@@ -132,6 +132,40 @@ function getFirstName(fullName: string | undefined): string | null {
   return trimmed.split(/\s+/)[0];
 }
 
+type RoleStart = Readonly<{
+  moduleId: "sales" | "leads" | "accounting";
+  icon: SemanticIconName;
+  titleKey: "roleStartSalesTitle" | "roleStartReceptionTitle" | "roleStartAccountantTitle";
+  bodyKey: "roleStartSalesBody" | "roleStartReceptionBody" | "roleStartAccountantBody";
+}>;
+
+// Operational roles used to be hard-redirected straight into one module. Instead
+// we land them on the dashboard and give them a prominent one-tap "start here"
+// card into that same module — keeping the fast path but adding a role Today.
+function getRoleStart(roleName: string | undefined): RoleStart | null {
+  switch (roleName?.toUpperCase()) {
+    case "SALES":
+    case "SALESPERSON":
+      return { moduleId: "sales", icon: "sales", titleKey: "roleStartSalesTitle", bodyKey: "roleStartSalesBody" };
+    case "RECEPTION":
+      return { moduleId: "leads", icon: "leads", titleKey: "roleStartReceptionTitle", bodyKey: "roleStartReceptionBody" };
+    case "ACCOUNTANT":
+      return { moduleId: "accounting", icon: "accounting", titleKey: "roleStartAccountantTitle", bodyKey: "roleStartAccountantBody" };
+    default:
+      return null;
+  }
+}
+
+const FINANCE_PERMISSIONS: readonly string[] = ["view:sales", "view:reports", "view:finance"];
+
+// The owner/manager "performance" section (revenue hero, metric grid, team) reads
+// permission-gated numbers server-side; hide it for roles that would only see
+// zeros so their Today stays clean.
+function showsPerformanceSection(myMembership: MobileMyMembership): boolean {
+  if (myMembership.roleName?.toUpperCase() === "OWNER") return true;
+  return myMembership.permissions.some((permission) => FINANCE_PERMISSIONS.includes(permission));
+}
+
 function Header({ org }: { org: MobileOrgSummary }) {
   const styles = useThemedStyles(makeStyles);
   const router = useRouter();
@@ -452,6 +486,32 @@ function QuickActionRail({
   );
 }
 
+function RoleStartCard({ orgId, start }: Readonly<{ orgId: string; start: RoleStart }>) {
+  const styles = useThemedStyles(makeStyles);
+  const router = useRouter();
+  const { t, textDirection } = useLocale();
+  const type = useDashboardTypography();
+
+  return (
+    <Card
+      accessibilityLabel={t(start.titleKey)}
+      onPress={() =>
+        router.push({ pathname: nativeRoutes.orgModule, params: { orgId, moduleId: start.moduleId } })
+      }
+      style={[styles.roleStartCard, { direction: textDirection }]}
+    >
+      <View style={styles.roleStartIcon}>
+        <Icon color="onPrimary" name={start.icon} size={22} />
+      </View>
+      <View style={styles.roleStartText}>
+        <Text style={[styles.roleStartTitle, type.heading]}>{t(start.titleKey)}</Text>
+        <Text style={[styles.roleStartBody, type.caption]}>{t(start.bodyKey)}</Text>
+      </View>
+      <Icon color="onPrimary" name={textDirection === "rtl" ? "back" : "chevronForward"} size={22} />
+    </Card>
+  );
+}
+
 function DashboardContent({
   myMembership,
   org,
@@ -471,81 +531,92 @@ function DashboardContent({
   const { locale, t } = useLocale();
   const router = useRouter();
   const type = useDashboardTypography();
+  const roleStart = getRoleStart(myMembership.roleName);
+  const showsPerformance = showsPerformanceSection(myMembership);
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContentFull}>
       <Header org={org} />
       <View style={styles.contentBody}>
-      <FadeSlideIn delay={0}>
-        <TodayAgenda orgId={org._id} myMembership={myMembership} />
-      </FadeSlideIn>
-      <FadeSlideIn delay={70}>
-        <QuickActionRail orgId={org._id} roleName={myMembership.roleName} />
-      </FadeSlideIn>
-      <FadeSlideIn delay={140}>
-      <Card
-        accessibilityLabel={t("dealerMarketplace")}
-        onPress={() =>
-          router.push({
-            pathname: nativeRoutes.orgMarketplace,
-            params: { orgId: org._id },
-          })
-        }
-        style={styles.marketplaceLink}
-      >
-        <View style={styles.marketplaceLinkIcon}>
-          <Icon color="primary" name="marketplace" size={22} />
-        </View>
-        <View style={styles.marketplaceLinkText}>
-          <Text style={[styles.marketplaceLinkTitle, type.heading]}>{t("dealerMarketplace")}</Text>
-          <Text style={[styles.marketplaceLinkBody, type.caption]}>{t("dealerMarketplaceSubtitle")}</Text>
-        </View>
-        <Icon color="primary" name="chevronForward" size={22} />
-      </Card>
-      </FadeSlideIn>
-      <FadeSlideIn delay={210} style={styles.performanceSection}>
-      <Text style={[styles.performanceEyebrow, type.label]}>{t("performanceUpper")}</Text>
-      <SalesHero stats={stats} timeRange={timeRange} onChangeTimeRange={onChangeTimeRange} />
+        <FadeSlideIn delay={0}>
+          <TodayAgenda orgId={org._id} myMembership={myMembership} />
+        </FadeSlideIn>
+        {roleStart ? (
+          <FadeSlideIn delay={40}>
+            <RoleStartCard orgId={org._id} start={roleStart} />
+          </FadeSlideIn>
+        ) : null}
+        <FadeSlideIn delay={70}>
+          <QuickActionRail orgId={org._id} roleName={myMembership.roleName} />
+        </FadeSlideIn>
+        <FadeSlideIn delay={140}>
+          <Card
+            accessibilityLabel={t("dealerMarketplace")}
+            onPress={() =>
+              router.push({
+                pathname: nativeRoutes.orgMarketplace,
+                params: { orgId: org._id },
+              })
+            }
+            style={styles.marketplaceLink}
+          >
+            <View style={styles.marketplaceLinkIcon}>
+              <Icon color="primary" name="marketplace" size={22} />
+            </View>
+            <View style={styles.marketplaceLinkText}>
+              <Text style={[styles.marketplaceLinkTitle, type.heading]}>{t("dealerMarketplace")}</Text>
+              <Text style={[styles.marketplaceLinkBody, type.caption]}>{t("dealerMarketplaceSubtitle")}</Text>
+            </View>
+            <Icon color="primary" name="chevronForward" size={22} />
+          </Card>
+        </FadeSlideIn>
+        <FadeSlideIn delay={180}>
+          <WorkspaceModuleLauncher
+            orgId={org._id}
+            permissions={myMembership.permissions}
+            roleName={myMembership.roleName}
+          />
+        </FadeSlideIn>
+        {showsPerformance ? (
+          <FadeSlideIn delay={230} style={styles.performanceSection}>
+            <Text style={[styles.performanceEyebrow, type.label]}>{t("performanceUpper")}</Text>
+            <SalesHero stats={stats} timeRange={timeRange} onChangeTimeRange={onChangeTimeRange} />
 
-      <View style={styles.metricGrid}>
-        <MetricCard
-          title={t("vehiclesUpper")}
-          value={plainNumber(stats.totalVehicles, locale)}
-          caption={`${plainNumber(stats.availableVehicles, locale)} ${t("available")}`}
-          icon="vehicles"
-          tone="success"
-        />
-        <MetricCard
-          title={t("leadsUpper")}
-          value={plainNumber(stats.activeLeads, locale)}
-          caption={t("activeLeads")}
-          icon="leads"
-          tone="warning"
-        />
-        <MetricCard
-          title={t("teamUpper")}
-          value={plainNumber(stats.teamMembers, locale)}
-          caption={t("activeStaff")}
-          icon="team"
-          tone="info"
-        />
-        <MetricCard
-          title={t("tasksUpper")}
-          value={plainNumber(stats.taskStats.total, locale)}
-          caption={`${plainNumber(stats.taskStats.overdue, locale)} ${t("overdue")}`}
-          icon="tasks"
-          tone="primary"
-        />
-      </View>
+            <View style={styles.metricGrid}>
+              <MetricCard
+                title={t("vehiclesUpper")}
+                value={plainNumber(stats.totalVehicles, locale)}
+                caption={`${plainNumber(stats.availableVehicles, locale)} ${t("available")}`}
+                icon="vehicles"
+                tone="success"
+              />
+              <MetricCard
+                title={t("leadsUpper")}
+                value={plainNumber(stats.activeLeads, locale)}
+                caption={t("activeLeads")}
+                icon="leads"
+                tone="warning"
+              />
+              <MetricCard
+                title={t("teamUpper")}
+                value={plainNumber(stats.teamMembers, locale)}
+                caption={t("activeStaff")}
+                icon="team"
+                tone="info"
+              />
+              <MetricCard
+                title={t("tasksUpper")}
+                value={plainNumber(stats.taskStats.total, locale)}
+                caption={`${plainNumber(stats.taskStats.overdue, locale)} ${t("overdue")}`}
+                icon="tasks"
+                tone="primary"
+              />
+            </View>
 
-      <DataQualityPanel dataQuality={dataQuality} />
-      <WorkspaceModuleLauncher
-        orgId={org._id}
-        permissions={myMembership.permissions}
-        roleName={myMembership.roleName}
-      />
-      <TeamPanel stats={stats} />
-      </FadeSlideIn>
+            <DataQualityPanel dataQuality={dataQuality} />
+            <TeamPanel stats={stats} />
+          </FadeSlideIn>
+        ) : null}
       </View>
     </ScrollView>
   );
@@ -621,27 +692,6 @@ export function OrgDashboardScreen({ orgId }: Readonly<{ orgId: string | null }>
       router.replace(nativeRoutes.signIn);
     }
   }, [isLoaded, isSignedIn, router]);
-
-  useEffect(() => {
-    if (!selectedOrg || !myMembership) return;
-
-    const role = myMembership.roleName?.toUpperCase();
-    const moduleId =
-      role === "SALES" || role === "SALESPERSON"
-        ? "sales"
-        : role === "RECEPTION"
-          ? "leads"
-          : role === "ACCOUNTANT"
-            ? "accounting"
-            : null;
-
-    if (moduleId) {
-      router.replace({
-        pathname: nativeRoutes.orgModule,
-        params: { orgId: selectedOrg._id, moduleId },
-      });
-    }
-  }, [myMembership, router, selectedOrg]);
 
   if (!orgId || !isLoaded || convexAuthLoading || !isSignedIn || !isAuthenticated) {
     return (
@@ -789,6 +839,36 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   },
   marketplaceLinkBody: {
     color: theme.colors.mutedText,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  roleStartCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.md,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.primary,
+  },
+  roleStartIcon: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.primaryDark,
+  },
+  roleStartText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  roleStartTitle: {
+    color: theme.colors.onPrimary,
+    fontSize: 17,
+    fontWeight: "700",
+  },
+  roleStartBody: {
+    color: theme.colors.onPrimary,
+    opacity: 0.85,
     fontSize: 13,
     lineHeight: 18,
   },
