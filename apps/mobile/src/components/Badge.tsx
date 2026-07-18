@@ -2,7 +2,8 @@ import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-na
 
 import { useAppFontState } from "../providers/AppFontContext";
 import { useLocale } from "../providers/LocaleProvider";
-import { getTypographyStyle, theme } from "../theme";
+import { useThemedStyles } from "../providers/ThemeProvider";
+import { getTypographyStyle, theme, type AppTheme } from "../theme";
 
 export type BadgeTone = "neutral" | "primary" | "success" | "warning" | "danger" | "info";
 
@@ -12,7 +13,7 @@ type BadgeProps = Readonly<{
   tone?: BadgeTone;
 }>;
 
-const toneStyles = {
+const makeToneStyles = (theme: AppTheme) => ({
   neutral: {
     backgroundColor: theme.colors.surfaceAlt,
     color: theme.colors.mutedText,
@@ -37,11 +38,12 @@ const toneStyles = {
     backgroundColor: theme.colors.infoSoft,
     color: theme.colors.info,
   },
-} as const;
+}) as const;
 
 export function Badge({ label, style, tone = "neutral" }: BadgeProps) {
   const { locale } = useLocale();
   const { fontsLoaded } = useAppFontState();
+  const toneStyles = useThemedStyles(makeToneStyles);
   const toneStyle = toneStyles[tone];
 
   return (
@@ -56,6 +58,7 @@ export function Badge({ label, style, tone = "neutral" }: BadgeProps) {
 export function Pill({ label, style, tone = "neutral" }: BadgeProps) {
   const { locale } = useLocale();
   const { fontsLoaded } = useAppFontState();
+  const toneStyles = useThemedStyles(makeToneStyles);
   const toneStyle = toneStyles[tone];
 
   return (

@@ -2,7 +2,8 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { useAppFontState } from "../providers/AppFontContext";
 import { useLocale } from "../providers/LocaleProvider";
-import { getTypographyStyle, theme } from "../theme";
+import { useAppTheme, useThemedStyles } from "../providers/ThemeProvider";
+import { getTypographyStyle, type AppTheme } from "../theme";
 import { Icon, type SemanticIconName } from "./Icon";
 
 type ListRowProps = Readonly<{
@@ -14,12 +15,14 @@ type ListRowProps = Readonly<{
 }>;
 
 export function getListRowPressedStyle(pressed: boolean) {
-  return pressed ? styles.pressed : null;
+  return pressed ? pressedStyles.pressed : null;
 }
 
 export function ListRow({ avatarLabel, leadingIcon, meta, onPress, title }: ListRowProps) {
   const { locale, textDirection } = useLocale();
   const { fontsLoaded } = useAppFontState();
+  const theme = useAppTheme();
+  const styles = useThemedStyles(makeStyles);
   const leading = leadingIcon ? (
     <View style={styles.iconShell}>
       <Icon color="primary" name={leadingIcon} size={20} />
@@ -69,7 +72,14 @@ export function ListRow({ avatarLabel, leadingIcon, meta, onPress, title }: List
   return <View style={[styles.row, { direction: textDirection }]}>{content}</View>;
 }
 
-const styles = StyleSheet.create({
+const pressedStyles = StyleSheet.create({
+  pressed: {
+    opacity: 0.86,
+    transform: [{ scale: 0.99 }],
+  },
+});
+
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   row: {
     minHeight: 68,
     flexDirection: "row",
@@ -111,9 +121,5 @@ const styles = StyleSheet.create({
   },
   meta: {
     color: theme.colors.mutedText,
-  },
-  pressed: {
-    opacity: 0.86,
-    transform: [{ scale: 0.99 }],
   },
 });

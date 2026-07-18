@@ -3,9 +3,10 @@ import { Text, View } from "react-native";
 import { api, type MobileFinanceApplication } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { PAGE_SIZE, money, RecordCard, ModuleList } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function ApplicationsModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const { loadMore, results, status } = usePaginatedQuery(api.applications.list, { orgId }, { initialNumItems: PAGE_SIZE });
   return (

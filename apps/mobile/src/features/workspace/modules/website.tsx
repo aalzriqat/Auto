@@ -6,9 +6,10 @@ import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepF
 import { api, type MobileWebsiteLanguage } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { type SelectableOption, type WebsiteColorPreset, WEBSITE_TEMPLATE_OPTIONS, WEBSITE_COLOR_PRESETS, HERO_TITLE_PRESETS, HERO_SUBTITLE_PRESETS, compactNumber, maybeText, useGenericError, PrimaryButton, FormField, SelectField, RecordCard, MetricCard, getOptionLabel, websiteTemplateLabel, websiteTemplateOptions, heroPresetOptions, websiteAddressPreview, websiteEnabledCount, DetailPill, SummaryRow, SummaryPanel, WizardActions, ModuleScroll, LockedFeature } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function WebsiteModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const subscription = useQuery(api.subscriptions.getMySubscription, { orgId });

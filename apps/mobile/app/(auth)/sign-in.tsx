@@ -8,12 +8,14 @@ import { LocaleToggle } from "../../src/components/LocaleToggle";
 import { Screen } from "../../src/components/Screen";
 import { useAppFontState } from "../../src/providers/AppFontContext";
 import { useLocale } from "../../src/providers/LocaleProvider";
-import { getTypographyStyle, theme } from "../../src/theme";
+import { useThemedStyles } from "../../src/providers/ThemeProvider";
+import { getTypographyStyle, type AppTheme } from "../../src/theme";
 
 export default function SignInRoute() {
   const router = useRouter();
   const { fontsLoaded } = useAppFontState();
   const { locale, t, textDirection } = useLocale();
+  const styles = useThemedStyles(makeStyles);
 
   return (
     <Screen scroll padding="lg">
@@ -40,7 +42,7 @@ export default function SignInRoute() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   shell: {
     flex: 1,
     gap: theme.spacing.lg,

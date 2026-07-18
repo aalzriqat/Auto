@@ -5,9 +5,10 @@ import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileBranch } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { SELECTOR_PAGE_SIZE, maybeText, splitLinesOrCommas, joinList, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function BranchesModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const branches = useQuery(api.branches.list, { orgId });

@@ -5,7 +5,7 @@ import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileCustomField, type MobileCustomFieldEntityType, type MobileCustomFieldType } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { type Option, splitLinesOrCommas, joinList, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, EmptyList, ModuleScroll } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 function fieldKeyFromName(name: string): string {
   return name
@@ -16,6 +16,7 @@ function fieldKeyFromName(name: string): string {
 }
 
 export function CustomFieldsModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const [entityType, setEntityType] = useState<MobileCustomFieldEntityType>("vehicle");

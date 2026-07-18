@@ -18,7 +18,8 @@ import { RouteLoadingState } from "../../components/RouteState";
 import { Screen } from "../../components/Screen";
 import { useAppFontState } from "../../providers/AppFontContext";
 import { useLocale } from "../../providers/LocaleProvider";
-import { getFontFamily, theme } from "../../theme";
+import { useAppTheme, useThemedStyles } from "../../providers/ThemeProvider";
+import { getFontFamily, type AppTheme } from "../../theme";
 import {
   countVisibleNativeModulesByCategory,
   type NativeModuleCategory,
@@ -82,6 +83,8 @@ export function WorkspaceTabsLayout({ orgId }: Readonly<{ orgId: string | null }
   const insets = useSafeAreaInsets();
   const { fontsLoaded } = useAppFontState();
   const { isRtl, locale, t } = useLocale();
+  const theme = useAppTheme();
+  const styles = useThemedStyles(makeStyles);
   const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const { isLoading: convexAuthLoading, isAuthenticated } = useConvexAuth();
   const canQuery = isLoaded && isSignedIn && !convexAuthLoading && isAuthenticated && Boolean(orgId);
@@ -187,7 +190,7 @@ export function WorkspaceTabsLayout({ orgId }: Readonly<{ orgId: string | null }
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   root: {
     flex: 1,
   },

@@ -6,13 +6,14 @@ import Svg, { Circle, Defs, LinearGradient, Stop } from "react-native-svg";
 import { api } from "../convexApi";
 import { MessagesModule } from "../features/workspace/modules/messages";
 import { useLocale } from "../providers/LocaleProvider";
-import { theme } from "../theme";
+import { useAppTheme, useThemedStyles } from "../providers/ThemeProvider";
+import { type AppTheme } from "../theme";
 import { Icon } from "./Icon";
 
 const FAB_SIZE = 58;
 
 export function getFabPressedStyle(pressed: boolean) {
-  return pressed ? styles.pressed : null;
+  return pressed ? pressedStyles.pressed : null;
 }
 
 export function FloatingMessengerFAB({
@@ -20,6 +21,8 @@ export function FloatingMessengerFAB({
   orgId,
 }: Readonly<{ bottomOffset: number; orgId: string }>) {
   const { locale, textDirection } = useLocale();
+  const theme = useAppTheme();
+  const styles = useThemedStyles(makeStyles);
   const conversations = useQuery(api.directMessages.listConversations, { orgId });
   const unreadCount = (conversations ?? []).filter((conversation) => conversation.hasUnread).length;
   const pulse = useRef(new Animated.Value(0)).current;
@@ -94,7 +97,13 @@ export function FloatingMessengerFAB({
   );
 }
 
-const styles = StyleSheet.create({
+const pressedStyles = StyleSheet.create({
+  pressed: {
+    opacity: 0.88,
+  },
+});
+
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   shell: {
     position: "absolute",
     end: theme.spacing.lg,
@@ -105,9 +114,6 @@ const styles = StyleSheet.create({
     height: FAB_SIZE,
     alignItems: "center",
     justifyContent: "center",
-  },
-  pressed: {
-    opacity: 0.88,
   },
   badge: {
     position: "absolute",

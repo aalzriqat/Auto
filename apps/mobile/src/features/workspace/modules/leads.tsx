@@ -5,9 +5,10 @@ import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepF
 import { api, type MobileLead, type MobileLeadStage } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, compactNumber, money, maybeText, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function LeadsModule({ highlightId, orgId }: { highlightId?: string; orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const createLead = useMutation(api.leads.create);

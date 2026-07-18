@@ -28,7 +28,8 @@ import { RouteLoadingState } from "../../components/RouteState";
 import { SearchableSelectField } from "../../components/SearchableSelectField";
 import { Screen } from "../../components/Screen";
 import { useLocale } from "../../providers/LocaleProvider";
-import { theme } from "../../theme";
+import { type AppTheme } from "../../theme";
+import { useAppTheme, useThemedStyles } from "../../providers/ThemeProvider";
 import {
   BuyerRequestPanel,
   TradeInRequestPanel,
@@ -97,6 +98,7 @@ function openExternalUrl(url: string | null) {
 }
 
 function Header() {
+  const styles = useThemedStyles(makeStyles);
   const router = useRouter();
   const { t, textDirection } = useLocale();
 
@@ -121,6 +123,8 @@ function Header() {
 }
 
 function TabBar({ activeTab, onChange }: { activeTab: BuyerTab; onChange: (tab: BuyerTab) => void }) {
+  const theme = useAppTheme();
+  const styles = useThemedStyles(makeStyles);
   const { t, textDirection } = useLocale();
   const { width } = useWindowDimensions();
   const tabs: Array<{ value: BuyerTab; label: string }> = [
@@ -186,6 +190,8 @@ function SearchPanel({
   onSearch: () => void;
   onReset: () => void;
 }>) {
+  const theme = useAppTheme();
+  const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
   const selectOptions = getMarketplaceSelectOptions(locale);
 
@@ -259,6 +265,7 @@ function SearchPanel({
 }
 
 function Badge({ label, tone = "green" }: Readonly<{ label: string; tone?: "green" | "amber" | "blue" }>) {
+  const styles = useThemedStyles(makeStyles);
   return (
     <View style={[styles.badge, tone === "amber" && styles.amberBadge, tone === "blue" && styles.blueBadge]}>
       <Text style={styles.badgeText}>{label}</Text>
@@ -267,6 +274,7 @@ function Badge({ label, tone = "green" }: Readonly<{ label: string; tone?: "gree
 }
 
 function TrustFacts({ vehicle }: Readonly<{ vehicle: MobileMarketplaceVehicle }>) {
+  const styles = useThemedStyles(makeStyles);
   const { locale, t } = useLocale();
   const facts = [
     vehicle.inspectionStatus === "SELF_REPORTED" ? t("marketplaceTrustSelfReported") : null,
@@ -299,6 +307,7 @@ function VehicleCard({
   vehicle: MobileMarketplaceVehicle;
   onTradeInPress: (dealer: TradeInDealerTarget) => void;
 }>) {
+  const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
   const title = getVehicleTitle(vehicle);
   const listingUrl = getListingUrl(vehicle);
@@ -380,6 +389,7 @@ function CarsResultsPage({
   onLoadMore: (cursor: string) => void;
   onTradeInPress: (dealer: TradeInDealerTarget) => void;
 }) {
+  const styles = useThemedStyles(makeStyles);
   const { t } = useLocale();
   const searchResult = useQuery(api.marketplaceBrowse.search, { ...filters, cursor }) as
     | MobileMarketplaceSearchResult
@@ -415,6 +425,7 @@ function CarsResultsPage({
 }
 
 function CarsPanel({ onTradeInPress }: Readonly<{ onTradeInPress: (dealer: TradeInDealerTarget) => void }>) {
+  const styles = useThemedStyles(makeStyles);
   const [fields, setFields] = useState<SearchFields>(DEFAULT_FIELDS);
   const [searchKey, setSearchKey] = useState(0);
   const [filters, setFilters] = useState<SearchFilters>(() => buildSearchFilters(DEFAULT_FIELDS));
@@ -458,6 +469,7 @@ function DealerCard({
   dealer: MobileMarketplaceDealer;
   onTradeInPress: (dealer: TradeInDealerTarget) => void;
 }>) {
+  const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
 
   return (
@@ -518,6 +530,7 @@ function DealerCard({
 }
 
 function DealersPanel({ onTradeInPress }: Readonly<{ onTradeInPress: (dealer: TradeInDealerTarget) => void }>) {
+  const styles = useThemedStyles(makeStyles);
   const { t } = useLocale();
   const dealers = useQuery(api.marketplaceDealers.listPublicDirectory, {});
 
@@ -539,6 +552,7 @@ function DealersPanel({ onTradeInPress }: Readonly<{ onTradeInPress: (dealer: Tr
 }
 
 function StatusPanel() {
+  const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
   const acceptOffer = useMutation(api.marketplaceTradeIns.acceptOfferByPublicId);
   const declineOffer = useMutation(api.marketplaceTradeIns.declineOfferByPublicId);
@@ -710,6 +724,7 @@ function StatusPanel() {
 }
 
 export function MarketplaceScreen() {
+  const styles = useThemedStyles(makeStyles);
   const { textDirection } = useLocale();
   const [activeTab, setActiveTab] = useState<BuyerTab>("cars");
   const [selectedTradeInDealer, setSelectedTradeInDealer] = useState<TradeInDealerTarget | null>(null);
@@ -749,7 +764,7 @@ export function MarketplaceScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   scroll: {
     flex: 1,
   },

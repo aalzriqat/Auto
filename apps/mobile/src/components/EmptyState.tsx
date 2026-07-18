@@ -2,7 +2,8 @@ import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-na
 
 import { useAppFontState } from "../providers/AppFontContext";
 import { useLocale } from "../providers/LocaleProvider";
-import { getTypographyStyle, theme } from "../theme";
+import { useThemedStyles } from "../providers/ThemeProvider";
+import { getTypographyStyle, type AppTheme } from "../theme";
 import { Button } from "./Button";
 import { Icon, type SemanticIconName } from "./Icon";
 
@@ -25,6 +26,7 @@ export function EmptyState({
 }: EmptyStateProps) {
   const { locale, textDirection } = useLocale();
   const { fontsLoaded } = useAppFontState();
+  const styles = useThemedStyles(makeStyles);
 
   return (
     <View style={[styles.root, { direction: textDirection }, style]}>
@@ -48,7 +50,7 @@ export function EmptyState({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   root: {
     alignItems: "center",
     gap: theme.spacing.md,

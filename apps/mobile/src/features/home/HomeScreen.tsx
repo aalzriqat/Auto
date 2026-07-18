@@ -17,7 +17,8 @@ import { RouteLoadingState } from "../../components/RouteState";
 import { Screen } from "../../components/Screen";
 import { useAppFontState } from "../../providers/AppFontContext";
 import { useLocale } from "../../providers/LocaleProvider";
-import { getTypographyStyle, theme } from "../../theme";
+import { getTypographyStyle, type AppTheme } from "../../theme";
+import { useAppTheme, useThemedStyles } from "../../providers/ThemeProvider";
 import {
   filterWorkspaces,
   getSafeWorkspaces,
@@ -44,6 +45,7 @@ function useHomeTypography() {
 }
 
 function SignedOutState() {
+  const styles = useThemedStyles(makeStyles);
   const { t, textDirection } = useLocale();
   const router = useRouter();
   const type = useHomeTypography();
@@ -102,6 +104,7 @@ function WorkspaceCard({
   org: MobileOrgSummary;
   onOpen: () => void;
 }) {
+  const styles = useThemedStyles(makeStyles);
   const { t, textDirection } = useLocale();
   const type = useHomeTypography();
   const workspaceName = org.name || t("untitledWorkspace");
@@ -145,6 +148,8 @@ function EmptyWorkspaceState() {
 }
 
 function AuthenticatedHome() {
+  const theme = useAppTheme();
+  const styles = useThemedStyles(makeStyles);
   const { t, textDirection } = useLocale();
   const router = useRouter();
   const type = useHomeTypography();
@@ -298,7 +303,7 @@ export function HomeScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   scroll: {
     flex: 1,
   },

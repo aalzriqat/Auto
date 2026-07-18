@@ -5,9 +5,10 @@ import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileFeedback, type MobileFeedbackStatus, type MobileFeedbackType } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { dateLabel, maybeText, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, EmptyList, ModuleScroll } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function FeedbackModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const [statusFilter, setStatusFilter] = useState<MobileFeedbackStatus | "ALL">("OPEN");

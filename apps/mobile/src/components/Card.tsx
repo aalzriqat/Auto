@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 
-import { theme } from "../theme";
+import { useAppTheme, useThemedStyles } from "../providers/ThemeProvider";
+import { type AppTheme } from "../theme";
 
 type CardProps = Readonly<{
   accessibilityLabel?: string;
@@ -12,10 +13,12 @@ type CardProps = Readonly<{
 }>;
 
 export function getCardPressedStyle(pressed: boolean) {
-  return pressed ? styles.pressed : null;
+  return pressed ? pressedStyles.pressed : null;
 }
 
 export function Card({ accessibilityLabel, children, onPress, style, testID }: CardProps) {
+  const theme = useAppTheme();
+  const styles = useThemedStyles(makeStyles);
   if (onPress) {
     return (
       <Pressable
@@ -38,16 +41,19 @@ export function Card({ accessibilityLabel, children, onPress, style, testID }: C
   );
 }
 
-const styles = StyleSheet.create({
+const pressedStyles = StyleSheet.create({
+  pressed: {
+    opacity: 0.86,
+    transform: [{ scale: 0.98 }],
+  },
+});
+
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   card: {
     gap: theme.spacing.md,
     borderRadius: theme.radius.lg,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.md,
     ...theme.shadows.sm,
-  },
-  pressed: {
-    opacity: 0.86,
-    transform: [{ scale: 0.98 }],
   },
 });

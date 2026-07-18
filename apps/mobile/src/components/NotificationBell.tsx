@@ -9,7 +9,8 @@ import { api, type MobileNotification } from "../convexApi";
 import { relativeTimeLabel, useGenericError } from "../features/workspace/modules/moduleShared";
 import { getNativeModule, nativeModulePath, type NativeModuleId } from "../features/workspace/nativeModules";
 import { useLocale } from "../providers/LocaleProvider";
-import { theme } from "../theme";
+import { useThemedStyles } from "../providers/ThemeProvider";
+import { type AppTheme } from "../theme";
 import { Icon } from "./Icon";
 
 const PREVIEW_COUNT = 8;
@@ -39,11 +40,11 @@ export function parseNotificationLink(
 }
 
 export function getBellPressedStyle(pressed: boolean) {
-  return pressed ? styles.pressed : null;
+  return pressed ? pressedStyles.pressed : null;
 }
 
 export function getRowPressedStyle(pressed: boolean) {
-  return pressed ? styles.rowPressed : null;
+  return pressed ? pressedStyles.rowPressed : null;
 }
 
 function renderedCopy(notification: MobileNotification, locale: "en" | "ar") {
@@ -62,6 +63,7 @@ export function NotificationBell({ orgId }: Readonly<{ orgId: string }>) {
   const router = useRouter();
   const { locale, textDirection } = useLocale();
   const reportError = useGenericError();
+  const styles = useThemedStyles(makeStyles);
   const [open, setOpen] = useState(false);
   const unreadCount = useQuery(api.notifications.unreadCount, { orgId });
   const notifications = useQuery(api.notifications.list, open ? { orgId } : "skip");
@@ -197,7 +199,16 @@ export function NotificationBell({ orgId }: Readonly<{ orgId: string }>) {
   );
 }
 
-const styles = StyleSheet.create({
+const pressedStyles = StyleSheet.create({
+  pressed: {
+    opacity: 0.82,
+  },
+  rowPressed: {
+    opacity: 0.7,
+  },
+});
+
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   bellButton: {
     width: 38,
     height: 38,
@@ -205,9 +216,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     borderRadius: theme.radius.full,
     backgroundColor: theme.colors.surfaceAlt,
-  },
-  pressed: {
-    opacity: 0.82,
   },
   badge: {
     position: "absolute",
@@ -291,9 +299,6 @@ const styles = StyleSheet.create({
   rowSeparator: {
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.colors.border,
-  },
-  rowPressed: {
-    opacity: 0.7,
   },
   unreadDot: {
     marginTop: 6,

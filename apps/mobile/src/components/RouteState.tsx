@@ -1,6 +1,7 @@
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 
-import { theme } from "../theme";
+import { useAppTheme, useThemedStyles } from "../providers/ThemeProvider";
+import { type AppTheme } from "../theme";
 
 interface RouteStateProps {
   label: string;
@@ -12,6 +13,8 @@ interface RouteErrorStateProps {
 }
 
 export function RouteLoadingState({ label }: RouteStateProps) {
+  const theme = useAppTheme();
+  const styles = useThemedStyles(makeStyles);
   return (
     <View style={styles.center}>
       <View style={styles.stateCard}>
@@ -23,6 +26,7 @@ export function RouteLoadingState({ label }: RouteStateProps) {
 }
 
 export function RouteErrorState({ message, onRetry }: RouteErrorStateProps) {
+  const styles = useThemedStyles(makeStyles);
   return (
     <View style={styles.center}>
       <View style={styles.stateCard}>
@@ -39,10 +43,17 @@ export function RouteErrorState({ message, onRetry }: RouteErrorStateProps) {
 }
 
 export function getRouteButtonPressedStyle(pressed: boolean) {
-  return pressed ? styles.buttonPressed : null;
+  return pressed ? pressedStyles.buttonPressed : null;
 }
 
-const styles = StyleSheet.create({
+const pressedStyles = StyleSheet.create({
+  buttonPressed: {
+    opacity: 0.82,
+    transform: [{ scale: 0.98 }],
+  },
+});
+
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   center: {
     flex: 1,
     alignItems: "center",
@@ -87,10 +98,6 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.md,
     backgroundColor: theme.colors.primary,
     paddingHorizontal: theme.spacing.lg,
-  },
-  buttonPressed: {
-    opacity: 0.82,
-    transform: [{ scale: 0.98 }],
   },
   buttonText: {
     color: theme.colors.onPrimary,

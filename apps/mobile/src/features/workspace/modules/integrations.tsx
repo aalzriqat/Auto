@@ -5,7 +5,7 @@ import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileFacebookConnectionStatus, type MobileInstagramConnectionStatus } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { maybeText, splitLinesOrCommas, joinList, useGenericError, PrimaryButton, FormField, SelectField, RecordCard, ModuleScroll, LockedFeature } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 function IntegrationPlatformCard({
   facebook,
@@ -17,6 +17,7 @@ function IntegrationPlatformCard({
   orgId: string;
 }) {
   const { locale } = useLocale();
+  const styles = useStyles();
   const reportError = useGenericError();
   const saveInstagramReply = useMutation(api.socialIntegrations.setInstagramAutoReplyConfig);
   const saveInstagramLead = useMutation(api.socialIntegrations.setInstagramLeadCreationConfig);
@@ -126,6 +127,7 @@ function IntegrationPlatformCard({
 }
 
 export function IntegrationsModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const subscription = useQuery(api.subscriptions.getMySubscription, { orgId });
   const canUseSocial = subscription?.planDetails.gates.socialInbox === true;

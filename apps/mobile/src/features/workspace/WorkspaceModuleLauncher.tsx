@@ -7,7 +7,8 @@ import { EmptyState } from "../../components/EmptyState";
 import { Icon } from "../../components/Icon";
 import { useAppFontState } from "../../providers/AppFontContext";
 import { useLocale } from "../../providers/LocaleProvider";
-import { getTypographyStyle, theme } from "../../theme";
+import { getTypographyStyle, type AppTheme } from "../../theme";
+import { useAppTheme, useThemedStyles } from "../../providers/ThemeProvider";
 import {
   countVisibleNativeModulesByCategory,
   getVisibleNativeModules,
@@ -49,6 +50,8 @@ export function WorkspaceModuleLauncher({
   permissions?: readonly string[];
   roleName?: string;
 }) {
+  const theme = useAppTheme();
+  const styles = useThemedStyles(makeStyles);
   const router = useRouter();
   const { locale, t, textDirection } = useLocale();
   const type = useLauncherTypography();
@@ -233,7 +236,7 @@ function getCategoryLabel(module: NativeModuleDefinition, locale: "en" | "ar"): 
   return category ? labelFor(category.title, locale) : module.category;
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   panel: {
     gap: theme.spacing.md,
     borderRadius: theme.radius.md,

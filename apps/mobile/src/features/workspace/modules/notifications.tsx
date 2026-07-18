@@ -4,7 +4,7 @@ import { renderNotification } from "../../../../../../lib/notifications/render";
 import { api, type MobileNotification } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { DetailPill, PAGE_SIZE, compactNumber, useGenericError, PrimaryButton, RecordCard, ModuleList } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 function priorityLabel(priority: string | undefined, locale: "en" | "ar"): string {
   if (priority === "urgent") return locale === "ar" ? "عاجل" : "Urgent";
@@ -13,6 +13,7 @@ function priorityLabel(priority: string | undefined, locale: "en" | "ar"): strin
 }
 
 export function NotificationsModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const unreadCount = useQuery(api.notifications.unreadCount, { orgId });

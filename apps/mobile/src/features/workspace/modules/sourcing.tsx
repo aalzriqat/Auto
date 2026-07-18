@@ -5,9 +5,10 @@ import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileSupplierPayable, type MobileSupplierPayableStatus } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { type Option, money, maybeText, parseOptionalNumber, idempotencyKey, useGenericError, PrimaryButton, SegmentedControl, FormField, FormModal, RecordCard, EmptyList, ModuleScroll } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function SourcingModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const markPaid = useMutation(api.sourcingPayables.markPaid);

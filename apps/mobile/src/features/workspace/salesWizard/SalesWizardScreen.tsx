@@ -24,7 +24,8 @@ import {
   type MobileFinanceCompany,
 } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { theme } from "../../../theme";
+import { type AppTheme } from "../../../theme";
+import { useAppTheme, useThemedStyles } from "../../../providers/ThemeProvider";
 import { compactInitials } from "../nativeModules";
 import { idempotencyKey, money, parseOptionalNumber, useGenericError, SearchInput } from "../modules/moduleShared";
 import { calculateUnifiedMurabaha, type UnifiedMurabahaResult } from "./murabaha";
@@ -44,25 +45,27 @@ interface ComparisonRow {
   minimumDownPayment: number;
 }
 
-function accentColor(paymentType: WizardPaymentType): string {
-  return paymentType === "CASH" ? theme.colors.primary : theme.colors.indigo;
+function accentColor(paymentType: WizardPaymentType, colors: AppTheme["colors"]): string {
+  return paymentType === "CASH" ? colors.primary : colors.indigo;
 }
 
-function accentSoft(paymentType: WizardPaymentType): string {
-  return paymentType === "CASH" ? theme.colors.primarySoft : theme.colors.indigoSoft;
+function accentSoft(paymentType: WizardPaymentType, colors: AppTheme["colors"]): string {
+  return paymentType === "CASH" ? colors.primarySoft : colors.indigoSoft;
 }
 
 function StepIndicator({
   currentStep,
   paymentType,
 }: Readonly<{ currentStep: WizardStep; paymentType: WizardPaymentType }>) {
+  const styles = useThemedStyles(makeStyles);
+  const theme = useAppTheme();
   const { locale, textDirection } = useLocale();
   const labels = [
     locale === "ar" ? "الإعداد" : "Setup",
     locale === "ar" ? "العميل" : "Customer",
     locale === "ar" ? "المراجعة" : "Review",
   ];
-  const accent = accentColor(paymentType);
+  const accent = accentColor(paymentType, theme.colors);
 
   return (
     <View style={[styles.stepRow, { direction: textDirection }]}>
@@ -106,6 +109,8 @@ function Field({
   onChangeText: (value: string) => void;
   value: string;
 }>) {
+  const theme = useAppTheme();
+  const styles = useThemedStyles(makeStyles);
   return (
     <View style={styles.field}>
       <Text style={styles.fieldLabel}>{label}</Text>
@@ -129,10 +134,12 @@ export function SalesWizardScreen({
   orgId: string;
   paymentType: WizardPaymentType;
 }>) {
+  const theme = useAppTheme();
+  const styles = useThemedStyles(makeStyles);
   const { locale, textDirection } = useLocale();
   const reportError = useGenericError();
   const isCash = paymentType === "CASH";
-  const accent = accentColor(paymentType);
+  const accent = accentColor(paymentType, theme.colors);
 
   const [step, setStep] = useState<WizardStep>(1);
 
@@ -565,7 +572,7 @@ export function SalesWizardScreen({
     <View style={[styles.root, { direction: textDirection }]}>
       {/* HEADER — matches the web wizard header (title + step X of 3 + close) */}
       <View style={styles.header}>
-        <View style={[styles.headerIcon, { backgroundColor: accentSoft(paymentType) }]}>
+        <View style={[styles.headerIcon, { backgroundColor: accentSoft(paymentType, theme.colors) }]}>
           <Icon color={isCash ? "primary" : "indigo"} name={isCash ? "sales" : "billing"} size={20} />
         </View>
         <View style={styles.headerText}>
@@ -606,7 +613,7 @@ export function SalesWizardScreen({
         {step === 1 ? (
           <>
             {/* Payment-type badge card */}
-            <View style={[styles.badgeCard, { backgroundColor: accentSoft(paymentType) }]}>
+            <View style={[styles.badgeCard, { backgroundColor: accentSoft(paymentType, theme.colors) }]}>
               <Icon color={isCash ? "primary" : "indigo"} name={isCash ? "sales" : "billing"} size={22} />
               <View style={styles.badgeCardText}>
                 <Text style={styles.badgeCardTitle}>
@@ -724,7 +731,7 @@ export function SalesWizardScreen({
                           key={option._id}
                           accessibilityRole="checkbox"
                           accessibilityState={{ checked }}
-                          style={[styles.statusChip, checked && { backgroundColor: accentSoft(paymentType) }]}
+                          style={[styles.statusChip, checked && { backgroundColor: accentSoft(paymentType, theme.colors) }]}
                           onPress={() => {
                             setCustomerStatuses((prev) =>
                               prev.includes(option._id)
@@ -900,7 +907,7 @@ export function SalesWizardScreen({
         {step === 2 ? (
           <>
             {customer ? (
-              <View style={[styles.badgeCard, { backgroundColor: accentSoft(paymentType) }]}>
+              <View style={[styles.badgeCard, { backgroundColor: accentSoft(paymentType, theme.colors) }]}>
                 <View style={styles.customerAvatar}>
                   <Text style={styles.customerAvatarText}>
                     {compactInitials(`${customer.firstName} ${customer.lastName}`)}
@@ -1069,7 +1076,7 @@ export function SalesWizardScreen({
         {step === 4 && customer ? (
           <>
             <View style={styles.successBlock}>
-              <View style={[styles.successCircle, { backgroundColor: accentSoft(paymentType) }]}>
+              <View style={[styles.successCircle, { backgroundColor: accentSoft(paymentType, theme.colors) }]}>
                 <Icon color={isCash ? "primary" : "indigo"} name="check" size={34} />
               </View>
               <Text style={styles.successTitle}>
@@ -1239,7 +1246,7 @@ export function SalesWizardScreen({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: theme.colors.background,

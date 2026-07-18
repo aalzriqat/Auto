@@ -4,9 +4,10 @@ import { Alert, Text, View } from "react-native";
 import { api, type MobileTask, type MobileTaskPriority } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, dateLabel, maybeText, parseRequiredNumber, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function TasksModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const createTask = useMutation(api.tasks.create);

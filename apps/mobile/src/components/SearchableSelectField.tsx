@@ -13,7 +13,8 @@ import {
 
 import { useAppFontState } from "../providers/AppFontContext";
 import { useLocale } from "../providers/LocaleProvider";
-import { getTypographyStyle, theme } from "../theme";
+import { useAppTheme, useThemedStyles } from "../providers/ThemeProvider";
+import { getTypographyStyle, type AppTheme } from "../theme";
 import { Icon } from "./Icon";
 
 export type SearchableSelectOption = Readonly<{
@@ -60,6 +61,7 @@ export function formatCustomValueLabel(template: string | undefined, value: stri
 }
 
 function OptionSeparator() {
+  const styles = useThemedStyles(makeStyles);
   return <View style={styles.optionSeparator} />;
 }
 
@@ -82,6 +84,8 @@ export function SearchableSelectField({
 }: SearchableSelectFieldProps) {
   const { locale, textDirection } = useLocale();
   const { fontsLoaded } = useAppFontState();
+  const theme = useAppTheme();
+  const styles = useThemedStyles(makeStyles);
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const selectedOption = options.find((option) => option.value === value);
@@ -269,7 +273,7 @@ export function SearchableSelectField({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   field: {
     gap: theme.spacing.xs,
   },

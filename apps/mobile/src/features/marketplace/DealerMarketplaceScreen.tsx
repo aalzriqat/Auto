@@ -18,7 +18,8 @@ import { Icon } from "../../components/Icon";
 import { RouteLoadingState } from "../../components/RouteState";
 import { Screen } from "../../components/Screen";
 import { useLocale } from "../../providers/LocaleProvider";
-import { theme } from "../../theme";
+import { type AppTheme } from "../../theme";
+import { useThemedStyles } from "../../providers/ThemeProvider";
 import {
   formatMoney,
   formatNumber,
@@ -44,6 +45,7 @@ function getSafeOrgs(orgs: Array<MobileOrgSummary | null> | undefined): MobileOr
 }
 
 function Header({ org }: Readonly<{ org: MobileOrgSummary }>) {
+  const styles = useThemedStyles(makeStyles);
   const router = useRouter();
   const { t, textDirection } = useLocale();
 
@@ -80,6 +82,7 @@ function TabBar({
   activeTab,
   onChange,
 }: Readonly<{ activeTab: DealerTab; onChange: (tab: DealerTab) => void }>) {
+  const styles = useThemedStyles(makeStyles);
   const { t, textDirection } = useLocale();
   const tabs: Array<{ value: DealerTab; label: string }> = [
     { value: "requests", label: t("marketplaceDealerInboxTab") },
@@ -114,6 +117,7 @@ function Pill({
   label,
   tone = "slate",
 }: Readonly<{ label: string; tone?: "green" | "amber" | "rose" | "slate" }>) {
+  const styles = useThemedStyles(makeStyles);
   return (
     <View
       style={[
@@ -139,6 +143,7 @@ function RequestCard({
   openRequestId: string | null;
   onToggle: (requestId: string | null) => void;
 }>) {
+  const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
   const isOpen = openRequestId === request.requestId;
   const vehicleLabel = [request.make, request.model].filter(Boolean).join(" ") || t("marketplaceVehicle");
@@ -186,6 +191,7 @@ function VehicleOption({
   selected: boolean;
   onSelect: () => void;
 }>) {
+  const styles = useThemedStyles(makeStyles);
   const { locale } = useLocale();
   const label = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(" ");
 
@@ -215,6 +221,7 @@ function ResponseForm({
   requestId: string;
   onSaved: () => void;
 }>) {
+  const styles = useThemedStyles(makeStyles);
   const { isRtl, t } = useLocale();
   const respond = useMutation(api.marketplaceResponses.respond);
   const [kind, setKind] = useState<MobileMarketplaceResponseKind>("HAVE_MATCH");
@@ -328,6 +335,7 @@ function ResponseForm({
 }
 
 function RequestsTab({ orgId }: Readonly<{ orgId: string }>) {
+  const styles = useThemedStyles(makeStyles);
   const { t } = useLocale();
   const requests = useQuery(api.marketplaceResponses.listForOrg, { orgId });
   const [openRequestId, setOpenRequestId] = useState<string | null>(null);
@@ -359,6 +367,7 @@ function TradeInCard({
   orgId,
   tradeIn,
 }: Readonly<{ orgId: string; tradeIn: MobileMarketplaceTradeInRow }>) {
+  const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
   const makeOffer = useMutation(api.marketplaceTradeIns.makeOffer);
   const [expanded, setExpanded] = useState(false);
@@ -434,6 +443,7 @@ function TradeInCard({
 }
 
 function TradeInsTab({ orgId }: Readonly<{ orgId: string }>) {
+  const styles = useThemedStyles(makeStyles);
   const { t } = useLocale();
   const tradeIns = useQuery(api.marketplaceTradeIns.listForOrg, { orgId });
 
@@ -455,6 +465,7 @@ function TradeInsTab({ orgId }: Readonly<{ orgId: string }>) {
 }
 
 function InaccessibleState() {
+  const styles = useThemedStyles(makeStyles);
   const router = useRouter();
   const { t, textDirection } = useLocale();
 
@@ -473,6 +484,7 @@ function InaccessibleState() {
 }
 
 export function DealerMarketplaceScreen({ orgId }: Readonly<{ orgId: string | null }>) {
+  const styles = useThemedStyles(makeStyles);
   const router = useRouter();
   const { t, textDirection } = useLocale();
   const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
@@ -524,7 +536,7 @@ export function DealerMarketplaceScreen({ orgId }: Readonly<{ orgId: string | nu
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   scroll: {
     flex: 1,
   },

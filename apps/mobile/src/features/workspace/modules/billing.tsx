@@ -5,7 +5,7 @@ import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobilePlanId } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { money, dateLabel, maybeText, useGenericError, PrimaryButton, FormField, FormModal, RecordCard, ModuleScroll } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 function planRank(planId: MobilePlanId): number {
   const order: MobilePlanId[] = ["free", "starter", "professional", "enterprise"];
@@ -18,6 +18,7 @@ function limitLabel(current: number, max: number, locale: "en" | "ar"): string {
 }
 
 export function BillingModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const subscription = useQuery(api.subscriptions.getMySubscription, { orgId });

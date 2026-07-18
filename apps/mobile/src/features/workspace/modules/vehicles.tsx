@@ -12,9 +12,10 @@ import { GradientFill } from "../../../components/Premium";
 import { Icon } from "../../../components/Icon";
 import { PressableScale } from "../../../components/Motion";
 import { theme } from "../../../theme";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function VehiclesModule({ orgId, permissions }: { orgId: string; permissions: readonly string[] }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const createVehicle = useMutation(api.vehicles.create);

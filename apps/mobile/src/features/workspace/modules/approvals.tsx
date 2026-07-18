@@ -4,9 +4,10 @@ import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileApprovalRequest } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { dateLabel, useGenericError, PrimaryButton, RecordCard, EmptyList, ModuleScroll } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function ApprovalsModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const approvals = useQuery(api.approvals.listPendingApprovals, { orgId });

@@ -7,7 +7,7 @@ import { useLocale } from "../../../providers/LocaleProvider";
 import { Icon } from "../../../components/Icon";
 import { compactInitials } from "../nativeModules";
 import { PAGE_SIZE, compactNumber, maybeText, useGenericError, SearchInput, PrimaryButton, FormField, FormModal, RecordCard, MetricCard, ModuleList, DetailPill } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function CustomersModule({
   highlightId,
@@ -18,6 +18,7 @@ export function CustomersModule({
   orgId: string;
   permissions: readonly string[];
 }) {
+  const styles = useStyles();
   const router = useRouter();
   const { locale } = useLocale();
   const reportError = useGenericError();

@@ -6,9 +6,9 @@ import { Icon } from "../../../components/Icon";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileDirectConversation, type MobileDirectMember, type MobileDirectMessage } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { theme } from "../../../theme";
+import { useAppTheme } from "../../../providers/ThemeProvider";
 import { relativeTimeLabel, directConversationTitle, isPaginationLoading, canLoadMore, useGenericError, SearchInput, PrimaryButton, FormField, FormModal, EmptyList } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 function directConversationAvatarUrl(
   conversation: MobileDirectConversation,
@@ -20,6 +20,7 @@ function directConversationAvatarUrl(
 }
 
 function TypingDots() {
+  const styles = useStyles();
   const dots = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
 
   useEffect(() => {
@@ -57,6 +58,8 @@ function TypingDots() {
 }
 
 export function MessagesModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
+  const theme = useAppTheme();
   const { locale, textDirection } = useLocale();
   const reportError = useGenericError();
   const me = useQuery(api.users.getMe, {});

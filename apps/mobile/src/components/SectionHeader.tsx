@@ -2,7 +2,8 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { useAppFontState } from "../providers/AppFontContext";
 import { useLocale } from "../providers/LocaleProvider";
-import { getTypographyStyle, theme } from "../theme";
+import { useThemedStyles } from "../providers/ThemeProvider";
+import { getTypographyStyle, type AppTheme } from "../theme";
 
 type SectionHeaderProps = Readonly<{
   actionLabel?: string;
@@ -12,12 +13,13 @@ type SectionHeaderProps = Readonly<{
 }>;
 
 export function getSectionActionPressedStyle(pressed: boolean) {
-  return pressed ? styles.actionPressed : null;
+  return pressed ? { opacity: 0.82 } : null;
 }
 
 export function SectionHeader({ actionLabel, onAction, subtitle, title }: SectionHeaderProps) {
   const { locale, textDirection } = useLocale();
   const { fontsLoaded } = useAppFontState();
+  const styles = useThemedStyles(makeStyles);
 
   return (
     <View style={[styles.header, { direction: textDirection }]}>
@@ -47,7 +49,7 @@ export function SectionHeader({ actionLabel, onAction, subtitle, title }: Sectio
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "flex-end",
@@ -71,9 +73,6 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.full,
     backgroundColor: theme.colors.primarySoft,
     paddingHorizontal: theme.spacing.md,
-  },
-  actionPressed: {
-    opacity: 0.82,
   },
   actionText: {
     color: theme.colors.primary,

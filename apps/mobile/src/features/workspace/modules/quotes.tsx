@@ -6,9 +6,10 @@ import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepF
 import { api, type MobileQuote, type MobileQuoteMode, type MobileQuoteStatus } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { SELECTOR_PAGE_SIZE, type Option, money, dateLabel, maybeText, parseOptionalNumber, parseRequiredNumber, parseRequiredPositiveNumber, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function QuotesModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const saveQuote = useMutation(api.quotes.saveQuote);

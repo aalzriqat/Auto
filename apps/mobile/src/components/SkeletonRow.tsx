@@ -1,13 +1,15 @@
 import { useEffect, useRef } from "react";
 import { Animated, StyleSheet, View } from "react-native";
 
-import { theme } from "../theme";
+import { useThemedStyles } from "../providers/ThemeProvider";
+import { type AppTheme } from "../theme";
 
 type SkeletonRowProps = Readonly<{
   count?: number;
 }>;
 
 export function SkeletonRow({ count = 1 }: SkeletonRowProps) {
+  const styles = useThemedStyles(makeStyles);
   const opacity = useRef(new Animated.Value(0.45)).current;
 
   useEffect(() => {
@@ -49,7 +51,7 @@ export function SkeletonRow({ count = 1 }: SkeletonRowProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   stack: {
     gap: theme.spacing.sm,
   },

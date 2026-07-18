@@ -5,9 +5,10 @@ import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileLeadSource } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, EmptyList, ModuleScroll } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function LeadSourcesModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const sources = useQuery(api.orgLeadSources.list, { orgId });

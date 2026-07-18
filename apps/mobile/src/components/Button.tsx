@@ -3,7 +3,8 @@ import { Pressable, StyleSheet, Text, type StyleProp, type ViewStyle } from "rea
 
 import { useAppFontState } from "../providers/AppFontContext";
 import { useLocale } from "../providers/LocaleProvider";
-import { getTypographyStyle, theme } from "../theme";
+import { useAppTheme, useThemedStyles } from "../providers/ThemeProvider";
+import { getTypographyStyle, theme, type AppTheme } from "../theme";
 import { Icon, type SemanticIconName } from "./Icon";
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
@@ -19,7 +20,7 @@ type ButtonProps = Readonly<{
   variant?: ButtonVariant;
 }>;
 
-const variantStyles = {
+const makeVariantStyles = (theme: AppTheme) => ({
   primary: {
     container: {
       backgroundColor: theme.colors.primary,
@@ -60,7 +61,7 @@ const variantStyles = {
       color: theme.colors.danger,
     },
   },
-} as const;
+}) as const;
 
 export function getButtonPressedStyle(pressed: boolean, disabled = false) {
   if (!pressed || disabled) return null;
@@ -79,6 +80,8 @@ export function Button({
 }: ButtonProps) {
   const { locale } = useLocale();
   const { fontsLoaded } = useAppFontState();
+  const theme = useAppTheme();
+  const variantStyles = useThemedStyles(makeVariantStyles);
   const variantStyle = variantStyles[variant];
   const labelStyle = getTypographyStyle("heading", locale, fontsLoaded);
   const content: ReactNode = (

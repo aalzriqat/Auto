@@ -7,13 +7,14 @@ import { api, type MobileSocialConversation, type MobileSocialConversationEvent,
 import { useLocale } from "../../../providers/LocaleProvider";
 import { compactInitials } from "../nativeModules";
 import { PAGE_SIZE, compactNumber, relativeTimeLabel, useGenericError, PrimaryButton, FormField, SelectField, FormModal, ModuleList } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 function FilterChip({
   label,
   onPress,
   selected,
 }: Readonly<{ label: string; onPress: () => void; selected: boolean }>) {
+  const styles = useStyles();
   return (
     <Pressable
       accessibilityRole="button"
@@ -34,6 +35,7 @@ function ConversationRow({
   onPress: () => void;
 }>) {
   const { locale, textDirection } = useLocale();
+  const styles = useStyles();
   const platformLabel = conversation.platform === "instagram" ? "Instagram" : "Facebook";
 
   return (
@@ -93,6 +95,7 @@ function EventThread({
   events: readonly MobileSocialConversationEvent[];
   locale: string;
 }>) {
+  const styles = useStyles();
   return (
     <View style={styles.threadContent}>
       {events.map((event) => (
@@ -135,6 +138,7 @@ function EventThread({
 }
 
 export function SocialInboxModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const replyInstagramComment = useAction(api.instagramEngagement.replyToInstagramComment);
