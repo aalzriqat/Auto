@@ -85,6 +85,12 @@ jobs:
           # Cloudflare's documented always-pass Turnstile secret for E2E runs.
           # The matching public sitekey is passed only to the test build below.
           retry_convex pnpm exec convex env set TURNSTILE_SECRET_KEY "1x0000000000000000000000000000000AA"
+          # NEXT_PUBLIC_APP_URL is a REQUIRED backend env var (getValidatedEnv in
+          # convex/utils/env.ts). A freshly created Convex deployment starts with
+          # no env vars, so without this the public dealer-site lead forms throw
+          # ("Missing: NEXT_PUBLIC_APP_URL") and dealer-site.cy.ts fails. Set it
+          # so E2E passes on any deployment, not just one preconfigured by hand.
+          retry_convex pnpm exec convex env set NEXT_PUBLIC_APP_URL "${NEXT_PUBLIC_APP_URL:-http://localhost:3000}"
           retry_convex pnpm exec convex deploy \
             --typecheck enable \
             --cmd 'echo "NEXT_PUBLIC_CONVEX_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"' \
@@ -92,6 +98,7 @@ jobs:
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
 
       - name: Build production bundle
         run: pnpm build
