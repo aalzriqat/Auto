@@ -72,6 +72,7 @@ import type * as liveChat from "../liveChat.js";
 import type * as marketplaceAffordability from "../marketplaceAffordability.js";
 import type * as marketplaceBrowse from "../marketplaceBrowse.js";
 import type * as marketplaceBuyerActions from "../marketplaceBuyerActions.js";
+import type * as marketplaceBuyerPush from "../marketplaceBuyerPush.js";
 import type * as marketplaceDealers from "../marketplaceDealers.js";
 import type * as marketplaceReports from "../marketplaceReports.js";
 import type * as marketplaceRequests from "../marketplaceRequests.js";
@@ -254,6 +255,7 @@ declare const fullApi: ApiFromModules<{
   marketplaceAffordability: typeof marketplaceAffordability;
   marketplaceBrowse: typeof marketplaceBrowse;
   marketplaceBuyerActions: typeof marketplaceBuyerActions;
+  marketplaceBuyerPush: typeof marketplaceBuyerPush;
   marketplaceDealers: typeof marketplaceDealers;
   marketplaceReports: typeof marketplaceReports;
   marketplaceRequests: typeof marketplaceRequests;

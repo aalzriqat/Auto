@@ -967,6 +967,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "عند الرد على مشترٍ من السوق عبر هاتفك، أصبح بإمكانك اختيار السيارة وجهة التمويل وإدخال الدفعة الأولى والمدة وصلاحية العرض — ويحتسب أوتوفلو القسط الشهري بدقّة ويعرض للمشتري عرض تمويل كاملاً (دون أن تكتب القسط يدوياً). كما تحمل ردود التوفير نطاق سعر صادقاً ومدة توفير بدل رقم تقديري.",
     publishedAt: releaseAt(2026, 7, 18, 3),
   },
+  {
+    type: "FEATURE",
+    titleEn: "Buyers get notified the moment a dealer sends an offer",
+    titleAr: "المشترون يوصلهم إشعار لحظة ما يرسل المعرض عرضاً",
+    descriptionEn: "Buyers who allow notifications now get a push on their phone the instant a dealer responds to their car request — so they can jump back into their Request Room and review the offer while it's fresh, without keeping the app open.",
+    descriptionAr: "المشترون الذين يسمحون بالإشعارات أصبح يوصلهم تنبيه على هواتفهم لحظة ما يرد أي معرض على طلب سيارتهم — ليعودوا فوراً إلى غرفة الطلب ويراجعوا العرض وهو جديد، دون الحاجة لإبقاء التطبيق مفتوحاً.",
+    publishedAt: releaseAt(2026, 7, 18, 4),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;
