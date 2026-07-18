@@ -911,6 +911,7 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     fontWeight: "700",
     letterSpacing: -0.6,
     lineHeight: 40,
+    fontVariant: ["tabular-nums"],
   },
   heroSubtitle: {
     color: theme.colors.mutedText,
@@ -930,6 +931,7 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     fontSize: 22,
     fontWeight: "700",
     textAlign: "center",
+    fontVariant: ["tabular-nums"],
   },
   soldLabel: {
     color: theme.colors.primaryDark,
@@ -1017,6 +1019,7 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     color: theme.colors.text,
     fontSize: 18,
     fontWeight: "700",
+    fontVariant: ["tabular-nums"],
   },
   metricPillLabel: {
     flex: 1,
