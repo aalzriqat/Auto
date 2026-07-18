@@ -4,9 +4,10 @@ import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileSale } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { money, dateLabel, idempotencyKey, useGenericError, PrimaryButton, RecordCard, EmptyList, ModuleScroll } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function CommissionsModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const commissions = useQuery(api.sales.listCommissions, { orgId });

@@ -42,7 +42,7 @@ import { FeedbackModule } from "./feedback";
 import { BillingModule } from "./billing";
 import { SettingsModule } from "./settings";
 import { firstAvailableOrg, ModuleHeader, ModuleSwitcherBar } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 function ModuleBody({
   highlightId,
@@ -132,6 +132,7 @@ export function WorkspaceModuleScreen({
   moduleId: string | null;
   orgId: string | null;
 }) {
+  const styles = useStyles();
   const router = useRouter();
   const { locale, t } = useLocale();
   const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });

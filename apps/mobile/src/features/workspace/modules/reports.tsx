@@ -4,9 +4,10 @@ import { Text, View } from "react-native";
 import { api } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { compactNumber, money, SegmentedControl, RecordCard, MetricCard, ModuleScroll } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function ReportsModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const [period, setPeriod] = useState<"MONTH" | "YEAR">("MONTH");
   const range = useMemo(() => {

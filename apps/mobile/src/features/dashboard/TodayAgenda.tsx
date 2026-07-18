@@ -7,17 +7,18 @@ import { api, type MobileMyMembership } from "../../convexApi";
 import { Card } from "../../components/Card";
 import { Icon, type SemanticIconName } from "../../components/Icon";
 import { useLocale } from "../../providers/LocaleProvider";
-import { theme } from "../../theme";
+import { type AppTheme } from "../../theme";
+import { useThemedStyles } from "../../providers/ThemeProvider";
 
 const AGENDA_TASK_PAGE_SIZE = 25;
 
 type AgendaTone = "warning" | "indigo" | "info";
 
-const rowToneSoft: Record<AgendaTone, string> = {
+const makeRowToneSoft = (theme: AppTheme): Record<AgendaTone, string> => ({
   warning: theme.colors.warningSoft,
   indigo: theme.colors.indigoSoft,
   info: theme.colors.infoSoft,
-};
+});
 
 function getTodayBounds(): { todayStart: number; todayEnd: number } {
   const start = new Date();
@@ -39,6 +40,8 @@ export function TodayAgenda({
   orgId,
   myMembership,
 }: Readonly<{ orgId: string; myMembership: MobileMyMembership }>) {
+  const styles = useThemedStyles(makeStyles);
+  const rowToneSoft = useThemedStyles(makeRowToneSoft);
   const router = useRouter();
   const { locale, t, textDirection } = useLocale();
   const canApprove = myMembership.permissions.includes("approve:requests");
@@ -150,7 +153,7 @@ export function TodayAgenda({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   card: {
     padding: 0,
     overflow: "hidden",

@@ -2,7 +2,8 @@ import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-na
 
 import { useAppFontState } from "../providers/AppFontContext";
 import { useLocale } from "../providers/LocaleProvider";
-import { getTypographyStyle, theme } from "../theme";
+import { useThemedStyles } from "../providers/ThemeProvider";
+import { getTypographyStyle, type AppTheme } from "../theme";
 import { Icon, type SemanticIconName } from "./Icon";
 
 export type StatTileTone = "primary" | "success" | "warning" | "info";
@@ -16,7 +17,7 @@ type StatTileProps = Readonly<{
   value: string;
 }>;
 
-const toneStyles = {
+const makeToneStyles = (theme: AppTheme) => ({
   primary: {
     backgroundColor: theme.colors.primarySoft,
     color: theme.colors.primary,
@@ -33,7 +34,7 @@ const toneStyles = {
     backgroundColor: theme.colors.infoSoft,
     color: theme.colors.info,
   },
-} as const;
+}) as const;
 
 export function StatTile({
   caption,
@@ -45,6 +46,8 @@ export function StatTile({
 }: StatTileProps) {
   const { locale, textDirection } = useLocale();
   const { fontsLoaded } = useAppFontState();
+  const styles = useThemedStyles(makeStyles);
+  const toneStyles = useThemedStyles(makeToneStyles);
   const toneStyle = toneStyles[tone];
 
   return (
@@ -69,7 +72,7 @@ export function StatTile({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   tile: {
     minHeight: 124,
     gap: theme.spacing.md,

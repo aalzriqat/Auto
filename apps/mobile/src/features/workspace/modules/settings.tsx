@@ -5,7 +5,7 @@ import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileMyMembership, type MobileOrgSummary, type MobileOrgSettings } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { maybeText, parseOptionalNumber, splitLinesOrCommas, joinList, useGenericError, PrimaryButton, FormField, SelectField, RecordCard, ModuleScroll } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function SettingsModule({
   myMembership,
@@ -14,6 +14,7 @@ export function SettingsModule({
   myMembership: MobileMyMembership;
   org: MobileOrgSummary;
 }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const settings = useQuery(api.orgSettings.get, { orgId: org._id });

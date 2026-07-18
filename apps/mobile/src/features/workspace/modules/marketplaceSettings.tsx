@@ -5,9 +5,10 @@ import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileMarketplaceDealerProfile } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { maybeText, splitLinesOrCommas, useGenericError, PrimaryButton, FormField, SelectField, RecordCard, ModuleScroll } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function MarketplaceSettingsModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const profile = useQuery(api.marketplaceDealers.getMyProfile, { orgId });

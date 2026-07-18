@@ -4,7 +4,8 @@ import { StyleSheet, Text, View } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
 import { getMobileAppUrl } from "../../config/env";
-import { theme } from "../../theme";
+import { useThemedStyles } from "../../providers/ThemeProvider";
+import { type AppTheme } from "../../theme";
 import { useLocale } from "../../providers/LocaleProvider";
 import { parseTurnstileMessage } from "./marketplaceUtils";
 
@@ -121,6 +122,7 @@ export function TurnstileVerification({ siteKey, onTokenChange, resetKey }: Turn
   const [status, setStatus] = useState<VerificationStatus>("loading");
   const html = useMemo(() => (siteKey ? buildTurnstileHtml(siteKey, locale) : ""), [locale, siteKey]);
   const baseUrl = useMemo(() => getTurnstileBaseUrl(), []);
+  const styles = useThemedStyles(makeStyles);
 
   function receiveTurnstileMessage(event: WebViewMessageEvent) {
     const message = parseTurnstileMessage(event.nativeEvent.data);
@@ -176,7 +178,7 @@ export function TurnstileVerification({ siteKey, onTokenChange, resetKey }: Turn
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   wrapper: {
     gap: theme.spacing.xs,
   },

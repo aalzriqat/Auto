@@ -5,9 +5,10 @@ import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileRole } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { splitLinesOrCommas, joinList, useGenericError, PrimaryButton, FormField, FormModal, RecordCard, EmptyList, ModuleScroll } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function RolesModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const roles = useQuery(api.roles.list, { orgId });

@@ -4,9 +4,10 @@ import { Alert, Text, View } from "react-native";
 import { api, type MobileExpense, type MobileExpenseCategory } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { PAGE_SIZE, money, dateLabel, maybeText, parseOptionalNumber, parseRequiredNumber, idempotencyKey, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function ExpensesModule({ highlightId, orgId }: { highlightId?: string; orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const createExpense = useMutation(api.expenses.create);

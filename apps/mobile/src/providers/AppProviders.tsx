@@ -21,7 +21,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { validateMobileEnv } from "../config/env";
 import { PushNotificationsGate } from "../notifications/PushNotificationsGate";
-import { getTypographyStyle, theme } from "../theme";
+import { getTypographyStyle, type AppTheme } from "../theme";
 import { NativeUpdateGate } from "../updates/NativeUpdateGate";
 import { OtaUpdateGate } from "../updates/OtaUpdateGate";
 import {
@@ -30,6 +30,7 @@ import {
   type AppFontState,
 } from "./AppFontContext";
 import { LocaleProvider, useLocale } from "./LocaleProvider";
+import { ThemeProvider, useThemedStyles } from "./ThemeProvider";
 
 export { useAppFontState } from "./AppFontContext";
 
@@ -86,6 +87,7 @@ function AppFontGate({ children }: { children: ReactNode }) {
 function ConfigurationError({ message }: { message: string }) {
   const { fontsLoaded } = useAppFontState();
   const { locale, t, textDirection } = useLocale();
+  const styles = useThemedStyles(makeStyles);
 
   return (
     <View style={[styles.configError, { direction: textDirection }]}>
@@ -107,6 +109,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
     <SafeAreaProvider>
       <OtaUpdateGate>
         <AppFontGate>
+        <ThemeProvider>
         <LocaleProvider>
           {envResult.success && convex ? (
             <ClerkProvider publishableKey={envResult.data.clerkPublishableKey} tokenCache={tokenCache}>
@@ -120,13 +123,14 @@ export function AppProviders({ children }: { children: ReactNode }) {
             <ConfigurationError message={configurationErrorMessage} />
           )}
         </LocaleProvider>
+        </ThemeProvider>
         </AppFontGate>
       </OtaUpdateGate>
     </SafeAreaProvider>
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   configError: {
     flex: 1,
     justifyContent: "center",

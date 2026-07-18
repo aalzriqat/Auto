@@ -6,9 +6,10 @@ import { MemberAvatar } from "../../../components/Avatar";
 import { PresencePill } from "../../../components/Presence";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { PAGE_SIZE, parseRequiredNumber, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function TeamModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const addMember = useMutation(api.memberships.add);

@@ -6,9 +6,10 @@ import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepF
 import { api, type MobileFinanceCompany } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { type Option, type MobileFinanceCompanyFilter, type FinancePreviewInput, TERM_MONTH_PRESETS, FINANCE_SCENARIO_PRESETS, compactNumber, money, parseOptionalNumber, parseRequiredNumber, parseRequiredPositiveNumber, useGenericError, SearchInput, PrimaryButton, Chip, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, EmptyList, calculateFinancePreview, financeCompanyMatchesView, averageFinanceRate, DetailPill, SummaryRow, SummaryPanel, WizardActions, ModuleScroll } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function FinanceCompaniesModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const { locale } = useLocale();
   const reportError = useGenericError();
   const companies = useQuery(api.finance.listCompanies, { orgId });

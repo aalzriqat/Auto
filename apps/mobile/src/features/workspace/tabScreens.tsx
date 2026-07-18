@@ -7,7 +7,8 @@ import { FadeSlideIn } from "../../components/Motion";
 import { firstParam } from "../../navigation/routeParams";
 import { Screen } from "../../components/Screen";
 import { useLocale } from "../../providers/LocaleProvider";
-import { theme } from "../../theme";
+import { type AppTheme } from "../../theme";
+import { useAppTheme, useThemedStyles } from "../../providers/ThemeProvider";
 import { LeadsModule } from "./modules/leads";
 import { SalesWizardScreen, type WizardPaymentType } from "./salesWizard/SalesWizardScreen";
 import { MessagesModule } from "./modules/messages";
@@ -38,6 +39,7 @@ function moduleAccessible(
 }
 
 function TabLargeTitle({ caption, title }: Readonly<{ caption?: string; title: string }>) {
+  const styles = useThemedStyles(makeStyles);
   const { textDirection } = useLocale();
 
   return (
@@ -59,6 +61,7 @@ function TabSegments<T extends string>({
   segments: ReadonlyArray<{ label: string; value: T }>;
   value: T;
 }>) {
+  const styles = useThemedStyles(makeStyles);
   const { textDirection } = useLocale();
 
   return (
@@ -114,6 +117,7 @@ export function InventoryTabScreen() {
 type SalesSegment = "leads" | "deals";
 
 export function SalesTabScreen() {
+  const styles = useThemedStyles(makeStyles);
   const { locale } = useLocale();
   const { myMembership, org, orgId } = useWorkspaceTabsData();
   const canSeeLeads = moduleAccessible("leads", myMembership.permissions, myMembership.roleName);
@@ -196,6 +200,7 @@ function normalizeInboxSegment(value: string | string[] | undefined): InboxSegme
 }
 
 export function InboxTabScreen() {
+  const styles = useThemedStyles(makeStyles);
   const { locale } = useLocale();
   const { myMembership, org, orgId } = useWorkspaceTabsData();
   const params = useLocalSearchParams<{ segment?: string | string[] }>();
@@ -274,6 +279,8 @@ function MoreRow({
   module: NativeModuleDefinition;
   onPress: () => void;
 }>) {
+  const theme = useAppTheme();
+  const styles = useThemedStyles(makeStyles);
   const { isRtl, locale } = useLocale();
 
   return (
@@ -297,6 +304,7 @@ function MoreRow({
 }
 
 export function MoreTabScreen() {
+  const styles = useThemedStyles(makeStyles);
   const router = useRouter();
   const { locale, textDirection } = useLocale();
   const { myMembership, org, orgId } = useWorkspaceTabsData();
@@ -345,7 +353,7 @@ export function MoreTabScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   largeTitleBlock: {
     gap: 2,
     paddingHorizontal: theme.spacing.lg,

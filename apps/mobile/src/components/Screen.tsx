@@ -1,8 +1,9 @@
+import { StatusBar } from "expo-status-bar";
 import type { ReactNode } from "react";
 import { ScrollView, StyleSheet, type StyleProp, type ViewStyle } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { StatusBar } from "expo-status-bar";
 
+import { useAppTheme, useStatusBarStyle } from "../providers/ThemeProvider";
 import { theme } from "../theme";
 
 type ScreenPadding = "none" | "sm" | "md" | "lg";
@@ -27,11 +28,13 @@ export function Screen({
   padding = "none",
   scroll = false,
 }: ScreenProps) {
+  const activeTheme = useAppTheme();
+  const statusBarStyle = useStatusBarStyle();
   const contentContainerStyle = [paddingStyles[padding], contentStyle];
 
   return (
-    <SafeAreaView style={styles.screen}>
-      <StatusBar style="dark" />
+    <SafeAreaView style={[styles.screen, { backgroundColor: activeTheme.colors.background }]}>
+      <StatusBar style={statusBarStyle} />
       {scroll ? (
         <ScrollView
           keyboardShouldPersistTaps="handled"
@@ -50,7 +53,6 @@ export function Screen({
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: theme.colors.background,
   },
   scroll: {
     flex: 1,

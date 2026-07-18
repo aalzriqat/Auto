@@ -3,7 +3,8 @@ import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-na
 
 import { useAppFontState } from "../providers/AppFontContext";
 import { useLocale } from "../providers/LocaleProvider";
-import { getTypographyStyle, theme } from "../theme";
+import { useThemedStyles } from "../providers/ThemeProvider";
+import { getTypographyStyle, type AppTheme } from "../theme";
 
 export type GuidedStep = Readonly<{
   subtitle?: string;
@@ -30,6 +31,7 @@ export function GuidedStepFlow({
 }: GuidedStepFlowProps) {
   const { locale, textDirection } = useLocale();
   const { fontsLoaded } = useAppFontState();
+  const styles = useThemedStyles(makeStyles);
   const safeIndex = getSafeStepIndex(steps.length, activeIndex);
   const activeStep = steps[safeIndex];
   const progressLabel = steps.length > 0 ? `${safeIndex + 1}/${steps.length}` : "0/0";
@@ -79,7 +81,7 @@ export function GuidedStepFlow({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   root: {
     gap: theme.spacing.md,
     borderRadius: theme.radius.lg,

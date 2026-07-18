@@ -1,8 +1,10 @@
 import { StyleSheet } from "react-native";
 
-import { theme } from "../../../theme";
+import { useThemedStyles } from "../../../providers/ThemeProvider";
+import { theme, type AppTheme } from "../../../theme";
 
-export const styles = StyleSheet.create({
+export const makeStyles = (theme: AppTheme) =>
+  StyleSheet.create({
   scroll: {
     flex: 1,
   },
@@ -42,7 +44,7 @@ export const styles = StyleSheet.create({
     gap: theme.spacing.sm,
   },
   brand: {
-    color: theme.colors.primary,
+    color: theme.colors.primaryGlow,
     fontSize: 11,
     fontWeight: "700",
     letterSpacing: 0,
@@ -173,6 +175,8 @@ export const styles = StyleSheet.create({
   recordCard: {
     gap: theme.spacing.sm,
     borderRadius: theme.radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.lg,
     ...theme.shadows.sm,
@@ -197,7 +201,7 @@ export const styles = StyleSheet.create({
     backgroundColor: theme.colors.primarySoft,
   },
   entityAvatarText: {
-    color: theme.colors.primaryDark,
+    color: theme.colors.primaryGlow,
     fontSize: 14,
     fontWeight: "700",
   },
@@ -209,6 +213,8 @@ export const styles = StyleSheet.create({
   vehicleRecordCard: {
     gap: theme.spacing.md,
     borderRadius: theme.radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.lg,
     ...theme.shadows.sm,
@@ -307,7 +313,7 @@ export const styles = StyleSheet.create({
     gap: theme.spacing.sm,
   },
   warningText: {
-    color: theme.colors.accent,
+    color: theme.colors.accentGlow,
     fontSize: 13,
     fontWeight: "600",
   },
@@ -373,6 +379,8 @@ export const styles = StyleSheet.create({
   },
   emptyState: {
     borderRadius: theme.radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.xl,
     ...theme.shadows.sm,
@@ -385,6 +393,8 @@ export const styles = StyleSheet.create({
   summaryPanel: {
     gap: theme.spacing.md,
     borderRadius: theme.radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.lg,
     ...theme.shadows.sm,
@@ -450,6 +460,8 @@ export const styles = StyleSheet.create({
     minHeight: 118,
     justifyContent: "space-between",
     borderRadius: theme.radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.lg,
     ...theme.shadows.sm,
@@ -597,7 +609,7 @@ export const styles = StyleSheet.create({
     backgroundColor: theme.colors.surfaceAlt,
   },
   conversationAvatarText: {
-    color: theme.colors.primary,
+    color: theme.colors.primaryGlow,
     fontSize: 13,
     fontWeight: "700",
   },
@@ -692,7 +704,7 @@ export const styles = StyleSheet.create({
     backgroundColor: theme.colors.primary,
   },
   messageSender: {
-    color: theme.colors.primary,
+    color: theme.colors.primaryGlow,
     fontSize: 11,
     fontWeight: "700",
   },
@@ -715,7 +727,7 @@ export const styles = StyleSheet.create({
     fontWeight: "600",
   },
   messageMetaMine: {
-    color: theme.colors.primarySoft,
+    color: "rgba(255,255,255,0.72)",
   },
   seenByStack: {
     flexDirection: "row",
@@ -793,7 +805,7 @@ export const styles = StyleSheet.create({
     backgroundColor: theme.colors.surfaceAlt,
   },
   memberAvatarText: {
-    color: theme.colors.primary,
+    color: theme.colors.primaryGlow,
     fontSize: 12,
     fontWeight: "700",
   },
@@ -867,7 +879,7 @@ export const styles = StyleSheet.create({
     fontWeight: "600",
   },
   vehiclePrice: {
-    color: theme.colors.primary,
+    color: theme.colors.primaryGlow,
     fontSize: 18,
     fontWeight: "700",
     letterSpacing: -0.3,
@@ -931,7 +943,7 @@ export const styles = StyleSheet.create({
     borderBottomColor: "transparent",
   },
   underlineTabSelected: {
-    borderBottomColor: theme.colors.primary,
+    borderBottomColor: theme.colors.primaryGlow,
   },
   underlineTabText: {
     color: theme.colors.mutedText,
@@ -939,7 +951,7 @@ export const styles = StyleSheet.create({
     fontWeight: "600",
   },
   underlineTabTextSelected: {
-    color: theme.colors.primary,
+    color: theme.colors.primaryGlow,
   },
   pushedScreenContent: {
     gap: theme.spacing.lg,
@@ -955,5 +967,98 @@ export const styles = StyleSheet.create({
     justifyContent: "center",
     borderRadius: theme.radius.full,
   },
-});
+  // Image-forward inventory card.
+  vehicleCard: {
+    overflow: "hidden",
+    borderRadius: theme.radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    ...theme.shadows.sm,
+  },
+  vehiclePhoto: {
+    height: 194,
+    justifyContent: "flex-end",
+    backgroundColor: theme.colors.hero,
+  },
+  vehiclePhotoImage: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  vehiclePhotoPlaceholder: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  vehiclePhotoInitials: {
+    color: "#ffffff",
+    fontSize: 46,
+    fontWeight: "800",
+    letterSpacing: 1,
+    opacity: 0.92,
+  },
+  vehiclePhotoTop: {
+    position: "absolute",
+    top: theme.spacing.sm,
+    left: theme.spacing.sm,
+    right: theme.spacing.sm,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+  },
+  vehiclePhotoStatus: {
+    overflow: "hidden",
+    borderRadius: theme.radius.full,
+    backgroundColor: "rgba(2,6,14,0.52)",
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.xs,
+  },
+  vehiclePhotoStatusText: {
+    color: "#ffffff",
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.3,
+  },
+  vehiclePhotoOverflow: {
+    width: 32,
+    height: 32,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.full,
+    backgroundColor: "rgba(2,6,14,0.52)",
+  },
+  vehiclePhotoBottom: {
+    gap: 3,
+    padding: theme.spacing.lg,
+  },
+  vehiclePhotoTitle: {
+    color: "#ffffff",
+    fontSize: 18,
+    fontWeight: "800",
+    letterSpacing: -0.3,
+  },
+  vehiclePhotoPrice: {
+    color: "#ffffff",
+    fontSize: 25,
+    fontWeight: "800",
+    letterSpacing: -0.5,
+  },
+  vehicleCardBody: {
+    gap: theme.spacing.sm,
+    padding: theme.spacing.lg,
+  },
+  });
+
+// Static light fallback for any not-yet-migrated consumer.
+export const styles = makeStyles(theme);
+
+// Reactive styles that follow the active theme. Prefer this in components.
+export const useStyles = () => useThemedStyles(makeStyles);
 

@@ -2,12 +2,14 @@ import { Pressable, StyleSheet, Text } from "react-native";
 
 import { useAppFontState } from "../providers/AppFontContext";
 import { useLocale } from "../providers/LocaleProvider";
-import { getTypographyStyle, theme } from "../theme";
+import { useThemedStyles } from "../providers/ThemeProvider";
+import { getTypographyStyle, type AppTheme } from "../theme";
 import { Icon } from "./Icon";
 
 export function LocaleToggle() {
   const { locale, setLocale } = useLocale();
   const { fontsLoaded } = useAppFontState();
+  const styles = useThemedStyles(makeStyles);
   const nextLocale = locale === "ar" ? "en" : "ar";
 
   return (
@@ -28,10 +30,10 @@ export function LocaleToggle() {
 }
 
 export function getLocaleTogglePressedStyle(pressed: boolean) {
-  return pressed ? styles.pressed : null;
+  return pressed ? { opacity: 0.82 } : null;
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   toggle: {
     minWidth: 58,
     height: 40,
@@ -47,8 +49,5 @@ const styles = StyleSheet.create({
   },
   toggleText: {
     color: theme.colors.text,
-  },
-  pressed: {
-    opacity: 0.82,
   },
 });

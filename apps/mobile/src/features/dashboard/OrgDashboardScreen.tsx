@@ -19,6 +19,7 @@ import { EmptyState } from "../../components/EmptyState";
 import { Icon } from "../../components/Icon";
 import type { SemanticIconName } from "../../components/Icon";
 import { LocaleToggle } from "../../components/LocaleToggle";
+import { ThemeToggle } from "../../components/ThemeToggle";
 import { FadeSlideIn, useCountUp } from "../../components/Motion";
 import { NotificationBell } from "../../components/NotificationBell";
 import { MemberAvatar } from "../../components/Avatar";
@@ -29,7 +30,8 @@ import { SkeletonRow } from "../../components/SkeletonRow";
 import { StatTile, type StatTileTone } from "../../components/StatTile";
 import { useAppFontState } from "../../providers/AppFontContext";
 import { useLocale } from "../../providers/LocaleProvider";
-import { getTypographyStyle, theme } from "../../theme";
+import { getTypographyStyle, type AppTheme } from "../../theme";
+import { useAppTheme, useThemedStyles } from "../../providers/ThemeProvider";
 import { WorkspaceModuleLauncher } from "../workspace/WorkspaceModuleLauncher";
 import { SmoothAreaChart } from "./SmoothAreaChart";
 import { TodayAgenda } from "./TodayAgenda";
@@ -131,6 +133,7 @@ function getFirstName(fullName: string | undefined): string | null {
 }
 
 function Header({ org }: { org: MobileOrgSummary }) {
+  const styles = useThemedStyles(makeStyles);
   const router = useRouter();
   const { locale, t, textDirection } = useLocale();
   const type = useDashboardTypography();
@@ -160,6 +163,7 @@ function Header({ org }: { org: MobileOrgSummary }) {
       </View>
       <View style={styles.headerActions}>
         <NotificationBell orgId={org._id} />
+        <ThemeToggle />
         <LocaleToggle />
         <UserButton />
       </View>
@@ -174,6 +178,7 @@ function TimeRangeControl({
   value: MobileDashboardTimeRange;
   onChange: (value: MobileDashboardTimeRange) => void;
 }) {
+  const styles = useThemedStyles(makeStyles);
   const { t, textDirection } = useLocale();
   const type = useDashboardTypography();
 
@@ -212,6 +217,8 @@ function SalesHero({
   timeRange: MobileDashboardTimeRange;
   onChangeTimeRange: (value: MobileDashboardTimeRange) => void;
 }) {
+  const theme = useAppTheme();
+  const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
   const type = useDashboardTypography();
   const latestTrend = stats.salesTrend.at(-1);
@@ -272,6 +279,7 @@ function MetricCard({
   icon: SemanticIconName;
   tone: StatTileTone;
 }) {
+  const styles = useThemedStyles(makeStyles);
   return (
     <StatTile
       caption={caption}
@@ -285,6 +293,7 @@ function MetricCard({
 }
 
 function DataQualityPanel({ dataQuality }: { dataQuality: MobileDataQualityStats }) {
+  const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
   const type = useDashboardTypography();
   const total = getDataQualityTotal(dataQuality);
@@ -315,6 +324,7 @@ function DataQualityPanel({ dataQuality }: { dataQuality: MobileDataQualityStats
 }
 
 function MetricPill({ label, value }: { label: string; value: string }) {
+  const styles = useThemedStyles(makeStyles);
   const type = useDashboardTypography();
 
   return (
@@ -326,6 +336,7 @@ function MetricPill({ label, value }: { label: string; value: string }) {
 }
 
 function TeamPanel({ stats }: { stats: MobileDashboardStats }) {
+  const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
   const type = useDashboardTypography();
   const topTeamTasks = stats.teamTasks.slice(0, 3);
@@ -377,6 +388,8 @@ function QuickActionRail({
   orgId: string;
   roleName: string;
 }>) {
+  const theme = useAppTheme();
+  const styles = useThemedStyles(makeStyles);
   const router = useRouter();
   const { t, textDirection } = useLocale();
   const type = useDashboardTypography();
@@ -454,6 +467,7 @@ function DashboardContent({
   timeRange: MobileDashboardTimeRange;
   onChangeTimeRange: (value: MobileDashboardTimeRange) => void;
 }) {
+  const styles = useThemedStyles(makeStyles);
   const { locale, t } = useLocale();
   const router = useRouter();
   const type = useDashboardTypography();
@@ -538,6 +552,7 @@ function DashboardContent({
 }
 
 function DashboardSkeleton({ org }: { org: MobileOrgSummary }) {
+  const styles = useThemedStyles(makeStyles);
   const { t, textDirection } = useLocale();
   const type = useDashboardTypography();
 
@@ -561,6 +576,7 @@ function DashboardSkeleton({ org }: { org: MobileOrgSummary }) {
 }
 
 function InaccessibleWorkspaceState() {
+  const styles = useThemedStyles(makeStyles);
   const router = useRouter();
   const { t, textDirection } = useLocale();
 
@@ -673,7 +689,7 @@ export function OrgDashboardScreen({ orgId }: Readonly<{ orgId: string | null }>
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   scroll: {
     flex: 1,
   },

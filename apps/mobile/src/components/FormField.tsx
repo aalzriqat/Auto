@@ -3,7 +3,8 @@ import { StyleSheet, Text, TextInput, View } from "react-native";
 
 import { useAppFontState } from "../providers/AppFontContext";
 import { useLocale } from "../providers/LocaleProvider";
-import { getTypographyStyle, theme } from "../theme";
+import { useAppTheme, useThemedStyles } from "../providers/ThemeProvider";
+import { getTypographyStyle, type AppTheme } from "../theme";
 
 type FormFieldProps = Readonly<{
   containerStyle?: StyleProp<ViewStyle>;
@@ -24,6 +25,8 @@ export function FormField({
 }: FormFieldProps) {
   const { isRtl, locale } = useLocale();
   const { fontsLoaded } = useAppFontState();
+  const theme = useAppTheme();
+  const styles = useThemedStyles(makeStyles);
 
   return (
     <View style={[styles.field, containerStyle]}>
@@ -47,7 +50,7 @@ export function FormField({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   field: {
     gap: theme.spacing.xs,
   },

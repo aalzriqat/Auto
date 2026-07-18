@@ -3,7 +3,8 @@ import type { ComponentProps } from "react";
 import type { StyleProp, TextStyle } from "react-native";
 
 import { useLocale } from "../providers/LocaleProvider";
-import { theme } from "../theme";
+import { useAppTheme } from "../providers/ThemeProvider";
+import { type AppTheme } from "../theme";
 
 export type IoniconGlyphName = ComponentProps<typeof Ionicons>["name"];
 
@@ -59,6 +60,8 @@ export const semanticIconGlyphs = {
   tasks: "checkbox-outline",
   tasksFilled: "checkbox",
   team: "people-circle-outline",
+  themeDark: "moon-outline",
+  themeLight: "sunny-outline",
   today: "sunny-outline",
   valuationCompanies: "scale-outline",
   vehicles: "car-sport-outline",
@@ -73,7 +76,7 @@ const rtlIconGlyphs: Partial<Record<IoniconGlyphName, IoniconGlyphName>> = {
 } as const;
 
 export type SemanticIconName = keyof typeof semanticIconGlyphs;
-export type IconColorToken = keyof typeof theme.colors;
+export type IconColorToken = keyof AppTheme["colors"];
 
 type IconProps = Readonly<{
   accessibilityLabel?: string;
@@ -98,6 +101,7 @@ export function Icon({
   testID,
 }: IconProps) {
   const { isRtl } = useLocale();
+  const theme = useAppTheme();
 
   return (
     <Ionicons

@@ -2,9 +2,10 @@ import { useRouter } from "expo-router";
 import { Text, View } from "react-native";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { PrimaryButton, ModuleScroll } from "./moduleShared";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export function DedicatedMarketplaceModule({ orgId }: { orgId: string }) {
+  const styles = useStyles();
   const router = useRouter();
   const { locale } = useLocale();
 

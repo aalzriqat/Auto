@@ -1,6 +1,7 @@
 import { Image, StyleSheet, Text, View, type ImageStyle, type StyleProp, type ViewStyle } from "react-native";
 
-import { theme } from "../theme";
+import { useThemedStyles } from "../providers/ThemeProvider";
+import { type AppTheme } from "../theme";
 
 export function MemberAvatar({
   imageUrl,
@@ -9,6 +10,7 @@ export function MemberAvatar({
   style,
   testID,
 }: Readonly<{ imageUrl?: string; name: string; size?: number; style?: StyleProp<ViewStyle>; testID?: string }>) {
+  const styles = useThemedStyles(makeStyles);
   const dimensionStyle = { width: size, height: size, borderRadius: size / 2 };
 
   if (imageUrl) {
@@ -28,7 +30,7 @@ export function MemberAvatar({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   avatar: {
     alignItems: "center",
     justifyContent: "center",

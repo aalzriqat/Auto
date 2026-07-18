@@ -19,7 +19,7 @@ import {
   parseOptionalNumber,
   useGenericError,
 } from "./modules/moduleShared";
-import { styles } from "./modules/moduleStyles";
+import { useStyles } from "./modules/moduleStyles";
 
 const PERMISSION = {
   editCustomers: "edit:customers",
@@ -42,6 +42,7 @@ export function CustomerDetailScreen({
   const router = useRouter();
   const { locale, t } = useLocale();
   const reportError = useGenericError();
+  const styles = useStyles();
   const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const canQuery = isLoaded && isSignedIn && Boolean(orgId) && Boolean(customerId);
 

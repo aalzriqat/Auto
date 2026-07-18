@@ -3,7 +3,8 @@ import { StyleSheet, Text, View } from "react-native";
 
 import { useAppFontState } from "../providers/AppFontContext";
 import { useLocale } from "../providers/LocaleProvider";
-import { getTypographyStyle, theme } from "../theme";
+import { useAppTheme, useThemedStyles } from "../providers/ThemeProvider";
+import { getTypographyStyle, theme, type AppTheme } from "../theme";
 
 // Mirrors the web team page's getLastSeenInfo tiers exactly (app/(dashboard)/[orgId]/team/page.tsx) —
 // lastSeenAt is throttled server-side to a write at most every few minutes, so "active now"
@@ -11,28 +12,31 @@ import { getTypographyStyle, theme } from "../theme";
 export function getPresenceInfo(
   t: (key: MobileFoundationStringKey) => string,
   lastSeenAt: number | undefined,
+  colors: AppTheme["colors"] = theme.colors,
 ): { label: string; dotColor: string } {
   if (!lastSeenAt) {
-    return { label: t("presenceOffline"), dotColor: theme.colors.subtleText };
+    return { label: t("presenceOffline"), dotColor: colors.subtleText };
   }
   const minutes = Math.floor((Date.now() - lastSeenAt) / 60_000);
   if (minutes < 5) {
-    return { label: t("presenceActiveNow"), dotColor: theme.colors.success };
+    return { label: t("presenceActiveNow"), dotColor: colors.success };
   }
   if (minutes < 60) {
-    return { label: t("presenceActiveMinutesAgo").replace("{0}", String(minutes)), dotColor: theme.colors.warning };
+    return { label: t("presenceActiveMinutesAgo").replace("{0}", String(minutes)), dotColor: colors.warning };
   }
   const hours = Math.floor(minutes / 60);
   if (hours < 24) {
-    return { label: t("presenceActiveHoursAgo").replace("{0}", String(hours)), dotColor: theme.colors.subtleText };
+    return { label: t("presenceActiveHoursAgo").replace("{0}", String(hours)), dotColor: colors.subtleText };
   }
   const days = Math.floor(hours / 24);
-  return { label: t("presenceActiveDaysAgo").replace("{0}", String(days)), dotColor: theme.colors.subtleText };
+  return { label: t("presenceActiveDaysAgo").replace("{0}", String(days)), dotColor: colors.subtleText };
 }
 
 export function PresenceDot({ lastSeenAt }: Readonly<{ lastSeenAt: number | undefined }>) {
   const { t } = useLocale();
-  const presence = getPresenceInfo(t, lastSeenAt);
+  const theme = useAppTheme();
+  const styles = useThemedStyles(makeStyles);
+  const presence = getPresenceInfo(t, lastSeenAt, theme.colors);
 
   return (
     <View
@@ -45,7 +49,9 @@ export function PresenceDot({ lastSeenAt }: Readonly<{ lastSeenAt: number | unde
 export function PresencePill({ lastSeenAt }: Readonly<{ lastSeenAt: number | undefined }>) {
   const { locale, t } = useLocale();
   const { fontsLoaded } = useAppFontState();
-  const presence = getPresenceInfo(t, lastSeenAt);
+  const theme = useAppTheme();
+  const styles = useThemedStyles(makeStyles);
+  const presence = getPresenceInfo(t, lastSeenAt, theme.colors);
 
   return (
     <View style={styles.presencePill}>
@@ -60,7 +66,7 @@ export function PresencePill({ lastSeenAt }: Readonly<{ lastSeenAt: number | und
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   presenceDot: {
     width: 8,
     height: 8,

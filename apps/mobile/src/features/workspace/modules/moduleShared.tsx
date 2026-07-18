@@ -3,13 +3,14 @@ import { Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, Scro
 import { FadeSlideIn } from "../../../components/Motion";
 import { Icon } from "../../../components/Icon";
 import { LocaleToggle } from "../../../components/LocaleToggle";
+import { ThemeToggle } from "../../../components/ThemeToggle";
 import { SearchableSelectField, type SearchableSelectOption } from "../../../components/SearchableSelectField";
 import { api, type MobileDirectConversation, type MobileFinanceCompany, type MobileOrgSummary, type MobileSale, type MobileSaleStatus, type MobileVehicle } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { theme } from "../../../theme";
+import { useAppTheme } from "../../../providers/ThemeProvider";
 import { getFirstNhtsaResult, getFirstNhtsaWmiName, mapNhtsaVinPayload, type MobileVinDecodedFields, type MobileVinReadiness } from "../mobileVinDecode";
 import { getNativeModule, getVisibleNativeModulesByCategory, labelFor, nativeModulePath, type NativeModuleId } from "../nativeModules";
-import { styles } from "./moduleStyles";
+import { useStyles } from "./moduleStyles";
 
 export const PAGE_SIZE = 25;
 export const SELECTOR_PAGE_SIZE = 100;
@@ -340,6 +341,7 @@ export function ModuleHeader({
 }) {
   const router = useRouter();
   const { t, textDirection } = useLocale();
+  const styles = useStyles();
 
   return (
     <View style={[styles.header, { direction: textDirection }]}>
@@ -361,6 +363,7 @@ export function ModuleHeader({
         </Text>
       </View>
       <View style={styles.headerActions}>
+        <ThemeToggle />
         <LocaleToggle />
       </View>
     </View>
@@ -378,6 +381,7 @@ export function PushedScreenHeader({
 }) {
   const router = useRouter();
   const { locale, t, textDirection } = useLocale();
+  const styles = useStyles();
 
   return (
     <View style={[styles.header, { direction: textDirection }]}>
@@ -426,6 +430,7 @@ export function ModuleSwitcherBar({
 }) {
   const router = useRouter();
   const { locale, textDirection } = useLocale();
+  const styles = useStyles();
   const activeModule = getNativeModule(activeModuleId);
   const modules = activeModule
     ? getVisibleNativeModulesByCategory(activeModule.category, permissions, roleName)
@@ -462,7 +467,7 @@ export function ModuleSwitcherBar({
               }
             >
               <View style={styles.moduleSwitchChipContent}>
-                <Icon color={selected ? "primary" : "mutedText"} name={module.icon} size={16} />
+                <Icon color={selected ? "onPrimary" : "mutedText"} name={module.icon} size={16} />
                 <Text
                   numberOfLines={1}
                   style={[styles.moduleSwitchText, selected && styles.moduleSwitchTextSelected]}
@@ -487,6 +492,8 @@ export function SearchInput({
   placeholder: string;
   value: string;
 }) {
+  const styles = useStyles();
+  const theme = useAppTheme();
   return (
     <TextInput
       autoCapitalize="none"
@@ -511,6 +518,7 @@ export function PrimaryButton({
   onPress: () => void;
   tone?: "primary" | "danger" | "muted";
 }) {
+  const styles = useStyles();
   const buttonStyle =
     tone === "danger"
       ? styles.dangerButton
@@ -555,6 +563,7 @@ export function Chip<T extends string>({
   selected: boolean;
   value: T;
 }) {
+  const styles = useStyles();
   return (
     <Pressable
       accessibilityRole="button"
@@ -580,6 +589,7 @@ export function SegmentedControl<T extends string>({
   options: Array<Option<T>>;
   value: T;
 }) {
+  const styles = useStyles();
   return (
     <View style={styles.chipRow}>
       {options.map((option) => (
@@ -605,6 +615,7 @@ export function UnderlineTabBar<T extends string>({
   value: T;
 }) {
   const { textDirection } = useLocale();
+  const styles = useStyles();
 
   return (
     <ScrollView
@@ -641,6 +652,8 @@ export function FormField({
   placeholder,
   value,
 }: FormFieldProps) {
+  const styles = useStyles();
+  const theme = useAppTheme();
   return (
     <View style={styles.formField}>
       <Text style={styles.formLabel}>{label}</Text>
@@ -703,6 +716,7 @@ export function FormModal({
   visible: boolean;
 }) {
   const { locale, textDirection } = useLocale();
+  const styles = useStyles();
 
   return (
     <Modal animationType="slide" transparent visible={visible} onRequestClose={onClose}>
@@ -727,6 +741,7 @@ export function FormModal({
 }
 
 export function RecordCard({ children }: { children: React.ReactNode }) {
+  const styles = useStyles();
   return <View style={styles.recordCard}>{children}</View>;
 }
 
@@ -739,6 +754,7 @@ export function MetricCard({
   title: string;
   value: string;
 }) {
+  const styles = useStyles();
   return (
     <View style={styles.metricCard}>
       <Text style={styles.metricTitle}>{title}</Text>
@@ -751,6 +767,7 @@ export function MetricCard({
 }
 
 export function EmptyList({ label }: { label: string }) {
+  const styles = useStyles();
   return (
     <View style={styles.emptyState}>
       <Text style={styles.emptyText}>{label}</Text>
@@ -766,6 +783,7 @@ export function LoadMoreFooter({
   status: string;
 }) {
   const { locale } = useLocale();
+  const styles = useStyles();
 
   if (canLoadMore(status)) {
     return (
@@ -930,6 +948,7 @@ export function DetailPill({
   label: string;
   tone?: "neutral" | "success" | "warning" | "info";
 }) {
+  const styles = useStyles();
   return (
     <View
       style={[
@@ -951,6 +970,7 @@ export function SummaryRow({
   label: string;
   value: string;
 }) {
+  const styles = useStyles();
   return (
     <View style={styles.summaryRow}>
       <Text style={styles.summaryLabel}>{label}</Text>
@@ -970,6 +990,7 @@ export function SummaryPanel({
   subtitle?: string;
   title: string;
 }) {
+  const styles = useStyles();
   return (
     <View style={styles.summaryPanel}>
       <View style={styles.summaryHeader}>
@@ -1002,6 +1023,7 @@ export function WizardActions({
   saving: boolean;
   totalSteps: number;
 }) {
+  const styles = useStyles();
   const isLastStep = activeStep >= totalSteps - 1;
 
   return (
@@ -1021,6 +1043,7 @@ export function WizardActions({
 }
 
 export function ModuleScroll({ children }: { children: React.ReactNode }) {
+  const styles = useStyles();
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
       <FadeSlideIn>{children}</FadeSlideIn>
@@ -1047,6 +1070,7 @@ export function ModuleList<T>({
   renderItem: (item: T) => React.ReactElement;
   status?: string;
 }) {
+  const styles = useStyles();
   const handleEndReached =
     loadMore && status && canLoadMore(status) ? () => loadMore(PAGE_SIZE) : undefined;
 
