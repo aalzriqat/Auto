@@ -2,6 +2,14 @@ import type { ConfigContext, ExpoConfig } from "expo/config";
 
 const appScheme = process.env.EXPO_PUBLIC_APP_SCHEME || "autoflow";
 
+// FCM config for Expo push (remote notifications on Android). Kept out of git
+// (it carries the Android Firebase key); provide it locally as
+// apps/mobile/google-services.json or via the GOOGLE_SERVICES_JSON env / EAS
+// secret. Only consumed by `expo prebuild` / EAS; a plain Gradle build ignores
+// it and applies the Firebase plugin only when the file is actually present
+// (see android/app/build.gradle), so a checkout without FCM creds still builds.
+const googleServicesFile = process.env.GOOGLE_SERVICES_JSON ?? "./google-services.json";
+
 // The EAS project created for AutoFlow (expo.dev, account "aalzriqat"). This id
 // is what both EAS Update (OTA) and the Expo push service route by. It's public
 // (it ships in the app bundle), so it's fine hardcoded; the env var only exists
@@ -19,10 +27,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   slug: "autoflow",
   owner: "aalzriqat",
   scheme: appScheme,
-  // Drives the "appVersion" runtimeVersion policy below: OTA JS bundles only
-  // load onto a native build with a matching runtimeVersion, so bump this
-  // whenever you ship a NATIVE change (new module/permission) to force a fresh
-  // APK instead of pushing an incompatible bundle over-the-air.
   version: "1.0.0",
   // Bare workflow (android/ is committed) → eas update can't resolve a policy,
   // so pin the runtime version concretely. Must equal the value the installed
@@ -52,6 +56,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   android: {
     ...config.android,
     package: "com.autoflowdealer.mobile",
+    googleServicesFile,
     adaptiveIcon: {
       // Android crops the foreground to a circle/squircle and only shows the
       // centre ~66%, so this must be the AF/car MARK (no wordmark), centred on

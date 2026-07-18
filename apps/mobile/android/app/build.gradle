@@ -2,6 +2,13 @@ apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
+// Firebase (FCM) for Expo push notifications. Applied only when
+// google-services.json is present so a checkout without FCM credentials can
+// still build (remote push simply won't register in that build).
+if (file("google-services.json").exists()) {
+    apply plugin: "com.google.gms.google-services"
+}
+
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 
 def releaseSigningPropertiesFile = rootProject.file("release-signing.properties")
