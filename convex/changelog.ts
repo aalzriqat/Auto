@@ -951,6 +951,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "أصبح لسوق التطبيق غرفة طلب جديدة: بعد أن يخبرنا المشتري بالسيارة التي يريدها، ينتقل مباشرةً إلى شاشة حيّة تظهر فيها عروض المعارض المطابقة أولاً بأول مع القسط الشهري والسعر نقداً وشارات الثقة. يمكن للمشتري حفظ العروض ومقارنة عرضين أو ثلاثة جنباً إلى جنب، ولا يظهر رقم هاتفه إلا للمعرض الذي يختاره وبعد موافقته الصريحة. ويحتفظ تبويب «طلباتي» بكل طلب على بُعد نقرة واحدة مع إشعار عند وصول عروض جديدة.",
     publishedAt: releaseAt(2026, 7, 18, 1),
   },
+  {
+    type: "IMPROVEMENT",
+    titleEn: "See your budget reach before you sign up",
+    titleAr: "شوف مدى ميزانيتك قبل ما تسجّل",
+    descriptionEn: "The mobile 'request a car' flow now leads with value: it asks about the car and your budget first, and shows the approximate price range you can reach for a given monthly payment — calculated live from real dealer finance terms — before ever asking for your name or number. Your contact details are the last step, not the first.",
+    descriptionAr: "أصبح مسار «اطلب سيارة» في التطبيق يبدأ بالقيمة: يسألك عن السيارة وميزانيتك أولاً، ويعرض لك مدى الأسعار التقريبي الذي تقدر توصله بقسط شهري معيّن — محسوباً مباشرةً من شروط تمويل المعارض الحقيقية — قبل أن يطلب اسمك أو رقمك. بيانات تواصلك أصبحت الخطوة الأخيرة لا الأولى.",
+    publishedAt: releaseAt(2026, 7, 18, 2),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;
