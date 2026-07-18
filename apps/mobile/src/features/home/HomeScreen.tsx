@@ -1,5 +1,5 @@
 import { nativeRoutes } from "@autoflow/shared";
-import { UserButton } from "@clerk/expo/native";
+import { ProfileButton } from "../../components/ProfileButton";
 import { useAuth } from "@clerk/expo";
 import { useRouter } from "expo-router";
 import { useConvexAuth, useQuery } from "convex/react";
@@ -204,7 +204,7 @@ function AuthenticatedHome() {
         </View>
         <View style={styles.headerActions}>
           <LocaleToggle />
-          <UserButton />
+          <ProfileButton />
         </View>
       </View>
 
