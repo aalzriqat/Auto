@@ -1155,3 +1155,253 @@ describe("vehicles trust passport (Phase 61 self-service form)", () => {
     });
   });
 });
+
+const baseImportRow = {
+  make: "Toyota",
+  model: "Camry",
+  year: 2022,
+  color: "White",
+  fuelType: "Petrol",
+  transmission: "Automatic",
+  sellingPrice: 18000,
+  purchasePrice: 14000,
+};
+
+describe("vehicles.importBulk — owned stock vs sourced", () => {
+  test("lands owned stock as AVAILABLE (STOCK) by default", async () => {
+    const { orgId, asUser, t } = await setup();
+
+    const result = await asUser.mutation(api.vehicles.importBulk, {
+      orgId,
+      vehicles: [{ ...baseImportRow, vin: "STOCK-IMPORT-1" }],
+    });
+
+    expect(result.inserted).toBe(1);
+    await t.run(async (ctx) => {
+      const vehicle = await ctx.db
+        .query("vehicles")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .first();
+      expect(vehicle?.status).toBe("AVAILABLE");
+      expect(vehicle?.sourceType ?? "STOCK").toBe("STOCK");
+    });
+  });
+
+  test("creates a sourced vehicle as SOURCING with supplier name and cost", async () => {
+    const { orgId, asUser, t } = await setup();
+
+    const result = await asUser.mutation(api.vehicles.importBulk, {
+      orgId,
+      vehicles: [
+        {
+          ...baseImportRow,
+          make: "BYD",
+          model: "Dolphin",
+          year: 2024,
+          vin: "SOURCED-IMPORT-1",
+          purchasePrice: 22000,
+          sourceType: "SOURCED",
+          sourcedFromName: "Gulf Motors",
+          sourceCost: 22000,
+        },
+      ],
+    });
+
+    expect(result.inserted).toBe(1);
+    await t.run(async (ctx) => {
+      const vehicle = await ctx.db
+        .query("vehicles")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .first();
+      expect(vehicle?.status).toBe("SOURCING");
+      expect(vehicle?.sourceType).toBe("SOURCED");
+      expect(vehicle?.sourcedFromName).toBe("Gulf Motors");
+      expect(vehicle?.sourceCost).toBe(22000);
+      // purchasePrice mirrors supplier cost, matching createSourced.
+      expect(vehicle?.purchasePrice).toBe(22000);
+    });
+  });
+
+  test("skips a sourced row missing its supplier without aborting the batch", async () => {
+    const { orgId, asUser, t } = await setup();
+
+    const result = await asUser.mutation(api.vehicles.importBulk, {
+      orgId,
+      vehicles: [
+        // Invalid: sourced but no supplier name/cost.
+        { ...baseImportRow, vin: "SOURCED-BAD-1", sourceType: "SOURCED" },
+        // Valid owned stock in the same batch must still import.
+        { ...baseImportRow, vin: "STOCK-GOOD-1" },
+      ],
+    });
+
+    expect(result.inserted).toBe(1);
+    expect(result.skipped).toBeGreaterThanOrEqual(1);
+    await t.run(async (ctx) => {
+      const vehicles = await ctx.db
+        .query("vehicles")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect();
+      const vins = vehicles.map((v) => v.vin);
+      expect(vins).toContain("STOCK-GOOD-1");
+      expect(vins).not.toContain("SOURCED-BAD-1");
+    });
+  });
+});
+
+describe("vehicles.exportData", () => {
+  test("returns vehicles with their source type and finance-company valuations", async () => {
+    const { orgId, asUser, t, roleId } = await setup();
+    // Cost is only exported for roles that can see dealer cost.
+    await t.run((ctx) => ctx.db.patch(roleId, { permissions: [...PERMISSIONS, "view:cost_price"] }));
+
+    const companyId = await t.run((ctx) =>
+      ctx.db.insert("financeCompanies", {
+        orgId,
+        name: "بندار",
+        profitRate: 5,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        isActive: true,
+      })
+    );
+
+    await asUser.mutation(api.vehicles.importBulk, {
+      orgId,
+      vehicles: [
+        {
+          ...baseImportRow,
+          vin: "EXPORT-1",
+          valuations: [{ companyId, valuationAmount: 19000 }],
+        },
+      ],
+    });
+
+    const data = await asUser.query(api.vehicles.exportData, { orgId });
+
+    expect(data.vehicles).toHaveLength(1);
+    const vehicle = data.vehicles[0];
+    expect(vehicle.make).toBe("Toyota");
+    expect(vehicle.sourceType).toBe("STOCK");
+    expect(vehicle.cost).toBe(14000);
+    expect(vehicle.valuations).toEqual([{ companyName: "بندار", amount: 19000 }]);
+    expect(data.valuationCompanyNames).toContain("بندار");
+  });
+
+  test("strips cost for roles that cannot see dealer cost", async () => {
+    const { orgId, asUser } = await setup();
+
+    await asUser.mutation(api.vehicles.importBulk, {
+      orgId,
+      vehicles: [{ ...baseImportRow, vin: "EXPORT-NOCOST-1" }],
+    });
+
+    const data = await asUser.query(api.vehicles.exportData, { orgId });
+    expect(data.vehicles[0].cost).toBeNull();
+  });
+
+  test("round-trips a sourced vehicle + valuation into a brand-new dealer account", async () => {
+    const { orgId: orgA, asUser: asUserA, t, roleId: roleA } = await setup();
+    await t.run((ctx) => ctx.db.patch(roleA, { permissions: [...PERMISSIONS, "view:cost_price"] }));
+
+    const companyAId = await t.run((ctx) =>
+      ctx.db.insert("financeCompanies", {
+        orgId: orgA,
+        name: "بندار",
+        profitRate: 5,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        isActive: true,
+      })
+    );
+
+    await asUserA.mutation(api.vehicles.importBulk, {
+      orgId: orgA,
+      vehicles: [
+        {
+          ...baseImportRow,
+          make: "BYD",
+          model: "Dolphin",
+          year: 2024,
+          vin: "ROUNDTRIP-1",
+          purchasePrice: 22000,
+          sourceType: "SOURCED",
+          sourcedFromName: "Gulf Motors",
+          sourceCost: 22000,
+          valuations: [{ companyId: companyAId, valuationAmount: 27000 }],
+        },
+      ],
+    });
+
+    const exported = await asUserA.query(api.vehicles.exportData, { orgId: orgA });
+
+    // Fresh dealer account with no finance companies yet.
+    const orgB = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Brand New Dealer", createdAt: Date.now() })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId: orgB,
+        plan: "professional",
+        status: "active",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+    const userBId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "user_b_rt", email: "b@test.com", name: "Dealer B" })
+    );
+    const roleBId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId: orgB, name: "OWNER", permissions: PERMISSIONS })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId: orgB, userId: userBId, roleId: roleBId }));
+    const asUserB = t.withIdentity({ subject: "user_b_rt" });
+
+    // Transform the export payload the way the spreadsheet + import parser do.
+    const reimport = exported.vehicles.map((v) => ({
+      make: v.make,
+      model: v.model,
+      year: v.year,
+      vin: v.vin,
+      color: v.color,
+      mileage: v.mileage ?? undefined,
+      fuelType: "Petrol",
+      transmission: "Automatic",
+      sellingPrice: v.sellingPrice,
+      purchasePrice: v.cost ?? undefined,
+      sourceType: v.sourceType,
+      sourcedFromName: v.sourcedFrom || undefined,
+      sourceCost: v.sourceType === "SOURCED" ? v.cost ?? undefined : undefined,
+      valuations: v.valuations.map((x) => ({ companyName: x.companyName, valuationAmount: x.amount })),
+    }));
+
+    const result = await asUserB.mutation(api.vehicles.importBulk, { orgId: orgB, vehicles: reimport });
+
+    expect(result.inserted).toBe(1);
+    expect(result.companiesCreated).toBe(1); // "بندار" auto-created in the new account
+
+    await t.run(async (ctx) => {
+      const vehicle = await ctx.db
+        .query("vehicles")
+        .withIndex("by_org", (q) => q.eq("orgId", orgB))
+        .first();
+      expect(vehicle?.make).toBe("BYD");
+      expect(vehicle?.status).toBe("SOURCING");
+      expect(vehicle?.sourceType).toBe("SOURCED");
+      expect(vehicle?.sourcedFromName).toBe("Gulf Motors");
+      expect(vehicle?.sourceCost).toBe(22000);
+
+      const company = await ctx.db
+        .query("financeCompanies")
+        .withIndex("by_org", (q) => q.eq("orgId", orgB))
+        .first();
+      expect(company?.name).toBe("بندار");
+
+      const valuation = await ctx.db
+        .query("vehicleValuations")
+        .withIndex("by_org", (q) => q.eq("orgId", orgB))
+        .first();
+      expect(valuation?.valuationAmount).toBe(27000);
+    });
+  });
+});

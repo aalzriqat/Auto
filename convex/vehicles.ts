@@ -316,6 +316,75 @@ export const listAll = query({
 });
 
 /**
+ * Returns every non-deleted vehicle in the org together with its per-company
+ * financing valuations, shaped for the "Export all vehicles" button. The client
+ * writes these into the dealership's canonical import template so the file can
+ * be re-imported into the same — or a brand-new — dealer account with no manual
+ * column remapping. Cost is stripped for roles that can't see dealer cost.
+ *
+ * This deliberately collects the whole inventory (export is a rare, explicit
+ * action); it stays well within Convex read limits for realistic dealership
+ * inventory sizes.
+ */
+export const exportData = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    const canViewCostPrice = role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
+
+    const vehicles = await ctx.db
+      .query("vehicles")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.neq(q.field("isDeleted"), true))
+      .collect();
+
+    const companies = await ctx.db
+      .query("financeCompanies")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    const companyNameById = new Map(companies.map((c) => [c._id, c.name]));
+
+    const valuations = await ctx.db
+      .query("vehicleValuations")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+
+    const valuationsByVehicle = new Map<string, Array<{ companyName: string; amount: number }>>();
+    const valuationCompanyNames = new Set<string>();
+    for (const valuation of valuations) {
+      const companyName = companyNameById.get(valuation.companyId);
+      if (!companyName) continue; // company deleted out from under the valuation
+      valuationCompanyNames.add(companyName);
+      const list = valuationsByVehicle.get(valuation.vehicleId) ?? [];
+      list.push({ companyName, amount: valuation.valuationAmount });
+      valuationsByVehicle.set(valuation.vehicleId, list);
+    }
+
+    return {
+      vehicles: vehicles.map((vehicle) => {
+        const sourceType = (vehicle.sourceType ?? "STOCK") as "STOCK" | "SOURCED";
+        // "Cost" carries purchasePrice for stock and sourceCost for sourced.
+        const cost = canViewCostPrice ? vehicle.purchasePrice ?? vehicle.sourceCost ?? null : null;
+        return {
+          make: vehicle.make,
+          model: vehicle.model,
+          year: vehicle.year,
+          vin: vehicle.vin ?? "",
+          color: vehicle.color ?? "",
+          mileage: vehicle.mileage ?? null,
+          cost,
+          sellingPrice: vehicle.sellingPrice,
+          sourceType,
+          sourcedFrom: vehicle.sourcedFromName ?? "",
+          valuations: valuationsByVehicle.get(vehicle._id) ?? [],
+        };
+      }),
+      valuationCompanyNames: Array.from(valuationCompanyNames),
+    };
+  },
+});
+
+/**
  * Gets a single vehicle by ID. Verifies it belongs to the caller's org.
  */
 export const get = query({
@@ -1688,6 +1757,12 @@ export const importBulk = mutation({
       purchasePrice: v.optional(v.number()),
       status: v.optional(v.string()),
       notes: v.optional(v.string()),
+      // Owned stock vs sourced (drop-ship from another dealer). SOURCED rows
+      // carry the supplier name + cost and land as SOURCING status; anything
+      // else is treated as owned STOCK.
+      sourceType: v.optional(v.string()),
+      sourcedFromName: v.optional(v.string()),
+      sourceCost: v.optional(v.number()),
       // Per-company financing valuations carried over from the spreadsheet's
       // valuation columns. `companyId` targets an existing finance company;
       // `companyName` (no companyId) means the column's header didn't match
@@ -1752,7 +1827,19 @@ export const importBulk = mutation({
       }
 
       if (!vehicleId) {
-        const status = normalizeVehicleStatus(row.status) ?? "AVAILABLE";
+        const isSourced = (row.sourceType ?? "").trim().toUpperCase() === "SOURCED";
+
+        // A sourced row without its supplier name + cost can't be created (the
+        // same constraint createSourced enforces). Skip it rather than throw —
+        // one bad row must not roll back the whole batch's inserts.
+        const sourceCost = row.sourceCost ?? row.purchasePrice;
+        if (isSourced && (!row.sourcedFromName?.trim() || sourceCost === undefined || sourceCost <= 0)) {
+          skipped++;
+          continue;
+        }
+
+        // Sourced vehicles begin life as SOURCING; owned stock as AVAILABLE.
+        const status = normalizeVehicleStatus(row.status) ?? (isSourced ? "SOURCING" : "AVAILABLE");
         assertDirectVehicleCreateStatus(status);
 
         vehicleId = await ctx.db.insert("vehicles", {
@@ -1766,7 +1853,11 @@ export const importBulk = mutation({
           fuelType: row.fuelType,
           transmission: row.transmission,
           sellingPrice: row.sellingPrice,
-          purchasePrice: row.purchasePrice,
+          // For a sourced vehicle purchasePrice mirrors the supplier cost, matching createSourced.
+          purchasePrice: isSourced ? sourceCost : row.purchasePrice,
+          ...(isSourced
+            ? { sourceType: "SOURCED" as const, sourcedFromName: row.sourcedFromName!.trim(), sourceCost }
+            : {}),
           status: status as VehicleLifecycleStatus,
           notes: row.notes,
           addedBy: user._id,
