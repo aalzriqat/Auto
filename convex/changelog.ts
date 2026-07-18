@@ -943,6 +943,38 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "أصبحت قائمة إغلاق الفترة تفصل الأمور التي يجب إصلاحها فعلاً قبل الإغلاق عن فروقات دفاتر الأستاذ المساعدة التي تكون عادةً مجرد توقيت بين الفترات وتحتاج مراجعة فقط، فلم يعد بالإمكان منع إغلاق شهر سليم بسبب نشاط حدث بعد انتهائه.",
     publishedAt: releaseAt(2026, 7, 14, 2),
   },
+  {
+    type: "FEATURE",
+    titleEn: "Buyers now watch dealer offers arrive live in the app",
+    titleAr: "المشترون يتابعون عروض المعارض تصل مباشرةً في التطبيق",
+    descriptionEn: "The mobile marketplace has a new Request Room: after a buyer tells us what car they want, they land straight in a live screen where each matching dealer's offer streams in as it arrives, with the monthly payment, cash price, and trust badges. Buyers can shortlist, compare two or three offers side by side, and only their chosen dealer sees their phone number after they explicitly allow contact. A My Requests tab keeps every request one tap away, with a badge when new offers land.",
+    descriptionAr: "أصبح لسوق التطبيق غرفة طلب جديدة: بعد أن يخبرنا المشتري بالسيارة التي يريدها، ينتقل مباشرةً إلى شاشة حيّة تظهر فيها عروض المعارض المطابقة أولاً بأول مع القسط الشهري والسعر نقداً وشارات الثقة. يمكن للمشتري حفظ العروض ومقارنة عرضين أو ثلاثة جنباً إلى جنب، ولا يظهر رقم هاتفه إلا للمعرض الذي يختاره وبعد موافقته الصريحة. ويحتفظ تبويب «طلباتي» بكل طلب على بُعد نقرة واحدة مع إشعار عند وصول عروض جديدة.",
+    publishedAt: releaseAt(2026, 7, 18, 1),
+  },
+  {
+    type: "IMPROVEMENT",
+    titleEn: "See your budget reach before you sign up",
+    titleAr: "شوف مدى ميزانيتك قبل ما تسجّل",
+    descriptionEn: "The mobile 'request a car' flow now leads with value: it asks about the car and your budget first, and shows the approximate price range you can reach for a given monthly payment — calculated live from real dealer finance terms — before ever asking for your name or number. Your contact details are the last step, not the first.",
+    descriptionAr: "أصبح مسار «اطلب سيارة» في التطبيق يبدأ بالقيمة: يسألك عن السيارة وميزانيتك أولاً، ويعرض لك مدى الأسعار التقريبي الذي تقدر توصله بقسط شهري معيّن — محسوباً مباشرةً من شروط تمويل المعارض الحقيقية — قبل أن يطلب اسمك أو رقمك. بيانات تواصلك أصبحت الخطوة الأخيرة لا الأولى.",
+    publishedAt: releaseAt(2026, 7, 18, 2),
+  },
+  {
+    type: "FEATURE",
+    titleEn: "Dealers can send finance offers from the mobile app",
+    titleAr: "المعارض تقدر ترسل عروض تمويل من التطبيق",
+    descriptionEn: "When replying to a marketplace buyer from your phone, you can now pick the vehicle, choose a finance company, and enter the down payment, term, and offer validity — AutoFlow computes the exact monthly installment and shows the buyer a full finance offer (you never type the installment). Replies that can source a car also carry an honest price range and availability instead of a made-up figure.",
+    descriptionAr: "عند الرد على مشترٍ من السوق عبر هاتفك، أصبح بإمكانك اختيار السيارة وجهة التمويل وإدخال الدفعة الأولى والمدة وصلاحية العرض — ويحتسب أوتوفلو القسط الشهري بدقّة ويعرض للمشتري عرض تمويل كاملاً (دون أن تكتب القسط يدوياً). كما تحمل ردود التوفير نطاق سعر صادقاً ومدة توفير بدل رقم تقديري.",
+    publishedAt: releaseAt(2026, 7, 18, 3),
+  },
+  {
+    type: "FEATURE",
+    titleEn: "Buyers get notified the moment a dealer sends an offer",
+    titleAr: "المشترون يوصلهم إشعار لحظة ما يرسل المعرض عرضاً",
+    descriptionEn: "Buyers who allow notifications now get a push on their phone the instant a dealer responds to their car request — so they can jump back into their Request Room and review the offer while it's fresh, without keeping the app open.",
+    descriptionAr: "المشترون الذين يسمحون بالإشعارات أصبح يوصلهم تنبيه على هواتفهم لحظة ما يرد أي معرض على طلب سيارتهم — ليعودوا فوراً إلى غرفة الطلب ويراجعوا العرض وهو جديد، دون الحاجة لإبقاء التطبيق مفتوحاً.",
+    publishedAt: releaseAt(2026, 7, 18, 4),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

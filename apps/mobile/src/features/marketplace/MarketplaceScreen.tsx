@@ -1,5 +1,5 @@
 import { nativeRoutes } from "@autoflow/shared";
-import { useMutation, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import { useRouter } from "expo-router";
 import { useState, type ReactNode } from "react";
 import {
@@ -28,26 +28,26 @@ import { RouteLoadingState } from "../../components/RouteState";
 import { SearchableSelectField } from "../../components/SearchableSelectField";
 import { Screen } from "../../components/Screen";
 import { useLocale } from "../../providers/LocaleProvider";
-import { type AppTheme } from "../../theme";
-import { useAppTheme, useThemedStyles } from "../../providers/ThemeProvider";
+import { theme } from "../../theme";
 import {
   BuyerRequestPanel,
   TradeInRequestPanel,
   type TradeInDealerTarget,
 } from "./BuyerIntakePanels";
+import { OffersTab } from "./OffersTab";
+import { RequestRoomScreen } from "./RequestRoomScreen";
+import { saveBuyerRequest, type SavedBuyerRequest } from "./buyerRequestsStore";
 import {
   formatMoney,
   formatNumber,
   getListingUrl,
-  getRequestStatusKey,
-  getTradeInStatusKey,
   getVehicleTitle,
   parseOptionalPositiveNumber,
   trimOrUndefined,
 } from "./marketplaceUtils";
 import { getMarketplaceSelectOptions } from "./marketplaceSelectOptions";
 
-type BuyerTab = "cars" | "request" | "tradein" | "dealers" | "status";
+type BuyerTab = "cars" | "request" | "tradein" | "dealers" | "offers";
 
 type SearchFields = {
   make: string;
@@ -98,7 +98,6 @@ function openExternalUrl(url: string | null) {
 }
 
 function Header() {
-  const styles = useThemedStyles(makeStyles);
   const router = useRouter();
   const { t, textDirection } = useLocale();
 
@@ -123,8 +122,6 @@ function Header() {
 }
 
 function TabBar({ activeTab, onChange }: { activeTab: BuyerTab; onChange: (tab: BuyerTab) => void }) {
-  const theme = useAppTheme();
-  const styles = useThemedStyles(makeStyles);
   const { t, textDirection } = useLocale();
   const { width } = useWindowDimensions();
   const tabs: Array<{ value: BuyerTab; label: string }> = [
@@ -132,7 +129,7 @@ function TabBar({ activeTab, onChange }: { activeTab: BuyerTab; onChange: (tab: 
     { value: "request", label: t("marketplaceRequestCarTab") },
     { value: "tradein", label: t("marketplaceTradeInBuyerTab") },
     { value: "dealers", label: t("marketplaceDealersTab") },
-    { value: "status", label: t("marketplaceStatusTab") },
+    { value: "offers", label: t("marketplaceOffersTab") },
   ];
   const tabWidth = Math.max(
     64,
@@ -190,8 +187,6 @@ function SearchPanel({
   onSearch: () => void;
   onReset: () => void;
 }>) {
-  const theme = useAppTheme();
-  const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
   const selectOptions = getMarketplaceSelectOptions(locale);
 
@@ -265,7 +260,6 @@ function SearchPanel({
 }
 
 function Badge({ label, tone = "green" }: Readonly<{ label: string; tone?: "green" | "amber" | "blue" }>) {
-  const styles = useThemedStyles(makeStyles);
   return (
     <View style={[styles.badge, tone === "amber" && styles.amberBadge, tone === "blue" && styles.blueBadge]}>
       <Text style={styles.badgeText}>{label}</Text>
@@ -274,7 +268,6 @@ function Badge({ label, tone = "green" }: Readonly<{ label: string; tone?: "gree
 }
 
 function TrustFacts({ vehicle }: Readonly<{ vehicle: MobileMarketplaceVehicle }>) {
-  const styles = useThemedStyles(makeStyles);
   const { locale, t } = useLocale();
   const facts = [
     vehicle.inspectionStatus === "SELF_REPORTED" ? t("marketplaceTrustSelfReported") : null,
@@ -307,7 +300,6 @@ function VehicleCard({
   vehicle: MobileMarketplaceVehicle;
   onTradeInPress: (dealer: TradeInDealerTarget) => void;
 }>) {
-  const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
   const title = getVehicleTitle(vehicle);
   const listingUrl = getListingUrl(vehicle);
@@ -389,7 +381,6 @@ function CarsResultsPage({
   onLoadMore: (cursor: string) => void;
   onTradeInPress: (dealer: TradeInDealerTarget) => void;
 }) {
-  const styles = useThemedStyles(makeStyles);
   const { t } = useLocale();
   const searchResult = useQuery(api.marketplaceBrowse.search, { ...filters, cursor }) as
     | MobileMarketplaceSearchResult
@@ -425,7 +416,6 @@ function CarsResultsPage({
 }
 
 function CarsPanel({ onTradeInPress }: Readonly<{ onTradeInPress: (dealer: TradeInDealerTarget) => void }>) {
-  const styles = useThemedStyles(makeStyles);
   const [fields, setFields] = useState<SearchFields>(DEFAULT_FIELDS);
   const [searchKey, setSearchKey] = useState(0);
   const [filters, setFilters] = useState<SearchFilters>(() => buildSearchFilters(DEFAULT_FIELDS));
@@ -469,7 +459,6 @@ function DealerCard({
   dealer: MobileMarketplaceDealer;
   onTradeInPress: (dealer: TradeInDealerTarget) => void;
 }>) {
-  const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
 
   return (
@@ -530,7 +519,6 @@ function DealerCard({
 }
 
 function DealersPanel({ onTradeInPress }: Readonly<{ onTradeInPress: (dealer: TradeInDealerTarget) => void }>) {
-  const styles = useThemedStyles(makeStyles);
   const { t } = useLocale();
   const dealers = useQuery(api.marketplaceDealers.listPublicDirectory, {});
 
@@ -551,192 +539,50 @@ function DealersPanel({ onTradeInPress }: Readonly<{ onTradeInPress: (dealer: Tr
   );
 }
 
-function StatusPanel() {
-  const styles = useThemedStyles(makeStyles);
-  const { locale, t, textDirection } = useLocale();
-  const acceptOffer = useMutation(api.marketplaceTradeIns.acceptOfferByPublicId);
-  const declineOffer = useMutation(api.marketplaceTradeIns.declineOfferByPublicId);
-  const [requestId, setRequestId] = useState("");
-  const [requestPhone, setRequestPhone] = useState("");
-  const [submittedRequest, setSubmittedRequest] = useState<{ id: string; phone: string } | null>(null);
-  const [tradeInId, setTradeInId] = useState("");
-  const [tradeInPhone, setTradeInPhone] = useState("");
-  const [submittedTradeIn, setSubmittedTradeIn] = useState<{ id: string; phone: string } | null>(null);
-  const [offerUpdating, setOfferUpdating] = useState(false);
-  const [offerMessage, setOfferMessage] = useState<string | null>(null);
-
-  const requestStatus = useQuery(
-    api.marketplaceRequests.getStatusForBuyerByPublicId,
-    submittedRequest ? { requestId: submittedRequest.id, buyerPhone: submittedRequest.phone } : "skip",
-  );
-  const tradeInStatus = useQuery(
-    api.marketplaceTradeIns.getStatusForBuyerByPublicId,
-    submittedTradeIn
-      ? { tradeInRequestId: submittedTradeIn.id, buyerPhone: submittedTradeIn.phone }
-      : "skip",
-  );
-
-  const canCheckRequest = requestId.trim().length > 0 && requestPhone.trim().length > 0;
-  const canCheckTradeIn = tradeInId.trim().length > 0 && tradeInPhone.trim().length > 0;
-
-  async function updateTradeInOfferStatus(action: "accept" | "decline") {
-    if (!submittedTradeIn) return;
-
-    setOfferUpdating(true);
-    setOfferMessage(null);
-    try {
-      const offerActionResult =
-        action === "accept"
-          ? await acceptOffer({
-              tradeInRequestId: submittedTradeIn.id,
-              buyerPhone: submittedTradeIn.phone,
-            })
-          : await declineOffer({
-              tradeInRequestId: submittedTradeIn.id,
-              buyerPhone: submittedTradeIn.phone,
-            });
-
-      if (!offerActionResult.success) {
-        Alert.alert("AutoFlow", t("marketplaceOfferUpdateFailed"));
-        return;
-      }
-
-      setOfferMessage(t("marketplaceOfferUpdated"));
-    } catch (error) {
-      console.error("Failed to update marketplace trade-in offer", error);
-      Alert.alert("AutoFlow", t("marketplaceOfferUpdateFailed"));
-    } finally {
-      setOfferUpdating(false);
-    }
-  }
-
-  return (
-    <View style={[styles.panelGap, { direction: textDirection }]}>
-      <View style={styles.lookupPanel}>
-        <FormField label={t("marketplaceStatusRequestId")} value={requestId} onChangeText={setRequestId} />
-        <FormField
-          label={t("marketplaceStatusPhone")}
-          value={requestPhone}
-          onChangeText={setRequestPhone}
-          keyboardType="phone-pad"
-        />
-        <Pressable
-          disabled={!canCheckRequest}
-          style={({ pressed }) => [
-            styles.primaryButton,
-            !canCheckRequest && styles.disabledButton,
-            pressed && styles.pressed,
-          ]}
-          onPress={() => setSubmittedRequest({ id: requestId.trim(), phone: requestPhone.trim() })}
-        >
-          <Text style={styles.primaryButtonText}>{t("marketplaceStatusCheckRequest")}</Text>
-        </Pressable>
-        {submittedRequest && requestStatus === undefined ? (
-          <RouteLoadingState label={t("marketplaceStatusCheckRequest")} />
-        ) : null}
-        {submittedRequest && requestStatus === null ? (
-          <Text style={styles.emptyText}>{t("marketplaceStatusNotFound")}</Text>
-        ) : null}
-        {requestStatus ? (
-          <View style={styles.statusResult}>
-            <Text style={styles.statusTitle}>{t(getRequestStatusKey(requestStatus.status))}</Text>
-            <Text style={styles.cardMeta}>
-              {formatNumber(requestStatus.matchedCount, locale)} {t("marketplaceMatchedDealers")}
-            </Text>
-            <Text style={styles.cardMeta}>
-              {formatNumber(requestStatus.respondedCount, locale)} {t("marketplaceDealerReplies")}
-            </Text>
-          </View>
-        ) : null}
-      </View>
-
-      <View style={styles.lookupPanel}>
-        <FormField label={t("marketplaceStatusTradeInId")} value={tradeInId} onChangeText={setTradeInId} />
-        <FormField
-          label={t("marketplaceStatusPhone")}
-          value={tradeInPhone}
-          onChangeText={setTradeInPhone}
-          keyboardType="phone-pad"
-        />
-        <Pressable
-          disabled={!canCheckTradeIn}
-          style={({ pressed }) => [
-            styles.primaryButton,
-            !canCheckTradeIn && styles.disabledButton,
-            pressed && styles.pressed,
-          ]}
-          onPress={() => {
-            setOfferMessage(null);
-            setSubmittedTradeIn({ id: tradeInId.trim(), phone: tradeInPhone.trim() });
-          }}
-        >
-          <Text style={styles.primaryButtonText}>{t("marketplaceStatusCheckTradeIn")}</Text>
-        </Pressable>
-        {submittedTradeIn && tradeInStatus === undefined ? (
-          <RouteLoadingState label={t("marketplaceStatusCheckTradeIn")} />
-        ) : null}
-        {submittedTradeIn && tradeInStatus === null ? (
-          <Text style={styles.emptyText}>{t("marketplaceStatusNotFound")}</Text>
-        ) : null}
-        {tradeInStatus ? (
-          <View style={styles.statusResult}>
-            <Text style={styles.statusTitle}>{t(getTradeInStatusKey(tradeInStatus.status))}</Text>
-            <Text style={styles.cardMeta}>
-              {tradeInStatus.currentYear} {tradeInStatus.currentMake} {tradeInStatus.currentModel}
-            </Text>
-            {tradeInStatus.offerAmountJod != null ? (
-              <Text style={styles.priceText}>
-                {t("marketplaceOfferAmount")}: {formatMoney(tradeInStatus.offerAmountJod, locale)}
-              </Text>
-            ) : null}
-            {tradeInStatus.status === "OFFERED" ? (
-              <View style={styles.actionRow}>
-                <Pressable
-                  disabled={offerUpdating}
-                  style={({ pressed }) => [
-                    styles.primaryButton,
-                    offerUpdating && styles.disabledButton,
-                    pressed && styles.pressed,
-                  ]}
-                  onPress={() => void updateTradeInOfferStatus("accept")}
-                >
-                  <Text style={styles.primaryButtonText}>{t("marketplaceAcceptOffer")}</Text>
-                </Pressable>
-                <Pressable
-                  disabled={offerUpdating}
-                  style={({ pressed }) => [
-                    styles.secondaryButton,
-                    offerUpdating && styles.disabledButton,
-                    pressed && styles.pressed,
-                  ]}
-                  onPress={() => void updateTradeInOfferStatus("decline")}
-                >
-                  <Text style={styles.secondaryButtonText}>{t("marketplaceDeclineOffer")}</Text>
-                </Pressable>
-              </View>
-            ) : null}
-            {offerMessage ? <Text style={styles.successText}>{offerMessage}</Text> : null}
-          </View>
-        ) : null}
-      </View>
-    </View>
-  );
-}
-
 export function MarketplaceScreen() {
-  const styles = useThemedStyles(makeStyles);
   const { textDirection } = useLocale();
   const [activeTab, setActiveTab] = useState<BuyerTab>("cars");
   const [selectedTradeInDealer, setSelectedTradeInDealer] = useState<TradeInDealerTarget | null>(null);
+  const [openRoomPublicId, setOpenRoomPublicId] = useState<string | null>(null);
+  const [offersReloadToken, setOffersReloadToken] = useState(0);
 
   function openTradeInForDealer(dealer: TradeInDealerTarget) {
     setSelectedTradeInDealer(dealer);
     setActiveTab("tradein");
   }
 
+  function openRoom(publicId: string) {
+    setOpenRoomPublicId(publicId);
+  }
+
+  async function handleRequestSubmitted(request: SavedBuyerRequest) {
+    await saveBuyerRequest(request);
+    setOffersReloadToken((value) => value + 1);
+    setActiveTab("offers");
+    setOpenRoomPublicId(request.publicId);
+  }
+
+  // A Request Room is a full-screen takeover so the buyer stays focused on the
+  // offers streaming in; backing out returns to whichever tab they were on.
+  if (openRoomPublicId) {
+    return (
+      <Screen>
+        <ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollContent, { direction: textDirection }]}>
+          <RequestRoomScreen
+            publicId={openRoomPublicId}
+            onBack={() => {
+              setOpenRoomPublicId(null);
+              setOffersReloadToken((value) => value + 1);
+            }}
+          />
+        </ScrollView>
+      </Screen>
+    );
+  }
+
   let content: ReactNode;
   if (activeTab === "request") {
-    content = <BuyerRequestPanel />;
+    content = <BuyerRequestPanel onRequestSubmitted={handleRequestSubmitted} />;
   } else if (activeTab === "tradein") {
     content = (
       <TradeInRequestPanel
@@ -747,8 +593,8 @@ export function MarketplaceScreen() {
     );
   } else if (activeTab === "dealers") {
     content = <DealersPanel onTradeInPress={openTradeInForDealer} />;
-  } else if (activeTab === "status") {
-    content = <StatusPanel />;
+  } else if (activeTab === "offers") {
+    content = <OffersTab reloadToken={offersReloadToken} onOpenRoom={openRoom} />;
   } else {
     content = <CarsPanel onTradeInPress={openTradeInForDealer} />;
   }
@@ -764,7 +610,7 @@ export function MarketplaceScreen() {
   );
 }
 
-const makeStyles = (theme: AppTheme) => StyleSheet.create({
+const styles = StyleSheet.create({
   scroll: {
     flex: 1,
   },

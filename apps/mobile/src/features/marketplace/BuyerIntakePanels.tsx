@@ -23,11 +23,12 @@ import { RouteLoadingState } from "../../components/RouteState";
 import { SearchableSelectField } from "../../components/SearchableSelectField";
 import { getMobileEnv } from "../../config/env";
 import { useLocale } from "../../providers/LocaleProvider";
-import { type AppTheme } from "../../theme";
-import { useAppTheme, useThemedStyles } from "../../providers/ThemeProvider";
+import { theme } from "../../theme";
+import { type SavedBuyerRequest } from "./buyerRequestsStore";
 import { getMarketplaceClientFingerprint } from "./marketplaceFingerprint";
 import { getMarketplaceSelectOptions } from "./marketplaceSelectOptions";
 import {
+  formatMoney,
   formatNumber,
   parseOptionalWholeNumber,
   trimOrUndefined,
@@ -54,9 +55,13 @@ type RequestFields = {
   priceMax: string;
   paymentType: MobilePaymentType;
   monthlyBudget: string;
+  downPayment: string;
+  financeTermMonths: string;
   buyerTimeframe: MobileBuyerTimeframe;
   consentAccepted: boolean;
 };
+
+const FINANCE_TERM_OPTIONS = ["24", "36", "48", "60", "72"] as const;
 
 type TradeInFields = {
   buyerFirstName: string;
@@ -83,6 +88,8 @@ const DEFAULT_REQUEST_FIELDS: RequestFields = {
   priceMax: "",
   paymentType: "EITHER",
   monthlyBudget: "",
+  downPayment: "",
+  financeTermMonths: "60",
   buyerTimeframe: "THIS_MONTH",
   consentAccepted: false,
 };
@@ -143,7 +150,6 @@ function ChoiceGroup<TValue extends string>({
   options: Array<ChoiceOption<TValue>>;
   onChange: (value: TValue) => void;
 }) {
-  const styles = useThemedStyles(makeStyles);
   const { t } = useLocale();
 
   return (
@@ -184,8 +190,6 @@ function ConsentRow({
   value: boolean;
   onChange: (value: boolean) => void;
 }) {
-  const theme = useAppTheme();
-  const styles = useThemedStyles(makeStyles);
   return (
     <Pressable
       accessibilityRole="checkbox"
@@ -205,7 +209,6 @@ function ConsentRow({
 }
 
 function Notice({ title, body }: { title: string; body?: string }) {
-  const styles = useThemedStyles(makeStyles);
   return (
     <View style={styles.notice}>
       <Text style={styles.noticeTitle}>{title}</Text>
@@ -223,7 +226,6 @@ function SubmitButton({
   submitting: boolean;
   onPress: () => void;
 }) {
-  const styles = useThemedStyles(makeStyles);
   const { t } = useLocale();
 
   return (
@@ -265,7 +267,6 @@ function StepActions({
   submitting: boolean;
   totalSteps: number;
 }) {
-  const styles = useThemedStyles(makeStyles);
   const isLast = activeStep >= totalSteps - 1;
 
   return (
@@ -296,8 +297,70 @@ function StepActions({
   );
 }
 
-export function BuyerRequestPanel() {
-  const styles = useThemedStyles(makeStyles);
+/**
+ * Live "what can I afford?" readout. Calls the reverse-finance solver query as
+ * the buyer sets their monthly ceiling — showing real value (a price range from
+ * dealers' actual finance terms) before we ask who they are. Skips the query
+ * until a monthly figure is entered.
+ */
+function AffordabilityReadout({
+  monthlyBudget,
+  downPayment,
+  termMonths,
+}: {
+  monthlyBudget: string;
+  downPayment: string;
+  termMonths: string;
+}) {
+  const { locale, t } = useLocale();
+  const monthly = parseOptionalWholeNumber(monthlyBudget);
+  const range = useQuery(
+    api.marketplaceAffordability.getAffordabilityRange,
+    monthly && monthly > 0
+      ? {
+          maximumMonthlyPayment: monthly,
+          downPayment: parseOptionalWholeNumber(downPayment),
+          termMonths: parseOptionalWholeNumber(termMonths),
+        }
+      : "skip",
+  );
+
+  if (!monthly || monthly <= 0) {
+    return (
+      <View style={styles.affordabilityCard}>
+        <Text style={styles.affordabilityEmpty}>{t("marketplaceAffordabilityEmpty")}</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.affordabilityCard}>
+      <Text style={styles.affordabilityTitle}>{t("marketplaceAffordabilityTitle")}</Text>
+      {range === undefined ? (
+        <Text style={styles.affordabilityEmpty}>…</Text>
+      ) : range === null ? (
+        <Text style={styles.affordabilityEmpty}>{t("marketplaceAffordabilityNone")}</Text>
+      ) : (
+        <>
+          <Text style={styles.affordabilityHint}>{t("marketplaceAffordabilityHint")}</Text>
+          <Text style={styles.affordabilityRange}>
+            {formatMoney(range.minPriceJod, locale)} – {formatMoney(range.maxPriceJod, locale)}
+          </Text>
+          <Text style={styles.affordabilityMeta}>
+            {t("marketplaceAffordabilityAcross").replace(
+              "{count}",
+              formatNumber(range.companiesConsidered, locale),
+            )}
+          </Text>
+        </>
+      )}
+    </View>
+  );
+}
+
+export function BuyerRequestPanel({
+  onRequestSubmitted,
+}: Readonly<{ onRequestSubmitted: (request: SavedBuyerRequest) => void | Promise<void> }>) {
   const { locale, t, textDirection } = useLocale();
   const submitRequest = useAction(api.marketplaceRequests.submitRequest);
   const [fields, setFields] = useState<RequestFields>(DEFAULT_REQUEST_FIELDS);
@@ -305,27 +368,16 @@ export function BuyerRequestPanel() {
   const [verificationResetKey, setVerificationResetKey] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [submittedRequest, setSubmittedRequest] = useState<{ requestId: string; matchedCount: number } | null>(null);
   const [activeStep, setActiveStep] = useState(0);
   const turnstileSiteKey = getTurnstileSiteKey();
   const selectOptions = getMarketplaceSelectOptions(locale);
+  // Value before identity: the buyer sees what AutoFlow can do (their car, their
+  // budget reach) before we ever ask who they are — contact is the final step.
   const requestSteps: GuidedStep[] = [
-    {
-      title: locale === "ar" ? "بيانات المشتري" : "Buyer details",
-      subtitle: locale === "ar" ? "ابدأ بوسيلة التواصل والمدينة." : "Start with contact and city.",
-    },
-    {
-      title: locale === "ar" ? "السيارة المطلوبة" : "Desired vehicle",
-      subtitle: locale === "ar" ? "اختر الماركة وأدخل المواصفات المهمة." : "Pick the make and key preferences.",
-    },
-    {
-      title: locale === "ar" ? "الميزانية والتوقيت" : "Budget and timing",
-      subtitle: locale === "ar" ? "حدد طريقة الدفع ومدى الجدية." : "Set payment, budget, and urgency.",
-    },
-    {
-      title: locale === "ar" ? "المراجعة والإرسال" : "Review and submit",
-      subtitle: locale === "ar" ? "أكد الموافقة ثم أرسل الطلب." : "Confirm consent, verify, and send.",
-    },
+    { title: t("marketplaceWizardStepVehicle"), subtitle: t("marketplaceWizardStepVehicleHint") },
+    { title: t("marketplaceWizardStepBudget"), subtitle: t("marketplaceWizardStepBudgetHint") },
+    { title: t("marketplaceWizardStepPreferences"), subtitle: t("marketplaceWizardStepPreferencesHint") },
+    { title: t("marketplaceWizardStepContact"), subtitle: t("marketplaceWizardStepContactHint") },
   ];
   function setField<TKey extends keyof RequestFields>(key: TKey, value: RequestFields[TKey]) {
     setError(null);
@@ -333,12 +385,9 @@ export function BuyerRequestPanel() {
   }
 
   function getBuyerRequestStepError(step: number): string | null {
-    if (
-      step === 0 &&
-      (!trimOrUndefined(fields.buyerFirstName) ||
-        !trimOrUndefined(fields.buyerPhone) ||
-        !trimOrUndefined(fields.buyerCity))
-    ) {
+    // City is the only required field before the final contact step; identity
+    // (name/phone) is validated at submit so it's never demanded early.
+    if (step === 2 && !trimOrUndefined(fields.buyerCity)) {
       return t("marketplaceRequiredFields");
     }
 
@@ -384,13 +433,15 @@ export function BuyerRequestPanel() {
     setSubmitting(true);
     try {
       const clientFingerprint = await getMarketplaceClientFingerprint(locale);
+      const make = trimOrUndefined(fields.make);
+      const model = trimOrUndefined(fields.model);
       const submitResponse = await submitRequest({
         buyerFirstName,
         buyerPhone,
         buyerWhatsApp: trimOrUndefined(fields.buyerWhatsApp),
         buyerCity,
-        make: trimOrUndefined(fields.make),
-        model: trimOrUndefined(fields.model),
+        make,
+        model,
         yearMin: parseOptionalWholeNumber(fields.yearMin),
         yearMax: parseOptionalWholeNumber(fields.yearMax),
         priceMin: parseOptionalWholeNumber(fields.priceMin),
@@ -406,11 +457,20 @@ export function BuyerRequestPanel() {
         turnstileToken,
       });
 
-      setSubmittedRequest(submitResponse);
       setFields(DEFAULT_REQUEST_FIELDS);
       setActiveStep(0);
       setTurnstileToken(null);
       setVerificationResetKey((value) => value + 1);
+      // Value before a success box: drop the buyer straight into their live
+      // Request Room, persisting the publicId so they can return to it later.
+      await onRequestSubmitted({
+        publicId: submitResponse.publicId,
+        phone: buyerPhone,
+        make,
+        model,
+        createdAt: Date.now(),
+        seenOfferCount: 0,
+      });
     } catch (error) {
       const message = t("marketplaceSubmitFailed");
       setError(message);
@@ -429,60 +489,8 @@ export function BuyerRequestPanel() {
         <Text style={styles.panelSubtitle}>{t("marketplaceBuyerRequestSubtitle")}</Text>
       </View>
 
-      {submittedRequest ? (
-        <Notice
-          title={t("marketplaceRequestSent")}
-          body={
-            submittedRequest.matchedCount > 0
-              ? `${formatNumber(submittedRequest.matchedCount, locale)} ${t("marketplaceRequestSentMatched")}`
-              : t("marketplaceRequestSentZero")
-          }
-        />
-      ) : null}
-      {submittedRequest ? (
-        <View style={styles.idBox}>
-          <Text style={styles.fieldLabel}>{t("marketplaceRequestIdLabel")}</Text>
-          <Text selectable style={styles.idText}>
-            {submittedRequest.requestId}
-          </Text>
-        </View>
-      ) : null}
-
       <GuidedStepFlow activeIndex={activeStep} steps={requestSteps}>
         {activeStep === 0 ? (
-          <View style={styles.formGrid}>
-            <FormField
-              label={t("marketplaceBuyerFirstName")}
-              value={fields.buyerFirstName}
-              onChangeText={(value) => setField("buyerFirstName", value)}
-            />
-            <FormField
-              label={t("marketplaceBuyerPhone")}
-              value={fields.buyerPhone}
-              keyboardType="phone-pad"
-              onChangeText={(value) => setField("buyerPhone", value)}
-            />
-            <FormField
-              label={t("marketplaceBuyerWhatsapp")}
-              value={fields.buyerWhatsApp}
-              keyboardType="phone-pad"
-              onChangeText={(value) => setField("buyerWhatsApp", value)}
-            />
-            <SearchableSelectField
-              allowCustomValue
-              closeLabel={selectOptions.closeLabel}
-              customValueLabel={selectOptions.customValueLabel}
-              emptyLabel={selectOptions.emptyLabel}
-              label={t("marketplaceCity")}
-              options={selectOptions.cityOptions}
-              placeholder={selectOptions.cityPlaceholder}
-              searchPlaceholder={selectOptions.citySearchPlaceholder}
-              value={fields.buyerCity}
-              onChange={(value) => setField("buyerCity", value)}
-            />
-          </View>
-        ) : null}
-        {activeStep === 1 ? (
           <View style={styles.formGrid}>
             <SearchableSelectField
               allowCustomValue
@@ -515,7 +523,7 @@ export function BuyerRequestPanel() {
             />
           </View>
         ) : null}
-        {activeStep === 2 ? (
+        {activeStep === 1 ? (
           <>
             <View style={styles.formGrid}>
               <FormField
@@ -538,12 +546,48 @@ export function BuyerRequestPanel() {
               onChange={(value) => setField("paymentType", value)}
             />
             {fields.paymentType !== "CASH" ? (
-              <FormField
-                label={t("marketplaceBuyerMonthlyBudget")}
-                value={fields.monthlyBudget}
-                keyboardType="number-pad"
-                onChangeText={(value) => setField("monthlyBudget", value)}
-              />
+              <>
+                <FormField
+                  label={t("marketplaceBuyerMonthlyBudget")}
+                  value={fields.monthlyBudget}
+                  keyboardType="number-pad"
+                  onChangeText={(value) => setField("monthlyBudget", value)}
+                />
+                <FormField
+                  label={t("marketplaceAffordabilityDownPayment")}
+                  value={fields.downPayment}
+                  keyboardType="number-pad"
+                  onChangeText={(value) => setField("downPayment", value)}
+                />
+                <View style={styles.field}>
+                  <Text style={styles.fieldLabel}>{t("marketplaceAffordabilityTerm")}</Text>
+                  <View style={styles.choiceWrap}>
+                    {FINANCE_TERM_OPTIONS.map((term) => {
+                      const selected = fields.financeTermMonths === term;
+                      return (
+                        <Pressable
+                          key={term}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected }}
+                          style={({ pressed }) => [
+                            styles.choiceButton,
+                            selected && styles.choiceButtonSelected,
+                            pressed && styles.pressed,
+                          ]}
+                          onPress={() => setField("financeTermMonths", term)}
+                        >
+                          <Text style={[styles.choiceText, selected && styles.choiceTextSelected]}>{term}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+                <AffordabilityReadout
+                  monthlyBudget={fields.monthlyBudget}
+                  downPayment={fields.downPayment}
+                  termMonths={fields.financeTermMonths}
+                />
+              </>
             ) : null}
             <ChoiceGroup
               label={t("marketplaceBuyerTimeframe")}
@@ -553,8 +597,43 @@ export function BuyerRequestPanel() {
             />
           </>
         ) : null}
+        {activeStep === 2 ? (
+          <View style={styles.formGrid}>
+            <SearchableSelectField
+              allowCustomValue
+              closeLabel={selectOptions.closeLabel}
+              customValueLabel={selectOptions.customValueLabel}
+              emptyLabel={selectOptions.emptyLabel}
+              label={t("marketplaceCity")}
+              options={selectOptions.cityOptions}
+              placeholder={selectOptions.cityPlaceholder}
+              searchPlaceholder={selectOptions.citySearchPlaceholder}
+              value={fields.buyerCity}
+              onChange={(value) => setField("buyerCity", value)}
+            />
+          </View>
+        ) : null}
         {activeStep === 3 ? (
           <>
+            <View style={styles.formGrid}>
+              <FormField
+                label={t("marketplaceBuyerFirstName")}
+                value={fields.buyerFirstName}
+                onChangeText={(value) => setField("buyerFirstName", value)}
+              />
+              <FormField
+                label={t("marketplaceBuyerPhone")}
+                value={fields.buyerPhone}
+                keyboardType="phone-pad"
+                onChangeText={(value) => setField("buyerPhone", value)}
+              />
+              <FormField
+                label={t("marketplaceBuyerWhatsapp")}
+                value={fields.buyerWhatsApp}
+                keyboardType="phone-pad"
+                onChangeText={(value) => setField("buyerWhatsApp", value)}
+              />
+            </View>
             <ConsentRow
               label={t("marketplaceBuyerConsent")}
               value={fields.consentAccepted}
@@ -589,7 +668,6 @@ function DealerSelector({
 }: {
   onSelectDealer: (dealer: TradeInDealerTarget) => void;
 }) {
-  const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
   const [search, setSearch] = useState("");
   const dealers = useQuery(api.marketplaceDealers.listPublicDirectory, {});
@@ -647,7 +725,6 @@ export function TradeInRequestPanel({
   onSelectDealer: (dealer: TradeInDealerTarget) => void;
   onClearDealer: () => void;
 }) {
-  const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
   const submitTradeInRequest = useAction(api.marketplaceTradeIns.submitTradeInRequest);
   const [fields, setFields] = useState<TradeInFields>(DEFAULT_TRADE_IN_FIELDS);
@@ -913,7 +990,7 @@ export function TradeInRequestPanel({
   );
 }
 
-const makeStyles = (theme: AppTheme) => StyleSheet.create({
+const styles = StyleSheet.create({
   panel: {
     gap: theme.spacing.md,
     borderRadius: theme.radius.lg,
@@ -1058,6 +1135,40 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   },
   errorText: {
     color: theme.colors.danger,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  affordabilityCard: {
+    gap: theme.spacing.xs,
+    borderRadius: theme.radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.primarySoft,
+    backgroundColor: theme.colors.primarySoft,
+    padding: theme.spacing.md,
+  },
+  affordabilityTitle: {
+    color: theme.colors.text,
+    fontSize: 12,
+    fontWeight: "700",
+    textTransform: "uppercase",
+  },
+  affordabilityHint: {
+    color: theme.colors.mutedText,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  affordabilityRange: {
+    color: theme.colors.text,
+    fontSize: 20,
+    fontWeight: "700",
+    writingDirection: "ltr",
+  },
+  affordabilityMeta: {
+    color: theme.colors.mutedText,
+    fontSize: 12,
+  },
+  affordabilityEmpty: {
+    color: theme.colors.mutedText,
     fontSize: 13,
     lineHeight: 19,
   },
