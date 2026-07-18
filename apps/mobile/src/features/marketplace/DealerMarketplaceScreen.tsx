@@ -220,12 +220,25 @@ function ResponseForm({
   const [kind, setKind] = useState<MobileMarketplaceResponseKind>("HAVE_MATCH");
   const [vehicleId, setVehicleId] = useState<string | null>(null);
   const [offerPrice, setOfferPrice] = useState("");
+  const [financeCompanyId, setFinanceCompanyId] = useState<string | null>(null);
+  const [downPayment, setDownPayment] = useState("");
+  const [termMonths, setTermMonths] = useState("");
+  const [expiryDays, setExpiryDays] = useState("");
+  const [sourceMin, setSourceMin] = useState("");
+  const [sourceMax, setSourceMax] = useState("");
+  const [sourceEta, setSourceEta] = useState("");
   const [note, setNote] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const showOfferFields = kind !== "NOT_AVAILABLE";
+
+  // A concrete offer names a real car (+ optional AutoFlow-computed finance);
+  // sourcing is an honest range instead. NOT_AVAILABLE carries neither.
+  const isConcreteOffer = kind === "HAVE_MATCH" || kind === "HAVE_SIMILAR";
+  const isSourcing = kind === "CAN_SOURCE";
+
   const vehiclesPage = useQuery(
     api.vehicles.list,
-    showOfferFields
+    isConcreteOffer
       ? {
           orgId,
           status: "AVAILABLE",
@@ -233,17 +246,48 @@ function ResponseForm({
         }
       : "skip",
   );
+  const financeCompanies = useQuery(api.finance.listCompanies, isConcreteOffer ? { orgId } : "skip");
+
   const parsedOffer = parseOptionalPositiveNumber(offerPrice);
+  const parsedDown = parseOptionalPositiveNumber(downPayment);
+  const parsedTerm = parseOptionalPositiveNumber(termMonths);
+  const parsedExpiryDays = parseOptionalPositiveNumber(expiryDays);
+  const parsedMin = parseOptionalPositiveNumber(sourceMin);
+  const parsedMax = parseOptionalPositiveNumber(sourceMax);
+  const parsedEta = parseOptionalPositiveNumber(sourceEta);
 
   async function submit() {
+    setError(null);
+
+    // AutoFlow computes the installment, but it needs the terms to do it.
+    if (isConcreteOffer && financeCompanyId && (parsedOffer === undefined || parsedDown === undefined || parsedTerm === undefined)) {
+      setError(t("marketplaceComposerNeedsFinanceFields"));
+      return;
+    }
+    if (isSourcing && (parsedMin === undefined || parsedMax === undefined || parsedEta === undefined || parsedMin > parsedMax)) {
+      setError(t("marketplaceComposerNeedsRange"));
+      return;
+    }
+
     setSaving(true);
     try {
       await respond({
         orgId,
         requestId,
         kind,
-        vehicleId: showOfferFields && vehicleId ? vehicleId : undefined,
-        offerPriceJod: showOfferFields ? parsedOffer : undefined,
+        vehicleId: isConcreteOffer && vehicleId ? vehicleId : undefined,
+        offerPriceJod: isConcreteOffer ? parsedOffer : undefined,
+        financeCompanyId: isConcreteOffer && financeCompanyId ? financeCompanyId : undefined,
+        downPayment: isConcreteOffer && financeCompanyId ? parsedDown : undefined,
+        termMonths: isConcreteOffer && financeCompanyId ? parsedTerm : undefined,
+        offerExpiresAt:
+          isConcreteOffer && financeCompanyId && parsedExpiryDays !== undefined
+            ? Date.now() + parsedExpiryDays * 24 * 60 * 60 * 1000
+            : undefined,
+        sourcingRange:
+          isSourcing && parsedMin !== undefined && parsedMax !== undefined && parsedEta !== undefined
+            ? { minJod: parsedMin, maxJod: parsedMax, etaDays: parsedEta }
+            : undefined,
         note: note.trim() || undefined,
       });
       Alert.alert("AutoFlow", t("marketplaceResponseSaved"));
@@ -280,7 +324,7 @@ function ResponseForm({
         })}
       </View>
 
-      {showOfferFields ? (
+      {isConcreteOffer ? (
         <>
           <Text style={styles.formLabel}>{t("marketplaceVehicle")}</Text>
           <VehicleOption
@@ -305,6 +349,86 @@ function ResponseForm({
             keyboardType="number-pad"
             style={[styles.input, { textAlign: isRtl ? "right" : "left" }]}
           />
+
+          <Text style={styles.formLabel}>{t("marketplaceComposerFinanceTitle")}</Text>
+          <Text style={styles.composerHint}>{t("marketplaceComposerFinanceHint")}</Text>
+          <View style={styles.optionGrid}>
+            <Pressable
+              style={({ pressed }) => [styles.optionButton, !financeCompanyId && styles.optionButtonSelected, pressed && styles.pressed]}
+              onPress={() => setFinanceCompanyId(null)}
+            >
+              <Text style={[styles.optionButtonText, !financeCompanyId && styles.optionButtonTextSelected]}>
+                {t("marketplaceComposerNoFinance")}
+              </Text>
+            </Pressable>
+            {(financeCompanies ?? [])
+              .filter((company) => company.isActive)
+              .map((company) => {
+                const selected = financeCompanyId === company._id;
+                return (
+                  <Pressable
+                    key={company._id}
+                    style={({ pressed }) => [styles.optionButton, selected && styles.optionButtonSelected, pressed && styles.pressed]}
+                    onPress={() => setFinanceCompanyId(company._id)}
+                  >
+                    <Text style={[styles.optionButtonText, selected && styles.optionButtonTextSelected]}>{company.name}</Text>
+                  </Pressable>
+                );
+              })}
+          </View>
+
+          {financeCompanyId ? (
+            <>
+              <Text style={styles.formLabel}>{t("marketplaceAffordabilityDownPayment")}</Text>
+              <TextInput
+                value={downPayment}
+                onChangeText={setDownPayment}
+                keyboardType="number-pad"
+                style={[styles.input, { textAlign: isRtl ? "right" : "left" }]}
+              />
+              <Text style={styles.formLabel}>{t("marketplaceAffordabilityTerm")}</Text>
+              <TextInput
+                value={termMonths}
+                onChangeText={setTermMonths}
+                keyboardType="number-pad"
+                style={[styles.input, { textAlign: isRtl ? "right" : "left" }]}
+              />
+              <Text style={styles.formLabel}>{t("marketplaceComposerExpiryDays")}</Text>
+              <TextInput
+                value={expiryDays}
+                onChangeText={setExpiryDays}
+                keyboardType="number-pad"
+                style={[styles.input, { textAlign: isRtl ? "right" : "left" }]}
+              />
+            </>
+          ) : null}
+        </>
+      ) : null}
+
+      {isSourcing ? (
+        <>
+          <Text style={styles.formLabel}>{t("marketplaceComposerSourcingTitle")}</Text>
+          <Text style={styles.formLabel}>{t("marketplaceComposerSourceMin")}</Text>
+          <TextInput
+            value={sourceMin}
+            onChangeText={setSourceMin}
+            keyboardType="number-pad"
+            style={[styles.input, { textAlign: isRtl ? "right" : "left" }]}
+          />
+          <Text style={styles.formLabel}>{t("marketplaceComposerSourceMax")}</Text>
+          <TextInput
+            value={sourceMax}
+            onChangeText={setSourceMax}
+            keyboardType="number-pad"
+            style={[styles.input, { textAlign: isRtl ? "right" : "left" }]}
+          />
+          <Text style={styles.formLabel}>{t("marketplaceComposerSourceEta")}</Text>
+          <TextInput
+            value={sourceEta}
+            onChangeText={setSourceEta}
+            keyboardType="number-pad"
+            style={[styles.input, { textAlign: isRtl ? "right" : "left" }]}
+          />
         </>
       ) : null}
 
@@ -315,6 +439,8 @@ function ResponseForm({
         multiline
         style={[styles.input, styles.noteInput, { textAlign: isRtl ? "right" : "left" }]}
       />
+
+      {error ? <Text style={styles.composerError}>{error}</Text> : null}
 
       <Pressable
         disabled={saving}
@@ -698,6 +824,16 @@ const styles = StyleSheet.create({
     color: theme.colors.mutedText,
     fontSize: 12,
     fontWeight: "700",
+  },
+  composerHint: {
+    color: theme.colors.mutedText,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  composerError: {
+    color: theme.colors.danger,
+    fontSize: 13,
+    lineHeight: 19,
   },
   optionGrid: {
     flexDirection: "row",

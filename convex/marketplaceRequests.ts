@@ -480,10 +480,22 @@ export const getBuyerOffers = query({
     if (!request) return null;
 
     const now = Date.now();
-    const responses = await ctx.db
-      .query("marketplaceResponses")
-      .withIndex("by_request", (q) => q.eq("requestId", request._id))
-      .collect();
+    const [matches, responses] = await Promise.all([
+      ctx.db
+        .query("marketplaceRequestMatches")
+        .withIndex("by_request", (q) => q.eq("requestId", request._id))
+        .collect(),
+      ctx.db
+        .query("marketplaceResponses")
+        .withIndex("by_request", (q) => q.eq("requestId", request._id))
+        .collect(),
+    ]);
+    // How many dealers were reached, and how many actually replied with an
+    // offer — the Request Room timeline reads these to render real, non-fake
+    // progress ("we notified N dealers", "M replied") without a separate query.
+    const respondingOrgIds = new Set(
+      responses.filter((response) => response.kind !== "NOT_AVAILABLE").map((response) => response.orgId)
+    );
 
     const offers = await Promise.all(
       responses
@@ -556,6 +568,8 @@ export const getBuyerOffers = query({
       model: request.model,
       buyerCity: request.buyerCity,
       paymentType: request.paymentType,
+      matchedCount: matches.length,
+      respondedCount: respondingOrgIds.size,
       offers,
     };
   },

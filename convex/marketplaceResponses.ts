@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query, MutationCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -262,6 +263,15 @@ export const respond = mutation({
       meta: { kind: args.kind },
       createdAt: now,
     });
+
+    // Ping the buyer's device the moment a real offer lands (no-ops if they
+    // never enabled notifications). NOT_AVAILABLE isn't an offer, so it's silent.
+    // Legacy requests predating the publicId token simply don't get a push.
+    if (FULFILLING_KINDS.has(args.kind) && request.publicId) {
+      await ctx.scheduler.runAfter(0, internal.marketplaceBuyerPush.sendBuyerOfferPush, {
+        publicId: request.publicId,
+      });
+    }
 
     if (profile) {
       if (profile.tier === "LEAD_PACKAGE") await consumeMarketplaceLead(ctx, profile, now);

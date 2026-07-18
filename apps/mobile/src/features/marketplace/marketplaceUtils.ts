@@ -21,6 +21,9 @@ export type MarketplaceStringKey =
   | "marketplaceResponseNotAvailable"
   | "marketplaceRequestStatusOpen"
   | "marketplaceRequestStatusMatched"
+  | "marketplaceRequestStatusOffersReceived"
+  | "marketplaceRequestStatusAccepted"
+  | "marketplaceRequestStatusCompleted"
   | "marketplaceRequestStatusFulfilled"
   | "marketplaceRequestStatusExpired"
   | "marketplaceRequestStatusSpam"
@@ -170,6 +173,12 @@ export function getRequestStatusKey(status: MobileMarketplaceRequestStatus): Mar
       return "marketplaceRequestStatusOpen";
     case "MATCHED":
       return "marketplaceRequestStatusMatched";
+    case "OFFERS_RECEIVED":
+      return "marketplaceRequestStatusOffersReceived";
+    case "ACCEPTED":
+      return "marketplaceRequestStatusAccepted";
+    case "COMPLETED":
+      return "marketplaceRequestStatusCompleted";
     case "FULFILLED":
       return "marketplaceRequestStatusFulfilled";
     case "EXPIRED":
