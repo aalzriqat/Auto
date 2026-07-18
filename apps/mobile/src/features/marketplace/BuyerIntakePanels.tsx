@@ -23,7 +23,8 @@ import { RouteLoadingState } from "../../components/RouteState";
 import { SearchableSelectField } from "../../components/SearchableSelectField";
 import { getMobileEnv } from "../../config/env";
 import { useLocale } from "../../providers/LocaleProvider";
-import { theme } from "../../theme";
+import { type AppTheme } from "../../theme";
+import { useAppTheme, useThemedStyles } from "../../providers/ThemeProvider";
 import { type SavedBuyerRequest } from "./buyerRequestsStore";
 import { getMarketplaceClientFingerprint } from "./marketplaceFingerprint";
 import { getMarketplaceSelectOptions } from "./marketplaceSelectOptions";
@@ -150,6 +151,7 @@ function ChoiceGroup<TValue extends string>({
   options: Array<ChoiceOption<TValue>>;
   onChange: (value: TValue) => void;
 }) {
+  const styles = useThemedStyles(makeStyles);
   const { t } = useLocale();
 
   return (
@@ -190,6 +192,8 @@ function ConsentRow({
   value: boolean;
   onChange: (value: boolean) => void;
 }) {
+  const theme = useAppTheme();
+  const styles = useThemedStyles(makeStyles);
   return (
     <Pressable
       accessibilityRole="checkbox"
@@ -209,6 +213,7 @@ function ConsentRow({
 }
 
 function Notice({ title, body }: { title: string; body?: string }) {
+  const styles = useThemedStyles(makeStyles);
   return (
     <View style={styles.notice}>
       <Text style={styles.noticeTitle}>{title}</Text>
@@ -226,6 +231,7 @@ function SubmitButton({
   submitting: boolean;
   onPress: () => void;
 }) {
+  const styles = useThemedStyles(makeStyles);
   const { t } = useLocale();
 
   return (
@@ -267,6 +273,7 @@ function StepActions({
   submitting: boolean;
   totalSteps: number;
 }) {
+  const styles = useThemedStyles(makeStyles);
   const isLast = activeStep >= totalSteps - 1;
 
   return (
@@ -312,6 +319,7 @@ function AffordabilityReadout({
   downPayment: string;
   termMonths: string;
 }) {
+  const styles = useThemedStyles(makeStyles);
   const { locale, t } = useLocale();
   const monthly = parseOptionalWholeNumber(monthlyBudget);
   const range = useQuery(
@@ -361,6 +369,7 @@ function AffordabilityReadout({
 export function BuyerRequestPanel({
   onRequestSubmitted,
 }: Readonly<{ onRequestSubmitted: (request: SavedBuyerRequest) => void | Promise<void> }>) {
+  const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
   const submitRequest = useAction(api.marketplaceRequests.submitRequest);
   const [fields, setFields] = useState<RequestFields>(DEFAULT_REQUEST_FIELDS);
@@ -668,6 +677,7 @@ function DealerSelector({
 }: {
   onSelectDealer: (dealer: TradeInDealerTarget) => void;
 }) {
+  const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
   const [search, setSearch] = useState("");
   const dealers = useQuery(api.marketplaceDealers.listPublicDirectory, {});
@@ -725,6 +735,7 @@ export function TradeInRequestPanel({
   onSelectDealer: (dealer: TradeInDealerTarget) => void;
   onClearDealer: () => void;
 }) {
+  const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
   const submitTradeInRequest = useAction(api.marketplaceTradeIns.submitTradeInRequest);
   const [fields, setFields] = useState<TradeInFields>(DEFAULT_TRADE_IN_FIELDS);
@@ -990,7 +1001,7 @@ export function TradeInRequestPanel({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (theme: AppTheme) => StyleSheet.create({
   panel: {
     gap: theme.spacing.md,
     borderRadius: theme.radius.lg,
