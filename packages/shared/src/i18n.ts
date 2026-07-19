@@ -189,6 +189,8 @@ const mobileFoundationStringEntries = [
   ["untitledWorkspace", "Untitled workspace", "مساحة عمل بدون اسم"],
   ["marketplaceSearch", "Search", "بحث"],
   ["marketplaceFilters", "Filters", "الفلاتر"],
+  ["marketplaceViewDetails", "View details", "عرض التفاصيل"],
+  ["marketplaceYear", "Year", "السنة"],
   ["marketplaceReset", "Reset", "إعادة"],
   ["marketplaceMake", "Make", "الماركة"],
   ["marketplaceCity", "City", "المدينة"],

@@ -378,6 +378,136 @@ function useVehicleSaved(vehicleId: string) {
   return { saved, toggle };
 }
 
+// Native, in-app vehicle detail — the buyer's conversion screen. Uses the
+// vehicle object already returned by the search query (no extra round-trip) so
+// the journey stays in AutoFlow instead of bouncing to the dealer's website.
+function VehicleDetailModal({
+  vehicle,
+  visible,
+  onClose,
+  onTradeIn,
+  saved,
+  onToggleSave,
+  listingUrl,
+}: Readonly<{
+  vehicle: MobileMarketplaceVehicle;
+  visible: boolean;
+  onClose: () => void;
+  onTradeIn: () => void;
+  saved: boolean;
+  onToggleSave: () => void;
+  listingUrl: string | null;
+}>) {
+  const styles = useThemedStyles(makeStyles);
+  const { locale, t, textDirection } = useLocale();
+  const { width } = useWindowDimensions();
+  const title = getVehicleTitle(vehicle);
+  const price = formatMoney(vehicle.price, locale);
+  const monthly = formatMoney(vehicle.estimatedMonthlyPayment, locale);
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <Screen>
+        <ScrollView contentContainerStyle={styles.detailContent}>
+          <View style={[styles.sheetHeader, { direction: textDirection }]}>
+            <Text numberOfLines={1} style={styles.detailDealer}>{vehicle.dealershipName}</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t("close")}
+              style={({ pressed }) => [styles.sheetClose, pressed && styles.pressed]}
+              onPress={onClose}
+            >
+              <Icon color="text" name="close" size={20} />
+            </Pressable>
+          </View>
+
+          {vehicle.imageUrls.length > 0 ? (
+            <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} style={styles.gallery}>
+              {vehicle.imageUrls.map((url, index) => (
+                <Image
+                  key={`${url}-${index}`}
+                  source={{ uri: url }}
+                  style={[styles.galleryImage, { width }]}
+                  resizeMode="cover"
+                />
+              ))}
+            </ScrollView>
+          ) : (
+            <View style={styles.galleryEmpty}>
+              <Text style={styles.noImageText}>{t("marketplaceNoImage")}</Text>
+            </View>
+          )}
+
+          <View style={[styles.detailBody, { direction: textDirection }]}>
+            <Text style={styles.detailTitle}>{title}</Text>
+            {price ? <Text style={styles.detailPrice}>{price}</Text> : null}
+            {monthly ? (
+              <Text style={styles.detailMonthly}>
+                {t("marketplaceFromPerMonth")} {monthly}/{t("marketplaceMonth")}
+              </Text>
+            ) : null}
+
+            <View style={styles.badgeRow}>
+              {vehicle.financeAvailable ? <Badge label={t("marketplaceFinanceAvailable")} /> : null}
+              {vehicle.dealerBadges.includes("VERIFIED_PHONE") ? (
+                <Badge label={t("marketplaceVerifiedDealer")} tone="blue" />
+              ) : null}
+              {vehicle.dealerBadges.includes("FAST_RESPONSE") ? (
+                <Badge label={t("marketplaceFastResponse")} tone="amber" />
+              ) : null}
+            </View>
+
+            <View style={styles.specGrid}>
+              {vehicle.mileage != null ? (
+                <View style={styles.specRow}>
+                  <Text style={styles.specLabel}>{t("marketplaceMileage")}</Text>
+                  <Text style={styles.specValue}>{formatNumber(vehicle.mileage, locale)}</Text>
+                </View>
+              ) : null}
+              {vehicle.year ? (
+                <View style={styles.specRow}>
+                  <Text style={styles.specLabel}>{t("marketplaceYear")}</Text>
+                  <Text style={styles.specValue}>{formatNumber(vehicle.year, locale)}</Text>
+                </View>
+              ) : null}
+            </View>
+
+            <TrustFacts vehicle={vehicle} />
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ selected: saved }}
+              style={({ pressed }) => [styles.detailPrimaryAction, saved && styles.detailPrimaryActionActive, pressed && styles.pressed]}
+              onPress={onToggleSave}
+            >
+              <Icon color={saved ? "onPrimary" : "primary"} name="save" size={18} />
+              <Text style={[styles.detailPrimaryActionText, saved && styles.detailPrimaryActionTextActive]}>
+                {saved ? t("marketplaceSavedRemove") : t("marketplaceSaveCar")}
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
+              onPress={onTradeIn}
+            >
+              <Text style={styles.secondaryButtonText}>{t("marketplaceRequestTradeIn")}</Text>
+            </Pressable>
+            {listingUrl ? (
+              <Pressable
+                accessibilityRole="button"
+                style={({ pressed }) => [styles.inlineButton, pressed && styles.pressed]}
+                onPress={() => openExternalUrl(listingUrl)}
+              >
+                <Text style={styles.inlineButtonText}>{t("marketplaceOpenListing")}</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </ScrollView>
+      </Screen>
+    </Modal>
+  );
+}
+
 function VehicleCard({
   vehicle,
   onTradeInPress,
@@ -392,6 +522,7 @@ function VehicleCard({
   const price = formatMoney(vehicle.price, locale);
   const monthly = formatMoney(vehicle.estimatedMonthlyPayment, locale);
   const { saved, toggle } = useVehicleSaved(vehicle.id);
+  const [detailOpen, setDetailOpen] = useState(false);
 
   const snapshot: SavedVehicle = {
     id: vehicle.id,
@@ -406,7 +537,12 @@ function VehicleCard({
 
   return (
     <View style={[styles.vehicleCard, { direction: textDirection }]}>
-      <View style={styles.vehicleImageWrap}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${t("marketplaceViewDetails")}: ${title}`}
+        style={styles.vehicleImageWrap}
+        onPress={() => setDetailOpen(true)}
+      >
         {vehicle.imageUrls[0] ? (
           <Image source={{ uri: vehicle.imageUrls[0] }} style={styles.vehicleImage} resizeMode="cover" />
         ) : (
@@ -426,9 +562,11 @@ function VehicleCard({
             <Text style={styles.priceBadgeText}>{price}</Text>
           </View>
         ) : null}
-      </View>
+      </Pressable>
       <View style={styles.cardBody}>
-        <Text style={styles.cardTitle}>{title}</Text>
+        <Pressable accessibilityRole="button" onPress={() => setDetailOpen(true)}>
+          <Text style={styles.cardTitle}>{title}</Text>
+        </Pressable>
         <Text style={styles.cardMeta}>{vehicle.dealershipName}</Text>
         {vehicle.mileage != null ? (
           <Text style={styles.cardMeta}>
@@ -469,6 +607,18 @@ function VehicleCard({
           </Pressable>
         </View>
       </View>
+      <VehicleDetailModal
+        vehicle={vehicle}
+        visible={detailOpen}
+        onClose={() => setDetailOpen(false)}
+        onTradeIn={() => {
+          setDetailOpen(false);
+          onTradeInPress({ orgId: vehicle.orgId, dealershipName: vehicle.dealershipName });
+        }}
+        saved={saved}
+        onToggleSave={() => void toggle(snapshot)}
+        listingUrl={listingUrl}
+      />
     </View>
   );
 }
@@ -943,6 +1093,98 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     justifyContent: "center",
     borderRadius: theme.radius.full,
     backgroundColor: theme.colors.surfaceAlt,
+  },
+  detailContent: {
+    paddingBottom: theme.spacing.xxl,
+  },
+  detailDealer: {
+    flex: 1,
+    minWidth: 0,
+    color: theme.colors.mutedText,
+    fontSize: 14,
+    fontWeight: "700",
+    paddingHorizontal: theme.spacing.lg,
+  },
+  gallery: {
+    width: "100%",
+    aspectRatio: 4 / 3,
+    backgroundColor: theme.colors.surfaceAlt,
+  },
+  galleryImage: {
+    width: 720,
+    height: "100%",
+  },
+  galleryEmpty: {
+    width: "100%",
+    aspectRatio: 4 / 3,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: theme.colors.surfaceAlt,
+  },
+  detailBody: {
+    gap: theme.spacing.md,
+    padding: theme.spacing.lg,
+  },
+  detailTitle: {
+    color: theme.colors.text,
+    fontSize: 24,
+    fontWeight: "800",
+    lineHeight: 30,
+  },
+  detailPrice: {
+    color: theme.colors.primary,
+    fontSize: 26,
+    fontWeight: "900",
+  },
+  detailMonthly: {
+    color: theme.colors.mutedText,
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  specGrid: {
+    gap: theme.spacing.sm,
+  },
+  specRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.surface,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+  },
+  specLabel: {
+    color: theme.colors.mutedText,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  specValue: {
+    color: theme.colors.text,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  detailPrimaryAction: {
+    minHeight: 52,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme.spacing.sm,
+    borderRadius: theme.radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.primary,
+    backgroundColor: theme.colors.primarySoft,
+  },
+  detailPrimaryActionActive: {
+    backgroundColor: theme.colors.primary,
+    borderColor: theme.colors.primary,
+  },
+  detailPrimaryActionText: {
+    color: theme.colors.primary,
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  detailPrimaryActionTextActive: {
+    color: theme.colors.onPrimary,
   },
   searchPanel: {
     gap: theme.spacing.md,
