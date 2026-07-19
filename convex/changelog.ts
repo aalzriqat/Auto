@@ -1015,6 +1015,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "يتيح لك زر الترتيب الجديد ترتيب السيارات حسب السعر (من الأقل للأعلى أو العكس) أو الأحدث سنةً أو الأقل ممشى — لتجد السيارة المناسبة أسرع بدلاً من تصفّح كل شيء.",
     publishedAt: releaseAt(2026, 7, 19, 4),
   },
+  {
+    type: "IMPROVEMENT",
+    titleEn: "Filter cars by transmission and fuel",
+    titleAr: "فلترة السيارات حسب ناقل الحركة والوقود",
+    descriptionEn: "The marketplace filters now include quick chips for transmission (automatic/manual) and fuel type (petrol, diesel, electric, hybrid), so you can narrow to exactly the kind of car you want.",
+    descriptionAr: "أصبحت فلاتر السوق تتضمن الآن أزراراً سريعة لناقل الحركة (أوتوماتيك/عادي) ونوع الوقود (بنزين، ديزل، كهرباء، هجين)، لتحصر النتائج في نوع السيارة الذي تريده بالضبط.",
+    publishedAt: releaseAt(2026, 7, 19, 5),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

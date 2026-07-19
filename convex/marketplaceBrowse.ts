@@ -142,6 +142,8 @@ export const search = query({
     maxMonthlyPayment: v.optional(v.number()),
     city: v.optional(v.string()),
     paymentType: paymentTypeValidator,
+    transmission: v.optional(v.string()),
+    fuelType: v.optional(v.string()),
     sortBy: sortByValidator,
     cursor: v.optional(v.string()),
     numItems: v.optional(v.number()),
@@ -152,6 +154,12 @@ export const search = query({
     const cityFilter = args.city?.trim().toLowerCase();
     const makeFilter = args.make?.trim().toLowerCase();
     const modelFilter = args.model?.trim().toLowerCase();
+    // Spec filters match the dealer-published values case-insensitively. A car
+    // only carries transmission/fuel in its snapshot when the dealer enabled
+    // that site section, so filtering by a spec necessarily narrows to dealers
+    // who disclosed it — same tradeoff as the city/finance filters.
+    const transmissionFilter = args.transmission?.trim().toLowerCase();
+    const fuelFilter = args.fuelType?.trim().toLowerCase();
 
     const profiles = await listOptedInDealerProfiles(ctx, MAX_CANDIDATE_ORGS);
 
@@ -196,6 +204,8 @@ export const search = query({
         if (vehicle.status && vehicle.status !== "AVAILABLE") continue;
         if (makeFilter && vehicle.make.toLowerCase() !== makeFilter) continue;
         if (modelFilter && vehicle.model.toLowerCase() !== modelFilter) continue;
+        if (transmissionFilter && vehicle.transmission?.toLowerCase() !== transmissionFilter) continue;
+        if (fuelFilter && vehicle.fuelType?.toLowerCase() !== fuelFilter) continue;
         if (args.priceMin != null && (vehicle.price ?? Infinity) < args.priceMin) continue;
         if (args.priceMax != null && (vehicle.price ?? -Infinity) > args.priceMax) continue;
 

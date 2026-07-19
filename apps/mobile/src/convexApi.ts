@@ -1298,6 +1298,8 @@ type MarketplaceSearchArgs = {
   maxMonthlyPayment?: number;
   city?: string;
   paymentType?: MobileMarketplacePaymentFilter;
+  transmission?: string;
+  fuelType?: string;
   sortBy?: MobileMarketplaceSortBy;
   cursor?: string;
   numItems?: number;
