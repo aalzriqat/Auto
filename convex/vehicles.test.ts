@@ -1247,6 +1247,53 @@ describe("vehicles.importBulk — owned stock vs sourced", () => {
       expect(vins).not.toContain("SOURCED-BAD-1");
     });
   });
+
+  test("imports every owned-stock row even when they share a placeholder VIN", async () => {
+    const { orgId, asUser, t } = await setup();
+
+    // Owned stock with no VIN yet is routinely filled with a filler string.
+    // These must NOT dedupe against each other — before the fix, only the first
+    // imported and the rest were skipped as "duplicate VIN".
+    const result = await asUser.mutation(api.vehicles.importBulk, {
+      orgId,
+      vehicles: [
+        { ...baseImportRow, make: "Neta", model: "V", vin: "xxxxxxxxxxxxxxxxx" },
+        { ...baseImportRow, make: "Dongfeng", model: "Nano Box", vin: "xxxxxxxxxxxxxxxxx" },
+        { ...baseImportRow, make: "SERES", model: "3", vin: "N/A" },
+        { ...baseImportRow, make: "Tesla", model: "Model 3", vin: "" },
+      ],
+    });
+
+    expect(result.inserted).toBe(4);
+    expect(result.skipped).toBe(0);
+    await t.run(async (ctx) => {
+      const vehicles = await ctx.db
+        .query("vehicles")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect();
+      expect(vehicles.length).toBe(4);
+      // Each got its own generated placeholder VIN — no filler string persisted,
+      // and every VIN is unique.
+      const vins = vehicles.map((v) => v.vin);
+      expect(new Set(vins).size).toBe(4);
+      expect(vins.every((vin) => /^IMPORT-/.test(vin ?? ""))).toBe(true);
+    });
+  });
+
+  test("still dedupes genuine repeated VINs within a batch", async () => {
+    const { orgId, asUser } = await setup();
+
+    const result = await asUser.mutation(api.vehicles.importBulk, {
+      orgId,
+      vehicles: [
+        { ...baseImportRow, vin: "1HGCM82633A004321" },
+        { ...baseImportRow, vin: "1hgcm82633a004321" }, // same VIN, different case
+      ],
+    });
+
+    expect(result.inserted).toBe(1);
+    expect(result.skipped).toBe(1);
+  });
 });
 
 describe("vehicles.exportData", () => {

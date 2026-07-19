@@ -8,17 +8,31 @@ import { downloadXlsxTemplate, type SpreadsheetCell } from "@/lib/spreadsheet";
 // parser (VehicleImportDialog) all key off the header text defined here, so an
 // exported file re-imports with zero manual column remapping — including into a
 // brand-new dealer account that has none of these finance companies yet.
+//
+// Layout is a SINGLE header row (matching the dealer's working sheet):
+//   TYPE/Name | VIN | Color | KM | Cost | Selling Price | Model | Source Type |
+//   Sourced From | <finance-program valuation columns…>
+// Every column after "Sourced From" is a finance-company/program valuation —
+// the importer treats any header it doesn't recognize as a core field as one.
 // ---------------------------------------------------------------------------
 
 /**
- * Default finance-company valuation columns that ship with the blank template.
- * They double as the importer's double-header trigger (parseVehicleWorksheet in
- * VehicleImportDialog keys on these three names to decide a sheet uses the
- * two-row valuation header), so every exported file always includes them — that
- * is what guarantees the valuation block is detected on re-import even when the
- * target account has no finance companies configured.
+ * Default finance-program valuation columns that ship with the blank template —
+ * the dealer's real programs. Every column after the core columns is imported as
+ * a valuation, so these round-trip on re-import even into an account that has no
+ * finance companies configured yet (they're auto-created inactive on import).
  */
-export const DEFAULT_VALUATION_HEADERS = ["بندار", "تمكين", "السماحة"];
+export const DEFAULT_VALUATION_HEADERS = [
+  "المتخصصة / 80% زيرو بدون كفيل",
+  "الكوثر 90% اثاث",
+  "زيرو بندار زيرو 90%",
+  "المتخصصه 90%",
+  "دار التمويل",
+  "الكوثر 85%",
+  "الكوثر 6.5%",
+  "بندار مستعمل 8.5%",
+  "المتخصصة مستعمل / سماحه تطبيقات",
+];
 
 /**
  * Canonical non-valuation columns, in template order. The header text is what
@@ -26,20 +40,16 @@ export const DEFAULT_VALUATION_HEADERS = ["بندار", "تمكين", "السم�
  * download, export, and import stay in lockstep through this one list.
  */
 const CORE_HEADERS = [
-  "TYPE/Name", // make
+  "TYPE/Name", // make (may embed the model too, e.g. "BYD Dolphin")
   "VIN",
   "Color",
   "KM", // mileage
   "Cost", // purchasePrice (== sourceCost for sourced vehicles)
+  "Selling Price", // the dealer's asking price (distinct from the finance valuations)
   "Model", // model, with the year embedded (e.g. "Camry 2022")
-  "المتخصصة", // sellingPrice (retail)
-  "الكوتر", // unused passthrough column — kept for template fidelity
   "Source Type", // STOCK / SOURCED
   "Sourced From", // supplier dealer name (sourced vehicles only)
 ];
-
-const VALUATION_GROUP_HEADER = "التخمين";
-const SELLING_PRICE_HEADER = "المتخصصة";
 
 export interface VehicleSheetRow {
   make: string;
@@ -50,10 +60,11 @@ export interface VehicleSheetRow {
   cost?: number | null;
   model: string;
   year?: number | null;
-  sellingPrice: number;
+  /** The dealer's asking price — written to the "Selling Price" column. */
+  sellingPrice?: number | null;
   sourceType: "STOCK" | "SOURCED";
   sourcedFrom?: string | null;
-  /** company name -> valuation amount */
+  /** company/program name -> valuation amount */
   valuationsByCompany?: Record<string, number>;
 }
 
@@ -81,18 +92,6 @@ function numberOrBlank(value?: number | null): SpreadsheetCell {
   return value === undefined || value === null || Number.isNaN(value) ? "" : value;
 }
 
-function buildHeaderRows(companyNames: string[]): { row1: SpreadsheetCell[]; row2: SpreadsheetCell[] } {
-  const row1: SpreadsheetCell[] = [...CORE_HEADERS, VALUATION_GROUP_HEADER];
-  const row2: SpreadsheetCell[] = CORE_HEADERS.map(() => "");
-  companyNames.forEach((name, i) => {
-    // The first valuation column sits under the group header already pushed
-    // above; the rest extend the merged group header across their columns.
-    if (i > 0) row1.push("");
-    row2.push(name);
-  });
-  return { row1, row2 };
-}
-
 function buildDataRow(row: VehicleSheetRow, companyNames: string[]): SpreadsheetCell[] {
   const byCompany = row.valuationsByCompany ?? {};
   return [
@@ -101,23 +100,20 @@ function buildDataRow(row: VehicleSheetRow, companyNames: string[]): Spreadsheet
     row.color ?? "",
     numberOrBlank(row.mileage),
     numberOrBlank(row.cost),
-    composeModelCell(row.model, row.year),
     numberOrBlank(row.sellingPrice),
-    "", // الكوتر (unused)
+    composeModelCell(row.model, row.year),
     row.sourceType,
     row.sourcedFrom ?? "",
     ...companyNames.map((name) => numberOrBlank(byCompany[name])),
   ];
 }
 
+/** RTL-align the Arabic valuation header cells (row 1) so they read correctly. */
 function rightAlignedValuationCells(companyCount: number): Array<{ row: number; col: number }> {
   const cells: Array<{ row: number; col: number }> = [];
-  const sellingPriceCol = CORE_HEADERS.indexOf(SELLING_PRICE_HEADER) + 1; // 1-based
-  cells.push({ row: 1, col: sellingPriceCol });
-  const firstValuationCol = CORE_HEADERS.length + 1;
+  const firstValuationCol = CORE_HEADERS.length + 1; // 1-based
   for (let c = firstValuationCol; c < firstValuationCol + companyCount; c += 1) {
     cells.push({ row: 1, col: c });
-    cells.push({ row: 2, col: c });
   }
   return cells;
 }
@@ -130,7 +126,7 @@ interface DownloadVehicleSheetOptions {
 }
 
 export interface VehicleSheetMatrix {
-  /** [headerRow1, headerRow2, ...dataRows] in canonical column order. */
+  /** [headerRow, ...dataRows] in canonical column order. */
   rows: SpreadsheetCell[][];
   /** Finance-company valuation columns actually written (defaults + org companies). */
   companyNames: string[];
@@ -140,34 +136,22 @@ export interface VehicleSheetMatrix {
 
 /**
  * Pure builder for the vehicle spreadsheet cell matrix — separated from the
- * download side effect so it can be unit-tested (and reused). Always prepends
- * the default valuation headers so the importer's double-header detection fires.
+ * download side effect so it can be unit-tested (and reused). Emits a single
+ * header row followed by data rows; every finance-program valuation column lands
+ * inline after the core columns.
  */
 export function buildVehicleSheetMatrix(
   companyNamesInput: string[],
   rows: VehicleSheetRow[]
 ): VehicleSheetMatrix {
   const companyNames = dedupeNames([...DEFAULT_VALUATION_HEADERS, ...companyNamesInput]);
-  const { row1, row2 } = buildHeaderRows(companyNames);
+  const headerRow: SpreadsheetCell[] = [...CORE_HEADERS, ...companyNames];
   const dataRows = rows.map((row) => buildDataRow(row, companyNames));
 
-  const firstValuationCol = CORE_HEADERS.length + 1;
-  const merges =
-    companyNames.length > 1
-      ? [
-          {
-            startRow: 1,
-            startCol: firstValuationCol,
-            endRow: 1,
-            endCol: firstValuationCol + companyNames.length - 1,
-          },
-        ]
-      : [];
-
   return {
-    rows: [row1, row2, ...dataRows],
+    rows: [headerRow, ...dataRows],
     companyNames,
-    merges,
+    merges: [],
     rightAlignedCells: rightAlignedValuationCells(companyNames.length),
   };
 }
@@ -193,33 +177,43 @@ export async function downloadVehicleSheet(options: DownloadVehicleSheetOptions)
 /**
  * Downloads the blank reference template with two worked examples — one owned
  * stock car and one sourced car — so dealers can see how every column, incl. the
- * Source Type / Sourced From distinction, is filled in.
+ * Source Type / Sourced From distinction, is filled in. The stock example uses a
+ * blank VIN (owned stock often has none yet) to show that leaving it empty is
+ * fine — each such row still imports as its own vehicle.
  */
 export async function downloadVehicleTemplate(): Promise<void> {
   const stockExample: VehicleSheetRow = {
-    make: "Toyota",
-    vin: "JTDKARFU7G3529873",
+    make: "Toyota Camry", // TYPE/Name may hold the full name; Model can just carry the year
+    vin: "", // owned stock with no VIN yet — leave blank, it still imports
     color: "White",
-    mileage: 45000, // known mileage; leave KM empty for a used car to fill in later
+    mileage: 45000,
     cost: 14000,
-    model: "Camry",
-    year: 2022,
     sellingPrice: 18000,
+    model: "",
+    year: 2022,
     sourceType: "STOCK",
-    valuationsByCompany: { "بندار": 19000, "تمكين": 18500, "السماحة": 17000 },
+    valuationsByCompany: {
+      "المتخصصة / 80% زيرو بدون كفيل": 19000,
+      "الكوثر 90% اثاث": 18500,
+      "دار التمويل": 17000,
+    },
   };
   const sourcedExample: VehicleSheetRow = {
-    make: "BYD",
+    make: "BYD Dolphin",
     vin: "LJ136HBDA4P123456",
     color: "Black",
     mileage: null,
     cost: 22000, // for a sourced car, Cost is the supplier cost
-    model: "Dolphin",
-    year: 2024,
     sellingPrice: 26000,
+    model: "",
+    year: 2024,
     sourceType: "SOURCED",
-    sourcedFrom: "Gulf Motors",
-    valuationsByCompany: { "بندار": 27000, "تمكين": 26500, "السماحة": 25500 },
+    sourcedFrom: "العطيوي",
+    valuationsByCompany: {
+      "المتخصصة / 80% زيرو بدون كفيل": 27000,
+      "المتخصصه 90%": 26500,
+      "بندار مستعمل 8.5%": 25500,
+    },
   };
 
   await downloadVehicleSheet({

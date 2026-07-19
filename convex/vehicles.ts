@@ -69,6 +69,20 @@ function generateImportVinPlaceholder(): string {
   return `IMPORT-${Date.now()}-${randomHex(3)}`;
 }
 
+// Dealers routinely drop a filler string into the VIN column for stock that has
+// no VIN yet — a run of x's, dashes or zeros, or "N/A". Those are NOT real
+// identifiers, so treating them as such makes every such row after the first
+// collide as a "duplicate VIN" and get silently skipped (this is why owned
+// stock, which most often lacks a VIN, failed to import). Normalizing them to
+// blank lets each row get its own generated placeholder instead of deduping.
+function isPlaceholderVin(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) return true;
+  if (/^(.)\1+$/.test(trimmed)) return true; // xxxxxxxx, --------, 00000000, ...
+  const lower = trimmed.toLowerCase();
+  return lower === "n/a" || lower === "na" || lower === "tbd" || lower === "none" || lower === "-";
+}
+
 /**
  * Posts the VEHICLE_ACQUIRED GL entry (+ legacy VEHICLE_PURCHASE transaction
  * row) for owned stock with a purchase price — shared by the direct
@@ -1810,7 +1824,9 @@ export const importBulk = mutation({
     let skipped = 0;
 
     for (const row of args.vehicles) {
-      const normalizedVin = row.vin.trim().toUpperCase();
+      // Placeholder VINs (xxxxx, N/A, blank, ...) are treated as "no VIN": they
+      // must NOT dedupe against each other, or all-but-one stock row is skipped.
+      const normalizedVin = isPlaceholderVin(row.vin) ? "" : row.vin.trim().toUpperCase();
 
       // Skip duplicate VINs within the org (or blank VINs treated as unique),
       // but still refresh that vehicle's valuations from this import.

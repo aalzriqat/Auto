@@ -105,6 +105,18 @@ const PREVIEW_COLUMNS = [
   { key: "valuations", label: "Financing Company Valuations" },
 ];
 
+// Mirror of the backend guard (convex/vehicles.ts): a run of x's/dashes/zeros,
+// "N/A", or blank is a filler VIN, not a real one. Blanking it here keeps the
+// preview honest and lets the backend assign each row a unique placeholder
+// instead of skipping stock rows that share the same filler string.
+function isPlaceholderVin(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) return true;
+  if (/^(.)\1+$/.test(trimmed)) return true;
+  const lower = trimmed.toLowerCase();
+  return lower === "n/a" || lower === "na" || lower === "tbd" || lower === "none" || lower === "-";
+}
+
 function normalizeImportSourceType(raw: unknown): "STOCK" | "SOURCED" {
   const value = String(raw ?? "").trim().toUpperCase();
   if (!value) return "STOCK";
@@ -141,8 +153,17 @@ function parseVehicleWorksheet(rawRows: SpreadsheetRows): { headers: string[]; r
     valuationHeaders = finalHeaders.filter((_, i) => secondRow[i] !== "");
     dataStartRow = 2;
   } else {
+    // Single-header sheet (the dealership's current template): the valuation
+    // columns sit inline on row 1 with descriptive Arabic names (one per finance
+    // program), not on a second row. Any non-empty header that COL_MAP doesn't
+    // recognize as a core vehicle field is therefore a finance-company valuation
+    // column — resolveDynamicFields turns each into a mappable target, and the
+    // dealer can still switch any of them to "Ignore" in the wizard.
     finalHeaders = primaryHeaders;
     dataStartRow = 1;
+    valuationHeaders = finalHeaders.filter(
+      (h) => h.trim() !== "" && !(normalizeKey(h) in COL_MAP)
+    );
   }
 
   const dataRows = rawRows.slice(dataStartRow).filter((row) => row.some((cell: any) => cell !== ""));
@@ -168,7 +189,8 @@ function deriveVehicleRow(mapped: Record<string, any>): Record<string, any> {
     make = make.slice(0, spaceIdx).trim();
   }
 
-  const vin = String(mapped.vin ?? "").trim();
+  const rawVin = String(mapped.vin ?? "").trim();
+  const vin = isPlaceholderVin(rawVin) ? "" : rawVin;
   const color = String(mapped.color ?? "").trim();
   const rawMileage = mapped.mileage != null ? String(mapped.mileage).trim() : "";
   const mileage = rawMileage === "" ? undefined : parseFloat(rawMileage.replace(/,/g, ""));
