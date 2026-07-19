@@ -5,23 +5,23 @@ import {
   type VehicleSheetRow,
 } from "./vehicleSheet";
 
-// The importer (VehicleImportDialog.parseVehicleWorksheet) treats a sheet as
-// double-header only when row 2 contains one of these names, then reads every
-// non-empty row-2 cell as a finance-company valuation column. These tests lock
-// the exported layout to that contract so an export round-trips on re-import.
-const CORE_COLUMN_COUNT = 10;
+// The template is a single header row: the core columns followed by one column
+// per finance-program valuation. The importer treats any header after the core
+// columns as a valuation, so these tests lock that layout in place so an export
+// round-trips on re-import.
+const CORE_COLUMN_COUNT = 9;
 
 const stockRow: VehicleSheetRow = {
   make: "Toyota",
-  vin: "JTDKARFU7G3529873",
+  vin: "",
   color: "White",
   mileage: 45000,
   cost: 14000,
+  sellingPrice: 18000,
   model: "Camry",
   year: 2022,
-  sellingPrice: 18000,
   sourceType: "STOCK",
-  valuationsByCompany: { "بندار": 19000 },
+  valuationsByCompany: { [DEFAULT_VALUATION_HEADERS[0]]: 19000 },
 };
 
 const sourcedRow: VehicleSheetRow = {
@@ -30,38 +30,49 @@ const sourcedRow: VehicleSheetRow = {
   color: "Black",
   mileage: null,
   cost: 22000,
+  sellingPrice: 26000,
   model: "Dolphin",
   year: 2024,
-  sellingPrice: 26000,
   sourceType: "SOURCED",
   sourcedFrom: "Gulf Motors",
 };
 
 describe("buildVehicleSheetMatrix", () => {
-  test("always emits the default valuation headers as the double-header trigger", () => {
+  test("emits a single header row with the default valuation columns after the core columns", () => {
     const { rows } = buildVehicleSheetMatrix([], [stockRow]);
-    const [, headerRow2] = rows;
+    const [headerRow] = rows;
     for (const header of DEFAULT_VALUATION_HEADERS) {
-      expect(headerRow2).toContain(header);
+      expect(headerRow).toContain(header);
     }
-    // The trigger names live in row 2, after the core columns.
-    expect(headerRow2[CORE_COLUMN_COUNT]).toBe(DEFAULT_VALUATION_HEADERS[0]);
+    // First valuation column sits immediately after the core columns.
+    expect(headerRow[CORE_COLUMN_COUNT]).toBe(DEFAULT_VALUATION_HEADERS[0]);
+    // Data starts on the second row (no second header row).
+    expect(rows.length).toBe(2);
   });
 
   test("embeds the model year inside the Model column the way the template encodes it", () => {
     const { rows } = buildVehicleSheetMatrix([], [stockRow]);
-    const dataRow = rows[2];
-    expect(dataRow[5]).toBe("Camry 2022");
+    const dataRow = rows[1];
+    expect(dataRow[6]).toBe("Camry 2022");
   });
 
-  test("writes the Source Type and Sourced From columns", () => {
-    const { rows } = buildVehicleSheetMatrix([], [stockRow, sourcedRow]);
-    const [, , stock, sourced] = rows;
+  test("writes Cost and Selling Price as distinct adjacent columns", () => {
+    const { rows } = buildVehicleSheetMatrix([], [stockRow]);
+    const [headerRow, dataRow] = rows;
+    expect(headerRow[4]).toBe("Cost");
+    expect(headerRow[5]).toBe("Selling Price");
+    expect(dataRow[4]).toBe(14000);
+    expect(dataRow[5]).toBe(18000);
+  });
 
-    // Column 9 = Source Type, column 10 = Sourced From (0-indexed 8 / 9).
-    expect(stock[8]).toBe("STOCK");
-    expect(sourced[8]).toBe("SOURCED");
-    expect(sourced[9]).toBe("Gulf Motors");
+  test("writes the Source Type and Sourced From columns right after Model", () => {
+    const { rows } = buildVehicleSheetMatrix([], [stockRow, sourcedRow]);
+    const [, stock, sourced] = rows;
+
+    // Column 8 = Source Type, column 9 = Sourced From (0-indexed 7 / 8).
+    expect(stock[7]).toBe("STOCK");
+    expect(sourced[7]).toBe("SOURCED");
+    expect(sourced[8]).toBe("Gulf Motors");
     // A sourced car must carry its supplier cost in the Cost column.
     expect(sourced[4]).toBe(22000);
   });
@@ -69,24 +80,27 @@ describe("buildVehicleSheetMatrix", () => {
   test("appends org finance companies after the defaults without duplicating them", () => {
     const rowWithCustom: VehicleSheetRow = {
       ...stockRow,
-      valuationsByCompany: { "بندار": 19000, "MyBank": 21000 },
+      valuationsByCompany: { [DEFAULT_VALUATION_HEADERS[0]]: 19000, "MyBank": 21000 },
     };
-    // "بندار" is a default AND passed as an org company — it must appear once.
-    const { rows, companyNames } = buildVehicleSheetMatrix(["بندار", "MyBank"], [rowWithCustom]);
+    // The first default is passed as an org company too — it must appear once.
+    const { rows, companyNames } = buildVehicleSheetMatrix(
+      [DEFAULT_VALUATION_HEADERS[0], "MyBank"],
+      [rowWithCustom]
+    );
 
     expect(companyNames).toEqual([...DEFAULT_VALUATION_HEADERS, "MyBank"]);
 
-    const headerRow2 = rows[1];
-    const myBankCol = headerRow2.indexOf("MyBank");
+    const headerRow = rows[0];
+    const myBankCol = headerRow.indexOf("MyBank");
     expect(myBankCol).toBeGreaterThan(-1);
-    expect(rows[2][myBankCol]).toBe(21000);
+    expect(rows[1][myBankCol]).toBe(21000);
     // Default valuation still lands in its own column.
-    const bandarCol = headerRow2.indexOf("بندار");
-    expect(rows[2][bandarCol]).toBe(19000);
+    const defaultCol = headerRow.indexOf(DEFAULT_VALUATION_HEADERS[0]);
+    expect(rows[1][defaultCol]).toBe(19000);
   });
 
   test("leaves KM blank for a car with no mileage", () => {
     const { rows } = buildVehicleSheetMatrix([], [sourcedRow]);
-    expect(rows[2][3]).toBe("");
+    expect(rows[1][3]).toBe("");
   });
 });

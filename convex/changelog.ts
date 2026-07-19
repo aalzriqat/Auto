@@ -1063,6 +1063,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "أصلحنا ظهور قائمة السيارات أحياناً في تبويب الطلب بعد التصفّح — أصبح الآن يفتح نموذج \"اطلب سيارة\" مباشرةً كما هو متوقع.",
     publishedAt: releaseAt(2026, 7, 19, 10),
   },
+  {
+    type: "FIX",
+    titleEn: "Owned stock now imports even without a VIN",
+    titleAr: "استيراد المخزون المملوك يعمل الآن حتى بدون رقم هيكل",
+    descriptionEn: "Fixed vehicle import so owned-stock rows that share a placeholder VIN (like a run of x's, a dash, or \"N/A\") no longer get skipped as duplicates — each imports as its own car. The import template now matches the dealership sheet exactly: a Selling Price column sits next to Cost, Source Type and Sourced From come right after Model, and every finance-program column (like المتخصصة and الكوثر) is read as a valuation.",
+    descriptionAr: "تم إصلاح استيراد السيارات بحيث لم تعد صفوف المخزون المملوك التي تشترك في رقم هيكل مؤقت (مثل سلسلة أحرف x أو شرطة أو \"N/A\") تُتجاهل كتكرار — بل يُستورد كل صف كسيارة مستقلة. كما أصبح قالب الاستيراد مطابقاً لملف المعرض تماماً: عمود سعر البيع بجانب التكلفة، وعمودا نوع المصدر والمصدر مباشرة بعد الموديل، ويُقرأ كل عمود لبرنامج تمويلي (مثل المتخصصة والكوثر) كتقييم.",
+    publishedAt: releaseAt(2026, 7, 19, 11),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;
