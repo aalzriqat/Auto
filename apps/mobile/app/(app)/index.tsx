@@ -1,7 +1,7 @@
-import { MarketplaceScreen } from "../../src/features/marketplace/MarketplaceScreen";
+import { BuyerShell } from "../../src/features/marketplace/BuyerShell";
 
-// Marketplace-first: the app opens straight into the public buyer marketplace.
-// Dealers reach their workspace via Account → Dealer sign in (/workspaces).
+// Marketplace-first: the app opens into the buyer shell (Browse · Request ·
+// Saved · Account). Dealers reach their workspace via Account → Dealer sign in.
 export default function HomeRoute() {
-  return <MarketplaceScreen />;
+  return <BuyerShell />;
 }
