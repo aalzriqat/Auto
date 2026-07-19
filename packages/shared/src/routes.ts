@@ -1,6 +1,10 @@
 export const nativeRoutes = {
+  // Marketplace-first: "/" is the public buyer marketplace. Dealer surfaces live
+  // behind /workspaces (picker) and /org/[orgId]/* (the dealer OS).
   home: "/",
   marketplace: "/marketplace",
+  account: "/account",
+  dealerWorkspaces: "/workspaces",
   signIn: "/sign-in",
   orgHome: "/org/[orgId]/home",
   orgOperations: "/org/[orgId]/operations",

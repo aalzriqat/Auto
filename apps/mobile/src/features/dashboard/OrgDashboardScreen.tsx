@@ -181,7 +181,7 @@ function Header({ org }: { org: MobileOrgSummary }) {
         accessibilityLabel={t("back")}
         accessibilityRole="button"
         style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
-        onPress={() => router.replace(nativeRoutes.home)}
+        onPress={() => router.replace(nativeRoutes.dealerWorkspaces)}
       >
         <Icon color="text" name="back" size={20} />
       </Pressable>
@@ -653,7 +653,7 @@ function InaccessibleWorkspaceState() {
         actionLabel={t("back")}
         hint={t("inaccessibleWorkspaceBody")}
         icon="settings"
-        onAction={() => router.replace(nativeRoutes.home)}
+        onAction={() => router.replace(nativeRoutes.dealerWorkspaces)}
         title={t("inaccessibleWorkspaceTitle")}
       />
     </View>

@@ -9,6 +9,8 @@ import RootLayout, { ErrorBoundary } from "../../app/_layout";
 import AppLayout from "../../app/(app)/_layout";
 import HomeRoute from "../../app/(app)/index";
 import MarketplaceRoute from "../../app/(app)/marketplace";
+import DealerWorkspacesRoute from "../../app/(app)/workspaces";
+import AccountRoute from "../../app/(app)/account";
 import OrgDashboardRoute from "../../app/(app)/org/[orgId]";
 import DealerMarketplaceRoute from "../../app/(app)/org/[orgId]/marketplace";
 import WorkspaceModuleRoute from "../../app/(app)/org/[orgId]/module/[moduleId]";
@@ -87,6 +89,15 @@ jest.mock("../features/marketplace/MarketplaceScreen", () => {
 
   return {
     MarketplaceScreen: () => React.createElement(Text, { testID: "marketplace-screen" }, "MarketplaceScreen"),
+  };
+});
+
+jest.mock("../features/account/BuyerAccountScreen", () => {
+  const React = jest.requireActual<typeof import("react")>("react");
+  const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
+
+  return {
+    BuyerAccountScreen: () => React.createElement(Text, { testID: "buyer-account-screen" }, "BuyerAccountScreen"),
   };
 });
 
@@ -202,9 +213,17 @@ describe("mobile Expo routes", () => {
   });
 
   test("renders top-level app routes", async () => {
-    expect((await render(<HomeRoute />)).getByTestId("home-screen").props.children).toBe("HomeScreen");
+    // Marketplace-first: "/" now lands on the buyer marketplace; the dealer
+    // workspace picker moved to /workspaces, and /account hosts the buyer account.
+    expect((await render(<HomeRoute />)).getByTestId("marketplace-screen").props.children).toBe(
+      "MarketplaceScreen",
+    );
     expect((await render(<MarketplaceRoute />)).getByTestId("marketplace-screen").props.children).toBe(
       "MarketplaceScreen",
+    );
+    expect((await render(<DealerWorkspacesRoute />)).getByTestId("home-screen").props.children).toBe("HomeScreen");
+    expect((await render(<AccountRoute />)).getByTestId("buyer-account-screen").props.children).toBe(
+      "BuyerAccountScreen",
     );
   });
 

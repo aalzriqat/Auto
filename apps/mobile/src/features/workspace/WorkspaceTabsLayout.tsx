@@ -125,7 +125,7 @@ export function WorkspaceTabsLayout({ orgId }: Readonly<{ orgId: string | null }
           actionLabel={t("back")}
           hint={t("inaccessibleWorkspaceBody")}
           icon="settings"
-          onAction={() => router.replace(nativeRoutes.home)}
+          onAction={() => router.replace(nativeRoutes.dealerWorkspaces)}
           title={t("inaccessibleWorkspaceTitle")}
         />
       </Screen>

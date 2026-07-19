@@ -112,12 +112,12 @@ function Header() {
       </View>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={t("home")}
+        accessibilityLabel={t("account")}
         style={({ pressed }) => [styles.secondaryIconButton, pressed && styles.pressed]}
-        onPress={() => router.replace(nativeRoutes.home)}
+        onPress={() => router.push(nativeRoutes.account)}
       >
-        <Icon color="primary" name="dashboard" size={18} />
-        <Text style={styles.secondaryIconText}>{t("home")}</Text>
+        <Icon color="primary" name="team" size={18} />
+        <Text style={styles.secondaryIconText}>{t("account")}</Text>
       </Pressable>
     </View>
   );
