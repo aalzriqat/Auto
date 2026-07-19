@@ -87,6 +87,7 @@
       "src/features/marketplace/marketplaceUtils.ts",
       "src/features/marketplace/requestRoomModel.ts",
       "src/features/marketplace/buyerRequestsStore.ts",
+    "src/features/marketplace/savedVehiclesStore.ts",
       "src/features/workspace/mobileVinDecode.ts",
       "src/providers/LocaleProvider.tsx",
       "src/navigation/*.ts",

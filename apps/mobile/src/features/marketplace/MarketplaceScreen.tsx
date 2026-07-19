@@ -1,7 +1,7 @@
 import { nativeRoutes } from "@autoflow/shared";
 import { useQuery } from "convex/react";
 import { useRouter } from "expo-router";
-import { useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   Alert,
   Image,
@@ -38,6 +38,12 @@ import {
 import { OffersTab } from "./OffersTab";
 import { RequestRoomScreen } from "./RequestRoomScreen";
 import { saveBuyerRequest, type SavedBuyerRequest } from "./buyerRequestsStore";
+import {
+  isVehicleSaved,
+  loadSavedVehicles,
+  toggleSavedVehicle,
+  type SavedVehicle,
+} from "./savedVehiclesStore";
 import {
   formatMoney,
   formatNumber,
@@ -335,6 +341,31 @@ function TrustFacts({ vehicle }: Readonly<{ vehicle: MobileMarketplaceVehicle }>
   );
 }
 
+// Per-card saved state so the heart toggles without threading store state
+// through the whole results list. Anonymous buyers save to the on-device store.
+function useVehicleSaved(vehicleId: string) {
+  const [saved, setSaved] = useState(false);
+  useEffect(() => {
+    let active = true;
+    loadSavedVehicles()
+      .then((list) => {
+        if (active) setSaved(isVehicleSaved(list, vehicleId));
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [vehicleId]);
+  const toggle = useCallback(
+    async (snapshot: SavedVehicle) => {
+      const next = await toggleSavedVehicle(snapshot);
+      setSaved(isVehicleSaved(next, vehicleId));
+    },
+    [vehicleId],
+  );
+  return { saved, toggle };
+}
+
 function VehicleCard({
   vehicle,
   onTradeInPress,
@@ -348,6 +379,18 @@ function VehicleCard({
   const listingUrl = getListingUrl(vehicle);
   const price = formatMoney(vehicle.price, locale);
   const monthly = formatMoney(vehicle.estimatedMonthlyPayment, locale);
+  const { saved, toggle } = useVehicleSaved(vehicle.id);
+
+  const snapshot: SavedVehicle = {
+    id: vehicle.id,
+    orgId: vehicle.orgId,
+    title,
+    price: vehicle.price ?? undefined,
+    monthlyPayment: vehicle.estimatedMonthlyPayment ?? undefined,
+    imageUrl: vehicle.imageUrls[0],
+    dealershipName: vehicle.dealershipName,
+    savedAt: Date.now(),
+  };
 
   return (
     <View style={[styles.vehicleCard, { direction: textDirection }]}>
@@ -357,6 +400,15 @@ function VehicleCard({
         ) : (
           <Text style={styles.noImageText}>{t("marketplaceNoImage")}</Text>
         )}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={saved ? t("marketplaceSavedRemove") : t("marketplaceSaveCar")}
+          accessibilityState={{ selected: saved }}
+          style={({ pressed }) => [styles.saveButton, saved && styles.saveButtonActive, pressed && styles.pressed]}
+          onPress={() => void toggle(snapshot)}
+        >
+          <Icon color={saved ? "onPrimary" : "text"} name="save" size={18} />
+        </Pressable>
         {price ? (
           <View style={styles.priceBadge}>
             <Text style={styles.priceBadgeText}>{price}</Text>
@@ -846,6 +898,21 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     color: theme.colors.mutedText,
     fontSize: 13,
     fontWeight: "600",
+  },
+  saveButton: {
+    position: "absolute",
+    top: theme.spacing.md,
+    end: theme.spacing.md,
+    width: 38,
+    height: 38,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.surface,
+    ...theme.shadows.sm,
+  },
+  saveButtonActive: {
+    backgroundColor: theme.colors.primary,
   },
   priceBadge: {
     position: "absolute",
