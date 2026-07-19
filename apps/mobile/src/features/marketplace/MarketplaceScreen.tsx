@@ -48,6 +48,12 @@ import {
   type SavedVehicle,
 } from "./savedVehiclesStore";
 import {
+  loadSavedSearches,
+  removeSavedSearchById,
+  saveSearch,
+  type SavedSearch,
+} from "./savedSearchesStore";
+import {
   buildTelUrl,
   buildWhatsappUrl,
   formatMoney,
@@ -154,6 +160,39 @@ const FUEL_OPTIONS: ReadonlyArray<{ value: string; labelKey: MobileFoundationStr
   { value: "Electric", labelKey: "marketplaceFuelElectric" },
   { value: "Hybrid", labelKey: "marketplaceFuelHybrid" },
 ];
+
+type Translate = (key: MobileFoundationStringKey) => string;
+
+/** Narrows a stored sort string back to the union, defaulting when unrecognized (e.g. an older saved search). */
+function coerceSortBy(value: string): MobileMarketplaceSortBy {
+  return SORT_OPTIONS.some((option) => option.value === value) ? (value as MobileMarketplaceSortBy) : DEFAULT_SORT;
+}
+
+function localizedSpecValue(
+  value: string,
+  options: ReadonlyArray<{ value: string; labelKey: MobileFoundationStringKey }>,
+  t: Translate,
+): string {
+  const match = options.find((option) => option.value === value);
+  return match ? t(match.labelKey) : value;
+}
+
+/** Human, localized one-line summary of a search's filters, stored with the saved search so the chip reads clearly. */
+export function buildSearchLabel(fields: SearchFields, t: Translate): string {
+  const parts: string[] = [];
+  if (fields.make.trim()) parts.push(fields.make.trim());
+  if (fields.city.trim()) parts.push(fields.city.trim());
+  if (fields.transmission) parts.push(localizedSpecValue(fields.transmission, TRANSMISSION_OPTIONS, t));
+  if (fields.fuelType) parts.push(localizedSpecValue(fields.fuelType, FUEL_OPTIONS, t));
+  const min = fields.priceMin.trim();
+  const max = fields.priceMax.trim();
+  if (min && max) parts.push(`${min}–${max} JOD`);
+  else if (min) parts.push(`≥ ${min} JOD`);
+  else if (max) parts.push(`≤ ${max} JOD`);
+  if (fields.maxMonthlyPayment.trim()) parts.push(`≤ ${fields.maxMonthlyPayment.trim()} JOD/${t("marketplaceMonth")}`);
+  if (fields.financeOnly) parts.push(t("marketplaceFinanceOnly"));
+  return parts.join(" · ");
+}
 
 export function countActiveFilters(fields: SearchFields): number {
   let count = 0;
@@ -963,12 +1002,38 @@ function CarsPanel({ onTradeInPress }: Readonly<{ onTradeInPress: (dealer: Trade
   const [cursors, setCursors] = useState<Array<string | undefined>>([undefined]);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
+  const [savedSearches, setSavedSearches] = useState<SavedSearch[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    loadSavedSearches()
+      .then((list) => {
+        if (active) setSavedSearches(list);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
 
   function applyFields(next: SearchFields) {
     setFields(next);
     setSearchKey((value) => value + 1);
     setFilters(buildSearchFilters(next));
     setCursors([undefined]);
+  }
+
+  async function handleSaveSearch() {
+    setSavedSearches(await saveSearch(fields, buildSearchLabel(fields, t)));
+    setSheetOpen(false);
+  }
+
+  async function handleRemoveSaved(id: string) {
+    setSavedSearches(await removeSavedSearchById(id));
+  }
+
+  function handleApplySaved(entry: SavedSearch) {
+    applyFields({ ...entry.fields, sortBy: coerceSortBy(entry.fields.sortBy) });
   }
 
   const activeCount = countActiveFilters(fields);
@@ -1010,6 +1075,36 @@ function CarsPanel({ onTradeInPress }: Readonly<{ onTradeInPress: (dealer: Trade
         </Pressable>
       </View>
 
+      {savedSearches.length > 0 ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={[styles.savedSearchRow, { direction: textDirection }]}
+        >
+          {savedSearches.map((entry) => (
+            <View key={entry.id} style={styles.savedSearchChip}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={entry.label}
+                style={({ pressed }) => [styles.savedSearchChipMain, pressed && styles.pressed]}
+                onPress={() => handleApplySaved(entry)}
+              >
+                <Icon color="primary" name="search" size={13} />
+                <Text numberOfLines={1} style={styles.savedSearchChipText}>{entry.label}</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("marketplaceRemoveSearch")}
+                style={({ pressed }) => [styles.savedSearchRemove, pressed && styles.pressed]}
+                onPress={() => void handleRemoveSaved(entry.id)}
+              >
+                <Icon color="mutedText" name="close" size={13} />
+              </Pressable>
+            </View>
+          ))}
+        </ScrollView>
+      ) : null}
+
       {cursors.map((cursor, index) => (
         <CarsResultsPage
           key={`${searchKey}-${index}`}
@@ -1050,6 +1145,20 @@ function CarsPanel({ onTradeInPress }: Readonly<{ onTradeInPress: (dealer: Trade
               }}
               onReset={() => applyFields(DEFAULT_FIELDS)}
             />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: activeCount === 0 }}
+              disabled={activeCount === 0}
+              style={({ pressed }) => [
+                styles.saveSearchButton,
+                activeCount === 0 && styles.disabledButton,
+                pressed && styles.pressed,
+              ]}
+              onPress={() => void handleSaveSearch()}
+            >
+              <Icon color="primary" name="save" size={16} />
+              <Text style={styles.saveSearchButtonText}>{t("marketplaceSaveSearch")}</Text>
+            </Pressable>
           </ScrollView>
         </Screen>
       </Modal>
@@ -1404,6 +1513,56 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   },
   chipTextActive: {
     color: theme.colors.primaryDark,
+  },
+  savedSearchRow: {
+    gap: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
+  },
+  savedSearchChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    maxWidth: 260,
+    borderRadius: theme.radius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+  },
+  savedSearchChipMain: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.xs,
+    flexShrink: 1,
+    paddingStart: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+  },
+  savedSearchChipText: {
+    color: theme.colors.text,
+    fontSize: 13,
+    fontWeight: "700",
+    flexShrink: 1,
+  },
+  savedSearchRemove: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.sm,
+  },
+  saveSearchButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme.spacing.sm,
+    minHeight: 48,
+    borderRadius: theme.radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.primary,
+    backgroundColor: theme.colors.primarySoft,
+    paddingHorizontal: theme.spacing.md,
+  },
+  saveSearchButtonText: {
+    color: theme.colors.primary,
+    fontSize: 15,
+    fontWeight: "800",
   },
   sheetContent: {
     gap: theme.spacing.md,

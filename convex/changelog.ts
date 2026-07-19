@@ -1039,6 +1039,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "عند فتح سيارة، سترى الآن صف \"سيارات مشابهة\" يعرض إعلانات أخرى من نفس الماركة — اضغط على أي منها لعرضها في نفس المكان دون مغادرة الصفحة.",
     publishedAt: releaseAt(2026, 7, 19, 7),
   },
+  {
+    type: "FEATURE",
+    titleEn: "Save your marketplace searches",
+    titleAr: "احفظ عمليات البحث في السوق",
+    descriptionEn: "Set your filters once and tap \"Save this search\" — it becomes a chip above the results you can tap anytime to re-run the same search. Saved on this device, no account needed.",
+    descriptionAr: "اضبط الفلاتر مرة واحدة ثم اضغط \"احفظ هذا البحث\" — ليظهر كزر فوق النتائج تضغطه في أي وقت لإعادة تشغيل البحث نفسه. يُحفظ على هذا الجهاز دون الحاجة لحساب.",
+    publishedAt: releaseAt(2026, 7, 19, 8),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;
