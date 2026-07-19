@@ -26,6 +26,7 @@ async function seedPublishedDealer(
     financeTerms?: { insuranceRate?: number; adminFees?: number; commission?: number };
     dealershipPhone?: string;
     whatsappNumber?: string;
+    withSpecs?: boolean;
     trust?: {
       inspectionStatus?: "SELF_REPORTED" | "PARTNER_VERIFIED";
       accidentDisclosed?: boolean;
@@ -100,6 +101,9 @@ async function seedPublishedDealer(
     sections: [
       { sectionKey: "vehicle.price", enabled: !opts.hidePrices },
       { sectionKey: "vehicle.photos", enabled: true },
+      { sectionKey: "vehicle.transmission", enabled: opts.withSpecs === true },
+      { sectionKey: "vehicle.fuelType", enabled: opts.withSpecs === true },
+      { sectionKey: "vehicle.exteriorColor", enabled: opts.withSpecs === true },
     ],
   });
   await asOwner.mutation(api.websites.publish, { orgId });
@@ -205,6 +209,19 @@ describe("marketplaceBrowse.search", () => {
     expect(both).toMatchObject({ dealerPhone: "+962790000001", dealerWhatsapp: "+962790000002" });
     expect(phoneOnly).toMatchObject({ dealerPhone: "+962790000003", dealerWhatsapp: "+962790000003" });
     expect(none).toMatchObject({ dealerPhone: null, dealerWhatsapp: null });
+  });
+
+  test("passes through spec fields (transmission/fuel/color) only when the dealer enables those sections", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedPublishedDealer(t, { name: "Specs Dealer", subdomainSlug: "specsdealer", city: "Amman", withSpecs: true });
+    await seedPublishedDealer(t, { name: "No Specs Dealer", subdomainSlug: "nospecsdealer", city: "Amman" });
+
+    const result = await t.query(api.marketplaceBrowse.search, {});
+    const withSpecs = result.vehicles.find((v) => v.dealershipName === "Specs Dealer");
+    const withoutSpecs = result.vehicles.find((v) => v.dealershipName === "No Specs Dealer");
+
+    expect(withSpecs).toMatchObject({ transmission: "Automatic", fuelType: "Petrol", exteriorColor: "White" });
+    expect(withoutSpecs).toMatchObject({ transmission: null, fuelType: null, exteriorColor: null });
   });
 
   test("passes through trust-passport fields when disclosed, and safe defaults when not (Phase 61)", async () => {

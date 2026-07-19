@@ -9,6 +9,7 @@ import {
   Modal,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Switch,
   Text,
@@ -328,6 +329,50 @@ function Badge({ label, tone = "green" }: Readonly<{ label: string; tone?: "gree
   );
 }
 
+// Full specs table on the detail sheet — grows the native detail toward the
+// classifieds' depth (transmission/fuel/color join year+mileage). Each field is
+// only present when the dealer enabled that section on their published site, so
+// rows are filtered to whatever's actually disclosed.
+function SpecsTable({ vehicle }: Readonly<{ vehicle: MobileMarketplaceVehicle }>) {
+  const styles = useThemedStyles(makeStyles);
+  const { locale, t } = useLocale();
+  const rows = [
+    vehicle.year ? { label: t("marketplaceYear"), value: formatNumber(vehicle.year, locale) } : null,
+    vehicle.mileage != null ? { label: t("marketplaceMileage"), value: formatNumber(vehicle.mileage, locale) } : null,
+    vehicle.transmission ? { label: t("marketplaceTransmission"), value: vehicle.transmission } : null,
+    vehicle.fuelType ? { label: t("marketplaceFuelType"), value: vehicle.fuelType } : null,
+    vehicle.exteriorColor ? { label: t("marketplaceColor"), value: vehicle.exteriorColor } : null,
+  ].filter((row): row is { label: string; value: string } => row !== null);
+
+  if (rows.length === 0) return null;
+
+  return (
+    <View style={styles.specSection}>
+      <Text style={styles.specSectionTitle}>{t("marketplaceSpecsTitle")}</Text>
+      <View style={styles.specGrid}>
+        {rows.map((row) => (
+          <View key={row.label} style={styles.specRow}>
+            <Text style={styles.specLabel}>{row.label}</Text>
+            <Text style={styles.specValue}>{row.value}</Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+// Native share sheet with the car title + its public listing link, so a buyer
+// can send a car to a friend/family (a decision often made together here).
+async function shareVehicle(vehicle: MobileMarketplaceVehicle, title: string, shareErrorLabel: string) {
+  const message = [title, getListingUrl(vehicle)].filter((part): part is string => Boolean(part)).join(" ");
+  try {
+    await Share.share({ message, title });
+  } catch (error) {
+    console.error("Failed to share vehicle", error);
+    Alert.alert("AutoFlow", shareErrorLabel);
+  }
+}
+
 function TrustFacts({ vehicle }: Readonly<{ vehicle: MobileMarketplaceVehicle }>) {
   const styles = useThemedStyles(makeStyles);
   const { locale, t } = useLocale();
@@ -465,14 +510,24 @@ function VehicleDetailModal({
         <ScrollView contentContainerStyle={styles.detailContent}>
           <View style={[styles.sheetHeader, { direction: textDirection }]}>
             <Text numberOfLines={1} style={styles.detailDealer}>{vehicle.dealershipName}</Text>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={t("close")}
-              style={({ pressed }) => [styles.sheetClose, pressed && styles.pressed]}
-              onPress={onClose}
-            >
-              <Icon color="text" name="close" size={20} />
-            </Pressable>
+            <View style={styles.sheetHeaderActions}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("marketplaceShare")}
+                style={({ pressed }) => [styles.sheetClose, pressed && styles.pressed]}
+                onPress={() => void shareVehicle(vehicle, title, t("marketplaceShareError"))}
+              >
+                <Icon color="text" name="share" size={20} />
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("close")}
+                style={({ pressed }) => [styles.sheetClose, pressed && styles.pressed]}
+                onPress={onClose}
+              >
+                <Icon color="text" name="close" size={20} />
+              </Pressable>
+            </View>
           </View>
 
           {vehicle.imageUrls.length > 0 ? (
@@ -511,20 +566,7 @@ function VehicleDetailModal({
               ) : null}
             </View>
 
-            <View style={styles.specGrid}>
-              {vehicle.mileage != null ? (
-                <View style={styles.specRow}>
-                  <Text style={styles.specLabel}>{t("marketplaceMileage")}</Text>
-                  <Text style={styles.specValue}>{formatNumber(vehicle.mileage, locale)}</Text>
-                </View>
-              ) : null}
-              {vehicle.year ? (
-                <View style={styles.specRow}>
-                  <Text style={styles.specLabel}>{t("marketplaceYear")}</Text>
-                  <Text style={styles.specValue}>{formatNumber(vehicle.year, locale)}</Text>
-                </View>
-              ) : null}
-            </View>
+            <SpecsTable vehicle={vehicle} />
 
             <TrustFacts vehicle={vehicle} />
 
@@ -1142,6 +1184,11 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     fontSize: 20,
     fontWeight: "800",
   },
+  sheetHeaderActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.sm,
+  },
   sheetClose: {
     width: 34,
     height: 34,
@@ -1196,6 +1243,14 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     color: theme.colors.mutedText,
     fontSize: 15,
     fontWeight: "600",
+  },
+  specSection: {
+    gap: theme.spacing.sm,
+  },
+  specSectionTitle: {
+    color: theme.colors.text,
+    fontSize: 16,
+    fontWeight: "800",
   },
   specGrid: {
     gap: theme.spacing.sm,
