@@ -1288,6 +1288,8 @@ type DashboardStatsArgs = OrgScopedArgs & {
   timeRange?: MobileDashboardTimeRange;
 };
 
+export type MobileMarketplaceSortBy = "price_asc" | "price_desc" | "year_desc" | "mileage_asc";
+
 type MarketplaceSearchArgs = {
   make?: string;
   model?: string;
@@ -1296,6 +1298,7 @@ type MarketplaceSearchArgs = {
   maxMonthlyPayment?: number;
   city?: string;
   paymentType?: MobileMarketplacePaymentFilter;
+  sortBy?: MobileMarketplaceSortBy;
   cursor?: string;
   numItems?: number;
 };

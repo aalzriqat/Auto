@@ -1007,6 +1007,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "أصبحت صفحة تفاصيل السيارة تعرض الآن قائمة مواصفات كاملة — السنة والممشى وناقل الحركة والوقود واللون — كلما نشرها المعرض. كما يمكنك مشاركة أي سيارة (الاسم مع رابط الإعلان) مباشرة عبر واتساب أو الرسائل أو أي تطبيق آخر عبر زر المشاركة الجديد.",
     publishedAt: releaseAt(2026, 7, 19, 3),
   },
+  {
+    type: "IMPROVEMENT",
+    titleEn: "Sort marketplace results",
+    titleAr: "ترتيب نتائج السوق",
+    descriptionEn: "A new Sort button lets you order cars by price (low to high or high to low), newest year, or lowest mileage — so you find the right car faster instead of scrolling everything.",
+    descriptionAr: "يتيح لك زر الترتيب الجديد ترتيب السيارات حسب السعر (من الأقل للأعلى أو العكس) أو الأحدث سنةً أو الأقل ممشى — لتجد السيارة المناسبة أسرع بدلاً من تصفّح كل شيء.",
+    publishedAt: releaseAt(2026, 7, 19, 4),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

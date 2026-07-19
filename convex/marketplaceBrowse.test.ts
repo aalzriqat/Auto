@@ -1,8 +1,29 @@
 import { convexTest } from "convex-test";
-import { expect, test, describe } from "vitest";
+import { expect, test, describe, it } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { compareBrowseVehicles } from "./marketplaceBrowse";
+
+describe("compareBrowseVehicles", () => {
+  const car = (price: number | null, year: number, mileage: number | null) => ({ price, year, mileage });
+
+  it("orders each direction and pushes missing values to the end", () => {
+    const sort = (rows: ReturnType<typeof car>[], sortBy: Parameters<typeof compareBrowseVehicles>[2]) =>
+      [...rows].sort((a, b) => compareBrowseVehicles(a, b, sortBy));
+
+    const rows = [car(20000, 2019, 90000), car(10000, 2023, 15000), car(null, 2021, null)];
+
+    // price_asc: cheapest first, null price last.
+    expect(sort(rows, "price_asc").map((r) => r.price)).toEqual([10000, 20000, null]);
+    // price_desc: dearest first, null price last.
+    expect(sort(rows, "price_desc").map((r) => r.price)).toEqual([20000, 10000, null]);
+    // year_desc: newest year first.
+    expect(sort(rows, "year_desc").map((r) => r.year)).toEqual([2023, 2021, 2019]);
+    // mileage_asc: lowest mileage first, null mileage last.
+    expect(sort(rows, "mileage_asc").map((r) => r.mileage)).toEqual([15000, 90000, null]);
+  });
+});
 
 const WEBSITE_PERMISSIONS = [
   "website.view",
@@ -163,6 +184,22 @@ describe("marketplaceBrowse.search", () => {
 
     const tooExpensive = await t.query(api.marketplaceBrowse.search, { priceMin: 20000 });
     expect(tooExpensive.vehicles).toHaveLength(0);
+  });
+
+  test("sorts by the requested order (price asc default, price desc, year desc)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedPublishedDealer(t, { name: "Cheap 2020", subdomainSlug: "cheap2020", city: "Amman", sellingPrice: 8000 });
+    await seedPublishedDealer(t, { name: "Pricey 2024", subdomainSlug: "pricey2024", city: "Amman", sellingPrice: 25000 });
+    await seedPublishedDealer(t, { name: "Mid 2022", subdomainSlug: "mid2022", city: "Amman", sellingPrice: 15000 });
+
+    const asc = await t.query(api.marketplaceBrowse.search, {});
+    expect(asc.vehicles.map((v) => v.price)).toEqual([8000, 15000, 25000]);
+
+    const explicitAsc = await t.query(api.marketplaceBrowse.search, { sortBy: "price_asc" });
+    expect(explicitAsc.vehicles.map((v) => v.price)).toEqual([8000, 15000, 25000]);
+
+    const desc = await t.query(api.marketplaceBrowse.search, { sortBy: "price_desc" });
+    expect(desc.vehicles.map((v) => v.price)).toEqual([25000, 15000, 8000]);
   });
 
   test("paginates via cursor", async () => {
