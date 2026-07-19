@@ -6,6 +6,7 @@ import {
   Alert,
   Image,
   Linking,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -113,6 +114,17 @@ function buildSearchFilters(fields: SearchFields): SearchFilters {
     paymentType: fields.financeOnly ? "FINANCE" : undefined,
     numItems: 12,
   };
+}
+
+export function countActiveFilters(fields: SearchFields): number {
+  let count = 0;
+  if (trimOrUndefined(fields.make)) count += 1;
+  if (trimOrUndefined(fields.city)) count += 1;
+  if (parseOptionalPositiveNumber(fields.priceMin) != null) count += 1;
+  if (parseOptionalPositiveNumber(fields.priceMax) != null) count += 1;
+  if (parseOptionalPositiveNumber(fields.maxMonthlyPayment) != null) count += 1;
+  if (fields.financeOnly) count += 1;
+  return count;
 }
 
 function openExternalUrl(url: string | null) {
@@ -513,27 +525,50 @@ function CarsResultsPage({
 
 function CarsPanel({ onTradeInPress }: Readonly<{ onTradeInPress: (dealer: TradeInDealerTarget) => void }>) {
   const styles = useThemedStyles(makeStyles);
+  const { t, textDirection } = useLocale();
   const [fields, setFields] = useState<SearchFields>(DEFAULT_FIELDS);
   const [searchKey, setSearchKey] = useState(0);
   const [filters, setFilters] = useState<SearchFilters>(() => buildSearchFilters(DEFAULT_FIELDS));
   const [cursors, setCursors] = useState<Array<string | undefined>>([undefined]);
+  const [sheetOpen, setSheetOpen] = useState(false);
 
-  function applySearch() {
+  function applyFields(next: SearchFields) {
+    setFields(next);
     setSearchKey((value) => value + 1);
-    setFilters(buildSearchFilters(fields));
+    setFilters(buildSearchFilters(next));
     setCursors([undefined]);
   }
 
-  function resetSearch() {
-    setFields(DEFAULT_FIELDS);
-    setSearchKey((value) => value + 1);
-    setFilters(buildSearchFilters(DEFAULT_FIELDS));
-    setCursors([undefined]);
-  }
+  const activeCount = countActiveFilters(fields);
 
   return (
     <View style={styles.panelGap}>
-      <SearchPanel fields={fields} setFields={setFields} onSearch={applySearch} onReset={resetSearch} />
+      {/* Results-first: a slim bar (Filters sheet + Finance chip) sits above the
+          inventory instead of a full desktop-style form. */}
+      <View style={[styles.browseBar, { direction: textDirection }]}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t("marketplaceFilters")}
+          style={({ pressed }) => [styles.filtersButton, pressed && styles.pressed]}
+          onPress={() => setSheetOpen(true)}
+        >
+          <Icon color="text" name="search" size={18} />
+          <Text style={styles.filtersButtonText}>{t("marketplaceFilters")}</Text>
+          {activeCount > 0 ? <Badge label={String(activeCount)} tone="blue" /> : null}
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t("marketplaceFinanceOnly")}
+          accessibilityState={{ selected: fields.financeOnly }}
+          style={({ pressed }) => [styles.chip, fields.financeOnly && styles.chipActive, pressed && styles.pressed]}
+          onPress={() => applyFields({ ...fields, financeOnly: !fields.financeOnly })}
+        >
+          <Text style={[styles.chipText, fields.financeOnly && styles.chipTextActive]}>
+            {t("marketplaceFinanceOnly")}
+          </Text>
+        </Pressable>
+      </View>
+
       {cursors.map((cursor, index) => (
         <CarsResultsPage
           key={`${searchKey}-${index}`}
@@ -545,6 +580,38 @@ function CarsPanel({ onTradeInPress }: Readonly<{ onTradeInPress: (dealer: Trade
           onTradeInPress={onTradeInPress}
         />
       ))}
+
+      <Modal
+        visible={sheetOpen}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setSheetOpen(false)}
+      >
+        <Screen>
+          <ScrollView contentContainerStyle={styles.sheetContent}>
+            <View style={[styles.sheetHeader, { direction: textDirection }]}>
+              <Text style={styles.sheetTitle}>{t("marketplaceFilters")}</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("close")}
+                style={({ pressed }) => [styles.sheetClose, pressed && styles.pressed]}
+                onPress={() => setSheetOpen(false)}
+              >
+                <Icon color="text" name="close" size={20} />
+              </Pressable>
+            </View>
+            <SearchPanel
+              fields={fields}
+              setFields={setFields}
+              onSearch={() => {
+                applyFields(fields);
+                setSheetOpen(false);
+              }}
+              onReset={() => applyFields(DEFAULT_FIELDS)}
+            />
+          </ScrollView>
+        </Screen>
+      </Modal>
     </View>
   );
 }
@@ -811,6 +878,71 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   },
   panelGap: {
     gap: theme.spacing.md,
+  },
+  browseBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.sm,
+  },
+  filtersButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.sm,
+    minHeight: 44,
+    borderRadius: theme.radius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    paddingHorizontal: theme.spacing.md,
+  },
+  filtersButtonText: {
+    color: theme.colors.text,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  chip: {
+    minHeight: 44,
+    justifyContent: "center",
+    borderRadius: theme.radius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    paddingHorizontal: theme.spacing.md,
+  },
+  chipActive: {
+    borderColor: theme.colors.primary,
+    backgroundColor: theme.colors.primarySoft,
+  },
+  chipText: {
+    color: theme.colors.mutedText,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  chipTextActive: {
+    color: theme.colors.primaryDark,
+  },
+  sheetContent: {
+    gap: theme.spacing.md,
+    padding: theme.spacing.lg,
+    paddingBottom: theme.spacing.xxl,
+  },
+  sheetHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  sheetTitle: {
+    color: theme.colors.text,
+    fontSize: 20,
+    fontWeight: "800",
+  },
+  sheetClose: {
+    width: 34,
+    height: 34,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.surfaceAlt,
   },
   searchPanel: {
     gap: theme.spacing.md,
