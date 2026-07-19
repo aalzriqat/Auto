@@ -18,6 +18,7 @@ export const semanticIconGlyphs = {
   billing: "card-outline",
   branches: "business-outline",
   calendar: "calendar-outline",
+  call: "call-outline",
   check: "checkmark",
   checkDone: "checkmark-done",
   chevronDown: "chevron-down",
@@ -66,6 +67,7 @@ export const semanticIconGlyphs = {
   valuationCompanies: "scale-outline",
   vehicles: "car-sport-outline",
   website: "globe-outline",
+  whatsapp: "logo-whatsapp",
 } as const satisfies Record<string, IoniconGlyphName>;
 
 const rtlIconGlyphs: Partial<Record<IoniconGlyphName, IoniconGlyphName>> = {

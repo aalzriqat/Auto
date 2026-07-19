@@ -1065,6 +1065,8 @@ export interface MobileMarketplaceVehicle {
   dealershipName: string;
   dealerBadges: string[];
   siteUrl: string | null;
+  dealerPhone: string | null;
+  dealerWhatsapp: string | null;
   id: string;
   slug: string;
   make: string;

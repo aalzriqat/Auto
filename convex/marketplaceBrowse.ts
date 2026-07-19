@@ -79,6 +79,8 @@ type BrowseVehicle = {
   dealershipName: string;
   dealerBadges: string[];
   siteUrl: string | null;
+  dealerPhone: string | null;
+  dealerWhatsapp: string | null;
   id: string;
   slug: string;
   make: string;
@@ -144,6 +146,17 @@ export const search = query({
       const siteUrl = domain?.status === "active" ? `https://${domain.domain}` : null;
       const dealershipName = snapshotData?.profile?.dealershipName ?? org.name;
 
+      // Direct-contact channels (P0 conversion): the dealership phone lives on
+      // org settings; the WhatsApp number is the dealer's marketplace profile
+      // number, falling back to the same phone so a dealer who set only a phone
+      // still gets a working WhatsApp deep-link.
+      const orgSettings = await ctx.db
+        .query("orgSettings")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .unique();
+      const dealerPhone = orgSettings?.dealershipPhone ?? null;
+      const dealerWhatsapp = profile.whatsappNumber ?? orgSettings?.dealershipPhone ?? null;
+
       for (const vehicle of vehicles) {
         if (!vehicle.id || !vehicle.make || !vehicle.model) continue;
         if (vehicle.status && vehicle.status !== "AVAILABLE") continue;
@@ -164,6 +177,8 @@ export const search = query({
           dealershipName,
           dealerBadges: profile.badges,
           siteUrl,
+          dealerPhone,
+          dealerWhatsapp,
           id: vehicle.id,
           slug: vehicle.slug ?? vehicle.id,
           make: vehicle.make,

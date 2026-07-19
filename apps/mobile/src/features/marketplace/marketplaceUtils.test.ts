@@ -1,9 +1,12 @@
 import {
   buildMarketplaceClientFingerprint,
+  buildTelUrl,
+  buildWhatsappUrl,
   formatNumber,
   formatMoney,
   getBuyerIntentKey,
   getListingUrl,
+  normalizePhoneDigits,
   getPaymentTypeKey,
   getRequestStatusKey,
   getResponseKindKey,
@@ -38,6 +41,26 @@ describe("marketplace mobile helpers", () => {
       "https://dealer.example/inventory/camry%20hybrid",
     );
     expect(getListingUrl({ siteUrl: null, slug: "camry" })).toBeNull();
+  });
+
+  it("builds tel: and wa.me contact deep-links from dealer numbers", () => {
+    expect(normalizePhoneDigits("+962 79 000 0001")).toBe("962790000001");
+    expect(normalizePhoneDigits("  ")).toBeNull();
+    expect(normalizePhoneDigits(null)).toBeNull();
+
+    // tel: keeps the leading + when the source number had one.
+    expect(buildTelUrl("+962 79-000-0001")).toBe("tel:+962790000001");
+    expect(buildTelUrl("079 000 0001")).toBe("tel:0790000001");
+    expect(buildTelUrl(null)).toBeNull();
+    // Truthy but digit-less input passes the first guard, fails the second.
+    expect(buildTelUrl("+")).toBeNull();
+
+    // wa.me uses international digits with no +, and prefills the message.
+    expect(buildWhatsappUrl("+962790000002")).toBe("https://wa.me/962790000002");
+    expect(buildWhatsappUrl("+962790000002", "Hi there")).toBe(
+      "https://wa.me/962790000002?text=Hi%20there",
+    );
+    expect(buildWhatsappUrl(undefined)).toBeNull();
   });
 
   it("formats localized money values and rejects missing amounts", () => {

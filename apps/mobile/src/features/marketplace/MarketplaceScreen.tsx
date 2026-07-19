@@ -46,6 +46,8 @@ import {
   type SavedVehicle,
 } from "./savedVehiclesStore";
 import {
+  buildTelUrl,
+  buildWhatsappUrl,
   formatMoney,
   formatNumber,
   getListingUrl,
@@ -378,6 +380,58 @@ function useVehicleSaved(vehicleId: string) {
   return { saved, toggle };
 }
 
+// Builds the WhatsApp opener text: a greeting + the car title + its public
+// listing link, so the dealer sees exactly which car the buyer means.
+function buildWhatsappContactUrl(vehicle: MobileMarketplaceVehicle, greeting: string): string | null {
+  const message = [greeting, getVehicleTitle(vehicle), getListingUrl(vehicle)]
+    .filter((part): part is string => Boolean(part))
+    .join(" ");
+  return buildWhatsappUrl(vehicle.dealerWhatsapp, message);
+}
+
+// Direct-contact CTAs — the #1 marketplace conversion lever (regional buyers
+// reach dealers by Call/WhatsApp, not in-app forms). Rendered as a sticky
+// footer on the detail sheet and inline on cards. Returns null when the dealer
+// exposed no reachable number, so no dead button is shown.
+function ContactBar({
+  vehicle,
+  variant = "sticky",
+}: Readonly<{ vehicle: MobileMarketplaceVehicle; variant?: "sticky" | "inline" }>) {
+  const styles = useThemedStyles(makeStyles);
+  const { t, textDirection } = useLocale();
+  const telUrl = buildTelUrl(vehicle.dealerPhone);
+  const whatsappUrl = buildWhatsappContactUrl(vehicle, t("marketplaceWhatsappMessage"));
+
+  if (!telUrl && !whatsappUrl) return null;
+
+  return (
+    <View style={[variant === "sticky" ? styles.contactBar : styles.contactBarInline, { direction: textDirection }]}>
+      {telUrl ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t("marketplaceCall")}
+          style={({ pressed }) => [styles.contactButton, styles.contactButtonCall, pressed && styles.pressed]}
+          onPress={() => openExternalUrl(telUrl)}
+        >
+          <Icon color="onPrimary" name="call" size={18} />
+          <Text style={styles.contactButtonText}>{t("marketplaceCall")}</Text>
+        </Pressable>
+      ) : null}
+      {whatsappUrl ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t("marketplaceWhatsapp")}
+          style={({ pressed }) => [styles.contactButton, styles.contactButtonWhatsapp, pressed && styles.pressed]}
+          onPress={() => openExternalUrl(whatsappUrl)}
+        >
+          <Icon color="onPrimary" name="whatsapp" size={18} />
+          <Text style={styles.contactButtonText}>{t("marketplaceWhatsapp")}</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
 // Native, in-app vehicle detail — the buyer's conversion screen. Uses the
 // vehicle object already returned by the search query (no extra round-trip) so
 // the journey stays in AutoFlow instead of bouncing to the dealer's website.
@@ -503,6 +557,7 @@ function VehicleDetailModal({
             ) : null}
           </View>
         </ScrollView>
+        <ContactBar vehicle={vehicle} />
       </Screen>
     </Modal>
   );
@@ -588,6 +643,7 @@ function VehicleCard({
           ) : null}
         </View>
         <TrustFacts vehicle={vehicle} />
+        <ContactBar vehicle={vehicle} variant="inline" />
         <View style={styles.actionRow}>
           {listingUrl ? (
             <Pressable
@@ -1185,6 +1241,44 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   },
   detailPrimaryActionTextActive: {
     color: theme.colors.onPrimary,
+  },
+  contactBar: {
+    flexDirection: "row",
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.lg,
+    paddingTop: theme.spacing.sm,
+    paddingBottom: theme.spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+  },
+  contactBarInline: {
+    flexDirection: "row",
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.xs,
+  },
+  contactButton: {
+    minHeight: 48,
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme.spacing.sm,
+    borderRadius: theme.radius.md,
+    paddingHorizontal: theme.spacing.md,
+  },
+  contactButtonCall: {
+    backgroundColor: theme.colors.primary,
+  },
+  // WhatsApp brand green — kept literal (not a theme token) so the button reads
+  // as WhatsApp in both light and dark, matching how buyers expect it to look.
+  contactButtonWhatsapp: {
+    backgroundColor: "#25D366",
+  },
+  contactButtonText: {
+    color: theme.colors.onPrimary,
+    fontSize: 15,
+    fontWeight: "800",
   },
   searchPanel: {
     gap: theme.spacing.md,

@@ -24,6 +24,8 @@ async function seedPublishedDealer(
     hidePrices?: boolean;
     sellingPrice?: number;
     financeTerms?: { insuranceRate?: number; adminFees?: number; commission?: number };
+    dealershipPhone?: string;
+    whatsappNumber?: string;
     trust?: {
       inspectionStatus?: "SELF_REPORTED" | "PARTNER_VERIFIED";
       accidentDisclosed?: boolean;
@@ -48,6 +50,7 @@ async function seedPublishedDealer(
       currencySymbol: "د.أ",
       enabledPaymentTypes: ["CASH"],
       dealershipName: opts.name,
+      dealershipPhone: opts.dealershipPhone,
     })
   );
 
@@ -107,6 +110,7 @@ async function seedPublishedDealer(
       isOptedIn: opts.isOptedIn ?? true,
       areas: [opts.city],
       brandsCarried: ["Toyota"],
+      whatsappNumber: opts.whatsappNumber,
       badges: [],
       totalResponses: 0,
       totalAccepted: 0,
@@ -171,6 +175,36 @@ describe("marketplaceBrowse.search", () => {
     expect(secondPage.vehicles).toHaveLength(1);
     expect(secondPage.isDone).toBe(true);
     expect(secondPage.vehicles[0].orgId).not.toBe(firstPage.vehicles[0].orgId);
+  });
+
+  test("exposes dealer phone and WhatsApp for direct contact, falling back WhatsApp to the phone", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    // Dealer with both a phone and a distinct WhatsApp number.
+    await seedPublishedDealer(t, {
+      name: "Both Contacts",
+      subdomainSlug: "bothcontacts",
+      city: "Amman",
+      dealershipPhone: "+962790000001",
+      whatsappNumber: "+962790000002",
+    });
+    // Dealer with only a phone -> WhatsApp falls back to the phone.
+    await seedPublishedDealer(t, {
+      name: "Phone Only",
+      subdomainSlug: "phoneonly",
+      city: "Amman",
+      dealershipPhone: "+962790000003",
+    });
+    // Dealer with no contact info at all -> both null.
+    await seedPublishedDealer(t, { name: "No Contact", subdomainSlug: "nocontact", city: "Amman" });
+
+    const result = await t.query(api.marketplaceBrowse.search, {});
+    const both = result.vehicles.find((v) => v.dealershipName === "Both Contacts");
+    const phoneOnly = result.vehicles.find((v) => v.dealershipName === "Phone Only");
+    const none = result.vehicles.find((v) => v.dealershipName === "No Contact");
+
+    expect(both).toMatchObject({ dealerPhone: "+962790000001", dealerWhatsapp: "+962790000002" });
+    expect(phoneOnly).toMatchObject({ dealerPhone: "+962790000003", dealerWhatsapp: "+962790000003" });
+    expect(none).toMatchObject({ dealerPhone: null, dealerWhatsapp: null });
   });
 
   test("passes through trust-passport fields when disclosed, and safe defaults when not (Phase 61)", async () => {
