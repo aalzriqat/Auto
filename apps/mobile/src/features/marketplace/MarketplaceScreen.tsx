@@ -88,6 +88,8 @@ type SearchFields = {
   priceMin: string;
   priceMax: string;
   maxMonthlyPayment: string;
+  transmission: string;
+  fuelType: string;
   financeOnly: boolean;
   sortBy: MobileMarketplaceSortBy;
 };
@@ -98,6 +100,8 @@ type SearchFilters = {
   priceMin?: number;
   priceMax?: number;
   maxMonthlyPayment?: number;
+  transmission?: string;
+  fuelType?: string;
   paymentType?: MobileMarketplacePaymentFilter;
   sortBy: MobileMarketplaceSortBy;
   numItems: number;
@@ -109,6 +113,8 @@ const DEFAULT_FIELDS: SearchFields = {
   priceMin: "",
   priceMax: "",
   maxMonthlyPayment: "",
+  transmission: "",
+  fuelType: "",
   financeOnly: false,
   sortBy: DEFAULT_SORT,
 };
@@ -120,6 +126,8 @@ function buildSearchFilters(fields: SearchFields): SearchFilters {
     priceMin: parseOptionalPositiveNumber(fields.priceMin),
     priceMax: parseOptionalPositiveNumber(fields.priceMax),
     maxMonthlyPayment: parseOptionalPositiveNumber(fields.maxMonthlyPayment),
+    transmission: trimOrUndefined(fields.transmission),
+    fuelType: trimOrUndefined(fields.fuelType),
     paymentType: fields.financeOnly ? "FINANCE" : undefined,
     sortBy: fields.sortBy,
     numItems: 12,
@@ -133,6 +141,19 @@ const SORT_OPTIONS: ReadonlyArray<{ value: MobileMarketplaceSortBy; labelKey: Mo
   { value: "mileage_asc", labelKey: "marketplaceSortMileageAsc" },
 ];
 
+// Fixed spec values (chip groups). `value` is the English string stored on the
+// vehicle and matched case-insensitively by the backend; the label is localized.
+const TRANSMISSION_OPTIONS: ReadonlyArray<{ value: string; labelKey: MobileFoundationStringKey }> = [
+  { value: "Automatic", labelKey: "marketplaceTransmissionAutomatic" },
+  { value: "Manual", labelKey: "marketplaceTransmissionManual" },
+];
+const FUEL_OPTIONS: ReadonlyArray<{ value: string; labelKey: MobileFoundationStringKey }> = [
+  { value: "Petrol", labelKey: "marketplaceFuelPetrol" },
+  { value: "Diesel", labelKey: "marketplaceFuelDiesel" },
+  { value: "Electric", labelKey: "marketplaceFuelElectric" },
+  { value: "Hybrid", labelKey: "marketplaceFuelHybrid" },
+];
+
 export function countActiveFilters(fields: SearchFields): number {
   let count = 0;
   if (trimOrUndefined(fields.make)) count += 1;
@@ -140,6 +161,8 @@ export function countActiveFilters(fields: SearchFields): number {
   if (parseOptionalPositiveNumber(fields.priceMin) != null) count += 1;
   if (parseOptionalPositiveNumber(fields.priceMax) != null) count += 1;
   if (parseOptionalPositiveNumber(fields.maxMonthlyPayment) != null) count += 1;
+  if (trimOrUndefined(fields.transmission)) count += 1;
+  if (trimOrUndefined(fields.fuelType)) count += 1;
   if (fields.financeOnly) count += 1;
   return count;
 }
@@ -249,6 +272,47 @@ function TabBar({
   );
 }
 
+// Grouped/visual filter — a labeled row of single-select chips (with an "Any"
+// reset chip). The selected `value` is the English spec string sent to the
+// backend; chips show localized labels.
+function FilterChipGroup({
+  label,
+  value,
+  options,
+  onChange,
+}: Readonly<{
+  label: string;
+  value: string;
+  options: ReadonlyArray<{ value: string; labelKey: MobileFoundationStringKey }>;
+  onChange: (value: string) => void;
+}>) {
+  const styles = useThemedStyles(makeStyles);
+  const { t } = useLocale();
+  const chips = [{ value: "", label: t("marketplaceAnyOption") }, ...options.map((o) => ({ value: o.value, label: t(o.labelKey) }))];
+
+  return (
+    <View style={styles.chipGroup}>
+      <Text style={styles.chipGroupLabel}>{label}</Text>
+      <View style={styles.chipGroupRow}>
+        {chips.map((chip) => {
+          const selected = value === chip.value;
+          return (
+            <Pressable
+              key={chip.value || "any"}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              style={({ pressed }) => [styles.chip, selected && styles.chipActive, pressed && styles.pressed]}
+              onPress={() => onChange(chip.value)}
+            >
+              <Text style={[styles.chipText, selected && styles.chipTextActive]}>{chip.label}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 function SearchPanel({
   fields,
   setFields,
@@ -311,6 +375,19 @@ function SearchPanel({
           onChangeText={(maxMonthlyPayment) => setFields({ ...fields, maxMonthlyPayment })}
         />
       </View>
+
+      <FilterChipGroup
+        label={t("marketplaceTransmission")}
+        value={fields.transmission}
+        options={TRANSMISSION_OPTIONS}
+        onChange={(transmission) => setFields({ ...fields, transmission })}
+      />
+      <FilterChipGroup
+        label={t("marketplaceFuelType")}
+        value={fields.fuelType}
+        options={FUEL_OPTIONS}
+        onChange={(fuelType) => setFields({ ...fields, fuelType })}
+      />
 
       <View style={styles.switchRow}>
         <Switch
@@ -1310,6 +1387,19 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     color: theme.colors.mutedText,
     fontSize: 15,
     fontWeight: "600",
+  },
+  chipGroup: {
+    gap: theme.spacing.sm,
+  },
+  chipGroupLabel: {
+    color: theme.colors.mutedText,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  chipGroupRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: theme.spacing.sm,
   },
   sortList: {
     gap: theme.spacing.sm,

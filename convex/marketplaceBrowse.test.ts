@@ -261,6 +261,23 @@ describe("marketplaceBrowse.search", () => {
     expect(withoutSpecs).toMatchObject({ transmission: null, fuelType: null, exteriorColor: null });
   });
 
+  test("filters by transmission and fuel type (case-insensitive), only matching dealers who disclosed them", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    // Both seeded cars are Automatic/Petrol, but only this dealer publishes specs.
+    await seedPublishedDealer(t, { name: "Specs Dealer", subdomainSlug: "specsfilter", city: "Amman", withSpecs: true });
+    await seedPublishedDealer(t, { name: "No Specs Dealer", subdomainSlug: "nospecsfilter", city: "Amman" });
+
+    const petrol = await t.query(api.marketplaceBrowse.search, { fuelType: "petrol" });
+    expect(petrol.vehicles.map((v) => v.dealershipName)).toEqual(["Specs Dealer"]);
+
+    const automatic = await t.query(api.marketplaceBrowse.search, { transmission: "Automatic" });
+    expect(automatic.vehicles.map((v) => v.dealershipName)).toEqual(["Specs Dealer"]);
+
+    // A spec no car matches yields nothing (and never the undisclosed dealer).
+    const diesel = await t.query(api.marketplaceBrowse.search, { fuelType: "Diesel" });
+    expect(diesel.vehicles).toHaveLength(0);
+  });
+
   test("passes through trust-passport fields when disclosed, and safe defaults when not (Phase 61)", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     await seedPublishedDealer(t, {
