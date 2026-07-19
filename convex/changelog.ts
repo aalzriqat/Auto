@@ -1031,6 +1031,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "تحمل السيارات المضافة حديثاً الآن شارة \"جديد\" خلال أول أسبوعين، ويعرض كل كرت عدد صوره — لتتعرّف بنظرة سريعة على أحدث الوافدين والسيارات الأكثر توثيقاً بالصور.",
     publishedAt: releaseAt(2026, 7, 19, 6),
   },
+  {
+    type: "IMPROVEMENT",
+    titleEn: "Similar cars on the detail page",
+    titleAr: "سيارات مشابهة في صفحة التفاصيل",
+    descriptionEn: "When you open a car, you'll now see a \"Similar cars\" row of other listings of the same make — tap any one to view it right there, without leaving the page.",
+    descriptionAr: "عند فتح سيارة، سترى الآن صف \"سيارات مشابهة\" يعرض إعلانات أخرى من نفس الماركة — اضغط على أي منها لعرضها في نفس المكان دون مغادرة الصفحة.",
+    publishedAt: releaseAt(2026, 7, 19, 7),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

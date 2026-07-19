@@ -231,6 +231,7 @@ const mobileFoundationStringEntries = [
   ["marketplaceContactUnavailable", "Contact details unavailable for this dealer.", "لا تتوفر بيانات التواصل لهذا المعرض."],
   ["marketplaceNoImage", "No image", "لا توجد صورة"],
   ["marketplaceNew", "New", "جديد"],
+  ["marketplaceSimilarTitle", "Similar cars", "سيارات مشابهة"],
   ["marketplacePhotoCountLabel", "photos", "صور"],
   ["marketplaceFinanceAvailable", "Finance available", "تمويل متاح"],
   ["marketplaceFastResponse", "Fast response", "رد سريع"],
