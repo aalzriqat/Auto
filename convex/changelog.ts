@@ -1071,6 +1071,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "تم إصلاح استيراد السيارات بحيث لم تعد صفوف المخزون المملوك التي تشترك في رقم هيكل مؤقت (مثل سلسلة أحرف x أو شرطة أو \"N/A\") تُتجاهل كتكرار — بل يُستورد كل صف كسيارة مستقلة. كما أصبح قالب الاستيراد مطابقاً لملف المعرض تماماً: عمود سعر البيع بجانب التكلفة، وعمودا نوع المصدر والمصدر مباشرة بعد الموديل، ويُقرأ كل عمود لبرنامج تمويلي (مثل المتخصصة والكوثر) كتقييم.",
     publishedAt: releaseAt(2026, 7, 19, 11),
   },
+  {
+    type: "FEATURE",
+    titleEn: "New-listing alerts on saved searches",
+    titleAr: "تنبيهات الإعلانات الجديدة لعمليات البحث المحفوظة",
+    descriptionEn: "Your saved-search chips now show a badge counting cars listed since you last ran the search — so you can spot fresh matches at a glance. Tapping the search reviews it and clears the badge.",
+    descriptionAr: "أصبحت أزرار عمليات البحث المحفوظة تعرض الآن شارة تحسب السيارات المُضافة منذ آخر مرة شغّلت فيها البحث — لتلاحظ المطابقات الجديدة بنظرة سريعة. والضغط على البحث يستعرضه ويُخفي الشارة.",
+    publishedAt: releaseAt(2026, 7, 19, 12),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

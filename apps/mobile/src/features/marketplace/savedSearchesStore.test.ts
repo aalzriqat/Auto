@@ -9,6 +9,8 @@ import {
   deserializeSavedSearches,
   isSearchSaved,
   loadSavedSearches,
+  markSearchSeen,
+  markSearchSeenInList,
   removeSavedSearch,
   removeSavedSearchById,
   saveSearch,
@@ -36,7 +38,7 @@ function fields(extra: Partial<SavedSearchFields> = {}): SavedSearchFields {
 }
 
 function search(id: string, extra: Partial<SavedSearch> = {}): SavedSearch {
-  return { id, label: `Search ${id}`, fields: fields(), savedAt: 1, ...extra };
+  return { id, label: `Search ${id}`, fields: fields(), savedAt: 1, lastSeenAt: 1, ...extra };
 }
 
 describe("savedSearchesStore", () => {
@@ -71,6 +73,28 @@ describe("savedSearchesStore", () => {
         ]),
       ),
     ).toEqual([search("a")]);
+  });
+
+  test("deserialize defaults lastSeenAt to savedAt for rows saved before it existed", () => {
+    const legacy = { id: "a", label: "l", fields: fields(), savedAt: 42 }; // no lastSeenAt
+    const [row] = deserializeSavedSearches(JSON.stringify([legacy]));
+    expect(row).toEqual({ ...legacy, lastSeenAt: 42 });
+  });
+
+  test("markSearchSeenInList updates only the matching id's lastSeenAt", () => {
+    const list = [search("a", { lastSeenAt: 1 }), search("b", { lastSeenAt: 1 })];
+    const next = markSearchSeenInList(list, "a", 999);
+    expect(next.find((s) => s.id === "a")!.lastSeenAt).toBe(999);
+    expect(next.find((s) => s.id === "b")!.lastSeenAt).toBe(1);
+    // Unknown id is a no-op.
+    expect(markSearchSeenInList(list, "zzz", 999)).toEqual(list);
+  });
+
+  test("markSearchSeen persists the stamped list", async () => {
+    getItemAsync.mockResolvedValueOnce(JSON.stringify([search("a", { lastSeenAt: 1 })]));
+    const next = await markSearchSeen("a");
+    expect(next[0]!.lastSeenAt).toBeGreaterThan(1);
+    expect(setItemAsync).toHaveBeenCalled();
   });
 
   test("serialize and deserialize cap at MAX_SAVED_SEARCHES", () => {

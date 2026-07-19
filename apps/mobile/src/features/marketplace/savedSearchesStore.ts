@@ -30,6 +30,8 @@ export interface SavedSearch {
   label: string;
   fields: SavedSearchFields;
   savedAt: number;
+  /** When the buyer last ran/reviewed this search — cars listed after this are "new". Defaults to savedAt for older rows. */
+  lastSeenAt: number;
 }
 
 /** The string-valued filter fields (everything except the boolean `financeOnly`). */
@@ -69,13 +71,19 @@ function isSavedSearch(value: unknown): value is SavedSearch {
   );
 }
 
-/** Parses stored JSON into a clean, newest-first list, dropping malformed rows. */
+/** Parses stored JSON into a clean, newest-first list, dropping malformed rows and defaulting `lastSeenAt` for rows saved before it existed. */
 export function deserializeSavedSearches(raw: string | null): SavedSearch[] {
   if (!raw) return [];
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isSavedSearch).slice(0, MAX_SAVED_SEARCHES);
+    return parsed
+      .filter(isSavedSearch)
+      .slice(0, MAX_SAVED_SEARCHES)
+      .map((item) => ({
+        ...item,
+        lastSeenAt: typeof item.lastSeenAt === "number" ? item.lastSeenAt : item.savedAt,
+      }));
   } catch {
     return [];
   }
@@ -120,10 +128,23 @@ export async function loadSavedSearches(): Promise<SavedSearch[]> {
   return deserializeSavedSearches(await readRaw());
 }
 
+/** Pure: stamps a saved search as reviewed now, so its "new" count resets. No-op if the id isn't present. */
+export function markSearchSeenInList(list: readonly SavedSearch[], id: string, now: number): SavedSearch[] {
+  return list.map((item) => (item.id === id ? { ...item, lastSeenAt: now } : item));
+}
+
 /** Saves (or refreshes) a search from its fields + a prebuilt label; returns the updated list. */
 export async function saveSearch(fields: SavedSearchFields, label: string): Promise<SavedSearch[]> {
-  const entry: SavedSearch = { id: searchFieldsId(fields), label, fields, savedAt: Date.now() };
+  const now = Date.now();
+  const entry: SavedSearch = { id: searchFieldsId(fields), label, fields, savedAt: now, lastSeenAt: now };
   const next = upsertSavedSearch(await loadSavedSearches(), entry);
+  await writeList(next);
+  return next;
+}
+
+/** Marks a saved search reviewed now (clears its new-listing count) and persists. */
+export async function markSearchSeen(id: string): Promise<SavedSearch[]> {
+  const next = markSearchSeenInList(await loadSavedSearches(), id, Date.now());
   await writeList(next);
   return next;
 }
