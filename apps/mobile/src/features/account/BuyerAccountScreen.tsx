@@ -19,15 +19,14 @@ import { type AppTheme } from "../../theme";
  * most buyers never need it. Full buyer sign-in/sync arrives in a later phase;
  * for now the buyer section states that plainly rather than showing dead buttons.
  */
-export function BuyerAccountScreen() {
+export function BuyerAccountScreen({ embedded = false }: Readonly<{ embedded?: boolean }> = {}) {
   const styles = useThemedStyles(makeStyles);
   const router = useRouter();
   const { t, textDirection } = useLocale();
   const { isSignedIn } = useAuth();
 
-  return (
-    <Screen>
-      <ScrollView style={styles.scroll} contentContainerStyle={[styles.content, { direction: textDirection }]}>
+  const body = (
+    <ScrollView style={styles.scroll} contentContainerStyle={[styles.content, { direction: textDirection }]}>
         <View style={styles.headerText}>
           <Text style={styles.brand}>{t("appName")}</Text>
           <Text style={styles.title}>{t("account")}</Text>
@@ -77,8 +76,9 @@ export function BuyerAccountScreen() {
 
         <Text style={styles.buildText}>{`${t("appName")} · ${t("buildLabel")} ${OTA_UPDATE_NUMBER}`}</Text>
       </ScrollView>
-    </Screen>
   );
+
+  return embedded ? body : <Screen>{body}</Screen>;
 }
 
 const makeStyles = (theme: AppTheme) =>
