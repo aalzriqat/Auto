@@ -64,6 +64,9 @@ type SnapshotVehicle = {
   year?: number;
   trim?: string | null;
   mileage?: number | null;
+  transmission?: string | null;
+  fuelType?: string | null;
+  exteriorColor?: string | null;
   price?: number | null;
   financePrice?: number | null;
   imageUrls?: string[];
@@ -88,6 +91,9 @@ type BrowseVehicle = {
   year: number;
   trim: string | null;
   mileage: number | null;
+  transmission: string | null;
+  fuelType: string | null;
+  exteriorColor: string | null;
   price: number | null;
   financePrice: number | null;
   imageUrls: string[];
@@ -186,6 +192,9 @@ export const search = query({
           year: vehicle.year ?? 0,
           trim: vehicle.trim ?? null,
           mileage: vehicle.mileage ?? null,
+          transmission: vehicle.transmission ?? null,
+          fuelType: vehicle.fuelType ?? null,
+          exteriorColor: vehicle.exteriorColor ?? null,
           price: vehicle.price ?? null,
           financePrice: vehicle.financePrice ?? null,
           imageUrls: vehicle.imageUrls ?? [],

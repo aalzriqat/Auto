@@ -999,6 +999,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "أثناء تصفّح السوق، تظهر الآن لكل سيارة أزرار الاتصال وواتساب الخاصة بالمعرض — اضغط للاتصال بهم أو لفتح محادثة واتساب تتضمن مسبقاً اسم السيارة التي تسأل عنها. لا حاجة للبحث عن رقم بعد الآن.",
     publishedAt: releaseAt(2026, 7, 19, 2),
   },
+  {
+    type: "IMPROVEMENT",
+    titleEn: "Richer car details and a share button",
+    titleAr: "تفاصيل أوفى للسيارة وزر للمشاركة",
+    descriptionEn: "A car's detail page now shows a full specifications list — year, mileage, transmission, fuel, and color — whenever the dealer has published them. You can also share any car (title plus its listing link) straight to WhatsApp, messages, or anywhere else with the new share button.",
+    descriptionAr: "أصبحت صفحة تفاصيل السيارة تعرض الآن قائمة مواصفات كاملة — السنة والممشى وناقل الحركة والوقود واللون — كلما نشرها المعرض. كما يمكنك مشاركة أي سيارة (الاسم مع رابط الإعلان) مباشرة عبر واتساب أو الرسائل أو أي تطبيق آخر عبر زر المشاركة الجديد.",
+    publishedAt: releaseAt(2026, 7, 19, 3),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

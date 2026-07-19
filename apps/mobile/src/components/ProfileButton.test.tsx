@@ -19,7 +19,13 @@ jest.mock("@clerk/expo", () => ({
 
 import { LocaleProvider } from "../providers/LocaleProvider";
 import { ThemeProvider } from "../providers/ThemeProvider";
+import { OTA_UPDATE_NUMBER } from "../otaUpdateNumber";
 import { ProfileButton, getProfilePressedStyle, resolveAccountIdentity } from "./ProfileButton";
+
+// Track the current OTA build so bumping otaUpdateNumber.ts doesn't break these
+// assertions (the build line renders `OTA_UPDATE_NUMBER`).
+const buildLine = `AutoFlow · الإصدار ${OTA_UPDATE_NUMBER}`;
+const buildLineRe = new RegExp(`الإصدار ${OTA_UPDATE_NUMBER}`);
 
 function renderProfile() {
   return render(
@@ -84,12 +90,12 @@ describe("ProfileButton", () => {
     const { getByLabelText, getByTestId, getByText, queryByText } = await renderProfile();
 
     // Sheet is closed until the avatar is tapped.
-    expect(queryByText(/الإصدار 9/)).toBeNull();
+    expect(queryByText(buildLineRe)).toBeNull();
 
     fireEvent.press(getByTestId("account-avatar-button"));
 
     // Modal children mount a tick after opening (as in the FAB test).
-    await waitFor(() => expect(getByText("AutoFlow · الإصدار 9")).toBeTruthy());
+    await waitFor(() => expect(getByText(buildLine)).toBeTruthy());
 
     // Identity + subtle build line (replaces the old red OTA banner).
     expect(getByText("Jane Dealer")).toBeTruthy();
@@ -110,7 +116,7 @@ describe("ProfileButton", () => {
     expect(getByText("English")).toBeTruthy();
 
     fireEvent.press(getByLabelText("إغلاق"));
-    await waitFor(() => expect(queryByText(/الإصدار 9/)).toBeNull());
+    await waitFor(() => expect(queryByText(buildLineRe)).toBeNull());
   });
 
   test("hides the email row when it matches the display name", async () => {
@@ -131,7 +137,7 @@ describe("ProfileButton", () => {
     mockUser = { user: null };
     const { getByTestId, getByText, queryByText } = await renderProfile();
     fireEvent.press(getByTestId("account-avatar-button"));
-    await waitFor(() => expect(getByText("AutoFlow · الإصدار 9")).toBeTruthy());
+    await waitFor(() => expect(getByText(buildLine)).toBeTruthy());
     // Name falls back to the localized "Account"; no email row and no crash.
     expect(getByText("الحساب")).toBeTruthy();
     expect(queryByText(/@/)).toBeNull();
@@ -143,15 +149,15 @@ describe("ProfileButton", () => {
     await waitFor(() => expect(getByText("تسجيل الخروج")).toBeTruthy());
     fireEvent.press(getByText("تسجيل الخروج"));
     expect(mockSignOut).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(queryByText(/الإصدار 9/)).toBeNull());
+    await waitFor(() => expect(queryByText(buildLineRe)).toBeNull());
   });
 
   test("closes via the close button without signing out", async () => {
     const { getByLabelText, getByTestId, queryByText } = await renderProfile();
     fireEvent.press(getByTestId("account-avatar-button"));
-    await waitFor(() => expect(queryByText(/الإصدار 9/)).not.toBeNull());
+    await waitFor(() => expect(queryByText(buildLineRe)).not.toBeNull());
     fireEvent.press(getByLabelText("إغلاق"));
-    await waitFor(() => expect(queryByText(/الإصدار 9/)).toBeNull());
+    await waitFor(() => expect(queryByText(buildLineRe)).toBeNull());
     expect(mockSignOut).not.toHaveBeenCalled();
   });
 });

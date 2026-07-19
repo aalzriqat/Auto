@@ -1074,6 +1074,9 @@ export interface MobileMarketplaceVehicle {
   year: number;
   trim: string | null;
   mileage: number | null;
+  transmission: string | null;
+  fuelType: string | null;
+  exteriorColor: string | null;
   price: number | null;
   financePrice: number | null;
   imageUrls: string[];
