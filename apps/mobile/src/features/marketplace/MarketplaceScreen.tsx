@@ -49,6 +49,7 @@ import {
 } from "./savedVehiclesStore";
 import {
   loadSavedSearches,
+  markSearchSeen,
   removeSavedSearchById,
   saveSearch,
   type SavedSearch,
@@ -993,6 +994,56 @@ function CarsResultsPage({
   );
 }
 
+// Number of first-page matches scanned to count new listings for a saved
+// search — bounds the per-chip query while comfortably covering the "9+" cap.
+const SAVED_SEARCH_SCAN = 30;
+
+// One saved-search chip. Runs the saved query to badge how many matching cars
+// were listed since the buyer last ran it (their new-listing alert). Tapping
+// re-runs the search (and clears the badge); × removes it.
+function SavedSearchChip({
+  entry,
+  onApply,
+  onRemove,
+}: Readonly<{ entry: SavedSearch; onApply: () => void; onRemove: () => void }>) {
+  const styles = useThemedStyles(makeStyles);
+  const { t } = useLocale();
+  const filters = buildSearchFilters({ ...entry.fields, sortBy: coerceSortBy(entry.fields.sortBy) });
+  const result = useQuery(api.marketplaceBrowse.search, { ...filters, numItems: SAVED_SEARCH_SCAN }) as
+    | MobileMarketplaceSearchResult
+    | undefined;
+  const newCount = (result?.vehicles ?? []).filter(
+    (vehicle) => vehicle.listedAt != null && vehicle.listedAt > entry.lastSeenAt,
+  ).length;
+
+  return (
+    <View style={styles.savedSearchChip}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={entry.label}
+        style={({ pressed }) => [styles.savedSearchChipMain, pressed && styles.pressed]}
+        onPress={onApply}
+      >
+        <Icon color="primary" name="search" size={13} />
+        <Text numberOfLines={1} style={styles.savedSearchChipText}>{entry.label}</Text>
+        {newCount > 0 ? (
+          <View style={styles.savedSearchNewBadge}>
+            <Text style={styles.savedSearchNewBadgeText}>{newCount > 9 ? "9+" : String(newCount)}</Text>
+          </View>
+        ) : null}
+      </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={t("marketplaceRemoveSearch")}
+        style={({ pressed }) => [styles.savedSearchRemove, pressed && styles.pressed]}
+        onPress={onRemove}
+      >
+        <Icon color="mutedText" name="close" size={13} />
+      </Pressable>
+    </View>
+  );
+}
+
 function CarsPanel({
   onTradeInPress,
   onRequest,
@@ -1035,8 +1086,10 @@ function CarsPanel({
     setSavedSearches(await removeSavedSearchById(id));
   }
 
-  function handleApplySaved(entry: SavedSearch) {
+  async function handleApplySaved(entry: SavedSearch) {
     applyFields({ ...entry.fields, sortBy: coerceSortBy(entry.fields.sortBy) });
+    // Reviewing the search clears its new-listing badge.
+    setSavedSearches(await markSearchSeen(entry.id));
   }
 
   const activeCount = countActiveFilters(fields);
@@ -1107,25 +1160,12 @@ function CarsPanel({
           contentContainerStyle={[styles.savedSearchRow, { direction: textDirection }]}
         >
           {savedSearches.map((entry) => (
-            <View key={entry.id} style={styles.savedSearchChip}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={entry.label}
-                style={({ pressed }) => [styles.savedSearchChipMain, pressed && styles.pressed]}
-                onPress={() => handleApplySaved(entry)}
-              >
-                <Icon color="primary" name="search" size={13} />
-                <Text numberOfLines={1} style={styles.savedSearchChipText}>{entry.label}</Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={t("marketplaceRemoveSearch")}
-                style={({ pressed }) => [styles.savedSearchRemove, pressed && styles.pressed]}
-                onPress={() => void handleRemoveSaved(entry.id)}
-              >
-                <Icon color="mutedText" name="close" size={13} />
-              </Pressable>
-            </View>
+            <SavedSearchChip
+              key={entry.id}
+              entry={entry}
+              onApply={() => void handleApplySaved(entry)}
+              onRemove={() => void handleRemoveSaved(entry.id)}
+            />
           ))}
         </ScrollView>
       ) : null}
@@ -1630,6 +1670,20 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     fontSize: 13,
     fontWeight: "700",
     flexShrink: 1,
+  },
+  savedSearchNewBadge: {
+    minWidth: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.primary,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+  },
+  savedSearchNewBadgeText: {
+    color: theme.colors.onPrimary,
+    fontSize: 11,
+    fontWeight: "800",
   },
   savedSearchRemove: {
     alignItems: "center",
