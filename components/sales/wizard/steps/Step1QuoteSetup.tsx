@@ -157,7 +157,11 @@ export default function Step1QuoteSetup({
     setSelectedCompanyId(undefined);
   };
 
-  const selectedVehicle = availableVehicles?.find((v: Doc<"vehicles">) => v._id === watchedVehicleId);
+  // Resolve against the merged picker list, not just AVAILABLE stock — a sourced
+  // car is in SOURCING status and lives in `sourcingVehicles`. Looking it up in
+  // `availableVehicles` alone left `selectedVehicle` undefined for sourced cars,
+  // so the whole quote (make, VIN, price, minimum profit, notes) rendered empty.
+  const selectedVehicle = allPickerVehicles.find((v: Doc<"vehicles">) => v._id === watchedVehicleId);
   const minimumProfit = selectedVehicle?.minimumProfit || 0;
   const isProfitBelowMinimum = !isCash && watchedVehicleId && Number(watchedProfit) < minimumProfit;
 

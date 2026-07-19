@@ -49,6 +49,16 @@ export function Step3Review({
     api.vehicles.listAll,
     activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE", includeReserved: true } : "skip"
   );
+  // Sourced cars sit in SOURCING status, in a separate list — without them the
+  // review/print resolves a sourced vehicle to undefined and shows empty data.
+  const sourcingVehicles = useQuery(
+    api.vehicles.listAll,
+    activeOrgId ? { orgId: activeOrgId, status: "SOURCING" } : "skip"
+  );
+  const allVehicles = useMemo(
+    () => [...(availableVehicles ?? []), ...(sourcingVehicles ?? [])],
+    [availableVehicles, sourcingVehicles]
+  );
 
   const financeCompanies = useQuery(
     api.finance.listCompanies,
@@ -60,14 +70,14 @@ export function Step3Review({
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
 
-  const selectedVehicle = availableVehicles?.find(
+  const selectedVehicle = allVehicles.find(
     (v: Doc<"vehicles">) => v._id === wizardData.vehicleId
   );
 
   const selectedVehicles = wizardData.vehicleItems?.length > 1
     ? (wizardData.vehicleItems
         .map((item: { vehicleId: string; unitPrice: number }) => {
-          const vehicle = availableVehicles?.find((v: Doc<"vehicles">) => v._id === item.vehicleId);
+          const vehicle = allVehicles.find((v: Doc<"vehicles">) => v._id === item.vehicleId);
           return vehicle ? { vehicle, unitPrice: item.unitPrice } : null;
         })
         .filter(Boolean) as Array<{ vehicle: Doc<"vehicles">; unitPrice: number }>)
