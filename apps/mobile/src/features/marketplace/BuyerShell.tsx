@@ -42,7 +42,14 @@ export function BuyerShell() {
 
   let content;
   if (active === "browse") {
-    content = <MarketplaceScreen variant="browse" embedded onRequestTradeIn={() => setActive("request")} />;
+    content = (
+      <MarketplaceScreen
+        variant="browse"
+        embedded
+        onRequestTradeIn={() => setActive("request")}
+        onOpenRequest={() => setActive("request")}
+      />
+    );
   } else if (active === "request") {
     content = <MarketplaceScreen variant="request" embedded />;
   } else if (active === "saved") {
