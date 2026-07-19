@@ -1,7 +1,7 @@
 import { nativeRoutes, type MobileFoundationStringKey } from "@autoflow/shared";
 import { useQuery } from "convex/react";
 import { useRouter } from "expo-router";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Alert,
   Image,
@@ -569,45 +569,112 @@ function ContactBar({
   );
 }
 
-// Native, in-app vehicle detail — the buyer's conversion screen. Uses the
-// vehicle object already returned by the search query (no extra round-trip) so
-// the journey stays in AutoFlow instead of bouncing to the dealer's website.
-function VehicleDetailModal({
+// A compact card in the "Similar cars" strip on the detail sheet.
+function SimilarCarCard({
   vehicle,
-  visible,
-  onClose,
-  onTradeIn,
-  saved,
-  onToggleSave,
-  listingUrl,
-}: Readonly<{
-  vehicle: MobileMarketplaceVehicle;
-  visible: boolean;
-  onClose: () => void;
-  onTradeIn: () => void;
-  saved: boolean;
-  onToggleSave: () => void;
-  listingUrl: string | null;
-}>) {
+  onSelect,
+}: Readonly<{ vehicle: MobileMarketplaceVehicle; onSelect: () => void }>) {
   const styles = useThemedStyles(makeStyles);
-  const { locale, t, textDirection } = useLocale();
-  const { width } = useWindowDimensions();
+  const { locale, t } = useLocale();
   const title = getVehicleTitle(vehicle);
   const price = formatMoney(vehicle.price, locale);
   const monthly = formatMoney(vehicle.estimatedMonthlyPayment, locale);
 
   return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${t("marketplaceViewDetails")}: ${title}`}
+      style={({ pressed }) => [styles.similarCard, pressed && styles.pressed]}
+      onPress={onSelect}
+    >
+      <View style={styles.similarImageWrap}>
+        {vehicle.imageUrls[0] ? (
+          <Image source={{ uri: vehicle.imageUrls[0] }} style={styles.similarImage} resizeMode="cover" />
+        ) : (
+          <Text style={styles.noImageText}>{t("marketplaceNoImage")}</Text>
+        )}
+      </View>
+      <Text numberOfLines={1} style={styles.similarTitle}>{title}</Text>
+      {price ? <Text numberOfLines={1} style={styles.similarPrice}>{price}</Text> : null}
+      {monthly ? (
+        <Text numberOfLines={1} style={styles.similarMonthly}>
+          {t("marketplaceFromPerMonth")} {monthly}/{t("marketplaceMonth")}
+        </Text>
+      ) : null}
+    </Pressable>
+  );
+}
+
+// Native, in-app vehicle detail — the buyer's conversion screen. Uses the
+// vehicle object already returned by the search query (no extra round-trip) so
+// the journey stays in AutoFlow instead of bouncing to the dealer's website.
+// Holds its own "shown" vehicle so the Similar-cars strip can swap the detail
+// in place without leaving the sheet.
+function VehicleDetailModal({
+  vehicle,
+  visible,
+  onClose,
+  onTradeInPress,
+}: Readonly<{
+  vehicle: MobileMarketplaceVehicle;
+  visible: boolean;
+  onClose: () => void;
+  onTradeInPress: (dealer: TradeInDealerTarget) => void;
+}>) {
+  const styles = useThemedStyles(makeStyles);
+  const { locale, t, textDirection } = useLocale();
+  const { width } = useWindowDimensions();
+  const scrollRef = useRef<ScrollView>(null);
+  const [shown, setShown] = useState(vehicle);
+
+  // Reset to the card's vehicle whenever the sheet (re)opens for it, so a prior
+  // Similar-cars selection doesn't linger into the next open.
+  useEffect(() => {
+    if (visible) setShown(vehicle);
+  }, [visible, vehicle]);
+
+  const { saved, toggle } = useVehicleSaved(shown.id);
+  const title = getVehicleTitle(shown);
+  const price = formatMoney(shown.price, locale);
+  const monthly = formatMoney(shown.estimatedMonthlyPayment, locale);
+  const listingUrl = getListingUrl(shown);
+
+  const snapshot: SavedVehicle = {
+    id: shown.id,
+    orgId: shown.orgId,
+    title,
+    price: shown.price ?? undefined,
+    monthlyPayment: shown.estimatedMonthlyPayment ?? undefined,
+    imageUrl: shown.imageUrls[0],
+    dealershipName: shown.dealershipName,
+    savedAt: Date.now(),
+  };
+
+  // Only query while the sheet is open. Same-make cars from the marketplace,
+  // minus the one being viewed.
+  const similarResult = useQuery(
+    api.marketplaceBrowse.search,
+    visible ? { make: shown.make, numItems: 8 } : "skip",
+  ) as MobileMarketplaceSearchResult | undefined;
+  const similar = (similarResult?.vehicles ?? []).filter((car) => car.id !== shown.id).slice(0, 6);
+
+  const selectSimilar = (car: MobileMarketplaceVehicle) => {
+    setShown(car);
+    scrollRef.current?.scrollTo({ y: 0, animated: true });
+  };
+
+  return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <Screen>
-        <ScrollView contentContainerStyle={styles.detailContent}>
+        <ScrollView ref={scrollRef} contentContainerStyle={styles.detailContent}>
           <View style={[styles.sheetHeader, { direction: textDirection }]}>
-            <Text numberOfLines={1} style={styles.detailDealer}>{vehicle.dealershipName}</Text>
+            <Text numberOfLines={1} style={styles.detailDealer}>{shown.dealershipName}</Text>
             <View style={styles.sheetHeaderActions}>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={t("marketplaceShare")}
                 style={({ pressed }) => [styles.sheetClose, pressed && styles.pressed]}
-                onPress={() => void shareVehicle(vehicle, title, t("marketplaceShareError"))}
+                onPress={() => void shareVehicle(shown, title, t("marketplaceShareError"))}
               >
                 <Icon color="text" name="share" size={20} />
               </Pressable>
@@ -622,9 +689,9 @@ function VehicleDetailModal({
             </View>
           </View>
 
-          {vehicle.imageUrls.length > 0 ? (
+          {shown.imageUrls.length > 0 ? (
             <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} style={styles.gallery}>
-              {vehicle.imageUrls.map((url, index) => (
+              {shown.imageUrls.map((url, index) => (
                 <Image
                   key={`${url}-${index}`}
                   source={{ uri: url }}
@@ -649,25 +716,25 @@ function VehicleDetailModal({
             ) : null}
 
             <View style={styles.badgeRow}>
-              {isRecentlyListed(vehicle.listedAt) ? <Badge label={t("marketplaceNew")} tone="amber" /> : null}
-              {vehicle.financeAvailable ? <Badge label={t("marketplaceFinanceAvailable")} /> : null}
-              {vehicle.dealerBadges.includes("VERIFIED_PHONE") ? (
+              {isRecentlyListed(shown.listedAt) ? <Badge label={t("marketplaceNew")} tone="amber" /> : null}
+              {shown.financeAvailable ? <Badge label={t("marketplaceFinanceAvailable")} /> : null}
+              {shown.dealerBadges.includes("VERIFIED_PHONE") ? (
                 <Badge label={t("marketplaceVerifiedDealer")} tone="blue" />
               ) : null}
-              {vehicle.dealerBadges.includes("FAST_RESPONSE") ? (
+              {shown.dealerBadges.includes("FAST_RESPONSE") ? (
                 <Badge label={t("marketplaceFastResponse")} tone="amber" />
               ) : null}
             </View>
 
-            <SpecsTable vehicle={vehicle} />
+            <SpecsTable vehicle={shown} />
 
-            <TrustFacts vehicle={vehicle} />
+            <TrustFacts vehicle={shown} />
 
             <Pressable
               accessibilityRole="button"
               accessibilityState={{ selected: saved }}
               style={({ pressed }) => [styles.detailPrimaryAction, saved && styles.detailPrimaryActionActive, pressed && styles.pressed]}
-              onPress={onToggleSave}
+              onPress={() => void toggle(snapshot)}
             >
               <Icon color={saved ? "onPrimary" : "primary"} name="save" size={18} />
               <Text style={[styles.detailPrimaryActionText, saved && styles.detailPrimaryActionTextActive]}>
@@ -677,7 +744,10 @@ function VehicleDetailModal({
             <Pressable
               accessibilityRole="button"
               style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
-              onPress={onTradeIn}
+              onPress={() => {
+                onClose();
+                onTradeInPress({ orgId: shown.orgId, dealershipName: shown.dealershipName });
+              }}
             >
               <Text style={styles.secondaryButtonText}>{t("marketplaceRequestTradeIn")}</Text>
             </Pressable>
@@ -690,9 +760,28 @@ function VehicleDetailModal({
                 <Text style={styles.inlineButtonText}>{t("marketplaceOpenListing")}</Text>
               </Pressable>
             ) : null}
+
+            {similar.length > 0 ? (
+              <View style={styles.similarSection}>
+                <Text style={styles.specSectionTitle}>{t("marketplaceSimilarTitle")}</Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={[styles.similarRow, { direction: textDirection }]}
+                >
+                  {similar.map((car) => (
+                    <SimilarCarCard
+                      key={`${car.orgId}-${car.id}`}
+                      vehicle={car}
+                      onSelect={() => selectSimilar(car)}
+                    />
+                  ))}
+                </ScrollView>
+              </View>
+            ) : null}
           </View>
         </ScrollView>
-        <ContactBar vehicle={vehicle} />
+        <ContactBar vehicle={shown} />
       </Screen>
     </Modal>
   );
@@ -809,13 +898,7 @@ function VehicleCard({
         vehicle={vehicle}
         visible={detailOpen}
         onClose={() => setDetailOpen(false)}
-        onTradeIn={() => {
-          setDetailOpen(false);
-          onTradeInPress({ orgId: vehicle.orgId, dealershipName: vehicle.dealershipName });
-        }}
-        saved={saved}
-        onToggleSave={() => void toggle(snapshot)}
-        listingUrl={listingUrl}
+        onTradeInPress={onTradeInPress}
       />
     </View>
   );
@@ -1443,6 +1526,46 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     color: theme.colors.text,
     fontSize: 16,
     fontWeight: "800",
+  },
+  similarSection: {
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.sm,
+  },
+  similarRow: {
+    gap: theme.spacing.md,
+    paddingVertical: theme.spacing.xs,
+  },
+  similarCard: {
+    width: 168,
+    gap: 4,
+  },
+  similarImageWrap: {
+    width: "100%",
+    aspectRatio: 16 / 9,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.md,
+    overflow: "hidden",
+    backgroundColor: theme.colors.surfaceAlt,
+  },
+  similarImage: {
+    width: "100%",
+    height: "100%",
+  },
+  similarTitle: {
+    color: theme.colors.text,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  similarPrice: {
+    color: theme.colors.primary,
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  similarMonthly: {
+    color: theme.colors.mutedText,
+    fontSize: 12,
+    fontWeight: "600",
   },
   specGrid: {
     gap: theme.spacing.sm,
