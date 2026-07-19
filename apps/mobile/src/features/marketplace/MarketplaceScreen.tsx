@@ -993,7 +993,10 @@ function CarsResultsPage({
   );
 }
 
-function CarsPanel({ onTradeInPress }: Readonly<{ onTradeInPress: (dealer: TradeInDealerTarget) => void }>) {
+function CarsPanel({
+  onTradeInPress,
+  onRequest,
+}: Readonly<{ onTradeInPress: (dealer: TradeInDealerTarget) => void; onRequest: () => void }>) {
   const styles = useThemedStyles(makeStyles);
   const { t, textDirection } = useLocale();
   const [fields, setFields] = useState<SearchFields>(DEFAULT_FIELDS);
@@ -1040,6 +1043,28 @@ function CarsPanel({ onTradeInPress }: Readonly<{ onTradeInPress: (dealer: Trade
 
   return (
     <View style={styles.panelGap}>
+      {/* Reverse-marketplace hero: AutoFlow's wedge — the buyer posts a request
+          and dealers compete with real monthly-payment offers. Kept at the top
+          of Browse so it's the differentiator buyers see, not buried in a tab. */}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={t("marketplaceRequestHeroCta")}
+        style={({ pressed }) => [styles.requestHero, { direction: textDirection }, pressed && styles.pressed]}
+        onPress={onRequest}
+      >
+        <View style={styles.requestHeroIcon}>
+          <Icon color="onPrimary" name="marketplace" size={22} />
+        </View>
+        <View style={styles.requestHeroText}>
+          <Text style={styles.requestHeroTitle}>{t("marketplaceRequestHeroTitle")}</Text>
+          <Text style={styles.requestHeroBody}>{t("marketplaceRequestHeroBody")}</Text>
+          <View style={styles.requestHeroCta}>
+            <Text style={styles.requestHeroCtaText}>{t("marketplaceRequestHeroCta")}</Text>
+            <Icon color="onPrimary" name="chevronForward" size={16} />
+          </View>
+        </View>
+      </Pressable>
+
       {/* Results-first: a slim bar (Filters sheet + Finance chip) sits above the
           inventory instead of a full desktop-style form. */}
       <View style={[styles.browseBar, { direction: textDirection }]}>
@@ -1302,10 +1327,12 @@ export function MarketplaceScreen({
   variant = "full",
   embedded = false,
   onRequestTradeIn,
+  onOpenRequest,
 }: Readonly<{
   variant?: MarketplaceVariant;
   embedded?: boolean;
   onRequestTradeIn?: () => void;
+  onOpenRequest?: () => void;
 }> = {}) {
   const styles = useThemedStyles(makeStyles);
   const { textDirection } = useLocale();
@@ -1328,6 +1355,17 @@ export function MarketplaceScreen({
 
   function openRoom(publicId: string) {
     setOpenRoomPublicId(publicId);
+  }
+
+  // The buyer-shell Browse tab has no in-screen Request tab, so hand off to the
+  // shell (it switches to the Request bottom tab); the dealer "full" variant
+  // switches its own inline tab.
+  function openRequest() {
+    if (onOpenRequest && !visibleTabs.includes("request")) {
+      onOpenRequest();
+      return;
+    }
+    setActiveTab("request");
   }
 
   async function handleRequestSubmitted(request: SavedBuyerRequest) {
@@ -1371,7 +1409,7 @@ export function MarketplaceScreen({
   } else if (activeTab === "offers") {
     content = <OffersTab reloadToken={offersReloadToken} onOpenRoom={openRoom} />;
   } else {
-    content = <CarsPanel onTradeInPress={openTradeInForDealer} />;
+    content = <CarsPanel onTradeInPress={openTradeInForDealer} onRequest={openRequest} />;
   }
 
   return wrap(
@@ -1471,6 +1509,50 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   },
   panelGap: {
     gap: theme.spacing.md,
+  },
+  requestHero: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.md,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.hero,
+    padding: theme.spacing.md,
+    ...theme.shadows.sm,
+  },
+  requestHeroIcon: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.full,
+    backgroundColor: "rgba(255, 255, 255, 0.16)",
+  },
+  requestHeroText: {
+    flex: 1,
+    minWidth: 0,
+    gap: 4,
+  },
+  requestHeroTitle: {
+    color: theme.colors.onPrimary,
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  requestHeroBody: {
+    color: theme.colors.onPrimary,
+    fontSize: 13,
+    fontWeight: "500",
+    opacity: 0.9,
+  },
+  requestHeroCta: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginTop: 2,
+  },
+  requestHeroCtaText: {
+    color: theme.colors.onPrimary,
+    fontSize: 14,
+    fontWeight: "800",
   },
   browseBar: {
     flexDirection: "row",

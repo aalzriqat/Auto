@@ -1047,6 +1047,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "اضبط الفلاتر مرة واحدة ثم اضغط \"احفظ هذا البحث\" — ليظهر كزر فوق النتائج تضغطه في أي وقت لإعادة تشغيل البحث نفسه. يُحفظ على هذا الجهاز دون الحاجة لحساب.",
     publishedAt: releaseAt(2026, 7, 19, 8),
   },
+  {
+    type: "FEATURE",
+    titleEn: "Let dealers come to you",
+    titleAr: "دع المعارض تأتي إليك",
+    descriptionEn: "Can't find the car you want? A new banner at the top of Browse lets you post a request — verified dealers then compete for it with real monthly-payment offers, instead of you hunting listings.",
+    descriptionAr: "لم تجد السيارة التي تريدها؟ يتيح لك شريط جديد أعلى صفحة التصفّح نشر طلبك — لتتنافس عليه المعارض الموثوقة بعروض أقساط شهرية حقيقية، بدلاً من البحث في الإعلانات بنفسك.",
+    publishedAt: releaseAt(2026, 7, 19, 9),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;
