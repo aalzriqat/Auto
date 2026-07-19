@@ -43,7 +43,7 @@ export default function SignInRoute() {
   // this screen from home (which also treats that state as signed out),
   // trapping them with no way to reach the form and retry.
   useEffect(() => {
-    if (isSignedIn && isAuthenticated) router.replace(nativeRoutes.home);
+    if (isSignedIn && isAuthenticated) router.replace(nativeRoutes.dealerWorkspaces);
   }, [isSignedIn, isAuthenticated, router]);
 
   const [identifier, setIdentifier] = useState("");
@@ -62,7 +62,7 @@ export default function SignInRoute() {
     [t],
   );
 
-  const finishSignIn = useCallback(() => router.replace(nativeRoutes.home), [router]);
+  const finishSignIn = useCallback(() => router.replace(nativeRoutes.dealerWorkspaces), [router]);
 
   const signInWithGoogle = useCallback(async () => {
     if (busy) return;

@@ -601,7 +601,7 @@ function InaccessibleState() {
       <Text style={styles.cardMeta}>{t("inaccessibleWorkspaceBody")}</Text>
       <Pressable
         style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
-        onPress={() => router.replace(nativeRoutes.home)}
+        onPress={() => router.replace(nativeRoutes.dealerWorkspaces)}
       >
         <Text style={styles.primaryButtonText}>{t("back")}</Text>
       </Pressable>
