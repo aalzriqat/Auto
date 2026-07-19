@@ -46,6 +46,7 @@ export const semanticIconGlyphs = {
   more: "ellipsis-horizontal-circle-outline",
   notifications: "notifications-outline",
   notificationsFilled: "notifications",
+  photos: "images-outline",
   operations: "grid-outline",
   pipeline: "git-merge-outline",
   pipelineSettings: "git-network-outline",

@@ -98,6 +98,7 @@ type SnapshotVehicle = {
   financePrice?: number | null;
   imageUrls?: string[];
   status?: string;
+  listedAt?: number | null;
   inspectionStatus?: InspectionStatus;
   accidentDisclosed?: boolean | null;
   ownerCount?: number | null;
@@ -124,6 +125,7 @@ type BrowseVehicle = {
   price: number | null;
   financePrice: number | null;
   imageUrls: string[];
+  listedAt: number | null;
   financeAvailable: boolean;
   estimatedMonthlyPayment: number | null;
   inspectionStatus: InspectionStatus;
@@ -236,6 +238,7 @@ export const search = query({
           price: vehicle.price ?? null,
           financePrice: vehicle.financePrice ?? null,
           imageUrls: vehicle.imageUrls ?? [],
+          listedAt: vehicle.listedAt ?? null,
           financeAvailable,
           estimatedMonthlyPayment,
           inspectionStatus: vehicle.inspectionStatus ?? "NONE",

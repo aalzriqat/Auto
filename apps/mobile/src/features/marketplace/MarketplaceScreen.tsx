@@ -54,6 +54,7 @@ import {
   formatNumber,
   getListingUrl,
   getVehicleTitle,
+  isRecentlyListed,
   parseOptionalPositiveNumber,
   trimOrUndefined,
 } from "./marketplaceUtils";
@@ -648,6 +649,7 @@ function VehicleDetailModal({
             ) : null}
 
             <View style={styles.badgeRow}>
+              {isRecentlyListed(vehicle.listedAt) ? <Badge label={t("marketplaceNew")} tone="amber" /> : null}
               {vehicle.financeAvailable ? <Badge label={t("marketplaceFinanceAvailable")} /> : null}
               {vehicle.dealerBadges.includes("VERIFIED_PHONE") ? (
                 <Badge label={t("marketplaceVerifiedDealer")} tone="blue" />
@@ -750,6 +752,12 @@ function VehicleCard({
             <Text style={styles.priceBadgeText}>{price}</Text>
           </View>
         ) : null}
+        {vehicle.imageUrls.length > 0 ? (
+          <View style={styles.photoCountBadge}>
+            <Icon color="onPrimary" name="photos" size={13} />
+            <Text style={styles.photoCountText}>{formatNumber(vehicle.imageUrls.length, locale)}</Text>
+          </View>
+        ) : null}
       </Pressable>
       <View style={styles.cardBody}>
         <Pressable accessibilityRole="button" onPress={() => setDetailOpen(true)}>
@@ -767,6 +775,7 @@ function VehicleCard({
           </Text>
         ) : null}
         <View style={styles.badgeRow}>
+          {isRecentlyListed(vehicle.listedAt) ? <Badge label={t("marketplaceNew")} tone="amber" /> : null}
           {vehicle.financeAvailable ? <Badge label={t("marketplaceFinanceAvailable")} /> : null}
           {vehicle.dealerBadges.includes("VERIFIED_PHONE") ? (
             <Badge label={t("marketplaceVerifiedDealer")} tone="blue" />
@@ -1633,6 +1642,24 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     color: theme.colors.onPrimary,
     fontSize: 15,
     fontWeight: "700",
+  },
+  photoCountBadge: {
+    position: "absolute",
+    bottom: theme.spacing.md,
+    end: theme.spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.xs,
+    borderRadius: theme.radius.full,
+    // Translucent charcoal so it reads over any photo, in either theme.
+    backgroundColor: "rgba(17, 24, 39, 0.72)",
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 4,
+  },
+  photoCountText: {
+    color: "#ffffff",
+    fontSize: 12,
+    fontWeight: "800",
   },
   cardBody: {
     gap: theme.spacing.sm,

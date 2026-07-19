@@ -133,6 +133,7 @@ async function projectedVehicleRows(
         financePrice: vehicleRow.sellingPrice,
         vin: includeVinChassis ? vehicleRow.vin : null,
         status: vehicleRow.status,
+        listedAt: vehicleRow.createdAt ?? vehicleRow._creationTime,
         imageUrls: enabledSections["vehicle.photos"] ? safeImageUrls : [],
         inspectionStatus: vehicleRow.inspectionStatus ?? "NONE",
         accidentDisclosed: vehicleRow.accidentDisclosed ?? null,

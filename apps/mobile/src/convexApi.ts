@@ -1080,6 +1080,7 @@ export interface MobileMarketplaceVehicle {
   price: number | null;
   financePrice: number | null;
   imageUrls: string[];
+  listedAt: number | null;
   financeAvailable: boolean;
   estimatedMonthlyPayment: number | null;
   inspectionStatus: MobileInspectionStatus;

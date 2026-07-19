@@ -261,6 +261,19 @@ describe("marketplaceBrowse.search", () => {
     expect(withoutSpecs).toMatchObject({ transmission: null, fuelType: null, exteriorColor: null });
   });
 
+  test("exposes a listedAt timestamp for freshness", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const before = Date.now();
+    await seedPublishedDealer(t, { name: "Fresh Dealer", subdomainSlug: "freshdealer", city: "Amman" });
+
+    const result = await t.query(api.marketplaceBrowse.search, {});
+    expect(result.vehicles).toHaveLength(1);
+    const listedAt = result.vehicles[0].listedAt;
+    expect(typeof listedAt).toBe("number");
+    // Falls back to the row's creation time, so it's ~now for a freshly seeded car.
+    expect(listedAt).toBeGreaterThanOrEqual(before);
+  });
+
   test("filters by transmission and fuel type (case-insensitive), only matching dealers who disclosed them", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     // Both seeded cars are Automatic/Petrol, but only this dealer publishes specs.
