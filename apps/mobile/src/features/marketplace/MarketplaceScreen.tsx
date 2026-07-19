@@ -50,6 +50,25 @@ import { getMarketplaceSelectOptions } from "./marketplaceSelectOptions";
 
 type BuyerTab = "cars" | "request" | "tradein" | "dealers" | "offers";
 
+// The buyer shell surfaces the marketplace as two bottom tabs — Browse (find a
+// car / see dealers) and Request (ask the market / trade in / my offers). "full"
+// keeps all five in one screen for the dealer-side /marketplace browse route.
+export type MarketplaceVariant = "full" | "browse" | "request";
+
+const VARIANT_TABS: Record<MarketplaceVariant, readonly BuyerTab[]> = {
+  full: ["cars", "request", "tradein", "dealers", "offers"],
+  browse: ["cars", "dealers"],
+  request: ["request", "tradein", "offers"],
+};
+
+export function getVariantTabs(variant: MarketplaceVariant): readonly BuyerTab[] {
+  return VARIANT_TABS[variant];
+}
+
+export function getVariantInitialTab(variant: MarketplaceVariant): BuyerTab {
+  return VARIANT_TABS[variant][0];
+}
+
 type SearchFields = {
   make: string;
   city: string;
@@ -98,7 +117,7 @@ function openExternalUrl(url: string | null) {
   });
 }
 
-function Header() {
+function Header({ showAccount }: Readonly<{ showAccount: boolean }>) {
   const styles = useThemedStyles(makeStyles);
   const router = useRouter();
   const { t, textDirection } = useLocale();
@@ -110,31 +129,46 @@ function Header() {
         <Text style={styles.title}>{t("marketplaceTitle")}</Text>
         <Text style={styles.subtitle}>{t("marketplaceSubtitle")}</Text>
       </View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={t("account")}
-        style={({ pressed }) => [styles.secondaryIconButton, pressed && styles.pressed]}
-        onPress={() => router.push(nativeRoutes.account)}
-      >
-        <Icon color="primary" name="team" size={18} />
-        <Text style={styles.secondaryIconText}>{t("account")}</Text>
-      </Pressable>
+      {showAccount ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t("account")}
+          style={({ pressed }) => [styles.secondaryIconButton, pressed && styles.pressed]}
+          onPress={() => router.push(nativeRoutes.account)}
+        >
+          <Icon color="primary" name="team" size={18} />
+          <Text style={styles.secondaryIconText}>{t("account")}</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
 
-function TabBar({ activeTab, onChange }: { activeTab: BuyerTab; onChange: (tab: BuyerTab) => void }) {
+function TabBar({
+  activeTab,
+  onChange,
+  visibleTabs,
+}: {
+  activeTab: BuyerTab;
+  onChange: (tab: BuyerTab) => void;
+  visibleTabs: readonly BuyerTab[];
+}) {
   const theme = useAppTheme();
   const styles = useThemedStyles(makeStyles);
   const { t, textDirection } = useLocale();
   const { width } = useWindowDimensions();
-  const tabs: Array<{ value: BuyerTab; label: string }> = [
+  const allTabs: Array<{ value: BuyerTab; label: string }> = [
     { value: "cars", label: t("marketplaceCarsTab") },
     { value: "request", label: t("marketplaceRequestCarTab") },
     { value: "tradein", label: t("marketplaceTradeInBuyerTab") },
     { value: "dealers", label: t("marketplaceDealersTab") },
     { value: "offers", label: t("marketplaceOffersTab") },
   ];
+  const tabs = allTabs.filter((tab) => visibleTabs.includes(tab.value));
+  // A two-tab variant reads better as full-width segments than as scroll chips.
+  if (tabs.length <= 1) {
+    return null;
+  }
   const tabWidth = Math.max(
     64,
     Math.floor(
@@ -552,15 +586,30 @@ function DealersPanel({ onTradeInPress }: Readonly<{ onTradeInPress: (dealer: Tr
   );
 }
 
-export function MarketplaceScreen() {
+export function MarketplaceScreen({
+  variant = "full",
+  embedded = false,
+  onRequestTradeIn,
+}: Readonly<{
+  variant?: MarketplaceVariant;
+  embedded?: boolean;
+  onRequestTradeIn?: () => void;
+}> = {}) {
   const styles = useThemedStyles(makeStyles);
   const { textDirection } = useLocale();
-  const [activeTab, setActiveTab] = useState<BuyerTab>("cars");
+  const visibleTabs = getVariantTabs(variant);
+  const [activeTab, setActiveTab] = useState<BuyerTab>(() => getVariantInitialTab(variant));
   const [selectedTradeInDealer, setSelectedTradeInDealer] = useState<TradeInDealerTarget | null>(null);
   const [openRoomPublicId, setOpenRoomPublicId] = useState<string | null>(null);
   const [offersReloadToken, setOffersReloadToken] = useState(0);
 
   function openTradeInForDealer(dealer: TradeInDealerTarget) {
+    // In the Browse tab there is no trade-in sub-tab; hand off to the shell so it
+    // switches to the Request tab (dealer selection is re-made in that form).
+    if (onRequestTradeIn && !visibleTabs.includes("tradein")) {
+      onRequestTradeIn();
+      return;
+    }
     setSelectedTradeInDealer(dealer);
     setActiveTab("tradein");
   }
@@ -576,21 +625,21 @@ export function MarketplaceScreen() {
     setOpenRoomPublicId(request.publicId);
   }
 
+  const wrap = (node: ReactNode): ReactNode => (embedded ? node : <Screen>{node}</Screen>);
+
   // A Request Room is a full-screen takeover so the buyer stays focused on the
   // offers streaming in; backing out returns to whichever tab they were on.
   if (openRoomPublicId) {
-    return (
-      <Screen>
-        <ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollContent, { direction: textDirection }]}>
-          <RequestRoomScreen
-            publicId={openRoomPublicId}
-            onBack={() => {
-              setOpenRoomPublicId(null);
-              setOffersReloadToken((value) => value + 1);
-            }}
-          />
-        </ScrollView>
-      </Screen>
+    return wrap(
+      <ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollContent, { direction: textDirection }]}>
+        <RequestRoomScreen
+          publicId={openRoomPublicId}
+          onBack={() => {
+            setOpenRoomPublicId(null);
+            setOffersReloadToken((value) => value + 1);
+          }}
+        />
+      </ScrollView>,
     );
   }
 
@@ -613,14 +662,12 @@ export function MarketplaceScreen() {
     content = <CarsPanel onTradeInPress={openTradeInForDealer} />;
   }
 
-  return (
-    <Screen>
-      <ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollContent, { direction: textDirection }]}>
-        <Header />
-        <TabBar activeTab={activeTab} onChange={setActiveTab} />
-        {content}
-      </ScrollView>
-    </Screen>
+  return wrap(
+    <ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollContent, { direction: textDirection }]}>
+      <Header showAccount={!embedded} />
+      <TabBar activeTab={activeTab} onChange={setActiveTab} visibleTabs={visibleTabs} />
+      {content}
+    </ScrollView>,
   );
 }
 

@@ -101,6 +101,15 @@ jest.mock("../features/account/BuyerAccountScreen", () => {
   };
 });
 
+jest.mock("../features/marketplace/BuyerShell", () => {
+  const React = jest.requireActual<typeof import("react")>("react");
+  const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
+
+  return {
+    BuyerShell: () => React.createElement(Text, { testID: "buyer-shell" }, "BuyerShell"),
+  };
+});
+
 jest.mock("../features/dashboard/OrgDashboardScreen", () => {
   const React = jest.requireActual<typeof import("react")>("react");
   const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
@@ -213,11 +222,10 @@ describe("mobile Expo routes", () => {
   });
 
   test("renders top-level app routes", async () => {
-    // Marketplace-first: "/" now lands on the buyer marketplace; the dealer
-    // workspace picker moved to /workspaces, and /account hosts the buyer account.
-    expect((await render(<HomeRoute />)).getByTestId("marketplace-screen").props.children).toBe(
-      "MarketplaceScreen",
-    );
+    // Marketplace-first: "/" now lands on the buyer shell (Browse/Request/Saved/
+    // Account); the dealer workspace picker moved to /workspaces, and /account
+    // still deep-links the buyer account.
+    expect((await render(<HomeRoute />)).getByTestId("buyer-shell").props.children).toBe("BuyerShell");
     expect((await render(<MarketplaceRoute />)).getByTestId("marketplace-screen").props.children).toBe(
       "MarketplaceScreen",
     );
