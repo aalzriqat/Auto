@@ -58,6 +58,7 @@ export const semanticIconGlyphs = {
   settings: "settings-outline",
   share: "share-social-outline",
   socialInbox: "logo-instagram",
+  sort: "swap-vertical-outline",
   sourcing: "cube-outline",
   tasks: "checkbox-outline",
   tasksFilled: "checkbox",

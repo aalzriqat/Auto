@@ -1,4 +1,4 @@
-import { nativeRoutes } from "@autoflow/shared";
+import { nativeRoutes, type MobileFoundationStringKey } from "@autoflow/shared";
 import { useQuery } from "convex/react";
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
@@ -22,6 +22,7 @@ import {
   type MobileMarketplaceDealer,
   type MobileMarketplacePaymentFilter,
   type MobileMarketplaceSearchResult,
+  type MobileMarketplaceSortBy,
   type MobileMarketplaceVehicle,
 } from "../../convexApi";
 import { FormField } from "../../components/FormField";
@@ -79,6 +80,8 @@ export function getVariantInitialTab(variant: MarketplaceVariant): BuyerTab {
   return VARIANT_TABS[variant][0];
 }
 
+const DEFAULT_SORT: MobileMarketplaceSortBy = "price_asc";
+
 type SearchFields = {
   make: string;
   city: string;
@@ -86,6 +89,7 @@ type SearchFields = {
   priceMax: string;
   maxMonthlyPayment: string;
   financeOnly: boolean;
+  sortBy: MobileMarketplaceSortBy;
 };
 
 type SearchFilters = {
@@ -95,6 +99,7 @@ type SearchFilters = {
   priceMax?: number;
   maxMonthlyPayment?: number;
   paymentType?: MobileMarketplacePaymentFilter;
+  sortBy: MobileMarketplaceSortBy;
   numItems: number;
 };
 
@@ -105,6 +110,7 @@ const DEFAULT_FIELDS: SearchFields = {
   priceMax: "",
   maxMonthlyPayment: "",
   financeOnly: false,
+  sortBy: DEFAULT_SORT,
 };
 
 function buildSearchFilters(fields: SearchFields): SearchFilters {
@@ -115,9 +121,17 @@ function buildSearchFilters(fields: SearchFields): SearchFilters {
     priceMax: parseOptionalPositiveNumber(fields.priceMax),
     maxMonthlyPayment: parseOptionalPositiveNumber(fields.maxMonthlyPayment),
     paymentType: fields.financeOnly ? "FINANCE" : undefined,
+    sortBy: fields.sortBy,
     numItems: 12,
   };
 }
+
+const SORT_OPTIONS: ReadonlyArray<{ value: MobileMarketplaceSortBy; labelKey: MobileFoundationStringKey }> = [
+  { value: "price_asc", labelKey: "marketplaceSortPriceAsc" },
+  { value: "price_desc", labelKey: "marketplaceSortPriceDesc" },
+  { value: "year_desc", labelKey: "marketplaceSortYearDesc" },
+  { value: "mileage_asc", labelKey: "marketplaceSortMileageAsc" },
+];
 
 export function countActiveFilters(fields: SearchFields): number {
   let count = 0;
@@ -779,6 +793,7 @@ function CarsPanel({ onTradeInPress }: Readonly<{ onTradeInPress: (dealer: Trade
   const [filters, setFilters] = useState<SearchFilters>(() => buildSearchFilters(DEFAULT_FIELDS));
   const [cursors, setCursors] = useState<Array<string | undefined>>([undefined]);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [sortOpen, setSortOpen] = useState(false);
 
   function applyFields(next: SearchFields) {
     setFields(next);
@@ -803,6 +818,15 @@ function CarsPanel({ onTradeInPress }: Readonly<{ onTradeInPress: (dealer: Trade
           <Icon color="text" name="search" size={18} />
           <Text style={styles.filtersButtonText}>{t("marketplaceFilters")}</Text>
           {activeCount > 0 ? <Badge label={String(activeCount)} tone="blue" /> : null}
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t("marketplaceSort")}
+          style={({ pressed }) => [styles.filtersButton, pressed && styles.pressed]}
+          onPress={() => setSortOpen(true)}
+        >
+          <Icon color="text" name="sort" size={18} />
+          <Text style={styles.filtersButtonText}>{t("marketplaceSort")}</Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"
@@ -857,6 +881,49 @@ function CarsPanel({ onTradeInPress }: Readonly<{ onTradeInPress: (dealer: Trade
               }}
               onReset={() => applyFields(DEFAULT_FIELDS)}
             />
+          </ScrollView>
+        </Screen>
+      </Modal>
+
+      <Modal
+        visible={sortOpen}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setSortOpen(false)}
+      >
+        <Screen>
+          <ScrollView contentContainerStyle={styles.sheetContent}>
+            <View style={[styles.sheetHeader, { direction: textDirection }]}>
+              <Text style={styles.sheetTitle}>{t("marketplaceSortTitle")}</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("close")}
+                style={({ pressed }) => [styles.sheetClose, pressed && styles.pressed]}
+                onPress={() => setSortOpen(false)}
+              >
+                <Icon color="text" name="close" size={20} />
+              </Pressable>
+            </View>
+            <View style={[styles.sortList, { direction: textDirection }]}>
+              {SORT_OPTIONS.map((option) => {
+                const selected = fields.sortBy === option.value;
+                return (
+                  <Pressable
+                    key={option.value}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    style={({ pressed }) => [styles.sortRow, selected && styles.sortRowActive, pressed && styles.pressed]}
+                    onPress={() => {
+                      applyFields({ ...fields, sortBy: option.value });
+                      setSortOpen(false);
+                    }}
+                  >
+                    <Text style={[styles.sortRowText, selected && styles.sortRowTextActive]}>{t(option.labelKey)}</Text>
+                    {selected ? <Icon color="primary" name="check" size={18} /> : null}
+                  </Pressable>
+                );
+              })}
+            </View>
           </ScrollView>
         </Screen>
       </Modal>
@@ -1243,6 +1310,32 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     color: theme.colors.mutedText,
     fontSize: 15,
     fontWeight: "600",
+  },
+  sortList: {
+    gap: theme.spacing.sm,
+  },
+  sortRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    minHeight: 52,
+    borderRadius: theme.radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    paddingHorizontal: theme.spacing.md,
+  },
+  sortRowActive: {
+    borderColor: theme.colors.primary,
+    backgroundColor: theme.colors.primarySoft,
+  },
+  sortRowText: {
+    color: theme.colors.text,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  sortRowTextActive: {
+    color: theme.colors.primary,
   },
   specSection: {
     gap: theme.spacing.sm,

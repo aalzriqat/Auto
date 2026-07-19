@@ -25,6 +25,33 @@ const ESTIMATE_TERM_MONTHS = 60;
 
 const paymentTypeValidator = v.optional(v.union(v.literal("CASH"), v.literal("FINANCE")));
 
+const sortByValidator = v.optional(
+  v.union(v.literal("price_asc"), v.literal("price_desc"), v.literal("year_desc"), v.literal("mileage_asc"))
+);
+export type BrowseSortBy = "price_asc" | "price_desc" | "year_desc" | "mileage_asc";
+
+const SORT_HI = Number.MAX_SAFE_INTEGER;
+const SORT_LO = Number.MIN_SAFE_INTEGER;
+
+/** Pure comparator for the merged result set. Missing values always sort to the end, whichever direction is chosen, so a price-less/mileage-less car never floats to the top. */
+export function compareBrowseVehicles(
+  a: { price: number | null; year: number; mileage: number | null },
+  b: { price: number | null; year: number; mileage: number | null },
+  sortBy: BrowseSortBy
+): number {
+  switch (sortBy) {
+    case "price_desc":
+      return (b.price ?? SORT_LO) - (a.price ?? SORT_LO);
+    case "year_desc":
+      return (b.year || 0) - (a.year || 0);
+    case "mileage_asc":
+      return (a.mileage ?? SORT_HI) - (b.mileage ?? SORT_HI);
+    case "price_asc":
+    default:
+      return (a.price ?? SORT_HI) - (b.price ?? SORT_HI);
+  }
+}
+
 type FinanceCompanyTerms = {
   profitRate: number;
   maxTermMonths: number;
@@ -115,6 +142,7 @@ export const search = query({
     maxMonthlyPayment: v.optional(v.number()),
     city: v.optional(v.string()),
     paymentType: paymentTypeValidator,
+    sortBy: sortByValidator,
     cursor: v.optional(v.string()),
     numItems: v.optional(v.number()),
   },
@@ -209,7 +237,7 @@ export const search = query({
       }
     }
 
-    merged.sort((a, b) => (a.price ?? Number.MAX_SAFE_INTEGER) - (b.price ?? Number.MAX_SAFE_INTEGER));
+    merged.sort((a, b) => compareBrowseVehicles(a, b, args.sortBy ?? "price_asc"));
 
     const page = merged.slice(offset, offset + numItems);
     const nextOffset = offset + numItems;
