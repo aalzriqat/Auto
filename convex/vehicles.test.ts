@@ -1276,7 +1276,7 @@ describe("vehicles.importBulk — owned stock vs sourced", () => {
       // and every VIN is unique.
       const vins = vehicles.map((v) => v.vin);
       expect(new Set(vins).size).toBe(4);
-      expect(vins.every((vin) => /^IMPORT-/.test(vin))).toBe(true);
+      expect(vins.every((vin) => /^IMPORT-/.test(vin ?? ""))).toBe(true);
     });
   });
 
