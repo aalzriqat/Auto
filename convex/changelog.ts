@@ -1055,6 +1055,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "لم تجد السيارة التي تريدها؟ يتيح لك شريط جديد أعلى صفحة التصفّح نشر طلبك — لتتنافس عليه المعارض الموثوقة بعروض أقساط شهرية حقيقية، بدلاً من البحث في الإعلانات بنفسك.",
     publishedAt: releaseAt(2026, 7, 19, 9),
   },
+  {
+    type: "FIX",
+    titleEn: "Request tab opens the request form",
+    titleAr: "تبويب الطلب يفتح نموذج الطلب",
+    descriptionEn: "Fixed the Request tab sometimes showing the car list after you'd been browsing — it now always opens the \"Request a car\" form as expected.",
+    descriptionAr: "أصلحنا ظهور قائمة السيارات أحياناً في تبويب الطلب بعد التصفّح — أصبح الآن يفتح نموذج \"اطلب سيارة\" مباشرةً كما هو متوقع.",
+    publishedAt: releaseAt(2026, 7, 19, 10),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

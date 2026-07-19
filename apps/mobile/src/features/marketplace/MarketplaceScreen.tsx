@@ -1342,6 +1342,14 @@ export function MarketplaceScreen({
   const [openRoomPublicId, setOpenRoomPublicId] = useState<string | null>(null);
   const [offersReloadToken, setOffersReloadToken] = useState(0);
 
+  // The buyer shell swaps browse↔request into the same tree slot, so React
+  // reuses this component instance and keeps the old activeTab. Without this,
+  // arriving on Request with a stale "cars" tab falls through to the Browse
+  // car list. Reset to the variant's first tab whenever the variant changes.
+  useEffect(() => {
+    setActiveTab(getVariantInitialTab(variant));
+  }, [variant]);
+
   function openTradeInForDealer(dealer: TradeInDealerTarget) {
     // In the Browse tab there is no trade-in sub-tab; hand off to the shell so it
     // switches to the Request tab (dealer selection is re-made in that form).
