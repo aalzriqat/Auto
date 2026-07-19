@@ -991,6 +991,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "رتّبنا الشريط العلوي في التطبيق. أصبح المظهر (فاتح/داكن) واللغة داخل صفحة حسابك — فقط اضغط على صورة ملفك الشخصي — بدلاً من ازدحام الشريط العلوي. كما أصبح اختصار الموظفين الذي كان مكتوباً عليه بالخطأ \"الإعدادات\" يظهر الآن بشكل صحيح \"الفريق\"، ولم يعد شريط الاختبار الكبير يظهر على الشاشة الرئيسية.",
     publishedAt: releaseAt(2026, 7, 19, 1),
   },
+  {
+    type: "FEATURE",
+    titleEn: "Call and WhatsApp a dealer straight from a car",
+    titleAr: "اتصل وراسل المعرض عبر واتساب مباشرة من السيارة",
+    descriptionEn: "Browsing the marketplace? Every car now shows Call and WhatsApp buttons for its dealer — tap to phone them or open a WhatsApp chat that already names the exact car you're asking about. No more hunting for a number.",
+    descriptionAr: "أثناء تصفّح السوق، تظهر الآن لكل سيارة أزرار الاتصال وواتساب الخاصة بالمعرض — اضغط للاتصال بهم أو لفتح محادثة واتساب تتضمن مسبقاً اسم السيارة التي تسأل عنها. لا حاجة للبحث عن رقم بعد الآن.",
+    publishedAt: releaseAt(2026, 7, 19, 2),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

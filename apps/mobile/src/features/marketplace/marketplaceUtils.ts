@@ -132,6 +132,30 @@ export function getListingUrl(vehicle: Pick<MobileMarketplaceVehicle, "siteUrl" 
   return `${vehicle.siteUrl.replace(/\/$/u, "")}/inventory/${encodeURIComponent(vehicle.slug)}`;
 }
 
+/** Digits-only phone (drops spaces, dashes, parentheses, and a leading +). Returns null when nothing dialable remains. */
+export function normalizePhoneDigits(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  const digits = phone.replace(/\D/gu, "");
+  return digits.length > 0 ? digits : null;
+}
+
+/** `tel:` deep-link preserving a leading + so the dialer keeps the country code. Null when the number has no digits. */
+export function buildTelUrl(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  const digits = normalizePhoneDigits(phone);
+  if (!digits) return null;
+  return phone.trim().startsWith("+") ? `tel:+${digits}` : `tel:${digits}`;
+}
+
+/** `wa.me` deep-link (international digits only, no +) with an optional prefilled message. Null when the number has no digits. */
+export function buildWhatsappUrl(phone: string | null | undefined, message?: string): string | null {
+  const digits = normalizePhoneDigits(phone);
+  if (!digits) return null;
+  const base = `https://wa.me/${digits}`;
+  const text = message?.trim();
+  return text ? `${base}?text=${encodeURIComponent(text)}` : base;
+}
+
 export function getBuyerIntentKey(intent: MobileBuyerIntent): MarketplaceStringKey {
   switch (intent) {
     case "HOT":
