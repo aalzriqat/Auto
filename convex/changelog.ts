@@ -983,6 +983,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "أصبحت شاشة السيارات تحتوي على زر تصدير يحمّل كل سيارة بنفس تنسيق ملف الاستيراد تماماً — بما في ذلك التمييز بين المخزون المملوك والسيارات المصدّرة وتقييمات شركات التمويل — بحيث يمكن إعادة استيراد المخزون إلى حساب معرض آخر فوراً. كما أصبح الاستيراد يتعرّف على أعمدة المخزون المملوك والمصدّر.",
     publishedAt: releaseAt(2026, 7, 18, 5),
   },
+  {
+    type: "IMPROVEMENT",
+    titleEn: "A calmer, cleaner mobile home screen",
+    titleAr: "شاشة رئيسية أهدأ وأنظف في التطبيق",
+    descriptionEn: "We tidied up the mobile app's top bar. Theme (light/dark) and language now live in your account sheet — just tap your profile picture — instead of crowding the header. The staff shortcut that was mislabeled \"Settings\" now correctly reads \"Team\", and the large test banner no longer appears on the home screen.",
+    descriptionAr: "رتّبنا الشريط العلوي في التطبيق. أصبح المظهر (فاتح/داكن) واللغة داخل صفحة حسابك — فقط اضغط على صورة ملفك الشخصي — بدلاً من ازدحام الشريط العلوي. كما أصبح اختصار الموظفين الذي كان مكتوباً عليه بالخطأ \"الإعدادات\" يظهر الآن بشكل صحيح \"الفريق\"، ولم يعد شريط الاختبار الكبير يظهر على الشاشة الرئيسية.",
+    publishedAt: releaseAt(2026, 7, 19, 1),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

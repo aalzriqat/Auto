@@ -184,26 +184,17 @@ function AuthenticatedHome() {
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
-      <View
-        style={{
-          backgroundColor: "#e11d48",
-          paddingVertical: 20,
-          paddingHorizontal: 16,
-          borderRadius: 14,
-          alignItems: "center",
-        }}
-      >
-        <Text style={{ color: "#ffffff", fontSize: 22, fontWeight: "800", textAlign: "center" }}>
-          {`🚀 OTA UPDATE #${OTA_UPDATE_NUMBER} LIVE ✅`}
-        </Text>
-      </View>
+      {__DEV__ ? (
+        <View style={styles.devBuildBadge}>
+          <Text style={styles.devBuildBadgeText}>{`OTA #${OTA_UPDATE_NUMBER} · dev`}</Text>
+        </View>
+      ) : null}
       <View style={[styles.header, { direction: textDirection }]}>
         <View style={styles.headerText}>
           <Text style={[styles.brand, type.label]}>{t("appName")}</Text>
           <Text style={[styles.title, type.display]}>{t("homeWorkCenter")}</Text>
         </View>
         <View style={styles.headerActions}>
-          <LocaleToggle />
           <ProfileButton />
         </View>
       </View>
@@ -325,6 +316,18 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     gap: theme.spacing.lg,
     padding: theme.spacing.lg,
     paddingBottom: theme.spacing.xxl,
+  },
+  devBuildBadge: {
+    alignSelf: "flex-start",
+    borderRadius: theme.radius.sm,
+    backgroundColor: theme.colors.surfaceAlt,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
+  },
+  devBuildBadgeText: {
+    color: theme.colors.subtleText,
+    fontSize: 11,
+    fontWeight: "700",
   },
   signedOut: {
     flex: 1,
