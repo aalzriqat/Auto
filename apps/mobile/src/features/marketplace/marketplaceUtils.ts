@@ -156,6 +156,17 @@ export function buildWhatsappUrl(phone: string | null | undefined, message?: str
   return text ? `${base}?text=${encodeURIComponent(text)}` : base;
 }
 
+/** How many days a car is flagged "New" in the marketplace after being listed. */
+export const RECENTLY_LISTED_DAYS = 14;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** True when the car was listed within the last {@link RECENTLY_LISTED_DAYS} days. Null/future timestamps are treated as not-new. */
+export function isRecentlyListed(listedAt: number | null | undefined, now: number = Date.now()): boolean {
+  if (listedAt == null) return false;
+  const ageMs = now - listedAt;
+  return ageMs >= 0 && ageMs <= RECENTLY_LISTED_DAYS * DAY_MS;
+}
+
 export function getBuyerIntentKey(intent: MobileBuyerIntent): MarketplaceStringKey {
   switch (intent) {
     case "HOT":

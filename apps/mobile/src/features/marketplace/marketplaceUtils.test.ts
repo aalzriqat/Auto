@@ -6,7 +6,9 @@ import {
   formatMoney,
   getBuyerIntentKey,
   getListingUrl,
+  isRecentlyListed,
   normalizePhoneDigits,
+  RECENTLY_LISTED_DAYS,
   getPaymentTypeKey,
   getRequestStatusKey,
   getResponseKindKey,
@@ -61,6 +63,19 @@ describe("marketplace mobile helpers", () => {
       "https://wa.me/962790000002?text=Hi%20there",
     );
     expect(buildWhatsappUrl(undefined)).toBeNull();
+  });
+
+  it("flags recently-listed cars within the freshness window", () => {
+    const now = Date.parse("2026-07-19T00:00:00Z");
+    const day = 24 * 60 * 60 * 1000;
+    expect(isRecentlyListed(now, now)).toBe(true); // listed today
+    expect(isRecentlyListed(now - (RECENTLY_LISTED_DAYS - 1) * day, now)).toBe(true); // just inside
+    expect(isRecentlyListed(now - (RECENTLY_LISTED_DAYS + 1) * day, now)).toBe(false); // just outside
+    expect(isRecentlyListed(now + day, now)).toBe(false); // future timestamp
+    expect(isRecentlyListed(null, now)).toBe(false);
+    expect(isRecentlyListed(undefined, now)).toBe(false);
+    // Default `now` (Date.now()): a car listed right now is fresh.
+    expect(isRecentlyListed(Date.now())).toBe(true);
   });
 
   it("formats localized money values and rejects missing amounts", () => {

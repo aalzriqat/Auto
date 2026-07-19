@@ -230,6 +230,8 @@ const mobileFoundationStringEntries = [
   ["marketplaceWhatsappMessage", "Hi, I'm interested in this car on AutoFlow:", "مرحباً، أنا مهتم بهذه السيارة على أوتوفلو:"],
   ["marketplaceContactUnavailable", "Contact details unavailable for this dealer.", "لا تتوفر بيانات التواصل لهذا المعرض."],
   ["marketplaceNoImage", "No image", "لا توجد صورة"],
+  ["marketplaceNew", "New", "جديد"],
+  ["marketplacePhotoCountLabel", "photos", "صور"],
   ["marketplaceFinanceAvailable", "Finance available", "تمويل متاح"],
   ["marketplaceFastResponse", "Fast response", "رد سريع"],
   ["marketplaceVerifiedDealer", "Verified dealer", "معرض موثق"],

@@ -1023,6 +1023,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "أصبحت فلاتر السوق تتضمن الآن أزراراً سريعة لناقل الحركة (أوتوماتيك/عادي) ونوع الوقود (بنزين، ديزل، كهرباء، هجين)، لتحصر النتائج في نوع السيارة الذي تريده بالضبط.",
     publishedAt: releaseAt(2026, 7, 19, 5),
   },
+  {
+    type: "IMPROVEMENT",
+    titleEn: "New-listing badges and photo counts",
+    titleAr: "شارات الإعلانات الجديدة وعدد الصور",
+    descriptionEn: "Freshly listed cars now carry a \"New\" badge for their first two weeks, and each car card shows how many photos it has — so you can spot the newest arrivals and best-documented cars at a glance.",
+    descriptionAr: "تحمل السيارات المضافة حديثاً الآن شارة \"جديد\" خلال أول أسبوعين، ويعرض كل كرت عدد صوره — لتتعرّف بنظرة سريعة على أحدث الوافدين والسيارات الأكثر توثيقاً بالصور.",
+    publishedAt: releaseAt(2026, 7, 19, 6),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;
