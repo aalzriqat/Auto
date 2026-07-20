@@ -15,7 +15,7 @@ import { postAccountingEvent, PostCommand } from "./postingEngine";
 import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
-import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount } from "../chartOfAccounts";
+import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
   enqueuePendingReversal,
@@ -732,6 +732,161 @@ function makeCommissionHook(
 
 export const hookCommissionAccrued = makeCommissionHook("COMMISSION_ACCRUED", "commission", "commission_accrued");
 export const hookCommissionPaid = makeCommissionHook("COMMISSION_PAID", "commission_paid", "commission_paid");
+
+// ─── Payroll hooks ─────────────────────────────────────────────────────────────
+// Scoped self-heal (like ensureVatReceivableAccountIfChartReady): only payroll
+// events touch the salaries/employee-advance accounts, so don't add them to the
+// shared postOrEnqueue choke point.
+async function ensurePayrollAccountsIfChartReady(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  if (await isChartInitialized(ctx, orgId)) {
+    await ensurePayrollAccounts(ctx, orgId, actorId);
+  }
+}
+
+/** Advance issued to an employee: Dr Employee Advances (asset) / Cr cash. */
+export async function hookEmployeeAdvancePaid(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    advanceId: Id<"employeeAdvances">;
+    userId: Id<"users">;
+    amountMinor: number;
+    currency: string;
+    paymentMethod?: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await ensurePayrollAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "EMPLOYEE_ADVANCE_PAID",
+    sourceType: "employeeAdvances",
+    sourceId: args.advanceId.toString(),
+    idempotencyKey: `employee_advance_paid_${args.advanceId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      advanceId: args.advanceId.toString(),
+      userId: args.userId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+    },
+  });
+}
+
+/** Advance repaid directly (outside payroll): Dr cash / Cr Employee Advances. */
+export async function hookEmployeeAdvanceRecovered(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    advanceId: Id<"employeeAdvances">;
+    userId: Id<"users">;
+    amountMinor: number;
+    currency: string;
+    paymentMethod?: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await ensurePayrollAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "EMPLOYEE_ADVANCE_RECOVERED",
+    sourceType: "employeeAdvances",
+    sourceId: `recovery_${args.advanceId}`,
+    idempotencyKey: `employee_advance_recovered_${args.advanceId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      advanceId: args.advanceId.toString(),
+      userId: args.userId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+    },
+  });
+}
+
+/** Salary accrued for one employee on a run: Dr Salaries Expense / Cr Salaries Payable. */
+export async function hookPayrollAccrued(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    itemId: Id<"payrollItems">;
+    runId: Id<"payrollRuns">;
+    userId: Id<"users">;
+    amountMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await ensurePayrollAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "PAYROLL_ACCRUED",
+    sourceType: "payrollItems",
+    sourceId: `accrued_${args.itemId}`,
+    idempotencyKey: `payroll_accrued_${args.itemId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      runId: args.runId.toString(),
+      userId: args.userId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+    },
+  });
+}
+
+/** One employee's payslip payment (clears salary + commission payables, recovers advance, pays net). */
+export async function hookPayrollPaid(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    itemId: Id<"payrollItems">;
+    userId: Id<"users">;
+    salaryMinor: number;
+    commissionMinor: number;
+    advanceRecoveredMinor: number;
+    netMinor: number;
+    currency: string;
+    paymentMethod?: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await ensurePayrollAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "PAYROLL_PAID",
+    sourceType: "payrollItems",
+    sourceId: `paid_${args.itemId}`,
+    idempotencyKey: `payroll_paid_${args.itemId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      itemId: args.itemId.toString(),
+      userId: args.userId.toString(),
+      salaryMinor: args.salaryMinor,
+      commissionMinor: args.commissionMinor,
+      advanceRecoveredMinor: args.advanceRecoveredMinor,
+      netMinor: args.netMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+    },
+  });
+}
 
 type ReversalHookArgs<TSourceId> = {
   orgId: Id<"organizations">;

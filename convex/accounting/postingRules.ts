@@ -42,6 +42,10 @@ export type EventType =
   | "PREPAID_EXPENSE_REFUNDED"
   | "PREPAID_EXPENSE_WRITTEN_OFF"
   | "RECEIVABLE_CREATED"
+  | "EMPLOYEE_ADVANCE_PAID"
+  | "EMPLOYEE_ADVANCE_RECOVERED"
+  | "PAYROLL_ACCRUED"
+  | "PAYROLL_PAID"
   | "JOURNAL_REVERSAL";
 
 export const ALL_EVENT_TYPES = new Set<string>([
@@ -62,6 +66,7 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "PREPAID_EXPENSE_REFUNDED",
   "PREPAID_EXPENSE_WRITTEN_OFF",
   "RECEIVABLE_CREATED",
+  "EMPLOYEE_ADVANCE_PAID", "EMPLOYEE_ADVANCE_RECOVERED", "PAYROLL_ACCRUED", "PAYROLL_PAID",
   // JOURNAL_REVERSAL is intentionally excluded: it is written directly by
   // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
 ]);
@@ -1296,6 +1301,96 @@ export function ruleCashDrawerDeposited(p: CashDrawerDepositedPayload): RuleResu
 
 // ─── Dispatch ─────────────────────────────────────────────────────────────────
 
+// ─── Payroll ──────────────────────────────────────────────────────────────────
+
+export interface EmployeeAdvancePaidPayload {
+  advanceId: string;
+  userId: string;
+  amountMinor: number;
+  currency: string;
+  paymentMethod?: string;
+}
+
+/** Advance issued to an employee: Dr Employee Advances (asset) / Cr cash. */
+export function ruleEmployeeAdvancePaid(p: EmployeeAdvancePaidPayload): RuleResult {
+  const cashKey = cashAccountKey(p.paymentMethod);
+  return {
+    lines: [
+      line(SYSTEM_KEYS.EMPLOYEE_ADVANCES, p.amountMinor, 0, "Employee advance issued"),
+      line(cashKey, 0, p.amountMinor, "Advance paid to employee"),
+    ],
+    memo: "Employee advance paid",
+    category: "SYSTEM",
+  };
+}
+
+/** Advance repaid directly by an employee (outside payroll): Dr cash / Cr Employee Advances. */
+export function ruleEmployeeAdvanceRecovered(p: EmployeeAdvancePaidPayload): RuleResult {
+  const cashKey = cashAccountKey(p.paymentMethod);
+  return {
+    lines: [
+      line(cashKey, p.amountMinor, 0, "Advance repaid by employee"),
+      line(SYSTEM_KEYS.EMPLOYEE_ADVANCES, 0, p.amountMinor, "Employee advance recovered"),
+    ],
+    memo: "Employee advance recovered",
+    category: "SYSTEM",
+  };
+}
+
+export interface PayrollAccruedPayload {
+  runId: string;
+  userId: string;
+  amountMinor: number;
+  currency: string;
+}
+
+/** Salary accrued at payroll-run approval: Dr Salaries Expense / Cr Salaries Payable. */
+export function rulePayrollAccrued(p: PayrollAccruedPayload): RuleResult {
+  return {
+    lines: [
+      line(SYSTEM_KEYS.SALARIES_EXPENSE, p.amountMinor, 0, "Salary expense"),
+      line(SYSTEM_KEYS.SALARIES_PAYABLE, 0, p.amountMinor, "Salary payable"),
+    ],
+    memo: "Payroll accrued",
+    category: "SYSTEM",
+  };
+}
+
+export interface PayrollPaidPayload {
+  itemId: string;
+  userId: string;
+  /** Gross salary being settled (clears Salaries Payable). */
+  salaryMinor: number;
+  /** Commission portion paid through payroll (clears Commission Payable) — Option A. */
+  commissionMinor: number;
+  /** Outstanding advance recovered from this payslip (credits Employee Advances). */
+  advanceRecoveredMinor: number;
+  /** Net cash actually disbursed = salary + commission − advanceRecovered. */
+  netMinor: number;
+  currency: string;
+  paymentMethod?: string;
+}
+
+/**
+ * One employee's payslip payment. Clears the salary + commission payables,
+ * recovers any outstanding advance, and pays out the net in cash. Zero-value
+ * legs are omitted so validateBalance never sees a 0/0 line; the remaining
+ * legs always balance (debits salary+commission = credits advance+net).
+ */
+export function rulePayrollPaid(p: PayrollPaidPayload): RuleResult {
+  const cashKey = cashAccountKey(p.paymentMethod);
+  const lines: LineSpec[] = [];
+  if (p.salaryMinor > 0) lines.push(line(SYSTEM_KEYS.SALARIES_PAYABLE, p.salaryMinor, 0, "Salary settled"));
+  if (p.commissionMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.COMMISSION_PAYABLE, p.commissionMinor, 0, "Commission settled via payroll"));
+  }
+  if (p.advanceRecoveredMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.EMPLOYEE_ADVANCES, 0, p.advanceRecoveredMinor, "Advance recovered from payroll"));
+  }
+  if (p.netMinor > 0) lines.push(line(cashKey, 0, p.netMinor, "Net pay disbursed"));
+  return { lines, memo: "Payroll paid", category: "SYSTEM" };
+}
+
 export function applyPostingRule(eventType: string, payload: Record<string, unknown>): RuleResult {
   switch (eventType as EventType) {
     case "DEPOSIT_RECEIVED": return ruleDepositReceived(payload as unknown as DepositReceivedPayload);
@@ -1331,6 +1426,10 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "CLAIM_SETTLED": return ruleClaimSettled(payload as unknown as ClaimSettledPayload);
     case "CLAIM_WRITTEN_OFF": return ruleClaimWrittenOff(payload as unknown as ClaimWrittenOffPayload);
     case "CASH_DRAWER_DEPOSITED": return ruleCashDrawerDeposited(payload as unknown as CashDrawerDepositedPayload);
+    case "EMPLOYEE_ADVANCE_PAID": return ruleEmployeeAdvancePaid(payload as unknown as EmployeeAdvancePaidPayload);
+    case "EMPLOYEE_ADVANCE_RECOVERED": return ruleEmployeeAdvanceRecovered(payload as unknown as EmployeeAdvancePaidPayload);
+    case "PAYROLL_ACCRUED": return rulePayrollAccrued(payload as unknown as PayrollAccruedPayload);
+    case "PAYROLL_PAID": return rulePayrollPaid(payload as unknown as PayrollPaidPayload);
     case "VEHICLE_ACQUIRED": return ruleVehicleAcquired(payload as unknown as VehicleAcquiredPayload);
     case "TRADE_IN_ACCEPTED": return ruleTradeInAccepted(payload as unknown as TradeInAcceptedPayload);
     case "VEHICLE_LANDED_COST_CAPITALIZED": return ruleVehicleLandedCostCapitalized(payload as unknown as VehicleLandedCostCapitalizedPayload);

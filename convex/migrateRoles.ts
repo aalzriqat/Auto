@@ -250,6 +250,41 @@ export const backfillAccountantExpensePermissions = internalMutation({
  * rather than getting a duplicate. Assigning any member to the new role is
  * left to the org — this only makes the role available.
  */
+/**
+ * Grant the new payroll permissions to roles that should have them: every
+ * OWNER (so isSystemOwnerRole keeps holding — a new PERMISSIONS entry otherwise
+ * breaks it for legacy owner rows), plus any role that already manages finance
+ * or commissions. Run once after deploying the payroll feature.
+ */
+export const backfillPayrollPermissions = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const roles = await ctx.db.query("roles").collect();
+    let updatedCount = 0;
+    const updates: string[] = [];
+
+    for (const role of roles) {
+      if (role.isDeleted) continue;
+      const has = (p: string) => role.permissions.includes(p);
+      const toAdd = new Set<string>();
+
+      if (has(PERMISSIONS.MANAGE_FINANCE) || has(PERMISSIONS.MANAGE_COMMISSIONS)) {
+        toAdd.add(PERMISSIONS.VIEW_PAYROLL);
+        toAdd.add(PERMISSIONS.MANAGE_PAYROLL);
+      }
+      // Owners always get every permission.
+      if (isSystemOwnerRole(role) || normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME) {
+        toAdd.add(PERMISSIONS.VIEW_PAYROLL);
+        toAdd.add(PERMISSIONS.MANAGE_PAYROLL);
+      }
+
+      if (await patchRoleIfNeeded(ctx, role, toAdd, updates)) updatedCount++;
+    }
+
+    return { updatedCount, updates };
+  },
+});
+
 export const backfillSeniorAccountantRole = internalMutation({
   args: {},
   handler: async (ctx) => {

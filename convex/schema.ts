@@ -2313,6 +2313,103 @@ export default defineSchema({
     .index("by_org_vehicle", ["orgId", "vehicleId"])
     .index("by_org_status", ["orgId", "status"]),
 
+  // ─── Payroll ──────────────────────────────────────────────────────────────
+  // Fixed monthly salary per team member. History is kept by superseding rows
+  // (active:false on the old one) rather than editing in place.
+  employeeCompensation: defineTable({
+    orgId: v.id("organizations"),
+    userId: v.id("users"),
+    monthlySalaryMinor: v.number(),
+    currency: v.string(),
+    effectiveFrom: v.number(),
+    active: v.boolean(),
+    createdAt: v.number(),
+    createdBy: v.optional(v.id("users")),
+    updatedAt: v.number(),
+    updatedBy: v.optional(v.id("users")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_user", ["orgId", "userId"])
+    .index("by_org_user_active", ["orgId", "userId", "active"]),
+
+  // Salary advances (سلفة) — a recoverable ASSET (Employee Advances), NOT an
+  // expense, until offset against a payslip or repaid.
+  employeeAdvances: defineTable({
+    orgId: v.id("organizations"),
+    userId: v.id("users"),
+    amountMinor: v.number(),
+    recoveredMinor: v.number(),
+    currency: v.string(),
+    date: v.number(),
+    method: v.optional(
+      v.union(
+        v.literal("CASH"),
+        v.literal("BANK_TRANSFER"),
+        v.literal("CHEQUE"),
+        v.literal("CARD"),
+      ),
+    ),
+    status: v.union(
+      v.literal("OUTSTANDING"),
+      v.literal("RECOVERED"),
+      v.literal("WRITTEN_OFF"),
+    ),
+    note: v.optional(v.string()),
+    createdBy: v.optional(v.id("users")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    isDeleted: v.optional(v.boolean()),
+    deletedAt: v.optional(v.number()),
+    deletedBy: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_user", ["orgId", "userId"])
+    .index("by_org_status", ["orgId", "status"]),
+
+  // A monthly payroll run and its per-employee payslip items.
+  payrollRuns: defineTable({
+    orgId: v.id("organizations"),
+    periodYear: v.number(),
+    periodMonth: v.number(), // 1-12
+    currency: v.string(),
+    status: v.union(
+      v.literal("DRAFT"),
+      v.literal("APPROVED"),
+      v.literal("PAID"),
+      v.literal("CANCELLED"),
+    ),
+    totalGrossMinor: v.number(),
+    totalNetMinor: v.number(),
+    createdBy: v.optional(v.id("users")),
+    createdAt: v.number(),
+    approvedBy: v.optional(v.id("users")),
+    approvedAt: v.optional(v.number()),
+    paidBy: v.optional(v.id("users")),
+    paidAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_period", ["orgId", "periodYear", "periodMonth"])
+    .index("by_org_status", ["orgId", "status"]),
+
+  payrollItems: defineTable({
+    orgId: v.id("organizations"),
+    runId: v.id("payrollRuns"),
+    userId: v.id("users"),
+    baseSalaryMinor: v.number(),
+    commissionMinor: v.number(),
+    otherEarningsMinor: v.number(),
+    advanceDeductionMinor: v.number(),
+    otherDeductionMinor: v.number(),
+    grossMinor: v.number(),
+    netMinor: v.number(),
+    currency: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_run", ["runId"])
+    .index("by_org_user", ["orgId", "userId"]),
+
   wizardDrafts: defineTable({
     orgId: v.id("organizations"),
     userId: v.id("users"),
