@@ -90,7 +90,6 @@ export default function CommissionsPage() {
   });
 
   const markPaid = useMutation(api.sales.markCommissionPaid);
-  const markUnpaid = useMutation(api.sales.markCommissionUnpaid);
   const setCommissionAmount = useMutation(api.sales.setCommissionAmount);
   const recalculateCommission = useMutation(api.sales.recalculateCommission);
 
@@ -141,16 +140,6 @@ export default function CommissionsPage() {
       toast.success(t("CommissionRecalculated" as any));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  async function handleMarkUnpaid(saleId: Id<"sales">) {
-    if (!activeOrgId) return;
-    try {
-      await markUnpaid({ orgId: activeOrgId, saleId });
-      toast.success(t("CommissionUnpaidSuccess" as any));
-    } catch {
-      toast.error(t("CommissionPaymentFailed" as any));
     }
   }
 
@@ -381,14 +370,10 @@ export default function CommissionsPage() {
                     {canManage && (
                       <TableCell className="text-end">
                         {c.commissionPaidAt ? (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-muted-foreground hover:text-foreground"
-                            onClick={() => handleMarkUnpaid(c._id)}
-                          >
-                            <Undo2 className="h-3.5 w-3.5 me-1" /> {t("Revert" as any)}
-                          </Button>
+                          // Paid commissions are locked server-side (reversing a
+                          // paid commission needs an accounting reversal, not a
+                          // flag flip) — so no Revert action is offered here.
+                          null
                         ) : c.missingPurchaseCost ? null : c.needsRecalculation ? (
                           <Button
                             variant="outline"

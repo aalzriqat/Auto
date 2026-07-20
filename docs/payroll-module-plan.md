@@ -100,7 +100,8 @@ Biggest risks: GL balance correctness across accrue/pay/offset (mitigate with re
 
 ### Known limitations (accepted, documented)
 - **No reversal for APPROVED/PAID runs** (cancel is DRAFT-only). An approved/paid run posted real GL entries; reversing needs offsetting entries — manual accounting correction until a reversal flow ships.
-- `markCommissionUnpaid` clears operational flags without reversing the COMMISSION_PAID entry (pre-existing; superseded by payroll-driven payment).
+- Reverting a PAID commission is fail-closed everywhere (`markCommissionUnpaid` rejects paid commissions server-side; the UI offers no Revert action) — undoing a paid commission requires an accounting reversal.
+- **Salary double-booking is possible by operator error**: recording a salary through the Expenses page (SALARIES category → immediate Dr Salaries Expense) AND paying the same month through a payroll run books the expense twice. Until a guard exists, orgs using the payroll module should record salaries ONLY through payroll.
 - Timezone: period end is computed in UTC, not org-local time.
 
 ### Deployment order
