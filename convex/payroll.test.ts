@@ -704,17 +704,11 @@ describe("payroll: production-hardening controls", () => {
 describe("payroll: ledger-integrity (third audit)", () => {
   async function countRecoveryEvents(t: ReturnType<typeof convexTest>, orgId: any) {
     return await t.run(async (ctx) => {
-      const posted = await ctx.db
-        .query("accountingEvents")
-        .withIndex("by_org", (q: any) => q.eq("orgId", orgId))
-        .filter((q: any) => q.eq(q.field("eventType"), "EMPLOYEE_ADVANCE_RECOVERED"))
-        .collect();
-      const pending = await ctx.db
-        .query("pendingAccountingEvents")
-        .withIndex("by_org_status", (q: any) => q.eq("orgId", orgId))
-        .filter((q: any) => q.eq(q.field("eventType"), "EMPLOYEE_ADVANCE_RECOVERED"))
-        .collect();
-      return posted.length + pending.length;
+      const posted = await ctx.db.query("accountingEvents").collect();
+      const pending = await ctx.db.query("pendingAccountingEvents").collect();
+      const isRecovery = (r: any) =>
+        r.orgId === orgId && r.eventType === "EMPLOYEE_ADVANCE_RECOVERED";
+      return posted.filter(isRecovery).length + pending.filter(isRecovery).length;
     });
   }
 
