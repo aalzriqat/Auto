@@ -24,7 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, Pencil, Trash2, ImageIcon, Download, ClipboardList, Check, X, Hourglass, History, Eye, FileSpreadsheet } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, ImageIcon, Download, ClipboardList, Check, X, Hourglass, History, Eye, FileSpreadsheet, AlertTriangle } from "lucide-react";
 import { VehicleImportDialog } from "@/components/vehicles/VehicleImportDialog";
 import { VehicleExportButton } from "@/components/vehicles/VehicleExportButton";
 import { toast } from "@/components/ui/sonner";
@@ -124,6 +124,13 @@ export default function VehiclesPage() {
   // to see and use them, just routed through requestCreate/requestUpdate.
   const canCreateOrRequest = canCreate || permissions.includes("create:vehicles:request");
   const canEditOrRequest = canEdit || permissions.includes("edit:vehicles:request");
+  // Only cost-price viewers get purchasePrice in the payload at all, so the
+  // "missing cost" flag is meaningful (and shown) only for them — otherwise a
+  // salesperson would see it on every vehicle. A missing cost means no auto
+  // commission was calculated (see C3), which is what we want managers to spot.
+  const canViewCost = permissions.includes("view:cost_price");
+  const isMissingCost = (v: Doc<"vehicles">) =>
+    canViewCost && v.status !== "SOURCING" && v.purchasePrice == null;
 
   const pendingRequests = useQuery(api.vehicleRequests.listPending, activeOrgId && canEdit ? { orgId: activeOrgId } : "skip");
   const pendingEdits = useQuery(api.vehicleEdits.listPending, activeOrgId && canEdit ? { orgId: activeOrgId } : "skip");
@@ -349,6 +356,16 @@ export default function VehiclesPage() {
                 {(vehicle as any).sourceType === "SOURCED" && (
                   <Badge variant="outline" className="text-orange-600 border-orange-400 text-[10px] px-1.5 py-0">{t("SourcedVehicle" as any)}</Badge>
                 )}
+                {isMissingCost(vehicle) && (
+                  <Badge
+                    variant="outline"
+                    className="text-amber-700 dark:text-amber-300 border-amber-400 bg-amber-50 dark:bg-amber-950/30 text-[10px] px-1.5 py-0 inline-flex items-center gap-1"
+                    title={t("MissingPurchaseCostHint" as any)}
+                  >
+                    <AlertTriangle className="h-2.5 w-2.5" />
+                    {t("MissingPurchaseCost" as any)}
+                  </Badge>
+                )}
               </div>
             </div>
             <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
@@ -426,6 +443,16 @@ export default function VehiclesPage() {
                     {vehicle.vin ?? <span className="text-muted-foreground italic">{t("VinPending" as any)}</span>}
                     {(vehicle as any).sourceType === "SOURCED" && (
                       <Badge variant="outline" className="ms-1 text-orange-600 border-orange-400 text-[10px] px-1.5 py-0">{t("SourcedVehicle" as any)}</Badge>
+                    )}
+                    {isMissingCost(vehicle) && (
+                      <Badge
+                        variant="outline"
+                        className="ms-1 text-amber-700 dark:text-amber-300 border-amber-400 bg-amber-50 dark:bg-amber-950/30 text-[10px] px-1.5 py-0 inline-flex items-center gap-1"
+                        title={t("MissingPurchaseCostHint" as any)}
+                      >
+                        <AlertTriangle className="h-2.5 w-2.5" />
+                        {t("MissingPurchaseCost" as any)}
+                      </Badge>
                     )}
                   </TableCell>
                   <TableCell>{vehicle.year}</TableCell>

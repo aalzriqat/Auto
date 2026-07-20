@@ -1,5 +1,6 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, MutationCtx } from "./_generated/server";
+import { Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -13,7 +14,7 @@ import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation"
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
-import { getOrgCurrency, hookCommissionPaid, hookCommissionReversed, hookSaleCancelled } from "./accounting/workflowHooks";
+import { getOrgCurrency, hookCommissionAccrued, hookCommissionPaid, hookCommissionReversed, hookSaleCancelled } from "./accounting/workflowHooks";
 import { toMinorUnits } from "./utils/money";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 import { fromMinorUnits } from "./utils/money";
@@ -657,19 +658,39 @@ export const listCommissions = query({
         .collect();
     }
 
-    // Only include sales that have a commission amount set
-    const withCommission = sales.filter(s => s.commissionAmount != null && s.commissionAmount > 0);
+    // In an automatic mode, a completed sale whose vehicle has no recorded
+    // purchase cost earns 0 commission (see C3 in saleCompletion). Surface those
+    // rows too — flagged — so a manager notices the missing cost and can fix it.
+    const orgSettings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+    const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
+    const isAutoMode = mode === "AUTO_MEMBER" || mode === "AUTO_TIERS";
 
-    // Apply paid/unpaid filter
+    const hydrated = await Promise.all(
+      sales.map(async (sale) => {
+        const vehicle = await ctx.db.get(sale.vehicleId);
+        const missingPurchaseCost =
+          isAutoMode && sale.status === "COMPLETED" && vehicle?.purchasePrice == null;
+        return { sale, vehicle, missingPurchaseCost };
+      })
+    );
+
+    // Include sales with a real commission, plus the flagged missing-cost sales.
+    const withCommission = hydrated.filter(
+      (h) => (h.sale.commissionAmount != null && h.sale.commissionAmount > 0) || h.missingPurchaseCost
+    );
+
+    // Apply paid/unpaid filter (missing-cost rows are unpaid by definition)
     const filtered = args.paidStatus === "paid"
-      ? withCommission.filter(s => s.commissionPaidAt != null)
+      ? withCommission.filter((h) => h.sale.commissionPaidAt != null)
       : args.paidStatus === "unpaid"
-        ? withCommission.filter(s => s.commissionPaidAt == null)
+        ? withCommission.filter((h) => h.sale.commissionPaidAt == null)
         : withCommission;
 
     return await Promise.all(
-      filtered.map(async (sale) => {
-        const vehicle = await ctx.db.get(sale.vehicleId);
+      filtered.map(async ({ sale, vehicle, missingPurchaseCost }) => {
         const customer = await ctx.db.get(sale.customerId);
         const salesperson = await ctx.db.get(sale.salespersonId);
         const paidBy = sale.commissionPaidBy ? await ctx.db.get(sale.commissionPaidBy) : null;
@@ -679,11 +700,40 @@ export const listCommissions = query({
           customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
           salespersonName: salesperson?.name ?? salesperson?.email ?? "Unknown",
           paidByName: paidBy?.name ?? paidBy?.email ?? null,
+          missingPurchaseCost,
         };
       })
     );
   },
 });
+
+/**
+ * True once this sale's commission has been recognized in the ledger — either a
+ * posted COMMISSION_ACCRUED journal entry or a still-queued accrual in the
+ * outbox. AUTO modes accrue at completion; MANUAL accrues at payment. Used to
+ * keep a MANUAL amount editable only while it hasn't yet hit the books.
+ */
+async function hasCommissionAccrual(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  saleId: Id<"sales">
+): Promise<boolean> {
+  const posted = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", orgId).eq("sourceType", "sales").eq("sourceId", `commission_${saleId}`)
+    )
+    .filter((q) => q.eq(q.field("eventType"), "COMMISSION_ACCRUED"))
+    .first();
+  if (posted) return true;
+  const pending = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+    )
+    .first();
+  return pending !== null;
+}
 
 export const markCommissionPaid = mutation({
   args: {
@@ -728,11 +778,25 @@ export const markCommissionPaid = mutation({
           commissionPaymentIdempotencyKey: args.idempotencyKey,
         });
         const currency = await getOrgCurrency(ctx, args.orgId);
+        const amountMinor = toMinorUnits(sale.commissionAmount, currency);
+        // Recognize the expense before paying it. AUTO modes already accrued at
+        // completion (this is an idempotent no-op — same idempotency key);
+        // MANUAL accrues here for the first time, so the payment always clears a
+        // real Commission Payable instead of pushing it negative (fixes C1).
+        await hookCommissionAccrued(ctx, {
+          orgId: args.orgId,
+          saleId: args.saleId,
+          salespersonId: sale.salespersonId,
+          amountMinor,
+          currency,
+          actorId: user._id,
+          occurredAt: now,
+        });
         await hookCommissionPaid(ctx, {
           orgId: args.orgId,
           saleId: args.saleId,
           salespersonId: sale.salespersonId,
-          amountMinor: toMinorUnits(sale.commissionAmount, currency),
+          amountMinor,
           currency,
           paymentMethod,
           actorId: user._id,
@@ -784,14 +848,31 @@ export const setCommissionAmount = mutation({
     if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
       throw new ConvexError("Sale not found.");
     }
-    if (sale.status === "COMPLETED") {
+    if (sale.commissionPaidAt != null) {
+      throwAppError(AppErrorCode.VALIDATION_FAILED, "Paid commission amounts cannot be changed.");
+    }
+
+    const orgSettings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+    const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
+
+    // AUTO-mode commissions are derived and accrued at completion, so they stay
+    // locked afterwards. MANUAL commissions are entered by hand and accrue only
+    // at payment, so they remain editable on a completed sale until they're
+    // paid or otherwise recorded in the ledger (fixes C1/C2 for MANUAL).
+    if (sale.status === "COMPLETED" && mode !== "MANUAL") {
       throwAppError(
         AppErrorCode.SALE_ALREADY_COMPLETED,
         "Completed sale commission amounts are locked. Use a correction workflow."
       );
     }
-    if (sale.commissionPaidAt != null) {
-      throwAppError(AppErrorCode.VALIDATION_FAILED, "Paid commission amounts cannot be changed.");
+    if (await hasCommissionAccrual(ctx, args.orgId, args.saleId)) {
+      throwAppError(
+        AppErrorCode.VALIDATION_FAILED,
+        "This commission is already recorded in the ledger. Reverse it before changing the amount."
+      );
     }
 
     await ctx.db.patch(args.saleId, {

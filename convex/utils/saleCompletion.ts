@@ -57,6 +57,10 @@ type SaleCompletionArgs = {
   gapTermMonths?: number;
   idempotencyKey?: string;
   actorId: Id<"users">;
+  // MANUAL commission mode carries the manager-entered amount through
+  // completion untouched. Populated from the existing sale when completing a
+  // draft; undefined for freshly-created sales.
+  existingCommissionAmount?: number;
 };
 
 type PreparedSaleCompletion = {
@@ -65,6 +69,9 @@ type PreparedSaleCompletion = {
   leadId?: Id<"leads">;
   commissionAmount?: number;
   currency: string;
+  // AUTO modes accrue the commission to the GL at completion; MANUAL defers it
+  // to payment time (so the amount stays editable until paid).
+  accrueAtCompletion: boolean;
 };
 
 async function prepareSaleCompletion(
@@ -142,26 +149,40 @@ async function prepareSaleCompletion(
 
   const commissionMode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
   // Same cost basis the GL uses for COGS (purchase + landed costs + capitalized
-  // reconditioning expenses) — previously this only subtracted purchasePrice,
-  // so commission, the GL, and the operational reports could each show a
-  // different margin for the same sale.
+  // reconditioning expenses) so commission, the GL, and the operational reports
+  // all show the same margin for a sale.
   const vehicleCost = await computeVehicleCapitalizedCost(ctx, vehicle);
-  const grossProfit = Math.max(0, args.salePrice - vehicleCost);
+  // C3: without a recorded purchase cost the capitalized-cost basis isn't
+  // trustworthy (it would be ~zero), so the automatic commission modes earn
+  // NOTHING here rather than paying on ~the full sale price. Managers are
+  // alerted to the missing cost on the Commissions page and Vehicles list so
+  // they can fix it and re-set the commission. MANUAL mode is unaffected.
+  const hasPurchaseCost = vehicle.purchasePrice != null;
+  const grossProfit = hasPurchaseCost ? Math.max(0, args.salePrice - vehicleCost) : 0;
 
   let commissionAmount: number | undefined;
-  if (commissionMode === "AUTO_MEMBER") {
+  // AUTO modes derive the amount now and accrue it to the GL at completion.
+  // MANUAL mode carries the manager-entered amount through untouched and defers
+  // its GL accrual to payment time, so it stays editable until paid (see
+  // sales.ts markCommissionPaid / setCommissionAmount).
+  let accrueAtCompletion = false;
+  if (commissionMode === "MANUAL") {
+    commissionAmount = args.existingCommissionAmount;
+  } else if (hasPurchaseCost && commissionMode === "AUTO_MEMBER") {
     const rate = membership.commissionRate ?? 0;
     if (rate > 0) {
       commissionAmount = grossProfit * (rate / 100);
     }
-  } else if (commissionMode === "AUTO_TIERS") {
+    accrueAtCompletion = true;
+  } else if (hasPurchaseCost && commissionMode === "AUTO_TIERS") {
     const amount = calculateCommissionFromTiers(grossProfit, orgSettings?.commissionTiers ?? []);
     if (amount > 0) commissionAmount = amount;
+    accrueAtCompletion = true;
   }
 
   const currency = await getOrgCurrency(ctx, args.orgId);
 
-  return { vehicle, customer, leadId, commissionAmount, currency };
+  return { vehicle, customer, leadId, commissionAmount, currency, accrueAtCompletion };
 }
 
 async function insertSaleRecord(
@@ -452,7 +473,7 @@ async function applySaleCompletionSideEffects(
     });
   }
 
-  if (prepared.commissionAmount != null && prepared.commissionAmount > 0) {
+  if (prepared.accrueAtCompletion && prepared.commissionAmount != null && prepared.commissionAmount > 0) {
     await hookCommissionAccrued(ctx, {
       orgId: args.orgId,
       saleId,
@@ -610,6 +631,8 @@ export async function completeExistingSale(
     gapTermMonths: sale.gapTermMonths,
     idempotencyKey: args.idempotencyKey ?? sale.idempotencyKey,
     actorId: args.actorId,
+    // Preserve a manager-entered MANUAL commission across completion.
+    existingCommissionAmount: sale.commissionAmount,
   };
 
   const prepared = await prepareSaleCompletion(ctx, completionArgs);
