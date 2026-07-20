@@ -1079,6 +1079,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "أصبحت أزرار عمليات البحث المحفوظة تعرض الآن شارة تحسب السيارات المُضافة منذ آخر مرة شغّلت فيها البحث — لتلاحظ المطابقات الجديدة بنظرة سريعة. والضغط على البحث يستعرضه ويُخفي الشارة.",
     publishedAt: releaseAt(2026, 7, 19, 12),
   },
+  {
+    type: "IMPROVEMENT",
+    titleEn: "Clearer message when you don't have access",
+    titleAr: "رسالة أوضح عند عدم امتلاكك الصلاحية",
+    descriptionEn: "When you open a page or try an action your role doesn't allow, AutoFlow now shows a calm \"Access Not Allowed\" notice — with a hint to contact your manager or administrator — instead of a red error or silently sending you back to the dashboard.",
+    descriptionAr: "عند فتح صفحة أو محاولة إجراء لا يسمح به دورك، يعرض أوتوفلو الآن إشعاراً هادئاً بعنوان \"الوصول غير مسموح\" — مع تلميح للتواصل مع مديرك أو المسؤول — بدلاً من رسالة خطأ حمراء أو إعادتك إلى لوحة التحكم بصمت.",
+    publishedAt: releaseAt(2026, 7, 20, 1),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;
