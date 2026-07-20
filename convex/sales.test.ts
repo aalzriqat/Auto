@@ -376,3 +376,323 @@ describe("Sales Mutations", () => {
     });
   });
 });
+
+describe("C3: automatic commission requires a recorded purchase cost", () => {
+  async function setAutoMemberMode(
+    t: ReturnType<typeof convexTest>,
+    orgId: any,
+    userId: any,
+    rate: number
+  ) {
+    await t.run(async (ctx) => {
+      const memberships = await ctx.db.query("memberships").collect();
+      const m = memberships.find((x: any) => x.orgId === orgId && x.userId === userId);
+      await ctx.db.patch(m!._id, { commissionRate: rate });
+      await ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "USD",
+        currencySymbol: "$",
+        enabledPaymentTypes: [],
+        commissionMode: "AUTO_MEMBER",
+      });
+    });
+  }
+
+  test("no purchase cost => auto commission is zero (not commissioned on full sale price)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "c3_nocost");
+    // AUTO_MEMBER @ 10%, but the seeded vehicle has NO purchasePrice.
+    await setAutoMemberMode(t, orgId, userId, 10);
+
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 15000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+
+    const sale = await t.run((ctx) => ctx.db.get(saleId));
+    // Pre-fix behavior would have been 15000 * 10% = 1500 (commission on the
+    // full sale price). With the fix, no cost => no commission.
+    expect(sale?.commissionAmount == null || sale?.commissionAmount === 0).toBe(true);
+  });
+
+  test("with purchase cost, auto commission still computes on profit", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "c3_cost");
+    await setAutoMemberMode(t, orgId, userId, 10);
+    await t.run((ctx) => ctx.db.patch(vehicleId, { purchasePrice: 10000 }));
+
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 15000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+
+    const sale = await t.run((ctx) => ctx.db.get(saleId));
+    // profit = 15000 - 10000 = 5000; 10% => 500
+    expect(sale?.commissionAmount).toBe(500);
+  });
+
+  test("a ZERO purchase cost is treated as missing, not as a real cost", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "c3_zero");
+    await setAutoMemberMode(t, orgId, userId, 10);
+    // 0 passes a naive `!= null` check but would commission on ~the full sale
+    // price (15000 * 10% = 1500) — exactly what the guard exists to prevent.
+    await t.run((ctx) => ctx.db.patch(vehicleId, { purchasePrice: 0 }));
+
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 15000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+
+    const sale = await t.run((ctx) => ctx.db.get(saleId));
+    expect(sale?.commissionAmount == null || sale?.commissionAmount === 0).toBe(true);
+  });
+
+  test("a SOURCED vehicle with a sourceCost is commissioned normally (not flagged as missing cost)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "c3_sourced");
+    await setAutoMemberMode(t, orgId, userId, 10);
+    // SOURCED vehicles carry their cost in sourceCost, not purchasePrice.
+    await t.run((ctx) => ctx.db.patch(vehicleId, { sourceType: "SOURCED", sourceCost: 12000 }));
+
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 15000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+
+    const sale = await t.run((ctx) => ctx.db.get(saleId));
+    // profit = 15000 - 12000 = 3000; 10% => 300. A purchasePrice-only check
+    // would wrongly zero this out.
+    expect(sale?.commissionAmount).toBe(300);
+  });
+
+  test("recalculateCommission books the commission after the missing cost is corrected", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "c3_recalc");
+    await setAutoMemberMode(t, orgId, userId, 10);
+
+    // Completes with NO cost => no commission computed, sale flagged.
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 15000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+    let rows = await asAdmin.query(api.sales.listCommissions, { orgId });
+    expect(rows.find((r) => r._id === saleId)?.missingPurchaseCost).toBe(true);
+
+    // Manager fixes the vehicle cost → the row flips to "needs recalculation".
+    await t.run((ctx) => ctx.db.patch(vehicleId, { purchasePrice: 10000 }));
+    rows = await asAdmin.query(api.sales.listCommissions, { orgId });
+    const flagged = rows.find((r) => r._id === saleId);
+    expect(flagged?.missingPurchaseCost).toBe(false);
+    expect(flagged?.needsRecalculation).toBe(true);
+
+    // Recalculate: computes on profit AND books the accrual completion skipped.
+    const result = await asAdmin.mutation(api.sales.recalculateCommission, { orgId, saleId });
+    expect(result.commissionAmount).toBe(500);
+    const sale = await t.run((ctx) => ctx.db.get(saleId));
+    expect(sale?.commissionAmount).toBe(500);
+    const accrual = await t.run((ctx) =>
+      ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(accrual).not.toBeNull();
+
+    // One-shot: a second recalculation is rejected (amount now exists).
+    await expect(
+      asAdmin.mutation(api.sales.recalculateCommission, { orgId, saleId })
+    ).rejects.toThrow(/already has a commission/i);
+  });
+});
+
+describe("C1/C2: MANUAL commission lifecycle", () => {
+  async function setManualMode(t: ReturnType<typeof convexTest>, orgId: any) {
+    await t.run(async (ctx) => {
+      await ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "USD",
+        currencySymbol: "$",
+        enabledPaymentTypes: [],
+        commissionMode: "MANUAL",
+      });
+    });
+  }
+
+  test("a manually-set commission survives sale completion (not wiped)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "manual_preserve");
+    await setManualMode(t, orgId);
+
+    // Draft, set the commission by hand, then complete.
+    const saleId = await asAdmin.mutation(api.sales.createDraft, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 15000,
+      saleDate: Date.now(),
+      financingType: "CASH",
+    });
+    await asAdmin.mutation(api.sales.setCommissionAmount, { orgId, saleId, commissionAmount: 250 });
+    await asAdmin.mutation(api.sales.completeDraft, { orgId, saleId, idempotencyKey: "manual-preserve" });
+
+    const sale = await t.run((ctx) => ctx.db.get(saleId));
+    // Pre-fix: completion overwrote this with the mode's value (undefined) and
+    // the manual amount was lost.
+    expect(sale?.status).toBe("COMPLETED");
+    expect(sale?.commissionAmount).toBe(250);
+  });
+
+  test("a completed, unpaid MANUAL commission is still editable", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "manual_edit");
+    await setManualMode(t, orgId);
+
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 15000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+    // Pre-fix this threw ("Completed sale commission amounts are locked").
+    await asAdmin.mutation(api.sales.setCommissionAmount, { orgId, saleId, commissionAmount: 300 });
+
+    const sale = await t.run((ctx) => ctx.db.get(saleId));
+    expect(sale?.commissionAmount).toBe(300);
+  });
+
+  test("paying a MANUAL commission recognizes the accrual, not just the payment", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "manual_pay");
+    await setManualMode(t, orgId);
+
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 15000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+    await asAdmin.mutation(api.sales.setCommissionAmount, { orgId, saleId, commissionAmount: 400 });
+    await asAdmin.mutation(api.sales.markCommissionPaid, { orgId, saleId, paymentMethod: "CASH" });
+
+    // A COMMISSION_ACCRUED event must exist (posted or still queued) so the
+    // payment clears a real payable instead of pushing it negative. Pre-fix the
+    // MANUAL amount could never be set on a completed sale, so payment (and thus
+    // any accrual) was unreachable.
+    const accrual = await t.run(async (ctx) => {
+      const posted = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "sales").eq("sourceId", `commission_${saleId}`)
+        )
+        .filter((q) => q.eq(q.field("eventType"), "COMMISSION_ACCRUED"))
+        .first();
+      const pending = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first();
+      return posted ?? pending;
+    });
+    expect(accrual).not.toBeNull();
+  });
+});
+
+describe("commission accrual lock respects reversals", () => {
+  test("a REVERSED accrual no longer locks a MANUAL commission amount", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "rev_unlock");
+    await t.run(async (ctx) => {
+      await ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "USD",
+        currencySymbol: "$",
+        enabledPaymentTypes: [],
+        commissionMode: "MANUAL",
+      });
+    });
+
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 15000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+    await asAdmin.mutation(api.sales.setCommissionAmount, { orgId, saleId, commissionAmount: 300 });
+
+    // Simulate a posted accrual: the amount must now be locked.
+    const eventId = await t.run((ctx) =>
+      ctx.db.insert("accountingEvents", {
+        orgId,
+        eventType: "COMMISSION_ACCRUED",
+        sourceType: "sales",
+        sourceId: `commission_${saleId}`,
+        eventVersion: 1,
+        idempotencyKey: `commission_accrued_${saleId}`,
+        occurredAt: Date.now(),
+        accountingDate: Date.now(),
+        currency: "USD",
+        payload: {},
+        status: "POSTED",
+        createdBy: userId,
+        createdAt: Date.now(),
+      })
+    );
+    await expect(
+      asAdmin.mutation(api.sales.setCommissionAmount, { orgId, saleId, commissionAmount: 400 })
+    ).rejects.toThrow(/already recorded in the ledger/i);
+
+    // Reverse the accrual — the lock's own error message says "Reverse it
+    // before changing the amount", so a REVERSED accrual must actually unlock.
+    await t.run((ctx) => ctx.db.patch(eventId, { status: "REVERSED" }));
+    await asAdmin.mutation(api.sales.setCommissionAmount, { orgId, saleId, commissionAmount: 400 });
+    const sale = await t.run((ctx) => ctx.db.get(saleId));
+    expect(sale?.commissionAmount).toBe(400);
+  });
+});

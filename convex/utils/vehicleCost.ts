@@ -16,6 +16,27 @@ export const CAPITALIZABLE_EXPENSE_CATEGORIES = new Set([
 ]);
 
 /**
+ * Whether a vehicle has a trustworthy recorded cost basis, using the SAME
+ * source of truth as computeVehicleCapitalizedCost: SOURCED vehicles are costed
+ * off sourceCost, everything else off purchasePrice. Keeping this aligned with
+ * the cost function is what stops the commission "missing cost" guard (which
+ * zeroes AUTO commission and flags the vehicle) from misfiring on a legitimately
+ * costed SOURCED vehicle that happens to have no purchasePrice.
+ */
+export function vehicleHasCostBasis(
+  vehicle: Pick<Doc<"vehicles">, "sourceType" | "sourceCost" | "purchasePrice">
+): boolean {
+  // Zero is treated as missing, not as a real cost: a 0 basis would make the
+  // "gross profit" nearly the full sale price — exactly the overpayment the
+  // missing-cost guard exists to prevent. A genuinely free vehicle should be
+  // flagged for a manager to confirm, not silently commissioned at full price.
+  if (vehicle.sourceType === "SOURCED") {
+    return vehicle.sourceCost != null && vehicle.sourceCost > 0;
+  }
+  return vehicle.purchasePrice != null && vehicle.purchasePrice > 0;
+}
+
+/**
  * The single authoritative "book value" of a vehicle: what should be debited
  * to Vehicle Inventory over its life, and therefore what COGS should equal
  * when it sells. Used by both the GL (SALE_COMPLETED costMinor, commission

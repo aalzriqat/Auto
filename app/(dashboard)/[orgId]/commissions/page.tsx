@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "@/components/ui/sonner";
-import { TrendingUp, CheckCircle2, Clock, DollarSign, Check, Undo2, Pencil, X } from "lucide-react";
+import { TrendingUp, CheckCircle2, Clock, DollarSign, Check, Undo2, Pencil, X, AlertTriangle } from "lucide-react";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { CommissionPaymentDialog } from "@/components/commissions/CommissionPaymentDialog";
 import { type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
@@ -40,6 +40,8 @@ type CommissionSale = Doc<"sales"> & {
   customerName: string;
   salespersonName: string;
   paidByName: string | null;
+  missingPurchaseCost?: boolean;
+  needsRecalculation?: boolean;
 };
 
 function formatCurrency(amount: number) {
@@ -88,8 +90,8 @@ export default function CommissionsPage() {
   });
 
   const markPaid = useMutation(api.sales.markCommissionPaid);
-  const markUnpaid = useMutation(api.sales.markCommissionUnpaid);
   const setCommissionAmount = useMutation(api.sales.setCommissionAmount);
+  const recalculateCommission = useMutation(api.sales.recalculateCommission);
 
   const [editingId, setEditingId] = useState<Id<"sales"> | null>(null);
   const [editingAmount, setEditingAmount] = useState("");
@@ -131,13 +133,13 @@ export default function CommissionsPage() {
     }
   }
 
-  async function handleMarkUnpaid(saleId: Id<"sales">) {
+  async function handleRecalculate(saleId: Id<"sales">) {
     if (!activeOrgId) return;
     try {
-      await markUnpaid({ orgId: activeOrgId, saleId });
-      toast.success(t("CommissionUnpaidSuccess" as any));
-    } catch {
-      toast.error(t("CommissionPaymentFailed" as any));
+      await recalculateCommission({ orgId: activeOrgId, saleId });
+      toast.success(t("CommissionRecalculated" as any));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -286,7 +288,16 @@ export default function CommissionsPage() {
                 </TableRow>
               ) : (
                 filtered.map((c: CommissionSale) => (
-                  <TableRow key={c._id}>
+                  <TableRow
+                    key={c._id}
+                    className={
+                      c.missingPurchaseCost
+                        ? "bg-amber-50 dark:bg-amber-950/20"
+                        : c.needsRecalculation
+                          ? "bg-blue-50 dark:bg-blue-950/20"
+                          : undefined
+                    }
+                  >
                     <TableCell className="font-medium">{c.salespersonName}</TableCell>
                     <TableCell>{c.vehicleSummary}</TableCell>
                     <TableCell>{c.customerName}</TableCell>
@@ -295,7 +306,15 @@ export default function CommissionsPage() {
                     </TableCell>
                     <TableCell className="text-end tabular-nums">{formatCurrency(c.salePrice)}</TableCell>
                     <TableCell className="text-end tabular-nums font-semibold">
-                      {isManualMode && canManage && editingId === c._id ? (
+                      {c.missingPurchaseCost ? (
+                        <span
+                          className="inline-flex items-center gap-1.5 rounded-md bg-amber-100 dark:bg-amber-900/40 px-2 py-1 text-xs font-medium text-amber-700 dark:text-amber-300"
+                          title={t("MissingPurchaseCostHint" as any)}
+                        >
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                          {t("MissingPurchaseCost" as any)}
+                        </span>
+                      ) : isManualMode && canManage && editingId === c._id ? (
                         <div className="flex items-center justify-end gap-1">
                           <Input
                             type="number"
@@ -351,13 +370,19 @@ export default function CommissionsPage() {
                     {canManage && (
                       <TableCell className="text-end">
                         {c.commissionPaidAt ? (
+                          // Paid commissions are locked server-side (reversing a
+                          // paid commission needs an accounting reversal, not a
+                          // flag flip) — so no Revert action is offered here.
+                          null
+                        ) : c.missingPurchaseCost ? null : c.needsRecalculation ? (
                           <Button
-                            variant="ghost"
+                            variant="outline"
                             size="sm"
-                            className="text-muted-foreground hover:text-foreground"
-                            onClick={() => handleMarkUnpaid(c._id)}
+                            className="text-blue-600 border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-950/30"
+                            title={t("RecalculateCommissionHint" as any)}
+                            onClick={() => handleRecalculate(c._id)}
                           >
-                            <Undo2 className="h-3.5 w-3.5 me-1" /> {t("Revert" as any)}
+                            <Undo2 className="h-3.5 w-3.5 me-1" /> {t("RecalculateCommission" as any)}
                           </Button>
                         ) : (
                           <Button

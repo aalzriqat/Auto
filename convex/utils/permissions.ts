@@ -104,6 +104,10 @@ export const PERMISSIONS = {
   VIEW_COMMISSIONS: "view:commissions",
   MANAGE_COMMISSIONS: "manage:commissions",
 
+  // Payroll (employee compensation, salary advances, monthly payroll runs)
+  VIEW_PAYROLL: "view:payroll",
+  MANAGE_PAYROLL: "manage:payroll",
+
   // Approvals (profit approvals, finance application approvals, document verification)
   APPROVE_REQUESTS: "approve:requests", // Cache buster 1
   VIEW_FINANCE_APPLICATIONS: "view:finance_applications",
@@ -222,6 +226,8 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.VIEW_COST_PRICE,
       PERMISSIONS.VIEW_COMMISSIONS,
       PERMISSIONS.MANAGE_COMMISSIONS,
+      PERMISSIONS.VIEW_PAYROLL,
+      PERMISSIONS.MANAGE_PAYROLL,
       PERMISSIONS.APPROVE_REQUESTS,
       PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
       PERMISSIONS.CREATE_FINANCE_APPLICATION,
@@ -304,6 +310,8 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.MANAGE_FINANCE,
       PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
       PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+      PERMISSIONS.VIEW_PAYROLL,
+      PERMISSIONS.MANAGE_PAYROLL,
     ],
   },
   {
@@ -333,6 +341,8 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.VIEW_COST_PRICE,
       PERMISSIONS.VIEW_COMMISSIONS,
       PERMISSIONS.MANAGE_COMMISSIONS,
+      PERMISSIONS.VIEW_PAYROLL,
+      PERMISSIONS.MANAGE_PAYROLL,
     ],
   },
 ];

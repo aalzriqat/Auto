@@ -355,6 +355,23 @@ export async function ensureClaimAccounts(
 }
 
 /**
+ * Payroll self-heal, scoped to the payroll hooks (employee advances + payroll
+ * runs). Existing orgs' charts predate these accounts, so create them on demand
+ * before any payroll GL event posts. SALARIES_EXPENSE is also self-healed by
+ * ensureExpenseCategoryAccounts, but a payroll run can be the first thing that
+ * needs it, so include it here too (ensureSystemAccount is idempotent).
+ */
+export async function ensurePayrollAccounts(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.SALARIES_EXPENSE, "6820");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.SALARIES_PAYABLE, "2310");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.EMPLOYEE_ADVANCES, "1230");
+}
+
+/**
  * Phase 41 self-heal: input VAT on expenses/supplier payables debits this
  * account. Scoped to those two posting hooks only, same reasoning as
  * ensureFixedAssetAccounts — no other event type ever needs it.

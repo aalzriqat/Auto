@@ -218,6 +218,11 @@ export const commonEn = {
   CommissionUnpaidSuccess: "Commission marked as unpaid.",
   CommissionPaymentFailed: "Failed to update commission payment.",
   NoCommissionRecords: "No commission records found. Set a commission rate on team members to start tracking.",
+  MissingPurchaseCost: "No purchase cost",
+  MissingPurchaseCostHint: "This vehicle has no recorded purchase cost, so no commission could be calculated. Set the purchase cost on the vehicle, then set the commission.",
+  RecalculateCommission: "Recalculate",
+  RecalculateCommissionHint: "The vehicle's cost has been recorded since this sale completed. Recalculate to compute and book the commission.",
+  CommissionRecalculated: "Commission recalculated.",
 
   // Onboarding wizard
   WelcomeToAutoFlow: "Welcome to AutoFlow",
@@ -1028,6 +1033,11 @@ export const commonAr = {
   CommissionUnpaidSuccess: "تم إرجاع العمولة إلى غير مدفوعة.",
   CommissionPaymentFailed: "فشل تحديث دفعة العمولة.",
   NoCommissionRecords: "لم يتم العثور على سجلات عمولة. قم بتعيين نسبة عمولة لأعضاء الفريق للبدء في التتبع.",
+  MissingPurchaseCost: "لا توجد تكلفة شراء",
+  MissingPurchaseCostHint: "لا توجد تكلفة شراء مسجلة لهذه المركبة، لذلك تعذّر احتساب أي عمولة. أدخل تكلفة الشراء على المركبة ثم عيّن العمولة.",
+  RecalculateCommission: "إعادة الاحتساب",
+  RecalculateCommissionHint: "تم تسجيل تكلفة المركبة بعد إتمام هذا البيع. أعد الاحتساب لاحتساب العمولة وقيدها.",
+  CommissionRecalculated: "تمت إعادة احتساب العمولة.",
 
   // Onboarding wizard
   WelcomeToAutoFlow: "مرحباً بك في أوتو فلو",
