@@ -1087,6 +1087,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "شغّل رواتب شهرية تدفع الرواتب الثابتة وعمولات المبيعات معاً، وسجّل سُلَف الموظفين (سلفة) التي تُسترد من كشوف الرواتب اللاحقة. تُجمّد المبالغ ويُعاد التحقق منها عند الاعتماد، وتُعامل سُلَف الرواتب كأصل قابل للاسترداد (وليست مصروفاً)، وتُرحّل كل خطوة إلى الفترة المحاسبية الصحيحة.",
     publishedAt: releaseAt(2026, 7, 20, 1),
   },
+  {
+    type: "IMPROVEMENT",
+    titleEn: "Clearer message when you don't have access",
+    titleAr: "رسالة أوضح عند عدم امتلاكك الصلاحية",
+    descriptionEn: "When you open a page or try an action your role doesn't allow, AutoFlow now shows a calm \"Access Not Allowed\" notice — with a hint to contact your manager or administrator — instead of a red error or silently sending you back to the dashboard.",
+    descriptionAr: "عند فتح صفحة أو محاولة إجراء لا يسمح به دورك، يعرض أوتوفلو الآن إشعاراً هادئاً بعنوان \"الوصول غير مسموح\" — مع تلميح للتواصل مع مديرك أو المسؤول — بدلاً من رسالة خطأ حمراء أو إعادتك إلى لوحة التحكم بصمت.",
+    publishedAt: releaseAt(2026, 7, 20, 2),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

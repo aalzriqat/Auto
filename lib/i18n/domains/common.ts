@@ -804,6 +804,13 @@ export const commonEn = {
   UpdateBannerWarning: "Don't update now if you have unsaved work in progress — it will be lost.",
   UpdateBannerButton: "Update",
   UpdateBannerDismiss: "Dismiss",
+
+  // Access restriction (not an error — a calm permission notice)
+  AccessNotAllowedTitle: "Access Not Allowed",
+  AccessNotAllowedPageDescription: "You do not have permission to view this page or perform this action.",
+  AccessNotAllowedActionDescription: "You do not have permission to perform this action.",
+  AccessNotAllowedHint: "Please contact your manager or administrator if you believe this is a mistake.",
+  AccessRestricted: "Access restricted",
 };
 
 export const commonAr = {
@@ -1612,4 +1619,11 @@ export const commonAr = {
   UpdateBannerWarning: "لا تقم بالتحديث الآن إذا كان لديك عمل غير محفوظ قيد التنفيذ — سيتم فقدانه.",
   UpdateBannerButton: "تحديث",
   UpdateBannerDismiss: "تجاهل",
+
+  // Access restriction (not an error — a calm permission notice)
+  AccessNotAllowedTitle: "الوصول غير مسموح",
+  AccessNotAllowedPageDescription: "ليس لديك الصلاحية لعرض هذه الصفحة أو تنفيذ هذا الإجراء.",
+  AccessNotAllowedActionDescription: "ليس لديك الصلاحية لتنفيذ هذا الإجراء.",
+  AccessNotAllowedHint: "يرجى التواصل مع مديرك أو المسؤول إذا كنت تعتقد أن هذا خطأ.",
+  AccessRestricted: "الوصول مقيّد",
 };

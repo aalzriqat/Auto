@@ -3,6 +3,18 @@
 import { useTheme } from "next-themes"
 import { Toaster as Sonner, toast as originalToast } from "sonner"
 import * as Sentry from "@sentry/nextjs"
+import { ShieldAlert } from "lucide-react"
+
+// Translation keys (from the friendly-error dictionary below) that represent an
+// access / permission restriction rather than a genuine failure. These get a
+// calm, informational toast instead of a red destructive one.
+const ACCESS_ERROR_KEYS = new Set([
+  "unauthenticated",
+  "unauthorized",
+  "forbidden",
+  "access denied",
+  "permission denied",
+])
 
 type ToasterProps = React.ComponentProps<typeof Sonner>
 
@@ -191,12 +203,22 @@ const Toaster = ({ ...props }: ToasterProps) => {
   )
 }
 
-// Global user-friendly error formatting utility
-function formatFriendlyError(error: unknown, locale: string): string {
+// Global user-friendly error formatting utility.
+// Returns the friendly message plus whether it is an access/permission
+// restriction, so the caller can present it calmly rather than as an error.
+interface FriendlyError {
+  message: string;
+  isAccess: boolean;
+}
+
+function formatFriendlyError(error: unknown, locale: string): FriendlyError {
   if (!error) {
-    return locale === "ar" 
-      ? "حدث خطأ غير متوقع. يرجى المحاولة مرة أخرى." 
-      : "An unexpected error occurred. Please try again.";
+    return {
+      message: locale === "ar"
+        ? "حدث خطأ غير متوقع. يرجى المحاولة مرة أخرى."
+        : "An unexpected error occurred. Please try again.",
+      isAccess: false,
+    };
   }
 
   let rawMessage = "";
@@ -426,38 +448,50 @@ function formatFriendlyError(error: unknown, locale: string): string {
     lowerMessage === "server error" ||
     lowerMessage === "[convex]"
   ) {
-    return locale === "ar"
-      ? "حدث خطأ أثناء معالجة الطلب. يرجى المحاولة مرة أخرى."
-      : "An error occurred while processing your request. Please try again.";
+    return {
+      message: locale === "ar"
+        ? "حدث خطأ أثناء معالجة الطلب. يرجى المحاولة مرة أخرى."
+        : "An error occurred while processing your request. Please try again.",
+      isAccess: false,
+    };
   }
 
   const accessError = formatAccessError(rawMessage, lowerMessage, locale);
   if (accessError) {
-    return accessError;
+    return { message: accessError, isAccess: true };
   }
 
   // Search for partial matches
   for (const [key, value] of Object.entries(enTranslations)) {
     if (lowerMessage.includes(key)) {
-      return locale === "ar" ? (arTranslations[key] ?? value) : value;
+      return {
+        message: locale === "ar" ? (arTranslations[key] ?? value) : value,
+        isAccess: ACCESS_ERROR_KEYS.has(key),
+      };
     }
   }
 
   // Generic formatting for database and account framework exceptions
   if (lowerMessage.includes("clerk") || lowerMessage.includes("form_data_missing") || lowerMessage.includes("last_name")) {
-    return locale === "ar" 
-      ? "فشل تسجيل البيانات في نظام الحسابات. يرجى التأكد من ملء جميع الحقول المطلوبة بشكل صحيح." 
-      : "Account registry error. Please ensure all required form fields are completed correctly.";
+    return {
+      message: locale === "ar"
+        ? "فشل تسجيل البيانات في نظام الحسابات. يرجى التأكد من ملء جميع الحقول المطلوبة بشكل صحيح."
+        : "Account registry error. Please ensure all required form fields are completed correctly.",
+      isAccess: false,
+    };
   }
 
   // Return formatted raw message if not developer-heavy, otherwise generic
   if (rawMessage.length > 0 && !lowerMessage.includes("error:") && !lowerMessage.includes("uncaught") && !lowerMessage.includes("exception")) {
-    return rawMessage;
+    return { message: rawMessage, isAccess: false };
   }
 
-  return locale === "ar"
-    ? "حدث خطأ أثناء معالجة الطلب. يرجى مراجعة المدخلات والمحاولة مرة أخرى."
-    : "An error occurred while processing your request. Please review your inputs and try again.";
+  return {
+    message: locale === "ar"
+      ? "حدث خطأ أثناء معالجة الطلب. يرجى مراجعة المدخلات والمحاولة مرة أخرى."
+      : "An error occurred while processing your request. Please review your inputs and try again.",
+    isAccess: false,
+  };
 }
 
 // Custom wrapped toast object with user-friendly formatting for error
@@ -470,7 +504,20 @@ export const toast = {
     const locale = typeof window !== "undefined"
       ? (localStorage.getItem("autoflow-locale") || "en")
       : "en";
-    const friendlyMessage = formatFriendlyError(message, locale);
+    const { message: friendlyMessage, isAccess } = formatFriendlyError(message, locale);
+
+    // Access / permission restrictions are an expected state, not a failure —
+    // surface them as a calm, informational toast with a shield icon instead
+    // of a red destructive one.
+    if (isAccess) {
+      const title = locale === "ar" ? "الوصول مقيّد" : "Access restricted";
+      return originalToast(title, {
+        description: friendlyMessage,
+        icon: <ShieldAlert className="h-4 w-4 text-primary" />,
+        ...options,
+      });
+    }
+
     return originalToast.error(friendlyMessage, options);
   }
 }
