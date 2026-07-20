@@ -2404,6 +2404,9 @@ export default defineSchema({
     grossMinor: v.number(),
     netMinor: v.number(),
     currency: v.string(),
+    // Unpaid commission sales this payslip settles (Option A: commissions are
+    // paid through payroll). Marked paid when the run is paid.
+    commissionSaleIds: v.array(v.id("sales")),
     createdAt: v.number(),
   })
     .index("by_org", ["orgId"])

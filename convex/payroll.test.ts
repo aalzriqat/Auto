@@ -176,6 +176,94 @@ describe("payroll: employee advances (سلفة)", () => {
   });
 });
 
+describe("payroll: monthly run (Option A — commissions paid through payroll)", () => {
+  test("create → approve → pay settles salary, commission, and recovers an advance", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "run");
+
+    // Salary 500, an outstanding advance 50, and a completed unpaid commission 100.
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
+    await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 50 });
+    const saleId = await t.run(async (ctx) => {
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, vin: "VIN-RUN", make: "Kia", model: "K5", year: 2024, color: "White",
+        fuelType: "Gasoline", transmission: "Automatic", mileage: 10, sellingPrice: 20000, status: "SOLD",
+      });
+      const customerId = await ctx.db.insert("customers", {
+        orgId, firstName: "Jane", lastName: "Buyer", email: "buyer.run@example.com",
+      });
+      return await ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId,
+        salePrice: 20000, saleDate: Date.now(), status: "COMPLETED", commissionAmount: 100,
+      });
+    });
+
+    const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
+
+    const items = await asAdmin.query(api.payroll.listRunItems, { orgId, runId });
+    expect(items).toHaveLength(1);
+    const item = items[0];
+    expect(item.baseSalaryMinor).toBe(500000);
+    expect(item.commissionMinor).toBe(100000);
+    expect(item.advanceDeductionMinor).toBe(50000); // whole outstanding advance
+    expect(item.grossMinor).toBe(600000);
+    expect(item.netMinor).toBe(550000);
+
+    await asAdmin.mutation(api.payroll.approveRun, { orgId, runId });
+    // Salary accrual + commission accrual must exist before payment.
+    const accruals = await t.run(async (ctx) => {
+      const salary = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", `payroll_accrued_${item._id}`)
+        )
+        .first();
+      const commission = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first();
+      return { salary, commission };
+    });
+    expect(accruals.salary).not.toBeNull();
+    expect(accruals.commission).not.toBeNull();
+
+    await asAdmin.mutation(api.payroll.payRun, { orgId, runId, method: "CASH" });
+
+    // Run paid, advance recovered, commission marked paid, payslip payment posted.
+    const after = await t.run(async (ctx) => {
+      const run = await ctx.db.get(runId);
+      const sale = await ctx.db.get(saleId);
+      const advances = await ctx.db
+        .query("employeeAdvances")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+        .collect();
+      const paidEvt = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", `payroll_paid_${item._id}`)
+        )
+        .first();
+      return { run, sale, advances, paidEvt };
+    });
+    expect(after.run?.status).toBe("PAID");
+    expect(after.sale?.commissionPaidAt).not.toBeNull();
+    expect(after.advances[0].status).toBe("RECOVERED");
+    expect(after.paidEvt).not.toBeNull();
+  });
+
+  test("a second run for the same period is rejected", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "dup");
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 300 });
+    await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
+    await expect(
+      asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 })
+    ).rejects.toThrow(/already exists/i);
+  });
+});
+
 describe("payroll: employee compensation", () => {
   test("setting a salary supersedes the previous active row", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.ts"));
