@@ -2313,6 +2313,166 @@ export default defineSchema({
     .index("by_org_vehicle", ["orgId", "vehicleId"])
     .index("by_org_status", ["orgId", "status"]),
 
+  // ─── Payroll ──────────────────────────────────────────────────────────────
+  // Fixed monthly salary per team member. History is kept by superseding rows
+  // (active:false on the old one) rather than editing in place.
+  employeeCompensation: defineTable({
+    orgId: v.id("organizations"),
+    userId: v.id("users"),
+    monthlySalaryMinor: v.number(),
+    currency: v.string(),
+    effectiveFrom: v.number(),
+    active: v.boolean(),
+    createdAt: v.number(),
+    createdBy: v.optional(v.id("users")),
+    updatedAt: v.number(),
+    updatedBy: v.optional(v.id("users")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_user", ["orgId", "userId"])
+    .index("by_org_user_active", ["orgId", "userId", "active"]),
+
+  // Salary advances (سلفة) — a recoverable ASSET (Employee Advances), NOT an
+  // expense, until offset against a payslip or repaid.
+  employeeAdvances: defineTable({
+    orgId: v.id("organizations"),
+    userId: v.id("users"),
+    amountMinor: v.number(),
+    recoveredMinor: v.number(),
+    currency: v.string(),
+    date: v.number(),
+    method: v.optional(
+      v.union(
+        v.literal("CASH"),
+        v.literal("BANK_TRANSFER"),
+        v.literal("CHEQUE"),
+        v.literal("CARD"),
+      ),
+    ),
+    status: v.union(
+      v.literal("OUTSTANDING"),
+      v.literal("RECOVERED"),
+      v.literal("WRITTEN_OFF"),
+    ),
+    note: v.optional(v.string()),
+    createdBy: v.optional(v.id("users")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    isDeleted: v.optional(v.boolean()),
+    deletedAt: v.optional(v.number()),
+    deletedBy: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_user", ["orgId", "userId"])
+    .index("by_org_status", ["orgId", "status"]),
+
+  // One immutable row per advance recovery event (direct repayment or payroll
+  // deduction). Each carries its own GL identity so partial repayments post
+  // distinct EMPLOYEE_ADVANCE_RECOVERED entries and the Employee Advances asset
+  // is credited exactly once per repayment.
+  employeeAdvanceRecoveries: defineTable({
+    orgId: v.id("organizations"),
+    advanceId: v.id("employeeAdvances"),
+    userId: v.id("users"),
+    amountMinor: v.number(),
+    currency: v.string(),
+    method: v.optional(
+      v.union(
+        v.literal("CASH"),
+        v.literal("BANK_TRANSFER"),
+        v.literal("CHEQUE"),
+        v.literal("CARD"),
+      ),
+    ),
+    // "DIRECT" = repaid outside payroll; "PAYROLL" = deducted on a payslip.
+    source: v.union(v.literal("DIRECT"), v.literal("PAYROLL")),
+    payrollItemId: v.optional(v.id("payrollItems")),
+    recoveredAt: v.number(),
+    recoveredBy: v.id("users"),
+    // Fingerprint for direct-repayment idempotency (advance+amount+method); a
+    // retried recoverAdvance with the same key must not book a second recovery.
+    idempotencyKey: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_advance", ["advanceId"])
+    // Lets the outbox find every advance a payslip recovered, so a queued
+    // PAYROLL_PAID can be held until each advance issuance has posted.
+    .index("by_payroll_item", ["payrollItemId"])
+    .index("by_org_idempotency", ["orgId", "idempotencyKey"]),
+
+  // A monthly payroll run and its per-employee payslip items.
+  payrollRuns: defineTable({
+    orgId: v.id("organizations"),
+    periodYear: v.number(),
+    periodMonth: v.number(), // 1-12
+    currency: v.string(),
+    status: v.union(
+      v.literal("DRAFT"),
+      v.literal("APPROVED"),
+      // Was APPROVED, but a pay-time recompute found the payable now differs
+      // materially from what was approved (a new advance, a directly-paid or
+      // cancelled commission, a directly-repaid advance). Payment is blocked
+      // until it is re-approved — the run re-derives and re-freezes its totals.
+      v.literal("NEEDS_REAPPROVAL"),
+      v.literal("PAID"),
+      v.literal("CANCELLED"),
+    ),
+    totalGrossMinor: v.number(),
+    totalNetMinor: v.number(),
+    // Why the run fell back to NEEDS_REAPPROVAL (shown to the approver).
+    reapprovalReason: v.optional(v.string()),
+    // Accounting date the salary/commission accrual is recognized on: the last
+    // moment of the payroll period (UTC), so a retroactive run books its expense
+    // in the month worked, not the month it was approved.
+    accountingDate: v.optional(v.number()),
+    // Immutable snapshot of gross/net at approval, so a pay-time recompute (a
+    // commission paid directly, an advance repaid, a sale cancelled since
+    // approval) leaves an audit trail instead of silently overwriting.
+    approvedGrossMinor: v.optional(v.number()),
+    approvedNetMinor: v.optional(v.number()),
+    // The method the whole run was paid with (per-employee split not supported).
+    paidMethod: v.optional(v.string()),
+    createdBy: v.optional(v.id("users")),
+    createdAt: v.number(),
+    approvedBy: v.optional(v.id("users")),
+    approvedAt: v.optional(v.number()),
+    paidBy: v.optional(v.id("users")),
+    paidAt: v.optional(v.number()),
+    cancelledBy: v.optional(v.id("users")),
+    cancelledAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_period", ["orgId", "periodYear", "periodMonth"])
+    .index("by_org_status", ["orgId", "status"]),
+
+  payrollItems: defineTable({
+    orgId: v.id("organizations"),
+    runId: v.id("payrollRuns"),
+    userId: v.id("users"),
+    baseSalaryMinor: v.number(),
+    commissionMinor: v.number(),
+    otherEarningsMinor: v.number(),
+    advanceDeductionMinor: v.number(),
+    otherDeductionMinor: v.number(),
+    grossMinor: v.number(),
+    netMinor: v.number(),
+    // Immutable snapshot of gross/net frozen at (re)approval. grossMinor/netMinor
+    // above are overwritten with the actually-paid figures at payment; these are
+    // what the approver authorized and are what a pay-time drift check compares
+    // against to decide whether the run needs re-approval.
+    approvedGrossMinor: v.optional(v.number()),
+    approvedNetMinor: v.optional(v.number()),
+    currency: v.string(),
+    // Unpaid commission sales this payslip settles (Option A: commissions are
+    // paid through payroll). Marked paid when the run is paid.
+    commissionSaleIds: v.array(v.id("sales")),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_run", ["runId"])
+    .index("by_org_user", ["orgId", "userId"]),
+
   wizardDrafts: defineTable({
     orgId: v.id("organizations"),
     userId: v.id("users"),

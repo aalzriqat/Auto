@@ -1,5 +1,6 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, MutationCtx } from "./_generated/server";
+import { Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -8,12 +9,13 @@ import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
 import { CreateDraftSaleSchema, CreateSaleSchema, UpdateSaleSchema } from "./validations/sales";
 import { restoreVehicleToAvailable } from "./utils/saleHelpers";
-import { completeExistingSale, completeSale, completeSalesForLineItems, createDraftSale } from "./utils/saleCompletion";
+import { vehicleHasCostBasis } from "./utils/vehicleCost";
+import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
-import { getOrgCurrency, hookCommissionPaid, hookCommissionReversed, hookSaleCancelled } from "./accounting/workflowHooks";
+import { getOrgCurrency, hookCommissionAccrued, hookCommissionPaid, hookCommissionReversed, hookSaleCancelled } from "./accounting/workflowHooks";
 import { toMinorUnits } from "./utils/money";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 import { fromMinorUnits } from "./utils/money";
@@ -657,19 +659,71 @@ export const listCommissions = query({
         .collect();
     }
 
-    // Only include sales that have a commission amount set
-    const withCommission = sales.filter(s => s.commissionAmount != null && s.commissionAmount > 0);
+    // In an automatic mode, a completed sale whose vehicle has no recorded cost
+    // basis earns 0 commission (see C3 in saleCompletion). Surface those rows
+    // too — flagged — so a manager notices the missing cost and can fix it.
+    const orgSettings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+    const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
+    const isAutoMode = mode === "AUTO_MEMBER" || mode === "AUTO_TIERS";
 
-    // Apply paid/unpaid filter
+    // Cheap in-memory narrowing before any vehicle fetch: a sale can only make
+    // the final list if it already carries a commission, or (auto mode) it's a
+    // completed sale that might be flagged for a missing cost basis. Skip the
+    // ctx.db.get for everything else (drafts, cancelled, zero-commission).
+    const candidates = sales.filter(
+      (sale) =>
+        (sale.commissionAmount != null && sale.commissionAmount > 0) ||
+        (isAutoMode && sale.status === "COMPLETED" && sale.commissionAmount == null)
+    );
+
+    const hydrated = await Promise.all(
+      candidates.map(async (sale) => {
+        const vehicle = await ctx.db.get(sale.vehicleId);
+        // Only ever flag a sale whose commission was NEVER computed
+        // (commissionAmount == null). A sale that already carries a real
+        // commission — even if the vehicle's cost is later cleared — keeps its
+        // amount and its Pay action and must not be pulled back into remediation.
+        const missingPurchaseCost =
+          isAutoMode &&
+          sale.status === "COMPLETED" &&
+          sale.commissionAmount == null &&
+          (!vehicle || !vehicleHasCostBasis(vehicle));
+        // The follow-up state to missingPurchaseCost: the cost has since been
+        // fixed on the vehicle, but this sale completed while it was missing so
+        // its commission was never computed (commissionAmount == null — AUTO
+        // completion always stores a number, even 0, when a cost basis exists).
+        // Surfaced so a manager can run recalculateCommission on it.
+        const needsRecalculation =
+          isAutoMode &&
+          sale.status === "COMPLETED" &&
+          sale.commissionPaidAt == null &&
+          sale.commissionAmount == null &&
+          vehicle != null &&
+          vehicleHasCostBasis(vehicle);
+        return { sale, vehicle, missingPurchaseCost, needsRecalculation };
+      })
+    );
+
+    // Include sales with a real commission, plus the flagged fix-up rows.
+    const withCommission = hydrated.filter(
+      (h) =>
+        (h.sale.commissionAmount != null && h.sale.commissionAmount > 0) ||
+        h.missingPurchaseCost ||
+        h.needsRecalculation
+    );
+
+    // Apply paid/unpaid filter (missing-cost rows are unpaid by definition)
     const filtered = args.paidStatus === "paid"
-      ? withCommission.filter(s => s.commissionPaidAt != null)
+      ? withCommission.filter((h) => h.sale.commissionPaidAt != null)
       : args.paidStatus === "unpaid"
-        ? withCommission.filter(s => s.commissionPaidAt == null)
+        ? withCommission.filter((h) => h.sale.commissionPaidAt == null)
         : withCommission;
 
     return await Promise.all(
-      filtered.map(async (sale) => {
-        const vehicle = await ctx.db.get(sale.vehicleId);
+      filtered.map(async ({ sale, vehicle, missingPurchaseCost, needsRecalculation }) => {
         const customer = await ctx.db.get(sale.customerId);
         const salesperson = await ctx.db.get(sale.salespersonId);
         const paidBy = sale.commissionPaidBy ? await ctx.db.get(sale.commissionPaidBy) : null;
@@ -679,11 +733,50 @@ export const listCommissions = query({
           customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
           salespersonName: salesperson?.name ?? salesperson?.email ?? "Unknown",
           paidByName: paidBy?.name ?? paidBy?.email ?? null,
+          missingPurchaseCost,
+          needsRecalculation,
         };
       })
     );
   },
 });
+
+/**
+ * True once this sale's commission has been recognized in the ledger — either a
+ * posted COMMISSION_ACCRUED journal entry or a still-queued accrual in the
+ * outbox. AUTO modes accrue at completion; MANUAL accrues at payment. Used to
+ * keep a MANUAL amount editable only while it hasn't yet hit the books.
+ */
+async function hasCommissionAccrual(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  saleId: Id<"sales">
+): Promise<boolean> {
+  // Only an ACTIVE accrual locks the amount. A REVERSED event means the
+  // accrual was backed out (e.g. the sale was voided) — the error message's
+  // "reverse it before changing the amount" promise must actually unlock then.
+  const posted = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", orgId).eq("sourceType", "sales").eq("sourceId", `commission_${saleId}`)
+    )
+    .filter((q) =>
+      q.and(q.eq(q.field("eventType"), "COMMISSION_ACCRUED"), q.neq(q.field("status"), "REVERSED"))
+    )
+    .first();
+  if (posted) return true;
+  // Outbox rows persist after being processed (status POSTED) — a processed
+  // row's accrual is already covered by the accountingEvents check above, so
+  // only a still-queued (PENDING/FAILED) row counts as an accrual here.
+  const pending = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+    )
+    .filter((q) => q.neq(q.field("status"), "POSTED"))
+    .first();
+  return pending !== null;
+}
 
 export const markCommissionPaid = mutation({
   args: {
@@ -728,11 +821,25 @@ export const markCommissionPaid = mutation({
           commissionPaymentIdempotencyKey: args.idempotencyKey,
         });
         const currency = await getOrgCurrency(ctx, args.orgId);
+        const amountMinor = toMinorUnits(sale.commissionAmount, currency);
+        // Recognize the expense before paying it. AUTO modes already accrued at
+        // completion (this is an idempotent no-op — same idempotency key);
+        // MANUAL accrues here for the first time, so the payment always clears a
+        // real Commission Payable instead of pushing it negative (fixes C1).
+        await hookCommissionAccrued(ctx, {
+          orgId: args.orgId,
+          saleId: args.saleId,
+          salespersonId: sale.salespersonId,
+          amountMinor,
+          currency,
+          actorId: user._id,
+          occurredAt: now,
+        });
         await hookCommissionPaid(ctx, {
           orgId: args.orgId,
           saleId: args.saleId,
           salespersonId: sale.salespersonId,
-          amountMinor: toMinorUnits(sale.commissionAmount, currency),
+          amountMinor,
           currency,
           paymentMethod,
           actorId: user._id,
@@ -784,18 +891,135 @@ export const setCommissionAmount = mutation({
     if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
       throw new ConvexError("Sale not found.");
     }
-    if (sale.status === "COMPLETED") {
+    if (sale.commissionPaidAt != null) {
+      throwAppError(AppErrorCode.VALIDATION_FAILED, "Paid commission amounts cannot be changed.");
+    }
+
+    const orgSettings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+    const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
+
+    // AUTO-mode commissions are derived and accrued at completion, so they stay
+    // locked afterwards. MANUAL commissions are entered by hand and accrue only
+    // at payment, so they remain editable on a completed sale until they're
+    // paid or otherwise recorded in the ledger (fixes C1/C2 for MANUAL).
+    if (sale.status === "COMPLETED" && mode !== "MANUAL") {
       throwAppError(
         AppErrorCode.SALE_ALREADY_COMPLETED,
         "Completed sale commission amounts are locked. Use a correction workflow."
       );
     }
-    if (sale.commissionPaidAt != null) {
-      throwAppError(AppErrorCode.VALIDATION_FAILED, "Paid commission amounts cannot be changed.");
+    if (await hasCommissionAccrual(ctx, args.orgId, args.saleId)) {
+      throwAppError(
+        AppErrorCode.VALIDATION_FAILED,
+        "This commission is already recorded in the ledger. Reverse it before changing the amount."
+      );
     }
 
     await ctx.db.patch(args.saleId, {
       commissionAmount: Math.max(0, args.commissionAmount),
     });
+  },
+});
+
+/**
+ * The remediation path for C3: a sale that completed while its vehicle had no
+ * recorded cost basis earned no commission (commissionAmount stayed null and
+ * nothing accrued). Once a manager fixes the vehicle's cost, this recomputes
+ * the commission under the CURRENT auto rules and posts the accrual the
+ * completion skipped. One-shot by design: once an amount exists or an accrual
+ * is on the books, changes go through the normal locked/correction flow.
+ */
+export const recalculateCommission = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    saleId: v.id("sales"),
+  },
+  handler: async (ctx, args) => {
+    try {
+      const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_COMMISSIONS]);
+
+      const sale = await ctx.db.get(args.saleId);
+      if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
+        throw new ConvexError("Sale not found.");
+      }
+      if (sale.status !== "COMPLETED") {
+        throwAppError(AppErrorCode.VALIDATION_FAILED, "Only completed sales can be recalculated.");
+      }
+      if (sale.commissionPaidAt != null) {
+        throwAppError(AppErrorCode.VALIDATION_FAILED, "Paid commissions cannot be recalculated.");
+      }
+      if (sale.commissionAmount != null) {
+        throwAppError(
+          AppErrorCode.VALIDATION_FAILED,
+          "This sale already has a commission amount. Amount changes go through the correction workflow."
+        );
+      }
+
+      const orgSettings = await ctx.db
+        .query("orgSettings")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .unique();
+      const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
+      if (mode !== "AUTO_MEMBER" && mode !== "AUTO_TIERS") {
+        throwAppError(
+          AppErrorCode.VALIDATION_FAILED,
+          "Recalculation only applies to automatic commission modes. Set the amount directly in manual mode."
+        );
+      }
+      if (await hasCommissionAccrual(ctx, args.orgId, args.saleId)) {
+        throwAppError(
+          AppErrorCode.VALIDATION_FAILED,
+          "This commission is already recorded in the ledger."
+        );
+      }
+
+      const vehicle = await ctx.db.get(sale.vehicleId);
+      if (!vehicle || !vehicleHasCostBasis(vehicle)) {
+        throwAppError(
+          AppErrorCode.VALIDATION_FAILED,
+          "The vehicle still has no recorded cost. Set its purchase cost first."
+        );
+      }
+
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", sale.salespersonId))
+        .unique();
+
+      const amount = await computeAutoCommissionAmount(ctx, {
+        salePrice: sale.salePrice,
+        vehicle,
+        commissionMode: mode,
+        memberCommissionRate: membership?.commissionRate,
+        commissionTiers: orgSettings?.commissionTiers ?? [],
+      });
+      // Cost basis was just verified, so the calculator always returns a number.
+      const commissionAmount = amount ?? 0;
+      await ctx.db.patch(args.saleId, { commissionAmount });
+
+      if (commissionAmount > 0) {
+        const currency = await getOrgCurrency(ctx, args.orgId);
+        const now = Date.now();
+        await hookCommissionAccrued(ctx, {
+          orgId: args.orgId,
+          saleId: args.saleId,
+          salespersonId: sale.salespersonId,
+          amountMinor: toMinorUnits(commissionAmount, currency),
+          currency,
+          actorId: user._id,
+          occurredAt: now,
+        });
+      }
+      return { commissionAmount };
+    } catch (error) {
+      // Routine validation rejections are ConvexErrors — re-throw them without
+      // logging so only genuinely unexpected failures hit error monitoring.
+      if (error instanceof ConvexError) throw error;
+      console.error("sales.recalculateCommission failed", error);
+      throw new ConvexError("An unexpected error occurred. Please try again later.");
+    }
   },
 });

@@ -15,7 +15,7 @@ import { postAccountingEvent, PostCommand } from "./postingEngine";
 import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
-import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount } from "../chartOfAccounts";
+import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
   enqueuePendingReversal,
@@ -40,11 +40,45 @@ async function shouldPost(ctx: MutationCtx, orgId: Id<"organizations">, date: nu
 }
 
 /**
+ * Whether a domain event dated `date` would post immediately (chart ready + an
+ * open period) rather than queue to the outbox. Payroll payment uses this to
+ * avoid the "payment posts now but its accrual is still queued for a closed
+ * period" negative-payable window: only enforce accrual-before-payment when the
+ * payment itself would actually hit the ledger.
+ */
+export async function isPostableNow(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  date: number
+): Promise<boolean> {
+  return shouldPost(ctx, orgId, date);
+}
+
+/**
  * Posts the event now if the chart + an open period exist, otherwise enqueues it
  * to the durable outbox for retry. This is the single choke point that replaced
  * the previous "silently return if not postable" behavior.
  */
 async function postOrEnqueue(ctx: MutationCtx, cmd: PostCommand): Promise<void> {
+  // Period integrity: if this exact domain event is already captured but not yet
+  // posted in the outbox, it will post with ITS ORIGINAL accounting date once the
+  // period opens. A second hook call for the same event (e.g. a commission
+  // accrued at sale completion into a closed month, then re-hooked at payroll
+  // approval with the period-end date) must NOT create a replacement dated to a
+  // different period — that would recognize the expense in the wrong month while
+  // the queued original later self-dedupes away. Treat the second call as a
+  // no-op; the queued original is the source of truth. (postAccountingEvent only
+  // dedupes against POSTED events, so this pending-side guard is the only thing
+  // that prevents the cross-period duplicate.)
+  const queued = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", cmd.orgId).eq("idempotencyKey", cmd.idempotencyKey)
+    )
+    .filter((q) => q.and(q.eq(q.field("kind"), "POST"), q.neq(q.field("status"), "POSTED")))
+    .first();
+  if (queued) return;
+
   // Self-heal: make sure the GENERAL_EXPENSE system account is mapped for this
   // org before the engine tries to resolve it (older charts lack the key).
   // Centralized here (not just in hookExpensePosted) because other posting
@@ -732,6 +766,165 @@ function makeCommissionHook(
 
 export const hookCommissionAccrued = makeCommissionHook("COMMISSION_ACCRUED", "commission", "commission_accrued");
 export const hookCommissionPaid = makeCommissionHook("COMMISSION_PAID", "commission_paid", "commission_paid");
+
+// ─── Payroll hooks ─────────────────────────────────────────────────────────────
+// Scoped self-heal (like ensureVatReceivableAccountIfChartReady): only payroll
+// events touch the salaries/employee-advance accounts, so don't add them to the
+// shared postOrEnqueue choke point.
+async function ensurePayrollAccountsIfChartReady(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  if (await isChartInitialized(ctx, orgId)) {
+    await ensurePayrollAccounts(ctx, orgId, actorId);
+  }
+}
+
+/** Advance issued to an employee: Dr Employee Advances (asset) / Cr cash. */
+export async function hookEmployeeAdvancePaid(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    advanceId: Id<"employeeAdvances">;
+    userId: Id<"users">;
+    amountMinor: number;
+    currency: string;
+    paymentMethod?: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await ensurePayrollAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "EMPLOYEE_ADVANCE_PAID",
+    sourceType: "employeeAdvances",
+    sourceId: args.advanceId.toString(),
+    idempotencyKey: `employee_advance_paid_${args.advanceId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      advanceId: args.advanceId.toString(),
+      userId: args.userId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+    },
+  });
+}
+
+/** Advance repaid directly (outside payroll): Dr cash / Cr Employee Advances. */
+export async function hookEmployeeAdvanceRecovered(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    advanceId: Id<"employeeAdvances">;
+    // Unique per recovery event so partial repayments each post their own GL
+    // entry. Keying idempotency on advanceId alone would silently drop every
+    // recovery after the first, under-crediting Employee Advances.
+    recoveryId: Id<"employeeAdvanceRecoveries">;
+    userId: Id<"users">;
+    amountMinor: number;
+    currency: string;
+    paymentMethod?: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await ensurePayrollAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "EMPLOYEE_ADVANCE_RECOVERED",
+    sourceType: "employeeAdvances",
+    sourceId: `recovery_${args.recoveryId}`,
+    idempotencyKey: `employee_advance_recovered_${args.recoveryId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      advanceId: args.advanceId.toString(),
+      userId: args.userId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+    },
+  });
+}
+
+/** Salary accrued for one employee on a run: Dr Salaries Expense / Cr Salaries Payable. */
+export async function hookPayrollAccrued(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    itemId: Id<"payrollItems">;
+    runId: Id<"payrollRuns">;
+    userId: Id<"users">;
+    amountMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await ensurePayrollAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "PAYROLL_ACCRUED",
+    sourceType: "payrollItems",
+    sourceId: `accrued_${args.itemId}`,
+    idempotencyKey: `payroll_accrued_${args.itemId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      runId: args.runId.toString(),
+      userId: args.userId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+    },
+  });
+}
+
+/** One employee's payslip payment (clears salary + commission payables, recovers advance, pays net). */
+export async function hookPayrollPaid(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    itemId: Id<"payrollItems">;
+    userId: Id<"users">;
+    salaryMinor: number;
+    commissionMinor: number;
+    advanceRecoveredMinor: number;
+    netMinor: number;
+    currency: string;
+    paymentMethod?: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await ensurePayrollAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "PAYROLL_PAID",
+    sourceType: "payrollItems",
+    sourceId: `paid_${args.itemId}`,
+    idempotencyKey: `payroll_paid_${args.itemId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      itemId: args.itemId.toString(),
+      userId: args.userId.toString(),
+      salaryMinor: args.salaryMinor,
+      commissionMinor: args.commissionMinor,
+      advanceRecoveredMinor: args.advanceRecoveredMinor,
+      netMinor: args.netMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+    },
+  });
+}
 
 type ReversalHookArgs<TSourceId> = {
   orgId: Id<"organizations">;

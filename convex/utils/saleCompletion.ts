@@ -2,7 +2,7 @@ import { ConvexError } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
 import { notifyManagers, getActorName } from "./notifications";
-import { calculateCommissionFromTiers } from "./commission";
+import { calculateCommissionFromTiers, CommissionTier } from "./commission";
 import {
   markVehicleAsSold,
   createSaleTransaction,
@@ -19,7 +19,7 @@ import {
 } from "../accounting/workflowHooks";
 import { computeResoldProductMargin } from "../accounting/postingRules";
 import { toMinorUnits } from "./money";
-import { computeVehicleCapitalizedCost } from "./vehicleCost";
+import { computeVehicleCapitalizedCost, vehicleHasCostBasis } from "./vehicleCost";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
@@ -57,6 +57,10 @@ type SaleCompletionArgs = {
   gapTermMonths?: number;
   idempotencyKey?: string;
   actorId: Id<"users">;
+  // MANUAL commission mode carries the manager-entered amount through
+  // completion untouched. Populated from the existing sale when completing a
+  // draft; undefined for freshly-created sales.
+  existingCommissionAmount?: number;
 };
 
 type PreparedSaleCompletion = {
@@ -65,6 +69,9 @@ type PreparedSaleCompletion = {
   leadId?: Id<"leads">;
   commissionAmount?: number;
   currency: string;
+  // AUTO modes accrue the commission to the GL at completion; MANUAL defers it
+  // to payment time (so the amount stays editable until paid).
+  accrueAtCompletion: boolean;
 };
 
 async function prepareSaleCompletion(
@@ -141,27 +148,64 @@ async function prepareSaleCompletion(
     .unique();
 
   const commissionMode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
-  // Same cost basis the GL uses for COGS (purchase + landed costs + capitalized
-  // reconditioning expenses) — previously this only subtracted purchasePrice,
-  // so commission, the GL, and the operational reports could each show a
-  // different margin for the same sale.
-  const vehicleCost = await computeVehicleCapitalizedCost(ctx, vehicle);
-  const grossProfit = Math.max(0, args.salePrice - vehicleCost);
 
   let commissionAmount: number | undefined;
-  if (commissionMode === "AUTO_MEMBER") {
-    const rate = membership.commissionRate ?? 0;
-    if (rate > 0) {
-      commissionAmount = grossProfit * (rate / 100);
-    }
-  } else if (commissionMode === "AUTO_TIERS") {
-    const amount = calculateCommissionFromTiers(grossProfit, orgSettings?.commissionTiers ?? []);
-    if (amount > 0) commissionAmount = amount;
+  // AUTO modes derive the amount now and accrue it to the GL at completion.
+  // MANUAL mode carries the manager-entered amount through untouched and defers
+  // its GL accrual to payment time, so it stays editable until paid (see
+  // sales.ts markCommissionPaid / setCommissionAmount).
+  let accrueAtCompletion = false;
+  if (commissionMode === "MANUAL") {
+    commissionAmount = args.existingCommissionAmount;
+  } else {
+    commissionAmount = await computeAutoCommissionAmount(ctx, {
+      salePrice: args.salePrice,
+      vehicle,
+      commissionMode,
+      memberCommissionRate: membership.commissionRate,
+      commissionTiers: orgSettings?.commissionTiers ?? [],
+    });
+    accrueAtCompletion = commissionAmount != null;
   }
 
   const currency = await getOrgCurrency(ctx, args.orgId);
 
-  return { vehicle, customer, leadId, commissionAmount, currency };
+  return { vehicle, customer, leadId, commissionAmount, currency, accrueAtCompletion };
+}
+
+/**
+ * The single source of the automatic-commission calculation, shared by sale
+ * completion and by sales.recalculateCommission (the manager's fix-up after a
+ * missing vehicle cost is corrected).
+ *
+ * Returns `undefined` when the vehicle has no trustworthy cost basis (C3: the
+ * capitalized cost would be ~zero, so commissioning would pay on ~the full
+ * sale price — instead the sale is flagged for a manager). When a cost basis
+ * IS present it always returns a number, including an explicit 0, so that a
+ * stored `commissionAmount == null` on a completed AUTO sale unambiguously
+ * means "never computed" rather than "computed as zero".
+ */
+export async function computeAutoCommissionAmount(
+  ctx: MutationCtx,
+  args: {
+    salePrice: number;
+    vehicle: Doc<"vehicles">;
+    commissionMode: string;
+    memberCommissionRate: number | undefined;
+    commissionTiers: CommissionTier[];
+  }
+): Promise<number | undefined> {
+  if (!vehicleHasCostBasis(args.vehicle)) return undefined;
+  // Same cost basis the GL uses for COGS (purchase + landed costs + capitalized
+  // reconditioning expenses) so commission, the GL, and the operational reports
+  // all show the same margin for a sale.
+  const vehicleCost = await computeVehicleCapitalizedCost(ctx, args.vehicle);
+  const grossProfit = Math.max(0, args.salePrice - vehicleCost);
+  if (args.commissionMode === "AUTO_TIERS") {
+    return calculateCommissionFromTiers(grossProfit, args.commissionTiers);
+  }
+  const rate = args.memberCommissionRate ?? 0;
+  return rate > 0 ? grossProfit * (rate / 100) : 0;
 }
 
 async function insertSaleRecord(
@@ -452,7 +496,7 @@ async function applySaleCompletionSideEffects(
     });
   }
 
-  if (prepared.commissionAmount != null && prepared.commissionAmount > 0) {
+  if (prepared.accrueAtCompletion && prepared.commissionAmount != null && prepared.commissionAmount > 0) {
     await hookCommissionAccrued(ctx, {
       orgId: args.orgId,
       saleId,
@@ -610,6 +654,8 @@ export async function completeExistingSale(
     gapTermMonths: sale.gapTermMonths,
     idempotencyKey: args.idempotencyKey ?? sale.idempotencyKey,
     actorId: args.actorId,
+    // Preserve a manager-entered MANUAL commission across completion.
+    existingCommissionAmount: sale.commissionAmount,
   };
 
   const prepared = await prepareSaleCompletion(ctx, completionArgs);

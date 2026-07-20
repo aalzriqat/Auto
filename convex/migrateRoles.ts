@@ -250,6 +250,59 @@ export const backfillAccountantExpensePermissions = internalMutation({
  * rather than getting a duplicate. Assigning any member to the new role is
  * left to the org — this only makes the role available.
  */
+/**
+ * Grant the new payroll permissions to roles that should have them: every
+ * OWNER (so isSystemOwnerRole keeps holding — a new PERMISSIONS entry otherwise
+ * breaks it for legacy owner rows), any role that already manages FINANCE, and
+ * any role still named after a default template whose template now carries
+ * payroll permissions. Deliberately NOT granted from manage:commissions alone —
+ * payroll (salaries, advances) is a finance capability, and a commissions-only
+ * role must not silently become a payroll administrator. Run once after
+ * deploying the payroll feature.
+ */
+export const backfillPayrollPermissions = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const roles = await ctx.db.query("roles").collect();
+    let updatedCount = 0;
+    const updates: string[] = [];
+
+    for (const role of roles) {
+      if (role.isDeleted) continue;
+      const has = (p: string) => role.permissions.includes(p);
+      const toAdd = new Set<string>();
+
+      // Payroll is a FINANCE capability, not a commissions one: salaries and
+      // advances are sensitive, so a role that only manages commissions must
+      // NOT silently become a payroll administrator. Finance-managing roles
+      // get both; roles still named after a default template whose template
+      // now carries payroll permissions get exactly what the template grants
+      // (mirrors what a fresh org would create). Renamed custom roles beyond
+      // that are a deliberate manual grant by the org owner.
+      if (has(PERMISSIONS.MANAGE_FINANCE)) {
+        toAdd.add(PERMISSIONS.VIEW_PAYROLL);
+        toAdd.add(PERMISSIONS.MANAGE_PAYROLL);
+      }
+      const template = DEFAULT_ROLE_TEMPLATES.find(
+        (t) => normalizeRoleName(t.name) === normalizeRoleName(role.name)
+      );
+      if (template) {
+        if (template.permissions.includes(PERMISSIONS.VIEW_PAYROLL)) toAdd.add(PERMISSIONS.VIEW_PAYROLL);
+        if (template.permissions.includes(PERMISSIONS.MANAGE_PAYROLL)) toAdd.add(PERMISSIONS.MANAGE_PAYROLL);
+      }
+      // Owners always get every permission.
+      if (isSystemOwnerRole(role) || normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME) {
+        toAdd.add(PERMISSIONS.VIEW_PAYROLL);
+        toAdd.add(PERMISSIONS.MANAGE_PAYROLL);
+      }
+
+      if (await patchRoleIfNeeded(ctx, role, toAdd, updates)) updatedCount++;
+    }
+
+    return { updatedCount, updates };
+  },
+});
+
 export const backfillSeniorAccountantRole = internalMutation({
   args: {},
   handler: async (ctx) => {

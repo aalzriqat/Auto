@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -98,6 +98,43 @@ export const upsert = mutation({
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
+
+    // Currency is load-bearing for every stored minor-unit amount (journal
+    // lines, payroll, advances, receivables…). Changing it does NOT convert
+    // any of them — 500.000 JOD would silently become 5,000.00 USD — so once
+    // ANY financial record exists the currency is locked. (Fresh orgs can
+    // still pick their currency during onboarding.)
+    // The effective current currency is the stored one, or the JOD default when
+    // no settings row exists yet (getOrgCurrency does the same). Checking this —
+    // rather than `existing && ...` — closes the bypass where a legacy org with
+    // financial records but no settings row creates its first row in a new
+    // currency.
+    const effectiveCurrentCurrency = existing?.currency ?? DEFAULT_SETTINGS.currency;
+    if (
+      args.currency !== undefined &&
+      effectiveCurrentCurrency !== args.currency
+    ) {
+      // Any of these tables stores a minor-unit amount denominated in the org
+      // currency (pendingAccountingEvents covers orgs whose chart isn't set up
+      // yet — their events queue rather than post). If any row exists, the
+      // currency is load-bearing and must not change without a migration.
+      // `expenses` is included because a PENDING expense stores an amount but
+      // posts no accounting event/transaction yet — switching currency and then
+      // marking it paid would re-denominate the stored amount into the new one.
+      const [ledger, pending, txns, comp, advances, expenseRow] = await Promise.all([
+        ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
+        ctx.db.query("pendingAccountingEvents").withIndex("by_org_status", (q) => q.eq("orgId", args.orgId)).first(),
+        ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
+        ctx.db.query("employeeCompensation").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
+        ctx.db.query("employeeAdvances").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
+        ctx.db.query("expenses").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
+      ]);
+      if (ledger || pending || txns || comp || advances || expenseRow) {
+        throw new ConvexError(
+          "The organization currency cannot be changed after financial records exist — stored amounts are not converted and would be misread. Contact support for a currency migration."
+        );
+      }
+    }
 
     const { orgId, ...fields } = args;
     if (fields.dealershipPhones !== undefined) {

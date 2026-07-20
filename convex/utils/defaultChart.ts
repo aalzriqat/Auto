@@ -38,6 +38,8 @@ export const SYSTEM_KEYS = {
   RENT_EXPENSE: "RENT_EXPENSE",
   UTILITIES_EXPENSE: "UTILITIES_EXPENSE",
   SALARIES_EXPENSE: "SALARIES_EXPENSE",
+  SALARIES_PAYABLE: "SALARIES_PAYABLE",
+  EMPLOYEE_ADVANCES: "EMPLOYEE_ADVANCES",
   MARKETING_EXPENSE: "MARKETING_EXPENSE",
   OFFICE_EXPENSE: "OFFICE_EXPENSE",
   PROFESSIONAL_FEES_EXPENSE: "PROFESSIONAL_FEES_EXPENSE",
@@ -147,6 +149,16 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     systemKey: SYSTEM_KEYS.UNAPPLIED_CUSTOMER_CASH,
   },
   {
+    code: "1230",
+    name: "Employee Advances",
+    nameAr: "سلف الموظفين",
+    type: "ASSET",
+    normalBalance: "DEBIT",
+    isControlAccount: true,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.EMPLOYEE_ADVANCES,
+  },
+  {
     code: "1300",
     name: "Cheques in Hand",
     nameAr: "شيكات في الحوزة",
@@ -249,6 +261,16 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: false,
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.COMMISSION_PAYABLE,
+  },
+  {
+    code: "2310",
+    name: "Salaries Payable",
+    nameAr: "رواتب مستحقة",
+    type: "LIABILITY",
+    normalBalance: "CREDIT",
+    isControlAccount: false,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.SALARIES_PAYABLE,
   },
 
   {
