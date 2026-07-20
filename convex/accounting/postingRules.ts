@@ -104,10 +104,11 @@ function cashAccountKey(
   return opts?.defaultCash ?? SYSTEM_KEYS.CASH_ON_HAND;
 }
 
-// For outbound refund disbursements, CHEQUE means the dealership issues a
-// cheque to the customer — crediting BANK_ACCOUNT (not CHEQUES_IN_HAND, which
-// is for customer cheques physically held by the dealership).
-function refundDisbursementAccountKey(method: string | undefined): SystemKey {
+// For ANY outbound disbursement (refunds, payroll, employee advances), CHEQUE
+// means the dealership ISSUES a cheque — crediting BANK_ACCOUNT (not
+// CHEQUES_IN_HAND, which is strictly an asset of customer cheques physically
+// held by the dealership). cashAccountKey is the inbound mapper.
+function disbursementAccountKey(method: string | undefined): SystemKey {
   if (method === "CHEQUE") return SYSTEM_KEYS.BANK_ACCOUNT;
   if (method === "BANK_TRANSFER") return SYSTEM_KEYS.BANK_ACCOUNT;
   if (method === "CARD") return SYSTEM_KEYS.BANK_ACCOUNT;
@@ -333,7 +334,7 @@ export function ruleDepositApplied(p: DepositAppliedPayload): RuleResult {
 }
 
 export function ruleDepositRefunded(p: DepositRefundedPayload): RuleResult {
-  const disbursementKey = refundDisbursementAccountKey(p.paymentMethod);
+  const disbursementKey = disbursementAccountKey(p.paymentMethod);
   return {
     lines: [
       line(SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY, p.amountMinor, 0, "Deposit liability released", { customerId: p.customerId }),
@@ -478,7 +479,7 @@ export function ruleCollectionRefund(p: CollectionRefundPayload): RuleResult {
   // customer's receivable is reopened for the refunded amount.
   // Use the refund-specific mapper so outbound cheques credit BANK_ACCOUNT,
   // not CHEQUES_IN_HAND (which is reserved for cheques held from customers).
-  const disbursementKey = refundDisbursementAccountKey(p.paymentMethod);
+  const disbursementKey = disbursementAccountKey(p.paymentMethod);
   return {
     lines: [
       line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, p.amountMinor, 0, "AR reopened by refund", { customerId: p.customerId }),
@@ -1207,7 +1208,7 @@ export function ruleCapitalContributed(p: PartnerEquityMovementPayload): RuleRes
 }
 
 export function rulePartnerDrew(p: PartnerEquityMovementPayload): RuleResult {
-  // Outbound payment — same reasoning as refundDisbursementAccountKey and
+  // Outbound payment — same reasoning as disbursementAccountKey and
   // ruleAssetCapitalized: our own cheque clears from the bank.
   const cashKey = p.paymentMethod === "CHEQUE"
     ? SYSTEM_KEYS.BANK_ACCOUNT
@@ -1313,7 +1314,9 @@ export interface EmployeeAdvancePaidPayload {
 
 /** Advance issued to an employee: Dr Employee Advances (asset) / Cr cash. */
 export function ruleEmployeeAdvancePaid(p: EmployeeAdvancePaidPayload): RuleResult {
-  const cashKey = cashAccountKey(p.paymentMethod);
+  // Outbound: a CHEQUE here is one the dealership WRITES, so it comes out of
+  // the bank — never out of CHEQUES_IN_HAND (customer cheques we hold).
+  const cashKey = disbursementAccountKey(p.paymentMethod);
   return {
     lines: [
       line(SYSTEM_KEYS.EMPLOYEE_ADVANCES, p.amountMinor, 0, "Employee advance issued"),
@@ -1378,7 +1381,9 @@ export interface PayrollPaidPayload {
  * legs always balance (debits salary+commission = credits advance+net).
  */
 export function rulePayrollPaid(p: PayrollPaidPayload): RuleResult {
-  const cashKey = cashAccountKey(p.paymentMethod);
+  // Outbound: a payroll CHEQUE is written by the dealership → credit the bank,
+  // never CHEQUES_IN_HAND (that asset is customer cheques we hold).
+  const cashKey = disbursementAccountKey(p.paymentMethod);
   const lines: LineSpec[] = [];
   if (p.salaryMinor > 0) lines.push(line(SYSTEM_KEYS.SALARIES_PAYABLE, p.salaryMinor, 0, "Salary settled"));
   if (p.commissionMinor > 0) {
@@ -1388,6 +1393,12 @@ export function rulePayrollPaid(p: PayrollPaidPayload): RuleResult {
     lines.push(line(SYSTEM_KEYS.EMPLOYEE_ADVANCES, 0, p.advanceRecoveredMinor, "Advance recovered from payroll"));
   }
   if (p.netMinor > 0) lines.push(line(cashKey, 0, p.netMinor, "Net pay disbursed"));
+  // Defense-in-depth: the payroll caller skips all-zero payslips, but a
+  // zero-line "journal entry" passes validateBalance trivially (0 === 0), so
+  // fail closed here too rather than letting an empty entry post.
+  if (lines.length === 0) {
+    throw new Error("PAYROLL_PAID with no non-zero legs — refusing to post an empty journal entry");
+  }
   return { lines, memo: "Payroll paid", category: "SYSTEM" };
 }
 

@@ -74,6 +74,50 @@ describe("payroll posting rules", () => {
     expect(keys).toContain(SYSTEM_KEYS.EMPLOYEE_ADVANCES);
   });
 
+  test("an OUTBOUND cheque payroll payment credits the bank, not Cheques in Hand", () => {
+    const r = rulePayrollPaid({
+      itemId: "i1",
+      userId: "u1",
+      salaryMinor: 50000,
+      commissionMinor: 0,
+      advanceRecoveredMinor: 0,
+      netMinor: 50000,
+      currency: "JOD",
+      paymentMethod: "CHEQUE",
+    });
+    const credit = r.lines.find((l) => l.creditMinor > 0)!;
+    expect(credit.accountSystemKey).toBe(SYSTEM_KEYS.BANK_ACCOUNT);
+    expect(credit.accountSystemKey).not.toBe(SYSTEM_KEYS.CHEQUES_IN_HAND);
+  });
+
+  test("an OUTBOUND cheque employee advance credits the bank, not Cheques in Hand", () => {
+    const r = ruleEmployeeAdvancePaid({
+      advanceId: "a1",
+      userId: "u1",
+      amountMinor: 20000,
+      currency: "JOD",
+      paymentMethod: "CHEQUE",
+    });
+    const credit = r.lines.find((l) => l.creditMinor > 0)!;
+    expect(credit.accountSystemKey).toBe(SYSTEM_KEYS.BANK_ACCOUNT);
+    expect(credit.accountSystemKey).not.toBe(SYSTEM_KEYS.CHEQUES_IN_HAND);
+  });
+
+  test("an all-zero payslip payment refuses to post an empty journal entry", () => {
+    expect(() =>
+      rulePayrollPaid({
+        itemId: "i1",
+        userId: "u1",
+        salaryMinor: 0,
+        commissionMinor: 0,
+        advanceRecoveredMinor: 0,
+        netMinor: 0,
+        currency: "JOD",
+        paymentMethod: "CASH",
+      })
+    ).toThrow(/empty journal entry/i);
+  });
+
   test("payslip with the whole payslip consumed by an advance omits the zero cash leg", () => {
     // salary 20000 − advance 20000 = net 0 → no cash line, still balances.
     const r = rulePayrollPaid({
@@ -104,6 +148,10 @@ async function seedPayrollOrg(t: ReturnType<typeof convexTest>, suffix: string) 
     ctx.db.insert("roles", {
       orgId,
       name: "Admin",
+      // Owner role: exempt from the self-beneficiary separation-of-duties guard,
+      // so these tests can set the admin's own salary / pay runs that include
+      // them. A dedicated non-owner test below proves the guard fires.
+      isSystemOwnerRole: true,
       permissions: ["view:payroll", "manage:payroll", "view:commissions", "manage:commissions"],
     })
   );
@@ -497,5 +545,155 @@ describe("payroll: employee compensation", () => {
     const listed = await asAdmin.query(api.payroll.listCompensation, { orgId });
     expect(listed).toHaveLength(1);
     expect(listed[0].monthlySalary).toBe(600);
+  });
+});
+
+describe("payroll: production-hardening controls", () => {
+  // A second, NON-owner member (manage:payroll but not owner) to exercise the
+  // separation-of-duties guards.
+  async function seedWithNonOwner(t: ReturnType<typeof convexTest>, suffix: string) {
+    const base = await seedPayrollOrg(t, suffix);
+    const mgrUserId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: `mgr_${suffix}`, email: `mgr_${suffix}@example.com`, name: "Mgr" })
+    );
+    const mgrRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId: base.orgId, name: "Payroll Clerk", permissions: ["view:payroll", "manage:payroll"] })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId: base.orgId, userId: mgrUserId, roleId: mgrRoleId }));
+    const asMgr = t.withIdentity({ subject: `mgr_${suffix}`, clerkId: `mgr_${suffix}` });
+    return { ...base, mgrUserId, asMgr };
+  }
+
+  test("a former employee (membership removed) is NOT included in a new run", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, mgrUserId, asAdmin } = await seedWithNonOwner(t, "exemp");
+    // The employee (not the acting owner) has the salary.
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId: mgrUserId, monthlySalary: 500 });
+
+    await t.run(async (ctx) => {
+      const m = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", mgrUserId))
+        .unique();
+      await ctx.db.delete(m!._id);
+    });
+
+    // Owner has no salary; the departed employee's salary must not be paid.
+    await expect(
+      asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 })
+    ).rejects.toThrow(/nothing to pay/i);
+  });
+
+  test("an offboarding member is excluded from the run", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, mgrUserId, asAdmin } = await seedWithNonOwner(t, "offb");
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId: mgrUserId, monthlySalary: 500 });
+    await t.run(async (ctx) => {
+      const m = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", mgrUserId))
+        .unique();
+      await ctx.db.patch(m!._id, { offboardingStatus: "PENDING_EXTERNAL_REMOVAL" });
+    });
+    await expect(
+      asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 })
+    ).rejects.toThrow(/nothing to pay/i);
+  });
+
+  test("no silent salary fallback: a period before the salary existed is not paid", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "nofall");
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
+    await expect(
+      asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 1 })
+    ).rejects.toThrow(/nothing to pay/i);
+  });
+
+  test("changing org currency is blocked once financial records exist", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "curlock");
+    await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 50 });
+    await expect(
+      asAdmin.mutation(api.orgSettings.upsert, { orgId, currency: "USD" })
+    ).rejects.toThrow(/currency cannot be changed/i);
+  });
+
+  test("a mismatched-currency salary is rejected at run time", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "curmix");
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
+    await t.run(async (ctx) => {
+      const c = await ctx.db.query("employeeCompensation").first();
+      await ctx.db.patch(c!._id, { currency: "USD" });
+    });
+    await expect(
+      asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 })
+    ).rejects.toThrow(/currencies must match/i);
+  });
+
+  test("a non-owner cannot set their own salary, advance themselves, or approve a run paying them", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, mgrUserId, asMgr, asAdmin } = await seedWithNonOwner(t, "sod");
+
+    await expect(
+      asMgr.mutation(api.payroll.setCompensation, { orgId, userId: mgrUserId, monthlySalary: 500 })
+    ).rejects.toThrow(/only the organization owner/i);
+    await expect(
+      asMgr.mutation(api.payroll.recordAdvance, { orgId, userId: mgrUserId, amount: 50 })
+    ).rejects.toThrow(/only the organization owner/i);
+
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId: mgrUserId, monthlySalary: 500 });
+    const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
+    await expect(
+      asMgr.mutation(api.payroll.approveRun, { orgId, runId })
+    ).rejects.toThrow(/pays you/i);
+  });
+
+  test("salary cannot be double-booked through Expenses once payroll is used", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "dblbook");
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
+    await expect(
+      asAdmin.mutation(api.expenses.create, {
+        orgId, title: "July salaries", amount: 500, date: Date.now(), category: "SALARIES",
+      })
+    ).rejects.toThrow(/payroll module/i);
+  });
+
+  test("a partial advance repayment leaves the advance outstanding", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "partial");
+    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 100 });
+    await asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId, method: "CASH", amount: 40 });
+    const adv = await t.run((ctx) => ctx.db.get(advanceId));
+    expect(adv?.status).toBe("OUTSTANDING");
+    expect(adv?.recoveredMinor).toBe(40000);
+    await expect(
+      asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId, amount: 100 })
+    ).rejects.toThrow(/exceeds the outstanding/i);
+  });
+
+  test("the run stores the period accounting date, approved snapshot, and paid method", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "acctdate");
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
+    const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
+    const run = await t.run((ctx) => ctx.db.get(runId));
+    // Accounting date is the last ms of July 2026 (UTC).
+    expect(run?.accountingDate).toBe(Date.UTC(2026, 7, 1) - 1);
+
+    await asAdmin.mutation(api.payroll.approveRun, { orgId, runId });
+    expect((await t.run((ctx) => ctx.db.get(runId)))?.approvedNetMinor).toBe(500000);
+    await asAdmin.mutation(api.payroll.payRun, { orgId, runId, method: "CHEQUE" });
+    expect((await t.run((ctx) => ctx.db.get(runId)))?.paidMethod).toBe("CHEQUE");
+  });
+
+  test("createRun rejects a non-integer month", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "badmonth");
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
+    await expect(
+      asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 6.5 })
+    ).rejects.toThrow(/whole number/i);
   });
 });

@@ -253,8 +253,12 @@ export const backfillAccountantExpensePermissions = internalMutation({
 /**
  * Grant the new payroll permissions to roles that should have them: every
  * OWNER (so isSystemOwnerRole keeps holding — a new PERMISSIONS entry otherwise
- * breaks it for legacy owner rows), plus any role that already manages finance
- * or commissions. Run once after deploying the payroll feature.
+ * breaks it for legacy owner rows), any role that already manages FINANCE, and
+ * any role still named after a default template whose template now carries
+ * payroll permissions. Deliberately NOT granted from manage:commissions alone —
+ * payroll (salaries, advances) is a finance capability, and a commissions-only
+ * role must not silently become a payroll administrator. Run once after
+ * deploying the payroll feature.
  */
 export const backfillPayrollPermissions = internalMutation({
   args: {},

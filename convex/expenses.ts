@@ -310,6 +310,22 @@ export const create = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_EXPENSES]);
+    // Salary double-booking guard: once the org uses payroll (any active
+    // compensation row), salaries must flow through the payroll run — which
+    // already books Salaries Expense. Recording a SALARIES expense here too
+    // would double-count the expense. Non-payroll orgs are unaffected.
+    if (args.category === "SALARIES") {
+      const hasPayroll = await ctx.db
+        .query("employeeCompensation")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .filter((q) => q.eq(q.field("active"), true))
+        .first();
+      if (hasPayroll) {
+        throw new ConvexError(
+          "This organization uses the Payroll module — record salaries through a payroll run, not as an expense, to avoid double-counting the salary expense."
+        );
+      }
+    }
     const status = args.status ?? "PAID";
     const paymentMethod = status === "PAID" ? normalizePaymentMethod(args.paymentMethod) : args.paymentMethod;
     if (args.taxAmount !== undefined && args.taxAmount > args.amount) {

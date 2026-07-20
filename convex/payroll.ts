@@ -1,8 +1,8 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query, MutationCtx } from "./_generated/server";
-import { Id } from "./_generated/dataModel";
-import { requireTenantAuth } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
+import { Doc, Id } from "./_generated/dataModel";
+import { requireTenantAuth, TenantAuthContext } from "./utils/tenancy";
+import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import {
   getOrgCurrency,
   hookEmployeeAdvancePaid,
@@ -10,9 +10,10 @@ import {
   hookPayrollAccrued,
   hookPayrollPaid,
   hookCommissionAccrued,
+  isPostableNow,
 } from "./accounting/workflowHooks";
 import { toMinorUnits, fromMinorUnits } from "./utils/money";
-import { paymentMethodValidator, normalizePaymentMethod } from "./utils/paymentMethods";
+import { paymentMethodValidator, normalizePaymentMethod, PaymentMethod } from "./utils/paymentMethods";
 
 // ─── Employee compensation (fixed monthly salary) ──────────────────────────────
 
@@ -29,7 +30,9 @@ export const setCompensation = mutation({
   },
   handler: async (ctx, args) => {
     try {
-      const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
+      const authCtx = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
+      const { user } = authCtx;
+      assertNotSelfBeneficiary(authCtx, args.userId, "set your own salary");
       if (!(args.monthlySalary >= 0)) {
         throw new ConvexError("Monthly salary must be zero or a positive number.");
       }
@@ -113,7 +116,9 @@ export const recordAdvance = mutation({
   },
   handler: async (ctx, args) => {
     try {
-      const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
+      const authCtx = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
+      const { user } = authCtx;
+      assertNotSelfBeneficiary(authCtx, args.userId, "issue yourself an advance");
       if (!(args.amount > 0)) {
         throw new ConvexError("Advance amount must be a positive number.");
       }
@@ -166,12 +171,17 @@ export const recordAdvance = mutation({
   },
 });
 
-/** Records a direct (cash) repayment of an outstanding advance, in full. */
+/**
+ * Records a direct repayment of an outstanding advance. Recovers the full
+ * remaining balance by default, or a specific `amount` for a partial repayment
+ * (the advance stays OUTSTANDING until fully recovered).
+ */
 export const recoverAdvance = mutation({
   args: {
     orgId: v.id("organizations"),
     advanceId: v.id("employeeAdvances"),
     method: v.optional(paymentMethodValidator),
+    amount: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     try {
@@ -188,11 +198,24 @@ export const recoverAdvance = mutation({
         throw new ConvexError("This advance has nothing left to recover.");
       }
 
+      // Full remaining balance unless a (positive, not-over) partial is given.
+      let recoverMinor = outstandingMinor;
+      if (args.amount !== undefined) {
+        if (!(args.amount > 0)) {
+          throw new ConvexError("Repayment amount must be a positive number.");
+        }
+        recoverMinor = toMinorUnits(args.amount, advance.currency);
+        if (recoverMinor > outstandingMinor) {
+          throw new ConvexError("Repayment amount exceeds the outstanding balance.");
+        }
+      }
+
       const now = Date.now();
       const method = normalizePaymentMethod(args.method);
+      const newRecovered = advance.recoveredMinor + recoverMinor;
       await ctx.db.patch(args.advanceId, {
-        recoveredMinor: advance.amountMinor,
-        status: "RECOVERED",
+        recoveredMinor: newRecovered,
+        status: newRecovered >= advance.amountMinor ? "RECOVERED" : "OUTSTANDING",
         updatedAt: now,
       });
 
@@ -201,7 +224,7 @@ export const recoverAdvance = mutation({
         orgId: args.orgId,
         advanceId: args.advanceId,
         userId: advance.userId,
-        amountMinor: outstandingMinor,
+        amountMinor: recoverMinor,
         currency: advance.currency,
         paymentMethod: method,
         actorId: user._id,
@@ -244,25 +267,302 @@ export const listAdvances = query({
   },
 });
 
-/** Total outstanding advance (minor units) for one employee — used by the payroll run engine. */
+/**
+ * Total outstanding advance (minor units) for one employee — used by the
+ * payroll run engine. When a run currency is given, every outstanding advance
+ * must be in it (payroll performs no conversion); a mismatch throws rather than
+ * summing incomparable amounts.
+ */
 export async function outstandingAdvanceMinor(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
-  userId: Id<"users">
+  userId: Id<"users">,
+  runCurrency?: string
 ): Promise<number> {
   const rows = await ctx.db
     .query("employeeAdvances")
     .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
     .filter((q) => q.and(q.eq(q.field("status"), "OUTSTANDING"), q.neq(q.field("isDeleted"), true)))
     .collect();
-  return rows.reduce((sum, r) => sum + (r.amountMinor - r.recoveredMinor), 0);
+  let sum = 0;
+  for (const r of rows) {
+    if (runCurrency !== undefined) assertSameCurrency(r.currency, runCurrency, "an employee advance");
+    sum += r.amountMinor - r.recoveredMinor;
+  }
+  return sum;
 }
 
 // ─── Monthly payroll run (Option A: commissions paid through payroll) ───────────
 
 /**
- * Builds a DRAFT payroll run for a period: one payslip item per employee who
- * has a salary and/or unpaid commissions. Advances are deducted up to gross.
+ * Salary (minor units) applicable to a period, per active member. Picks the
+ * latest compensation row that took effect on or before the period's end. There
+ * is NO fallback to a later row: an employee first paid in July has no June
+ * salary, and silently back-paying today's rate for months never worked would
+ * fabricate wages. All amounts must already be in the run currency.
+ */
+async function resolveSalariesForPeriod(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  periodEndMs: number,
+  currency: string,
+  activeMemberIds: Set<string>
+): Promise<Map<string, number>> {
+  const comps = await ctx.db
+    .query("employeeCompensation")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  const byUser = new Map<string, typeof comps>();
+  for (const c of comps) {
+    if (!activeMemberIds.has(c.userId)) continue;
+    const list = byUser.get(c.userId) ?? [];
+    list.push(c);
+    byUser.set(c.userId, list);
+  }
+  const salaryByUser = new Map<string, number>();
+  for (const [uid, rows] of byUser) {
+    const applicable = rows
+      .filter((r) => r.effectiveFrom <= periodEndMs)
+      .sort((a, b) => b.effectiveFrom - a.effectiveFrom)[0];
+    if (!applicable) continue; // no salary in force for this period → not paid
+    assertSameCurrency(applicable.currency, currency, "a salary");
+    salaryByUser.set(uid, applicable.monthlySalaryMinor);
+  }
+  return salaryByUser;
+}
+
+/** Completed, unpaid, positive commissions grouped by salesperson (active members only). */
+async function collectUnpaidCommissions(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  currency: string,
+  activeMemberIds: Set<string>
+): Promise<Map<string, { minor: number; saleIds: Id<"sales">[] }>> {
+  const sales = await ctx.db
+    .query("sales")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .filter((q) =>
+      q.and(
+        q.neq(q.field("isDeleted"), true),
+        q.eq(q.field("status"), "COMPLETED"),
+        q.eq(q.field("commissionPaidAt"), undefined)
+      )
+    )
+    .collect();
+  const byUser = new Map<string, { minor: number; saleIds: Id<"sales">[] }>();
+  for (const s of sales) {
+    if (!s.commissionAmount || s.commissionAmount <= 0) continue;
+    if (!activeMemberIds.has(s.salespersonId)) continue;
+    const entry = byUser.get(s.salespersonId) ?? { minor: 0, saleIds: [] };
+    entry.minor += toMinorUnits(s.commissionAmount, currency);
+    entry.saleIds.push(s._id);
+    byUser.set(s.salespersonId, entry);
+  }
+  return byUser;
+}
+
+/**
+ * Every stored minor-unit amount is meaningful only in its own currency, and
+ * payroll performs no conversion — mixing currencies would silently misvalue
+ * pay. Reject rather than guess.
+ */
+function assertSameCurrency(recordCurrency: string, runCurrency: string, what: string): void {
+  if (recordCurrency !== runCurrency) {
+    throw new ConvexError(
+      `Cannot process ${what} in ${recordCurrency} on a ${runCurrency} payroll run. Currencies must match.`
+    );
+  }
+}
+
+/**
+ * Separation of duties: a non-owner with manage:payroll must not be the
+ * beneficiary of their own payroll action (set their own salary, advance
+ * themselves, or approve/pay a run that includes their own payslip). The owner
+ * is the ultimate authority and is exempt so a one-person dealership still
+ * works. Owner self-payment stays possible but is the explicit, audited actor.
+ */
+function assertNotSelfBeneficiary(authCtx: TenantAuthContext, beneficiaryUserId: Id<"users">, action: string): void {
+  if (isSystemOwnerRole(authCtx.role)) return;
+  if (authCtx.user._id === beneficiaryUserId) {
+    throw new ConvexError(
+      `Only the organization owner can ${action}. Ask an owner to perform or approve this.`
+    );
+  }
+}
+
+/** True while a payroll accrual for this key is still queued (not yet posted). */
+async function accrualStillQueued(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  idempotencyKey: string
+): Promise<boolean> {
+  const pending = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
+    .filter((q) => q.neq(q.field("status"), "POSTED"))
+    .first();
+  return pending !== null;
+}
+
+/**
+ * Guards payment: every salary and still-settleable commission accrual for the
+ * run must already be POSTED before the payment (which will post now) clears the
+ * corresponding payable. A queued accrual (e.g. dated to a closed period) means
+ * the payable does not yet exist in the GL — paying would drive it negative.
+ */
+async function assertAccrualsPosted(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  items: { _id: Id<"payrollItems">; baseSalaryMinor: number; commissionSaleIds: Id<"sales">[] }[]
+): Promise<void> {
+  for (const item of items) {
+    if (item.baseSalaryMinor > 0 && (await accrualStillQueued(ctx, orgId, `payroll_accrued_${item._id}`))) {
+      throw new ConvexError(
+        "This run's salary accrual hasn't posted to the ledger yet (its accounting period may be closed). Open the period so the accrual posts, then pay."
+      );
+    }
+    for (const saleId of item.commissionSaleIds) {
+      const sale = await ctx.db.get(saleId);
+      if (!sale || sale.commissionPaidAt != null || !sale.commissionAmount || sale.commissionAmount <= 0) continue;
+      if (await accrualStillQueued(ctx, orgId, `commission_accrued_${saleId}`)) {
+        throw new ConvexError(
+          "A commission accrual for this run hasn't posted to the ledger yet (its accounting period may be closed). Open the period so the accrual posts, then pay."
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Re-derives the commission actually payable for a payslip from CURRENT sale
+ * state, not the draft snapshot: a sale paid by another period's run, cancelled,
+ * or deleted since drafting is skipped, so a commission is never paid twice and
+ * a dead sale never clears a payable that no longer exists.
+ */
+async function settleItemCommissions(
+  ctx: MutationCtx,
+  item: Doc<"payrollItems">
+): Promise<{ commissionMinor: number; saleIdsToSettle: Id<"sales">[] }> {
+  let commissionMinor = 0;
+  const saleIdsToSettle: Id<"sales">[] = [];
+  for (const saleId of item.commissionSaleIds) {
+    const sale = await ctx.db.get(saleId);
+    if (
+      !sale ||
+      sale.isDeleted ||
+      sale.status !== "COMPLETED" ||
+      sale.commissionPaidAt != null ||
+      !sale.commissionAmount ||
+      sale.commissionAmount <= 0
+    ) {
+      continue;
+    }
+    commissionMinor += toMinorUnits(sale.commissionAmount, item.currency);
+    saleIdsToSettle.push(saleId);
+  }
+  return { commissionMinor, saleIdsToSettle };
+}
+
+/**
+ * Recovers outstanding advances oldest-first, up to `cap`, from CURRENT advance
+ * balances (one may have been repaid or soft-deleted since drafting). Returns
+ * the amount ACTUALLY recovered so the GL credit to Employee Advances can never
+ * exceed reality.
+ */
+async function recoverItemAdvances(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  userId: Id<"users">,
+  currency: string,
+  cap: number,
+  now: number
+): Promise<number> {
+  let toRecover = Math.min(await outstandingAdvanceMinor(ctx, orgId, userId, currency), cap);
+  if (toRecover <= 0) return 0;
+  const advances = (
+    await ctx.db
+      .query("employeeAdvances")
+      .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+      .filter((q) => q.and(q.eq(q.field("status"), "OUTSTANDING"), q.neq(q.field("isDeleted"), true)))
+      .collect()
+  ).sort((a, b) => a.date - b.date);
+  let recovered = 0;
+  for (const adv of advances) {
+    if (toRecover <= 0) break;
+    const remaining = adv.amountMinor - adv.recoveredMinor;
+    const take = Math.min(remaining, toRecover);
+    const newRecovered = adv.recoveredMinor + take;
+    await ctx.db.patch(adv._id, {
+      recoveredMinor: newRecovered,
+      status: newRecovered >= adv.amountMinor ? "RECOVERED" : "OUTSTANDING",
+      updatedAt: now,
+    });
+    recovered += take;
+    toRecover -= take;
+  }
+  return recovered;
+}
+
+/**
+ * Pays one payslip: settles its still-valid commissions, recovers advances,
+ * posts the GL payment (skipping an all-zero payslip), marks the commissions
+ * paid, and rewrites the item to what was ACTUALLY paid. Returns the paid gross
+ * and net for the run totals.
+ */
+async function payItem(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  item: Doc<"payrollItems">,
+  method: PaymentMethod,
+  actorId: Id<"users">,
+  now: number
+): Promise<{ grossMinor: number; netMinor: number }> {
+  const { commissionMinor, saleIdsToSettle } = await settleItemCommissions(ctx, item);
+  const salaryMinor = item.baseSalaryMinor;
+  const grossMinor = salaryMinor + commissionMinor;
+  const advanceRecoveredMinor = await recoverItemAdvances(ctx, orgId, item.userId, item.currency, grossMinor, now);
+  const netMinor = grossMinor - advanceRecoveredMinor;
+
+  // Nothing left to pay (e.g. the only commission was settled by another run and
+  // there's no salary) → skip the GL post (an all-zero entry) but still zero the
+  // item below so reports don't show a phantom.
+  if (grossMinor > 0) {
+    await hookPayrollPaid(ctx, {
+      orgId,
+      itemId: item._id,
+      userId: item.userId,
+      salaryMinor,
+      commissionMinor,
+      advanceRecoveredMinor,
+      netMinor,
+      currency: item.currency,
+      paymentMethod: method,
+      actorId,
+      occurredAt: now,
+    });
+  }
+
+  for (const saleId of saleIdsToSettle) {
+    await ctx.db.patch(saleId, {
+      commissionPaidAt: now,
+      commissionPaidBy: actorId,
+      commissionPaymentMethod: method,
+    });
+  }
+
+  await ctx.db.patch(item._id, {
+    commissionMinor,
+    advanceDeductionMinor: advanceRecoveredMinor,
+    grossMinor,
+    netMinor,
+    commissionSaleIds: saleIdsToSettle,
+  });
+  return { grossMinor, netMinor };
+}
+
+/**
+ * Builds a DRAFT payroll run for a period: one payslip item per active employee
+ * who has a salary and/or unpaid commissions. Advances are deducted up to gross.
  * Nothing posts to the GL yet — that happens on approve (accrue) and pay.
  */
 export const createRun = mutation({
@@ -274,8 +574,15 @@ export const createRun = mutation({
   handler: async (ctx, args) => {
     try {
       const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
-      if (args.periodMonth < 1 || args.periodMonth > 12) {
-        throw new ConvexError("Month must be between 1 and 12.");
+      // Integer + range validation: NaN/fractional values slip past a bare
+      // `< 1 || > 12` (NaN comparisons are false) and would then poison
+      // Date.UTC below and persist a run under a different period than it
+      // computed its cutoff for.
+      if (!Number.isInteger(args.periodMonth) || args.periodMonth < 1 || args.periodMonth > 12) {
+        throw new ConvexError("Month must be a whole number between 1 and 12.");
+      }
+      if (!Number.isInteger(args.periodYear) || args.periodYear < 2000 || args.periodYear > 2200) {
+        throw new ConvexError("Year must be a valid whole number.");
       }
 
       const clash = await ctx.db
@@ -291,54 +598,28 @@ export const createRun = mutation({
 
       const currency = await getOrgCurrency(ctx, args.orgId);
       const now = Date.now();
-
-      // Salary applicable to the SELECTED period, not just whatever is active
-      // today: for each employee pick the latest compensation row that took
-      // effect on or before the period's end, so a retroactive June run created
-      // after a July raise still pays the June salary. Employees whose salary
-      // was first recorded after the period fall back to their current active
-      // row (they were mid-onboarding; the alternative — paying 0 — surprises).
+      // Last millisecond of the payroll month (UTC): both the salary cutoff and
+      // the accrual accounting date, so a retroactive run recognizes its expense
+      // in the period worked, not the month it happens to be approved in.
       const periodEndMs = Date.UTC(args.periodYear, args.periodMonth, 1) - 1;
-      const comps = await ctx.db
-        .query("employeeCompensation")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect();
-      const compsByUser = new Map<string, typeof comps>();
-      for (const c of comps) {
-        const list = compsByUser.get(c.userId) ?? [];
-        list.push(c);
-        compsByUser.set(c.userId, list);
-      }
-      const salaryByUser = new Map<string, number>();
-      for (const [uid, rows] of compsByUser) {
-        const applicable = rows
-          .filter((r) => r.effectiveFrom <= periodEndMs)
-          .sort((a, b) => b.effectiveFrom - a.effectiveFrom)[0];
-        const chosen = applicable ?? rows.find((r) => r.active);
-        if (chosen) salaryByUser.set(uid, chosen.monthlySalaryMinor);
-      }
 
-      // Unpaid, completed commissions grouped by salesperson.
-      const sales = await ctx.db
-        .query("sales")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .filter((q) =>
-          q.and(
-            q.neq(q.field("isDeleted"), true),
-            q.eq(q.field("status"), "COMPLETED"),
-            q.eq(q.field("commissionPaidAt"), undefined)
-          )
+      // Only members with a still-active membership are on payroll — a deleted
+      // or offboarding membership must NOT keep drawing salary. A former
+      // employee's final settlement for a period they worked is a separate
+      // manual adjustment, not an automatic monthly sweep.
+      const activeMemberIds = new Set(
+        (
+          await ctx.db
+            .query("memberships")
+            .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+            .collect()
         )
-        .collect();
-      const commissionByUser = new Map<string, { minor: number; saleIds: Id<"sales">[] }>();
-      for (const s of sales) {
-        if (!s.commissionAmount || s.commissionAmount <= 0) continue;
-        const key = s.salespersonId;
-        const entry = commissionByUser.get(key) ?? { minor: 0, saleIds: [] };
-        entry.minor += toMinorUnits(s.commissionAmount, currency);
-        entry.saleIds.push(s._id);
-        commissionByUser.set(key, entry);
-      }
+          .filter((m) => !m.offboardingStatus)
+          .map((m) => m.userId)
+      );
+
+      const salaryByUser = await resolveSalariesForPeriod(ctx, args.orgId, periodEndMs, currency, activeMemberIds);
+      const commissionByUser = await collectUnpaidCommissions(ctx, args.orgId, currency, activeMemberIds);
 
       const userIds = new Set<string>([...salaryByUser.keys(), ...commissionByUser.keys()]);
 
@@ -363,7 +644,7 @@ export const createRun = mutation({
         const grossMinor = baseSalaryMinor + commission.minor;
         if (grossMinor <= 0) continue;
 
-        const outstanding = await outstandingAdvanceMinor(ctx, args.orgId, userId);
+        const outstanding = await outstandingAdvanceMinor(ctx, args.orgId, userId, currency);
         const advanceDeductionMinor = Math.min(outstanding, grossMinor);
         const netMinor = grossMinor - advanceDeductionMinor;
         itemPayloads.push({
@@ -392,6 +673,7 @@ export const createRun = mutation({
         status: "DRAFT",
         totalGrossMinor: totalGross,
         totalNetMinor: totalNet,
+        accountingDate: periodEndMs,
         createdBy: user._id,
         createdAt: now,
         updatedAt: now,
@@ -467,16 +749,22 @@ export const approveRun = mutation({
   args: { orgId: v.id("organizations"), runId: v.id("payrollRuns") },
   handler: async (ctx, args) => {
     try {
-      const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
+      const authCtx = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
+      const { user } = authCtx;
       const run = await ctx.db.get(args.runId);
       if (!run || run.orgId !== args.orgId) throw new ConvexError("Payroll run not found.");
       if (run.status !== "DRAFT") throw new ConvexError("Only a draft payroll run can be approved.");
 
       const now = Date.now();
+      // Recognize the accrual in the period worked, not the approval month.
+      const accrualDate = run.accountingDate ?? now;
       const items = await ctx.db
         .query("payrollItems")
         .withIndex("by_run", (q) => q.eq("runId", args.runId))
         .collect();
+
+      // Separation of duties: a non-owner cannot approve a run that pays them.
+      for (const item of items) assertNotSelfBeneficiary(authCtx, item.userId, "approve a payroll run that pays you");
 
       for (const item of items) {
         if (item.baseSalaryMinor > 0) {
@@ -488,7 +776,7 @@ export const approveRun = mutation({
             amountMinor: item.baseSalaryMinor,
             currency: item.currency,
             actorId: user._id,
-            occurredAt: now,
+            occurredAt: accrualDate,
           });
         }
         for (const saleId of item.commissionSaleIds) {
@@ -512,7 +800,7 @@ export const approveRun = mutation({
             amountMinor: toMinorUnits(sale.commissionAmount, item.currency),
             currency: item.currency,
             actorId: user._id,
-            occurredAt: now,
+            occurredAt: accrualDate,
           });
         }
       }
@@ -521,6 +809,9 @@ export const approveRun = mutation({
         status: "APPROVED",
         approvedBy: user._id,
         approvedAt: now,
+        // Freeze what was approved so a pay-time recompute is auditable.
+        approvedGrossMinor: run.totalGrossMinor,
+        approvedNetMinor: run.totalNetMinor,
         updatedAt: now,
       });
     } catch (error) {
@@ -546,7 +837,8 @@ export const payRun = mutation({
   },
   handler: async (ctx, args) => {
     try {
-      const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
+      const authCtx = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
+      const { user } = authCtx;
       const run = await ctx.db.get(args.runId);
       if (!run || run.orgId !== args.orgId) throw new ConvexError("Payroll run not found.");
       if (run.status !== "APPROVED") throw new ConvexError("Only an approved payroll run can be paid.");
@@ -558,116 +850,32 @@ export const payRun = mutation({
         .withIndex("by_run", (q) => q.eq("runId", args.runId))
         .collect();
 
+      // Separation of duties: a non-owner cannot pay a run that pays them.
+      for (const item of items) assertNotSelfBeneficiary(authCtx, item.userId, "pay a payroll run that pays you");
+
+      // Accrual-before-payment: if the payment itself will hit the ledger now,
+      // every prerequisite accrual must already be POSTED — otherwise the
+      // payment debits a payable that is still queued (e.g. the accrual is dated
+      // to a closed period), driving Salaries/Commission Payable negative until
+      // the old period is opened. When the payment would itself queue (no open
+      // period now), it drains after the accrual, so no guard is needed.
+      if (await isPostableNow(ctx, args.orgId, now)) {
+        await assertAccrualsPosted(ctx, args.orgId, items);
+      }
+
       let paidGrossMinor = 0;
       let paidNetMinor = 0;
       for (const item of items) {
-        // Re-derive the commission from CURRENT state, not the draft snapshot.
-        // A run for another period may have paid some of these sales since this
-        // one was drafted (createRun captures all unpaid commissions with no
-        // period filter), and paying on the stale snapshot would pay the same
-        // commission twice and over-clear Commission Payable. Only still-unpaid
-        // sales are settled here.
-        let commissionMinor = 0;
-        const saleIdsToSettle: Id<"sales">[] = [];
-        for (const saleId of item.commissionSaleIds) {
-          const sale = await ctx.db.get(saleId);
-          // Must still be a live COMPLETED sale: a cancelled/voided sale has had
-          // its COMMISSION_ACCRUED entry reversed, so "paying" it would debit a
-          // payable that no longer exists and hand out cash for a dead sale.
-          if (
-            !sale ||
-            sale.isDeleted ||
-            sale.status !== "COMPLETED" ||
-            sale.commissionPaidAt != null ||
-            !sale.commissionAmount ||
-            sale.commissionAmount <= 0
-          ) {
-            continue;
-          }
-          commissionMinor += toMinorUnits(sale.commissionAmount, item.currency);
-          saleIdsToSettle.push(saleId);
-        }
-
-        const salaryMinor = item.baseSalaryMinor;
-        const grossMinor = salaryMinor + commissionMinor;
-
-        // Recover advances oldest-first from CURRENT outstanding advances (an
-        // advance may have been recovered or soft-deleted since drafting), capped
-        // at this payslip's gross. advanceRecoveredMinor is the amount ACTUALLY
-        // taken so the GL credit to Employee Advances can never exceed reality.
-        let toRecover = Math.min(await outstandingAdvanceMinor(ctx, args.orgId, item.userId), grossMinor);
-        let advanceRecoveredMinor = 0;
-        if (toRecover > 0) {
-          const advances = (
-            await ctx.db
-              .query("employeeAdvances")
-              .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", item.userId))
-              .filter((q) => q.and(q.eq(q.field("status"), "OUTSTANDING"), q.neq(q.field("isDeleted"), true)))
-              .collect()
-          ).sort((a, b) => a.date - b.date);
-          for (const adv of advances) {
-            if (toRecover <= 0) break;
-            const remaining = adv.amountMinor - adv.recoveredMinor;
-            const take = Math.min(remaining, toRecover);
-            const newRecovered = adv.recoveredMinor + take;
-            await ctx.db.patch(adv._id, {
-              recoveredMinor: newRecovered,
-              status: newRecovered >= adv.amountMinor ? "RECOVERED" : "OUTSTANDING",
-              updatedAt: now,
-            });
-            advanceRecoveredMinor += take;
-            toRecover -= take;
-          }
-        }
-
-        const netMinor = grossMinor - advanceRecoveredMinor;
-
-        // Nothing left to pay on this payslip (e.g. its only commission was
-        // already settled by another period's run and it carries no salary).
-        // Skip the GL post — an all-zero PAYROLL_PAID would be an empty entry —
-        // but still zero out the item below so reports don't show a phantom.
-        if (grossMinor > 0) {
-          await hookPayrollPaid(ctx, {
-            orgId: args.orgId,
-            itemId: item._id,
-            userId: item.userId,
-            salaryMinor,
-            commissionMinor,
-            advanceRecoveredMinor,
-            netMinor,
-            currency: item.currency,
-            paymentMethod: method,
-            actorId: user._id,
-            occurredAt: now,
-          });
-        }
-
-        // Mark the settled commissions paid (payable cleared by the payment above).
-        for (const saleId of saleIdsToSettle) {
-          await ctx.db.patch(saleId, {
-            commissionPaidAt: now,
-            commissionPaidBy: user._id,
-            commissionPaymentMethod: method,
-          });
-        }
-
-        // Persist what was ACTUALLY paid back onto the payslip so payslips and
-        // reports reflect reality rather than the possibly-stale draft snapshot.
-        await ctx.db.patch(item._id, {
-          commissionMinor,
-          advanceDeductionMinor: advanceRecoveredMinor,
-          grossMinor,
-          netMinor,
-          commissionSaleIds: saleIdsToSettle,
-        });
-        paidGrossMinor += grossMinor;
-        paidNetMinor += netMinor;
+        const paid = await payItem(ctx, args.orgId, item, method, user._id, now);
+        paidGrossMinor += paid.grossMinor;
+        paidNetMinor += paid.netMinor;
       }
 
       await ctx.db.patch(args.runId, {
         status: "PAID",
         paidBy: user._id,
         paidAt: now,
+        paidMethod: method,
         totalGrossMinor: paidGrossMinor,
         totalNetMinor: paidNetMinor,
         updatedAt: now,

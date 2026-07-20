@@ -2380,6 +2380,17 @@ export default defineSchema({
     ),
     totalGrossMinor: v.number(),
     totalNetMinor: v.number(),
+    // Accounting date the salary/commission accrual is recognized on: the last
+    // moment of the payroll period (UTC), so a retroactive run books its expense
+    // in the month worked, not the month it was approved.
+    accountingDate: v.optional(v.number()),
+    // Immutable snapshot of gross/net at approval, so a pay-time recompute (a
+    // commission paid directly, an advance repaid, a sale cancelled since
+    // approval) leaves an audit trail instead of silently overwriting.
+    approvedGrossMinor: v.optional(v.number()),
+    approvedNetMinor: v.optional(v.number()),
+    // The method the whole run was paid with (per-employee split not supported).
+    paidMethod: v.optional(v.string()),
     createdBy: v.optional(v.id("users")),
     createdAt: v.number(),
     approvedBy: v.optional(v.id("users")),

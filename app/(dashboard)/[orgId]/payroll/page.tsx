@@ -67,8 +67,8 @@ export default function PayrollPage() {
 
   async function saveSalary(userId: string) {
     if (!activeOrgId) return;
-    const value = parseFloat(salaryDrafts[userId]);
-    if (isNaN(value) || value < 0) return;
+    const value = Number.parseFloat(salaryDrafts[userId]);
+    if (Number.isNaN(value) || value < 0) return;
     try {
       await setCompensation({ orgId: activeOrgId, userId: userId as Id<"users">, monthlySalary: value });
       toast.success(t("Saved" as any));
@@ -80,8 +80,8 @@ export default function PayrollPage() {
 
   async function submitAdvance() {
     if (!activeOrgId || !advUser) return;
-    const value = parseFloat(advAmount);
-    if (isNaN(value) || value <= 0) return;
+    const value = Number.parseFloat(advAmount);
+    if (Number.isNaN(value) || value <= 0) return;
     try {
       await recordAdvance({ orgId: activeOrgId, userId: advUser as Id<"users">, amount: value, method: advMethod });
       toast.success(t("AdvanceRecorded" as any));
@@ -241,7 +241,7 @@ export default function PayrollPage() {
                   <Label className="text-xs">{t("Month" as any)}</Label>
                   <Input type="number" min="1" max="12" className="h-9 w-20" value={runMonth} onChange={(e) => setRunMonth(e.target.value)} />
                 </div>
-                <Button onClick={() => doAction(() => createRun({ orgId: activeOrgId!, periodYear: parseInt(runYear), periodMonth: parseInt(runMonth) }), "PayrollRunCreated")}>
+                <Button onClick={() => doAction(() => createRun({ orgId: activeOrgId!, periodYear: Number.parseInt(runYear, 10), periodMonth: Number.parseInt(runMonth, 10) }), "PayrollRunCreated")}>
                   {t("CreateRun" as any)}
                 </Button>
               </div>

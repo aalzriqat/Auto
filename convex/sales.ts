@@ -676,15 +676,20 @@ export const listCommissions = query({
     const candidates = sales.filter(
       (sale) =>
         (sale.commissionAmount != null && sale.commissionAmount > 0) ||
-        (isAutoMode && sale.status === "COMPLETED")
+        (isAutoMode && sale.status === "COMPLETED" && sale.commissionAmount == null)
     );
 
     const hydrated = await Promise.all(
       candidates.map(async (sale) => {
         const vehicle = await ctx.db.get(sale.vehicleId);
+        // Only ever flag a sale whose commission was NEVER computed
+        // (commissionAmount == null). A sale that already carries a real
+        // commission — even if the vehicle's cost is later cleared — keeps its
+        // amount and its Pay action and must not be pulled back into remediation.
         const missingPurchaseCost =
           isAutoMode &&
           sale.status === "COMPLETED" &&
+          sale.commissionAmount == null &&
           (!vehicle || !vehicleHasCostBasis(vehicle));
         // The follow-up state to missingPurchaseCost: the cost has since been
         // fixed on the vehicle, but this sale completed while it was missing so
@@ -1010,8 +1015,10 @@ export const recalculateCommission = mutation({
       }
       return { commissionAmount };
     } catch (error) {
-      console.error("sales.recalculateCommission failed", error);
+      // Routine validation rejections are ConvexErrors — re-throw them without
+      // logging so only genuinely unexpected failures hit error monitoring.
       if (error instanceof ConvexError) throw error;
+      console.error("sales.recalculateCommission failed", error);
       throw new ConvexError("An unexpected error occurred. Please try again later.");
     }
   },

@@ -40,6 +40,21 @@ async function shouldPost(ctx: MutationCtx, orgId: Id<"organizations">, date: nu
 }
 
 /**
+ * Whether a domain event dated `date` would post immediately (chart ready + an
+ * open period) rather than queue to the outbox. Payroll payment uses this to
+ * avoid the "payment posts now but its accrual is still queued for a closed
+ * period" negative-payable window: only enforce accrual-before-payment when the
+ * payment itself would actually hit the ledger.
+ */
+export async function isPostableNow(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  date: number
+): Promise<boolean> {
+  return shouldPost(ctx, orgId, date);
+}
+
+/**
  * Posts the event now if the chart + an open period exist, otherwise enqueues it
  * to the durable outbox for retry. This is the single choke point that replaced
  * the previous "silently return if not postable" behavior.

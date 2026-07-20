@@ -107,3 +107,27 @@ Biggest risks: GL balance correctness across accrue/pay/offset (mitigate with re
 ### Deployment order
 1. Merge + `npx convex deploy` (schema + functions).
 2. `npx convex run migrateRoles:backfillPayrollPermissions --prod` — REQUIRED, or legacy OWNER roles fail `isSystemOwnerRole()` and nobody sees the payroll page.
+
+## Production-hardening round (2026-07-20) — second deep audit
+
+Fixed:
+- **Ex-employee salary**: `createRun` includes only members with an active (non-offboarding) membership. A former employee's final settlement is a manual adjustment, not an automatic sweep.
+- **Currency safety**: org currency is locked once any financial record exists (`orgSettings.upsert`); `createRun`/`payRun` reject any compensation/advance whose stored currency ≠ run currency. No conversion is performed.
+- **Outbound cheque routing**: payroll payments and advance issuance credit `BANK_ACCOUNT` for CHEQUE (dealership-issued), never `CHEQUES_IN_HAND` (customer cheques held). Shared `disbursementAccountKey`.
+- **Accrual-before-payment**: when the payment would post now, every prerequisite salary/commission accrual must already be POSTED; a queued accrual (closed period) blocks payment instead of driving a payable negative.
+- **Retro accrual date**: salary/commission accrual is dated to the period end (`run.accountingDate`), so a retroactive run recognizes expense in the month worked, not the approval month.
+- **No silent salary fallback**: a period before an employee's first compensation record is simply not paid (was: back-paid today's rate).
+- **Separation of duties**: a non-owner cannot set their own salary, advance themselves, or approve/pay a run that includes their own payslip (owner exempt).
+- **Salary double-booking**: a SALARIES-category expense is blocked once the org has active payroll compensation.
+- **Flag semantics**: `missingPurchaseCost`/`needsRecalculation` only apply when `commissionAmount == null`, so a sale that already carries a commission keeps its Pay action even if the vehicle cost is later cleared.
+- **Partial advance recovery** (`recoverAdvance` optional `amount`), **paid method** + **approved snapshot** (`approvedGross/NetMinor`) stored on the run for audit, **integer period validation**, and defense-in-depth zero-line guard in `rulePayrollPaid`.
+
+Deferred (documented, not blocking a small-dealership launch — each needs schema/architecture work):
+- Full **reversal flow** for APPROVED/PAID runs (offsetting GL + operational-state restore). Cancel is DRAFT-only.
+- **Commission policy snapshot at completion** (rate/mode/tiers/basis on the sale) so a post-hoc recalculation uses the rules in force at sale time, and mode switches can't reclassify historical sales.
+- **payrollAdvanceAllocations** table (per-payslip advance allocation history) and **payrollItemVersions** (draft/approved/paid immutable stages).
+- **Employee dimension** on journal lines (salary/advance by employee from the GL).
+- **payrollPayments** evidence table (per-employee method/reference/date/attachment) and **per-item payment methods**.
+- **Subscription/feature gating** for payroll (product decision).
+- Period boundaries in **org-local timezone** (currently UTC).
+- **Reapproval-on-drift**: pay-time recompute is captured against the approved snapshot for audit but does not force re-approval.
