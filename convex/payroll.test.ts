@@ -334,8 +334,8 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
 
     // Neither run filters which older commissions it sweeps, so BOTH snapshot
     // the same January sale.
-    const junRun = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
-    const julRun = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 8 });
+    const junRun = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 6 });
+    const julRun = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
 
     // Pay the first run — settles the commission.
     await asAdmin.mutation(api.payroll.approveRun, { orgId, runId: junRun });
@@ -508,7 +508,7 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
     const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 50 });
 
     // Draft snapshots a 50 advance deduction (gross 200 → net 150).
-    const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 8 });
+    const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
     const before = await asAdmin.query(api.payroll.listRunItems, { orgId, runId });
     expect(before[0].advanceDeductionMinor).toBe(50000);
     expect(before[0].netMinor).toBe(150000);
@@ -807,5 +807,241 @@ describe("payroll: ledger-integrity (third audit)", () => {
       ctx.db.query("employeeAdvances").withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId)).collect()
     );
     expect(advances).toHaveLength(1);
+  });
+});
+
+describe("payroll: fourth audit (cross-flow integrity)", () => {
+  // ── Seed with a non-owner payroll clerk who has their OWN advance ──
+  async function seedClerkWithOwnAdvance(t: ReturnType<typeof convexTest>, suffix: string) {
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: `Payroll4 ${suffix}`, createdAt: Date.now() })
+    );
+    const ownerId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: `own_${suffix}`, email: `own_${suffix}@example.com`, name: "Owner" })
+    );
+    const ownerRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "Owner", isSystemOwnerRole: true, permissions: ["view:payroll", "manage:payroll"] })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: ownerId, roleId: ownerRoleId }));
+    await t.run((ctx) =>
+      ctx.db.insert("orgSettings", { orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: [] })
+    );
+    const clerkId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: `clk_${suffix}`, email: `clk_${suffix}@example.com`, name: "Clerk" })
+    );
+    const clerkRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "Payroll Clerk", permissions: ["view:payroll", "manage:payroll"] })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: clerkId, roleId: clerkRoleId }));
+    const asOwner = t.withIdentity({ subject: `own_${suffix}`, clerkId: `own_${suffix}` });
+    const asClerk = t.withIdentity({ subject: `clk_${suffix}`, clerkId: `clk_${suffix}` });
+    return { orgId, ownerId, clerkId, asOwner, asClerk };
+  }
+
+  test("#7 a non-owner payroll clerk cannot mark their OWN advance repaid", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, clerkId, asOwner, asClerk } = await seedClerkWithOwnAdvance(t, "selfrec");
+    // Owner (an independent actor) issues the clerk an advance.
+    const advanceId = await asOwner.mutation(api.payroll.recordAdvance, { orgId, userId: clerkId, amount: 100 });
+    // The clerk must not be able to clear the record of their own debt.
+    await expect(
+      asClerk.mutation(api.payroll.recoverAdvance, { orgId, advanceId, method: "CASH" })
+    ).rejects.toThrow(/only the organization owner/i);
+  });
+
+  test("#4 a duplicate partial repayment with the same key recovers only once", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "partidem");
+    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 100 });
+
+    await asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId, method: "CASH", amount: 40, idempotencyKey: "r-1" });
+    await asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId, method: "CASH", amount: 40, idempotencyKey: "r-1" });
+
+    // Pre-fix, the retry re-read a 60 balance and booked a second 40 (total 80).
+    const adv = await t.run((ctx) => ctx.db.get(advanceId));
+    expect(adv?.recoveredMinor).toBe(40000);
+    expect(adv?.status).toBe("OUTSTANDING");
+    const recoveries = await t.run((ctx) =>
+      ctx.db.query("employeeAdvanceRecoveries").withIndex("by_advance", (q) => q.eq("advanceId", advanceId)).collect()
+    );
+    expect(recoveries).toHaveLength(1);
+  });
+
+  test("#5 approval re-derives salary raised between draft and approval", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "salreapp");
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
+    const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
+    let items = await asAdmin.query(api.payroll.listRunItems, { orgId, runId });
+    expect(items[0].baseSalaryMinor).toBe(500000);
+
+    // Salary corrected upward before approval; approval must accrue/approve 600.
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 600 });
+    await asAdmin.mutation(api.payroll.approveRun, { orgId, runId });
+    items = await asAdmin.query(api.payroll.listRunItems, { orgId, runId });
+    expect(items[0].baseSalaryMinor).toBe(600000);
+    const run = await t.run((ctx) => ctx.db.get(runId));
+    expect(run?.approvedNetMinor).toBe(600000);
+  });
+
+  test("#6 an employee offboarded after drafting cannot be approved", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, clerkId, asOwner } = await seedClerkWithOwnAdvance(t, "offbappr");
+    await asOwner.mutation(api.payroll.setCompensation, { orgId, userId: clerkId, monthlySalary: 500 });
+    const runId = await asOwner.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
+
+    // Offboarded AFTER the draft — the draft is not a frozen authorization.
+    await t.run(async (ctx) => {
+      const m = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", clerkId))
+        .unique();
+      await ctx.db.patch(m!._id, { offboardingStatus: "PENDING_EXTERNAL_REMOVAL" });
+    });
+    await expect(
+      asOwner.mutation(api.payroll.approveRun, { orgId, runId })
+    ).rejects.toThrow(/no longer an active member/i);
+  });
+
+  test("#9 a PENDING expense cannot be flipped to SALARIES+PAID for a payroll org", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "salbypass");
+    // Org uses payroll (active compensation) and grant the actor expense perms.
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
+    await t.run(async (ctx) => {
+      const role = await ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
+      await ctx.db.patch(role!._id, { permissions: [...role!.permissions, "create:expenses", "edit:expenses"] });
+    });
+    // A PENDING expense under OTHER (no accounting exposure yet).
+    const expenseId = await t.run((ctx) =>
+      ctx.db.insert("expenses", {
+        orgId, title: "misc", amount: 500, date: Date.now(), category: "OTHER", status: "PENDING",
+      })
+    );
+    await expect(
+      asAdmin.mutation(api.expenses.update, { orgId, expenseId, category: "SALARIES", status: "PAID" })
+    ).rejects.toThrow(/record salaries through a payroll run/i);
+  });
+
+  test("#11 currency cannot change once a PENDING expense exists", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId } = await seedPayrollOrg(t, "curexp");
+    // A PENDING expense posts no accounting event/transaction yet, but its
+    // stored amount is denominated in the org currency.
+    await t.run((ctx) =>
+      ctx.db.insert("expenses", {
+        orgId, title: "misc", amount: 500, date: Date.now(), category: "OTHER", status: "PENDING",
+      })
+    );
+    const asAdmin = t.withIdentity({ subject: `pay_curexp`, clerkId: `pay_curexp` });
+    await expect(
+      asAdmin.mutation(api.orgSettings.upsert, { orgId, currency: "USD" })
+    ).rejects.toThrow(/currency cannot be changed/i);
+  });
+
+  test("a future payroll period is rejected", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "futper");
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
+    // December 2026 begins after "now" (2026-07); it has not been earned yet.
+    await expect(
+      asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 12 })
+    ).rejects.toThrow(/future period/i);
+  });
+
+  // ── Chart + open-period tests for the ledger-ordering fixes ──
+  async function seedPayrollOrgWithChart(t: ReturnType<typeof convexTest>, suffix: string) {
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: `PayChart ${suffix}`, createdAt: Date.now() })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
+    );
+    const userId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: `pc_${suffix}`, email: `${suffix}@pc.example.com`, name: "Owner" })
+    );
+    const roleId = await t.run((ctx) =>
+      ctx.db.insert("roles", {
+        orgId, name: "Owner", isSystemOwnerRole: true,
+        permissions: ["view:payroll", "manage:payroll", "view:commissions", "manage:commissions", "view:finance", "manage:finance"],
+      })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+    await t.run((ctx) =>
+      ctx.db.insert("orgSettings", { orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH", "BANK_TRANSFER"] })
+    );
+    const asAdmin = t.withIdentity({ subject: `pc_${suffix}`, clerkId: `pc_${suffix}` });
+    await asAdmin.mutation(api.chartOfAccounts.initialize, { orgId });
+    return { orgId, userId, asAdmin };
+  }
+
+  async function openMonth(asAdmin: any, orgId: any, year: number, monthIdx: number, periodNumber: number) {
+    await asAdmin.mutation(api.accountingPeriods.create, {
+      orgId,
+      startDate: Date.UTC(year, monthIdx, 1),
+      endDate: Date.UTC(year, monthIdx + 1, 1) - 1,
+      fiscalYear: year,
+      periodNumber,
+      openImmediately: true,
+    });
+  }
+
+  test("#1 payment cannot recover an advance whose issuance is still queued", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrgWithChart(t, "advorder");
+    // Only July is open. An advance dated in June (no open period) queues its
+    // issuance; a July salary run will try to recover it while July can post.
+    await openMonth(asAdmin, orgId, 2026, 6, 7); // July
+    await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 50, date: Date.UTC(2026, 5, 15) });
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
+
+    const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
+    await asAdmin.mutation(api.payroll.approveRun, { orgId, runId });
+    // Pre-fix, this posts PAYROLL_PAID crediting Employee Advances below a debit
+    // that is still queued (negative balance). The guard must block it instead.
+    await expect(
+      asAdmin.mutation(api.payroll.payRun, { orgId, runId, method: "CASH" })
+    ).rejects.toThrow(/issuance hasn't posted/i);
+  });
+
+  test("#2 re-accruing a queued commission does not recognize it in a later period", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrgWithChart(t, "commperiod");
+    await openMonth(asAdmin, orgId, 2026, 6, 7); // only July is open
+
+    const saleId = await t.run(async (ctx) => {
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, vin: "VIN-CP", make: "Kia", model: "K5", year: 2024, color: "White",
+        fuelType: "Gasoline", transmission: "Automatic", mileage: 10, sellingPrice: 20000, status: "SOLD",
+      });
+      const customerId = await ctx.db.insert("customers", { orgId, firstName: "J", lastName: "B", email: "cp@example.com" });
+      return await ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId,
+        salePrice: 20000, saleDate: Date.UTC(2026, 5, 15), status: "COMPLETED", commissionAmount: 100,
+      });
+    });
+
+    // A June run accrues the commission into June — but June has no open period,
+    // so it QUEUES (dated to June).
+    const junRun = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 6 });
+    await asAdmin.mutation(api.payroll.approveRun, { orgId, runId: junRun });
+
+    // A July run sweeps the still-unpaid commission and re-accrues it while July
+    // is open (postable now). It must NOT create a second, July-dated accrual —
+    // the queued June one is preserved.
+    const julRun = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
+    await asAdmin.mutation(api.payroll.approveRun, { orgId, runId: julRun });
+
+    const key = `commission_accrued_${saleId}`;
+    const posted = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", key)).collect()
+    );
+    const pending = await t.run((ctx) =>
+      ctx.db.query("pendingAccountingEvents").withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", key)).collect()
+    );
+    // Pre-fix: a POSTED July accrual exists; post-fix: only the queued June one.
+    expect(posted).toHaveLength(0);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].accountingDate).toBeLessThan(Date.UTC(2026, 6, 1));
   });
 });

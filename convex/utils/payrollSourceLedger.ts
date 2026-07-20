@@ -63,15 +63,33 @@ export async function payrollPostingBlockedReason(
   if (salaryMinor > 0 && !(await prereqPosted(ctx, entry.orgId, `payroll_accrued_${rawItemId}`))) {
     return "the salary accrual behind it has not posted to the ledger yet, so this would clear a Salaries Payable that was never accrued";
   }
+  const itemId = ctx.db.normalizeId("payrollItems", rawItemId);
   const commissionMinor = typeof payload.commissionMinor === "number" ? payload.commissionMinor : 0;
   if (commissionMinor > 0) {
-    const itemId = ctx.db.normalizeId("payrollItems", rawItemId);
     const item = itemId ? await ctx.db.get(itemId) : null;
     if (item && item.orgId === entry.orgId) {
       for (const saleId of item.commissionSaleIds) {
         if (!(await prereqPosted(ctx, entry.orgId, `commission_accrued_${saleId}`))) {
           return "a commission accrual behind it has not posted to the ledger yet, so this would clear a Commission Payable that was never accrued";
         }
+      }
+    }
+  }
+  // Advance recovery: the payment credits Employee Advances for every advance
+  // this payslip recovered, so each of those issuances must be posted first —
+  // otherwise the asset is credited below a debit that hasn't landed (negative
+  // balance). The recovery allocation rows record exactly which advances.
+  const advanceRecoveredMinor =
+    typeof payload.advanceRecoveredMinor === "number" ? payload.advanceRecoveredMinor : 0;
+  if (advanceRecoveredMinor > 0 && itemId) {
+    const recoveries = await ctx.db
+      .query("employeeAdvanceRecoveries")
+      .withIndex("by_payroll_item", (q) => q.eq("payrollItemId", itemId))
+      .collect();
+    for (const rec of recoveries) {
+      if (rec.orgId !== entry.orgId) continue;
+      if (!(await prereqPosted(ctx, entry.orgId, `employee_advance_paid_${rec.advanceId}`))) {
+        return "an advance issuance behind it has not posted to the ledger yet, so this would credit an Employee Advances balance that was never debited";
       }
     }
   }

@@ -118,14 +118,18 @@ export const upsert = mutation({
       // currency (pendingAccountingEvents covers orgs whose chart isn't set up
       // yet — their events queue rather than post). If any row exists, the
       // currency is load-bearing and must not change without a migration.
-      const [ledger, pending, txns, comp, advances] = await Promise.all([
+      // `expenses` is included because a PENDING expense stores an amount but
+      // posts no accounting event/transaction yet — switching currency and then
+      // marking it paid would re-denominate the stored amount into the new one.
+      const [ledger, pending, txns, comp, advances, expenseRow] = await Promise.all([
         ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
         ctx.db.query("pendingAccountingEvents").withIndex("by_org_status", (q) => q.eq("orgId", args.orgId)).first(),
         ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
         ctx.db.query("employeeCompensation").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
         ctx.db.query("employeeAdvances").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
+        ctx.db.query("expenses").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first(),
       ]);
-      if (ledger || pending || txns || comp || advances) {
+      if (ledger || pending || txns || comp || advances || expenseRow) {
         throw new ConvexError(
           "The organization currency cannot be changed after financial records exist — stored amounts are not converted and would be misread. Contact support for a currency migration."
         );

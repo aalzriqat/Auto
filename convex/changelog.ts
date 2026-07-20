@@ -1079,6 +1079,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "أصبحت أزرار عمليات البحث المحفوظة تعرض الآن شارة تحسب السيارات المُضافة منذ آخر مرة شغّلت فيها البحث — لتلاحظ المطابقات الجديدة بنظرة سريعة. والضغط على البحث يستعرضه ويُخفي الشارة.",
     publishedAt: releaseAt(2026, 7, 19, 12),
   },
+  {
+    type: "FEATURE",
+    titleEn: "Payroll: monthly runs, commissions, and advances",
+    titleAr: "الرواتب: دورات شهرية وعمولات وسُلَف",
+    descriptionEn: "Run monthly payroll that pays fixed salaries and sales commissions together, and record employee advances (سلفة) that are recovered from later payslips. Amounts are frozen and re-checked at approval, salary advances are tracked as a recoverable asset (not an expense), and every step posts to the correct accounting period.",
+    descriptionAr: "شغّل رواتب شهرية تدفع الرواتب الثابتة وعمولات المبيعات معاً، وسجّل سُلَف الموظفين (سلفة) التي تُسترد من كشوف الرواتب اللاحقة. تُجمّد المبالغ ويُعاد التحقق منها عند الاعتماد، وتُعامل سُلَف الرواتب كأصل قابل للاسترداد (وليست مصروفاً)، وتُرحّل كل خطوة إلى الفترة المحاسبية الصحيحة.",
+    publishedAt: releaseAt(2026, 7, 20, 1),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

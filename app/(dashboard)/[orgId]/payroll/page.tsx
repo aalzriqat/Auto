@@ -57,9 +57,13 @@ export default function PayrollPage() {
   const [advMethod, setAdvMethod] = useState<(typeof METHODS)[number]>("CASH");
   // How the money actually moved — advance recoveries and payroll payments hit
   // different GL cash accounts depending on the method, so neither is hardcoded.
-  const [recoverMethod, setRecoverMethod] = useState<(typeof METHODS)[number]>("CASH");
+  // Per-advance so changing one row's method never silently changes another's.
+  const [recoverMethods, setRecoverMethods] = useState<Record<string, (typeof METHODS)[number]>>({});
   // Per-advance partial repayment amount (blank = recover the full balance).
   const [recoverAmounts, setRecoverAmounts] = useState<Record<string, string>>({});
+  // Advances with a repayment in flight — the row's button is disabled so a
+  // double-click can't book a second partial recovery against the re-read balance.
+  const [recoveringIds, setRecoveringIds] = useState<Set<string>>(new Set());
   const [payMethod, setPayMethod] = useState<(typeof METHODS)[number]>("BANK_TRANSFER");
   const [runYear, setRunYear] = useState(String(new Date().getFullYear()));
   const [runMonth, setRunMonth] = useState(String(new Date().getMonth() + 1));
@@ -90,6 +94,37 @@ export default function PayrollPage() {
       setAdvUser(""); setAdvAmount("");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function doRecover(advanceId: string) {
+    if (!activeOrgId || recoveringIds.has(advanceId)) return;
+    const raw = (recoverAmounts[advanceId] ?? "").trim();
+    // Blank = recover the full outstanding balance. A NON-blank entry must be a
+    // valid positive number — an invalid/zero/negative value is a mistake and
+    // must be rejected, NOT silently coerced into a full repayment.
+    let amount: number | undefined;
+    if (raw !== "") {
+      const parsed = Number.parseFloat(raw);
+      if (Number.isNaN(parsed) || parsed <= 0) {
+        toast.error(t("InvalidRepaymentAmount" as any));
+        return;
+      }
+      amount = parsed;
+    }
+    const method = recoverMethods[advanceId] ?? "CASH";
+    // Stable key for THIS submission so an automatic network retry dedupes
+    // server-side; a fresh submission after success gets a fresh key.
+    const idempotencyKey = crypto.randomUUID();
+    setRecoveringIds((s) => new Set(s).add(advanceId));
+    try {
+      await recoverAdvance({ orgId: activeOrgId, advanceId: advanceId as Id<"employeeAdvances">, method, amount, idempotencyKey });
+      toast.success(t("AdvanceRecovered" as any));
+      setRecoverAmounts((m) => { const n = { ...m }; delete n[advanceId]; return n; });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRecoveringIds((s) => { const n = new Set(s); n.delete(advanceId); return n; });
     }
   }
 
@@ -216,22 +251,25 @@ export default function PayrollPage() {
                               placeholder={t("FullAmount" as any)}
                               value={recoverAmounts[a._id] ?? ""}
                               onChange={(e) => setRecoverAmounts((m) => ({ ...m, [a._id]: e.target.value }))}
+                              disabled={recoveringIds.has(a._id)}
                               className="h-8 w-24 text-end"
                               title={t("PartialRepaymentHint" as any)}
                             />
-                            <Select value={recoverMethod} onValueChange={(v) => setRecoverMethod(v as (typeof METHODS)[number])}>
+                            <Select
+                              value={recoverMethods[a._id] ?? "CASH"}
+                              onValueChange={(v) => setRecoverMethods((m) => ({ ...m, [a._id]: v as (typeof METHODS)[number] }))}
+                            >
                               <SelectTrigger className="w-36 h-8"><SelectValue /></SelectTrigger>
                               <SelectContent>
                                 {METHODS.map((mth) => <SelectItem key={mth} value={mth}>{t(`PaymentMethod_${mth}` as any)}</SelectItem>)}
                               </SelectContent>
                             </Select>
-                            <Button size="sm" variant="outline" onClick={() => {
-                              const raw = recoverAmounts[a._id];
-                              const parsed = raw ? Number.parseFloat(raw) : undefined;
-                              const amount = parsed !== undefined && !Number.isNaN(parsed) && parsed > 0 ? parsed : undefined;
-                              doAction(() => recoverAdvance({ orgId: activeOrgId!, advanceId: a._id, method: recoverMethod, amount }), "AdvanceRecovered");
-                              setRecoverAmounts((m) => { const n = { ...m }; delete n[a._id]; return n; });
-                            }}>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={recoveringIds.has(a._id)}
+                              onClick={() => doRecover(a._id)}
+                            >
                               {t("MarkRecovered" as any)}
                             </Button>
                           </div>

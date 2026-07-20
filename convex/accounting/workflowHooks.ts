@@ -60,6 +60,25 @@ export async function isPostableNow(
  * the previous "silently return if not postable" behavior.
  */
 async function postOrEnqueue(ctx: MutationCtx, cmd: PostCommand): Promise<void> {
+  // Period integrity: if this exact domain event is already captured but not yet
+  // posted in the outbox, it will post with ITS ORIGINAL accounting date once the
+  // period opens. A second hook call for the same event (e.g. a commission
+  // accrued at sale completion into a closed month, then re-hooked at payroll
+  // approval with the period-end date) must NOT create a replacement dated to a
+  // different period — that would recognize the expense in the wrong month while
+  // the queued original later self-dedupes away. Treat the second call as a
+  // no-op; the queued original is the source of truth. (postAccountingEvent only
+  // dedupes against POSTED events, so this pending-side guard is the only thing
+  // that prevents the cross-period duplicate.)
+  const queued = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", cmd.orgId).eq("idempotencyKey", cmd.idempotencyKey)
+    )
+    .filter((q) => q.and(q.eq(q.field("kind"), "POST"), q.neq(q.field("status"), "POSTED")))
+    .first();
+  if (queued) return;
+
   // Self-heal: make sure the GENERAL_EXPENSE system account is mapped for this
   // org before the engine tries to resolve it (older charts lack the key).
   // Centralized here (not just in hookExpensePosted) because other posting

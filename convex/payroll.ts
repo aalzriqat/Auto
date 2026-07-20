@@ -198,14 +198,19 @@ export const recoverAdvance = mutation({
     advanceId: v.id("employeeAdvances"),
     method: v.optional(paymentMethodValidator),
     amount: v.optional(v.number()),
+    idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     try {
-      const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
+      const authCtx = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
+      const { user } = authCtx;
       const advance = await ctx.db.get(args.advanceId);
       if (!advance || advance.isDeleted || advance.orgId !== args.orgId) {
         throw new ConvexError("Advance not found.");
       }
+      // Separation of duties: a non-owner payroll admin must not clear the record
+      // of their OWN debt — an independent actor has to record the repayment.
+      assertNotSelfBeneficiary(authCtx, advance.userId, "record repayment of your own advance");
       if (advance.status !== "OUTSTANDING") {
         throw new ConvexError("Only an outstanding advance can be recovered.");
       }
@@ -234,41 +239,61 @@ export const recoverAdvance = mutation({
         await assertAdvanceIssuancePosted(ctx, args.orgId, args.advanceId);
       }
 
-      const now = Date.now();
       const method = normalizePaymentMethod(args.method);
-      const newRecovered = advance.recoveredMinor + recoverMinor;
-      await ctx.db.patch(args.advanceId, {
-        recoveredMinor: newRecovered,
-        status: newRecovered >= advance.amountMinor ? "RECOVERED" : "OUTSTANDING",
-        updatedAt: now,
-      });
 
-      // One immutable recovery row per repayment → its own GL identity, so
-      // partial repayments each post a distinct EMPLOYEE_ADVANCE_RECOVERED.
-      const recoveryId = await ctx.db.insert("employeeAdvanceRecoveries", {
-        orgId: args.orgId,
-        advanceId: args.advanceId,
-        userId: advance.userId,
-        amountMinor: recoverMinor,
-        currency: advance.currency,
-        method,
-        source: "DIRECT",
-        recoveredAt: now,
-        recoveredBy: user._id,
-      });
+      // Idempotent: a double-click or network retry with the same key returns the
+      // first recovery instead of booking a second partial repayment (a duplicate
+      // full repayment self-guards via the RECOVERED status above, but a duplicate
+      // PARTIAL would otherwise succeed twice against the re-read balance).
+      return await runWithIdempotency(
+        ctx,
+        {
+          orgId: args.orgId,
+          operation: "payroll.recoverAdvance",
+          idempotencyKey: args.idempotencyKey,
+          actorId: user._id,
+          fingerprint: JSON.stringify({ advanceId: args.advanceId, recoverMinor, method }),
+        },
+        async () => {
+          const now = Date.now();
+          const newRecovered = advance.recoveredMinor + recoverMinor;
+          await ctx.db.patch(args.advanceId, {
+            recoveredMinor: newRecovered,
+            status: newRecovered >= advance.amountMinor ? "RECOVERED" : "OUTSTANDING",
+            updatedAt: now,
+          });
 
-      // GL: Dr cash / Cr Employee Advances — the asset is settled.
-      await hookEmployeeAdvanceRecovered(ctx, {
-        orgId: args.orgId,
-        advanceId: args.advanceId,
-        recoveryId,
-        userId: advance.userId,
-        amountMinor: recoverMinor,
-        currency: advance.currency,
-        paymentMethod: method,
-        actorId: user._id,
-        occurredAt: now,
-      });
+          // One immutable recovery row per repayment → its own GL identity, so
+          // partial repayments each post a distinct EMPLOYEE_ADVANCE_RECOVERED.
+          const recoveryId = await ctx.db.insert("employeeAdvanceRecoveries", {
+            orgId: args.orgId,
+            advanceId: args.advanceId,
+            userId: advance.userId,
+            amountMinor: recoverMinor,
+            currency: advance.currency,
+            method,
+            source: "DIRECT",
+            recoveredAt: now,
+            recoveredBy: user._id,
+            idempotencyKey: args.idempotencyKey,
+          });
+
+          // GL: Dr cash / Cr Employee Advances — the asset is settled.
+          await hookEmployeeAdvanceRecovered(ctx, {
+            orgId: args.orgId,
+            advanceId: args.advanceId,
+            recoveryId,
+            userId: advance.userId,
+            amountMinor: recoverMinor,
+            currency: advance.currency,
+            paymentMethod: method,
+            actorId: user._id,
+            occurredAt: now,
+          });
+
+          return recoveryId;
+        }
+      );
     } catch (error) {
       if (error instanceof ConvexError) throw error;
       console.error("payroll.recoverAdvance failed", error);
@@ -461,6 +486,36 @@ async function assertAdvanceIssuancePosted(
     throw new ConvexError(
       "This advance's issuance hasn't posted to the ledger yet (its accounting period may be closed). Open the period so the issuance posts, then record the repayment."
     );
+  }
+}
+
+/**
+ * Payment-path counterpart of assertAccrualsPosted for advance recovery: every
+ * outstanding advance the run could recover must have its issuance POSTED before
+ * a payment that posts now credits Employee Advances — otherwise the asset is
+ * credited below a debit that is still queued (issuance dated to a closed
+ * period), driving it negative. Checked against the same outstanding-advance
+ * population recoverItemAdvances will draw from.
+ */
+async function assertAdvanceIssuancesPosted(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  items: { userId: Id<"users">; currency: string }[]
+): Promise<void> {
+  const seen = new Set<string>();
+  for (const item of items) {
+    const key = `${item.userId}:${item.currency}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const advances = await ctx.db
+      .query("employeeAdvances")
+      .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", item.userId))
+      .filter((q) => q.and(q.eq(q.field("status"), "OUTSTANDING"), q.neq(q.field("isDeleted"), true)))
+      .collect();
+    for (const adv of advances) {
+      if (adv.currency !== item.currency) continue;
+      await assertAdvanceIssuancePosted(ctx, orgId, adv._id);
+    }
   }
 }
 
@@ -659,6 +714,13 @@ export const createRun = mutation({
       if (!Number.isInteger(args.periodYear) || args.periodYear < 2000 || args.periodYear > 2200) {
         throw new ConvexError("Year must be a valid whole number.");
       }
+      // Reject a period that lies entirely in the future: salary is earned by
+      // working the month, so a run cannot be drafted before the month has begun
+      // (there is no advance-payroll workflow). The current, in-progress month is
+      // allowed (dealerships commonly run payroll before month-end).
+      if (Date.UTC(args.periodYear, args.periodMonth - 1, 1) > Date.now()) {
+        throw new ConvexError("Cannot create a payroll run for a future period.");
+      }
 
       const clash = await ctx.db
         .query("payrollRuns")
@@ -841,6 +903,38 @@ export const approveRun = mutation({
       // Separation of duties: a non-owner cannot approve a run that pays them.
       for (const item of items) assertNotSelfBeneficiary(authCtx, item.userId, "approve a payroll run that pays you");
 
+      // A draft is NOT a frozen authorization. Revalidate membership and
+      // re-derive salary from live compensation at approval time:
+      //  - an employee offboarded/removed after drafting must not be accrued or
+      //    paid (their period settlement is a separate manual adjustment), and
+      //  - a salary corrected (up, down, or to zero) between draft and approval
+      //    must be the amount that actually accrues and is approved — the draft's
+      //    baseSalaryMinor snapshot is not trusted.
+      const activeMemberIds = new Set(
+        (
+          await ctx.db
+            .query("memberships")
+            .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+            .collect()
+        )
+          .filter((m) => !m.offboardingStatus)
+          .map((m) => m.userId)
+      );
+      for (const item of items) {
+        if (!activeMemberIds.has(item.userId)) {
+          throw new ConvexError(
+            "An employee on this draft is no longer an active member. Cancel this draft and create a fresh run for the period."
+          );
+        }
+      }
+      const salaryByUser = await resolveSalariesForPeriod(
+        ctx,
+        args.orgId,
+        accrualDate,
+        run.currency,
+        activeMemberIds
+      );
+
       // Approval RE-DERIVES each item from live state and freezes it, so the
       // amount accrued to the GL, the amount stored on the payslip, and the
       // approved run total can never disagree — e.g. a MANUAL commission edited
@@ -848,13 +942,14 @@ export const approveRun = mutation({
       let approvedGross = 0;
       let approvedNet = 0;
       for (const item of items) {
-        if (item.baseSalaryMinor > 0) {
+        const baseSalaryMinor = salaryByUser.get(item.userId) ?? 0;
+        if (baseSalaryMinor > 0) {
           await hookPayrollAccrued(ctx, {
             orgId: args.orgId,
             itemId: item._id,
             runId: args.runId,
             userId: item.userId,
-            amountMinor: item.baseSalaryMinor,
+            amountMinor: baseSalaryMinor,
             currency: item.currency,
             actorId: user._id,
             occurredAt: accrualDate,
@@ -890,13 +985,14 @@ export const approveRun = mutation({
           liveSaleIds.push(saleId);
         }
 
-        const grossMinor = item.baseSalaryMinor + commissionMinor;
+        const grossMinor = baseSalaryMinor + commissionMinor;
         const advanceDeductionMinor = Math.min(
           await outstandingAdvanceMinor(ctx, args.orgId, item.userId, item.currency),
           grossMinor
         );
         const netMinor = grossMinor - advanceDeductionMinor;
         await ctx.db.patch(item._id, {
+          baseSalaryMinor,
           commissionMinor,
           commissionSaleIds: liveSaleIds,
           advanceDeductionMinor,
@@ -965,6 +1061,7 @@ export const payRun = mutation({
       // period now), it drains after the accrual, so no guard is needed.
       if (await isPostableNow(ctx, args.orgId, now)) {
         await assertAccrualsPosted(ctx, args.orgId, items);
+        await assertAdvanceIssuancesPosted(ctx, args.orgId, items);
       }
 
       let paidGrossMinor = 0;

@@ -135,15 +135,27 @@ Fixed:
 - **`recordAdvance` is idempotent** (`runWithIdempotency` + `idempotencyKey`), so a double-click can't issue two advances/disbursements.
 - **Partial repayment exposed in the Payroll UI** (per-advance amount input; blank = full).
 
+## Fourth audit round (2026-07-20, cross-flow integrity pass)
+
+Fixed:
+- **Pending accrual keeps its original accounting period (engine-wide).** `postOrEnqueue` now no-ops when an unposted `pendingAccountingEvents` row already holds the same `idempotencyKey`. A commission accrued into a closed month (queued at sale completion) that is re-hooked at payroll approval no longer posts a second, differently-dated event that recognizes the expense in the wrong month while the queued original self-dedupes away. `postAccountingEvent` only ever dedupes against POSTED events, so this pending-side guard was the missing half.
+- **Payroll payment can't recover an advance whose issuance is still queued.** `payRun` adds `assertAdvanceIssuancesPosted` (mirrors `assertAccrualsPosted`) when the payment posts now, and the outbox guard for a queued `PAYROLL_PAID` now also holds until each recovered advance's issuance posts — traced via `employeeAdvanceRecoveries.by_payroll_item`. Previously only the DIRECT repayment path checked this, so a payroll recovery could credit Employee Advances below a still-queued debit (negative balance).
+- **Approval re-derives salary and revalidates membership.** `approveRun` now re-runs `resolveSalariesForPeriod` (a salary corrected up/down/to-zero between draft and approval is what accrues and is approved — not the stale draft snapshot) and rejects a run whose employee was offboarded/removed after drafting. A draft is no longer treated as frozen authorization.
+- **`recoverAdvance` self-recovery blocked + idempotent.** Added `assertNotSelfBeneficiary` (a non-owner payroll clerk can't clear the record of their own debt) and `runWithIdempotency` (a duplicate partial repayment with the same key books one recovery, not two against the re-read balance).
+- **Salary double-booking guard applied to expense UPDATE.** Shared `assertSalaryExpenseAllowed` now runs on `expenses.update` against the effective category, closing the PENDING/OTHER → SALARIES+PAID bypass of the create guard.
+- **Currency lock includes pending expenses.** A PENDING expense (amount stored, nothing posted yet) now locks the org currency, closing the re-denomination window.
+- **Future payroll periods rejected.** `createRun` rejects a period whose month begins after now (the current in-progress month is still allowed).
+- **Repayment UI** now uses per-advance payment methods (changing one row no longer changes others), rejects an invalid/zero/negative amount instead of silently recovering the full balance, sends an idempotency key, and disables the row while a repayment is in flight.
+
 Deferred (documented, not blocking a small-dealership launch — each needs schema/architecture work):
 - Full **reversal flow** for APPROVED/PAID runs (offsetting GL + operational-state restore). Cancel is DRAFT-only.
-- **Commission policy snapshot at completion** (rate/mode/tiers/basis on the sale) so a post-hoc recalculation uses the rules in force at sale time, and mode switches can't reclassify historical sales.
-- **payrollItemVersions** (draft/approved/paid immutable stages). Advance-allocation history now exists via `employeeAdvanceRecoveries`.
-- **Employee dimension** on journal lines (salary/advance by employee from the GL).
-- **payrollPayments** evidence table (per-employee cheque number/bank reference/attachment) and **per-item payment methods**.
-- **Maker–checker split** of `manage:payroll` into prepare/approve/pay. Current control: a non-owner can't act on their own payslip, but the same non-owner can still prepare+approve+pay others'.
-- **Employment start/end dates + final settlement** and **salary proration** (mid-period hires/raises pay the full monthly rate; a re-added employee's old active comp resumes).
-- **Subscription/feature gating** for payroll (product decision).
-- Period boundaries in **org-local timezone** (currently UTC); future-period runs are allowed (year ≤ 2200).
-- **Mandatory reapproval-on-drift**: approval now freezes an accurate snapshot, and payment always pays the correct live amount, but a post-approval change (e.g. a new advance) is not force-re-approved.
-- **Role-name-based backfill** can still grant payroll to a customized role that kept its default name — mitigated (finance/template-name only, never commissions), full fix = exact permission-set fingerprint.
+- **Mandatory reapproval-on-drift** as a state machine (`NEEDS_REAPPROVAL` + immutable per-item approved amounts). Current mitigation: approval freezes an accurate re-derived snapshot and payment recomputes from live state so the dangerous cases (double-pay, paying a cancelled commission) can't occur; a benign post-approval drift (e.g. an advance repaid directly) still pays the correct live amount without a forced re-approval.
+- **Subscription/feature gating** for payroll, or auto-provisioning a minimum ledger + a payroll-ledger reconciliation view for non-accounting plans (product decision). Today payroll queues its GL events for orgs without the accounting feature, but those orgs can't view/redrive the outbox.
+- **Commission policy snapshot at completion** (rate/mode/tiers/basis on the sale) so a post-hoc recalculation uses the rules in force at sale time.
+- **payrollItemVersions** (draft/approved/paid immutable stages). Advance-allocation history exists via `employeeAdvanceRecoveries`.
+- **Employee dimension** on journal lines; **payrollPayments** evidence table (cheque number/bank reference/attachment).
+- **Maker–checker split** of `manage:payroll` into prepare/approve/pay. Current control: a non-owner can't act on their own payslip, but can still prepare+approve+pay others'.
+- **Employment start/end dates + final settlement** and **salary proration** (mid-period hires/raises pay the full monthly rate).
+- Period boundaries in **org-local timezone** (currently UTC).
+- **Pagination** on the payroll members list / advances / runs (currently first-100 members, unpaginated advances/runs).
+- **Role-name-based backfill** can still grant payroll to a customized role that kept its default name — mitigated (finance/template-name only, never commissions); full fix = exact permission-set fingerprint.

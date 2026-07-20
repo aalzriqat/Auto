@@ -2389,9 +2389,16 @@ export default defineSchema({
     payrollItemId: v.optional(v.id("payrollItems")),
     recoveredAt: v.number(),
     recoveredBy: v.id("users"),
+    // Fingerprint for direct-repayment idempotency (advance+amount+method); a
+    // retried recoverAdvance with the same key must not book a second recovery.
+    idempotencyKey: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
-    .index("by_advance", ["advanceId"]),
+    .index("by_advance", ["advanceId"])
+    // Lets the outbox find every advance a payslip recovered, so a queued
+    // PAYROLL_PAID can be held until each advance issuance has posted.
+    .index("by_payroll_item", ["payrollItemId"])
+    .index("by_org_idempotency", ["orgId", "idempotencyKey"]),
 
   // A monthly payroll run and its per-employee payslip items.
   payrollRuns: defineTable({
