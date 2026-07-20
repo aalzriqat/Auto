@@ -2386,6 +2386,8 @@ export default defineSchema({
     approvedAt: v.optional(v.number()),
     paidBy: v.optional(v.id("users")),
     paidAt: v.optional(v.number()),
+    cancelledBy: v.optional(v.id("users")),
+    cancelledAt: v.optional(v.number()),
     updatedAt: v.number(),
   })
     .index("by_org", ["orgId"])

@@ -26,10 +26,14 @@ export const CAPITALIZABLE_EXPENSE_CATEGORIES = new Set([
 export function vehicleHasCostBasis(
   vehicle: Pick<Doc<"vehicles">, "sourceType" | "sourceCost" | "purchasePrice">
 ): boolean {
+  // Zero is treated as missing, not as a real cost: a 0 basis would make the
+  // "gross profit" nearly the full sale price — exactly the overpayment the
+  // missing-cost guard exists to prevent. A genuinely free vehicle should be
+  // flagged for a manager to confirm, not silently commissioned at full price.
   if (vehicle.sourceType === "SOURCED") {
-    return vehicle.sourceCost != null;
+    return vehicle.sourceCost != null && vehicle.sourceCost > 0;
   }
-  return vehicle.purchasePrice != null;
+  return vehicle.purchasePrice != null && vehicle.purchasePrice > 0;
 }
 
 /**

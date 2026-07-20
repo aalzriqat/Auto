@@ -135,7 +135,9 @@ export default function VehiclesPage() {
   // flag legitimately-costed SOURCED stock.
   const isMissingCost = (v: Doc<"vehicles">) => {
     if (!canViewCost || v.status === "SOURCING") return false;
-    return v.sourceType === "SOURCED" ? v.sourceCost == null : v.purchasePrice == null;
+    // Zero counts as missing too — a 0 cost basis would commission on ~the
+    // full sale price (mirrors backend vehicleHasCostBasis).
+    return v.sourceType === "SOURCED" ? !(v.sourceCost != null && v.sourceCost > 0) : !(v.purchasePrice != null && v.purchasePrice > 0);
   };
 
   const pendingRequests = useQuery(api.vehicleRequests.listPending, activeOrgId && canEdit ? { orgId: activeOrgId } : "skip");

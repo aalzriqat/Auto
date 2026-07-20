@@ -442,6 +442,100 @@ describe("C3: automatic commission requires a recorded purchase cost", () => {
     // profit = 15000 - 10000 = 5000; 10% => 500
     expect(sale?.commissionAmount).toBe(500);
   });
+
+  test("a ZERO purchase cost is treated as missing, not as a real cost", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "c3_zero");
+    await setAutoMemberMode(t, orgId, userId, 10);
+    // 0 passes a naive `!= null` check but would commission on ~the full sale
+    // price (15000 * 10% = 1500) — exactly what the guard exists to prevent.
+    await t.run((ctx) => ctx.db.patch(vehicleId, { purchasePrice: 0 }));
+
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 15000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+
+    const sale = await t.run((ctx) => ctx.db.get(saleId));
+    expect(sale?.commissionAmount == null || sale?.commissionAmount === 0).toBe(true);
+  });
+
+  test("a SOURCED vehicle with a sourceCost is commissioned normally (not flagged as missing cost)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "c3_sourced");
+    await setAutoMemberMode(t, orgId, userId, 10);
+    // SOURCED vehicles carry their cost in sourceCost, not purchasePrice.
+    await t.run((ctx) => ctx.db.patch(vehicleId, { sourceType: "SOURCED", sourceCost: 12000 }));
+
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 15000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+
+    const sale = await t.run((ctx) => ctx.db.get(saleId));
+    // profit = 15000 - 12000 = 3000; 10% => 300. A purchasePrice-only check
+    // would wrongly zero this out.
+    expect(sale?.commissionAmount).toBe(300);
+  });
+
+  test("recalculateCommission books the commission after the missing cost is corrected", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "c3_recalc");
+    await setAutoMemberMode(t, orgId, userId, 10);
+
+    // Completes with NO cost => no commission computed, sale flagged.
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 15000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+    let rows = await asAdmin.query(api.sales.listCommissions, { orgId });
+    expect(rows.find((r) => r._id === saleId)?.missingPurchaseCost).toBe(true);
+
+    // Manager fixes the vehicle cost → the row flips to "needs recalculation".
+    await t.run((ctx) => ctx.db.patch(vehicleId, { purchasePrice: 10000 }));
+    rows = await asAdmin.query(api.sales.listCommissions, { orgId });
+    const flagged = rows.find((r) => r._id === saleId);
+    expect(flagged?.missingPurchaseCost).toBe(false);
+    expect(flagged?.needsRecalculation).toBe(true);
+
+    // Recalculate: computes on profit AND books the accrual completion skipped.
+    const result = await asAdmin.mutation(api.sales.recalculateCommission, { orgId, saleId });
+    expect(result.commissionAmount).toBe(500);
+    const sale = await t.run((ctx) => ctx.db.get(saleId));
+    expect(sale?.commissionAmount).toBe(500);
+    const accrual = await t.run((ctx) =>
+      ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(accrual).not.toBeNull();
+
+    // One-shot: a second recalculation is rejected (amount now exists).
+    await expect(
+      asAdmin.mutation(api.sales.recalculateCommission, { orgId, saleId })
+    ).rejects.toThrow(/already has a commission/i);
+  });
 });
 
 describe("C1/C2: MANUAL commission lifecycle", () => {
@@ -543,5 +637,62 @@ describe("C1/C2: MANUAL commission lifecycle", () => {
       return posted ?? pending;
     });
     expect(accrual).not.toBeNull();
+  });
+});
+
+describe("commission accrual lock respects reversals", () => {
+  test("a REVERSED accrual no longer locks a MANUAL commission amount", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "rev_unlock");
+    await t.run(async (ctx) => {
+      await ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "USD",
+        currencySymbol: "$",
+        enabledPaymentTypes: [],
+        commissionMode: "MANUAL",
+      });
+    });
+
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 15000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+    await asAdmin.mutation(api.sales.setCommissionAmount, { orgId, saleId, commissionAmount: 300 });
+
+    // Simulate a posted accrual: the amount must now be locked.
+    const eventId = await t.run((ctx) =>
+      ctx.db.insert("accountingEvents", {
+        orgId,
+        eventType: "COMMISSION_ACCRUED",
+        sourceType: "sales",
+        sourceId: `commission_${saleId}`,
+        eventVersion: 1,
+        idempotencyKey: `commission_accrued_${saleId}`,
+        occurredAt: Date.now(),
+        accountingDate: Date.now(),
+        currency: "USD",
+        payload: {},
+        status: "POSTED",
+        createdBy: userId,
+        createdAt: Date.now(),
+      })
+    );
+    await expect(
+      asAdmin.mutation(api.sales.setCommissionAmount, { orgId, saleId, commissionAmount: 400 })
+    ).rejects.toThrow(/already recorded in the ledger/i);
+
+    // Reverse the accrual — the lock's own error message says "Reverse it
+    // before changing the amount", so a REVERSED accrual must actually unlock.
+    await t.run((ctx) => ctx.db.patch(eventId, { status: "REVERSED" }));
+    await asAdmin.mutation(api.sales.setCommissionAmount, { orgId, saleId, commissionAmount: 400 });
+    const sale = await t.run((ctx) => ctx.db.get(saleId));
+    expect(sale?.commissionAmount).toBe(400);
   });
 });

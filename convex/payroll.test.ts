@@ -104,7 +104,7 @@ async function seedPayrollOrg(t: ReturnType<typeof convexTest>, suffix: string) 
     ctx.db.insert("roles", {
       orgId,
       name: "Admin",
-      permissions: ["view:payroll", "manage:payroll"],
+      permissions: ["view:payroll", "manage:payroll", "view:commissions", "manage:commissions"],
     })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
@@ -314,6 +314,139 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
     // The sale itself was paid exactly once.
     const sale = await t.run((ctx) => ctx.db.get(saleId));
     expect(sale?.commissionPaidAt).not.toBeNull();
+  });
+
+  test("a run rejects an empty period instead of creating a blocking zero-item draft", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "empty");
+    // No salaries, no commissions → nothing to pay.
+    await expect(
+      asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 })
+    ).rejects.toThrow(/nothing to pay/i);
+    // And the period is NOT blocked afterwards: once there is something to
+    // pay, the same period creates fine (no phantom draft exists).
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 100 });
+    const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
+    expect(runId).toBeDefined();
+  });
+
+  test("cancelling a draft frees its period; approved runs cannot be cancelled", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "cancel");
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 300 });
+
+    const first = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
+    // Period is taken while the draft lives…
+    await expect(
+      asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 })
+    ).rejects.toThrow(/already exists/i);
+    // …and freed once it is cancelled.
+    await asAdmin.mutation(api.payroll.cancelRun, { orgId, runId: first });
+    const second = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
+    expect(second).toBeDefined();
+
+    // Once approved, the GL has accruals — cancel must refuse.
+    await asAdmin.mutation(api.payroll.approveRun, { orgId, runId: second });
+    await expect(
+      asAdmin.mutation(api.payroll.cancelRun, { orgId, runId: second })
+    ).rejects.toThrow(/only a draft/i);
+  });
+
+  test("a sale cancelled after drafting is NOT paid by the run", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "cxl");
+
+    // Commission-only payslip.
+    const saleId = await t.run(async (ctx) => {
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, vin: "VIN-CXL", make: "Kia", model: "K5", year: 2024, color: "White",
+        fuelType: "Gasoline", transmission: "Automatic", mileage: 10, sellingPrice: 20000, status: "SOLD",
+      });
+      const customerId = await ctx.db.insert("customers", {
+        orgId, firstName: "Jane", lastName: "Buyer", email: "buyer.cxl@example.com",
+      });
+      return await ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId,
+        salePrice: 20000, saleDate: Date.now(), status: "COMPLETED", commissionAmount: 100,
+      });
+    });
+
+    const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
+    await asAdmin.mutation(api.payroll.approveRun, { orgId, runId });
+
+    // The sale is voided before payday — its accrual would be reversed, so the
+    // run must not hand out cash for it or debit the (gone) payable.
+    await t.run((ctx) => ctx.db.patch(saleId, { status: "CANCELLED" }));
+    await asAdmin.mutation(api.payroll.payRun, { orgId, runId, method: "CASH" });
+
+    const items = await asAdmin.query(api.payroll.listRunItems, { orgId, runId });
+    expect(items[0].commissionMinor).toBe(0);
+    expect(items[0].netMinor).toBe(0);
+    const sale = await t.run((ctx) => ctx.db.get(saleId));
+    expect(sale?.commissionPaidAt ?? null).toBeNull();
+    const paidEvt = await t.run((ctx) =>
+      ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", `payroll_paid_${items[0]._id}`)
+        )
+        .first()
+    );
+    expect(paidEvt).toBeNull();
+  });
+
+  test("a commission paid directly from the Commissions page is not paid again by payroll", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "direct");
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 200 });
+
+    const saleId = await t.run(async (ctx) => {
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, vin: "VIN-DIR", make: "Kia", model: "K5", year: 2024, color: "White",
+        fuelType: "Gasoline", transmission: "Automatic", mileage: 10, sellingPrice: 20000, status: "SOLD",
+      });
+      const customerId = await ctx.db.insert("customers", {
+        orgId, firstName: "Jane", lastName: "Buyer", email: "buyer.dir@example.com",
+      });
+      return await ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId,
+        salePrice: 20000, saleDate: Date.now(), status: "COMPLETED", commissionAmount: 100,
+      });
+    });
+
+    // Draft captures salary 200 + commission 100.
+    const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
+    // Commission is then paid DIRECTLY, outside payroll.
+    await asAdmin.mutation(api.sales.markCommissionPaid, { orgId, saleId, paymentMethod: "CASH" });
+
+    await asAdmin.mutation(api.payroll.approveRun, { orgId, runId });
+    await asAdmin.mutation(api.payroll.payRun, { orgId, runId, method: "BANK_TRANSFER" });
+
+    // The run pays ONLY the salary; the direct payment record is untouched.
+    const items = await asAdmin.query(api.payroll.listRunItems, { orgId, runId });
+    expect(items[0].commissionMinor).toBe(0);
+    expect(items[0].grossMinor).toBe(200000);
+    expect(items[0].netMinor).toBe(200000);
+    const sale = await t.run((ctx) => ctx.db.get(saleId));
+    expect(sale?.commissionPaymentMethod).toBe("CASH");
+  });
+
+  test("a retroactive run pays the salary that applied in that period, not today's", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "retro");
+
+    // Salary was 600 from June 1st, raised to 800 later (today).
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 600 });
+    await t.run(async (ctx) => {
+      const rows = await ctx.db.query("employeeCompensation").collect();
+      await ctx.db.patch(rows[0]._id, { effectiveFrom: Date.UTC(2026, 5, 1) });
+    });
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 800 });
+
+    // A June run created after the raise must use the June salary (600).
+    const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 6 });
+    const items = await asAdmin.query(api.payroll.listRunItems, { orgId, runId });
+    expect(items[0].baseSalaryMinor).toBe(600000);
   });
 
   test("an advance recovered between create and pay is not double-recovered", async () => {

@@ -41,6 +41,7 @@ type CommissionSale = Doc<"sales"> & {
   salespersonName: string;
   paidByName: string | null;
   missingPurchaseCost?: boolean;
+  needsRecalculation?: boolean;
 };
 
 function formatCurrency(amount: number) {
@@ -91,6 +92,7 @@ export default function CommissionsPage() {
   const markPaid = useMutation(api.sales.markCommissionPaid);
   const markUnpaid = useMutation(api.sales.markCommissionUnpaid);
   const setCommissionAmount = useMutation(api.sales.setCommissionAmount);
+  const recalculateCommission = useMutation(api.sales.recalculateCommission);
 
   const [editingId, setEditingId] = useState<Id<"sales"> | null>(null);
   const [editingAmount, setEditingAmount] = useState("");
@@ -129,6 +131,16 @@ export default function CommissionsPage() {
       toast.error(t("CommissionPaymentFailed" as any));
     } finally {
       setIsPayingCommission(false);
+    }
+  }
+
+  async function handleRecalculate(saleId: Id<"sales">) {
+    if (!activeOrgId) return;
+    try {
+      await recalculateCommission({ orgId: activeOrgId, saleId });
+      toast.success(t("CommissionRecalculated" as any));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -289,7 +301,13 @@ export default function CommissionsPage() {
                 filtered.map((c: CommissionSale) => (
                   <TableRow
                     key={c._id}
-                    className={c.missingPurchaseCost ? "bg-amber-50 dark:bg-amber-950/20" : undefined}
+                    className={
+                      c.missingPurchaseCost
+                        ? "bg-amber-50 dark:bg-amber-950/20"
+                        : c.needsRecalculation
+                          ? "bg-blue-50 dark:bg-blue-950/20"
+                          : undefined
+                    }
                   >
                     <TableCell className="font-medium">{c.salespersonName}</TableCell>
                     <TableCell>{c.vehicleSummary}</TableCell>
@@ -371,7 +389,17 @@ export default function CommissionsPage() {
                           >
                             <Undo2 className="h-3.5 w-3.5 me-1" /> {t("Revert" as any)}
                           </Button>
-                        ) : c.missingPurchaseCost ? null : (
+                        ) : c.missingPurchaseCost ? null : c.needsRecalculation ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-blue-600 border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-950/30"
+                            title={t("RecalculateCommissionHint" as any)}
+                            onClick={() => handleRecalculate(c._id)}
+                          >
+                            <Undo2 className="h-3.5 w-3.5 me-1" /> {t("RecalculateCommission" as any)}
+                          </Button>
+                        ) : (
                           <Button
                             variant="outline"
                             size="sm"

@@ -49,11 +49,16 @@ export default function PayrollPage() {
   const createRun = useMutation(api.payroll.createRun);
   const approveRun = useMutation(api.payroll.approveRun);
   const payRun = useMutation(api.payroll.payRun);
+  const cancelRun = useMutation(api.payroll.cancelRun);
 
   const [salaryDrafts, setSalaryDrafts] = useState<Record<string, string>>({});
   const [advUser, setAdvUser] = useState("");
   const [advAmount, setAdvAmount] = useState("");
   const [advMethod, setAdvMethod] = useState<(typeof METHODS)[number]>("CASH");
+  // How the money actually moved — advance recoveries and payroll payments hit
+  // different GL cash accounts depending on the method, so neither is hardcoded.
+  const [recoverMethod, setRecoverMethod] = useState<(typeof METHODS)[number]>("CASH");
+  const [payMethod, setPayMethod] = useState<(typeof METHODS)[number]>("BANK_TRANSFER");
   const [runYear, setRunYear] = useState(String(new Date().getFullYear()));
   const [runMonth, setRunMonth] = useState(String(new Date().getMonth() + 1));
   const [openRun, setOpenRun] = useState<Id<"payrollRuns"> | null>(null);
@@ -201,9 +206,17 @@ export default function PayrollPage() {
                     {canManage && (
                       <TableCell className="text-end">
                         {a.status === "OUTSTANDING" && (
-                          <Button size="sm" variant="outline" onClick={() => doAction(() => recoverAdvance({ orgId: activeOrgId!, advanceId: a._id, method: "CASH" }), "AdvanceRecovered")}>
-                            {t("MarkRecovered" as any)}
-                          </Button>
+                          <div className="inline-flex items-center gap-1.5">
+                            <Select value={recoverMethod} onValueChange={(v) => setRecoverMethod(v as (typeof METHODS)[number])}>
+                              <SelectTrigger className="w-36 h-8"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                {METHODS.map((mth) => <SelectItem key={mth} value={mth}>{t(`PaymentMethod_${mth}` as any)}</SelectItem>)}
+                              </SelectContent>
+                            </Select>
+                            <Button size="sm" variant="outline" onClick={() => doAction(() => recoverAdvance({ orgId: activeOrgId!, advanceId: a._id, method: recoverMethod }), "AdvanceRecovered")}>
+                              {t("MarkRecovered" as any)}
+                            </Button>
+                          </div>
                         )}
                       </TableCell>
                     )}
@@ -255,10 +268,21 @@ export default function PayrollPage() {
                     <TableCell className="text-end space-x-1">
                       <Button size="sm" variant="ghost" onClick={() => setOpenRun(openRun === r._id ? null : r._id)}>{t("View" as any)}</Button>
                       {canManage && r.status === "DRAFT" && (
-                        <Button size="sm" variant="outline" onClick={() => doAction(() => approveRun({ orgId: activeOrgId!, runId: r._id }), "PayrollRunApproved")}>{t("Approve" as any)}</Button>
+                        <>
+                          <Button size="sm" variant="outline" onClick={() => doAction(() => approveRun({ orgId: activeOrgId!, runId: r._id }), "PayrollRunApproved")}>{t("Approve" as any)}</Button>
+                          <Button size="sm" variant="ghost" className="text-destructive" onClick={() => doAction(() => cancelRun({ orgId: activeOrgId!, runId: r._id }), "PayrollRunCancelled")}>{t("CancelRun" as any)}</Button>
+                        </>
                       )}
                       {canManage && r.status === "APPROVED" && (
-                        <Button size="sm" onClick={() => doAction(() => payRun({ orgId: activeOrgId!, runId: r._id, method: "BANK_TRANSFER" }), "PayrollRunPaid")}>{t("Pay" as any)}</Button>
+                        <div className="inline-flex items-center gap-1.5">
+                          <Select value={payMethod} onValueChange={(v) => setPayMethod(v as (typeof METHODS)[number])}>
+                            <SelectTrigger className="w-36 h-8"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {METHODS.map((mth) => <SelectItem key={mth} value={mth}>{t(`PaymentMethod_${mth}` as any)}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                          <Button size="sm" onClick={() => doAction(() => payRun({ orgId: activeOrgId!, runId: r._id, method: payMethod }), "PayrollRunPaid")}>{t("Pay" as any)}</Button>
+                        </div>
                       )}
                     </TableCell>
                   </TableRow>

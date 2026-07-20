@@ -34,6 +34,8 @@ export const payrollEn = {
   PayrollStatus_CANCELLED: "Cancelled",
   PayrollRunApproved: "Payroll run approved.",
   PayrollRunPaid: "Payroll run paid.",
+  PayrollRunCancelled: "Payroll run cancelled.",
+  CancelRun: "Cancel",
   Payslips: "Payslips",
 };
 
@@ -73,5 +75,7 @@ export const payrollAr = {
   PayrollStatus_CANCELLED: "ملغاة",
   PayrollRunApproved: "تم اعتماد دورة الرواتب.",
   PayrollRunPaid: "تم دفع دورة الرواتب.",
+  PayrollRunCancelled: "تم إلغاء دورة الرواتب.",
+  CancelRun: "إلغاء",
   Payslips: "قسائم الرواتب",
 };

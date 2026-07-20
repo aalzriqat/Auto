@@ -2,7 +2,7 @@ import { ConvexError } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
 import { notifyManagers, getActorName } from "./notifications";
-import { calculateCommissionFromTiers } from "./commission";
+import { calculateCommissionFromTiers, CommissionTier } from "./commission";
 import {
   markVehicleAsSold,
   createSaleTransaction,
@@ -148,19 +148,6 @@ async function prepareSaleCompletion(
     .unique();
 
   const commissionMode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
-  // Same cost basis the GL uses for COGS (purchase + landed costs + capitalized
-  // reconditioning expenses) so commission, the GL, and the operational reports
-  // all show the same margin for a sale.
-  const vehicleCost = await computeVehicleCapitalizedCost(ctx, vehicle);
-  // C3: without a recorded cost basis the capitalized-cost figure isn't
-  // trustworthy (it would be ~zero), so the automatic commission modes earn
-  // NOTHING here rather than paying on ~the full sale price. Managers are
-  // alerted to the missing cost on the Commissions page and Vehicles list so
-  // they can fix it and re-set the commission. MANUAL mode is unaffected.
-  // Uses the same cost-basis source as computeVehicleCapitalizedCost above, so
-  // a SOURCED vehicle (costed off sourceCost, no purchasePrice) isn't misflagged.
-  const hasCostBasis = vehicleHasCostBasis(vehicle);
-  const grossProfit = hasCostBasis ? Math.max(0, args.salePrice - vehicleCost) : 0;
 
   let commissionAmount: number | undefined;
   // AUTO modes derive the amount now and accrue it to the GL at completion.
@@ -170,21 +157,55 @@ async function prepareSaleCompletion(
   let accrueAtCompletion = false;
   if (commissionMode === "MANUAL") {
     commissionAmount = args.existingCommissionAmount;
-  } else if (hasCostBasis && commissionMode === "AUTO_MEMBER") {
-    const rate = membership.commissionRate ?? 0;
-    if (rate > 0) {
-      commissionAmount = grossProfit * (rate / 100);
-    }
-    accrueAtCompletion = true;
-  } else if (hasCostBasis && commissionMode === "AUTO_TIERS") {
-    const amount = calculateCommissionFromTiers(grossProfit, orgSettings?.commissionTiers ?? []);
-    if (amount > 0) commissionAmount = amount;
-    accrueAtCompletion = true;
+  } else {
+    commissionAmount = await computeAutoCommissionAmount(ctx, {
+      salePrice: args.salePrice,
+      vehicle,
+      commissionMode,
+      memberCommissionRate: membership.commissionRate,
+      commissionTiers: orgSettings?.commissionTiers ?? [],
+    });
+    accrueAtCompletion = commissionAmount != null;
   }
 
   const currency = await getOrgCurrency(ctx, args.orgId);
 
   return { vehicle, customer, leadId, commissionAmount, currency, accrueAtCompletion };
+}
+
+/**
+ * The single source of the automatic-commission calculation, shared by sale
+ * completion and by sales.recalculateCommission (the manager's fix-up after a
+ * missing vehicle cost is corrected).
+ *
+ * Returns `undefined` when the vehicle has no trustworthy cost basis (C3: the
+ * capitalized cost would be ~zero, so commissioning would pay on ~the full
+ * sale price — instead the sale is flagged for a manager). When a cost basis
+ * IS present it always returns a number, including an explicit 0, so that a
+ * stored `commissionAmount == null` on a completed AUTO sale unambiguously
+ * means "never computed" rather than "computed as zero".
+ */
+export async function computeAutoCommissionAmount(
+  ctx: MutationCtx,
+  args: {
+    salePrice: number;
+    vehicle: Doc<"vehicles">;
+    commissionMode: string;
+    memberCommissionRate: number | undefined;
+    commissionTiers: CommissionTier[];
+  }
+): Promise<number | undefined> {
+  if (!vehicleHasCostBasis(args.vehicle)) return undefined;
+  // Same cost basis the GL uses for COGS (purchase + landed costs + capitalized
+  // reconditioning expenses) so commission, the GL, and the operational reports
+  // all show the same margin for a sale.
+  const vehicleCost = await computeVehicleCapitalizedCost(ctx, args.vehicle);
+  const grossProfit = Math.max(0, args.salePrice - vehicleCost);
+  if (args.commissionMode === "AUTO_TIERS") {
+    return calculateCommissionFromTiers(grossProfit, args.commissionTiers);
+  }
+  const rate = args.memberCommissionRate ?? 0;
+  return rate > 0 ? grossProfit * (rate / 100) : 0;
 }
 
 async function insertSaleRecord(

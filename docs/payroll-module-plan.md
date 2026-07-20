@@ -1,6 +1,6 @@
 # Payroll Module — Scope & Plan
 
-Status: **PLAN / not started.** Author: agent, 2026-07-20.
+Status: **IMPLEMENTED (PR #125)** — Phases 0–2 + UI are built and tested; see "Implementation status" at the end of this doc for what shipped, deliberate policy choices, and known limitations. Author: agent, 2026-07-20.
 
 Goal: pay staff a **fixed monthly salary + commissions**, handle **salary advances (سلفة)** correctly, and post it all to the general ledger. Small dealership scale (a handful of employees, cash/bank advances, Jordan).
 
@@ -83,3 +83,26 @@ This plan has two parts:
 - Phase 3: ~1 PR, low-medium.
 
 Biggest risks: GL balance correctness across accrue/pay/offset (mitigate with reconciliation tests like the existing `commissionPayableReconciliation`), and OCC contention on the payroll run document (shard or per-item writes).
+
+---
+
+## Implementation status (2026-07-20, PR #125)
+
+### Shipped
+- **Phase 0 commission fixes** — C1 (MANUAL accrue-then-pay), C2 (completed AUTO locked; MANUAL editable until an ACTIVE accrual exists — a REVERSED accrual unlocks), C3 (no/zero cost basis ⇒ commission 0 + flagged), C5 (markCommissionPaid accrues first). Cost basis is `sourceCost` for SOURCED vehicles, `purchasePrice` otherwise, and **must be > 0** (shared `vehicleHasCostBasis`, aligned with `computeVehicleCapitalizedCost`).
+- **Missing-cost remediation**: once the vehicle cost is fixed, the Commissions page shows the sale as "needs recalculation" and `sales.recalculateCommission` computes + accrues one-shot.
+- **Payroll**: employeeCompensation (history-aware — a retroactive run pays the salary in force at that period's end), employeeAdvances (سلفة = recoverable asset), createRun/approveRun/payRun/cancelRun, payroll UI with method selection for advance recovery and run payment.
+- **Settlement safety**: `payRun` re-derives everything from CURRENT state at pay time — still-unpaid, still-COMPLETED, non-deleted sales only; advances re-read and the GL posted with actual recovered amounts; item + run totals rewritten to what was actually paid; all-zero payslips post nothing. Cross-period double-pay, direct-pay-then-payroll, cancel-after-draft, and stale-advance scenarios are covered by fail-first tests.
+
+### Deliberate policy choices
+- **A run sweeps ALL outstanding unpaid commissions**, not just the period's. Rationale: no commission can be stranded (a period-filtered sweep leaves any commission that missed its window unpayable), and double-pay is impossible because payment re-validates against live state. The period label controls salary selection and run identity only.
+- **Payroll permissions are a finance capability**: backfill grants them via `manage:finance` or a default template name match — never from `manage:commissions` alone.
+
+### Known limitations (accepted, documented)
+- **No reversal for APPROVED/PAID runs** (cancel is DRAFT-only). An approved/paid run posted real GL entries; reversing needs offsetting entries — manual accounting correction until a reversal flow ships.
+- `markCommissionUnpaid` clears operational flags without reversing the COMMISSION_PAID entry (pre-existing; superseded by payroll-driven payment).
+- Timezone: period end is computed in UTC, not org-local time.
+
+### Deployment order
+1. Merge + `npx convex deploy` (schema + functions).
+2. `npx convex run migrateRoles:backfillPayrollPermissions --prod` — REQUIRED, or legacy OWNER roles fail `isSystemOwnerRole()` and nobody sees the payroll page.

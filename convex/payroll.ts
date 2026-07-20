@@ -292,14 +292,31 @@ export const createRun = mutation({
       const currency = await getOrgCurrency(ctx, args.orgId);
       const now = Date.now();
 
-      // Active salaries by user.
+      // Salary applicable to the SELECTED period, not just whatever is active
+      // today: for each employee pick the latest compensation row that took
+      // effect on or before the period's end, so a retroactive June run created
+      // after a July raise still pays the June salary. Employees whose salary
+      // was first recorded after the period fall back to their current active
+      // row (they were mid-onboarding; the alternative — paying 0 — surprises).
+      const periodEndMs = Date.UTC(args.periodYear, args.periodMonth, 1) - 1;
       const comps = await ctx.db
         .query("employeeCompensation")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .filter((q) => q.eq(q.field("active"), true))
         .collect();
+      const compsByUser = new Map<string, typeof comps>();
+      for (const c of comps) {
+        const list = compsByUser.get(c.userId) ?? [];
+        list.push(c);
+        compsByUser.set(c.userId, list);
+      }
       const salaryByUser = new Map<string, number>();
-      for (const c of comps) salaryByUser.set(c.userId, c.monthlySalaryMinor);
+      for (const [uid, rows] of compsByUser) {
+        const applicable = rows
+          .filter((r) => r.effectiveFrom <= periodEndMs)
+          .sort((a, b) => b.effectiveFrom - a.effectiveFrom)[0];
+        const chosen = applicable ?? rows.find((r) => r.active);
+        if (chosen) salaryByUser.set(uid, chosen.monthlySalaryMinor);
+      }
 
       // Unpaid, completed commissions grouped by salesperson.
       const sales = await ctx.db
@@ -325,21 +342,20 @@ export const createRun = mutation({
 
       const userIds = new Set<string>([...salaryByUser.keys(), ...commissionByUser.keys()]);
 
-      const runId = await ctx.db.insert("payrollRuns", {
-        orgId: args.orgId,
-        periodYear: args.periodYear,
-        periodMonth: args.periodMonth,
-        currency,
-        status: "DRAFT",
-        totalGrossMinor: 0,
-        totalNetMinor: 0,
-        createdBy: user._id,
-        createdAt: now,
-        updatedAt: now,
-      });
-
+      // Build every payslip BEFORE inserting the run, so an empty period (no
+      // salaries, no commissions) is rejected instead of leaving a zero-item
+      // draft that blocks the period until someone cancels it.
       let totalGross = 0;
       let totalNet = 0;
+      const itemPayloads: {
+        userId: Id<"users">;
+        baseSalaryMinor: number;
+        commissionMinor: number;
+        advanceDeductionMinor: number;
+        grossMinor: number;
+        netMinor: number;
+        commissionSaleIds: Id<"sales">[];
+      }[] = [];
       for (const uid of userIds) {
         const userId = uid as Id<"users">;
         const baseSalaryMinor = salaryByUser.get(uid) ?? 0;
@@ -350,30 +366,91 @@ export const createRun = mutation({
         const outstanding = await outstandingAdvanceMinor(ctx, args.orgId, userId);
         const advanceDeductionMinor = Math.min(outstanding, grossMinor);
         const netMinor = grossMinor - advanceDeductionMinor;
-
-        await ctx.db.insert("payrollItems", {
-          orgId: args.orgId,
-          runId,
+        itemPayloads.push({
           userId,
           baseSalaryMinor,
           commissionMinor: commission.minor,
-          otherEarningsMinor: 0,
           advanceDeductionMinor,
-          otherDeductionMinor: 0,
           grossMinor,
           netMinor,
-          currency,
           commissionSaleIds: commission.saleIds,
-          createdAt: now,
         });
         totalGross += grossMinor;
         totalNet += netMinor;
       }
+      if (itemPayloads.length === 0) {
+        throw new ConvexError(
+          "Nothing to pay for this period: no member has a salary or an unpaid commission."
+        );
+      }
 
-      await ctx.db.patch(runId, { totalGrossMinor: totalGross, totalNetMinor: totalNet, updatedAt: now });
+      const runId = await ctx.db.insert("payrollRuns", {
+        orgId: args.orgId,
+        periodYear: args.periodYear,
+        periodMonth: args.periodMonth,
+        currency,
+        status: "DRAFT",
+        totalGrossMinor: totalGross,
+        totalNetMinor: totalNet,
+        createdBy: user._id,
+        createdAt: now,
+        updatedAt: now,
+      });
+      for (const p of itemPayloads) {
+        await ctx.db.insert("payrollItems", {
+          orgId: args.orgId,
+          runId,
+          userId: p.userId,
+          baseSalaryMinor: p.baseSalaryMinor,
+          commissionMinor: p.commissionMinor,
+          otherEarningsMinor: 0,
+          advanceDeductionMinor: p.advanceDeductionMinor,
+          otherDeductionMinor: 0,
+          grossMinor: p.grossMinor,
+          netMinor: p.netMinor,
+          currency,
+          commissionSaleIds: p.commissionSaleIds,
+          createdAt: now,
+        });
+      }
       return runId;
     } catch (error) {
       console.error("payroll.createRun failed", error);
+      if (error instanceof ConvexError) throw error;
+      throw new ConvexError("An unexpected error occurred. Please try again later.");
+    }
+  },
+});
+
+/**
+ * Cancels a DRAFT run. Only drafts: nothing has posted to the GL yet, so
+ * cancellation is purely operational and frees the period for a fresh run
+ * (the createRun clash check ignores CANCELLED runs). Reversing an APPROVED
+ * or PAID run requires offsetting journal entries and is deliberately NOT
+ * offered here — that's a manual accounting correction until a dedicated
+ * reversal flow ships.
+ */
+export const cancelRun = mutation({
+  args: { orgId: v.id("organizations"), runId: v.id("payrollRuns") },
+  handler: async (ctx, args) => {
+    try {
+      const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
+      const run = await ctx.db.get(args.runId);
+      if (!run || run.orgId !== args.orgId) throw new ConvexError("Payroll run not found.");
+      if (run.status !== "DRAFT") {
+        throw new ConvexError(
+          "Only a draft payroll run can be cancelled. Approved or paid runs need an accounting reversal."
+        );
+      }
+      const now = Date.now();
+      await ctx.db.patch(args.runId, {
+        status: "CANCELLED",
+        cancelledBy: user._id,
+        cancelledAt: now,
+        updatedAt: now,
+      });
+    } catch (error) {
+      console.error("payroll.cancelRun failed", error);
       if (error instanceof ConvexError) throw error;
       throw new ConvexError("An unexpected error occurred. Please try again later.");
     }
@@ -416,7 +493,18 @@ export const approveRun = mutation({
         }
         for (const saleId of item.commissionSaleIds) {
           const sale = await ctx.db.get(saleId);
-          if (!sale || !sale.commissionAmount || sale.commissionAmount <= 0) continue;
+          // A sale can leave the payable population between draft and approval:
+          // cancelled/voided sales get their accrual REVERSED by the void hook,
+          // so accruing (or later paying) them here would corrupt the payable.
+          if (
+            !sale ||
+            sale.isDeleted ||
+            sale.status !== "COMPLETED" ||
+            !sale.commissionAmount ||
+            sale.commissionAmount <= 0
+          ) {
+            continue;
+          }
           await hookCommissionAccrued(ctx, {
             orgId: args.orgId,
             saleId,
@@ -483,7 +571,17 @@ export const payRun = mutation({
         const saleIdsToSettle: Id<"sales">[] = [];
         for (const saleId of item.commissionSaleIds) {
           const sale = await ctx.db.get(saleId);
-          if (!sale || sale.commissionPaidAt != null || !sale.commissionAmount || sale.commissionAmount <= 0) {
+          // Must still be a live COMPLETED sale: a cancelled/voided sale has had
+          // its COMMISSION_ACCRUED entry reversed, so "paying" it would debit a
+          // payable that no longer exists and hand out cash for a dead sale.
+          if (
+            !sale ||
+            sale.isDeleted ||
+            sale.status !== "COMPLETED" ||
+            sale.commissionPaidAt != null ||
+            !sale.commissionAmount ||
+            sale.commissionAmount <= 0
+          ) {
             continue;
           }
           commissionMinor += toMinorUnits(sale.commissionAmount, item.currency);

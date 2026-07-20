@@ -268,9 +268,23 @@ export const backfillPayrollPermissions = internalMutation({
       const has = (p: string) => role.permissions.includes(p);
       const toAdd = new Set<string>();
 
-      if (has(PERMISSIONS.MANAGE_FINANCE) || has(PERMISSIONS.MANAGE_COMMISSIONS)) {
+      // Payroll is a FINANCE capability, not a commissions one: salaries and
+      // advances are sensitive, so a role that only manages commissions must
+      // NOT silently become a payroll administrator. Finance-managing roles
+      // get both; roles still named after a default template whose template
+      // now carries payroll permissions get exactly what the template grants
+      // (mirrors what a fresh org would create). Renamed custom roles beyond
+      // that are a deliberate manual grant by the org owner.
+      if (has(PERMISSIONS.MANAGE_FINANCE)) {
         toAdd.add(PERMISSIONS.VIEW_PAYROLL);
         toAdd.add(PERMISSIONS.MANAGE_PAYROLL);
+      }
+      const template = DEFAULT_ROLE_TEMPLATES.find(
+        (t) => normalizeRoleName(t.name) === normalizeRoleName(role.name)
+      );
+      if (template) {
+        if (template.permissions.includes(PERMISSIONS.VIEW_PAYROLL)) toAdd.add(PERMISSIONS.VIEW_PAYROLL);
+        if (template.permissions.includes(PERMISSIONS.MANAGE_PAYROLL)) toAdd.add(PERMISSIONS.MANAGE_PAYROLL);
       }
       // Owners always get every permission.
       if (isSystemOwnerRole(role) || normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME) {
