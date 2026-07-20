@@ -73,8 +73,8 @@ export const setCompensation = mutation({
       });
       return id;
     } catch (error) {
-      console.error("payroll.setCompensation failed", error);
       if (error instanceof ConvexError) throw error;
+      console.error("payroll.setCompensation failed", error);
       throw new ConvexError("An unexpected error occurred. Please try again later.");
     }
   },
@@ -164,8 +164,8 @@ export const recordAdvance = mutation({
 
       return advanceId;
     } catch (error) {
-      console.error("payroll.recordAdvance failed", error);
       if (error instanceof ConvexError) throw error;
+      console.error("payroll.recordAdvance failed", error);
       throw new ConvexError("An unexpected error occurred. Please try again later.");
     }
   },
@@ -231,8 +231,8 @@ export const recoverAdvance = mutation({
         occurredAt: now,
       });
     } catch (error) {
-      console.error("payroll.recoverAdvance failed", error);
       if (error instanceof ConvexError) throw error;
+      console.error("payroll.recoverAdvance failed", error);
       throw new ConvexError("An unexpected error occurred. Please try again later.");
     }
   },
@@ -697,8 +697,8 @@ export const createRun = mutation({
       }
       return runId;
     } catch (error) {
-      console.error("payroll.createRun failed", error);
       if (error instanceof ConvexError) throw error;
+      console.error("payroll.createRun failed", error);
       throw new ConvexError("An unexpected error occurred. Please try again later.");
     }
   },
@@ -732,8 +732,8 @@ export const cancelRun = mutation({
         updatedAt: now,
       });
     } catch (error) {
-      console.error("payroll.cancelRun failed", error);
       if (error instanceof ConvexError) throw error;
+      console.error("payroll.cancelRun failed", error);
       throw new ConvexError("An unexpected error occurred. Please try again later.");
     }
   },
@@ -815,8 +815,8 @@ export const approveRun = mutation({
         updatedAt: now,
       });
     } catch (error) {
-      console.error("payroll.approveRun failed", error);
       if (error instanceof ConvexError) throw error;
+      console.error("payroll.approveRun failed", error);
       throw new ConvexError("An unexpected error occurred. Please try again later.");
     }
   },
@@ -881,8 +881,8 @@ export const payRun = mutation({
         updatedAt: now,
       });
     } catch (error) {
-      console.error("payroll.payRun failed", error);
       if (error instanceof ConvexError) throw error;
+      console.error("payroll.payRun failed", error);
       throw new ConvexError("An unexpected error occurred. Please try again later.");
     }
   },
