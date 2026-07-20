@@ -211,6 +211,18 @@ export const recoverAdvance = mutation({
       // Separation of duties: a non-owner payroll admin must not clear the record
       // of their OWN debt — an independent actor has to record the repayment.
       assertNotSelfBeneficiary(authCtx, advance.userId, "record repayment of your own advance");
+
+      // Idempotent response: a retry with the same key must return the ORIGINAL
+      // recovery, not throw — even after a full repayment left the advance
+      // RECOVERED (the status check below would otherwise reject the replay).
+      if (args.idempotencyKey) {
+        const prior = await ctx.db
+          .query("employeeAdvanceRecoveries")
+          .withIndex("by_org_idempotency", (q) => q.eq("orgId", args.orgId).eq("idempotencyKey", args.idempotencyKey))
+          .first();
+        if (prior) return prior._id;
+      }
+
       if (advance.status !== "OUTSTANDING") {
         throw new ConvexError("Only an outstanding advance can be recovered.");
       }
@@ -579,6 +591,27 @@ async function settleItemCommissions(
 }
 
 /**
+ * Read-only preview of what a payslip WOULD pay right now (same figures payItem
+ * derives, without mutating): salary is the frozen accrued amount, commission is
+ * re-derived from live sales, and the advance deduction is capped at gross. Used
+ * by payRun's drift check to compare the live payable against the approved
+ * snapshot before any money moves.
+ */
+async function computeCurrentPayable(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  item: Doc<"payrollItems">
+): Promise<{ grossMinor: number; netMinor: number }> {
+  const { commissionMinor } = await settleItemCommissions(ctx, item);
+  const grossMinor = item.baseSalaryMinor + commissionMinor;
+  const advanceDeductionMinor = Math.min(
+    await outstandingAdvanceMinor(ctx, orgId, item.userId, item.currency),
+    grossMinor
+  );
+  return { grossMinor, netMinor: grossMinor - advanceDeductionMinor };
+}
+
+/**
  * Recovers outstanding advances oldest-first, up to `cap`, from CURRENT advance
  * balances (one may have been repaid or soft-deleted since drafting). Returns
  * the amount ACTUALLY recovered so the GL credit to Employee Advances can never
@@ -890,7 +923,12 @@ export const approveRun = mutation({
       const { user } = authCtx;
       const run = await ctx.db.get(args.runId);
       if (!run || run.orgId !== args.orgId) throw new ConvexError("Payroll run not found.");
-      if (run.status !== "DRAFT") throw new ConvexError("Only a draft payroll run can be approved.");
+      // A DRAFT is approved for the first time; a NEEDS_REAPPROVAL run (payment
+      // found its payable drifted from the approved figures) is re-approved.
+      const isReapproval = run.status === "NEEDS_REAPPROVAL";
+      if (run.status !== "DRAFT" && !isReapproval) {
+        throw new ConvexError("Only a draft or re-approval-pending payroll run can be approved.");
+      }
 
       const now = Date.now();
       // Recognize the accrual in the period worked, not the approval month.
@@ -942,7 +980,11 @@ export const approveRun = mutation({
       let approvedGross = 0;
       let approvedNet = 0;
       for (const item of items) {
-        const baseSalaryMinor = salaryByUser.get(item.userId) ?? 0;
+        // On re-approval the salary was already accrued at the first approval —
+        // keep that frozen amount (its accrual key is idempotent, so re-resolving
+        // a since-changed salary here could not update the posted accrual and
+        // would desync the payable). Only a first DRAFT approval resolves salary.
+        const baseSalaryMinor = isReapproval ? item.baseSalaryMinor : (salaryByUser.get(item.userId) ?? 0);
         if (baseSalaryMinor > 0) {
           await hookPayrollAccrued(ctx, {
             orgId: args.orgId,
@@ -998,9 +1040,24 @@ export const approveRun = mutation({
           advanceDeductionMinor,
           grossMinor,
           netMinor,
+          // Immutable authorization snapshot (payment overwrites grossMinor/
+          // netMinor with the paid figures; these stay put for the drift check).
+          approvedGrossMinor: grossMinor,
+          approvedNetMinor: netMinor,
         });
         approvedGross += grossMinor;
         approvedNet += netMinor;
+      }
+
+      // Reject a meaningless zero-value FIRST approval — nothing to pay, so the
+      // user should cancel and rebuild (a DRAFT is still cancellable, so this is
+      // not a dead end). A re-approval is allowed to settle to zero (its accruals
+      // already posted and it can no longer be cancelled), and payment safely
+      // skips the all-zero journal.
+      if (!isReapproval && approvedGross <= 0) {
+        throw new ConvexError(
+          "Nothing to approve: no payslip has a positive gross. Cancel this draft and create a fresh run."
+        );
       }
 
       await ctx.db.patch(args.runId, {
@@ -1012,6 +1069,7 @@ export const approveRun = mutation({
         totalNetMinor: approvedNet,
         approvedGrossMinor: approvedGross,
         approvedNetMinor: approvedNet,
+        reapprovalReason: undefined,
         updatedAt: now,
       });
     } catch (error) {
@@ -1053,6 +1111,33 @@ export const payRun = mutation({
       // Separation of duties: a non-owner cannot pay a run that pays them.
       for (const item of items) assertNotSelfBeneficiary(authCtx, item.userId, "pay a payroll run that pays you");
 
+      // Reapproval-on-drift: payment recomputes each payslip from live state to
+      // avoid double-paying, but that means the cash actually paid could differ
+      // from what was approved (a new advance issued, a commission paid/cancelled
+      // elsewhere, an advance repaid directly). Paying a different amount than was
+      // authorized is a control failure, so if any payslip's live payable differs
+      // from its immutable approved snapshot, send the run back for re-approval
+      // instead of paying. Returning (not throwing) so the transition persists.
+      let drifted = false;
+      for (const item of items) {
+        const cur = await computeCurrentPayable(ctx, args.orgId, item);
+        const approvedGross = item.approvedGrossMinor ?? item.grossMinor;
+        const approvedNet = item.approvedNetMinor ?? item.netMinor;
+        if (cur.grossMinor !== approvedGross || cur.netMinor !== approvedNet) {
+          drifted = true;
+          break;
+        }
+      }
+      if (drifted) {
+        await ctx.db.patch(args.runId, {
+          status: "NEEDS_REAPPROVAL",
+          reapprovalReason:
+            "A payslip's pay changed after approval (a commission or advance moved). Re-approve to authorize the current amounts before paying.",
+          updatedAt: now,
+        });
+        return { status: "NEEDS_REAPPROVAL" as const };
+      }
+
       // Accrual-before-payment: if the payment itself will hit the ledger now,
       // every prerequisite accrual must already be POSTED — otherwise the
       // payment debits a payable that is still queued (e.g. the accrual is dated
@@ -1081,6 +1166,7 @@ export const payRun = mutation({
         totalNetMinor: paidNetMinor,
         updatedAt: now,
       });
+      return { status: "PAID" as const };
     } catch (error) {
       if (error instanceof ConvexError) throw error;
       console.error("payroll.payRun failed", error);

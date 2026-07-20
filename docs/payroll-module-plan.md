@@ -159,3 +159,19 @@ Deferred (documented, not blocking a small-dealership launch — each needs sche
 - Period boundaries in **org-local timezone** (currently UTC).
 - **Pagination** on the payroll members list / advances / runs (currently first-100 members, unpaginated advances/runs).
 - **Role-name-based backfill** can still grant payroll to a customized role that kept its default name — mitigated (finance/template-name only, never commissions); full fix = exact permission-set fingerprint.
+
+## Fifth audit round (2026-07-20, approval-immutability + disbursement-idempotency pass)
+
+Fixed:
+- **Reapproval-on-drift (`NEEDS_REAPPROVAL`).** Payment recomputes each payslip from live state (to avoid double-paying), which meant the cash actually paid could differ from what was approved (a new advance issued after approval, a commission paid/cancelled elsewhere, an advance repaid directly). `payRun` now compares each payslip's live payable against an **immutable per-item approved snapshot** (`approvedGrossMinor`/`approvedNetMinor`, frozen at approval and never overwritten by the paid figures); on any difference the run moves to `NEEDS_REAPPROVAL` and payment is blocked. `approveRun` accepts a `NEEDS_REAPPROVAL` run and re-derives/re-freezes it (keeping the already-accrued salary, since its accrual key is idempotent). The transition is *returned*, not thrown, so it persists (a throw would roll it back). No dead-end: a first DRAFT approval that re-derives to zero is rejected (still cancellable), while a re-approval is allowed to settle to zero and pays as an all-zero (skipped) journal.
+- **Zero-value first approval rejected** (`approveRun` from DRAFT): "nothing to approve — cancel and rebuild." Prevents a meaningless approved/paid empty run.
+- **Advance issuance is idempotent from the UI.** `submitAdvance` now sends a per-submission `idempotencyKey` and disables the button in flight — closing the duplicate cash-disbursement window (the backend already supported the key; the UI wasn't sending one).
+- **Full-repayment retry returns the original recovery** instead of throwing on `RECOVERED`: `recoverAdvance` looks up an existing recovery by `idempotencyKey` up front and returns it, so a retried request with the same key yields the same successful result.
+- **SonarCloud cognitive complexity**: `payrollPostingBlockedReason` split into `advanceRecoveryBlockedReason` + `payrollPaidBlockedReason` with a flat dispatcher (addresses the open review thread).
+
+Still deferred (each needs schema/architecture or is a product decision — the reviewer agrees these are P1/P2, acceptable for a controlled small-dealership pilot):
+- Full **APPROVED/PAID reversal + replacement** flow (linked reversing entries, restored commissions/advances, reversal period/actor/approver). Cancel remains DRAFT-only.
+- **Maker–checker permission split** (`prepare` / `approve` / `disburse` / `manage:compensation` / `manage:advances`); today one `manage:payroll` covers all, with only the self-beneficiary guard.
+- **Subscription/feature gating** for payroll or auto-provisioned ledger + reconciliation view for non-accounting plans.
+- **Employee employment lifecycle**: effective-dated contracts, proration, leave, final settlement, statutory tax/social-security, overtime/bonuses/deductions.
+- **Payment evidence/versioning** (bank reference, cheque number, immutable payslip versions), employee GL dimension, bank-file generation + reconciliation, payroll posting-status (`UNPOSTED`/`PARTIALLY_POSTED`/`POSTED`/`FAILED`) surfacing, pagination, org-local timezone.

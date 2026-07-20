@@ -55,6 +55,8 @@ export default function PayrollPage() {
   const [advUser, setAdvUser] = useState("");
   const [advAmount, setAdvAmount] = useState("");
   const [advMethod, setAdvMethod] = useState<(typeof METHODS)[number]>("CASH");
+  // Locks the "Record advance" button while a disbursement is in flight.
+  const [submittingAdvance, setSubmittingAdvance] = useState(false);
   // How the money actually moved — advance recoveries and payroll payments hit
   // different GL cash accounts depending on the method, so neither is hardcoded.
   // Per-advance so changing one row's method never silently changes another's.
@@ -85,15 +87,21 @@ export default function PayrollPage() {
   }
 
   async function submitAdvance() {
-    if (!activeOrgId || !advUser) return;
+    if (!activeOrgId || !advUser || submittingAdvance) return;
     const value = Number.parseFloat(advAmount);
     if (Number.isNaN(value) || value <= 0) return;
+    // Issuing an advance disburses cash — an idempotency key + in-flight lock
+    // prevent a double-click or retry from booking (and paying out) it twice.
+    const idempotencyKey = crypto.randomUUID();
+    setSubmittingAdvance(true);
     try {
-      await recordAdvance({ orgId: activeOrgId, userId: advUser as Id<"users">, amount: value, method: advMethod });
+      await recordAdvance({ orgId: activeOrgId, userId: advUser as Id<"users">, amount: value, method: advMethod, idempotencyKey });
       toast.success(t("AdvanceRecorded" as any));
       setAdvUser(""); setAdvAmount("");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmittingAdvance(false);
     }
   }
 
@@ -131,6 +139,22 @@ export default function PayrollPage() {
   async function doAction(fn: () => Promise<unknown>, ok: string) {
     try { await fn(); toast.success(t(ok as any)); }
     catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
+  }
+
+  async function payRunHandler(runId: Id<"payrollRuns">) {
+    if (!activeOrgId) return;
+    try {
+      const res = await payRun({ orgId: activeOrgId, runId, method: payMethod });
+      // Payment recomputes from live state; if a payslip drifted from the
+      // approved amount the run is sent back for re-approval instead of paying.
+      if (res?.status === "NEEDS_REAPPROVAL") {
+        toast.error(t("PayrollNeedsReapproval" as any));
+      } else {
+        toast.success(t("PayrollRunPaid" as any));
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
   }
 
   const runItems = useQuery(
@@ -214,7 +238,7 @@ export default function PayrollPage() {
                     </SelectContent>
                   </Select>
                 </div>
-                <Button onClick={submitAdvance}>{t("RecordAdvance" as any)}</Button>
+                <Button onClick={submitAdvance} disabled={submittingAdvance}>{t("RecordAdvance" as any)}</Button>
               </div>
             )}
             <Table>
@@ -320,7 +344,14 @@ export default function PayrollPage() {
                     <TableCell className="font-medium">{r.periodMonth}/{r.periodYear}</TableCell>
                     <TableCell className="text-end tabular-nums">{format(r.totalGross)}</TableCell>
                     <TableCell className="text-end tabular-nums">{format(r.totalNet)}</TableCell>
-                    <TableCell><Badge variant="outline">{t(`PayrollStatus_${r.status}` as any)}</Badge></TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className={r.status === "NEEDS_REAPPROVAL" ? "text-orange-600 border-orange-300" : undefined}>
+                        {t(`PayrollStatus_${r.status}` as any)}
+                      </Badge>
+                      {r.status === "NEEDS_REAPPROVAL" && r.reapprovalReason && (
+                        <p className="mt-1 text-xs text-muted-foreground max-w-[16rem]">{r.reapprovalReason}</p>
+                      )}
+                    </TableCell>
                     <TableCell className="text-end space-x-1">
                       <Button size="sm" variant="ghost" onClick={() => setOpenRun(openRun === r._id ? null : r._id)}>{t("View" as any)}</Button>
                       {canManage && r.status === "DRAFT" && (
@@ -328,6 +359,9 @@ export default function PayrollPage() {
                           <Button size="sm" variant="outline" onClick={() => doAction(() => approveRun({ orgId: activeOrgId!, runId: r._id }), "PayrollRunApproved")}>{t("Approve" as any)}</Button>
                           <Button size="sm" variant="ghost" className="text-destructive" onClick={() => doAction(() => cancelRun({ orgId: activeOrgId!, runId: r._id }), "PayrollRunCancelled")}>{t("CancelRun" as any)}</Button>
                         </>
+                      )}
+                      {canManage && r.status === "NEEDS_REAPPROVAL" && (
+                        <Button size="sm" variant="outline" onClick={() => doAction(() => approveRun({ orgId: activeOrgId!, runId: r._id }), "PayrollRunApproved")}>{t("Reapprove" as any)}</Button>
                       )}
                       {canManage && r.status === "APPROVED" && (
                         <div className="inline-flex items-center gap-1.5">
@@ -337,7 +371,7 @@ export default function PayrollPage() {
                               {METHODS.map((mth) => <SelectItem key={mth} value={mth}>{t(`PaymentMethod_${mth}` as any)}</SelectItem>)}
                             </SelectContent>
                           </Select>
-                          <Button size="sm" onClick={() => doAction(() => payRun({ orgId: activeOrgId!, runId: r._id, method: payMethod }), "PayrollRunPaid")}>{t("Pay" as any)}</Button>
+                          <Button size="sm" onClick={() => payRunHandler(r._id)}>{t("Pay" as any)}</Button>
                         </div>
                       )}
                     </TableCell>

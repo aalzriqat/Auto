@@ -2409,11 +2409,18 @@ export default defineSchema({
     status: v.union(
       v.literal("DRAFT"),
       v.literal("APPROVED"),
+      // Was APPROVED, but a pay-time recompute found the payable now differs
+      // materially from what was approved (a new advance, a directly-paid or
+      // cancelled commission, a directly-repaid advance). Payment is blocked
+      // until it is re-approved — the run re-derives and re-freezes its totals.
+      v.literal("NEEDS_REAPPROVAL"),
       v.literal("PAID"),
       v.literal("CANCELLED"),
     ),
     totalGrossMinor: v.number(),
     totalNetMinor: v.number(),
+    // Why the run fell back to NEEDS_REAPPROVAL (shown to the approver).
+    reapprovalReason: v.optional(v.string()),
     // Accounting date the salary/commission accrual is recognized on: the last
     // moment of the payroll period (UTC), so a retroactive run books its expense
     // in the month worked, not the month it was approved.
@@ -2450,6 +2457,12 @@ export default defineSchema({
     otherDeductionMinor: v.number(),
     grossMinor: v.number(),
     netMinor: v.number(),
+    // Immutable snapshot of gross/net frozen at (re)approval. grossMinor/netMinor
+    // above are overwritten with the actually-paid figures at payment; these are
+    // what the approver authorized and are what a pay-time drift check compares
+    // against to decide whether the run needs re-approval.
+    approvedGrossMinor: v.optional(v.number()),
+    approvedNetMinor: v.optional(v.number()),
     currency: v.string(),
     // Unpaid commission sales this payslip settles (Option A: commissions are
     // paid through payroll). Marked paid when the run is paid.

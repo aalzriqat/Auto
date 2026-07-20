@@ -341,16 +341,15 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
     await asAdmin.mutation(api.payroll.approveRun, { orgId, runId: junRun });
     await asAdmin.mutation(api.payroll.payRun, { orgId, runId: junRun, method: "CASH" });
 
-    // Now pay the second — the commission is already paid, so it settles NOTHING.
-    await asAdmin.mutation(api.payroll.approveRun, { orgId, runId: julRun });
-    await asAdmin.mutation(api.payroll.payRun, { orgId, runId: julRun, method: "CASH" });
+    // The second run's only commission is now paid, so it re-derives to a zero
+    // payslip. Approving a meaningless zero run is rejected (cancel & rebuild),
+    // so the commission can never be paid a second time.
+    await expect(
+      asAdmin.mutation(api.payroll.approveRun, { orgId, runId: julRun })
+    ).rejects.toThrow(/nothing to approve/i);
 
+    // No second payslip payment was ever posted for the July run.
     const julItems = await asAdmin.query(api.payroll.listRunItems, { orgId, runId: julRun });
-    // The stale snapshot said 100000; the re-validated payment must be 0.
-    expect(julItems[0].commissionMinor).toBe(0);
-    expect(julItems[0].netMinor).toBe(0);
-
-    // And July must NOT post a second payslip payment (nothing left to pay).
     const julPaidEvt = await t.run(async (ctx) => {
       const item = julItems[0];
       return ctx.db
@@ -425,16 +424,18 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
     const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
     await asAdmin.mutation(api.payroll.approveRun, { orgId, runId });
 
-    // The sale is voided before payday — its accrual would be reversed, so the
-    // run must not hand out cash for it or debit the (gone) payable.
+    // The sale is voided before payday — the approved payslip no longer matches
+    // what would be paid, so payment must send the run back for re-approval
+    // rather than hand out cash for a commission that no longer exists.
     await t.run((ctx) => ctx.db.patch(saleId, { status: "CANCELLED" }));
-    await asAdmin.mutation(api.payroll.payRun, { orgId, runId, method: "CASH" });
+    const payResult = await asAdmin.mutation(api.payroll.payRun, { orgId, runId, method: "CASH" });
+    expect(payResult.status).toBe("NEEDS_REAPPROVAL");
 
-    const items = await asAdmin.query(api.payroll.listRunItems, { orgId, runId });
-    expect(items[0].commissionMinor).toBe(0);
-    expect(items[0].netMinor).toBe(0);
-    const sale = await t.run((ctx) => ctx.db.get(saleId));
+    let run = await t.run((ctx) => ctx.db.get(runId));
+    expect(run?.status).toBe("NEEDS_REAPPROVAL");
+    let sale = await t.run((ctx) => ctx.db.get(saleId));
     expect(sale?.commissionPaidAt ?? null).toBeNull();
+    let items = await asAdmin.query(api.payroll.listRunItems, { orgId, runId });
     const paidEvt = await t.run((ctx) =>
       ctx.db
         .query("pendingAccountingEvents")
@@ -444,6 +445,17 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
         .first()
     );
     expect(paidEvt).toBeNull();
+
+    // Re-approving re-derives the (now zero) payslip; paying it moves no money.
+    await asAdmin.mutation(api.payroll.approveRun, { orgId, runId });
+    await asAdmin.mutation(api.payroll.payRun, { orgId, runId, method: "CASH" });
+    items = await asAdmin.query(api.payroll.listRunItems, { orgId, runId });
+    expect(items[0].commissionMinor).toBe(0);
+    expect(items[0].netMinor).toBe(0);
+    run = await t.run((ctx) => ctx.db.get(runId));
+    expect(run?.status).toBe("PAID");
+    sale = await t.run((ctx) => ctx.db.get(saleId));
+    expect(sale?.commissionPaidAt ?? null).toBeNull();
   });
 
   test("a commission paid directly from the Commissions page is not paid again by payroll", async () => {
@@ -1043,5 +1055,78 @@ describe("payroll: fourth audit (cross-flow integrity)", () => {
     expect(posted).toHaveLength(0);
     expect(pending).toHaveLength(1);
     expect(pending[0].accountingDate).toBeLessThan(Date.UTC(2026, 6, 1));
+  });
+});
+
+describe("payroll: fifth audit (approval immutability + idempotency)", () => {
+  test("#2 a new advance issued after approval blocks payment and needs re-approval", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "drift");
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 1000 });
+    const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
+    await asAdmin.mutation(api.payroll.approveRun, { orgId, runId });
+    let run = await t.run((ctx) => ctx.db.get(runId));
+    expect(run?.approvedNetMinor).toBe(1000000); // approved to pay 1000
+
+    // A 700 advance is issued AFTER approval — paying now would net only 300,
+    // which nobody approved. Payment must instead require re-approval.
+    await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 700 });
+    const res = await asAdmin.mutation(api.payroll.payRun, { orgId, runId, method: "CASH" });
+    expect(res.status).toBe("NEEDS_REAPPROVAL");
+    run = await t.run((ctx) => ctx.db.get(runId));
+    expect(run?.status).toBe("NEEDS_REAPPROVAL");
+
+    // Re-approval authorizes the reduced net (1000 − 700), then it pays.
+    await asAdmin.mutation(api.payroll.approveRun, { orgId, runId });
+    run = await t.run((ctx) => ctx.db.get(runId));
+    expect(run?.status).toBe("APPROVED");
+    expect(run?.approvedNetMinor).toBe(300000);
+    const paid = await asAdmin.mutation(api.payroll.payRun, { orgId, runId, method: "CASH" });
+    expect(paid.status).toBe("PAID");
+    run = await t.run((ctx) => ctx.db.get(runId));
+    expect(run?.status).toBe("PAID");
+    expect(run?.totalNetMinor).toBe(300000);
+  });
+
+  test("#4 a full-repayment retry with the same key returns the original recovery", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "fullidem");
+    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 100 });
+
+    // Full repayment, then an exact retry with the same key.
+    const r1 = await asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId, method: "CASH", idempotencyKey: "full-1" });
+    const adv = await t.run((ctx) => ctx.db.get(advanceId));
+    expect(adv?.status).toBe("RECOVERED");
+    // Pre-fix, the retry hit the RECOVERED status check and threw; now it returns
+    // the original recovery id and books no second recovery.
+    const r2 = await asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId, method: "CASH", idempotencyKey: "full-1" });
+    expect(r2).toBe(r1);
+    const recoveries = await t.run((ctx) =>
+      ctx.db.query("employeeAdvanceRecoveries").withIndex("by_advance", (q) => q.eq("advanceId", advanceId)).collect()
+    );
+    expect(recoveries).toHaveLength(1);
+  });
+
+  test("#7 a zero-value first approval is rejected (cancel and rebuild)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "zeroappr");
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
+    const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
+    // Salary corrected to zero before approval — nothing left to pay. Patch the
+    // single active comp row (deterministic; avoids a same-ms effective-date tie).
+    await t.run(async (ctx) => {
+      const c = await ctx.db
+        .query("employeeCompensation")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .filter((q) => q.eq(q.field("active"), true))
+        .first();
+      await ctx.db.patch(c!._id, { monthlySalaryMinor: 0 });
+    });
+    await expect(
+      asAdmin.mutation(api.payroll.approveRun, { orgId, runId })
+    ).rejects.toThrow(/nothing to approve/i);
+    // The run is still a cancellable DRAFT (no dead end).
+    const run = await t.run((ctx) => ctx.db.get(runId));
+    expect(run?.status).toBe("DRAFT");
   });
 });
