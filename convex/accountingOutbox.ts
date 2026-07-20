@@ -19,6 +19,7 @@ import { MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { PostCommand, postAccountingEvent } from "./accounting/postingEngine";
 import { prepaidPostingBlockedReason } from "./utils/prepaidSourceLedger";
+import { payrollPostingBlockedReason } from "./utils/payrollSourceLedger";
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -256,7 +257,8 @@ export async function drainEntries(
     // negative balance that guard prevents, with no operator action. Reversals
     // are exempt: they unwind something that already posted.
     if (p.kind === "POST") {
-      const blockedReason = await prepaidPostingBlockedReason(ctx, p);
+      const blockedReason =
+        (await prepaidPostingBlockedReason(ctx, p)) ?? (await payrollPostingBlockedReason(ctx, p));
       if (blockedReason) {
         // Held, not failed: this entry is not broken and retrying it is not
         // wrong — it is waiting on something else to post first. Routing it

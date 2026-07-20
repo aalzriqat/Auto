@@ -802,6 +802,10 @@ export async function hookEmployeeAdvanceRecovered(
   args: {
     orgId: Id<"organizations">;
     advanceId: Id<"employeeAdvances">;
+    // Unique per recovery event so partial repayments each post their own GL
+    // entry. Keying idempotency on advanceId alone would silently drop every
+    // recovery after the first, under-crediting Employee Advances.
+    recoveryId: Id<"employeeAdvanceRecoveries">;
     userId: Id<"users">;
     amountMinor: number;
     currency: string;
@@ -815,8 +819,8 @@ export async function hookEmployeeAdvanceRecovered(
     orgId: args.orgId,
     eventType: "EMPLOYEE_ADVANCE_RECOVERED",
     sourceType: "employeeAdvances",
-    sourceId: `recovery_${args.advanceId}`,
-    idempotencyKey: `employee_advance_recovered_${args.advanceId}`,
+    sourceId: `recovery_${args.recoveryId}`,
+    idempotencyKey: `employee_advance_recovered_${args.recoveryId}`,
     currency: args.currency,
     occurredAt: args.occurredAt,
     actorId: args.actorId,

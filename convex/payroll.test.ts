@@ -324,21 +324,24 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
       const customerId = await ctx.db.insert("customers", {
         orgId, firstName: "Jane", lastName: "Buyer", email: "buyer.2p@example.com",
       });
+      // Dated in January so BOTH later-period runs may sweep it forward (a run
+      // sweeps older outstanding commissions; the cutoff only bars FUTURE ones).
       return await ctx.db.insert("sales", {
         orgId, vehicleId, customerId, salespersonId: userId,
-        salePrice: 20000, saleDate: Date.now(), status: "COMPLETED", commissionAmount: 100,
+        salePrice: 20000, saleDate: Date.UTC(2026, 0, 15), status: "COMPLETED", commissionAmount: 100,
       });
     });
 
-    // createRun has no period filter, so BOTH runs snapshot the same sale.
-    const junRun = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 6 });
-    const julRun = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
+    // Neither run filters which older commissions it sweeps, so BOTH snapshot
+    // the same January sale.
+    const junRun = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
+    const julRun = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 8 });
 
-    // Pay June first — settles the commission.
+    // Pay the first run — settles the commission.
     await asAdmin.mutation(api.payroll.approveRun, { orgId, runId: junRun });
     await asAdmin.mutation(api.payroll.payRun, { orgId, runId: junRun, method: "CASH" });
 
-    // Now pay July — the commission is already paid, so it must settle NOTHING.
+    // Now pay the second — the commission is already paid, so it settles NOTHING.
     await asAdmin.mutation(api.payroll.approveRun, { orgId, runId: julRun });
     await asAdmin.mutation(api.payroll.payRun, { orgId, runId: julRun, method: "CASH" });
 
@@ -695,5 +698,120 @@ describe("payroll: production-hardening controls", () => {
     await expect(
       asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 6.5 })
     ).rejects.toThrow(/whole number/i);
+  });
+});
+
+describe("payroll: ledger-integrity (third audit)", () => {
+  async function countRecoveryEvents(t: ReturnType<typeof convexTest>, orgId: any) {
+    return await t.run(async (ctx) => {
+      const posted = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org", (q: any) => q.eq("orgId", orgId))
+        .filter((q: any) => q.eq(q.field("eventType"), "EMPLOYEE_ADVANCE_RECOVERED"))
+        .collect();
+      const pending = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_status", (q: any) => q.eq("orgId", orgId))
+        .filter((q: any) => q.eq(q.field("eventType"), "EMPLOYEE_ADVANCE_RECOVERED"))
+        .collect();
+      return posted.length + pending.length;
+    });
+  }
+
+  test("two partial recoveries each post their own GL entry (not silently deduped)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "partgl");
+    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 100 });
+
+    await asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId, method: "CASH", amount: 40 });
+    await asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId, method: "CASH", amount: 60 });
+
+    const adv = await t.run((ctx) => ctx.db.get(advanceId));
+    expect(adv?.status).toBe("RECOVERED");
+    expect(adv?.recoveredMinor).toBe(100000);
+
+    // Two immutable recovery rows summing to the full advance.
+    const recoveries = await t.run((ctx) =>
+      ctx.db.query("employeeAdvanceRecoveries").withIndex("by_advance", (q) => q.eq("advanceId", advanceId)).collect()
+    );
+    expect(recoveries).toHaveLength(2);
+    expect(recoveries.reduce((s, r) => s + r.amountMinor, 0)).toBe(100000);
+
+    // Two distinct GL recovery events — pre-fix, the second was dropped by a
+    // per-advance idempotency key, leaving Employee Advances overstated by 60.
+    expect(await countRecoveryEvents(t, orgId)).toBe(2);
+  });
+
+  test("a retroactive run does not sweep a commission earned after the period", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "cutoff");
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
+    // Salary in force from the start of 2026.
+    await t.run(async (ctx) => {
+      const c = await ctx.db.query("employeeCompensation").first();
+      await ctx.db.patch(c!._id, { effectiveFrom: Date.UTC(2026, 0, 1) });
+    });
+    // A completed, unpaid commission from a DECEMBER 2026 sale.
+    await t.run(async (ctx) => {
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, vin: "VIN-CUT", make: "Kia", model: "K5", year: 2024, color: "White",
+        fuelType: "Gasoline", transmission: "Automatic", mileage: 10, sellingPrice: 20000, status: "SOLD",
+      });
+      const customerId = await ctx.db.insert("customers", { orgId, firstName: "J", lastName: "B", email: "cut@example.com" });
+      await ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId,
+        salePrice: 20000, saleDate: Date.UTC(2026, 11, 1), status: "COMPLETED", commissionAmount: 100,
+      });
+    });
+
+    // A JUNE 2026 run must include the salary but NOT the December commission.
+    const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 6 });
+    const items = await asAdmin.query(api.payroll.listRunItems, { orgId, runId });
+    expect(items).toHaveLength(1);
+    expect(items[0].baseSalaryMinor).toBe(500000);
+    expect(items[0].commissionMinor).toBe(0);
+  });
+
+  test("approval re-derives and freezes a commission edited after drafting", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "freeze");
+
+    const saleId = await t.run(async (ctx) => {
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, vin: "VIN-FRZ", make: "Kia", model: "K5", year: 2024, color: "White",
+        fuelType: "Gasoline", transmission: "Automatic", mileage: 10, sellingPrice: 20000, status: "SOLD",
+      });
+      const customerId = await ctx.db.insert("customers", { orgId, firstName: "J", lastName: "B", email: "frz@example.com" });
+      return await ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId,
+        salePrice: 20000, saleDate: Date.now(), status: "COMPLETED", commissionAmount: 100,
+      });
+    });
+
+    const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
+    let items = await asAdmin.query(api.payroll.listRunItems, { orgId, runId });
+    expect(items[0].commissionMinor).toBe(100000); // draft
+
+    // The commission is revised upward before approval.
+    await t.run((ctx) => ctx.db.patch(saleId, { commissionAmount: 150 }));
+
+    await asAdmin.mutation(api.payroll.approveRun, { orgId, runId });
+    items = await asAdmin.query(api.payroll.listRunItems, { orgId, runId });
+    // Item and approved snapshot must reflect what was actually accrued (150).
+    expect(items[0].commissionMinor).toBe(150000);
+    const run = await t.run((ctx) => ctx.db.get(runId));
+    expect(run?.approvedNetMinor).toBe(150000);
+  });
+
+  test("recordAdvance is idempotent under a repeated key", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "advidem");
+    const a1 = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 50, idempotencyKey: "k-1" });
+    const a2 = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 50, idempotencyKey: "k-1" });
+    expect(a1).toBe(a2);
+    const advances = await t.run((ctx) =>
+      ctx.db.query("employeeAdvances").withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId)).collect()
+    );
+    expect(advances).toHaveLength(1);
   });
 });

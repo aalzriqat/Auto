@@ -2366,6 +2366,33 @@ export default defineSchema({
     .index("by_org_user", ["orgId", "userId"])
     .index("by_org_status", ["orgId", "status"]),
 
+  // One immutable row per advance recovery event (direct repayment or payroll
+  // deduction). Each carries its own GL identity so partial repayments post
+  // distinct EMPLOYEE_ADVANCE_RECOVERED entries and the Employee Advances asset
+  // is credited exactly once per repayment.
+  employeeAdvanceRecoveries: defineTable({
+    orgId: v.id("organizations"),
+    advanceId: v.id("employeeAdvances"),
+    userId: v.id("users"),
+    amountMinor: v.number(),
+    currency: v.string(),
+    method: v.optional(
+      v.union(
+        v.literal("CASH"),
+        v.literal("BANK_TRANSFER"),
+        v.literal("CHEQUE"),
+        v.literal("CARD"),
+      ),
+    ),
+    // "DIRECT" = repaid outside payroll; "PAYROLL" = deducted on a payslip.
+    source: v.union(v.literal("DIRECT"), v.literal("PAYROLL")),
+    payrollItemId: v.optional(v.id("payrollItems")),
+    recoveredAt: v.number(),
+    recoveredBy: v.id("users"),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_advance", ["advanceId"]),
+
   // A monthly payroll run and its per-employee payslip items.
   payrollRuns: defineTable({
     orgId: v.id("organizations"),

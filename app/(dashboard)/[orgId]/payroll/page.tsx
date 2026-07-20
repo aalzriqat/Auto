@@ -58,6 +58,8 @@ export default function PayrollPage() {
   // How the money actually moved — advance recoveries and payroll payments hit
   // different GL cash accounts depending on the method, so neither is hardcoded.
   const [recoverMethod, setRecoverMethod] = useState<(typeof METHODS)[number]>("CASH");
+  // Per-advance partial repayment amount (blank = recover the full balance).
+  const [recoverAmounts, setRecoverAmounts] = useState<Record<string, string>>({});
   const [payMethod, setPayMethod] = useState<(typeof METHODS)[number]>("BANK_TRANSFER");
   const [runYear, setRunYear] = useState(String(new Date().getFullYear()));
   const [runMonth, setRunMonth] = useState(String(new Date().getMonth() + 1));
@@ -207,13 +209,29 @@ export default function PayrollPage() {
                       <TableCell className="text-end">
                         {a.status === "OUTSTANDING" && (
                           <div className="inline-flex items-center gap-1.5">
+                            <Input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              placeholder={t("FullAmount" as any)}
+                              value={recoverAmounts[a._id] ?? ""}
+                              onChange={(e) => setRecoverAmounts((m) => ({ ...m, [a._id]: e.target.value }))}
+                              className="h-8 w-24 text-end"
+                              title={t("PartialRepaymentHint" as any)}
+                            />
                             <Select value={recoverMethod} onValueChange={(v) => setRecoverMethod(v as (typeof METHODS)[number])}>
                               <SelectTrigger className="w-36 h-8"><SelectValue /></SelectTrigger>
                               <SelectContent>
                                 {METHODS.map((mth) => <SelectItem key={mth} value={mth}>{t(`PaymentMethod_${mth}` as any)}</SelectItem>)}
                               </SelectContent>
                             </Select>
-                            <Button size="sm" variant="outline" onClick={() => doAction(() => recoverAdvance({ orgId: activeOrgId!, advanceId: a._id, method: recoverMethod }), "AdvanceRecovered")}>
+                            <Button size="sm" variant="outline" onClick={() => {
+                              const raw = recoverAmounts[a._id];
+                              const parsed = raw ? Number.parseFloat(raw) : undefined;
+                              const amount = parsed !== undefined && !Number.isNaN(parsed) && parsed > 0 ? parsed : undefined;
+                              doAction(() => recoverAdvance({ orgId: activeOrgId!, advanceId: a._id, method: recoverMethod, amount }), "AdvanceRecovered");
+                              setRecoverAmounts((m) => { const n = { ...m }; delete n[a._id]; return n; });
+                            }}>
                               {t("MarkRecovered" as any)}
                             </Button>
                           </div>

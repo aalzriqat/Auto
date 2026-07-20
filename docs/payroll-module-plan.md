@@ -101,8 +101,9 @@ Biggest risks: GL balance correctness across accrue/pay/offset (mitigate with re
 ### Known limitations (accepted, documented)
 - **No reversal for APPROVED/PAID runs** (cancel is DRAFT-only). An approved/paid run posted real GL entries; reversing needs offsetting entries — manual accounting correction until a reversal flow ships.
 - Reverting a PAID commission is fail-closed everywhere (`markCommissionUnpaid` rejects paid commissions server-side; the UI offers no Revert action) — undoing a paid commission requires an accounting reversal.
-- **Salary double-booking is possible by operator error**: recording a salary through the Expenses page (SALARIES category → immediate Dr Salaries Expense) AND paying the same month through a payroll run books the expense twice. Until a guard exists, orgs using the payroll module should record salaries ONLY through payroll.
 - Timezone: period end is computed in UTC, not org-local time.
+
+> **Salary double-booking**: a SALARIES-category expense is now blocked whenever the org has active payroll compensation (see the round-2 and round-3 notes). The residual gap is only the reverse order — a SALARIES expense recorded *before* payroll is configured for the same period isn't retroactively caught; the robust fix is a payroll-period-overlap / payroll-run link (deferred).
 
 ### Deployment order
 1. Merge + `npx convex deploy` (schema + functions).
@@ -122,12 +123,27 @@ Fixed:
 - **Flag semantics**: `missingPurchaseCost`/`needsRecalculation` only apply when `commissionAmount == null`, so a sale that already carries a commission keeps its Pay action even if the vehicle cost is later cleared.
 - **Partial advance recovery** (`recoverAdvance` optional `amount`), **paid method** + **approved snapshot** (`approvedGross/NetMinor`) stored on the run for audit, **integer period validation**, and defense-in-depth zero-line guard in `rulePayrollPaid`.
 
+## Third audit round (2026-07-20, ledger-integrity pass)
+
+Fixed:
+- **Partial advance recovery now posts every repayment to the GL.** New `employeeAdvanceRecoveries` table: one immutable row per repayment (direct or payroll), each with its own GL identity (`employee_advance_recovered_<recoveryId>`). The old key was `<advanceId>`, so a second partial repayment was silently dropped, leaving Employee Advances overstated. This also gives per-payslip advance-allocation history.
+- **Out-of-order settlement in the outbox** (`payrollPostingBlockedReason`, mirroring the prepaid guard): a queued `PAYROLL_PAID` is HELD until its salary/commission accruals post, and a queued `EMPLOYEE_ADVANCE_RECOVERED` until the issuance posts — so a payable/asset is never cleared before it exists, even when events drain across periods.
+- **Advance recovery before issuance posts** is blocked in-mutation when the recovery would post now (`assertAdvanceIssuancePosted`), and held in the outbox otherwise.
+- **Retro run commission cutoff**: `collectUnpaidCommissions` excludes any sale with `saleDate > periodEnd`, so a run never recognizes a commission earned after its period.
+- **Approval re-derives and freezes each payslip** from live state (commission from live sales, advances from current balances), so the amount accrued to the GL, stored on the item, and in `approvedGross/NetMinor` all agree — a MANUAL commission edited between draft and approval is approved at its live value.
+- **Currency-lock bypass closed**: the guard now compares against the effective currency (stored, or JOD default when no settings row exists), so a legacy org with financial records can't set a new currency on its first settings write.
+- **`recordAdvance` is idempotent** (`runWithIdempotency` + `idempotencyKey`), so a double-click can't issue two advances/disbursements.
+- **Partial repayment exposed in the Payroll UI** (per-advance amount input; blank = full).
+
 Deferred (documented, not blocking a small-dealership launch — each needs schema/architecture work):
 - Full **reversal flow** for APPROVED/PAID runs (offsetting GL + operational-state restore). Cancel is DRAFT-only.
 - **Commission policy snapshot at completion** (rate/mode/tiers/basis on the sale) so a post-hoc recalculation uses the rules in force at sale time, and mode switches can't reclassify historical sales.
-- **payrollAdvanceAllocations** table (per-payslip advance allocation history) and **payrollItemVersions** (draft/approved/paid immutable stages).
+- **payrollItemVersions** (draft/approved/paid immutable stages). Advance-allocation history now exists via `employeeAdvanceRecoveries`.
 - **Employee dimension** on journal lines (salary/advance by employee from the GL).
-- **payrollPayments** evidence table (per-employee method/reference/date/attachment) and **per-item payment methods**.
+- **payrollPayments** evidence table (per-employee cheque number/bank reference/attachment) and **per-item payment methods**.
+- **Maker–checker split** of `manage:payroll` into prepare/approve/pay. Current control: a non-owner can't act on their own payslip, but the same non-owner can still prepare+approve+pay others'.
+- **Employment start/end dates + final settlement** and **salary proration** (mid-period hires/raises pay the full monthly rate; a re-added employee's old active comp resumes).
 - **Subscription/feature gating** for payroll (product decision).
-- Period boundaries in **org-local timezone** (currently UTC).
-- **Reapproval-on-drift**: pay-time recompute is captured against the approved snapshot for audit but does not force re-approval.
+- Period boundaries in **org-local timezone** (currently UTC); future-period runs are allowed (year ≤ 2200).
+- **Mandatory reapproval-on-drift**: approval now freezes an accurate snapshot, and payment always pays the correct live amount, but a post-approval change (e.g. a new advance) is not force-re-approved.
+- **Role-name-based backfill** can still grant payroll to a customized role that kept its default name — mitigated (finance/template-name only, never commissions), full fix = exact permission-set fingerprint.

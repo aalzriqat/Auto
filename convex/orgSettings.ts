@@ -104,10 +104,15 @@ export const upsert = mutation({
     // any of them — 500.000 JOD would silently become 5,000.00 USD — so once
     // ANY financial record exists the currency is locked. (Fresh orgs can
     // still pick their currency during onboarding.)
+    // The effective current currency is the stored one, or the JOD default when
+    // no settings row exists yet (getOrgCurrency does the same). Checking this —
+    // rather than `existing && ...` — closes the bypass where a legacy org with
+    // financial records but no settings row creates its first row in a new
+    // currency.
+    const effectiveCurrentCurrency = existing?.currency ?? DEFAULT_SETTINGS.currency;
     if (
       args.currency !== undefined &&
-      existing &&
-      existing.currency !== args.currency
+      effectiveCurrentCurrency !== args.currency
     ) {
       // Any of these tables stores a minor-unit amount denominated in the org
       // currency (pendingAccountingEvents covers orgs whose chart isn't set up
