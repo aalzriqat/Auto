@@ -98,6 +98,7 @@ import type * as orgValuationCompanies from "../orgValuationCompanies.js";
 import type * as organizations from "../organizations.js";
 import type * as partnerEquity from "../partnerEquity.js";
 import type * as paymentIntents from "../paymentIntents.js";
+import type * as payroll from "../payroll.js";
 import type * as paymentVouchers from "../paymentVouchers.js";
 import type * as prepaidExpenses from "../prepaidExpenses.js";
 import type * as pushSend from "../pushSend.js";
@@ -281,6 +282,7 @@ declare const fullApi: ApiFromModules<{
   organizations: typeof organizations;
   partnerEquity: typeof partnerEquity;
   paymentIntents: typeof paymentIntents;
+  payroll: typeof payroll;
   paymentVouchers: typeof paymentVouchers;
   prepaidExpenses: typeof prepaidExpenses;
   pushSend: typeof pushSend;
