@@ -9,6 +9,7 @@ import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
 import { CreateDraftSaleSchema, CreateSaleSchema, UpdateSaleSchema } from "./validations/sales";
 import { restoreVehicleToAvailable } from "./utils/saleHelpers";
+import { vehicleHasCostBasis } from "./utils/vehicleCost";
 import { completeExistingSale, completeSale, completeSalesForLineItems, createDraftSale } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
@@ -658,9 +659,9 @@ export const listCommissions = query({
         .collect();
     }
 
-    // In an automatic mode, a completed sale whose vehicle has no recorded
-    // purchase cost earns 0 commission (see C3 in saleCompletion). Surface those
-    // rows too — flagged — so a manager notices the missing cost and can fix it.
+    // In an automatic mode, a completed sale whose vehicle has no recorded cost
+    // basis earns 0 commission (see C3 in saleCompletion). Surface those rows
+    // too — flagged — so a manager notices the missing cost and can fix it.
     const orgSettings = await ctx.db
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
@@ -668,11 +669,23 @@ export const listCommissions = query({
     const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
     const isAutoMode = mode === "AUTO_MEMBER" || mode === "AUTO_TIERS";
 
+    // Cheap in-memory narrowing before any vehicle fetch: a sale can only make
+    // the final list if it already carries a commission, or (auto mode) it's a
+    // completed sale that might be flagged for a missing cost basis. Skip the
+    // ctx.db.get for everything else (drafts, cancelled, zero-commission).
+    const candidates = sales.filter(
+      (sale) =>
+        (sale.commissionAmount != null && sale.commissionAmount > 0) ||
+        (isAutoMode && sale.status === "COMPLETED")
+    );
+
     const hydrated = await Promise.all(
-      sales.map(async (sale) => {
+      candidates.map(async (sale) => {
         const vehicle = await ctx.db.get(sale.vehicleId);
         const missingPurchaseCost =
-          isAutoMode && sale.status === "COMPLETED" && vehicle?.purchasePrice == null;
+          isAutoMode &&
+          sale.status === "COMPLETED" &&
+          (!vehicle || !vehicleHasCostBasis(vehicle));
         return { sale, vehicle, missingPurchaseCost };
       })
     );

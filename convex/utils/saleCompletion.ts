@@ -19,7 +19,7 @@ import {
 } from "../accounting/workflowHooks";
 import { computeResoldProductMargin } from "../accounting/postingRules";
 import { toMinorUnits } from "./money";
-import { computeVehicleCapitalizedCost } from "./vehicleCost";
+import { computeVehicleCapitalizedCost, vehicleHasCostBasis } from "./vehicleCost";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
@@ -152,13 +152,15 @@ async function prepareSaleCompletion(
   // reconditioning expenses) so commission, the GL, and the operational reports
   // all show the same margin for a sale.
   const vehicleCost = await computeVehicleCapitalizedCost(ctx, vehicle);
-  // C3: without a recorded purchase cost the capitalized-cost basis isn't
+  // C3: without a recorded cost basis the capitalized-cost figure isn't
   // trustworthy (it would be ~zero), so the automatic commission modes earn
   // NOTHING here rather than paying on ~the full sale price. Managers are
   // alerted to the missing cost on the Commissions page and Vehicles list so
   // they can fix it and re-set the commission. MANUAL mode is unaffected.
-  const hasPurchaseCost = vehicle.purchasePrice != null;
-  const grossProfit = hasPurchaseCost ? Math.max(0, args.salePrice - vehicleCost) : 0;
+  // Uses the same cost-basis source as computeVehicleCapitalizedCost above, so
+  // a SOURCED vehicle (costed off sourceCost, no purchasePrice) isn't misflagged.
+  const hasCostBasis = vehicleHasCostBasis(vehicle);
+  const grossProfit = hasCostBasis ? Math.max(0, args.salePrice - vehicleCost) : 0;
 
   let commissionAmount: number | undefined;
   // AUTO modes derive the amount now and accrue it to the GL at completion.
@@ -168,13 +170,13 @@ async function prepareSaleCompletion(
   let accrueAtCompletion = false;
   if (commissionMode === "MANUAL") {
     commissionAmount = args.existingCommissionAmount;
-  } else if (hasPurchaseCost && commissionMode === "AUTO_MEMBER") {
+  } else if (hasCostBasis && commissionMode === "AUTO_MEMBER") {
     const rate = membership.commissionRate ?? 0;
     if (rate > 0) {
       commissionAmount = grossProfit * (rate / 100);
     }
     accrueAtCompletion = true;
-  } else if (hasPurchaseCost && commissionMode === "AUTO_TIERS") {
+  } else if (hasCostBasis && commissionMode === "AUTO_TIERS") {
     const amount = calculateCommissionFromTiers(grossProfit, orgSettings?.commissionTiers ?? []);
     if (amount > 0) commissionAmount = amount;
     accrueAtCompletion = true;

@@ -129,8 +129,14 @@ export default function VehiclesPage() {
   // salesperson would see it on every vehicle. A missing cost means no auto
   // commission was calculated (see C3), which is what we want managers to spot.
   const canViewCost = permissions.includes("view:cost_price");
-  const isMissingCost = (v: Doc<"vehicles">) =>
-    canViewCost && v.status !== "SOURCING" && v.purchasePrice == null;
+  // A vehicle's cost basis is sourceCost for SOURCED vehicles and purchasePrice
+  // for everything else — the same rule the backend uses (vehicleHasCostBasis /
+  // computeVehicleCapitalizedCost). Keying only off purchasePrice would wrongly
+  // flag legitimately-costed SOURCED stock.
+  const isMissingCost = (v: Doc<"vehicles">) => {
+    if (!canViewCost || v.status === "SOURCING") return false;
+    return v.sourceType === "SOURCED" ? v.sourceCost == null : v.purchasePrice == null;
+  };
 
   const pendingRequests = useQuery(api.vehicleRequests.listPending, activeOrgId && canEdit ? { orgId: activeOrgId } : "skip");
   const pendingEdits = useQuery(api.vehicleEdits.listPending, activeOrgId && canEdit ? { orgId: activeOrgId } : "skip");

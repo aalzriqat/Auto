@@ -253,7 +253,7 @@ export async function outstandingAdvanceMinor(
   const rows = await ctx.db
     .query("employeeAdvances")
     .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
-    .filter((q) => q.eq(q.field("status"), "OUTSTANDING"))
+    .filter((q) => q.and(q.eq(q.field("status"), "OUTSTANDING"), q.neq(q.field("isDeleted"), true)))
     .collect();
   return rows.reduce((sum, r) => sum + (r.amountMinor - r.recoveredMinor), 0);
 }
@@ -470,15 +470,41 @@ export const payRun = mutation({
         .withIndex("by_run", (q) => q.eq("runId", args.runId))
         .collect();
 
+      let paidGrossMinor = 0;
+      let paidNetMinor = 0;
       for (const item of items) {
-        // Recover advances oldest-first, up to the item's advance deduction.
-        let toRecover = item.advanceDeductionMinor;
+        // Re-derive the commission from CURRENT state, not the draft snapshot.
+        // A run for another period may have paid some of these sales since this
+        // one was drafted (createRun captures all unpaid commissions with no
+        // period filter), and paying on the stale snapshot would pay the same
+        // commission twice and over-clear Commission Payable. Only still-unpaid
+        // sales are settled here.
+        let commissionMinor = 0;
+        const saleIdsToSettle: Id<"sales">[] = [];
+        for (const saleId of item.commissionSaleIds) {
+          const sale = await ctx.db.get(saleId);
+          if (!sale || sale.commissionPaidAt != null || !sale.commissionAmount || sale.commissionAmount <= 0) {
+            continue;
+          }
+          commissionMinor += toMinorUnits(sale.commissionAmount, item.currency);
+          saleIdsToSettle.push(saleId);
+        }
+
+        const salaryMinor = item.baseSalaryMinor;
+        const grossMinor = salaryMinor + commissionMinor;
+
+        // Recover advances oldest-first from CURRENT outstanding advances (an
+        // advance may have been recovered or soft-deleted since drafting), capped
+        // at this payslip's gross. advanceRecoveredMinor is the amount ACTUALLY
+        // taken so the GL credit to Employee Advances can never exceed reality.
+        let toRecover = Math.min(await outstandingAdvanceMinor(ctx, args.orgId, item.userId), grossMinor);
+        let advanceRecoveredMinor = 0;
         if (toRecover > 0) {
           const advances = (
             await ctx.db
               .query("employeeAdvances")
               .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", item.userId))
-              .filter((q) => q.eq(q.field("status"), "OUTSTANDING"))
+              .filter((q) => q.and(q.eq(q.field("status"), "OUTSTANDING"), q.neq(q.field("isDeleted"), true)))
               .collect()
           ).sort((a, b) => a.date - b.date);
           for (const adv of advances) {
@@ -491,40 +517,61 @@ export const payRun = mutation({
               status: newRecovered >= adv.amountMinor ? "RECOVERED" : "OUTSTANDING",
               updatedAt: now,
             });
+            advanceRecoveredMinor += take;
             toRecover -= take;
           }
         }
 
-        await hookPayrollPaid(ctx, {
-          orgId: args.orgId,
-          itemId: item._id,
-          userId: item.userId,
-          salaryMinor: item.baseSalaryMinor,
-          commissionMinor: item.commissionMinor,
-          advanceRecoveredMinor: item.advanceDeductionMinor,
-          netMinor: item.netMinor,
-          currency: item.currency,
-          paymentMethod: method,
-          actorId: user._id,
-          occurredAt: now,
-        });
+        const netMinor = grossMinor - advanceRecoveredMinor;
 
-        // Mark the consumed commissions paid (payable already cleared above).
-        for (const saleId of item.commissionSaleIds) {
-          const sale = await ctx.db.get(saleId);
-          if (!sale || sale.commissionPaidAt != null) continue;
+        // Nothing left to pay on this payslip (e.g. its only commission was
+        // already settled by another period's run and it carries no salary).
+        // Skip the GL post — an all-zero PAYROLL_PAID would be an empty entry —
+        // but still zero out the item below so reports don't show a phantom.
+        if (grossMinor > 0) {
+          await hookPayrollPaid(ctx, {
+            orgId: args.orgId,
+            itemId: item._id,
+            userId: item.userId,
+            salaryMinor,
+            commissionMinor,
+            advanceRecoveredMinor,
+            netMinor,
+            currency: item.currency,
+            paymentMethod: method,
+            actorId: user._id,
+            occurredAt: now,
+          });
+        }
+
+        // Mark the settled commissions paid (payable cleared by the payment above).
+        for (const saleId of saleIdsToSettle) {
           await ctx.db.patch(saleId, {
             commissionPaidAt: now,
             commissionPaidBy: user._id,
             commissionPaymentMethod: method,
           });
         }
+
+        // Persist what was ACTUALLY paid back onto the payslip so payslips and
+        // reports reflect reality rather than the possibly-stale draft snapshot.
+        await ctx.db.patch(item._id, {
+          commissionMinor,
+          advanceDeductionMinor: advanceRecoveredMinor,
+          grossMinor,
+          netMinor,
+          commissionSaleIds: saleIdsToSettle,
+        });
+        paidGrossMinor += grossMinor;
+        paidNetMinor += netMinor;
       }
 
       await ctx.db.patch(args.runId, {
         status: "PAID",
         paidBy: user._id,
         paidAt: now,
+        totalGrossMinor: paidGrossMinor,
+        totalNetMinor: paidNetMinor,
         updatedAt: now,
       });
     } catch (error) {

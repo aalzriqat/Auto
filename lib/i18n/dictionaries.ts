@@ -13,6 +13,7 @@ import { socialSmartReplyEn, socialSmartReplyAr } from "./domains/socialSmartRep
 import { notificationsEn, notificationsAr } from "./domains/notifications";
 import { messagesEn, messagesAr } from "./domains/messages";
 import { marketplaceEn, marketplaceAr } from "./domains/marketplace";
+import { payrollEn, payrollAr } from "./domains/payroll";
 
 export type Locale = "en" | "ar";
 
@@ -32,6 +33,7 @@ const en = {
   ...notificationsEn,
   ...messagesEn,
   ...marketplaceEn,
+  ...payrollEn,
 };
 
 const ar = {
@@ -50,6 +52,7 @@ const ar = {
   ...notificationsAr,
   ...messagesAr,
   ...marketplaceAr,
+  ...payrollAr,
 } as unknown as typeof en;
 
 export const dictionaries = {

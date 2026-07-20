@@ -262,6 +262,84 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
       asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 })
     ).rejects.toThrow(/already exists/i);
   });
+
+  test("the same unpaid commission captured by two different-period runs is only paid once", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "twoperiod");
+
+    // No salary — just one completed, unpaid commission of 100.
+    const saleId = await t.run(async (ctx) => {
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, vin: "VIN-2P", make: "Kia", model: "K5", year: 2024, color: "White",
+        fuelType: "Gasoline", transmission: "Automatic", mileage: 10, sellingPrice: 20000, status: "SOLD",
+      });
+      const customerId = await ctx.db.insert("customers", {
+        orgId, firstName: "Jane", lastName: "Buyer", email: "buyer.2p@example.com",
+      });
+      return await ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId,
+        salePrice: 20000, saleDate: Date.now(), status: "COMPLETED", commissionAmount: 100,
+      });
+    });
+
+    // createRun has no period filter, so BOTH runs snapshot the same sale.
+    const junRun = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 6 });
+    const julRun = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
+
+    // Pay June first — settles the commission.
+    await asAdmin.mutation(api.payroll.approveRun, { orgId, runId: junRun });
+    await asAdmin.mutation(api.payroll.payRun, { orgId, runId: junRun, method: "CASH" });
+
+    // Now pay July — the commission is already paid, so it must settle NOTHING.
+    await asAdmin.mutation(api.payroll.approveRun, { orgId, runId: julRun });
+    await asAdmin.mutation(api.payroll.payRun, { orgId, runId: julRun, method: "CASH" });
+
+    const julItems = await asAdmin.query(api.payroll.listRunItems, { orgId, runId: julRun });
+    // The stale snapshot said 100000; the re-validated payment must be 0.
+    expect(julItems[0].commissionMinor).toBe(0);
+    expect(julItems[0].netMinor).toBe(0);
+
+    // And July must NOT post a second payslip payment (nothing left to pay).
+    const julPaidEvt = await t.run(async (ctx) => {
+      const item = julItems[0];
+      return ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", `payroll_paid_${item._id}`)
+        )
+        .first();
+    });
+    expect(julPaidEvt).toBeNull();
+
+    // The sale itself was paid exactly once.
+    const sale = await t.run((ctx) => ctx.db.get(saleId));
+    expect(sale?.commissionPaidAt).not.toBeNull();
+  });
+
+  test("an advance recovered between create and pay is not double-recovered", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "advstale");
+
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 200 });
+    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 50 });
+
+    // Draft snapshots a 50 advance deduction (gross 200 → net 150).
+    const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 8 });
+    const before = await asAdmin.query(api.payroll.listRunItems, { orgId, runId });
+    expect(before[0].advanceDeductionMinor).toBe(50000);
+    expect(before[0].netMinor).toBe(150000);
+
+    // The advance is recovered out-of-band before the run is paid.
+    await asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId, method: "CASH" });
+
+    await asAdmin.mutation(api.payroll.approveRun, { orgId, runId });
+    await asAdmin.mutation(api.payroll.payRun, { orgId, runId, method: "CASH" });
+
+    // Nothing outstanding to recover now → full salary paid, no advance leg.
+    const after = await asAdmin.query(api.payroll.listRunItems, { orgId, runId });
+    expect(after[0].advanceDeductionMinor).toBe(0);
+    expect(after[0].netMinor).toBe(200000);
+  });
 });
 
 describe("payroll: employee compensation", () => {
