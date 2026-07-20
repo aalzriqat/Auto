@@ -150,6 +150,7 @@ import type * as utils_money from "../utils/money.js";
 import type * as utils_notifications from "../utils/notifications.js";
 import type * as utils_paymentMethods from "../utils/paymentMethods.js";
 import type * as utils_paymentWebhook from "../utils/paymentWebhook.js";
+import type * as utils_payrollSourceLedger from "../utils/payrollSourceLedger.js";
 import type * as utils_permissions from "../utils/permissions.js";
 import type * as utils_prepaidRecognitionEvents from "../utils/prepaidRecognitionEvents.js";
 import type * as utils_prepaidSourceLedger from "../utils/prepaidSourceLedger.js";
@@ -334,6 +335,7 @@ declare const fullApi: ApiFromModules<{
   "utils/notifications": typeof utils_notifications;
   "utils/paymentMethods": typeof utils_paymentMethods;
   "utils/paymentWebhook": typeof utils_paymentWebhook;
+  "utils/payrollSourceLedger": typeof utils_payrollSourceLedger;
   "utils/permissions": typeof utils_permissions;
   "utils/prepaidRecognitionEvents": typeof utils_prepaidRecognitionEvents;
   "utils/prepaidSourceLedger": typeof utils_prepaidSourceLedger;
