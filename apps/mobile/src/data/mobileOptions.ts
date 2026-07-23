@@ -69,6 +69,27 @@ export function getVehicleMakeOptions(): SearchableSelectOption[] {
   return VEHICLE_MAKES.map((make) => ({ label: make, value: make }));
 }
 
+// A curated shortlist of the most-requested makes, surfaced as one-tap filter
+// chips on the marketplace Browse landing. `value` is the English make string
+// the search backend matches case-insensitively; the label is localized.
+const BRAND_CHIPS: Array<{ ar: string; en: string; value: string }> = [
+  { value: "Toyota", en: "Toyota", ar: "تويوتا" },
+  { value: "Hyundai", en: "Hyundai", ar: "هيونداي" },
+  { value: "Kia", en: "Kia", ar: "كيا" },
+  { value: "Nissan", en: "Nissan", ar: "نيسان" },
+  { value: "Mercedes-Benz", en: "Mercedes", ar: "مرسيدس" },
+  { value: "BMW", en: "BMW", ar: "بي إم دبليو" },
+  { value: "Lexus", en: "Lexus", ar: "لكزس" },
+  { value: "BYD", en: "BYD", ar: "بي واي دي" },
+] as const;
+
+export function getVehicleBrandChipOptions(locale: Locale): SearchableSelectOption[] {
+  return BRAND_CHIPS.map((brand) => ({
+    label: locale === "ar" ? brand.ar : brand.en,
+    value: brand.value,
+  }));
+}
+
 export function getJordanCityOptions(locale: Locale): SearchableSelectOption[] {
   return JORDAN_CITIES.map((city) => ({
     label: locale === "ar" ? city.ar : city.en,

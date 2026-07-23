@@ -66,6 +66,7 @@ import {
   trimOrUndefined,
 } from "./marketplaceUtils";
 import { getMarketplaceSelectOptions } from "./marketplaceSelectOptions";
+import { getVehicleBrandChipOptions } from "../../data/mobileOptions";
 
 type BuyerTab = "cars" | "request" | "tradein" | "dealers" | "offers";
 
@@ -1044,6 +1045,83 @@ function SavedSearchChip({
   );
 }
 
+// One-tap brand shortcuts — the storefront entry point buyers expect. Selecting
+// a chip sets the `make` filter and re-runs the search; "All" clears it. The
+// active chip reflects the current make (case-insensitive) so it stays in sync
+// when a make is set from the Filters sheet instead.
+function BrandChips({
+  activeMake,
+  onSelect,
+}: Readonly<{ activeMake: string; onSelect: (make: string) => void }>) {
+  const styles = useThemedStyles(makeStyles);
+  const { locale, t, textDirection } = useLocale();
+  const normalizedActive = activeMake.trim().toLowerCase();
+  const chips = [{ value: "", label: t("marketplaceBrandsAll") }, ...getVehicleBrandChipOptions(locale)];
+
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={[styles.brandRow, { direction: textDirection }]}
+    >
+      {chips.map((chip) => {
+        const selected = normalizedActive === chip.value.toLowerCase();
+        return (
+          <Pressable
+            key={chip.value || "all"}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            style={({ pressed }) => [styles.brandChip, selected && styles.brandChipActive, pressed && styles.pressed]}
+            onPress={() => onSelect(chip.value)}
+          >
+            <Text style={[styles.brandChipText, selected && styles.brandChipTextActive]}>{chip.label}</Text>
+          </Pressable>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+// Reassurance footer beneath the results — the marketplace's trust promise
+// (secure payment / verified dealers / fair prices), mirroring the dealer sites.
+function TrustStrip() {
+  const styles = useThemedStyles(makeStyles);
+  const { t, textDirection } = useLocale();
+  const items = [
+    {
+      icon: "approvals",
+      title: t("marketplaceTrustPaymentTitle"),
+      body: t("marketplaceTrustPaymentBody"),
+    },
+    {
+      icon: "approvalsFilled",
+      title: t("marketplaceTrustDealersTitle"),
+      body: t("marketplaceTrustDealersBody"),
+    },
+    {
+      icon: "sales",
+      title: t("marketplaceTrustPricesTitle"),
+      body: t("marketplaceTrustPricesBody"),
+    },
+  ] as const;
+
+  return (
+    <View style={[styles.trustStrip, { direction: textDirection }]}>
+      {items.map((item) => (
+        <View key={item.title} style={styles.trustItem}>
+          <Icon color="primary" name={item.icon} size={20} />
+          <Text numberOfLines={1} style={styles.trustTitle}>
+            {item.title}
+          </Text>
+          <Text numberOfLines={2} style={styles.trustBody}>
+            {item.body}
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 function CarsPanel({
   onTradeInPress,
   onRequest,
@@ -1118,6 +1196,10 @@ function CarsPanel({
         </View>
       </Pressable>
 
+      {/* One-tap brand shortcuts — the storefront entry buyers reach for before
+          opening the full Filters sheet. */}
+      <BrandChips activeMake={fields.make} onSelect={(make) => applyFields({ ...fields, make })} />
+
       {/* Results-first: a slim bar (Filters sheet + Finance chip) sits above the
           inventory instead of a full desktop-style form. */}
       <View style={[styles.browseBar, { direction: textDirection }]}>
@@ -1181,6 +1263,8 @@ function CarsPanel({
           onTradeInPress={onTradeInPress}
         />
       ))}
+
+      <TrustStrip />
 
       <Modal
         visible={sheetOpen}
@@ -1643,6 +1727,59 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   },
   chipTextActive: {
     color: theme.colors.primaryDark,
+  },
+  brandRow: {
+    flexDirection: "row",
+    gap: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
+  },
+  brandChip: {
+    minHeight: 40,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    paddingHorizontal: theme.spacing.lg,
+  },
+  brandChipActive: {
+    borderColor: theme.colors.primary,
+    backgroundColor: theme.colors.primarySoft,
+  },
+  brandChipText: {
+    color: theme.colors.text,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  brandChipTextActive: {
+    color: theme.colors.primaryDark,
+  },
+  trustStrip: {
+    flexDirection: "row",
+    gap: theme.spacing.sm,
+    borderRadius: theme.radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    padding: theme.spacing.md,
+  },
+  trustItem: {
+    flex: 1,
+    alignItems: "center",
+    gap: theme.spacing.xs,
+  },
+  trustTitle: {
+    color: theme.colors.text,
+    fontSize: 12,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  trustBody: {
+    color: theme.colors.mutedText,
+    fontSize: 11,
+    lineHeight: 15,
+    textAlign: "center",
   },
   savedSearchRow: {
     gap: theme.spacing.sm,

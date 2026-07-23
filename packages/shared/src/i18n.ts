@@ -456,6 +456,23 @@ const mobileFoundationStringEntries = [
   ["marketplaceComposerSourceMax", "Highest price", "أعلى سعر"],
   ["marketplaceComposerSourceEta", "Availability (days)", "مدة التوفير (أيام)"],
   ["marketplaceComposerNeedsRange", "A sourcing reply needs a valid price range and availability.", "رد التوفير يحتاج نطاق سعر صحيح ومدة توفير."],
+  ["marketplaceBrandsAll", "All", "الكل"],
+  ["marketplaceTrustPaymentTitle", "Secure payment", "دفع آمن"],
+  ["marketplaceTrustPaymentBody", "Your information is protected", "حماية معلوماتك"],
+  ["marketplaceTrustDealersTitle", "Trusted dealers", "معارض موثوقة"],
+  ["marketplaceTrustDealersBody", "Every showroom is verified", "تم التحقق منها"],
+  ["marketplaceTrustPricesTitle", "Fair prices", "أسعار عادلة"],
+  ["marketplaceTrustPricesBody", "No hidden fees", "بدون رسوم مخفية"],
+  ["otaUpdateTitle", "Update available", "يتوفر تحديث"],
+  ["otaUpdateBody", "A new version of AutoFlow is ready. Update now to get the latest improvements.", "نسخة جديدة من AutoFlow جاهزة. حدّث الآن للحصول على أحدث التحسينات."],
+  ["otaUpdateNow", "Update now", "تحديث الآن"],
+  ["otaUpdateLater", "Later", "لاحقاً"],
+  ["otaSectionTitle", "App updates", "تحديثات التطبيق"],
+  ["otaCheckForUpdates", "Check for updates", "التحقق من التحديثات"],
+  ["otaChecking", "Checking for updates…", "جاري التحقق من التحديثات…"],
+  ["otaUpToDate", "You're on the latest version", "أنت على أحدث إصدار"],
+  ["otaReadyStatus", "An update is ready to install", "يوجد تحديث جاهز للتثبيت"],
+  ["otaCheckFailed", "Couldn't check right now. Try again.", "تعذّر التحقق الآن. حاول مجدداً."],
 ] as const satisfies ReadonlyArray<readonly [string, string, string]>;
 
 type MobileFoundationStringEntry = (typeof mobileFoundationStringEntries)[number];
