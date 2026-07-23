@@ -1,6 +1,6 @@
 import { useQuery } from "convex/react";
 import { useCallback, useEffect, useState } from "react";
-import { Image, ImageBackground, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { api, type MobileMarketplaceSearchResult, type MobileMarketplaceVehicle } from "../../convexApi";
 import { Card } from "../../components/Card";
@@ -143,20 +143,23 @@ export function MarketplaceHomeScreen({
         </Pressable>
       </View>
 
-      {/* Hero: search + the reverse-market "Request a car" CTA, over the BMW
-          skyline banner with a dark scrim so the white copy stays legible. */}
-      <ImageBackground
-        source={require("../../../assets/brand/hero-bg.png")}
-        style={[styles.hero, { direction: textDirection }]}
-        imageStyle={styles.heroImage}
-        resizeMode="cover"
-      >
-        <View style={styles.heroScrim} pointerEvents="none" />
-        <View style={styles.heroTop}>
-          <Text style={styles.heroTitle}>{t("homeHeroTitle")}</Text>
-          <Text style={styles.heroSubtitle}>{t("homeHeroSubtitle")}</Text>
+      {/* Hero: the full BMW banner at its natural aspect (no crop, scales with
+          screen width) with the title overlaid, and the search + Request CTA on
+          the dark card below it. */}
+      <View style={[styles.hero, { direction: textDirection }]}>
+        <View style={styles.heroBanner}>
+          <Image
+            source={require("../../../assets/brand/hero-bg.png")}
+            style={styles.heroBannerImg}
+            resizeMode="cover"
+          />
+          <View style={styles.heroBannerScrim} pointerEvents="none" />
+          <View style={styles.heroBannerText}>
+            <Text style={styles.heroTitle}>{t("homeHeroTitle")}</Text>
+            <Text style={styles.heroSubtitle}>{t("homeHeroSubtitle")}</Text>
+          </View>
         </View>
-        <View style={styles.heroBottom}>
+        <View style={styles.heroBody}>
         <View style={styles.searchBar}>
           <Pressable
             accessibilityRole="button"
@@ -186,7 +189,7 @@ export function MarketplaceHomeScreen({
           <Text style={styles.heroRequestText}>{t("marketplaceRequestHeroCta")}</Text>
         </Pressable>
         </View>
-      </ImageBackground>
+      </View>
 
       {/* Brand shortcuts — white pills below the hero. */}
       <ScrollView
@@ -253,13 +256,14 @@ export function MarketplaceHomeScreen({
         style={({ pressed }) => [styles.requestBanner, { direction: textDirection }, pressed && styles.pressed]}
         onPress={onOpenRequest}
       >
-        <Image
-          source={require("../../../assets/brand/request-bg.png")}
-          style={StyleSheet.absoluteFill}
-          resizeMode="cover"
-        />
-        <View style={styles.requestScrim} pointerEvents="none" />
-        <View style={styles.requestText}>
+        <View style={styles.requestBannerImg}>
+          <Image
+            source={require("../../../assets/brand/request-bg.png")}
+            style={styles.requestBannerImgInner}
+            resizeMode="cover"
+          />
+        </View>
+        <View style={styles.requestContent}>
           <Text style={styles.requestTitle}>{t("homeRequestBannerTitle")}</Text>
           <Text style={styles.requestBody}>{t("homeRequestBannerBody")}</Text>
           <View style={styles.requestCta}>
@@ -472,29 +476,36 @@ const makeStyles = (theme: AppTheme) =>
     },
     hero: {
       overflow: "hidden",
-      minHeight: 280,
-      justifyContent: "space-between",
-      gap: theme.spacing.md,
       borderRadius: theme.radius.xl,
       backgroundColor: theme.colors.hero,
-      padding: theme.spacing.lg,
     },
-    heroTop: {
-      gap: theme.spacing.xs,
+    heroBanner: {
+      width: "100%",
+      aspectRatio: 1536 / 504,
+      overflow: "hidden",
     },
-    heroBottom: {
-      gap: theme.spacing.md,
+    heroBannerImg: {
+      width: "100%",
+      height: "100%",
     },
-    heroImage: {
-      borderRadius: theme.radius.xl,
-    },
-    heroScrim: {
+    heroBannerScrim: {
       position: "absolute",
       top: 0,
       left: 0,
       right: 0,
       bottom: 0,
-      backgroundColor: "rgba(8,12,24,0.55)",
+      backgroundColor: "rgba(8,12,24,0.32)",
+    },
+    heroBannerText: {
+      position: "absolute",
+      left: theme.spacing.lg,
+      right: theme.spacing.lg,
+      bottom: theme.spacing.md,
+      gap: theme.spacing.xs,
+    },
+    heroBody: {
+      gap: theme.spacing.md,
+      padding: theme.spacing.lg,
     },
     heroTitle: {
       color: theme.colors.onPrimary,
@@ -724,34 +735,21 @@ const makeStyles = (theme: AppTheme) =>
     },
     requestBanner: {
       overflow: "hidden",
-      minHeight: 150,
-      flexDirection: "row",
-      alignItems: "center",
-      gap: theme.spacing.md,
       borderRadius: theme.radius.xl,
       backgroundColor: theme.colors.heroAlt,
+    },
+    requestBannerImg: {
+      width: "100%",
+      aspectRatio: 1536 / 504,
+      overflow: "hidden",
+    },
+    requestBannerImgInner: {
+      width: "100%",
+      height: "100%",
+    },
+    requestContent: {
+      gap: theme.spacing.sm,
       padding: theme.spacing.lg,
-    },
-    requestScrim: {
-      position: "absolute",
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: "rgba(6,10,24,0.45)",
-    },
-    requestIcon: {
-      width: 54,
-      height: 54,
-      alignItems: "center",
-      justifyContent: "center",
-      borderRadius: theme.radius.full,
-      backgroundColor: "rgba(255,255,255,0.12)",
-    },
-    requestText: {
-      flex: 1,
-      minWidth: 0,
-      gap: theme.spacing.xs,
     },
     requestTitle: {
       color: theme.colors.onPrimary,
