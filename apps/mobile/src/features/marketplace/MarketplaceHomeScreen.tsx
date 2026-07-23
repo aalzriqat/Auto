@@ -1,6 +1,6 @@
 import { useQuery } from "convex/react";
 import { useCallback, useEffect, useState } from "react";
-import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Image, ImageBackground, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { api, type MobileMarketplaceSearchResult, type MobileMarketplaceVehicle } from "../../convexApi";
 import { Card } from "../../components/Card";
@@ -143,8 +143,15 @@ export function MarketplaceHomeScreen({
         </Pressable>
       </View>
 
-      {/* Hero: search + the reverse-market "Request a car" CTA. */}
-      <View style={[styles.hero, { direction: textDirection }]}>
+      {/* Hero: search + the reverse-market "Request a car" CTA, over the BMW
+          skyline banner with a dark scrim so the white copy stays legible. */}
+      <ImageBackground
+        source={require("../../../assets/brand/hero-bg.png")}
+        style={[styles.hero, { direction: textDirection }]}
+        imageStyle={styles.heroImage}
+        resizeMode="cover"
+      >
+        <View style={styles.heroScrim} pointerEvents="none" />
         <Text style={styles.heroTitle}>{t("homeHeroTitle")}</Text>
         <Text style={styles.heroSubtitle}>{t("homeHeroSubtitle")}</Text>
         <View style={styles.searchBar}>
@@ -175,7 +182,7 @@ export function MarketplaceHomeScreen({
           <Icon color="onPrimary" name="vehicles" size={18} />
           <Text style={styles.heroRequestText}>{t("marketplaceRequestHeroCta")}</Text>
         </Pressable>
-      </View>
+      </ImageBackground>
 
       {/* Brand shortcuts — white pills below the hero. */}
       <ScrollView
@@ -242,6 +249,12 @@ export function MarketplaceHomeScreen({
         style={({ pressed }) => [styles.requestBanner, { direction: textDirection }, pressed && styles.pressed]}
         onPress={onOpenRequest}
       >
+        <Image
+          source={require("../../../assets/brand/request-bg.png")}
+          style={StyleSheet.absoluteFill}
+          resizeMode="cover"
+        />
+        <View style={styles.requestScrim} pointerEvents="none" />
         <View style={styles.requestIcon}>
           <Icon color="onPrimary" name="search" size={26} />
         </View>
@@ -457,10 +470,22 @@ const makeStyles = (theme: AppTheme) =>
       height: 44,
     },
     hero: {
+      overflow: "hidden",
       gap: theme.spacing.md,
       borderRadius: theme.radius.xl,
       backgroundColor: theme.colors.hero,
       padding: theme.spacing.lg,
+    },
+    heroImage: {
+      borderRadius: theme.radius.xl,
+    },
+    heroScrim: {
+      position: "absolute",
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: "rgba(8,12,24,0.55)",
     },
     heroTitle: {
       color: theme.colors.onPrimary,
@@ -689,12 +714,21 @@ const makeStyles = (theme: AppTheme) =>
       textAlign: "center",
     },
     requestBanner: {
+      overflow: "hidden",
       flexDirection: "row",
       alignItems: "center",
       gap: theme.spacing.md,
       borderRadius: theme.radius.xl,
       backgroundColor: theme.colors.heroAlt,
       padding: theme.spacing.lg,
+    },
+    requestScrim: {
+      position: "absolute",
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: "rgba(6,10,24,0.45)",
     },
     requestIcon: {
       width: 54,
