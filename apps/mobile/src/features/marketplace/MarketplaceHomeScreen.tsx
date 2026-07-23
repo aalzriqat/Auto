@@ -80,7 +80,17 @@ export function MarketplaceHomeScreen({
 
   const brands = getVehicleBrandChipOptions(locale);
 
+  // RTL renders the array left→right, so this order puts طلب تمويل on the left
+  // and المفضلة on the right, matching the mockup.
   const quickActions: QuickAction[] = [
+    {
+      key: "finance",
+      icon: "applications",
+      tone: "purple",
+      title: t("homeActionFinanceTitle"),
+      body: t("homeActionFinanceBody"),
+      onPress: onOpenFinancing,
+    },
     {
       key: "calculator",
       icon: "calculator",
@@ -98,14 +108,6 @@ export function MarketplaceHomeScreen({
       onPress: onOpenCompare,
     },
     {
-      key: "finance",
-      icon: "applications",
-      tone: "purple",
-      title: t("homeActionFinanceTitle"),
-      body: t("homeActionFinanceBody"),
-      onPress: onOpenFinancing,
-    },
-    {
       key: "favorites",
       icon: "heartFilled",
       tone: "red",
@@ -118,27 +120,30 @@ export function MarketplaceHomeScreen({
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
-      {/* Header: bell + greeting + wordmark. */}
+      {/* Header: logo + greeting + bell. RTL renders the first child on the
+          right, so the logo sits top-right and the bell top-left. */}
       <View style={[styles.header, { direction: textDirection }]}>
+        <Image
+          source={require("../../../assets/brand/autoflow-logo.png")}
+          style={styles.logo}
+          resizeMode="contain"
+          accessibilityLabel={t("appName")}
+        />
+        <View style={styles.greetingBlock}>
+          <Text style={styles.greeting}>{`${t("homeGreetingPrefix")} 👋`}</Text>
+          <Text style={styles.greetingSub}>{t("homeGreetingSubtitle")}</Text>
+        </View>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={t("homeNotifications")}
           style={({ pressed }) => [styles.bell, pressed && styles.pressed]}
           onPress={onOpenFavorites}
         >
-          <Icon color="text" name="notifications" size={20} />
+          <Icon color="primary" name="notifications" size={20} />
         </Pressable>
-        <View style={styles.greetingBlock}>
-          <Text style={styles.greeting}>{`${t("homeGreetingPrefix")} 👋`}</Text>
-          <Text style={styles.greetingSub}>{t("homeGreetingSubtitle")}</Text>
-        </View>
-        <View style={styles.wordmarkBlock}>
-          <Text style={styles.wordmark}>{t("appName")}</Text>
-          <Text style={styles.wordmarkTag}>{t("homeBrandTagline")}</Text>
-        </View>
       </View>
 
-      {/* Hero: search-first with brand shortcuts. */}
+      {/* Hero: search + the reverse-market "Request a car" CTA. */}
       <View style={[styles.hero, { direction: textDirection }]}>
         <Text style={styles.heroTitle}>{t("homeHeroTitle")}</Text>
         <Text style={styles.heroSubtitle}>{t("homeHeroSubtitle")}</Text>
@@ -161,33 +166,35 @@ export function MarketplaceHomeScreen({
             style={[styles.searchInput, { textAlign: textDirection === "rtl" ? "right" : "left" }]}
           />
         </View>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={[styles.brandRow, { direction: textDirection }]}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t("marketplaceRequestHeroCta")}
+          style={({ pressed }) => [styles.heroRequestBtn, pressed && styles.pressed]}
+          onPress={onOpenRequest}
         >
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t("homeBrandsMore")}
-            style={({ pressed }) => [styles.brandChip, pressed && styles.pressed]}
-            onPress={() => onOpenCars()}
-          >
-            <Icon color="onPrimary" name="operations" size={15} />
-            <Text style={styles.brandChipText}>{t("homeBrandsMore")}</Text>
-          </Pressable>
-          {brands.map((brand) => (
-            <Pressable
-              key={brand.value}
-              accessibilityRole="button"
-              accessibilityLabel={brand.label}
-              style={({ pressed }) => [styles.brandChip, pressed && styles.pressed]}
-              onPress={() => onOpenCars(brand.value)}
-            >
-              <Text style={styles.brandChipText}>{brand.label}</Text>
-            </Pressable>
-          ))}
-        </ScrollView>
+          <Icon color="onPrimary" name="vehicles" size={18} />
+          <Text style={styles.heroRequestText}>{t("marketplaceRequestHeroCta")}</Text>
+        </Pressable>
       </View>
+
+      {/* Brand shortcuts — white pills below the hero. */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={[styles.brandStrip, { direction: textDirection }]}
+      >
+        {brands.map((brand) => (
+          <Pressable
+            key={brand.value}
+            accessibilityRole="button"
+            accessibilityLabel={brand.label}
+            style={({ pressed }) => [styles.brandPill, pressed && styles.pressed]}
+            onPress={() => onOpenCars(brand.value)}
+          >
+            <Text style={styles.brandPillText}>{brand.label}</Text>
+          </Pressable>
+        ))}
+      </ScrollView>
 
       {/* Quick actions. */}
       <Text style={[styles.sectionTitle, { textAlign: textDirection === "rtl" ? "right" : "left" }]}>
@@ -445,18 +452,9 @@ const makeStyles = (theme: AppTheme) =>
       color: theme.colors.mutedText,
       fontSize: 12,
     },
-    wordmarkBlock: {
-      alignItems: "flex-end",
-    },
-    wordmark: {
-      color: theme.colors.primary,
-      fontSize: 18,
-      fontWeight: "900",
-    },
-    wordmarkTag: {
-      color: theme.colors.mutedText,
-      fontSize: 10,
-      fontWeight: "700",
+    logo: {
+      width: 96,
+      height: 44,
     },
     hero: {
       gap: theme.spacing.md,
@@ -497,23 +495,40 @@ const makeStyles = (theme: AppTheme) =>
       fontSize: 14,
       paddingHorizontal: theme.spacing.sm,
     },
-    brandRow: {
-      flexDirection: "row",
-      gap: theme.spacing.sm,
-      paddingTop: theme.spacing.xs,
-    },
-    brandChip: {
+    heroRequestBtn: {
       flexDirection: "row",
       alignItems: "center",
-      gap: theme.spacing.xs,
-      minHeight: 38,
-      borderRadius: theme.radius.md,
-      backgroundColor: "rgba(255,255,255,0.14)",
-      paddingHorizontal: theme.spacing.md,
+      justifyContent: "center",
+      gap: theme.spacing.sm,
+      minHeight: 50,
+      borderRadius: theme.radius.full,
+      backgroundColor: theme.colors.primary,
+      paddingHorizontal: theme.spacing.lg,
     },
-    brandChipText: {
+    heroRequestText: {
       color: theme.colors.onPrimary,
-      fontSize: 13,
+      fontSize: 15,
+      fontWeight: "800",
+    },
+    brandStrip: {
+      flexDirection: "row",
+      gap: theme.spacing.sm,
+      paddingVertical: theme.spacing.xs,
+    },
+    brandPill: {
+      minHeight: 52,
+      alignItems: "center",
+      justifyContent: "center",
+      borderRadius: theme.radius.lg,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: theme.colors.border,
+      backgroundColor: theme.colors.surface,
+      paddingHorizontal: theme.spacing.lg,
+      ...theme.shadows.sm,
+    },
+    brandPillText: {
+      color: theme.colors.text,
+      fontSize: 14,
       fontWeight: "700",
     },
     sectionTitle: {

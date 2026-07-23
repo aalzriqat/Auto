@@ -95,10 +95,10 @@ describe("BuyerShell", () => {
     fireEvent.press(getByLabelText("المفضلة")); // Favorites
     await waitFor(() => expect(getByTestId("buyer-saved")).toBeTruthy());
 
-    fireEvent.press(getByLabelText("تمويل")); // Financing
+    fireEvent.press(getByLabelText("التمويل")); // Financing
     await waitFor(() => expect(getByTestId("buyer-financing")).toBeTruthy());
 
-    fireEvent.press(getByLabelText("الحساب")); // Account
+    fireEvent.press(getByLabelText("حسابي")); // Account
     await waitFor(() => expect(getByTestId("buyer-account")).toBeTruthy());
 
     fireEvent.press(getByLabelText("الرئيسية")); // Home
