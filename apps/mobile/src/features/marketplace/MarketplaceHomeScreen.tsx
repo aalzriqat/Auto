@@ -171,8 +171,11 @@ export function MarketplaceHomeScreen({
       >
         <View style={styles.heroScrim} pointerEvents="none" />
         <View style={styles.heroContent}>
-          <Text style={styles.heroTitle}>{t("homeHeroTitle")}</Text>
-          <Text style={styles.heroSubtitle}>{t("homeHeroSubtitle")}</Text>
+          <View style={styles.heroTextTop}>
+            <Text style={styles.heroTitle}>{t("homeHeroTitle")}</Text>
+            <Text style={styles.heroSubtitle}>{t("homeHeroSubtitle")}</Text>
+          </View>
+          <View style={styles.heroControls}>
         <View style={styles.searchBar}>
           <Pressable
             accessibilityRole="button"
@@ -201,6 +204,7 @@ export function MarketplaceHomeScreen({
           <Icon color="onPrimary" name="vehicles" size={18} />
           <Text style={styles.heroRequestText}>{t("marketplaceRequestHeroCta")}</Text>
         </Pressable>
+          </View>
         </View>
       </ImageBackground>
 
@@ -498,28 +502,39 @@ const makeStyles = (theme: AppTheme) =>
       backgroundColor: "rgba(8,12,24,0.28)",
     },
     heroContent: {
-      // Overlaid on the image, pinned to the (physical) left so the BMW on the
-      // right side of the photo stays visible; width-capped so the search bar
-      // and CTA don't run across the car.
+      // Overlaid on the full image: title at the top (over the sky), search +
+      // CTA anchored full-width at the bottom (over the road). Text shadows keep
+      // the copy legible wherever the photo is bright.
       position: "absolute",
       top: 0,
       bottom: 0,
       left: 0,
-      width: "60%",
-      justifyContent: "center",
-      gap: theme.spacing.sm,
+      right: 0,
+      justifyContent: "space-between",
       padding: theme.spacing.lg,
+    },
+    heroTextTop: {
+      gap: theme.spacing.xs,
+    },
+    heroControls: {
+      gap: theme.spacing.sm,
     },
     heroTitle: {
       color: theme.colors.onPrimary,
-      fontSize: 22,
+      fontSize: 24,
       fontWeight: "900",
-      lineHeight: 28,
+      lineHeight: 30,
+      textShadowColor: "rgba(0,0,0,0.55)",
+      textShadowOffset: { width: 0, height: 1 },
+      textShadowRadius: 8,
     },
     heroSubtitle: {
-      color: "rgba(255,255,255,0.82)",
+      color: "rgba(255,255,255,0.92)",
       fontSize: 13,
       lineHeight: 19,
+      textShadowColor: "rgba(0,0,0,0.5)",
+      textShadowOffset: { width: 0, height: 1 },
+      textShadowRadius: 6,
     },
     searchBar: {
       flexDirection: "row",
