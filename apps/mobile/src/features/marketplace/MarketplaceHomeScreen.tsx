@@ -152,8 +152,11 @@ export function MarketplaceHomeScreen({
         resizeMode="cover"
       >
         <View style={styles.heroScrim} pointerEvents="none" />
-        <Text style={styles.heroTitle}>{t("homeHeroTitle")}</Text>
-        <Text style={styles.heroSubtitle}>{t("homeHeroSubtitle")}</Text>
+        <View style={styles.heroTop}>
+          <Text style={styles.heroTitle}>{t("homeHeroTitle")}</Text>
+          <Text style={styles.heroSubtitle}>{t("homeHeroSubtitle")}</Text>
+        </View>
+        <View style={styles.heroBottom}>
         <View style={styles.searchBar}>
           <Pressable
             accessibilityRole="button"
@@ -182,6 +185,7 @@ export function MarketplaceHomeScreen({
           <Icon color="onPrimary" name="vehicles" size={18} />
           <Text style={styles.heroRequestText}>{t("marketplaceRequestHeroCta")}</Text>
         </Pressable>
+        </View>
       </ImageBackground>
 
       {/* Brand shortcuts — white pills below the hero. */}
@@ -255,9 +259,6 @@ export function MarketplaceHomeScreen({
           resizeMode="cover"
         />
         <View style={styles.requestScrim} pointerEvents="none" />
-        <View style={styles.requestIcon}>
-          <Icon color="onPrimary" name="search" size={26} />
-        </View>
         <View style={styles.requestText}>
           <Text style={styles.requestTitle}>{t("homeRequestBannerTitle")}</Text>
           <Text style={styles.requestBody}>{t("homeRequestBannerBody")}</Text>
@@ -471,10 +472,18 @@ const makeStyles = (theme: AppTheme) =>
     },
     hero: {
       overflow: "hidden",
+      minHeight: 280,
+      justifyContent: "space-between",
       gap: theme.spacing.md,
       borderRadius: theme.radius.xl,
       backgroundColor: theme.colors.hero,
       padding: theme.spacing.lg,
+    },
+    heroTop: {
+      gap: theme.spacing.xs,
+    },
+    heroBottom: {
+      gap: theme.spacing.md,
     },
     heroImage: {
       borderRadius: theme.radius.xl,
@@ -715,6 +724,7 @@ const makeStyles = (theme: AppTheme) =>
     },
     requestBanner: {
       overflow: "hidden",
+      minHeight: 150,
       flexDirection: "row",
       alignItems: "center",
       gap: theme.spacing.md,
