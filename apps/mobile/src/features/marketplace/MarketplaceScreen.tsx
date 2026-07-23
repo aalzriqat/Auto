@@ -1125,12 +1125,22 @@ function TrustStrip() {
 function CarsPanel({
   onTradeInPress,
   onRequest,
-}: Readonly<{ onTradeInPress: (dealer: TradeInDealerTarget) => void; onRequest: () => void }>) {
+  initialMake,
+}: Readonly<{
+  onTradeInPress: (dealer: TradeInDealerTarget) => void;
+  onRequest: () => void;
+  initialMake?: string;
+}>) {
   const styles = useThemedStyles(makeStyles);
   const { t, textDirection } = useLocale();
-  const [fields, setFields] = useState<SearchFields>(DEFAULT_FIELDS);
+  // Seed the make filter when the Home tab hands off a brand chip / search term.
+  // The shell remounts this panel (keyed by make) so this initializer re-applies.
+  const initialFields: SearchFields = initialMake
+    ? { ...DEFAULT_FIELDS, make: initialMake }
+    : DEFAULT_FIELDS;
+  const [fields, setFields] = useState<SearchFields>(initialFields);
   const [searchKey, setSearchKey] = useState(0);
-  const [filters, setFilters] = useState<SearchFilters>(() => buildSearchFilters(DEFAULT_FIELDS));
+  const [filters, setFilters] = useState<SearchFilters>(() => buildSearchFilters(initialFields));
   const [cursors, setCursors] = useState<Array<string | undefined>>([undefined]);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
@@ -1450,11 +1460,13 @@ function DealersPanel({ onTradeInPress }: Readonly<{ onTradeInPress: (dealer: Tr
 export function MarketplaceScreen({
   variant = "full",
   embedded = false,
+  initialMake,
   onRequestTradeIn,
   onOpenRequest,
 }: Readonly<{
   variant?: MarketplaceVariant;
   embedded?: boolean;
+  initialMake?: string;
   onRequestTradeIn?: () => void;
   onOpenRequest?: () => void;
 }> = {}) {
@@ -1541,7 +1553,9 @@ export function MarketplaceScreen({
   } else if (activeTab === "offers") {
     content = <OffersTab reloadToken={offersReloadToken} onOpenRoom={openRoom} />;
   } else {
-    content = <CarsPanel onTradeInPress={openTradeInForDealer} onRequest={openRequest} />;
+    content = (
+      <CarsPanel onTradeInPress={openTradeInForDealer} onRequest={openRequest} initialMake={initialMake} />
+    );
   }
 
   return wrap(
