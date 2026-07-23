@@ -13,6 +13,13 @@ import { fetchOtaUpdateIfAvailable, reloadIntoOtaUpdate } from "./otaUpdates";
 // "came back after a while" will be well past this window.
 const MIN_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 
+// While the app stays open in the foreground (no relaunch, no background→
+// foreground transition), poll on this cadence so an update published mid-
+// session surfaces on its own — without waiting for the user to reopen the app
+// or open the account "Check for updates" row. Polling stops once an update is
+// already downloaded and waiting.
+const FOREGROUND_POLL_MS = 60 * 1000;
+
 /**
  * Runs the over-the-air update check on launch AND every time the app returns
  * to the foreground, and exposes the result through {@link OtaUpdateContext} so
@@ -92,6 +99,17 @@ export function OtaUpdateGate({ children }: { children: ReactNode }) {
 
     return () => subscription.remove();
   }, [runCheck]);
+
+  // Foreground polling: catch an update published while the app is open, so the
+  // prompt appears without a relaunch. Stops once a bundle is ready and waiting.
+  useEffect(() => {
+    if (updateReady) return;
+    const timer = setInterval(() => {
+      lastCheckAtRef.current = Date.now();
+      void runCheck();
+    }, FOREGROUND_POLL_MS);
+    return () => clearInterval(timer);
+  }, [runCheck, updateReady]);
 
   const value = useMemo<OtaUpdateContextValue>(
     () => ({
