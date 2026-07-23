@@ -9,4 +9,4 @@
 // (e.g. `eas update --branch preview`). It's pure JS, so it ships over the air
 // with that same update — no native rebuild, no cable. When the number in the
 // account sheet changes to match, the OTA update has taken effect.
-export const OTA_UPDATE_NUMBER = 21;
+export const OTA_UPDATE_NUMBER = 22;

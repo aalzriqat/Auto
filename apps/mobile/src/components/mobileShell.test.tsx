@@ -114,7 +114,7 @@ describe("mobile shell components", () => {
     );
 
     await waitFor(() => {
-      expect(ltrIcon.getByTestId("search-icon").props.children).toBe("search:#0f766e:24");
+      expect(ltrIcon.getByTestId("search-icon").props.children).toBe("search:#2563eb:24");
     });
     expect(ltrIcon.getByLabelText("Search icon")).toBeTruthy();
 
