@@ -22,6 +22,23 @@ import {
   type SavedVehicle,
 } from "./savedVehiclesStore";
 
+// Banner images and their intrinsic aspect ratios, read from the bundled asset
+// so each banner renders the WHOLE image (no crop) at a height derived from the
+// device width. Drop in a taller image and the hero/banner resizes to fit it —
+// no code change needed. Falls back to 16:9 if the metadata is unavailable.
+const HERO_SOURCE = require("../../../assets/brand/hero-bg.png");
+const REQUEST_SOURCE = require("../../../assets/brand/request-bg.png");
+
+function assetAspectRatio(source: number, fallback: number): number {
+  const resolved = Image.resolveAssetSource(source);
+  return resolved && resolved.width > 0 && resolved.height > 0
+    ? resolved.width / resolved.height
+    : fallback;
+}
+
+const HERO_ASPECT = assetAspectRatio(HERO_SOURCE, 16 / 9);
+const REQUEST_ASPECT = assetAspectRatio(REQUEST_SOURCE, 16 / 9);
+
 type QuickAction = Readonly<{
   key: string;
   icon: SemanticIconName;
@@ -147,8 +164,8 @@ export function MarketplaceHomeScreen({
           screen width) with the title overlaid, and the search + Request CTA on
           the dark card below it. */}
       <ImageBackground
-        source={require("../../../assets/brand/hero-bg.png")}
-        style={[styles.hero, { direction: textDirection }]}
+        source={HERO_SOURCE}
+        style={[styles.hero, { aspectRatio: HERO_ASPECT, direction: textDirection }]}
         imageStyle={styles.heroImage}
         resizeMode="cover"
       >
@@ -252,22 +269,13 @@ export function MarketplaceHomeScreen({
         style={({ pressed }) => [styles.requestBanner, pressed && styles.pressed]}
         onPress={onOpenRequest}
       >
-        <ImageBackground
-          source={require("../../../assets/brand/request-bg.png")}
-          style={[styles.requestBg, { direction: textDirection }]}
-          imageStyle={styles.requestImage}
+        {/* The request banner artwork already includes its own headline, body,
+            and button, so the whole image is the tappable CTA (no overlay). */}
+        <Image
+          source={REQUEST_SOURCE}
+          style={[styles.requestBannerImg, { aspectRatio: REQUEST_ASPECT }]}
           resizeMode="cover"
-        >
-          <View style={styles.requestScrim} pointerEvents="none" />
-          <View style={styles.requestContent}>
-            <Text style={styles.requestTitle}>{t("homeRequestBannerTitle")}</Text>
-            <Text style={styles.requestBody}>{t("homeRequestBannerBody")}</Text>
-            <View style={styles.requestCta}>
-              <Text style={styles.requestCtaText}>{t("homeRequestBannerCta")}</Text>
-              <Icon color="text" name="chevronForward" size={14} />
-            </View>
-          </View>
-        </ImageBackground>
+        />
       </Pressable>
 
       {/* Trust promise. */}
@@ -472,7 +480,7 @@ const makeStyles = (theme: AppTheme) =>
       height: 44,
     },
     hero: {
-      height: 220,
+      width: "100%",
       overflow: "hidden",
       justifyContent: "center",
       borderRadius: theme.radius.xl,
@@ -497,7 +505,7 @@ const makeStyles = (theme: AppTheme) =>
       top: 0,
       bottom: 0,
       left: 0,
-      width: "68%",
+      width: "60%",
       justifyContent: "center",
       gap: theme.spacing.sm,
       padding: theme.spacing.lg,
@@ -729,13 +737,16 @@ const makeStyles = (theme: AppTheme) =>
       textAlign: "center",
     },
     requestBanner: {
-      height: 158,
+      width: "100%",
       overflow: "hidden",
       borderRadius: theme.radius.xl,
       backgroundColor: theme.colors.heroAlt,
     },
+    requestBannerImg: {
+      width: "100%",
+    },
     requestBg: {
-      flex: 1,
+      width: "100%",
       justifyContent: "center",
     },
     requestImage: {
