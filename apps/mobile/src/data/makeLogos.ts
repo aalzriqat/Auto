@@ -17,12 +17,34 @@ const MAKE_LOGOS: Record<string, ImageSourcePropType> = {
   baw: require("../../assets/brand/makes/baw.png"),
   bestune: require("../../assets/brand/makes/bestune.png"),
   bmw: require("../../assets/brand/makes/bmw.png"),
+  byd: require("../../assets/brand/makes/byd.png"),
+  cadillac: require("../../assets/brand/makes/cadillac.png"),
+  changan: require("../../assets/brand/makes/changan.png"),
+  chery: require("../../assets/brand/makes/chery.png"),
+  chevrolet: require("../../assets/brand/makes/chevrolet.png"),
+  chrysler: require("../../assets/brand/makes/chrysler.png"),
+  citroen: require("../../assets/brand/makes/citroen.png"),
+  deepal: require("../../assets/brand/makes/deepal.png"),
+  denza: require("../../assets/brand/makes/denza.png"),
+  dodge: require("../../assets/brand/makes/dodge.png"),
+  dongfeng: require("../../assets/brand/makes/dongfeng.png"),
+  exeed: require("../../assets/brand/makes/exeed.png"),
+  fiat: require("../../assets/brand/makes/fiat.png"),
+  ford: require("../../assets/brand/makes/ford.png"),
+  forthing: require("../../assets/brand/makes/forthing.png"),
+  foton: require("../../assets/brand/makes/foton.png"),
+  gac: require("../../assets/brand/makes/gac.png"),
+  geely: require("../../assets/brand/makes/geely.png"),
+  genesis: require("../../assets/brand/makes/genesis.png"),
+  gmc: require("../../assets/brand/makes/gmc.png"),
 };
 
 // Spelling variants that should resolve to the same logo as their canonical key.
 const MAKE_ALIASES: Record<string, string> = {
   "alfa-romeo": "alfa romeo",
   alfaromeo: "alfa romeo",
+  "citroën": "citroen",
+  chevy: "chevrolet",
 };
 
 function normalizeMake(make: string): string {
