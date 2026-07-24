@@ -1,51 +1,114 @@
-# Welcome to your Convex + Next.js + Clerk app
+# AutoFlow
 
-This is a [Convex](https://convex.dev/) project created with [`npm create convex`](https://www.npmjs.com/package/create-convex).
+**A multi-tenant operating system for car dealerships.**
 
-After the initial setup (<2 minutes) you'll have a working full-stack app using:
+AutoFlow is an end-to-end platform that runs the daily operations of an automotive dealership — inventory, sales, financing, accounting, staff, and a cross-dealer marketplace — behind a single bilingual (English / Arabic) interface. It is built as a strictly multi-tenant SaaS: every record is scoped to an organization, and access is governed by fine-grained, per-org role-based permissions.
 
-- Convex as your backend (database, server logic)
-- [React](https://react.dev/) as your frontend (web page interactivity)
-- [Next.js](https://nextjs.org/) for optimized web hosting and page routing
-- [Tailwind](https://tailwindcss.com/) for building great looking accessible UI
-- [Clerk](https://clerk.com/) for authentication
+The platform ships as a web application, a companion mobile app, and an edge worker, sharing one strongly-typed backend.
 
-## Get started
+---
 
-If you just cloned this codebase and didn't use `npm create convex`, run:
+## Highlights
+
+- **True multi-tenancy** — every entity is org-scoped end to end, with an onboarding flow for users without an organization.
+- **Fine-grained RBAC** — permissions are `action:resource` strings composed into customizable per-org roles (`OWNER`, `MANAGER`, `SALES`, `RECEPTION`, `ACCOUNTANT`, …). All authorization is enforced server-side.
+- **Double-entry accounting** — a general-ledger subledger with journals, COGS/commission recognition, prepaid amortization, and reconciliation reporting.
+- **Approval workflows** — vehicle creates/edits, status changes, and below-minimum-profit sales route through a pending → approved/rejected flow with a full audit trail.
+- **Dealer marketplace** — a reverse marketplace that matches buyer requests to inventory across dealers, with push notifications and messaging.
+- **Bilingual, RTL-aware UI** — first-class English and Arabic support, with dynamic font swapping and full right-to-left layout.
+- **Super-admin control plane** — a cross-tenant operations console, isolated from per-org RBAC, for platform administration and system health.
+
+## Feature surface
+
+Inventory & sourcing · Customers & leads · Sales & commissions · Financing applications · Deposits & payments · Expenses & payroll · Accounting & reports · Tasks · Team & permissions · Notifications · Internal messaging · Social inbox · Cross-dealer marketplace.
+
+---
+
+## Architecture
+
+AutoFlow is a **pnpm monorepo** built around a single Convex backend that every client consumes through generated, type-safe APIs.
 
 ```
-npm install
-npm run dev
+apps/mobile        React Native (Expo) companion app, OTA-updatable
+convex/            Backend: queries, mutations, schema, cron jobs, HTTP endpoints
+app/               Next.js App Router — dashboard, auth, marketing pages
+components/         UI (shadcn/ui + Tailwind), providers, domain components
+lib/               Shared client logic (financing math, i18n, utilities)
+dealer-worker/     Cloudflare Worker for edge-side dealer integrations
+packages/          Shared cross-app code
 ```
 
-If you're reading this README on GitHub and want to use this template, run:
+**Stack**
 
+| Layer | Technology |
+| --- | --- |
+| Frontend | Next.js 16 (App Router), React, TypeScript |
+| Backend | Convex (reactive database + server functions) |
+| Auth | Clerk (web + native), synced to Convex via Svix webhooks |
+| Styling | Tailwind CSS, shadcn/ui, `sonner` toasts |
+| Forms | react-hook-form + zod |
+| Mobile | React Native / Expo with OTA updates |
+| Edge | Cloudflare Workers |
+| Observability | Sentry |
+
+**Design principles**
+
+- **Backend owns the truth.** All validation and business logic live in Convex functions; the frontend is never trusted to enforce a rule. Auth is centralized in `convex/utils/tenancy.ts` (`requireAuth`, `requireTenantAuth`, `requireOwner`, `requireSuperAdmin`).
+- **Soft deletes everywhere.** Entities carry `isDeleted` / `deletedAt` / `deletedBy` and are filtered out of reads.
+- **Defensive frontend.** Optional chaining and fallbacks on all async/nested data, with explicit loading and empty states.
+- **Zero-`any` TypeScript.** Types are explicit and generated types are treated as source of truth.
+
+---
+
+## Getting started
+
+**Prerequisites:** Node 22+, pnpm, and Convex / Clerk accounts.
+
+```bash
+pnpm install
+pnpm dev          # runs the Convex dev server and Next.js together
 ```
-npm create convex@latest -- -t nextjs-clerk
+
+Configure the required environment variables (Clerk keys, Convex deployment, webhook secrets) before first run. The mobile app and dealer worker are managed through the workspace scripts below.
+
+### Common scripts
+
+```bash
+pnpm dev              # Convex + Next.js, watched
+pnpm build            # production web build
+pnpm lint             # ESLint
+pnpm test             # unit + Convex function tests (vitest)
+pnpm typecheck        # tsc --noEmit
+pnpm mobile:start     # start the Expo mobile app
+pnpm mobile:android   # run the mobile app on Android
 ```
 
-Then:
+---
 
-1. Open your app. There should be a "Claim your application" button from Clerk in the bottom right of your app.
-2. Follow the steps to claim your application and link it to this app.
-3. Follow step 3 in the [Convex Clerk onboarding guide](https://docs.convex.dev/auth/clerk#get-started) to create a Convex JWT template.
-4. Uncomment the Clerk provider in `convex/auth.config.ts`
-5. Paste the Issuer URL as `CLERK_JWT_ISSUER_DOMAIN` to your dev deployment environment variable settings on the Convex dashboard (see [docs](https://docs.convex.dev/auth/clerk#configuring-dev-and-prod-instances))
+## Testing
 
-If you want to sync Clerk user data via webhooks, check out this [example repo](https://github.com/thomasballinger/convex-clerk-users-table/).
+Quality is enforced at multiple levels:
 
-## Learn more
+- **Unit & backend tests** — `vitest` with `convex-test` exercises Convex functions in isolation, plus library-level tests for pure logic (financing math, date handling, i18n).
+- **End-to-end** — two parallel suites, **Playwright** and **Cypress**, cover the critical flows (sign-in, dashboard, inventory, customers, leads, expenses, an end-to-end cash sale, and language switching) against a real production build.
+- **Load testing** — `k6` smoke and 1,000-user scenarios under `load-tests/`.
+- **Coverage** — tracked in CI with per-module thresholds on the accounting core.
 
-To learn more about developing your project with Convex, check out:
+```bash
+pnpm test                 # unit + backend
+pnpm e2e:playwright       # Playwright E2E
+pnpm e2e:cypress          # Cypress E2E
+pnpm test:coverage        # coverage report
+```
 
-- The [Tour of Convex](https://docs.convex.dev/get-started) for a thorough introduction to Convex principles.
-- The rest of [Convex docs](https://docs.convex.dev/) to learn about all Convex features.
-- [Stack](https://stack.convex.dev/) for in-depth articles on advanced topics.
+---
 
-## Join the community
+## Deployment
 
-Join thousands of developers building full-stack apps with Convex:
+The web app deploys to Vercel; the Convex backend deploys via the Convex CLI; the mobile app ships production builds and over-the-air updates through Expo/EAS; and the dealer worker deploys to Cloudflare. CI runs linting, type-checking, tests, and the E2E suites on every change.
 
-- Join the [Convex Discord community](https://convex.dev/community) to get help in real-time.
-- Follow [Convex on GitHub](https://github.com/get-convex/), star and contribute to the open-source implementation of Convex.
+---
+
+## License
+
+Proprietary. All rights reserved.

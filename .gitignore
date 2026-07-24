@@ -86,3 +86,12 @@ __pycache__/
 
 # installer/wizard logs
 sentry-wizard-installation-error-*.log
+
+# Local development tooling & agent workflow artifacts (not part of the product)
+/CLAUDE.md
+/PROJECT_PLAN.md
+/handoff.md
+/.claude/
+/.agents/
+/graphify-out/
+/.mem0/
