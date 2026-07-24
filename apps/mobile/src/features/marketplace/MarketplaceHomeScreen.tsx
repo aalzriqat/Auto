@@ -759,7 +759,6 @@ const makeStyles = (theme: AppTheme) =>
     },
     requestBannerImg: {
       width: "100%",
-      borderRadius: theme.radius.xl,
     },
     requestBg: {
       width: "100%",
