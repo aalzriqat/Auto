@@ -4,7 +4,6 @@ import { useState } from "react";
 import { usePaginatedQuery, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
-import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -18,6 +17,7 @@ import {
 } from "@/components/ui/select";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { toast } from "@/components/ui/sonner";
+import { PageHeader, SectionCard, TableScroll } from "@/components/admin/ui";
 
 export default function AdminNotificationsPage() {
   const [audience, setAudience] = useState<"all_orgs" | "one_org">("all_orgs");
@@ -67,92 +67,112 @@ export default function AdminNotificationsPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold text-slate-100">Notifications</h1>
+      <PageHeader title="Notifications" description="Broadcast announcements to organizations." />
 
-      <Card className="p-6 bg-slate-900 border-slate-800 space-y-4">
-        <h2 className="text-sm font-semibold text-slate-200">Send an announcement</h2>
-
-        <div className="grid grid-cols-2 gap-4 max-w-xl">
-          <div className="space-y-1.5">
-            <Label className="text-slate-300">Audience</Label>
-            <Select value={audience} onValueChange={(v) => setAudience(v as "all_orgs" | "one_org")}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all_orgs">All organizations</SelectItem>
-                <SelectItem value="one_org">One organization</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          {audience === "one_org" && (
+      <SectionCard title="Send an announcement">
+        <div className="space-y-4">
+          <div className="grid max-w-xl grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label className="text-slate-300">Organization</Label>
-              <Select value={orgId} onValueChange={(v) => setOrgId(v as Id<"organizations">)}>
+              <Label>Audience</Label>
+              <Select value={audience} onValueChange={(v) => setAudience(v as "all_orgs" | "one_org")}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Select an org" />
+                  <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {orgs.map((org) => (
-                    <SelectItem key={org._id} value={org._id}>
-                      {org.name}
-                    </SelectItem>
-                  ))}
+                  <SelectItem value="all_orgs">All organizations</SelectItem>
+                  <SelectItem value="one_org">One organization</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-          )}
+
+            {audience === "one_org" && (
+              <div className="space-y-1.5">
+                <Label>Organization</Label>
+                <Select value={orgId} onValueChange={(v) => setOrgId(v as Id<"organizations">)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select an org" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {orgs.map((org) => (
+                      <SelectItem key={org._id} value={org._id}>
+                        {org.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
+
+          <div className="max-w-xl space-y-1.5">
+            <Label>Title</Label>
+            <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Scheduled maintenance tonight" />
+          </div>
+
+          <div className="max-w-xl space-y-1.5">
+            <Label>Message</Label>
+            <Textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={3} placeholder="AutoFlow will be briefly unavailable at 2am UTC for scheduled maintenance." />
+          </div>
+
+          <div className="max-w-xl space-y-1.5">
+            <Label>Link (optional)</Label>
+            <Input value={link} onChange={(e) => setLink(e.target.value)} placeholder="/dashboard" />
+          </div>
+
+          <Button onClick={handleSend} disabled={sending}>
+            {sending ? "Sending..." : "Send broadcast"}
+          </Button>
         </div>
+      </SectionCard>
 
-        <div className="space-y-1.5 max-w-xl">
-          <Label className="text-slate-300">Title</Label>
-          <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Scheduled maintenance tonight" />
-        </div>
+      <div>
+        <h2 className="mb-3 text-sm font-semibold text-foreground">History</h2>
 
-        <div className="space-y-1.5 max-w-xl">
-          <Label className="text-slate-300">Message</Label>
-          <Textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={3} placeholder="AutoFlow will be briefly unavailable at 2am UTC for scheduled maintenance." />
-        </div>
-
-        <div className="space-y-1.5 max-w-xl">
-          <Label className="text-slate-300">Link (optional)</Label>
-          <Input value={link} onChange={(e) => setLink(e.target.value)} placeholder="/dashboard" />
-        </div>
-
-        <Button onClick={handleSend} disabled={sending}>
-          {sending ? "Sending..." : "Send broadcast"}
-        </Button>
-      </Card>
-
-      <Card className="p-6 bg-slate-900 border-slate-800">
-        <h2 className="text-sm font-semibold text-slate-200 mb-4">History</h2>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Sent</TableHead>
-              <TableHead>Title</TableHead>
-              <TableHead>Audience</TableHead>
-              <TableHead>Recipients</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {history.map((b) => (
-              <TableRow key={b._id}>
-                <TableCell className="text-slate-400 text-xs">{new Date(b.createdAt).toLocaleString()}</TableCell>
-                <TableCell className="text-slate-200">{b.title}</TableCell>
-                <TableCell className="text-slate-400 text-xs">{b.orgId ? "Single org" : "All organizations"}</TableCell>
-                <TableCell className="text-slate-400 text-xs">{b.recipientCount}</TableCell>
+        {/* Desktop table */}
+        <TableScroll className="hidden md:block">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Sent</TableHead>
+                <TableHead>Title</TableHead>
+                <TableHead>Audience</TableHead>
+                <TableHead>Recipients</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {history.map((b) => (
+                <TableRow key={b._id}>
+                  <TableCell className="text-xs text-muted-foreground">{new Date(b.createdAt).toLocaleString()}</TableCell>
+                  <TableCell className="text-foreground">{b.title}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{b.orgId ? "Single org" : "All organizations"}</TableCell>
+                  <TableCell className="text-xs tabular-nums text-muted-foreground">{b.recipientCount}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableScroll>
+
+        {/* Mobile cards */}
+        <div className="flex flex-col gap-3 md:hidden">
+          {history.map((b) => (
+            <div key={b._id} className="rounded-xl border border-border bg-card p-4 shadow-sm">
+              <p className="text-sm font-medium text-foreground">{b.title}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{new Date(b.createdAt).toLocaleString()}</p>
+              <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
+                <span>{b.orgId ? "Single org" : "All organizations"}</span>
+                <span>·</span>
+                <span>{b.recipientCount} recipients</span>
+              </div>
+            </div>
+          ))}
+        </div>
+
         {status === "CanLoadMore" && (
-          <div className="text-center mt-4">
+          <div className="mt-4 text-center">
             <Button variant="outline" size="sm" onClick={() => loadMore(25)}>Load more</Button>
           </div>
         )}
-      </Card>
+      </div>
     </div>
   );
 }

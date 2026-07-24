@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/components/ui/sonner";
+import { PageHeader } from "@/components/admin/ui";
 import {
   MessageCircle,
   CheckCircle2,
@@ -55,7 +56,7 @@ function WhatsAppActionCell({
   actionIcon: ActionIcon = MessageCircle,
   actionLabel,
   onSend,
-  fallback = <span className="text-xs text-slate-500">No WhatsApp number on file</span>,
+  fallback = <span className="text-xs text-muted-foreground">No WhatsApp number on file</span>,
 }: {
   readonly done: boolean;
   readonly doneIcon?: LucideIcon;
@@ -68,7 +69,7 @@ function WhatsAppActionCell({
 }) {
   if (done) {
     return (
-      <span className="flex items-center gap-1 text-emerald-400 text-xs">
+      <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 text-xs">
         <DoneIcon className="h-3.5 w-3.5" />
         {doneLabel}
       </span>
@@ -137,17 +138,17 @@ function WeeklyReportsView() {
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-slate-400">
+      <p className="text-sm text-muted-foreground">
         Trailing 7-day activity for opted-in dealers. Automated email goes out every Monday; this is for a manual
         WhatsApp nudge in between, same wa.me pattern as buyer requests.
       </p>
-      {reports === undefined && <p className="text-sm text-slate-400">Loading...</p>}
-      {reports?.length === 0 && <p className="text-sm text-slate-400">No dealers with activity this week.</p>}
+      {reports === undefined && <p className="text-sm text-muted-foreground">Loading...</p>}
+      {reports?.length === 0 && <p className="text-sm text-muted-foreground">No dealers with activity this week.</p>}
 
       {(reports ?? []).map((row) => (
-        <Card key={row.orgId} className="p-4 bg-slate-900 border-slate-800 space-y-3">
+        <Card key={row.orgId} className="p-4 space-y-3 shadow-sm">
           <div className="flex items-start justify-between gap-3">
-            <span className="font-semibold text-slate-100">{row.dealerName}</span>
+            <span className="font-semibold text-foreground">{row.dealerName}</span>
             <WhatsAppActionCell
               done={Boolean(row.sentAt)}
               doneLabel={row.sentAt ? `Sent ${new Date(row.sentAt).toLocaleDateString()}` : ""}
@@ -156,7 +157,7 @@ function WeeklyReportsView() {
               onSend={() => handleSend(row.orgId, row.whatsappNumber!, buildWeeklyReportMessage(row.dealerName, row.report))}
             />
           </div>
-          <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm text-slate-400">
+          <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm text-muted-foreground">
             <span>{row.report.requestsMatched} matched</span>
             <span>{row.report.responsesSent} responses</span>
             {row.report.avgResponseMinutes != null && <span>{Math.round(row.report.avgResponseMinutes)} min avg reply</span>}
@@ -165,14 +166,14 @@ function WeeklyReportsView() {
               {row.report.pageViews} views ({row.report.vehicleDetailViews} vehicle)
             </span>
             {row.report.requestsLost > 0 && (
-              <span className="flex items-center gap-1 text-amber-400">
+              <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
                 <TrendingDown className="h-3.5 w-3.5" />
                 {row.report.requestsLost} lost to no response
               </span>
             )}
           </div>
           {row.report.mostViewedVehicle && (
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-muted-foreground">
               Most viewed: {row.report.mostViewedVehicle.year} {row.report.mostViewedVehicle.make}{" "}
               {row.report.mostViewedVehicle.model} ({row.report.mostViewedVehicle.views} views)
             </p>
@@ -259,34 +260,34 @@ function DealersView() {
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-slate-400">
+      <p className="text-sm text-muted-foreground">
         Confirm a dealer&apos;s WhatsApp number by calling or messaging it directly, then mark it verified here — there&apos;s no
         automated OTP send yet (blocked on Meta Business Verification, master plan A5b). Marketplace tier controls Phase 63
         monetization — LEAD_PACKAGE/FEATURED require the dealer&apos;s AutoFlow plan to include that feature.
       </p>
-      {dealers === undefined && <p className="text-sm text-slate-400">Loading...</p>}
-      {dealers?.length === 0 && <p className="text-sm text-slate-400">No opted-in dealers.</p>}
+      {dealers === undefined && <p className="text-sm text-muted-foreground">Loading...</p>}
+      {dealers?.length === 0 && <p className="text-sm text-muted-foreground">No opted-in dealers.</p>}
 
       {(dealers ?? []).map((dealer) => (
-        <Card key={dealer.orgId} className="p-4 bg-slate-900 border-slate-800 space-y-3">
+        <Card key={dealer.orgId} className="p-4 space-y-3 shadow-sm">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-semibold text-slate-100">{dealer.dealershipName}</span>
-              <span className="text-sm text-slate-400">{dealer.whatsappNumber ?? "No WhatsApp number on file"}</span>
+              <span className="font-semibold text-foreground">{dealer.dealershipName}</span>
+              <span className="text-sm text-muted-foreground">{dealer.whatsappNumber ?? "No WhatsApp number on file"}</span>
               {dealer.badges.includes("FAST_RESPONSE") && (
-                <Badge variant="outline" className="text-[10px] border-amber-600 text-amber-400">
+                <Badge variant="outline" className="text-[10px] border-amber-500/40 text-amber-600 dark:text-amber-400">
                   <Zap className="h-3 w-3 me-1" />
                   Fast response
                 </Badge>
               )}
               {dealer.tier === "FEATURED" && (
-                <Badge variant="outline" className="text-[10px] border-yellow-500 text-yellow-400">
+                <Badge variant="outline" className="text-[10px] border-yellow-500/50 text-yellow-600 dark:text-yellow-400">
                   <Crown className="h-3 w-3 me-1" />
                   Featured
                 </Badge>
               )}
               {dealer.tier === "LEAD_PACKAGE" && (
-                <Badge variant="outline" className="text-[10px] border-sky-600 text-sky-400">
+                <Badge variant="outline" className="text-[10px] border-sky-500/40 text-sky-600 dark:text-sky-400">
                   <Package className="h-3 w-3 me-1" />
                   {dealer.leadsUsedThisPeriod}/{dealer.leadQuota ?? 0} leads
                 </Badge>
@@ -297,8 +298,8 @@ function DealersView() {
                   className={cn(
                     "text-[10px]",
                     dealer.foundingWindowEndsAt < Date.now()
-                      ? "border-red-600 text-red-400"
-                      : "border-slate-600 text-slate-400"
+                      ? "border-destructive/40 text-destructive"
+                      : "border-border text-muted-foreground"
                   )}
                 >
                   {dealer.foundingWindowEndsAt < Date.now()
@@ -318,7 +319,7 @@ function DealersView() {
               fallback={null}
             />
           </div>
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-muted-foreground">
             {dealer.totalResponses} response(s)
             {dealer.avgResponseMinutes != null ? ` · ${Math.round(dealer.avgResponseMinutes)} min avg reply` : ""}
           </p>
@@ -356,14 +357,12 @@ export default function AdminMarketplacePage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-slate-100">Marketplace</h1>
-        <p className="text-sm text-slate-400 mt-1">
-          Buyer car requests, matched dealers, and weekly proof reports. Send via WhatsApp per master plan §0.5 — manual, no Meta API dependency.
-        </p>
-      </div>
+      <PageHeader
+        title="Marketplace"
+        description="Buyer car requests, matched dealers, and weekly proof reports. Send via WhatsApp per master plan §0.5 — manual, no Meta API dependency."
+      />
 
-      <div className="flex gap-2 border-b border-slate-800 pb-3">
+      <div className="flex flex-wrap gap-2 border-b border-border pb-3">
         <Button size="sm" variant={view === "requests" ? "default" : "outline"} onClick={() => setView("requests")}>
           Requests
         </Button>
@@ -380,7 +379,7 @@ export default function AdminMarketplacePage() {
 
       {view === "requests" && (
         <>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {STATUS_TABS.map((tab) => (
               <Button
                 key={tab.label}
@@ -394,32 +393,32 @@ export default function AdminMarketplacePage() {
           </div>
 
           <div className="space-y-4">
-            {requests === undefined && <p className="text-sm text-slate-400">Loading...</p>}
-            {requests?.length === 0 && <p className="text-sm text-slate-400">No requests.</p>}
+            {requests === undefined && <p className="text-sm text-muted-foreground">Loading...</p>}
+            {requests?.length === 0 && <p className="text-sm text-muted-foreground">No requests.</p>}
 
         {(requests ?? []).map((request) => (
-          <Card key={request._id} className="p-4 bg-slate-900 border-slate-800 space-y-3">
+          <Card key={request._id} className="p-4 space-y-3 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-semibold text-slate-100">{request.buyerFirstName}</span>
-                  <span className="text-sm text-slate-400">{request.buyerPhone}</span>
-                  <Badge variant="outline" className="text-[10px] border-slate-600 text-slate-300">
+                  <span className="font-semibold text-foreground">{request.buyerFirstName}</span>
+                  <span className="text-sm text-muted-foreground">{request.buyerPhone}</span>
+                  <Badge variant="outline" className="text-[10px] border-border text-foreground">
                     {request.status}
                   </Badge>
                   <Badge
                     variant="outline"
                     className={cn(
                       "text-[10px]",
-                      request.buyerIntent === "HOT" && "border-rose-600 text-rose-400",
-                      request.buyerIntent === "WARM" && "border-amber-600 text-amber-400",
-                      request.buyerIntent === "COLD" && "border-slate-600 text-slate-400"
+                      request.buyerIntent === "HOT" && "border-rose-500/40 text-rose-600 dark:text-rose-400",
+                      request.buyerIntent === "WARM" && "border-amber-500/40 text-amber-600 dark:text-amber-400",
+                      request.buyerIntent === "COLD" && "border-border text-muted-foreground"
                     )}
                   >
                     {request.buyerIntent}
                   </Badge>
                 </div>
-                <p className="text-sm text-slate-400 mt-1 flex items-center gap-1">
+                <p className="text-sm text-muted-foreground mt-1 flex items-center gap-1">
                   <Car className="h-3.5 w-3.5" />
                   {[request.make, request.model].filter(Boolean).join(" ") || "Any vehicle"} · {request.buyerCity} ·{" "}
                   {request.paymentType} · {request.buyerTimeframe}
@@ -434,10 +433,10 @@ export default function AdminMarketplacePage() {
             </div>
 
             {request.matches.length > 0 && (
-              <div className="border-t border-slate-800 pt-3 space-y-2">
+              <div className="border-t border-border pt-3 space-y-2">
                 {request.matches.map((match) => (
                   <div key={match.matchId} className="flex items-center justify-between gap-3 text-sm">
-                    <span className="text-slate-200">{match.dealerName}</span>
+                    <span className="text-foreground">{match.dealerName}</span>
                     <WhatsAppActionCell
                       done={Boolean(match.notifiedAt)}
                       doneLabel="Sent"

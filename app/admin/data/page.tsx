@@ -5,8 +5,8 @@ import { useSearchParams } from "next/navigation";
 import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
-import { Card } from "@/components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
+import { PageHeader, TableScroll } from "@/components/admin/ui";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -73,11 +73,11 @@ export default function AdminDataPage() {
 
   return (
     <div>
-      <h1 className="text-xl font-semibold text-slate-100 mb-4">Data Browser</h1>
+      <PageHeader title="Data Browser" description="Inspect and edit raw records for any organization." />
 
-      <div className="flex gap-3 mb-4">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row">
         <select
-          className="text-sm border rounded-md px-3 py-2 bg-background"
+          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm sm:w-64"
           value={orgId}
           onChange={(e) => setOrgId(e.target.value as Id<"organizations">)}
         >
@@ -87,7 +87,11 @@ export default function AdminDataPage() {
           ))}
         </select>
 
-        <select className="text-sm border rounded-md px-3 py-2 bg-background" value={table} onChange={(e) => setSelectedTable(e.target.value)}>
+        <select
+          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm sm:w-56"
+          value={table}
+          onChange={(e) => setSelectedTable(e.target.value)}
+        >
           {tables?.map((t: string) => (
             <option key={t} value={t}>{t}</option>
           ))}
@@ -95,9 +99,9 @@ export default function AdminDataPage() {
       </div>
 
       {!orgId ? (
-        <p className="text-sm text-slate-400">Select an organization to browse its data.</p>
+        <p className="text-sm text-muted-foreground">Select an organization to browse its data.</p>
       ) : (
-        <Card className="overflow-hidden">
+        <TableScroll>
           <Table>
             <TableHeader>
               <TableRow>
@@ -131,7 +135,7 @@ export default function AdminDataPage() {
               ))}
             </TableBody>
           </Table>
-        </Card>
+        </TableScroll>
       )}
 
       {status === "CanLoadMore" && (

@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useConvexAuth, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { AdminSidebar } from "@/components/admin/AdminSidebar";
+import { AdminShell } from "@/components/admin/AdminShell";
 import { Toaster } from "@/components/ui/sonner";
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -23,18 +23,17 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   if (isLoading || !isAuthenticated || !isSuperAdmin) {
     return (
-      <div className="flex h-screen items-center justify-center bg-slate-950 flex-col gap-4">
-        <div className="w-10 h-10 rounded-full border-4 border-amber-500 border-t-transparent animate-spin" />
-        <p className="text-sm text-slate-400">Checking access...</p>
+      <div className="flex h-screen flex-col items-center justify-center gap-4 bg-muted/30">
+        <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+        <p className="text-sm text-muted-foreground">Checking access…</p>
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-slate-950">
-      <AdminSidebar />
-      <main className="flex-1 overflow-y-auto p-6 lg:p-8">{children}</main>
+    <>
+      <AdminShell>{children}</AdminShell>
       <Toaster />
-    </div>
+    </>
   );
 }
