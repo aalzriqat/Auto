@@ -9,6 +9,7 @@ import { useLocale } from "../../providers/LocaleProvider";
 import { useAppTheme, useThemedStyles } from "../../providers/ThemeProvider";
 import { type AppTheme } from "../../theme";
 import { getVehicleBrandChipOptions } from "../../data/mobileOptions";
+import { getMakeLogo } from "../../data/makeLogos";
 import {
   formatMoney,
   formatNumber,
@@ -214,17 +215,25 @@ export function MarketplaceHomeScreen({
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={[styles.brandStrip, { direction: textDirection }]}
       >
-        {brands.map((brand) => (
-          <Pressable
-            key={brand.value}
-            accessibilityRole="button"
-            accessibilityLabel={brand.label}
-            style={({ pressed }) => [styles.brandPill, pressed && styles.pressed]}
-            onPress={() => onOpenCars(brand.value)}
-          >
-            <Text style={styles.brandPillText}>{brand.label}</Text>
-          </Pressable>
-        ))}
+        {brands.map((brand) => {
+          const logo = getMakeLogo(brand.value);
+          return (
+            <Pressable
+              key={brand.value}
+              accessibilityRole="button"
+              accessibilityLabel={brand.label}
+              style={({ pressed }) => [styles.brandPill, pressed && styles.pressed]}
+              onPress={() => onOpenCars(brand.value)}
+            >
+              {logo ? (
+                <View style={styles.brandLogoChip}>
+                  <Image source={logo} style={styles.brandLogo} resizeMode="contain" />
+                </View>
+              ) : null}
+              <Text style={styles.brandPillText}>{brand.label}</Text>
+            </Pressable>
+          );
+        })}
       </ScrollView>
 
       {/* Quick actions. */}
@@ -577,15 +586,34 @@ const makeStyles = (theme: AppTheme) =>
       paddingVertical: theme.spacing.xs,
     },
     brandPill: {
+      flexDirection: "row",
       minHeight: 52,
       alignItems: "center",
       justifyContent: "center",
+      gap: theme.spacing.sm,
       borderRadius: theme.radius.lg,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: theme.colors.border,
       backgroundColor: theme.colors.surface,
-      paddingHorizontal: theme.spacing.lg,
+      paddingHorizontal: theme.spacing.md,
       ...theme.shadows.sm,
+    },
+    // A small always-white puck so the marque logo (which sits on its own white
+    // ground) reads cleanly on both light and dark pills.
+    brandLogoChip: {
+      width: 32,
+      height: 32,
+      alignItems: "center",
+      justifyContent: "center",
+      overflow: "hidden",
+      borderRadius: theme.radius.md,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: theme.colors.border,
+      backgroundColor: "#ffffff",
+    },
+    brandLogo: {
+      width: 26,
+      height: 26,
     },
     brandPillText: {
       color: theme.colors.text,

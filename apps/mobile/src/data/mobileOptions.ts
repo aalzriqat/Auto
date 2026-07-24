@@ -79,8 +79,11 @@ const BRAND_CHIPS: Array<{ ar: string; en: string; value: string }> = [
   { value: "Nissan", en: "Nissan", ar: "نيسان" },
   { value: "Mercedes-Benz", en: "Mercedes", ar: "مرسيدس" },
   { value: "BMW", en: "BMW", ar: "بي إم دبليو" },
+  { value: "Audi", en: "Audi", ar: "أودي" },
   { value: "Lexus", en: "Lexus", ar: "لكزس" },
   { value: "BYD", en: "BYD", ar: "بي واي دي" },
+  { value: "BAIC", en: "BAIC", ar: "بايك" },
+  { value: "BAW", en: "BAW", ar: "باو" },
 ] as const;
 
 export function getVehicleBrandChipOptions(locale: Locale): SearchableSelectOption[] {
