@@ -69,6 +69,33 @@ export function getVehicleMakeOptions(): SearchableSelectOption[] {
   return VEHICLE_MAKES.map((make) => ({ label: make, value: make }));
 }
 
+// A curated shortlist of the most-requested makes, surfaced as one-tap filter
+// chips on the marketplace Browse landing. `value` is the English make string
+// the search backend matches case-insensitively; the label is localized.
+// Ordered by local popularity, but the brands we already have emblem art for
+// (BMW, Audi) are pulled slightly forward so a logo is visible without
+// scrolling — the rest render as text pills until their logo lands.
+const BRAND_CHIPS: Array<{ ar: string; en: string; value: string }> = [
+  { value: "Toyota", en: "Toyota", ar: "تويوتا" },
+  { value: "Hyundai", en: "Hyundai", ar: "هيونداي" },
+  { value: "BMW", en: "BMW", ar: "بي إم دبليو" },
+  { value: "Kia", en: "Kia", ar: "كيا" },
+  { value: "Audi", en: "Audi", ar: "أودي" },
+  { value: "Nissan", en: "Nissan", ar: "نيسان" },
+  { value: "Mercedes-Benz", en: "Mercedes", ar: "مرسيدس" },
+  { value: "Lexus", en: "Lexus", ar: "لكزس" },
+  { value: "BYD", en: "BYD", ar: "بي واي دي" },
+  { value: "BAIC", en: "BAIC", ar: "بايك" },
+  { value: "BAW", en: "BAW", ar: "باو" },
+] as const;
+
+export function getVehicleBrandChipOptions(locale: Locale): SearchableSelectOption[] {
+  return BRAND_CHIPS.map((brand) => ({
+    label: locale === "ar" ? brand.ar : brand.en,
+    value: brand.value,
+  }));
+}
+
 export function getJordanCityOptions(locale: Locale): SearchableSelectOption[] {
   return JORDAN_CITIES.map((city) => ({
     label: locale === "ar" ? city.ar : city.en,

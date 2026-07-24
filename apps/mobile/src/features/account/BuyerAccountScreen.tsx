@@ -1,7 +1,7 @@
 import { nativeRoutes } from "@autoflow/shared";
 import { useAuth } from "@clerk/expo";
 import { useRouter } from "expo-router";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { Card } from "../../components/Card";
 import { Icon } from "../../components/Icon";
@@ -12,6 +12,7 @@ import { OTA_UPDATE_NUMBER } from "../../otaUpdateNumber";
 import { useLocale } from "../../providers/LocaleProvider";
 import { useThemedStyles } from "../../providers/ThemeProvider";
 import { type AppTheme } from "../../theme";
+import { useOtaUpdate } from "../../updates/otaUpdateContext";
 
 /**
  * Buyer-side Account tab. Buyers browse anonymously, so this leads with
@@ -24,6 +25,18 @@ export function BuyerAccountScreen({ embedded = false }: Readonly<{ embedded?: b
   const router = useRouter();
   const { t, textDirection } = useLocale();
   const { isSignedIn } = useAuth();
+  const { status, updateReady, checkForUpdate, applyUpdate } = useOtaUpdate();
+
+  const updateStatusLabel =
+    status === "checking"
+      ? t("otaChecking")
+      : updateReady
+        ? t("otaReadyStatus")
+        : status === "error"
+          ? t("otaCheckFailed")
+          : status === "upToDate"
+            ? t("otaUpToDate")
+            : null;
 
   const body = (
     <ScrollView style={styles.scroll} contentContainerStyle={[styles.content, { direction: textDirection }]}>
@@ -72,6 +85,33 @@ export function BuyerAccountScreen({ embedded = false }: Readonly<{ embedded?: b
             </Text>
           </View>
           <Icon color="primary" name={textDirection === "rtl" ? "back" : "chevronForward"} size={20} />
+        </Card>
+
+        <Card style={styles.card}>
+          <View style={styles.updateRow}>
+            <View style={styles.updateTextWrap}>
+              <Text style={styles.cardTitle}>{t("otaSectionTitle")}</Text>
+              {updateStatusLabel ? (
+                <Text style={styles.cardBody}>{updateStatusLabel}</Text>
+              ) : null}
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={updateReady ? t("otaUpdateNow") : t("otaCheckForUpdates")}
+              disabled={status === "checking"}
+              style={({ pressed }) => [
+                styles.updateButton,
+                pressed && styles.pressed,
+                status === "checking" && styles.updateButtonDisabled,
+              ]}
+              onPress={() => void (updateReady ? applyUpdate() : checkForUpdate())}
+            >
+              <Icon color="primary" name={updateReady ? "updateAvailable" : "refresh"} size={16} />
+              <Text style={styles.updateButtonText}>
+                {updateReady ? t("otaUpdateNow") : t("otaCheckForUpdates")}
+              </Text>
+            </Pressable>
+          </View>
         </Card>
 
         <Text style={styles.buildText}>{`${t("appName")} · ${t("buildLabel")} ${OTA_UPDATE_NUMBER}`}</Text>
@@ -174,6 +214,39 @@ const makeStyles = (theme: AppTheme) =>
       color: theme.colors.mutedText,
       fontSize: 13,
       lineHeight: 18,
+    },
+    updateRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: theme.spacing.md,
+    },
+    updateTextWrap: {
+      flex: 1,
+      minWidth: 0,
+      gap: theme.spacing.xs,
+    },
+    updateButton: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: theme.spacing.xs,
+      minHeight: 40,
+      borderRadius: theme.radius.md,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: theme.colors.border,
+      backgroundColor: theme.colors.surface,
+      paddingHorizontal: theme.spacing.md,
+    },
+    updateButtonDisabled: {
+      opacity: 0.6,
+    },
+    updateButtonText: {
+      color: theme.colors.primary,
+      fontSize: 13,
+      fontWeight: "700",
+    },
+    pressed: {
+      opacity: 0.82,
     },
     buildText: {
       alignSelf: "center",
