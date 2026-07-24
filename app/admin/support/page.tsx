@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { toast } from "@/components/ui/sonner";
 import { format } from "date-fns";
+import { ArrowLeft } from "lucide-react";
 
 export default function AdminSupportPage() {
   const [inbox, setInbox] = useState<"support" | "info" | "subscriptions">("support");
@@ -23,9 +24,15 @@ export default function AdminSupportPage() {
   );
 
   return (
-    <div className="flex h-[calc(100vh-7rem)] gap-4">
-      <Card className="w-80 shrink-0 overflow-y-auto p-0">
-        <div className="flex border-b border-slate-800 shrink-0">
+    <div className="flex h-[calc(100dvh-8rem)] gap-4 lg:h-[calc(100dvh-6rem)]">
+      {/* Thread list */}
+      <Card
+        className={cn(
+          "w-full shrink-0 overflow-y-auto p-0 lg:w-80",
+          activeThreadId && "hidden lg:block"
+        )}
+      >
+        <div className="flex shrink-0 border-b border-border">
           {(["support", "info", "subscriptions"] as const).map((tab) => (
             <button
               key={tab}
@@ -34,30 +41,28 @@ export default function AdminSupportPage() {
                 setActiveThreadId(null);
               }}
               className={cn(
-                "flex-1 px-3 py-2.5 text-sm font-medium border-b-2 transition-colors",
+                "flex-1 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors",
                 inbox === tab
-                  ? "border-amber-500 text-amber-400"
-                  : "border-transparent text-slate-500 hover:text-slate-300"
+                  ? "border-primary text-primary"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
               )}
             >
               {tab === "support" ? "Support" : tab === "info" ? "Info" : "Billing"}
             </button>
           ))}
         </div>
-        {threads.length === 0 && (
-          <p className="text-sm text-slate-500 p-4">No messages yet.</p>
-        )}
+        {threads.length === 0 && <p className="p-4 text-sm text-muted-foreground">No messages yet.</p>}
         {threads.map((thread) => (
           <button
             key={thread._id}
             onClick={() => setActiveThreadId(thread._id)}
             className={cn(
-              "w-full text-start px-4 py-3 border-b border-slate-800 hover:bg-slate-800/50 transition-colors",
-              activeThreadId === thread._id && "bg-slate-800"
+              "w-full border-b border-border px-4 py-3 text-start transition-colors hover:bg-muted/50",
+              activeThreadId === thread._id && "bg-muted"
             )}
           >
             <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-medium text-slate-100 truncate">
+              <p className="truncate text-sm font-medium text-foreground">
                 {thread.participantName || thread.participantEmail}
               </p>
               {thread.status === "OPEN" ? (
@@ -66,8 +71,8 @@ export default function AdminSupportPage() {
                 <Badge variant="outline" className="shrink-0">Closed</Badge>
               )}
             </div>
-            <p className="text-xs text-slate-500 truncate">{thread.participantEmail}</p>
-            <p className="text-xs text-slate-400 truncate mt-1">{thread.subject}</p>
+            <p className="truncate text-xs text-muted-foreground">{thread.participantEmail}</p>
+            <p className="mt-1 truncate text-xs text-muted-foreground">{thread.subject}</p>
           </button>
         ))}
         {status === "CanLoadMore" && (
@@ -77,11 +82,17 @@ export default function AdminSupportPage() {
         )}
       </Card>
 
-      <Card className="flex-1 overflow-hidden p-0">
+      {/* Thread view */}
+      <Card
+        className={cn(
+          "flex-1 overflow-hidden p-0",
+          !activeThreadId && "hidden lg:block"
+        )}
+      >
         {activeThreadId ? (
-          <ThreadView threadId={activeThreadId} />
+          <ThreadView threadId={activeThreadId} onBack={() => setActiveThreadId(null)} />
         ) : (
-          <div className="h-full flex items-center justify-center text-sm text-slate-500">
+          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             Select a conversation
           </div>
         )}
@@ -90,7 +101,7 @@ export default function AdminSupportPage() {
   );
 }
 
-function ThreadView({ threadId }: { threadId: Id<"supportThreads"> }) {
+function ThreadView({ threadId, onBack }: { threadId: Id<"supportThreads">; onBack: () => void }) {
   const data = useQuery(api.support.getThreadMessages, { threadId });
   const setThreadStatus = useMutation(api.support.setThreadStatus);
   const sendReply = useAction(api.support.sendReply);
@@ -113,45 +124,58 @@ function ThreadView({ threadId }: { threadId: Id<"supportThreads"> }) {
   }
 
   if (!data) {
-    return <div className="h-full flex items-center justify-center text-sm text-slate-500">Loading…</div>;
+    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading…</div>;
   }
 
   const { thread, messages } = data;
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 shrink-0">
-        <div>
-          <p className="text-sm font-medium text-slate-100">{thread.participantName || thread.participantEmail}</p>
-          <p className="text-xs text-slate-500">{thread.participantEmail}</p>
+    <div className="flex h-full flex-col">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <Button variant="ghost" size="icon" className="-ms-2 h-8 w-8 lg:hidden" onClick={onBack} aria-label="Back">
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium text-foreground">{thread.participantName || thread.participantEmail}</p>
+            <p className="truncate text-xs text-muted-foreground">{thread.participantEmail}</p>
+          </div>
         </div>
         <Button
           size="sm"
           variant="outline"
+          className="shrink-0"
           onClick={() => setThreadStatus({ threadId, status: thread.status === "OPEN" ? "CLOSED" : "OPEN" })}
         >
-          {thread.status === "OPEN" ? "Close thread" : "Reopen thread"}
+          {thread.status === "OPEN" ? "Close" : "Reopen"}
         </Button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
+      <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-4">
         {messages.map((m: (typeof messages)[number]) => (
           <div
             key={m._id}
             className={cn(
-              "max-w-[75%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap",
+              "max-w-[85%] whitespace-pre-wrap rounded-lg px-3 py-2 text-sm sm:max-w-[75%]",
               m.direction === "OUTBOUND"
-                ? "self-end bg-amber-500 text-white"
-                : "self-start bg-slate-100 text-slate-900"
+                ? "self-end bg-primary text-primary-foreground"
+                : "self-start bg-muted text-foreground"
             )}
           >
             <p>{m.bodyText || "(no text content)"}</p>
-            <p className={cn("text-[10px] mt-1", m.direction === "OUTBOUND" ? "text-amber-100" : "text-slate-400")}>{format(m.createdAt, "PP p")}</p>
+            <p
+              className={cn(
+                "mt-1 text-[10px]",
+                m.direction === "OUTBOUND" ? "text-primary-foreground/70" : "text-muted-foreground"
+              )}
+            >
+              {format(m.createdAt, "PP p")}
+            </p>
           </div>
         ))}
       </div>
 
-      <div className="p-4 border-t border-slate-800 shrink-0 flex flex-col gap-2">
+      <div className="flex shrink-0 flex-col gap-2 border-t border-border p-4">
         <Textarea
           placeholder="Type a reply…"
           value={reply}

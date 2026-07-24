@@ -4,7 +4,6 @@ import { useState } from "react";
 import { usePaginatedQuery, useQuery, useMutation, useAction } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
-import { Card } from "@/components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +17,8 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/sonner";
+import { Users as UsersIcon } from "lucide-react";
+import { PageHeader, TableScroll, EmptyState } from "@/components/admin/ui";
 
 function ManageUserOrgsDialog({ userId, onClose }: { userId: Id<"users">; onClose: () => void }) {
   const detail = useQuery(api.adminUsers.getUserDetail, { userId });
@@ -169,9 +170,10 @@ export default function AdminUsersPage() {
 
   return (
     <div>
-      <h1 className="text-xl font-semibold text-slate-100 mb-4">Users</h1>
+      <PageHeader title="Users" description="Every account across all organizations." />
 
-      <Card className="overflow-hidden">
+      {/* Desktop table */}
+      <TableScroll className="hidden md:block">
         <Table>
           <TableHeader>
             <TableRow>
@@ -230,7 +232,62 @@ export default function AdminUsersPage() {
             })}
           </TableBody>
         </Table>
-      </Card>
+      </TableScroll>
+
+      {/* Mobile cards */}
+      <div className="flex flex-col gap-3 md:hidden">
+        {users.length === 0 && (
+          <div className="rounded-xl border border-border bg-card">
+            <EmptyState icon={UsersIcon} title="No users found." />
+          </div>
+        )}
+        {users.map((user) => {
+          const isSelf = me?._id === user._id;
+          return (
+            <div key={user._id} className="rounded-xl border border-border bg-card p-4 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-foreground">
+                    {user.email}
+                    {isSelf && <span className="text-muted-foreground"> (you)</span>}
+                  </p>
+                  {user.name && <p className="truncate text-xs text-muted-foreground">{user.name}</p>}
+                </div>
+                {user.disabled ? <Badge variant="destructive">Disabled</Badge> : <Badge variant="secondary">Active</Badge>}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {user.orgs.map((o: { orgId: string; orgName: string; roleName: string }) => (
+                  <Badge key={o.orgId} variant="outline">
+                    {o.orgName} ({o.roleName})
+                  </Badge>
+                ))}
+                {user.orgs.length === 0 && <span className="text-xs text-muted-foreground">No orgs</span>}
+              </div>
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                <Button size="sm" variant="outline" onClick={() => setManageTarget(user._id)}>
+                  Manage
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={isSelf}
+                  onClick={() => (user.disabled ? enableUser({ userId: user._id }) : disableUser({ userId: user._id }))}
+                >
+                  {user.disabled ? "Enable" : "Disable"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  disabled={isSelf}
+                  onClick={() => setDeleteTarget({ id: user._id, email: user.email })}
+                >
+                  Delete
+                </Button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
 
       {status === "CanLoadMore" && (
         <Button variant="outline" className="mt-4" onClick={() => loadMore(50)}>
@@ -256,7 +313,7 @@ export default function AdminUsersPage() {
         </DialogContent>
       </Dialog>
 
-      <p className="text-xs text-slate-500 mt-4">
+      <p className="text-xs text-muted-foreground mt-4">
         To impersonate a user, click Manage on their row, enter a reason, and click Impersonate next to the
         organization — opens a new tab with their exact role/permissions, audited, and expires after 30 minutes.
       </p>

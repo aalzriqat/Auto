@@ -5,7 +5,6 @@ import Link from "next/link";
 import { usePaginatedQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
-import { Card } from "@/components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,6 +18,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/sonner";
+import { Building2, ChevronRight } from "lucide-react";
+import { PageHeader, TableScroll, EmptyState } from "@/components/admin/ui";
 
 export default function AdminOrganizationsPage() {
   const { results: orgs, loadMore, status } = usePaginatedQuery(
@@ -67,9 +68,10 @@ export default function AdminOrganizationsPage() {
 
   return (
     <div>
-      <h1 className="text-xl font-semibold text-slate-100 mb-4">Organizations</h1>
+      <PageHeader title="Organizations" description="Every dealership tenant on the platform." />
 
-      <Card className="overflow-hidden">
+      {/* Desktop table */}
+      <TableScroll className="hidden md:block">
         <Table>
           <TableHeader>
             <TableRow>
@@ -84,16 +86,16 @@ export default function AdminOrganizationsPage() {
             {orgs.map((org) => (
               <TableRow key={org._id}>
                 <TableCell className="font-medium">
-                  <Link href={`/admin/organizations/${org._id}`} className="hover:underline">
+                  <Link href={`/admin/organizations/${org._id}`} className="text-foreground hover:text-primary hover:underline">
                     {org.name}
                   </Link>
                 </TableCell>
-                <TableCell>{org.memberCount}</TableCell>
-                <TableCell>{new Date(org.createdAt).toLocaleDateString()}</TableCell>
+                <TableCell className="tabular-nums">{org.memberCount}</TableCell>
+                <TableCell className="text-muted-foreground">{new Date(org.createdAt).toLocaleDateString()}</TableCell>
                 <TableCell>
                   {org.suspended ? <Badge variant="destructive">Suspended</Badge> : <Badge variant="secondary">Active</Badge>}
                 </TableCell>
-                <TableCell className="text-end space-x-2">
+                <TableCell className="space-x-2 text-end">
                   <Button
                     size="sm"
                     variant="outline"
@@ -109,7 +111,52 @@ export default function AdminOrganizationsPage() {
             ))}
           </TableBody>
         </Table>
-      </Card>
+      </TableScroll>
+
+      {/* Mobile cards */}
+      <div className="flex flex-col gap-3 md:hidden">
+        {orgs.length === 0 && (
+          <div className="rounded-xl border border-border bg-card">
+            <EmptyState icon={Building2} title="No organizations yet." />
+          </div>
+        )}
+        {orgs.map((org) => (
+          <div key={org._id} className="rounded-xl border border-border bg-card p-4 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <Link
+                href={`/admin/organizations/${org._id}`}
+                className="group flex min-w-0 items-center gap-1 font-medium text-foreground"
+              >
+                <span className="truncate">{org.name}</span>
+                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+              </Link>
+              {org.suspended ? <Badge variant="destructive">Suspended</Badge> : <Badge variant="secondary">Active</Badge>}
+            </div>
+            <div className="mt-2 flex items-center gap-4 text-xs text-muted-foreground">
+              <span>{org.memberCount} members</span>
+              <span>Created {new Date(org.createdAt).toLocaleDateString()}</span>
+            </div>
+            <div className="mt-3 flex gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="flex-1"
+                onClick={() => setSuspendTarget({ id: org._id, name: org.name, suspended: org.suspended })}
+              >
+                {org.suspended ? "Unsuspend" : "Suspend"}
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                className="flex-1"
+                onClick={() => setDeleteTarget({ id: org._id, name: org.name })}
+              >
+                Delete
+              </Button>
+            </div>
+          </div>
+        ))}
+      </div>
 
       {status === "CanLoadMore" && (
         <Button variant="outline" className="mt-4" onClick={() => loadMore(50)}>

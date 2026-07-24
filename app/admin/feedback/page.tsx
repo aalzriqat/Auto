@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/sonner";
 import { Bug, Lightbulb, CheckCircle2, RotateCcw, MessageSquare, ChevronDown, ChevronUp, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { PageHeader } from "@/components/admin/ui";
 
 type FeedbackType = "BUG" | "FEATURE" | undefined;
 type FeedbackStatus = "OPEN" | "CLOSED" | undefined;
@@ -70,34 +71,36 @@ function FeedbackCard({ item }: { item: FeedbackItem }) {
   const isBug = item.type === "BUG";
 
   return (
-    <Card className={cn("p-0 bg-slate-900 border-slate-800 overflow-hidden", item.status === "CLOSED" && "opacity-60")}>
+    <Card className={cn("overflow-hidden p-0 shadow-sm", item.status === "CLOSED" && "opacity-60")}>
       {/* Header row */}
-      <div className="flex items-start gap-3 px-4 pt-4 pb-3">
-        <div className={cn("mt-0.5 shrink-0", isBug ? "text-rose-400" : "text-amber-400")}>
+      <div className="flex items-start gap-3 px-4 pb-3 pt-4">
+        <div className={cn("mt-0.5 shrink-0", isBug ? "text-destructive" : "text-amber-500")}>
           {isBug ? <Bug className="h-4 w-4" /> : <Lightbulb className="h-4 w-4" />}
         </div>
 
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-semibold text-slate-100 truncate">{item.title}</span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="truncate text-sm font-semibold text-foreground">{item.title}</span>
             <Badge
               variant="outline"
               className={cn(
-                "text-[10px] shrink-0",
-                item.status === "OPEN" ? "border-emerald-600 text-emerald-400" : "border-slate-600 text-slate-400"
+                "shrink-0 text-[10px]",
+                item.status === "OPEN"
+                  ? "border-emerald-500/40 text-emerald-600 dark:text-emerald-400"
+                  : "border-border text-muted-foreground"
               )}
             >
               {item.status}
             </Badge>
             {item.adminReply && (
-              <Badge variant="outline" className="text-[10px] border-blue-700 text-blue-400 shrink-0">
-                <MessageSquare className="h-2.5 w-2.5 me-1" />
+              <Badge variant="outline" className="shrink-0 border-primary/40 text-[10px] text-primary">
+                <MessageSquare className="me-1 h-2.5 w-2.5" />
                 Replied
               </Badge>
             )}
           </div>
-          <div className="mt-0.5 flex items-center gap-2 text-[11px] text-slate-400 flex-wrap">
-            <span className="font-medium text-slate-300">{item.orgName}</span>
+          <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+            <span className="font-medium text-foreground">{item.orgName}</span>
             <span>·</span>
             <span>{item.userName}</span>
             <span>·</span>
@@ -109,7 +112,7 @@ function FeedbackCard({ item }: { item: FeedbackItem }) {
                   href={item.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-0.5 text-blue-400 hover:underline"
+                  className="flex items-center gap-0.5 text-primary hover:underline"
                 >
                   <ExternalLink className="h-2.5 w-2.5" />
                   {item.url}
@@ -121,7 +124,8 @@ function FeedbackCard({ item }: { item: FeedbackItem }) {
 
         <button
           onClick={() => setExpanded((v) => !v)}
-          className="text-slate-500 hover:text-slate-300 shrink-0 p-1"
+          className="shrink-0 p-1 text-muted-foreground transition-colors hover:text-foreground"
+          aria-label={expanded ? "Collapse" : "Expand"}
         >
           {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
         </button>
@@ -129,23 +133,23 @@ function FeedbackCard({ item }: { item: FeedbackItem }) {
 
       {/* Expandable body */}
       {expanded && (
-        <div className="px-4 pb-4 space-y-4 border-t border-slate-800 pt-3">
+        <div className="space-y-4 border-t border-border px-4 pb-4 pt-3">
           {item.description && (
-            <p className="text-sm text-slate-300 whitespace-pre-wrap">{item.description}</p>
+            <p className="whitespace-pre-wrap text-sm text-foreground">{item.description}</p>
           )}
 
           {/* Admin reply */}
           <div className="space-y-2">
-            <label className="text-xs font-medium text-slate-400">Admin reply</label>
+            <label className="text-xs font-medium text-muted-foreground">Admin reply</label>
             <Textarea
               value={replyText}
               onChange={(e) => setReplyText(e.target.value)}
               placeholder="Write a reply visible internally (for your records)..."
               rows={3}
-              className="resize-none bg-slate-800 border-slate-700 text-slate-200 placeholder:text-slate-500 text-sm"
+              className="resize-none text-sm"
             />
             {item.adminRepliedAt && (
-              <p className="text-[10px] text-slate-500">
+              <p className="text-[10px] text-muted-foreground">
                 Last saved {new Date(item.adminRepliedAt).toLocaleString()}
               </p>
             )}
@@ -165,12 +169,7 @@ function FeedbackCard({ item }: { item: FeedbackItem }) {
               variant="outline"
               onClick={handleToggleStatus}
               disabled={togglingStatus}
-              className={cn(
-                "gap-1.5",
-                item.status === "OPEN"
-                  ? "border-emerald-700 text-emerald-400 hover:bg-emerald-900/30"
-                  : "border-slate-600 text-slate-400 hover:bg-slate-800"
-              )}
+              className="gap-1.5"
             >
               {item.status === "OPEN" ? (
                 <><CheckCircle2 className="h-3.5 w-3.5" /> Mark resolved</>
@@ -208,37 +207,34 @@ export default function AdminFeedbackPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-slate-100">Feedback Inbox</h1>
-        <p className="text-sm text-slate-400 mt-0.5">Bug reports and feature requests from all organizations.</p>
-      </div>
+      <PageHeader title="Feedback Inbox" description="Bug reports and feature requests from all organizations." />
 
       {/* Type filter */}
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {tabs.map((tab) => (
           <button
             key={String(tab.type)}
             onClick={() => setTypeFilter(tab.type)}
             className={cn(
-              "px-3 py-1.5 rounded-lg text-sm font-medium transition-all",
+              "rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
               typeFilter === tab.type
-                ? "bg-amber-500/15 text-amber-400"
-                : "text-slate-400 hover:bg-slate-800 hover:text-slate-100"
+                ? "bg-primary/10 text-primary"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground"
             )}
           >
             {tab.label}
           </button>
         ))}
-        <div className="h-5 w-px bg-slate-700 mx-1" />
+        <div className="mx-1 h-5 w-px bg-border" />
         {statusTabs.map((tab) => (
           <button
             key={String(tab.status)}
             onClick={() => setStatusFilter(tab.status)}
             className={cn(
-              "px-3 py-1.5 rounded-lg text-sm font-medium transition-all",
+              "rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
               statusFilter === tab.status
-                ? "bg-slate-700 text-slate-100"
-                : "text-slate-500 hover:bg-slate-800 hover:text-slate-300"
+                ? "bg-muted text-foreground"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground"
             )}
           >
             {tab.label}
@@ -248,9 +244,9 @@ export default function AdminFeedbackPage() {
 
       {/* List */}
       {items === undefined ? (
-        <div className="text-sm text-slate-500">Loading...</div>
+        <div className="text-sm text-muted-foreground">Loading...</div>
       ) : items.length === 0 ? (
-        <Card className="p-8 bg-slate-900 border-slate-800 text-center text-sm text-slate-500">
+        <Card className="p-8 text-center text-sm text-muted-foreground">
           No submissions found.
         </Card>
       ) : (
@@ -258,7 +254,7 @@ export default function AdminFeedbackPage() {
           {items.map((item) => (
             <FeedbackCard key={item._id} item={item} />
           ))}
-          <p className="text-xs text-slate-600 text-center">{items.length} item{items.length !== 1 ? "s" : ""}</p>
+          <p className="text-center text-xs text-muted-foreground">{items.length} item{items.length !== 1 ? "s" : ""}</p>
         </div>
       )}
     </div>

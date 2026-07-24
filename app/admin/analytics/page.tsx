@@ -4,7 +4,6 @@ import { useMemo, useState } from "react";
 import { useQuery, usePaginatedQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -17,6 +16,8 @@ import {
 } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/sonner";
+import { UserPlus, TrendingUp, Eye } from "lucide-react";
+import { PageHeader, StatCard, SectionCard, TableScroll, EmptyState } from "@/components/admin/ui";
 
 const PURGE_PRESETS = [30, 60, 90, 120, 180, 365];
 const ALL_ORGS = "__all__";
@@ -71,98 +72,78 @@ export default function AdminAnalyticsPage() {
 
   return (
     <div>
-      <h1 className="text-xl font-semibold text-slate-100 mb-1">Website Analytics</h1>
-      <p className="text-sm text-slate-400 mb-6">
-        Visitor traffic for AutoFlow&apos;s own marketing pages and every dealer-site storefront.
-      </p>
+      <PageHeader
+        title="Website Analytics"
+        description="Visitor traffic for AutoFlow's own marketing pages and every dealer-site storefront."
+      />
 
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">New Visitors Today</CardTitle>
-          </CardHeader>
-          <CardContent className="text-2xl font-semibold">{overview?.newVisitorsToday ?? "—"}</CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">New Visitors (7d)</CardTitle>
-          </CardHeader>
-          <CardContent className="text-2xl font-semibold">{overview?.newVisitors7d ?? "—"}</CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">Page Views (7d)</CardTitle>
-          </CardHeader>
-          <CardContent className="text-2xl font-semibold">{overview?.pageViews7d ?? "—"}</CardContent>
-        </Card>
+      <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <StatCard label="New Visitors Today" value={overview?.newVisitorsToday ?? "—"} icon={UserPlus} tone="primary" />
+        <StatCard label="New Visitors (7d)" value={overview?.newVisitors7d ?? "—"} icon={TrendingUp} tone="success" />
+        <StatCard label="Page Views (7d)" value={overview?.pageViews7d ?? "—"} icon={Eye} tone="default" />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Top traffic sources (7d)</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-2">
-            {overview?.topTrafficSources.length === 0 && (
-              <p className="text-sm text-muted-foreground">No events recorded yet.</p>
-            )}
-            {overview?.topTrafficSources.map((s) => (
-              <div key={s.label} className="flex items-center justify-between text-sm border-b pb-2 last:border-0">
-                <span>{s.label}</span>
-                <span className="text-muted-foreground">{s.count}</span>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+      <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <SectionCard title="Top traffic sources (7d)" bodyClassName="p-0">
+          {overview?.topTrafficSources.length === 0 ? (
+            <EmptyState title="No events recorded yet." />
+          ) : (
+            <ul className="divide-y divide-border">
+              {overview?.topTrafficSources.map((s) => (
+                <li key={s.label} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm sm:px-5">
+                  <span className="truncate text-foreground">{s.label}</span>
+                  <span className="tabular-nums text-muted-foreground">{s.count}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </SectionCard>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Top pages (7d)</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-2">
-            {overview?.topPages.length === 0 && (
-              <p className="text-sm text-muted-foreground">No page views recorded yet.</p>
-            )}
-            {overview?.topPages.map((p) => (
-              <div key={p.path} className="flex items-center justify-between text-sm border-b pb-2 last:border-0">
-                <span className="font-mono text-xs">{p.path}</span>
-                <span className="text-muted-foreground">{p.count}</span>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+        <SectionCard title="Top pages (7d)" bodyClassName="p-0">
+          {overview?.topPages.length === 0 ? (
+            <EmptyState title="No page views recorded yet." />
+          ) : (
+            <ul className="divide-y divide-border">
+              {overview?.topPages.map((p) => (
+                <li key={p.path} className="flex items-center justify-between gap-3 px-4 py-2.5 sm:px-5">
+                  <span className="truncate font-mono text-xs text-foreground">{p.path}</span>
+                  <span className="tabular-nums text-sm text-muted-foreground">{p.count}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </SectionCard>
       </div>
 
-      <Card className="mb-6">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Data retention</CardTitle>
-        </CardHeader>
-        <CardContent className="flex items-center gap-3">
-          <p className="text-xs text-slate-500 flex-1">
+      <SectionCard title="Data retention" className="mb-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <p className="flex-1 text-xs text-muted-foreground">
             Events are kept indefinitely by default. Permanently delete page-view/click events older than:
           </p>
-          <Select value={purgeDays} onValueChange={setPurgeDays}>
-            <SelectTrigger className="w-32">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {PURGE_PRESETS.map((d) => (
-                <SelectItem key={d} value={String(d)}>
-                  {d} days
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button variant="destructive" size="sm" onClick={handlePurge} disabled={purging}>
-            Delete
-          </Button>
-        </CardContent>
-      </Card>
+          <div className="flex items-center gap-2">
+            <Select value={purgeDays} onValueChange={setPurgeDays}>
+              <SelectTrigger className="w-32">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PURGE_PRESETS.map((d) => (
+                  <SelectItem key={d} value={String(d)}>
+                    {d} days
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button variant="destructive" size="sm" onClick={handlePurge} disabled={purging}>
+              Delete
+            </Button>
+          </div>
+        </div>
+      </SectionCard>
 
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-sm font-semibold text-slate-100">Visitors</h2>
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <h2 className="text-sm font-semibold text-foreground">Visitors</h2>
         <Select value={orgFilter} onValueChange={setOrgFilter}>
-          <SelectTrigger className="w-64">
+          <SelectTrigger className="w-full sm:w-64">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -177,7 +158,8 @@ export default function AdminAnalyticsPage() {
         </Select>
       </div>
 
-      <Card className="overflow-hidden">
+      {/* Desktop table */}
+      <TableScroll className="hidden md:block">
         <Table>
           <TableHeader>
             <TableRow>
@@ -216,7 +198,35 @@ export default function AdminAnalyticsPage() {
             ))}
           </TableBody>
         </Table>
-      </Card>
+      </TableScroll>
+
+      {/* Mobile cards */}
+      <div className="flex flex-col gap-3 md:hidden">
+        {visitors.length === 0 && (
+          <div className="rounded-xl border border-border bg-card">
+            <EmptyState icon={Eye} title="No visitors yet." />
+          </div>
+        )}
+        {visitors.map((v) => (
+          <div key={v._id} className="rounded-xl border border-border bg-card p-4 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <p className="truncate text-sm font-medium text-foreground">
+                {v.orgId ? (orgNameById.get(v.orgId) ?? v.host) : "AutoFlow marketing site"}
+              </p>
+              <Button size="sm" variant="outline" className="shrink-0" onClick={() => setJourneyId(v._id)}>
+                Journey
+              </Button>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">{new Date(v.firstSeenAt).toLocaleString()}</p>
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              <span>Source: <span className="text-foreground">{v.firstTrafficSource}</span></span>
+              <span>{v.deviceType} · {v.browserName} · {v.osName}</span>
+              <span>{v.geoLookupStatus === "pending" ? "Looking up…" : locationLabel(v)}</span>
+              <span>{v.pageViewCount} views / {v.linkClickCount} clicks</span>
+            </div>
+          </div>
+        ))}
+      </div>
 
       {status === "CanLoadMore" && (
         <Button variant="outline" className="mt-4" onClick={() => loadMore(50)}>

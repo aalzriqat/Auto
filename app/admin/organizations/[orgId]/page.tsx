@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/sonner";
 import { useState, useEffect } from "react";
+import { PageHeader, StatCard, SectionCard } from "@/components/admin/ui";
 
 const PLANS = ["free", "starter", "professional", "enterprise"] as const;
 const STATUSES = ["active", "past_due", "cancelled", "expired"] as const;
@@ -23,10 +24,10 @@ type SubStatus = (typeof STATUSES)[number];
 type BillingInterval = (typeof BILLING_INTERVALS)[number];
 
 const STATUS_COLORS: Record<string, string> = {
-  active: "bg-green-100 text-green-700",
-  past_due: "bg-amber-100 text-amber-700",
-  cancelled: "bg-slate-100 text-slate-600",
-  expired: "bg-red-100 text-red-700",
+  active: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  past_due: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  cancelled: "bg-muted text-muted-foreground",
+  expired: "bg-destructive/10 text-destructive",
 };
 
 function toDateInputValue(ms: number | null | undefined): string {
@@ -82,55 +83,55 @@ export default function AdminOrgDetailPage() {
   }
 
   if (!detail) {
-    return <p className="text-slate-400 text-sm">Loading...</p>;
+    return <p className="text-sm text-muted-foreground">Loading…</p>;
   }
 
   const { org, settings, counts, subscription } = detail;
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-slate-100">{org.name}</h1>
-          <p className="text-sm text-slate-400">
-            Created {new Date(org.createdAt).toLocaleDateString()} ·{" "}
-            {org.suspended
-              ? <Badge variant="destructive">Suspended</Badge>
-              : <Badge variant="secondary">Active</Badge>}
-          </p>
-        </div>
-        <Button variant="outline" asChild>
-          <Link href={`/admin/data?orgId=${orgId}`}>Browse data for this org</Link>
-        </Button>
+    <div className="space-y-5">
+      <PageHeader
+        title={org.name}
+        actions={
+          <Button variant="outline" asChild>
+            <Link href={`/admin/data?orgId=${orgId}`}>Browse data for this org</Link>
+          </Button>
+        }
+      />
+      <div className="-mt-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+        <span>Created {new Date(org.createdAt).toLocaleDateString()}</span>
+        <span>·</span>
+        {org.suspended ? <Badge variant="destructive">Suspended</Badge> : <Badge variant="secondary">Active</Badge>}
       </div>
 
       {org.suspended && org.suspendedReason && (
-        <Card className="border-red-200">
-          <CardContent className="pt-6 text-sm text-red-700">
+        <Card className="border-destructive/30 bg-destructive/5">
+          <CardContent className="pt-6 text-sm text-destructive">
             Suspended reason: {org.suspendedReason}
           </CardContent>
         </Card>
       )}
 
       {/* ── Subscription Editor ─────────────────────────── */}
-      <Card>
-        <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base">Subscription</CardTitle>
-            <div className="flex items-center gap-2">
-              <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${STATUS_COLORS[subscription?.status ?? "active"] ?? ""}`}>
-                {subscription?.status ?? "active"}
-              </span>
-              <Badge variant="secondary" className="capitalize text-xs">
-                {subscription?.plan ?? "free"}
-              </Badge>
-            </div>
+      <SectionCard
+        title="Subscription"
+        action={
+          <div className="flex items-center gap-2">
+            <span
+              className={`rounded-full px-2 py-0.5 text-xs font-medium capitalize ${STATUS_COLORS[subscription?.status ?? "active"] ?? ""}`}
+            >
+              {subscription?.status ?? "active"}
+            </span>
+            <Badge variant="secondary" className="text-xs capitalize">
+              {subscription?.plan ?? "free"}
+            </Badge>
           </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        }
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label className="text-slate-300">Plan</Label>
+              <Label>Plan</Label>
               <Select value={plan} onValueChange={(v) => setPlan(v as Plan)}>
                 <SelectTrigger>
                   <SelectValue />
@@ -146,7 +147,7 @@ export default function AdminOrgDetailPage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-slate-300">Status</Label>
+              <Label>Status</Label>
               <Select value={subStatus} onValueChange={(v) => setSubStatus(v as SubStatus)}>
                 <SelectTrigger>
                   <SelectValue />
@@ -162,7 +163,7 @@ export default function AdminOrgDetailPage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-slate-300">Billing interval <span className="text-slate-500">(optional)</span></Label>
+              <Label>Billing interval <span className="text-muted-foreground">(optional)</span></Label>
               <Select value={billingInterval} onValueChange={(v) => setBillingInterval(v as BillingInterval | "none")}>
                 <SelectTrigger>
                   <SelectValue />
@@ -178,66 +179,42 @@ export default function AdminOrgDetailPage() {
               </Select>
             </div>
 
-            <div className="space-y-1.5" />
+            <div className="hidden sm:block" />
 
             <div className="space-y-1.5">
-              <Label className="text-slate-300">Period start <span className="text-slate-500">(optional)</span></Label>
-              <Input
-                type="date"
-                value={periodStart}
-                onChange={(e) => setPeriodStart(e.target.value)}
-                className="bg-slate-800 border-slate-700 text-slate-100"
-              />
+              <Label>Period start <span className="text-muted-foreground">(optional)</span></Label>
+              <Input type="date" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} />
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-slate-300">Period end <span className="text-slate-500">(optional)</span></Label>
-              <Input
-                type="date"
-                value={periodEnd}
-                onChange={(e) => setPeriodEnd(e.target.value)}
-                className="bg-slate-800 border-slate-700 text-slate-100"
-              />
+              <Label>Period end <span className="text-muted-foreground">(optional)</span></Label>
+              <Input type="date" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} />
             </div>
           </div>
 
-          <Button
-            onClick={handleSave}
-            disabled={saving}
-            className="bg-amber-500 hover:bg-amber-600 text-black font-semibold"
-          >
+          <Button onClick={handleSave} disabled={saving}>
             {saving ? "Saving…" : "Save subscription"}
           </Button>
-        </CardContent>
-      </Card>
+        </div>
+      </SectionCard>
 
       {/* ── Entity counts ───────────────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {Object.entries(counts).map(([entity, count]) => (
-          <Card key={entity}>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm capitalize text-muted-foreground">{entity}</CardTitle>
-            </CardHeader>
-            <CardContent className="text-2xl font-semibold">{count as number}</CardContent>
-          </Card>
+          <StatCard key={entity} label={entity} value={(count as number).toLocaleString()} />
         ))}
       </div>
 
       {/* ── Org Settings ────────────────────────────────── */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Org Settings</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {settings ? (
-            <pre className="text-xs whitespace-pre-wrap bg-muted rounded p-3 overflow-x-auto">
-              {JSON.stringify(settings, null, 2)}
-            </pre>
-          ) : (
-            <p className="text-sm text-muted-foreground">No settings configured.</p>
-          )}
-        </CardContent>
-      </Card>
+      <SectionCard title="Org Settings">
+        {settings ? (
+          <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg bg-muted p-3 text-xs text-foreground">
+            {JSON.stringify(settings, null, 2)}
+          </pre>
+        ) : (
+          <p className="text-sm text-muted-foreground">No settings configured.</p>
+        )}
+      </SectionCard>
     </div>
   );
 }
