@@ -8,7 +8,9 @@ overrides:
   # for CommonJS consumers (minimatch@3) and clears every brace-expansion
   # advisory, including GHSA-mh99 which has no fix on the 1.x/2.x lines.
   sharp: ">=0.35.0"
-  postcss: ">=8.5.18"
+  # Pinned exact (not a range) so it can't drift onto a release that trips the
+  # CI minimumReleaseAge (<24h) supply-chain gate; 8.5.22 is patched (>=8.5.18).
+  postcss: 8.5.22
   fast-uri: ">=3.1.4"
   "js-yaml@>=4.0.0 <4.3.0": ">=4.3.0"
   brace-expansion: 5.0.8
