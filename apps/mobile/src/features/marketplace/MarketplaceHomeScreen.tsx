@@ -270,16 +270,14 @@ export function MarketplaceHomeScreen({
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={t("homeRequestBannerCta")}
-        style={({ pressed }) => [styles.requestBanner, pressed && styles.pressed]}
+        style={({ pressed }) => [styles.requestBanner, { aspectRatio: REQUEST_ASPECT }, pressed && styles.pressed]}
         onPress={onOpenRequest}
       >
         {/* The request banner artwork already includes its own headline, body,
-            and button, so the whole image is the tappable CTA (no overlay). */}
-        <Image
-          source={REQUEST_SOURCE}
-          style={[styles.requestBannerImg, { aspectRatio: REQUEST_ASPECT }]}
-          resizeMode="cover"
-        />
+            and button, so the whole image is the tappable CTA (no overlay). The
+            aspect ratio lives on this container (like the hero) and the image
+            fills it — putting aspectRatio on the Image itself mis-sizes it. */}
+        <Image source={REQUEST_SOURCE} style={styles.requestBannerImg} resizeMode="cover" />
       </Pressable>
 
       {/* Trust promise. */}
@@ -759,6 +757,7 @@ const makeStyles = (theme: AppTheme) =>
     },
     requestBannerImg: {
       width: "100%",
+      height: "100%",
     },
     requestBg: {
       width: "100%",
