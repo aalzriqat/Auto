@@ -91,11 +91,18 @@ async function publicDealerProfile(
   };
 }
 
-async function projectedVehicleRows(
+export async function projectedVehicleRows(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
-  enabledSections: Record<string, boolean>
+  enabledSections: Record<string, boolean>,
+  // `resolveImageUrls: false` returns raw storage IDs and skips the per-image
+  // `ctx.storage.getUrl` round-trips. The marketplace uses this so image URLs
+  // are resolved only for the handful of cars that survive filtering +
+  // pagination, not every car in every org. Defaults to true so the public
+  // website projection keeps returning ready-to-render URLs.
+  options: { resolveImageUrls?: boolean } = {}
 ) {
+  const resolveImageUrls = options.resolveImageUrls !== false;
   const includeSoldVehicles = enabledSections["inventory.soldVehicles"] === true;
   const publicStatuses = includeSoldVehicles ? (["AVAILABLE", "SOLD"] as const) : (["AVAILABLE"] as const);
   const inventoryRows: Doc<"vehicles">[] = [];
@@ -112,11 +119,16 @@ async function projectedVehicleRows(
   const hideMissingPhotos = enabledSections["inventory.hideMissingPhotos"] === true;
   const hideMissingPrice = enabledSections["inventory.hideMissingPrice"] === true;
   const includeVinChassis = enabledSections["vehicle.vinChassis"] === true;
+  const photosEnabled = Boolean(enabledSections["vehicle.photos"]);
 
   const publicVehicles = await Promise.all(
     inventoryRows.map(async (vehicleRow) => {
-      const imageUrls = await Promise.all((vehicleRow.imageIds ?? []).map((storageId) => ctx.storage.getUrl(storageId)));
-      const safeImageUrls = imageUrls.filter((imageUrl): imageUrl is string => Boolean(imageUrl));
+      const imageStorageIds = photosEnabled ? (vehicleRow.imageIds ?? []) : [];
+      const imageUrls = resolveImageUrls
+        ? (await Promise.all(imageStorageIds.map((storageId) => ctx.storage.getUrl(storageId)))).filter(
+            (imageUrl): imageUrl is string => Boolean(imageUrl)
+          )
+        : [];
 
       return {
         id: vehicleRow._id,
@@ -134,7 +146,8 @@ async function projectedVehicleRows(
         vin: includeVinChassis ? vehicleRow.vin : null,
         status: vehicleRow.status,
         listedAt: vehicleRow.createdAt ?? vehicleRow._creationTime,
-        imageUrls: enabledSections["vehicle.photos"] ? safeImageUrls : [],
+        imageStorageIds,
+        imageUrls,
         inspectionStatus: vehicleRow.inspectionStatus ?? "NONE",
         accidentDisclosed: vehicleRow.accidentDisclosed ?? null,
         ownerCount: vehicleRow.ownerCount ?? null,
@@ -143,8 +156,10 @@ async function projectedVehicleRows(
     })
   );
 
+  // hideMissingPhotos keys off the presence of stored images (storage IDs), so
+  // it works identically whether or not URLs were resolved.
   return publicVehicles.filter((publicVehicle) => {
-    if (hideMissingPhotos && publicVehicle.imageUrls.length === 0) return false;
+    if (hideMissingPhotos && publicVehicle.imageStorageIds.length === 0) return false;
     if (hideMissingPrice && publicVehicle.price == null) return false;
     return true;
   });

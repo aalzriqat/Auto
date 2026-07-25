@@ -48,6 +48,8 @@ async function seedPublishedDealer(
     dealershipPhone?: string;
     whatsappNumber?: string;
     withSpecs?: boolean;
+    vehicleStatus?: "AVAILABLE" | "SOLD";
+    showSoldVehicles?: boolean;
     trust?: {
       inspectionStatus?: "SELF_REPORTED" | "PARTNER_VERIFIED";
       accidentDisclosed?: boolean;
@@ -87,7 +89,7 @@ async function seedPublishedDealer(
       fuelType: "Petrol",
       transmission: "Automatic",
       sellingPrice: opts.sellingPrice ?? 14000,
-      status: "AVAILABLE",
+      status: opts.vehicleStatus ?? "AVAILABLE",
       isDeleted: false,
       inspectionStatus: opts.trust?.inspectionStatus,
       accidentDisclosed: opts.trust?.accidentDisclosed,
@@ -125,6 +127,7 @@ async function seedPublishedDealer(
       { sectionKey: "vehicle.transmission", enabled: opts.withSpecs === true },
       { sectionKey: "vehicle.fuelType", enabled: opts.withSpecs === true },
       { sectionKey: "vehicle.exteriorColor", enabled: opts.withSpecs === true },
+      { sectionKey: "inventory.soldVehicles", enabled: opts.showSoldVehicles === true },
     ],
   });
   await asOwner.mutation(api.websites.publish, { orgId });
@@ -349,6 +352,29 @@ describe("marketplaceBrowse.search", () => {
 
     const result = await t.query(api.marketplaceBrowse.search, { maxMonthlyPayment: 1000 });
     expect(result.vehicles).toHaveLength(0);
+  });
+
+  test("shows SOLD vehicles only when the dealer enabled the inventory.soldVehicles section", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    // Sold car + section enabled -> appears in the marketplace.
+    await seedPublishedDealer(t, {
+      name: "Shows Sold",
+      subdomainSlug: "showssold",
+      city: "Amman",
+      vehicleStatus: "SOLD",
+      showSoldVehicles: true,
+    });
+    // Sold car + section disabled -> hidden from the marketplace.
+    await seedPublishedDealer(t, {
+      name: "Hides Sold",
+      subdomainSlug: "hidessold",
+      city: "Amman",
+      vehicleStatus: "SOLD",
+      showSoldVehicles: false,
+    });
+
+    const result = await t.query(api.marketplaceBrowse.search, {});
+    expect(result.vehicles.map((v) => v.dealershipName)).toEqual(["Shows Sold"]);
   });
 
   test("still estimates the monthly payment from financePrice when the dealer hides public prices", async () => {
