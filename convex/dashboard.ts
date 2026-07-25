@@ -362,6 +362,82 @@ export const stats = query({
   },
 });
 
+const OPEN_RECEIVABLE_STATUSES = ["OPEN", "PARTIALLY_PAID", "OVERDUE"] as const;
+const TODAY_FOR_ROLE_CAP = 2000;
+
+/**
+ * Role-aware "today" data for accountant-shaped roles: collections due today,
+ * post-dated cheques due this week, and overdue receivables. Gated on
+ * `view:finance` — the same permission `dashboard.stats` already requires for
+ * any of its finance-shaped fields — rather than a new permission string.
+ * Bounded scans (`.take(N)`) — this is an aggregate summary, not a list endpoint.
+ */
+export const todayForRole = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+
+    const now = Date.now();
+    const todayStart = new Date().setHours(0, 0, 0, 0);
+    const todayEnd = todayStart + 24 * 60 * 60 * 1000 - 1;
+    const weekEnd = now + 7 * 24 * 60 * 60 * 1000;
+
+    const receivablesDueToday = await ctx.db
+      .query("receivables")
+      .withIndex("by_org_dueDate", (q) =>
+        q.eq("orgId", args.orgId).gte("dueDate", todayStart).lte("dueDate", todayEnd),
+      )
+      .filter((q) =>
+        q.and(
+          q.neq(q.field("isDeleted"), true),
+          q.or(...OPEN_RECEIVABLE_STATUSES.map((status) => q.eq(q.field("status"), status))),
+        ),
+      )
+      .take(TODAY_FOR_ROLE_CAP);
+
+    const overdueReceivableRows = await ctx.db
+      .query("receivables")
+      .withIndex("by_org_dueDate", (q) => q.eq("orgId", args.orgId).lt("dueDate", todayStart))
+      .filter((q) =>
+        q.and(
+          q.neq(q.field("isDeleted"), true),
+          q.or(...OPEN_RECEIVABLE_STATUSES.map((status) => q.eq(q.field("status"), status))),
+        ),
+      )
+      .take(TODAY_FOR_ROLE_CAP);
+
+    const chequesDueThisWeekRows = await ctx.db
+      .query("postDatedCheques")
+      .withIndex("by_org_status_and_chequeDate", (q) =>
+        q.eq("orgId", args.orgId).eq("status", "HELD").gte("chequeDate", now).lte("chequeDate", weekEnd),
+      )
+      .filter((q) => q.neq(q.field("isDeleted"), true))
+      .take(TODAY_FOR_ROLE_CAP);
+
+    const sum = (rows: ReadonlyArray<{ amount?: number; outstandingAmount?: number }>, key: "amount" | "outstandingAmount") =>
+      rows.reduce((acc, row) => acc + (row[key] ?? 0), 0);
+
+    return {
+      collectionsDueToday: {
+        count: receivablesDueToday.length,
+        amount: sum(receivablesDueToday, "outstandingAmount"),
+      },
+      chequesDueThisWeek: {
+        count: chequesDueThisWeekRows.length,
+        amount: sum(chequesDueThisWeekRows, "amount"),
+      },
+      overdueReceivables: {
+        count: overdueReceivableRows.length,
+        amount: sum(overdueReceivableRows, "outstandingAmount"),
+      },
+      truncated:
+        receivablesDueToday.length === TODAY_FOR_ROLE_CAP ||
+        overdueReceivableRows.length === TODAY_FOR_ROLE_CAP ||
+        chequesDueThisWeekRows.length === TODAY_FOR_ROLE_CAP,
+    };
+  },
+});
+
 /**
  * Surfaces cheap, actionable data-quality gaps for the dashboard nudge card.
  * Bounded scans (`.take(N)`) — this is a count/sample, not a list endpoint.

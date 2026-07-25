@@ -298,3 +298,139 @@ describe("dashboard.stats", () => {
     expect(result.topPerformer).toBeNull();
   });
 });
+
+describe("dashboard.todayForRole", () => {
+  const FINANCE_PERMISSIONS = ["view:finance"];
+
+  async function seedCustomerAndVehicle(t: Awaited<ReturnType<typeof convexTest>>, orgId: string) {
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Sara", lastName: "Haddad" })
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "1HGCM82633A004352",
+        make: "Honda",
+        model: "Accord",
+        year: 2020,
+        mileage: 10000,
+        color: "Black",
+        fuelType: "Petrol",
+        transmission: "Automatic",
+        sellingPrice: 15000,
+        status: "AVAILABLE",
+      })
+    );
+    return { customerId, vehicleId };
+  }
+
+  test("aggregates collections due today, cheques due this week, and overdue receivables", async () => {
+    const { t, orgId, asUser } = await setup(FINANCE_PERMISSIONS);
+    const { customerId } = await seedCustomerAndVehicle(t, orgId);
+    const now = Date.now();
+    const todayStart = new Date().setHours(0, 0, 0, 0);
+    const createdBy = await t.run((ctx) =>
+      ctx.db
+        .query("memberships")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .first()
+        .then((membership) => membership!.userId)
+    );
+
+    // Due today, open — should count.
+    await t.run((ctx) =>
+      ctx.db.insert("receivables", {
+        orgId,
+        customerId,
+        sourceType: "INTERNAL_INSTALLMENT",
+        title: "Installment 1",
+        originalAmount: 500,
+        outstandingAmount: 500,
+        dueDate: todayStart + 60 * 60 * 1000,
+        status: "OPEN",
+        createdBy,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+
+    // Overdue (due yesterday, still open) — should count as overdue, not due-today.
+    await t.run((ctx) =>
+      ctx.db.insert("receivables", {
+        orgId,
+        customerId,
+        sourceType: "INTERNAL_INSTALLMENT",
+        title: "Installment 0",
+        originalAmount: 300,
+        outstandingAmount: 300,
+        dueDate: todayStart - 24 * 60 * 60 * 1000,
+        status: "OVERDUE",
+        createdBy,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+
+    // Already paid, due today — must be excluded from both buckets.
+    await t.run((ctx) =>
+      ctx.db.insert("receivables", {
+        orgId,
+        customerId,
+        sourceType: "INTERNAL_INSTALLMENT",
+        title: "Installment paid",
+        originalAmount: 200,
+        outstandingAmount: 0,
+        dueDate: todayStart + 60 * 60 * 1000,
+        status: "PAID",
+        createdBy,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+
+    // Held cheque due in 3 days — should count.
+    await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", {
+        orgId,
+        customerId,
+        bank: "Arab Bank",
+        chequeNumber: "1001",
+        chequeDate: now + 3 * 24 * 60 * 60 * 1000,
+        amount: 1200,
+        status: "HELD",
+        createdBy,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+
+    // Cleared cheque due in 3 days — must be excluded.
+    await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", {
+        orgId,
+        customerId,
+        bank: "Arab Bank",
+        chequeNumber: "1002",
+        chequeDate: now + 3 * 24 * 60 * 60 * 1000,
+        amount: 900,
+        status: "CLEARED",
+        createdBy,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+
+    const result = await asUser.query(api.dashboard.todayForRole, { orgId });
+
+    expect(result.collectionsDueToday).toEqual({ count: 1, amount: 500 });
+    expect(result.overdueReceivables).toEqual({ count: 1, amount: 300 });
+    expect(result.chequesDueThisWeek).toEqual({ count: 1, amount: 1200 });
+    expect(result.truncated).toBe(false);
+  });
+
+  test("rejects callers without view:finance permission", async () => {
+    const { orgId, asUser } = await setup(["view:vehicles"]);
+
+    await expect(asUser.query(api.dashboard.todayForRole, { orgId })).rejects.toThrow();
+  });
+});

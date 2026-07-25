@@ -169,6 +169,18 @@ export interface MobileDataQualityStats {
   vehiclesWithVinWarning: number;
 }
 
+export interface MobileDashboardTodayForRoleBucket {
+  count: number;
+  amount: number;
+}
+
+export interface MobileDashboardTodayForRole {
+  collectionsDueToday: MobileDashboardTodayForRoleBucket;
+  chequesDueThisWeek: MobileDashboardTodayForRoleBucket;
+  overdueReceivables: MobileDashboardTodayForRoleBucket;
+  truncated: boolean;
+}
+
 export interface MobilePageResult<T> {
   page: T[];
   isDone: boolean;
@@ -1918,6 +1930,11 @@ export const api = {
       OrgScopedArgs,
       MobileDataQualityStats
     >("dashboard:dataQualityStats"),
+    todayForRole: makeFunctionReference<
+      "query",
+      OrgScopedArgs,
+      MobileDashboardTodayForRole
+    >("dashboard:todayForRole"),
   },
   organizations: {
     listMine: makeFunctionReference<
@@ -2673,6 +2690,12 @@ export const api = {
       "public",
       OrgScopedArgs,
       MobileDataQualityStats
+    >;
+    todayForRole: FunctionReference<
+      "query",
+      "public",
+      OrgScopedArgs,
+      MobileDashboardTodayForRole
     >;
   };
   organizations: {
