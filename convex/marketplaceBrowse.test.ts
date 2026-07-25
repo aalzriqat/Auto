@@ -23,6 +23,15 @@ describe("compareBrowseVehicles", () => {
     // mileage_asc: lowest mileage first, null mileage last.
     expect(sort(rows, "mileage_asc").map((r) => r.mileage)).toEqual([15000, 90000, null]);
   });
+
+  it("newest: most-recently-listed first, undated cars last", () => {
+    const listedCar = (listedAt: number | null) => ({ price: null, year: 2020, mileage: null, listedAt });
+    const rows = [listedCar(1000), listedCar(3000), listedCar(null), listedCar(2000)];
+
+    const sorted = [...rows].sort((a, b) => compareBrowseVehicles(a, b, "newest"));
+
+    expect(sorted.map((r) => r.listedAt)).toEqual([3000, 2000, 1000, null]);
+  });
 });
 
 const WEBSITE_PERMISSIONS = [

@@ -27,17 +27,23 @@ const ESTIMATE_TERM_MONTHS = 60;
 const paymentTypeValidator = v.optional(v.union(v.literal("CASH"), v.literal("FINANCE")));
 
 const sortByValidator = v.optional(
-  v.union(v.literal("price_asc"), v.literal("price_desc"), v.literal("year_desc"), v.literal("mileage_asc"))
+  v.union(
+    v.literal("price_asc"),
+    v.literal("price_desc"),
+    v.literal("year_desc"),
+    v.literal("mileage_asc"),
+    v.literal("newest")
+  )
 );
-export type BrowseSortBy = "price_asc" | "price_desc" | "year_desc" | "mileage_asc";
+export type BrowseSortBy = "price_asc" | "price_desc" | "year_desc" | "mileage_asc" | "newest";
 
 const SORT_HI = Number.MAX_SAFE_INTEGER;
 const SORT_LO = Number.MIN_SAFE_INTEGER;
 
-/** Pure comparator for the merged result set. Missing values always sort to the end, whichever direction is chosen, so a price-less/mileage-less car never floats to the top. */
+/** Pure comparator for the merged result set. Missing values always sort to the end, whichever direction is chosen, so a price-less/mileage-less/undated car never floats to the top. `listedAt` is optional on the input shape only so the existing `compareBrowseVehicles` unit tests (which build bare {price,year,mileage} fixtures) keep compiling. */
 export function compareBrowseVehicles(
-  a: { price: number | null; year: number; mileage: number | null },
-  b: { price: number | null; year: number; mileage: number | null },
+  a: { price: number | null; year: number; mileage: number | null; listedAt?: number | null },
+  b: { price: number | null; year: number; mileage: number | null; listedAt?: number | null },
   sortBy: BrowseSortBy
 ): number {
   switch (sortBy) {
@@ -47,6 +53,8 @@ export function compareBrowseVehicles(
       return (b.year || 0) - (a.year || 0);
     case "mileage_asc":
       return (a.mileage ?? SORT_HI) - (b.mileage ?? SORT_HI);
+    case "newest":
+      return (b.listedAt ?? SORT_LO) - (a.listedAt ?? SORT_LO);
     case "price_asc":
     default:
       return (a.price ?? SORT_HI) - (b.price ?? SORT_HI);

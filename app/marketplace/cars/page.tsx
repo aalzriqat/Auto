@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { useQuery } from "convex/react";
 import Link from "next/link";
 import { api } from "@/convex/_generated/api";
-import { Car, Globe2, MapPin, Search, ShieldCheck, Store, Wallet, Zap } from "lucide-react";
+import { Car, Globe2, MapPin, MessageCircle, Phone, Search, ShieldCheck, Store, Wallet, Zap } from "lucide-react";
+import { buildWhatsAppDeepLink } from "@/lib/whatsappDeepLink";
 
 type Lang = "en" | "ar";
 
@@ -71,6 +72,34 @@ const STRINGS: Record<Lang, Record<string, string>> = {
   },
 };
 
+// Matches convex/marketplaceBrowse.ts's exported BrowseSortBy union (kept as a
+// local literal rather than an import — this file already hand-mirrors the
+// backend's BrowseVehicle shape below instead of importing convex/*.ts types).
+type SortBy = "price_asc" | "price_desc" | "year_desc" | "mileage_asc" | "newest";
+
+const SORT_BY_LABEL: Record<Lang, string> = { en: "Sort by", ar: "الترتيب حسب" };
+const SORT_STRINGS: Record<Lang, Record<SortBy, string>> = {
+  en: {
+    price_asc: "Price: Low to High",
+    price_desc: "Price: High to Low",
+    year_desc: "Year: Newest First",
+    mileage_asc: "Mileage: Lowest First",
+    newest: "Newest Listings",
+  },
+  ar: {
+    price_asc: "السعر: من الأقل للأعلى",
+    price_desc: "السعر: من الأعلى للأقل",
+    year_desc: "سنة الصنع: الأحدث أولاً",
+    mileage_asc: "الممشى: الأقل أولاً",
+    newest: "الأحدث إدراجاً",
+  },
+};
+
+const CONTACT_STRINGS: Record<Lang, { call: string; whatsapp: string; whatsappGreeting: string }> = {
+  en: { call: "Call", whatsapp: "WhatsApp", whatsappGreeting: "Hi, I'm interested in this car:" },
+  ar: { call: "اتصال", whatsapp: "واتساب", whatsappGreeting: "مرحباً، أنا مهتم بهذه السيارة:" },
+};
+
 type SearchFilters = {
   make?: string;
   city?: string;
@@ -78,6 +107,7 @@ type SearchFilters = {
   priceMax?: number;
   maxMonthlyPayment?: number;
   paymentType?: "FINANCE";
+  sortBy?: SortBy;
 };
 
 type BrowseVehicle = {
@@ -85,6 +115,8 @@ type BrowseVehicle = {
   dealershipName: string;
   dealerBadges: string[];
   siteUrl: string | null;
+  dealerPhone: string | null;
+  dealerWhatsapp: string | null;
   id: string;
   slug: string;
   make: string;
@@ -102,6 +134,53 @@ type BrowseVehicle = {
   ownerCount: number | null;
   dealerGuarantee: boolean | null;
 };
+
+/** `tel:` link preserving a leading + so the dialer keeps the country code — mirrors apps/mobile/src/features/marketplace/marketplaceUtils.ts's buildTelUrl. Null when the dealer exposed no phone. */
+function buildTelUrl(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  const digits = phone.replace(/\D/gu, "");
+  if (!digits) return null;
+  return phone.trim().startsWith("+") ? `tel:+${digits}` : `tel:${digits}`;
+}
+
+/** Direct-contact CTA (Call + WhatsApp) — the #1 marketplace conversion lever, same rationale as mobile's ContactBar. Renders nothing when the dealer exposed no reachable number, so no dead button ever shows. */
+function ContactBar({ vehicle, lang }: { readonly vehicle: BrowseVehicle; readonly lang: Lang }) {
+  const c = CONTACT_STRINGS[lang];
+  const telUrl = buildTelUrl(vehicle.dealerPhone);
+  const message = [c.whatsappGreeting, `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim()]
+    .filter((part): part is string => Boolean(part))
+    .join(" ");
+  const whatsappUrl = vehicle.dealerWhatsapp ? buildWhatsAppDeepLink(vehicle.dealerWhatsapp, message) : null;
+
+  if (!telUrl && !whatsappUrl) return null;
+
+  return (
+    <div className="flex gap-2">
+      {telUrl && (
+        <a
+          href={telUrl}
+          aria-label={c.call}
+          className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-slate-100 text-slate-800 text-sm font-medium py-2 hover:bg-slate-200"
+        >
+          <Phone className="h-3.5 w-3.5" />
+          {c.call}
+        </a>
+      )}
+      {whatsappUrl && (
+        <a
+          href={whatsappUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={c.whatsapp}
+          className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 text-white text-sm font-medium py-2 hover:bg-emerald-700"
+        >
+          <MessageCircle className="h-3.5 w-3.5" />
+          {c.whatsapp}
+        </a>
+      )}
+    </div>
+  );
+}
 
 /** Phase 61 trust passport — only renders facts the dealer actually reported; every field is optional and falls back to nothing rather than a misleading default (core dev rule: `?.`/`||` fallbacks, no crash on missing data). */
 function TrustInfoPanel({ vehicle, t }: { readonly vehicle: BrowseVehicle; readonly t: Record<string, string> }) {
@@ -127,7 +206,15 @@ function TrustInfoPanel({ vehicle, t }: { readonly vehicle: BrowseVehicle; reado
   );
 }
 
-function VehicleCard({ vehicle, t }: { readonly vehicle: BrowseVehicle; readonly t: Record<string, string> }) {
+function VehicleCard({
+  vehicle,
+  t,
+  lang,
+}: {
+  readonly vehicle: BrowseVehicle;
+  readonly t: Record<string, string>;
+  readonly lang: Lang;
+}) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white overflow-hidden flex flex-col shadow-sm">
       <div className="aspect-video bg-slate-100 flex items-center justify-center">
@@ -169,23 +256,30 @@ function VehicleCard({ vehicle, t }: { readonly vehicle: BrowseVehicle; readonly
           )}
         </div>
         <TrustInfoPanel vehicle={vehicle} t={t} />
-        <div className="mt-auto flex gap-2">
-          {vehicle.siteUrl && (
-            <a
-              href={`${vehicle.siteUrl}/inventory/${vehicle.slug}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex-1 text-center text-sm font-medium rounded-lg bg-slate-950 text-white py-2 hover:bg-slate-800"
+        {/* Sticky bottom action group: direct-contact CTA (the #1 conversion lever,
+            same rationale as mobile's ContactBar) pinned above the secondary
+            view-listing/trade-in row via mt-auto/sticky, so it stays reachable
+            without scrolling the card out of view. */}
+        <div className="mt-auto sticky bottom-0 flex flex-col gap-2 bg-white pt-2">
+          <ContactBar vehicle={vehicle} lang={lang} />
+          <div className="flex gap-2">
+            {vehicle.siteUrl && (
+              <a
+                href={`${vehicle.siteUrl}/inventory/${vehicle.slug}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 text-center text-sm font-medium rounded-lg bg-slate-950 text-white py-2 hover:bg-slate-800"
+              >
+                {t.viewListing}
+              </a>
+            )}
+            <Link
+              href={`/marketplace/tradein?orgId=${vehicle.orgId}&dealerName=${encodeURIComponent(vehicle.dealershipName)}`}
+              className="flex-1 text-center text-sm font-medium rounded-lg border border-slate-300 py-2 text-slate-700 hover:bg-slate-50"
             >
-              {t.viewListing}
-            </a>
-          )}
-          <Link
-            href={`/marketplace/tradein?orgId=${vehicle.orgId}&dealerName=${encodeURIComponent(vehicle.dealershipName)}`}
-            className="flex-1 text-center text-sm font-medium rounded-lg border border-slate-300 py-2 text-slate-700 hover:bg-slate-50"
-          >
-            {t.tradeIn}
-          </Link>
+              {t.tradeIn}
+            </Link>
+          </div>
         </div>
       </div>
     </div>
@@ -205,6 +299,7 @@ function CarsResultsPage({
   isFirst,
   isLast,
   t,
+  lang,
   onLoadMore,
 }: {
   readonly filters: SearchFilters;
@@ -212,6 +307,7 @@ function CarsResultsPage({
   readonly isFirst: boolean;
   readonly isLast: boolean;
   readonly t: Record<string, string>;
+  readonly lang: Lang;
   readonly onLoadMore: (nextCursor: string) => void;
 }) {
   const result = useQuery(api.marketplaceBrowse.search, { ...filters, cursor });
@@ -227,7 +323,7 @@ function CarsResultsPage({
     <>
       <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {result.vehicles.map((vehicle) => (
-          <VehicleCard key={`${vehicle.orgId}-${vehicle.id}`} vehicle={vehicle} t={t} />
+          <VehicleCard key={`${vehicle.orgId}-${vehicle.id}`} vehicle={vehicle} t={t} lang={lang} />
         ))}
       </div>
       {isLast && !result.isDone && result.continueCursor && (
@@ -260,6 +356,7 @@ export default function MarketplaceCarsPage() {
   const [priceMax, setPriceMax] = useState("");
   const [maxMonthlyPayment, setMaxMonthlyPayment] = useState("");
   const [financeOnly, setFinanceOnly] = useState(false);
+  const [sortBy, setSortBy] = useState<SortBy>("price_asc");
   const [searchKey, setSearchKey] = useState(0);
   const [appliedFilters, setAppliedFilters] = useState<SearchFilters>({});
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
@@ -274,6 +371,7 @@ export default function MarketplaceCarsPage() {
       priceMax: priceMax ? Number(priceMax) : undefined,
       maxMonthlyPayment: maxMonthlyPayment ? Number(maxMonthlyPayment) : undefined,
       paymentType: financeOnly ? "FINANCE" : undefined,
+      sortBy: sortBy !== "price_asc" ? sortBy : undefined,
     });
   }
 
@@ -284,9 +382,19 @@ export default function MarketplaceCarsPage() {
     setPriceMax("");
     setMaxMonthlyPayment("");
     setFinanceOnly(false);
+    setSortBy("price_asc");
     setSearchKey((key) => key + 1);
     setCursors([undefined]);
     setAppliedFilters({});
+  }
+
+  // Sort applies immediately (no Search click needed), matching the
+  // conventional "sort changes re-order right away" UX for a dropdown.
+  function handleSortChange(nextSortBy: SortBy) {
+    setSortBy(nextSortBy);
+    setSearchKey((key) => key + 1);
+    setCursors([undefined]);
+    setAppliedFilters((prev) => ({ ...prev, sortBy: nextSortBy !== "price_asc" ? nextSortBy : undefined }));
   }
 
   return (
@@ -312,7 +420,7 @@ export default function MarketplaceCarsPage() {
         <h1 className="text-2xl sm:text-3xl font-bold">{t.title}</h1>
         <p className="mt-2 text-slate-600">{t.subtitle}</p>
 
-        <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 items-end">
+        <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3 items-end">
           <div className="col-span-1">
             <label htmlFor="cars-make" className="block text-xs font-medium text-slate-600 mb-1">{t.make}</label>
             <input
@@ -368,6 +476,23 @@ export default function MarketplaceCarsPage() {
             <input type="checkbox" checked={financeOnly} onChange={(e) => setFinanceOnly(e.target.checked)} />
             {t.financeOnly}
           </label>
+          <div className="col-span-1">
+            <label htmlFor="cars-sort" className="block text-xs font-medium text-slate-600 mb-1">
+              {SORT_BY_LABEL[lang]}
+            </label>
+            <select
+              id="cars-sort"
+              value={sortBy}
+              onChange={(e) => handleSortChange(e.target.value as SortBy)}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white"
+            >
+              {(Object.keys(SORT_STRINGS[lang]) as SortBy[]).map((option) => (
+                <option key={option} value={option}>
+                  {SORT_STRINGS[lang][option]}
+                </option>
+              ))}
+            </select>
+          </div>
           <div className="col-span-2 sm:col-span-1 flex gap-2">
             <button
               type="button"
@@ -395,6 +520,7 @@ export default function MarketplaceCarsPage() {
             isFirst={index === 0}
             isLast={index === cursors.length - 1}
             t={t}
+            lang={lang}
             onLoadMore={(nextCursor) => setCursors((prev) => [...prev, nextCursor])}
           />
         ))}
