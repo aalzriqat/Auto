@@ -194,6 +194,7 @@ export interface MobileVehicle {
   sourcedFromName?: string;
   sourceCost?: number;
   notes?: string;
+  imageIds?: string[];
   imageUrls?: Array<string | null>;
   createdAt?: number;
   addedByName?: string | null;
@@ -1497,6 +1498,7 @@ type VehicleCreateArgs = OrgScopedArgs & {
   sourcedFromName?: string;
   sourceCost?: number;
   notes?: string;
+  imageIds?: string[];
   inspectionStatus?: MobileInspectionStatus;
   accidentDisclosed?: boolean;
   ownerCount?: number;
@@ -2609,6 +2611,11 @@ export const api = {
     ),
     create: makeFunctionReference<"mutation", VehicleCreateArgs, string>("vehicles:create"),
     update: makeFunctionReference<"mutation", VehicleUpdateArgs, null>("vehicles:update"),
+    generateUploadUrl: makeFunctionReference<
+      "mutation",
+      OrgScopedArgs & { mimeType: string; sizeInBytes: number },
+      string
+    >("vehicles:generateUploadUrl"),
     softDelete: makeFunctionReference<"mutation", OrgScopedArgs & { vehicleId: string }, null>(
       "vehicles:softDelete",
     ),
@@ -3203,6 +3210,12 @@ export const api = {
     get: FunctionReference<"query", "public", VehicleScopedArgs, MobileVehicle>;
     create: FunctionReference<"mutation", "public", VehicleCreateArgs, string>;
     update: FunctionReference<"mutation", "public", VehicleUpdateArgs, null>;
+    generateUploadUrl: FunctionReference<
+      "mutation",
+      "public",
+      OrgScopedArgs & { mimeType: string; sizeInBytes: number },
+      string
+    >;
     softDelete: FunctionReference<"mutation", "public", OrgScopedArgs & { vehicleId: string }, null>;
     listAll: FunctionReference<
       "query",
