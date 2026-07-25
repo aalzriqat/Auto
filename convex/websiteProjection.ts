@@ -91,7 +91,7 @@ async function publicDealerProfile(
   };
 }
 
-async function projectedVehicleRows(
+export async function projectedVehicleRows(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   enabledSections: Record<string, boolean>

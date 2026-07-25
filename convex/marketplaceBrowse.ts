@@ -3,7 +3,8 @@ import { query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { hasPlanFeature } from "./subscriptions";
 import { listOptedInDealerProfiles } from "./marketplaceDealers";
-import { getPublishedSnapshotData, activePrimaryDomain } from "./websites";
+import { getPublishedSnapshotData, getSettingsByOrg, activePrimaryDomain } from "./websites";
+import { projectedVehicleRows, websiteSectionMap } from "./websiteProjection";
 import { calculateUnifiedMurabaha } from "../lib/financing";
 
 const MAX_CANDIDATE_ORGS = 100;
@@ -183,12 +184,11 @@ export const search = query({
       if (args.paymentType === "FINANCE" && !financeAvailable) continue;
       if (args.maxMonthlyPayment != null && !financeAvailable) continue;
 
-      const vehicles = Array.isArray(snapshotData?.vehicles) ? (snapshotData.vehicles as SnapshotVehicle[]) : [];
-      if (vehicles.length === 0) continue;
-
       const domain = await activePrimaryDomain(ctx, orgId);
       const siteUrl = domain?.status === "active" ? `https://${domain.domain}` : null;
-      const dealershipName = snapshotData?.profile?.dealershipName ?? org.name;
+      // Always the internal organization name — not the marketing/business
+      // display name that the published snapshot carried.
+      const dealershipName = org.name;
 
       // Direct-contact channels (P0 conversion): the dealership phone lives on
       // org settings; the WhatsApp number is the dealer's marketplace profile
@@ -200,6 +200,18 @@ export const search = query({
         .unique();
       const dealerPhone = orgSettings?.dealershipPhone ?? null;
       const dealerWhatsapp = profile.whatsappNumber ?? orgSettings?.dealershipPhone ?? null;
+
+      // Project the org's inventory LIVE at query time (same projection the
+      // website publish uses — respecting the dealer's public-display toggles —
+      // but computed from the current vehicles table instead of the stale
+      // published snapshot). This is what makes freshly-added photos, prices,
+      // and availability appear in the marketplace immediately. Dealer
+      // eligibility is still gated above (opted-in profile + published website).
+      const settings = await getSettingsByOrg(ctx, orgId);
+      if (!settings) continue;
+      const enabledSections = await websiteSectionMap(ctx, settings._id);
+      const vehicles = await projectedVehicleRows(ctx, orgId, enabledSections);
+      if (vehicles.length === 0) continue;
 
       for (const vehicle of vehicles) {
         if (!vehicle.id || !vehicle.make || !vehicle.model) continue;
