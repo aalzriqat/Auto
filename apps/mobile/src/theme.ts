@@ -38,9 +38,9 @@ const lightColors = {
   text: "#0f172a",
   mutedText: "#64748b",
   subtleText: "#94a3b8",
-  primary: "#0f766e",
-  primaryDark: "#134e4a",
-  primarySoft: "#ccfbf1",
+  primary: "#2563eb",
+  primaryDark: "#1e40af",
+  primarySoft: "#dbeafe",
   onPrimary: "#ffffff",
   accent: "#ea580c",
   accentSoft: "#ffedd5",
@@ -55,10 +55,10 @@ const lightColors = {
   warning: "#d97706",
   warningSoft: "#fef3c7",
   hero: "#0f172a",
-  heroAlt: "#0e7490",
+  heroAlt: "#1e3a8a",
   // On light surfaces the "glow" accents ARE the base brand colors (legible on
   // white); the gradient hero is dark in both themes so glass stays the same.
-  primaryGlow: "#0f766e",
+  primaryGlow: "#2563eb",
   accentGlow: "#ea580c",
   glassBg: "rgba(255,255,255,0.05)",
   glassStrong: "rgba(255,255,255,0.08)",
@@ -79,9 +79,9 @@ const darkColors = {
   text: "#f2f5fb",
   mutedText: "#9db0cb",
   subtleText: "#6b7a95",
-  primary: "#0f766e",
-  primaryDark: "#134e4a",
-  primarySoft: "#0f3a37",
+  primary: "#3b82f6",
+  primaryDark: "#1d4ed8",
+  primarySoft: "#17233f",
   onPrimary: "#ffffff",
   accent: "#ea580c",
   accentSoft: "#3a2414",
@@ -96,8 +96,8 @@ const darkColors = {
   warning: "#fbbf24",
   warningSoft: "#332a10",
   hero: "#0b1220",
-  heroAlt: "#0e7490",
-  primaryGlow: "#2dd4bf",
+  heroAlt: "#1e3a8a",
+  primaryGlow: "#60a5fa",
   accentGlow: "#fb923c",
   glassBg: "rgba(255,255,255,0.05)",
   glassStrong: "rgba(255,255,255,0.08)",
@@ -106,10 +106,10 @@ const darkColors = {
 } as const;
 
 const gradients = {
-  // teal -> cyan -> indigo: the signature hero band (dark in both themes).
-  hero: ["#0f766e", "#0e7490", "#1e3a8a"],
-  heroDeep: ["#0f2a2e", "#0b1220"],
-  price: ["#2dd4bf", "#0f766e"],
+  // royal blue band: the signature hero (dark in both themes).
+  hero: ["#1e3a8a", "#1d4ed8", "#2563eb"],
+  heroDeep: ["#152449", "#0b1220"],
+  price: ["#60a5fa", "#1d4ed8"],
 } as const;
 
 const spacing = {

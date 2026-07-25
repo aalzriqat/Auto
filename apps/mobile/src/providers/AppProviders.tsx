@@ -24,6 +24,7 @@ import { PushNotificationsGate } from "../notifications/PushNotificationsGate";
 import { getTypographyStyle, type AppTheme } from "../theme";
 import { NativeUpdateGate } from "../updates/NativeUpdateGate";
 import { OtaUpdateGate } from "../updates/OtaUpdateGate";
+import { OtaUpdatePrompt } from "../updates/OtaUpdatePrompt";
 import {
   AppFontStateProvider,
   useAppFontState,
@@ -122,6 +123,10 @@ export function AppProviders({ children }: { children: ReactNode }) {
           ) : (
             <ConfigurationError message={configurationErrorMessage} />
           )}
+          {/* Themed, localized "Update available" popup. Lives inside Theme +
+              Locale (the gate itself sits above them) and overlays the app when a
+              new OTA bundle has been fetched. */}
+          <OtaUpdatePrompt />
         </LocaleProvider>
         </ThemeProvider>
         </AppFontGate>

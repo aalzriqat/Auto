@@ -34,6 +34,18 @@ jest.mock("./MarketplaceScreen", () => {
   };
 });
 
+jest.mock("./MarketplaceHomeScreen", () => {
+  const React = jest.requireActual<typeof import("react")>("react");
+  const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
+  return { MarketplaceHomeScreen: () => React.createElement(Text, { testID: "buyer-home" }, "home") };
+});
+
+jest.mock("../financing/FinancingScreen", () => {
+  const React = jest.requireActual<typeof import("react")>("react");
+  const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
+  return { FinancingScreen: () => React.createElement(Text, { testID: "buyer-financing" }, "financing") };
+});
+
 jest.mock("../account/BuyerSavedScreen", () => {
   const React = jest.requireActual<typeof import("react")>("react");
   const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
@@ -61,32 +73,46 @@ function renderShell() {
 }
 
 describe("BuyerShell", () => {
-  test("exposes four buyer tabs", () => {
-    expect(BUYER_SHELL_TABS.map((tab) => tab.value)).toEqual(["browse", "request", "saved", "account"]);
+  test("exposes five buyer tabs", () => {
+    expect(BUYER_SHELL_TABS.map((tab) => tab.value)).toEqual([
+      "home",
+      "cars",
+      "favorites",
+      "financing",
+      "account",
+    ]);
   });
 
   // Default locale is Arabic.
-  test("defaults to Browse and switches across every tab", async () => {
+  test("defaults to Home and switches across every tab", async () => {
     const { getByLabelText, getByTestId } = await renderShell();
 
-    expect(getByTestId("marketplace-screen").props.children).toBe("variant:browse");
+    expect(getByTestId("buyer-home")).toBeTruthy();
 
-    fireEvent.press(getByLabelText("اطلب")); // Request
-    await waitFor(() => expect(getByTestId("marketplace-screen").props.children).toBe("variant:request"));
+    fireEvent.press(getByLabelText("السيارات")); // Cars
+    await waitFor(() => expect(getByTestId("marketplace-screen").props.children).toBe("variant:browse"));
 
-    fireEvent.press(getByLabelText("المحفوظة")); // Saved
+    fireEvent.press(getByLabelText("المفضلة")); // Favorites
     await waitFor(() => expect(getByTestId("buyer-saved")).toBeTruthy());
 
-    fireEvent.press(getByLabelText("الحساب")); // Account
+    fireEvent.press(getByLabelText("التمويل")); // Financing
+    await waitFor(() => expect(getByTestId("buyer-financing")).toBeTruthy());
+
+    fireEvent.press(getByLabelText("حسابي")); // Account
     await waitFor(() => expect(getByTestId("buyer-account")).toBeTruthy());
 
-    fireEvent.press(getByLabelText("تصفّح")); // Browse
-    await waitFor(() => expect(getByTestId("marketplace-screen").props.children).toBe("variant:browse"));
+    fireEvent.press(getByLabelText("الرئيسية")); // Home
+    await waitFor(() => expect(getByTestId("buyer-home")).toBeTruthy());
   });
 
-  test("hands a Browse trade-in off to the Request tab", async () => {
+  test("hands a Cars trade-in off to the Request takeover", async () => {
     const { getByLabelText, getByTestId } = await renderShell();
-    // Browse passes onRequestTradeIn; triggering it should switch to Request.
+
+    // Open the Cars tab, whose browse variant passes onRequestTradeIn.
+    fireEvent.press(getByLabelText("السيارات"));
+    await waitFor(() => expect(getByTestId("marketplace-screen").props.children).toBe("variant:browse"));
+
+    // Triggering it opens the Request takeover.
     fireEvent.press(getByLabelText("trigger-tradein"));
     await waitFor(() => expect(getByTestId("marketplace-screen").props.children).toBe("variant:request"));
   });

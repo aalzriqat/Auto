@@ -9,51 +9,106 @@ import { useAppTheme, useStatusBarStyle, useThemedStyles } from "../../providers
 import { type AppTheme } from "../../theme";
 import { BuyerAccountScreen } from "../account/BuyerAccountScreen";
 import { BuyerSavedScreen } from "../account/BuyerSavedScreen";
+import { FinancingScreen } from "../financing/FinancingScreen";
+import { MarketplaceHomeScreen } from "./MarketplaceHomeScreen";
 import { MarketplaceScreen } from "./MarketplaceScreen";
 
-export type BuyerShellTab = "browse" | "request" | "saved" | "account";
+export type BuyerShellTab = "home" | "cars" | "favorites" | "financing" | "account";
 
 type BuyerShellTabConfig = Readonly<{
   value: BuyerShellTab;
   icon: SemanticIconName;
-  labelKey: "buyerTabBrowse" | "buyerTabRequest" | "buyerTabSaved" | "buyerTabAccount";
+  labelKey: "buyerTabHome" | "buyerTabCars" | "buyerTabFavorites" | "buyerTabFinancing" | "buyerTabAccount";
 }>;
 
+// RTL nav renders the first item on the right, matching the storefront mockup:
+// الرئيسية · السيارات · المفضلة · تمويل · حسابي.
 export const BUYER_SHELL_TABS: readonly BuyerShellTabConfig[] = [
-  { value: "browse", icon: "search", labelKey: "buyerTabBrowse" },
-  { value: "request", icon: "marketplace", labelKey: "buyerTabRequest" },
-  { value: "saved", icon: "save", labelKey: "buyerTabSaved" },
-  { value: "account", icon: "team", labelKey: "buyerTabAccount" },
+  { value: "home", icon: "home", labelKey: "buyerTabHome" },
+  { value: "cars", icon: "vehicles", labelKey: "buyerTabCars" },
+  { value: "favorites", icon: "heart", labelKey: "buyerTabFavorites" },
+  { value: "financing", icon: "finance", labelKey: "buyerTabFinancing" },
+  { value: "account", icon: "person", labelKey: "buyerTabAccount" },
 ];
 
 /**
  * The buyer app shell: a consumer-style bottom tab bar over the marketplace.
  * Implemented as an in-screen shell (not an Expo Router Tabs group) so the
- * navigation graph is unchanged — "/" still renders one screen. Browse hands off
- * a dealer trade-in to the Request tab in-component (no router round-trip).
+ * navigation graph is unchanged — "/" still renders one screen.
+ *
+ * Home is the storefront landing; its search, brand chips, and "view all" hand
+ * off to the Cars tab (pre-filtered by make), and its quick actions / request
+ * banner hand off to Financing, Favorites, and the reverse-market Request flow.
+ * Request has no bottom tab (it's reached from the Home banner and the Cars
+ * hero), so it renders as an in-shell takeover with a back affordance.
  */
 export function BuyerShell() {
-  const [active, setActive] = useState<BuyerShellTab>("browse");
+  const [active, setActive] = useState<BuyerShellTab>("home");
+  const [carsMake, setCarsMake] = useState<string | undefined>(undefined);
+  const [requestOpen, setRequestOpen] = useState(false);
   const styles = useThemedStyles(makeStyles);
   const theme = useAppTheme();
   const statusBarStyle = useStatusBarStyle();
   const { t, textDirection } = useLocale();
   const insets = useSafeAreaInsets();
 
+  const goToTab = (tab: BuyerShellTab) => {
+    setRequestOpen(false);
+    setActive(tab);
+  };
+
+  const openCars = (make?: string) => {
+    setCarsMake(make);
+    setRequestOpen(false);
+    setActive("cars");
+  };
+
+  const openRequest = () => setRequestOpen(true);
+
   let content;
-  if (active === "browse") {
+  if (requestOpen) {
     content = (
-      <MarketplaceScreen
-        variant="browse"
-        embedded
-        onRequestTradeIn={() => setActive("request")}
-        onOpenRequest={() => setActive("request")}
+      <View style={styles.overlay}>
+        <View style={[styles.overlayBar, { direction: textDirection }]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t("back")}
+            style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
+            onPress={() => setRequestOpen(false)}
+          >
+            <Icon color="text" name="back" size={20} />
+          </Pressable>
+        </View>
+        <View style={styles.overlayContent}>
+          <MarketplaceScreen variant="request" embedded />
+        </View>
+      </View>
+    );
+  } else if (active === "home") {
+    content = (
+      <MarketplaceHomeScreen
+        onOpenCars={openCars}
+        onOpenFavorites={() => setActive("favorites")}
+        onOpenFinancing={() => setActive("financing")}
+        onOpenCompare={() => setActive("favorites")}
+        onOpenRequest={openRequest}
       />
     );
-  } else if (active === "request") {
-    content = <MarketplaceScreen variant="request" embedded />;
-  } else if (active === "saved") {
+  } else if (active === "cars") {
+    content = (
+      <MarketplaceScreen
+        key={carsMake ?? "all"}
+        variant="browse"
+        embedded
+        initialMake={carsMake}
+        onRequestTradeIn={openRequest}
+        onOpenRequest={openRequest}
+      />
+    );
+  } else if (active === "favorites") {
     content = <BuyerSavedScreen embedded />;
+  } else if (active === "financing") {
+    content = <FinancingScreen embedded />;
   } else {
     content = <BuyerAccountScreen embedded />;
   }
@@ -69,7 +124,7 @@ export function BuyerShell() {
         ]}
       >
         {BUYER_SHELL_TABS.map((tab) => {
-          const selected = tab.value === active;
+          const selected = tab.value === active && !requestOpen;
           return (
             <Pressable
               key={tab.value}
@@ -77,7 +132,7 @@ export function BuyerShell() {
               accessibilityState={{ selected }}
               accessibilityLabel={t(tab.labelKey)}
               style={({ pressed }) => [styles.tabItem, pressed && styles.pressed]}
-              onPress={() => setActive(tab.value)}
+              onPress={() => goToTab(tab.value)}
             >
               <Icon color={selected ? "primary" : "mutedText"} name={tab.icon} size={22} />
               <Text style={[styles.tabLabel, selected && styles.tabLabelActive]}>{t(tab.labelKey)}</Text>
@@ -96,6 +151,26 @@ const makeStyles = (theme: AppTheme) =>
       backgroundColor: theme.colors.background,
     },
     content: {
+      flex: 1,
+    },
+    overlay: {
+      flex: 1,
+    },
+    overlayBar: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: theme.spacing.lg,
+      paddingTop: theme.spacing.sm,
+    },
+    backButton: {
+      width: 40,
+      height: 40,
+      alignItems: "center",
+      justifyContent: "center",
+      borderRadius: theme.radius.full,
+      backgroundColor: theme.colors.surfaceAlt,
+    },
+    overlayContent: {
       flex: 1,
     },
     tabBar: {

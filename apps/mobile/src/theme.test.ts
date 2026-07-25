@@ -2,7 +2,7 @@ import { buildTheme, getFontFamily, getTypographyStyle, resolveStatusBarStyle, t
 
 describe("mobile theme tokens", () => {
   test("keeps the brand color palette stable while expanding shape and depth tokens", () => {
-    expect(theme.colors.primary).toBe("#0f766e");
+    expect(theme.colors.primary).toBe("#2563eb");
     expect(theme.colors.accent).toBe("#ea580c");
     expect(theme.radius).toEqual({ sm: 10, md: 14, lg: 18, xl: 24, full: 999 });
     expect(theme.shadows.sm).toEqual(
@@ -24,13 +24,13 @@ describe("mobile theme tokens", () => {
     expect(theme.colors.background).toBe(light.colors.background);
     expect(light.colors.background).toBe("#f2f2f7");
     expect(light.colors.surface).toBe("#ffffff");
-    // Dark flips the neutrals but keeps the brand teal/orange verbatim.
+    // Dark flips the neutrals but keeps the brand blue/orange verbatim.
     expect(dark.colors.background).toBe("#0a0f1c");
-    expect(dark.colors.primary).toBe("#0f766e");
+    expect(dark.colors.primary).toBe("#3b82f6");
     expect(dark.colors.accent).toBe("#ea580c");
     // On-dark accent text uses a brighter same-hue glow; light keeps the base.
-    expect(dark.colors.primaryGlow).toBe("#2dd4bf");
-    expect(light.colors.primaryGlow).toBe("#0f766e");
+    expect(dark.colors.primaryGlow).toBe("#60a5fa");
+    expect(light.colors.primaryGlow).toBe("#2563eb");
     // Non-color tokens are shared across themes.
     expect(dark.radius).toEqual(light.radius);
 
