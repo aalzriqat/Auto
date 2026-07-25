@@ -1,7 +1,9 @@
 import { useMutation, usePaginatedQuery } from "convex/react";
+import * as ImagePicker from "expo-image-picker";
 import { useEffect, useRef, useState } from "react";
-import { Alert, Image, Pressable, Text, View } from "react-native";
+import { Alert, Image, Pressable, ScrollView, Text, View } from "react-native";
 import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepFlow";
+import { ensurePhotoLibraryPermission } from "../../../permissions/mediaPermissions";
 import { api, type MobileVehicle, type MobileVehicleStatus } from "../../../convexApi";
 import { getFuelTypeOptions, getTransmissionOptions, getVehicleColorOptions, getVehicleMakeOptions } from "../../../data/mobileOptions";
 import { useLocale } from "../../../providers/LocaleProvider";
@@ -21,6 +23,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
   const createVehicle = useMutation(api.vehicles.create);
   const updateVehicle = useMutation(api.vehicles.update);
   const archiveVehicle = useMutation(api.vehicles.softDelete);
+  const generateUploadUrl = useMutation(api.vehicles.generateUploadUrl);
   const [filter, setFilter] = useState<MobileVehicleStatus | "ALL">("ALL");
   const { loadMore, results, status } = usePaginatedQuery(
     api.vehicles.list,
@@ -35,6 +38,8 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
   const [vehicleStep, setVehicleStep] = useState(0);
   const [saving, setSaving] = useState(false);
   const [decodingVin, setDecodingVin] = useState(false);
+  const [photos, setPhotos] = useState<Array<{ id: string; uri: string }>>([]);
+  const [uploadingPhotos, setUploadingPhotos] = useState(false);
   const vinDecodeRequestRef = useRef(0);
   const formVinRef = useRef("");
   const [vinDecodeMessage, setVinDecodeMessage] = useState<string | null>(null);
@@ -109,6 +114,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
     setEditing(null);
     setVehicleStep(0);
     setVinDecodeMessage(null);
+    setPhotos([]);
     setForm({
       vin: "",
       make: "",
@@ -132,6 +138,13 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
     setEditing(vehicle);
     setVehicleStep(0);
     setVinDecodeMessage(null);
+    const ids = vehicle.imageIds ?? [];
+    const urls = vehicle.imageUrls ?? [];
+    setPhotos(
+      ids
+        .map((id, index) => ({ id, uri: urls[index] ?? "" }))
+        .filter((photo) => Boolean(photo.uri)),
+    );
     setForm({
       vin: vehicle.vin,
       make: vehicle.make,
@@ -156,6 +169,64 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
     setEditing(null);
     setVehicleStep(0);
     setVinDecodeMessage(null);
+    setPhotos([]);
+  }
+
+  function removePhoto(id: string) {
+    setPhotos((prev) => prev.filter((photo) => photo.id !== id));
+  }
+
+  async function pickAndUploadPhotos() {
+    try {
+      const permission = await ensurePhotoLibraryPermission();
+      if (!permission.granted) {
+        Alert.alert(
+          locale === "ar" ? "الإذن مطلوب" : "Permission needed",
+          locale === "ar"
+            ? "امنح التطبيق صلاحية الوصول إلى الصور لإضافة صور السيارة."
+            : "Allow photo access to add pictures to this vehicle.",
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsMultipleSelection: true,
+        // Keep the original resolution/quality — the marketplace renders these
+        // full-size, so any recompression here shows up as pixelation.
+        quality: 1,
+        selectionLimit: 10,
+      });
+      if (result.canceled || result.assets.length === 0) return;
+
+      setUploadingPhotos(true);
+      const uploaded: Array<{ id: string; uri: string }> = [];
+      for (const asset of result.assets) {
+        const response = await fetch(asset.uri);
+        const blob = await response.blob();
+        const mimeType = asset.mimeType || blob.type || "image/jpeg";
+        const postUrl = await generateUploadUrl({
+          orgId,
+          mimeType,
+          sizeInBytes: asset.fileSize ?? blob.size,
+        });
+        const uploadResult = await fetch(postUrl, {
+          method: "POST",
+          headers: { "Content-Type": mimeType },
+          body: blob,
+        });
+        if (!uploadResult.ok) {
+          throw new Error(`Upload failed with status ${uploadResult.status}`);
+        }
+        const { storageId } = await uploadResult.json();
+        uploaded.push({ id: storageId, uri: asset.uri });
+      }
+      setPhotos((prev) => [...prev, ...uploaded]);
+    } catch (error) {
+      reportError("Mobile vehicle photo upload failed", error);
+    } finally {
+      setUploadingPhotos(false);
+    }
   }
 
   async function decodeVehicleVin() {
@@ -243,6 +314,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
         sellingPrice,
         status: form.status,
         notes: maybeText(form.notes),
+        imageIds: photos.map((photo) => photo.id),
       };
       if (editing) {
         await updateVehicle({ ...payload, vehicleId: editing._id });
@@ -449,6 +521,52 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
           {vehicleStep === 2 ? (
             <>
               <FormField multiline label={locale === "ar" ? "ملاحظات" : "Notes"} value={form.notes} onChangeText={(notes) => setForm((prev) => ({ ...prev, notes }))} />
+              <View style={styles.photoSection}>
+                <Text style={styles.photoSectionLabel}>
+                  {locale === "ar" ? "صور السيارة" : "Vehicle photos"}
+                </Text>
+                <Text style={styles.photoSectionHint}>
+                  {locale === "ar"
+                    ? "تظهر هذه الصور للمشترين في السوق."
+                    : "These photos appear to buyers in the marketplace."}
+                </Text>
+                {photos.length ? (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoThumbRow}>
+                    {photos.map((photo) => (
+                      <View key={photo.id} style={styles.photoThumb}>
+                        <Image source={{ uri: photo.uri }} style={styles.photoThumbImage} resizeMode="cover" />
+                        <Pressable
+                          accessibilityLabel={locale === "ar" ? "إزالة الصورة" : "Remove photo"}
+                          accessibilityRole="button"
+                          hitSlop={6}
+                          style={styles.photoThumbRemove}
+                          onPress={() => removePhoto(photo.id)}
+                        >
+                          <Text style={styles.photoThumbRemoveText}>×</Text>
+                        </Pressable>
+                      </View>
+                    ))}
+                  </ScrollView>
+                ) : (
+                  <Text style={styles.photoSectionEmpty}>
+                    {locale === "ar" ? "لا توجد صور بعد." : "No photos yet."}
+                  </Text>
+                )}
+                <PrimaryButton
+                  tone="muted"
+                  disabled={uploadingPhotos}
+                  label={
+                    uploadingPhotos
+                      ? locale === "ar"
+                        ? "جاري الرفع..."
+                        : "Uploading..."
+                      : locale === "ar"
+                        ? "إضافة صور"
+                        : "Add photos"
+                  }
+                  onPress={pickAndUploadPhotos}
+                />
+              </View>
               <SummaryPanel
                 title={locale === "ar" ? "بطاقة المخزون" : "Inventory card"}
                 subtitle={locale === "ar" ? "هذه هي البيانات التي ستظهر في المخزون." : "These details will be saved into inventory."}
@@ -468,7 +586,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
             backLabel={locale === "ar" ? "السابق" : "Back"}
             nextLabel={locale === "ar" ? "التالي" : "Next"}
             saveLabel={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ السيارة" : "Save vehicle")}
-            saving={saving}
+            saving={saving || uploadingPhotos}
             totalSteps={vehicleSteps.length}
             onBack={() => setVehicleStep((step) => Math.max(0, step - 1))}
             onNext={() => setVehicleStep((step) => Math.min(vehicleSteps.length - 1, step + 1))}

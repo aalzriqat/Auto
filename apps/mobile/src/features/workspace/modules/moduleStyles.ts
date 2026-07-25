@@ -1064,6 +1064,55 @@ export const makeStyles = (theme: AppTheme) =>
     gap: theme.spacing.sm,
     padding: theme.spacing.lg,
   },
+  photoSection: {
+    gap: theme.spacing.sm,
+  },
+  photoSectionLabel: {
+    color: theme.colors.text,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  photoSectionHint: {
+    color: theme.colors.mutedText,
+    fontSize: 12,
+  },
+  photoSectionEmpty: {
+    color: theme.colors.subtleText,
+    fontSize: 13,
+    paddingVertical: theme.spacing.sm,
+  },
+  photoThumbRow: {
+    gap: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
+  },
+  photoThumb: {
+    width: 104,
+    height: 104,
+    borderRadius: theme.radius.md,
+    overflow: "hidden",
+    backgroundColor: theme.colors.surfaceAlt,
+  },
+  photoThumbImage: {
+    width: "100%",
+    height: "100%",
+  },
+  photoThumbRemove: {
+    position: "absolute",
+    top: 4,
+    right: 4,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(2,6,14,0.74)",
+  },
+  photoThumbRemoveText: {
+    color: "#ffffff",
+    fontSize: 17,
+    lineHeight: 19,
+    fontWeight: "900",
+  },
   });
 
 // Static light fallback for any not-yet-migrated consumer.
