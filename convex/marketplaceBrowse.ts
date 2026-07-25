@@ -84,28 +84,6 @@ function estimateMonthlyPayment(price: number, financeCompany: FinanceCompanyTer
 
 type InspectionStatus = "NONE" | "SELF_REPORTED" | "PARTNER_VERIFIED";
 
-type SnapshotVehicle = {
-  id?: string;
-  slug?: string;
-  make?: string;
-  model?: string;
-  year?: number;
-  trim?: string | null;
-  mileage?: number | null;
-  transmission?: string | null;
-  fuelType?: string | null;
-  exteriorColor?: string | null;
-  price?: number | null;
-  financePrice?: number | null;
-  imageUrls?: string[];
-  status?: string;
-  listedAt?: number | null;
-  inspectionStatus?: InspectionStatus;
-  accidentDisclosed?: boolean | null;
-  ownerCount?: number | null;
-  dealerGuarantee?: boolean | null;
-};
-
 type BrowseVehicle = {
   orgId: Id<"organizations">;
   dealershipName: string;
@@ -134,6 +112,10 @@ type BrowseVehicle = {
   ownerCount: number | null;
   dealerGuarantee: boolean | null;
 };
+
+// Carries raw storage IDs through candidate filtering + sorting; image URLs are
+// resolved once, only for the vehicles on the returned page.
+type MergedCandidate = Omit<BrowseVehicle, "imageUrls"> & { imageStorageIds: Id<"_storage">[] };
 
 /** Public: cross-org vehicle search, unioning each opted-in dealer's already-published site inventory (master plan A2 — no new listings table). */
 export const search = query({
@@ -166,7 +148,7 @@ export const search = query({
 
     const profiles = await listOptedInDealerProfiles(ctx, MAX_CANDIDATE_ORGS);
 
-    const merged: BrowseVehicle[] = [];
+    const merged: MergedCandidate[] = [];
 
     for (const profile of profiles) {
       if (merged.length >= MAX_MERGED_VEHICLES) break;
@@ -210,12 +192,18 @@ export const search = query({
       const settings = await getSettingsByOrg(ctx, orgId);
       if (!settings) continue;
       const enabledSections = await websiteSectionMap(ctx, settings._id);
-      const vehicles = await projectedVehicleRows(ctx, orgId, enabledSections);
+      // Defer image-URL resolution: projectedVehicleRows returns raw storage IDs,
+      // and we resolve `getUrl` only for the vehicles that survive filtering and
+      // land on the returned page (below), not every car in every org.
+      const vehicles = await projectedVehicleRows(ctx, orgId, enabledSections, { resolveImageUrls: false });
       if (vehicles.length === 0) continue;
 
       for (const vehicle of vehicles) {
         if (!vehicle.id || !vehicle.make || !vehicle.model) continue;
-        if (vehicle.status && vehicle.status !== "AVAILABLE") continue;
+        // projectedVehicleRows already includes SOLD rows only when the dealer
+        // enabled the `inventory.soldVehicles` section, so honor that here
+        // instead of hard-filtering to AVAILABLE. Any other status is skipped.
+        if (vehicle.status && vehicle.status !== "AVAILABLE" && vehicle.status !== "SOLD") continue;
         if (makeFilter && vehicle.make.toLowerCase() !== makeFilter) continue;
         if (modelFilter && vehicle.model.toLowerCase() !== modelFilter) continue;
         if (transmissionFilter && vehicle.transmission?.toLowerCase() !== transmissionFilter) continue;
@@ -249,7 +237,7 @@ export const search = query({
           exteriorColor: vehicle.exteriorColor ?? null,
           price: vehicle.price ?? null,
           financePrice: vehicle.financePrice ?? null,
-          imageUrls: vehicle.imageUrls ?? [],
+          imageStorageIds: vehicle.imageStorageIds ?? [],
           listedAt: vehicle.listedAt ?? null,
           financeAvailable,
           estimatedMonthlyPayment,
@@ -264,9 +252,17 @@ export const search = query({
 
     merged.sort((a, b) => compareBrowseVehicles(a, b, args.sortBy ?? "price_asc"));
 
-    const page = merged.slice(offset, offset + numItems);
+    const pageCandidates = merged.slice(offset, offset + numItems);
     const nextOffset = offset + numItems;
     const isDone = nextOffset >= merged.length;
+
+    // Resolve image URLs once, only for the vehicles actually returned on this page.
+    const page: BrowseVehicle[] = await Promise.all(
+      pageCandidates.map(async ({ imageStorageIds, ...candidate }) => {
+        const resolved = await Promise.all(imageStorageIds.map((storageId) => ctx.storage.getUrl(storageId)));
+        return { ...candidate, imageUrls: resolved.filter((url): url is string => Boolean(url)) };
+      })
+    );
 
     return { vehicles: page, continueCursor: isDone ? null : String(nextOffset), isDone };
   },
