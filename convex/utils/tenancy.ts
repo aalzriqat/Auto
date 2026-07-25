@@ -52,6 +52,25 @@ export async function requireAuth(ctx: QueryCtx | MutationCtx): Promise<Doc<"use
 // ─── Super-admin guard (cross-tenant) ────────────────────────────────────────
 
 /**
+ * Non-throwing counterpart to requireSuperAdmin for call sites that already
+ * hold a resolved `users` doc (e.g. a query that looked up the caller
+ * separately) and want a boolean check — to decide what to include in a
+ * response, for instance — rather than a thrown error. Mirrors every check
+ * requireSuperAdmin performs (allowlist membership AND not-disabled) so the
+ * two never drift apart.
+ */
+export function isSuperAdminUser(user: Doc<"users">): boolean {
+  if (user.disabled) return false;
+
+  const allowlist = (getValidatedEnv().SUPER_ADMIN_EMAILS ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+
+  return allowlist.includes(user.email.toLowerCase());
+}
+
+/**
  * Restricts access to developers listed in the SUPER_ADMIN_EMAILS env var.
  * Deliberately independent of org membership/roles — used only by the /admin
  * dashboard, which can see and act on every organization's data.
@@ -59,12 +78,7 @@ export async function requireAuth(ctx: QueryCtx | MutationCtx): Promise<Doc<"use
 export async function requireSuperAdmin(ctx: QueryCtx | MutationCtx): Promise<Doc<"users">> {
   const user = await requireAuth(ctx);
 
-  const allowlist = (getValidatedEnv().SUPER_ADMIN_EMAILS ?? "")
-    .split(",")
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
-
-  if (!allowlist.includes(user.email.toLowerCase())) {
+  if (!isSuperAdminUser(user)) {
     throwAppError(AppErrorCode.FORBIDDEN, "Forbidden: Super-admin access only.");
   }
 

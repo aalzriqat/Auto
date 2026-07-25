@@ -42,6 +42,14 @@ async function seedImage(t: ReturnType<typeof convexTest>, contentType = "image/
   return storageId;
 }
 
+// getListingById's return type is a union of the full doc and a variant with
+// sellerPhone/sellerWhatsapp omitted, so TS only allows accessing fields
+// common to both branches directly. This narrows just enough for tests to
+// assert on those two fields either way (present or absent).
+function contactFields(listing: unknown): { sellerPhone?: string; sellerWhatsapp?: string } | null {
+  return listing as { sellerPhone?: string; sellerWhatsapp?: string } | null;
+}
+
 describe("createListing", () => {
   test("rejects a listing with zero images", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
@@ -54,9 +62,13 @@ describe("createListing", () => {
 
   test("rejects an unauthenticated caller", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const imageId = await seedImage(t);
+
+    // Use a valid seeded image (and otherwise-valid args) so this can only
+    // fail on the auth check, not incidentally on the empty-images check.
     await expect(
-      t.mutation(api.marketplaceListings.createListing, { ...baseListing, imageIds: [] })
-    ).rejects.toThrow();
+      t.mutation(api.marketplaceListings.createListing, { ...baseListing, imageIds: [imageId] })
+    ).rejects.toThrow(/unauthenticated/i);
   });
 
   test("succeeds with >=1 image and starts PENDING_VERIFICATION", async () => {
@@ -78,11 +90,25 @@ describe("createListing", () => {
   test("rejects a non-image storage id", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_3", "seller3@test.com");
-    const pdfId = await t.run((ctx) => ctx.storage.store(new Blob(["%PDF-1.4"], { type: "application/pdf" })));
+    // Use seedImage (which patches contentType directly) so this actually
+    // exercises the allowlist-rejection branch, not the "no content type"
+    // branch — see the comment on seedImage for why raw ctx.storage.store
+    // doesn't work for this.
+    const pdfId = await seedImage(t, "application/pdf");
 
     await expect(
       asSeller.mutation(api.marketplaceListings.createListing, { ...baseListing, imageIds: [pdfId] })
     ).rejects.toThrow(/allowed file type/i);
+  });
+
+  test("rejects more than MAX_LISTING_IMAGES images", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_21", "seller21@test.com");
+    const imageIds = await Promise.all(Array.from({ length: 21 }, () => seedImage(t)));
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.createListing, { ...baseListing, imageIds })
+    ).rejects.toThrow(/at most 20 images/i);
   });
 
   test("rejects a non-positive price", async () => {
@@ -97,6 +123,70 @@ describe("createListing", () => {
         imageIds: [imageId],
       })
     ).rejects.toThrow(/price/i);
+  });
+
+  test("rejects a NaN price", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_22", "seller22@test.com");
+    const imageId = await seedImage(t);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.createListing, {
+        ...baseListing,
+        price: NaN,
+        imageIds: [imageId],
+      })
+    ).rejects.toThrow(/price/i);
+  });
+
+  test("rejects an Infinity price", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_23", "seller23@test.com");
+    const imageId = await seedImage(t);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.createListing, {
+        ...baseListing,
+        price: Infinity,
+        imageIds: [imageId],
+      })
+    ).rejects.toThrow(/price/i);
+  });
+
+  test("rejects a NaN mileage", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_24", "seller24@test.com");
+    const imageId = await seedImage(t);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.createListing, {
+        ...baseListing,
+        mileage: NaN,
+        imageIds: [imageId],
+      })
+    ).rejects.toThrow(/mileage/i);
+  });
+
+  test("rejects an out-of-range year", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_25", "seller25@test.com");
+    const imageId = await seedImage(t);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.createListing, {
+        ...baseListing,
+        year: 1900,
+        imageIds: [imageId],
+      })
+    ).rejects.toThrow(/year/i);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.createListing, {
+        ...baseListing,
+        year: new Date().getFullYear() + 5,
+        imageIds: [imageId],
+      })
+    ).rejects.toThrow(/year/i);
   });
 });
 
@@ -131,7 +221,7 @@ describe("ownership: update / soft-delete", () => {
 
     await expect(
       asOther.mutation(api.marketplaceListings.updateListing, { listingId, price: 1 })
-    ).rejects.toThrow(/forbidden|own/i);
+    ).rejects.toThrow(/not found or you don't have permission/i);
   });
 
   test("a different user cannot soft-delete someone else's listing", async () => {
@@ -146,10 +236,45 @@ describe("ownership: update / soft-delete", () => {
 
     await expect(
       asOther.mutation(api.marketplaceListings.softDeleteListing, { listingId })
-    ).rejects.toThrow(/forbidden|own/i);
+    ).rejects.toThrow(/not found or you don't have permission/i);
 
     const listing = await t.run((ctx) => ctx.db.get(listingId));
     expect(listing?.isDeleted).toBe(false);
+  });
+
+  test("updateListing gives the same error for a nonexistent listing as for someone else's listing", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_26", "seller26@test.com");
+    const asOther = await seedUser(t, "seller_27", "seller27@test.com");
+    const imageId = await seedImage(t);
+    const ownedListingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+    // A valid-format id that no longer resolves to any document, so we get a
+    // real "not found" (as opposed to "forbidden") comparison.
+    const deletedListingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+    await t.run((ctx) => ctx.db.delete(deletedListingId));
+
+    let notFoundMessage = "";
+    let forbiddenMessage = "";
+    try {
+      await asOther.mutation(api.marketplaceListings.updateListing, { listingId: deletedListingId, price: 1 });
+    } catch (error) {
+      notFoundMessage = error instanceof Error ? error.message : String(error);
+    }
+    try {
+      await asOther.mutation(api.marketplaceListings.updateListing, { listingId: ownedListingId, price: 1 });
+    } catch (error) {
+      forbiddenMessage = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(notFoundMessage).not.toBe("");
+    expect(forbiddenMessage).not.toBe("");
+    expect(notFoundMessage).toBe(forbiddenMessage);
   });
 
   test("owner can soft-delete their own listing, and it drops out of getMyListings", async () => {
@@ -183,6 +308,97 @@ describe("ownership: update / soft-delete", () => {
     await expect(
       asSeller.mutation(api.marketplaceListings.updateListing, { listingId, imageIds: [] })
     ).rejects.toThrow(/at least one image/i);
+  });
+
+  test("updateListing rejects more than MAX_LISTING_IMAGES images", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_28", "seller28@test.com");
+    const imageId = await seedImage(t);
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+    const tooManyImageIds = await Promise.all(Array.from({ length: 21 }, () => seedImage(t)));
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.updateListing, { listingId, imageIds: tooManyImageIds })
+    ).rejects.toThrow(/at most 20 images/i);
+  });
+
+  test("updateListing rejects a NaN price and an out-of-range year", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_29", "seller29@test.com");
+    const imageId = await seedImage(t);
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.updateListing, { listingId, price: NaN })
+    ).rejects.toThrow(/price/i);
+    await expect(
+      asSeller.mutation(api.marketplaceListings.updateListing, { listingId, year: 1900 })
+    ).rejects.toThrow(/year/i);
+  });
+
+  test("updateListing rejects edits once a listing is SOLD", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_30", "seller30@test.com");
+    const imageId = await seedImage(t);
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+    await t.run((ctx) => ctx.db.patch(listingId, { status: "SOLD" }));
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.updateListing, { listingId, price: 1 })
+    ).rejects.toThrow(/cannot edit a listing/i);
+  });
+
+  test("updateListing rejects edits once a listing is REMOVED", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_31", "seller31@test.com");
+    const asAdmin = await seedUser(t, "admin_10", "admin@autoflow.dev");
+    const imageId = await seedImage(t);
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, { listingId, status: "LIVE" });
+    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, { listingId, status: "REMOVED" });
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.updateListing, { listingId, price: 1 })
+    ).rejects.toThrow(/cannot edit a listing/i);
+  });
+
+  test("editing a REJECTED listing resubmits it to PENDING_VERIFICATION and clears the rejection reason", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_32", "seller32@test.com");
+    const asAdmin = await seedUser(t, "admin_11", "admin@autoflow.dev");
+    const imageId = await seedImage(t);
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, {
+      listingId,
+      status: "REJECTED",
+      rejectionReason: "Photos too blurry.",
+    });
+
+    await asSeller.mutation(api.marketplaceListings.updateListing, {
+      listingId,
+      description: "New, clearer description.",
+    });
+
+    const listing = await t.run((ctx) => ctx.db.get(listingId));
+    expect(listing?.status).toBe("PENDING_VERIFICATION");
+    expect(listing?.rejectionReason).toBeUndefined();
+    expect(listing?.verifiedBy).toBeUndefined();
+    expect(listing?.verifiedAt).toBeUndefined();
   });
 });
 
@@ -272,6 +488,50 @@ describe("visibility + admin verification lifecycle", () => {
     expect(listing?.rejectionReason).toBe("Photos too blurry to verify condition.");
   });
 
+  test("rejecting with a whitespace-only reason is treated as no reason", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_33", "seller33@test.com");
+    const asAdmin = await seedUser(t, "admin_12", "admin@autoflow.dev");
+    const imageId = await seedImage(t);
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+
+    await expect(
+      asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, {
+        listingId,
+        status: "REJECTED",
+        rejectionReason: "   ",
+      })
+    ).rejects.toThrow(/rejection reason/i);
+  });
+
+  test("a super admin can take a LIVE listing down to REMOVED, but cannot remove a non-LIVE listing", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_34", "seller34@test.com");
+    const asAdmin = await seedUser(t, "admin_13", "admin@autoflow.dev");
+    const imageId = await seedImage(t);
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+
+    // Cannot remove a PENDING_VERIFICATION listing.
+    await expect(
+      asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, { listingId, status: "REMOVED" })
+    ).rejects.toThrow(/only a live listing/i);
+
+    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, { listingId, status: "LIVE" });
+    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, { listingId, status: "REMOVED" });
+
+    const listing = await t.run((ctx) => ctx.db.get(listingId));
+    expect(listing?.status).toBe("REMOVED");
+
+    // Once REMOVED, it's no longer publicly reachable.
+    expect(await t.query(api.marketplaceListings.getListingById, { listingId })).toBeNull();
+  });
+
   test("editing a material field on a LIVE listing sends it back to PENDING_VERIFICATION", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_17", "seller17@test.com");
@@ -311,6 +571,64 @@ describe("visibility + admin verification lifecycle", () => {
     expect(listing?.status).toBe("LIVE");
     expect(listing?.sellerPhone).toBe("+962799999999");
   });
+
+  test("a LIVE listing hides sellerPhone/sellerWhatsapp from unauthenticated and non-owner callers, but keeps the rest", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_35", "seller35@test.com");
+    const asOther = await seedUser(t, "seller_36", "seller36@test.com");
+    const asAdmin = await seedUser(t, "admin_14", "admin@autoflow.dev");
+    const imageId = await seedImage(t);
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      sellerWhatsapp: "+962791111111",
+      imageIds: [imageId],
+    });
+    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, { listingId, status: "LIVE" });
+
+    const anonView = await t.query(api.marketplaceListings.getListingById, { listingId });
+    expect(anonView).not.toBeNull();
+    expect(contactFields(anonView)?.sellerPhone).toBeUndefined();
+    expect(contactFields(anonView)?.sellerWhatsapp).toBeUndefined();
+    expect(anonView?.sellerDisplayName).toBe(baseListing.sellerDisplayName);
+    expect(anonView?.make).toBe(baseListing.make);
+
+    const otherView = await asOther.query(api.marketplaceListings.getListingById, { listingId });
+    expect(contactFields(otherView)?.sellerPhone).toBeUndefined();
+    expect(contactFields(otherView)?.sellerWhatsapp).toBeUndefined();
+
+    // The owner still sees their own full contact info.
+    const ownerView = await asSeller.query(api.marketplaceListings.getListingById, { listingId });
+    expect(contactFields(ownerView)?.sellerPhone).toBe(baseListing.sellerPhone);
+    expect(contactFields(ownerView)?.sellerWhatsapp).toBe("+962791111111");
+
+    // A super admin still sees full contact info too.
+    const adminView = await asAdmin.query(api.marketplaceListings.getListingById, { listingId });
+    expect(contactFields(adminView)?.sellerPhone).toBe(baseListing.sellerPhone);
+    expect(contactFields(adminView)?.sellerWhatsapp).toBe("+962791111111");
+  });
+
+  test("a disabled super admin is treated as a regular caller (isSuperAdminUser enforces the disabled check)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_37", "seller37@test.com");
+    const asAdmin = await seedUser(t, "admin_15", "admin@autoflow.dev");
+    const imageId = await seedImage(t);
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, { listingId, status: "LIVE" });
+
+    await t.run(async (ctx) => {
+      const admin = await ctx.db
+        .query("users")
+        .withIndex("by_clerkId", (q) => q.eq("clerkId", "admin_15"))
+        .unique();
+      if (admin) await ctx.db.patch(admin._id, { disabled: true });
+    });
+
+    const disabledAdminView = await asAdmin.query(api.marketplaceListings.getListingById, { listingId });
+    expect(contactFields(disabledAdminView)?.sellerPhone).toBeUndefined();
+  });
 });
 
 describe("getMyListings", () => {
@@ -332,5 +650,65 @@ describe("getMyListings", () => {
     const mine = await asSeller.query(api.marketplaceListings.getMyListings, {});
     expect(mine).toHaveLength(1);
     expect(mine[0]._id).toBe(mineId);
+  });
+
+  test("live listings survive even when 200+ more-recent deleted listings would otherwise fill the take(200) budget", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_38", "seller38@test.com");
+    const imageId = await seedImage(t);
+
+    // Create the live/pending listings FIRST (older _creationTime).
+    const liveIds = [];
+    for (let i = 0; i < 3; i++) {
+      liveIds.push(
+        await asSeller.mutation(api.marketplaceListings.createListing, {
+          ...baseListing,
+          imageIds: [imageId],
+        })
+      );
+    }
+
+    // Then seed exactly 200 deleted listings directly (newer _creationTime,
+    // bypassing the mutation for speed). Pre-fix, `.take(200)` grabs the 200
+    // most-recent docs before filtering isDeleted, so with 200 more-recent
+    // deleted rows the 3 live ones above would be pushed out entirely.
+    await t.run(async (ctx) => {
+      const user = await ctx.db
+        .query("users")
+        .withIndex("by_clerkId", (q) => q.eq("clerkId", "seller_38"))
+        .unique();
+      if (!user) throw new Error("seed user missing");
+      const now = Date.now();
+      for (let i = 0; i < 200; i++) {
+        await ctx.db.insert("marketplaceListings", {
+          sellerUserId: user._id,
+          sellerKind: "INDIVIDUAL",
+          sellerDisplayName: baseListing.sellerDisplayName,
+          sellerPhone: baseListing.sellerPhone,
+          make: baseListing.make,
+          model: baseListing.model,
+          year: baseListing.year,
+          mileage: baseListing.mileage,
+          price: baseListing.price,
+          currency: baseListing.currency,
+          transmission: baseListing.transmission,
+          fuelType: baseListing.fuelType,
+          city: baseListing.city,
+          description: baseListing.description,
+          condition: baseListing.condition,
+          imageIds: [imageId],
+          status: "REMOVED",
+          createdAt: now,
+          updatedAt: now,
+          isDeleted: true,
+          deletedAt: now,
+          deletedBy: user._id,
+        });
+      }
+    });
+
+    const mine = await asSeller.query(api.marketplaceListings.getMyListings, {});
+    expect(mine).toHaveLength(3);
+    expect(new Set(mine.map((l) => l._id))).toEqual(new Set(liveIds));
   });
 });

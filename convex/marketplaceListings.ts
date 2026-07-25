@@ -1,9 +1,8 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
-import { requireAuth, requireSuperAdmin } from "./utils/tenancy";
+import { requireAuth, requireSuperAdmin, isSuperAdminUser } from "./utils/tenancy";
 import { assertMarketplaceListingImagesAllowed } from "./utils/storageValidation";
-import { getValidatedEnv } from "./utils/env";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -32,16 +31,60 @@ const MATERIAL_FIELDS = [
   "imageIds",
 ] as const;
 
-function assertNonEmptyImages(imageIds: Id<"_storage">[]): void {
+// A caller could otherwise submit an arbitrarily long imageIds array, which
+// fans out one storage-doc read per id and then persists forever on the
+// document.
+const MAX_LISTING_IMAGES = 20;
+
+// Matches the year-bounds convention already used for other orgless-buyer
+// marketplace intake flows (see marketplaceTradeIns.ts / marketplaceWhatsAppIntake.ts).
+const MIN_LISTING_YEAR = 1980;
+
+function assertImageCountWithinBounds(imageIds: Id<"_storage">[]): void {
   if (imageIds.length === 0) {
     throw new ConvexError("At least one image is required to list a vehicle.");
   }
+  if (imageIds.length > MAX_LISTING_IMAGES) {
+    throw new ConvexError(`A listing can have at most ${MAX_LISTING_IMAGES} images.`);
+  }
 }
 
-function assertOwnsListing(listing: Doc<"marketplaceListings">, userId: Id<"users">): void {
-  if (listing.sellerUserId !== userId) {
-    throw new ConvexError("Forbidden: You can only manage your own listings.");
+function assertValidPrice(price: number): void {
+  if (!Number.isFinite(price) || price <= 0) {
+    throw new ConvexError("Price must be a finite number greater than zero.");
   }
+}
+
+function assertValidMileage(mileage: number): void {
+  if (!Number.isFinite(mileage) || mileage < 0) {
+    throw new ConvexError("Mileage must be a finite number and cannot be negative.");
+  }
+}
+
+function assertValidYear(year: number): void {
+  const maxYear = new Date().getFullYear() + 1;
+  if (!Number.isInteger(year) || year < MIN_LISTING_YEAR || year > maxYear) {
+    throw new ConvexError(`Year must be a whole number between ${MIN_LISTING_YEAR} and ${maxYear}.`);
+  }
+}
+
+/**
+ * Resolves a listing the caller is entitled to manage (edit/soft-delete).
+ * Not-found and not-owned collapse into the same generic error, same as
+ * getListingById returning null for both cases below — so an authenticated
+ * caller can't enumerate whether an arbitrary listingId exists by comparing
+ * error messages.
+ */
+async function requireOwnedListing(
+  ctx: MutationCtx,
+  listingId: Id<"marketplaceListings">,
+  userId: Id<"users">
+): Promise<Doc<"marketplaceListings">> {
+  const listing = await ctx.db.get(listingId);
+  if (!listing || listing.isDeleted || listing.sellerUserId !== userId) {
+    throw new ConvexError("Listing not found or you don't have permission to manage it.");
+  }
+  return listing;
 }
 
 // ─── Mutations ───────────────────────────────────────────────────────────────
@@ -69,15 +112,12 @@ export const createListing = mutation({
     try {
       const user = await requireAuth(ctx);
 
-      assertNonEmptyImages(args.imageIds);
+      assertImageCountWithinBounds(args.imageIds);
       await assertMarketplaceListingImagesAllowed(ctx, args.imageIds);
 
-      if (args.price <= 0) {
-        throw new ConvexError("Price must be greater than zero.");
-      }
-      if (args.mileage < 0) {
-        throw new ConvexError("Mileage cannot be negative.");
-      }
+      assertValidPrice(args.price);
+      assertValidMileage(args.mileage);
+      assertValidYear(args.year);
 
       const now = Date.now();
       const listingId = await ctx.db.insert("marketplaceListings", {
@@ -106,7 +146,10 @@ export const createListing = mutation({
 
       // Keep a lightweight per-seller profile so a future admin queue can show
       // "already verified before" context and repeat listings don't need to
-      // re-collect contact info. Best-effort upsert — not on the critical path.
+      // re-collect contact info. This upsert runs in the same mutation
+      // transaction as the listing insert above, so it is NOT best-effort —
+      // if it throws, the listing insert is rolled back too, same as any
+      // other write in this handler.
       const existingProfile = await ctx.db
         .query("marketplaceIndividualSellerProfiles")
         .withIndex("by_sellerUserId", (q) => q.eq("sellerUserId", user._id))
@@ -161,28 +204,37 @@ export const updateListing = mutation({
     try {
       const user = await requireAuth(ctx);
 
-      const listing = await ctx.db.get(args.listingId);
-      if (!listing || listing.isDeleted) {
-        throw new ConvexError("Listing not found.");
+      const listing = await requireOwnedListing(ctx, args.listingId, user._id);
+
+      if (listing.status === "SOLD" || listing.status === "REMOVED") {
+        throw new ConvexError(`Cannot edit a listing with status "${listing.status}".`);
       }
-      assertOwnsListing(listing, user._id);
 
       if (args.imageIds !== undefined) {
-        assertNonEmptyImages(args.imageIds);
+        assertImageCountWithinBounds(args.imageIds);
         await assertMarketplaceListingImagesAllowed(ctx, args.imageIds);
       }
-      if (args.price !== undefined && args.price <= 0) {
-        throw new ConvexError("Price must be greater than zero.");
-      }
-      if (args.mileage !== undefined && args.mileage < 0) {
-        throw new ConvexError("Mileage cannot be negative.");
-      }
+      if (args.price !== undefined) assertValidPrice(args.price);
+      if (args.mileage !== undefined) assertValidMileage(args.mileage);
+      if (args.year !== undefined) assertValidYear(args.year);
 
       const { listingId, ...fields } = args;
-      const patch: Record<string, unknown> = { updatedAt: Date.now() };
-      for (const [key, value] of Object.entries(fields)) {
-        if (value !== undefined) patch[key] = value;
-      }
+      const patch: Partial<Doc<"marketplaceListings">> = { updatedAt: Date.now() };
+      if (fields.sellerDisplayName !== undefined) patch.sellerDisplayName = fields.sellerDisplayName;
+      if (fields.sellerPhone !== undefined) patch.sellerPhone = fields.sellerPhone;
+      if (fields.sellerWhatsapp !== undefined) patch.sellerWhatsapp = fields.sellerWhatsapp;
+      if (fields.make !== undefined) patch.make = fields.make;
+      if (fields.model !== undefined) patch.model = fields.model;
+      if (fields.year !== undefined) patch.year = fields.year;
+      if (fields.mileage !== undefined) patch.mileage = fields.mileage;
+      if (fields.price !== undefined) patch.price = fields.price;
+      if (fields.currency !== undefined) patch.currency = fields.currency;
+      if (fields.transmission !== undefined) patch.transmission = fields.transmission;
+      if (fields.fuelType !== undefined) patch.fuelType = fields.fuelType;
+      if (fields.city !== undefined) patch.city = fields.city;
+      if (fields.description !== undefined) patch.description = fields.description;
+      if (fields.condition !== undefined) patch.condition = fields.condition;
+      if (fields.imageIds !== undefined) patch.imageIds = fields.imageIds;
 
       const materialChanged = MATERIAL_FIELDS.some((field) => {
         const nextValue = (fields as Record<string, unknown>)[field];
@@ -198,10 +250,18 @@ export const updateListing = mutation({
         return nextValue !== listing[field as keyof Doc<"marketplaceListings">];
       });
 
-      // Only a listing that already reached LIVE needs to go back through
-      // review; a still-pending or already-rejected listing simply keeps
-      // collecting edits until an admin looks at it.
-      if (materialChanged && listing.status === "LIVE") {
+      if (listing.status === "REJECTED") {
+        // A rejected listing has no other path back to review — route any
+        // edit back to PENDING_VERIFICATION so the seller can resubmit
+        // whatever they fixed, rather than leaving it stuck as REJECTED.
+        patch.status = "PENDING_VERIFICATION";
+        patch.verifiedBy = undefined;
+        patch.verifiedAt = undefined;
+        patch.rejectionReason = undefined;
+      } else if (materialChanged && listing.status === "LIVE") {
+        // Only a listing that already reached LIVE needs to go back through
+        // review for a material change; a still-pending listing simply keeps
+        // collecting edits until an admin looks at it.
         patch.status = "PENDING_VERIFICATION";
         patch.verifiedBy = undefined;
         patch.verifiedAt = undefined;
@@ -224,11 +284,7 @@ export const softDeleteListing = mutation({
     try {
       const user = await requireAuth(ctx);
 
-      const listing = await ctx.db.get(args.listingId);
-      if (!listing || listing.isDeleted) {
-        throw new ConvexError("Listing not found.");
-      }
-      assertOwnsListing(listing, user._id);
+      await requireOwnedListing(ctx, args.listingId, user._id);
 
       await ctx.db.patch(args.listingId, {
         isDeleted: true,
@@ -247,13 +303,15 @@ export const softDeleteListing = mutation({
 
 /**
  * Groundwork for the admin verification queue (separate follow-up ticket):
- * the only way a listing can leave PENDING_VERIFICATION for LIVE, or be
- * REJECTED, is through this super-admin-gated mutation.
+ * a listing normally only leaves PENDING_VERIFICATION for LIVE or REJECTED
+ * through this super-admin-gated mutation. It also lets a super admin take
+ * down an already-LIVE listing (-> REMOVED) for abusive/fraudulent content,
+ * since softDeleteListing is owner-only and doesn't cover admin takedown.
  */
 export const adminSetListingStatus = mutation({
   args: {
     listingId: v.id("marketplaceListings"),
-    status: v.union(v.literal("LIVE"), v.literal("REJECTED")),
+    status: v.union(v.literal("LIVE"), v.literal("REJECTED"), v.literal("REMOVED")),
     rejectionReason: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -264,12 +322,22 @@ export const adminSetListingStatus = mutation({
       if (!listing || listing.isDeleted) {
         throw new ConvexError("Listing not found.");
       }
-      if (listing.status !== "PENDING_VERIFICATION") {
+
+      const trimmedReason = args.rejectionReason?.trim();
+
+      if (args.status === "REMOVED") {
+        if (listing.status !== "LIVE") {
+          throw new ConvexError(
+            `Cannot remove a listing with status "${listing.status}". Only a LIVE listing can be taken down.`
+          );
+        }
+      } else if (listing.status !== "PENDING_VERIFICATION") {
         throw new ConvexError(
           `Cannot verify a listing with status "${listing.status}". Only PENDING_VERIFICATION listings can be approved or rejected.`
         );
       }
-      if (args.status === "REJECTED" && !args.rejectionReason) {
+
+      if (args.status === "REJECTED" && !trimmedReason) {
         throw new ConvexError("A rejection reason is required.");
       }
 
@@ -277,7 +345,7 @@ export const adminSetListingStatus = mutation({
         status: args.status,
         verifiedBy: admin._id,
         verifiedAt: Date.now(),
-        rejectionReason: args.status === "REJECTED" ? args.rejectionReason : undefined,
+        rejectionReason: args.status === "REJECTED" || args.status === "REMOVED" ? trimmedReason : undefined,
         updatedAt: Date.now(),
       });
       return null;
@@ -296,12 +364,16 @@ export const getMyListings = query({
   handler: async (ctx) => {
     try {
       const user = await requireAuth(ctx);
-      const listings = await ctx.db
+      // The isDeleted filter is applied by the query itself (before take),
+      // not on the resolved array afterward — otherwise a seller with 200+
+      // deleted listings could have their live listings pushed out of the
+      // take(200) budget entirely.
+      return await ctx.db
         .query("marketplaceListings")
         .withIndex("by_sellerUserId", (q) => q.eq("sellerUserId", user._id))
+        .filter((q) => q.neq(q.field("isDeleted"), true))
         .order("desc")
         .take(200);
-      return listings.filter((listing) => !listing.isDeleted);
     } catch (error) {
       if (error instanceof ConvexError) throw error;
       console.error("marketplaceListings.getMyListings failed", error);
@@ -310,10 +382,23 @@ export const getMyListings = query({
   },
 });
 
+/** A LIVE listing with the raw seller contact fields stripped out. */
+function toPublicListing(
+  listing: Doc<"marketplaceListings">
+): Omit<Doc<"marketplaceListings">, "sellerPhone" | "sellerWhatsapp"> {
+  const { sellerPhone: _sellerPhone, sellerWhatsapp: _sellerWhatsapp, ...rest } = listing;
+  return rest;
+}
+
 /**
  * Public if LIVE and not deleted; otherwise only visible to the owning
  * seller or a super admin. Returns null (rather than throwing) when the
  * caller isn't entitled to see it, so we don't leak listing existence.
+ *
+ * Even in the public LIVE case, raw `sellerPhone`/`sellerWhatsapp` are only
+ * included for the listing's owner or a super admin — every other caller
+ * (including unauthenticated ones) gets `sellerDisplayName` only, so a LIVE
+ * listing id can't be used to scrape a seller's real contact details.
  */
 export const getListingById = query({
   args: { listingId: v.id("marketplaceListings") },
@@ -321,27 +406,23 @@ export const getListingById = query({
     try {
       const listing = await ctx.db.get(args.listingId);
       if (!listing || listing.isDeleted) return null;
-      if (listing.status === "LIVE") return listing;
 
       const identity = await ctx.auth.getUserIdentity();
-      if (!identity) return null;
+      const caller = identity
+        ? await ctx.db
+            .query("users")
+            .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
+            .unique()
+        : null;
+      const isEntitled = !!caller && (caller._id === listing.sellerUserId || isSuperAdminUser(caller));
 
-      const caller = await ctx.db
-        .query("users")
-        .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
-        .unique();
-      if (!caller) return null;
+      if (listing.status !== "LIVE") {
+        return isEntitled ? listing : null;
+      }
 
-      if (caller._id === listing.sellerUserId) return listing;
-
-      const allowlist = (getValidatedEnv().SUPER_ADMIN_EMAILS ?? "")
-        .split(",")
-        .map((e) => e.trim().toLowerCase())
-        .filter(Boolean);
-      if (allowlist.includes(caller.email.toLowerCase())) return listing;
-
-      return null;
+      return isEntitled ? listing : toPublicListing(listing);
     } catch (error) {
+      if (error instanceof ConvexError) throw error;
       console.error("marketplaceListings.getListingById failed", error);
       throw new ConvexError("An unexpected error occurred. Please try again later.");
     }
