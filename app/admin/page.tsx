@@ -12,6 +12,7 @@ import { toast } from "@/components/ui/sonner";
 import {
   X,
   Plus,
+  RotateCw,
   Building2,
   Users,
   Car,
@@ -49,6 +50,20 @@ export default function AdminOverviewPage() {
   const cronStatus = useQuery(api.adminSystem.getCronStatus);
   const { results: webhookLogs } = usePaginatedQuery(api.adminSystem.listWebhookLogs, {}, { initialNumItems: 10 });
   const setSiteConfig = useMutation(api.adminSystem.setSiteConfig);
+  const retryWebhook = useMutation(api.adminSystem.retryWebhookEvent);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+
+  async function handleRetryWebhook(id: string) {
+    setRetryingId(id);
+    try {
+      await retryWebhook({ webhookLogId: id as Parameters<typeof retryWebhook>[0]["webhookLogId"] });
+      toast.success("Webhook flagged for retry — awaiting provider redelivery.");
+    } catch (e: any) {
+      toast.error(e);
+    } finally {
+      setRetryingId(null);
+    }
+  }
 
   // showPlanPricing
   const showPricingRaw = useQuery(api.adminSystem.getSiteConfig, { key: "showPlanPricing" });
@@ -232,7 +247,22 @@ export default function AdminOverviewPage() {
                     </p>
                     <p className="text-xs text-muted-foreground">{new Date(w.createdAt).toLocaleString()}</p>
                   </div>
-                  <WebhookStatusBadge status={w.status} />
+                  <div className="flex shrink-0 items-center gap-2">
+                    <WebhookStatusBadge status={w.status} />
+                    {w.status !== "success" && (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7"
+                        title="Retry webhook"
+                        aria-label="Retry webhook"
+                        disabled={retryingId === w._id}
+                        onClick={() => handleRetryWebhook(w._id)}
+                      >
+                        <RotateCw className={retryingId === w._id ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />
+                      </Button>
+                    )}
+                  </div>
                 </li>
               ))}
             </ul>

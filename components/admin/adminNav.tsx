@@ -5,6 +5,7 @@ import {
   Building2,
   Users,
   Database,
+  ClipboardCheck,
   History,
   Inbox,
   Headset,
@@ -32,6 +33,7 @@ export const navGroups: NavGroup[] = [
     items: [
       { name: "Organizations", href: "/admin/organizations", icon: Building2 },
       { name: "Users", href: "/admin/users", icon: Users },
+      { name: "Reviews", href: "/admin/reviews", icon: ClipboardCheck },
       { name: "Data Browser", href: "/admin/data", icon: Database },
     ],
   },
