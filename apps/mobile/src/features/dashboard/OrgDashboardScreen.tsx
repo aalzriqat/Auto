@@ -348,12 +348,12 @@ function MetricGridSection({
   locale,
   showFinanceMetricProminent,
   todayForRole,
-}: {
+}: Readonly<{
   stats: MobileDashboardStats;
   locale: "en" | "ar";
   showFinanceMetricProminent: boolean;
   todayForRole?: MobileDashboardTodayForRole;
-}) {
+}>) {
   const styles = useThemedStyles(makeStyles);
   const { t, textDirection } = useLocale();
   const type = useDashboardTypography();
