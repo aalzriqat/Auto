@@ -94,6 +94,7 @@ async function seedPublishedDealer(
     withSpecs?: boolean;
     vehicleStatus?: "AVAILABLE" | "SOLD";
     showSoldVehicles?: boolean;
+    currency?: string;
     trust?: {
       inspectionStatus?: "SELF_REPORTED" | "PARTNER_VERIFIED";
       accidentDisclosed?: boolean;
@@ -114,7 +115,7 @@ async function seedPublishedDealer(
   await t.run((ctx) =>
     ctx.db.insert("orgSettings", {
       orgId,
-      currency: "JOD",
+      currency: opts.currency ?? "JOD",
       currencySymbol: "د.أ",
       enabledPaymentTypes: ["CASH"],
       dealershipName: opts.name,
@@ -419,6 +420,36 @@ describe("marketplaceBrowse.search", () => {
 
     const result = await t.query(api.marketplaceBrowse.search, {});
     expect(result.vehicles.map((v) => v.dealershipName)).toEqual(["Shows Sold"]);
+    // Finding 1: the row must expose its real status so the frontend can show
+    // a "Sold" badge and withhold the Call/WhatsApp CTA instead of inviting
+    // contact about a car that's already gone.
+    expect(result.vehicles[0].status).toBe("SOLD");
+  });
+
+  test("exposes AVAILABLE status for a normal in-stock vehicle", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedPublishedDealer(t, { name: "In Stock", subdomainSlug: "instock", city: "Amman" });
+
+    const result = await t.query(api.marketplaceBrowse.search, {});
+    expect(result.vehicles[0].status).toBe("AVAILABLE");
+  });
+
+  test("carries each org's real currency through, instead of assuming JOD (Finding 2)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedPublishedDealer(t, { name: "Default JOD Dealer", subdomainSlug: "defaultjoddealer", city: "Amman" });
+    await seedPublishedDealer(t, {
+      name: "USD Dealer",
+      subdomainSlug: "usddealer",
+      city: "Amman",
+      currency: "USD",
+    });
+
+    const result = await t.query(api.marketplaceBrowse.search, {});
+    const jodDealer = result.vehicles.find((v) => v.dealershipName === "Default JOD Dealer");
+    const usdDealer = result.vehicles.find((v) => v.dealershipName === "USD Dealer");
+
+    expect(jodDealer?.currency).toBe("JOD");
+    expect(usdDealer?.currency).toBe("USD");
   });
 
   test("still estimates the monthly payment from financePrice when the dealer hides public prices", async () => {

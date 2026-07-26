@@ -134,6 +134,13 @@ type BrowseVehicle = {
   exteriorColor: string | null;
   price: number | null;
   financePrice: number | null;
+  currency: string;
+  // Only AVAILABLE/SOLD ever reach the merged result — projectedVehicleRows
+  // is queried by index for exactly those two statuses (see the loop below),
+  // and every other status is filtered out before this shape is built. Lets
+  // the frontend show a "Sold" badge and withhold the Call/WhatsApp CTA
+  // instead of inviting contact about a car that's already gone.
+  status: "AVAILABLE" | "SOLD";
   imageUrls: string[];
   listedAt: number | null;
   financeAvailable: boolean;
@@ -213,6 +220,12 @@ export const search = query({
         .unique();
       const dealerPhone = orgSettings?.dealershipPhone ?? null;
       const dealerWhatsapp = profile.whatsappNumber ?? orgSettings?.dealershipPhone ?? null;
+      // Orgs are not all guaranteed to price in JOD (orgSettings.currency is a
+      // free-form per-org string) — carry the org's real currency through so
+      // the frontend never mislabels a non-JOD org's prices. Cross-currency
+      // comparison for the price-sort modes is explicitly out of scope here;
+      // this only fixes the display label.
+      const currency = orgSettings?.currency ?? "JOD";
 
       // Project the org's inventory LIVE at query time (same projection the
       // website publish uses — respecting the dealer's public-display toggles —
@@ -268,6 +281,8 @@ export const search = query({
           exteriorColor: vehicle.exteriorColor ?? null,
           price: vehicle.price ?? null,
           financePrice: vehicle.financePrice ?? null,
+          currency,
+          status: vehicle.status === "SOLD" ? "SOLD" : "AVAILABLE",
           imageStorageIds: vehicle.imageStorageIds ?? [],
           listedAt: vehicle.listedAt ?? null,
           financeAvailable,

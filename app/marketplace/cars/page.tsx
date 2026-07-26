@@ -37,6 +37,7 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     trustAccidentDisclosed: "Accident history disclosed",
     trustOwnerCount: "previous owner(s)",
     trustDealerGuarantee: "Dealer guarantee included",
+    sold: "Sold",
     toggleLang: "العربية",
     requestInstead: "Can't find it? Request a car instead",
   },
@@ -67,6 +68,7 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     trustAccidentDisclosed: "تم الإفصاح عن تاريخ حوادث",
     trustOwnerCount: "مالك سابق",
     trustDealerGuarantee: "يشمل ضمان المعرض",
+    sold: "تم البيع",
     toggleLang: "English",
     requestInstead: "لم تجد ما تبحث عنه؟ اطلب سيارة بدلاً من ذلك",
   },
@@ -131,6 +133,8 @@ type BrowseVehicle = {
   mileage: number | null;
   price: number | null;
   financePrice: number | null;
+  currency: string;
+  status: "AVAILABLE" | "SOLD";
   imageUrls: string[];
   financeAvailable: boolean;
   estimatedMonthlyPayment: number | null;
@@ -148,8 +152,9 @@ function buildTelUrl(phone: string | null | undefined): string | null {
   return phone.trim().startsWith("+") ? `tel:+${digits}` : `tel:${digits}`;
 }
 
-/** Direct-contact CTA (Call + WhatsApp) — the #1 marketplace conversion lever, same rationale as mobile's ContactBar. Renders nothing when the dealer exposed no reachable number, so no dead button ever shows. */
+/** Direct-contact CTA (Call + WhatsApp) — the #1 marketplace conversion lever, same rationale as mobile's ContactBar. Renders nothing when the dealer exposed no reachable number, or when the vehicle is already SOLD (nothing to buy, so no reason to invite contact), so no dead/misleading button ever shows. */
 function ContactBar({ vehicle, lang }: { readonly vehicle: BrowseVehicle; readonly lang: Lang }) {
+  if (vehicle.status === "SOLD") return null;
   const c = CONTACT_STRINGS[lang];
   const telUrl = buildTelUrl(vehicle.dealerPhone);
   const message = [c.whatsappGreeting, `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim()]
@@ -222,12 +227,17 @@ function VehicleCard({
 }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white overflow-hidden flex flex-col shadow-sm">
-      <div className="aspect-video bg-slate-100 flex items-center justify-center">
+      <div className="relative aspect-video bg-slate-100 flex items-center justify-center">
         {vehicle.imageUrls[0] ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={vehicle.imageUrls[0]} alt={`${vehicle.make} ${vehicle.model}`} className="h-full w-full object-cover" />
         ) : (
           <Car className="h-10 w-10 text-slate-300" />
+        )}
+        {vehicle.status === "SOLD" && (
+          <span className="absolute top-2 start-2 rounded-full bg-slate-950/90 text-white text-[11px] font-semibold px-2.5 py-1">
+            {t.sold}
+          </span>
         )}
       </div>
       <div className="p-4 flex flex-col gap-2 flex-1">
@@ -242,9 +252,13 @@ function VehicleCard({
             <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-emerald-600" aria-label={t.verifiedPhone} />
           )}
         </p>
-        {vehicle.price != null && <p className="text-lg font-bold text-slate-950">{vehicle.price.toLocaleString()} JOD</p>}
+        {vehicle.price != null && (
+          <p className="text-lg font-bold text-slate-950">{vehicle.price.toLocaleString()} {vehicle.currency}</p>
+        )}
         {vehicle.estimatedMonthlyPayment != null && (
-          <p className="text-xs text-slate-500">{t.fromPerMonth} {vehicle.estimatedMonthlyPayment.toLocaleString()} JOD/{t.month}</p>
+          <p className="text-xs text-slate-500">
+            {t.fromPerMonth} {vehicle.estimatedMonthlyPayment.toLocaleString()} {vehicle.currency}/{t.month}
+          </p>
         )}
         <div className="flex flex-wrap gap-1.5">
           {vehicle.financeAvailable && (
