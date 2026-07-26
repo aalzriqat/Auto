@@ -1,8 +1,12 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query, MutationCtx } from "./_generated/server";
+import { mutation, query, MutationCtx, QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireAuth, requireSuperAdmin, isSuperAdminUser } from "./utils/tenancy";
-import { assertMarketplaceListingImagesAllowed } from "./utils/storageValidation";
+import {
+  assertMarketplaceListingImagesAllowed,
+  MARKETPLACE_LISTING_IMAGE_CONTENT_TYPES,
+} from "./utils/storageValidation";
+import { rateLimiter } from "./rateLimit";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -56,11 +60,19 @@ const MAX_MODEL_LENGTH = 60;
 const MAX_TRANSMISSION_LENGTH = 40;
 const MAX_FUEL_TYPE_LENGTH = 40;
 
-// This repo has no existing shared currency-code allowlist (orgSettings.ts
-// stores an org's currency as a free-form string) — this app's two primary
-// markets per its i18n conventions are Jordan and USD-denominated deals, so
-// that's the floor for this allowlist until a broader one is needed.
-const ALLOWED_CURRENCIES = ["JOD", "USD"] as const;
+// This repo has no existing shared currency-code allowlist to reuse —
+// orgSettings.ts stores an org's currency as a free-form v.string() with no
+// enum constraint of its own (checked convex/orgSettings.ts and
+// lib/currencyFormat.ts; neither defines a canonical list). Expanded beyond
+// JOD/USD to the broader set of regional currencies this platform's target
+// markets realistically transact in. A shared canonical list should be
+// established later so this doesn't drift from orgSettings' free-form field.
+const ALLOWED_CURRENCIES = ["JOD", "USD", "SAR", "AED", "KWD", "EGP", "QAR", "BHD", "OMR"] as const;
+
+// Same 5MB limit assertMarketplaceListingImagesAllowed enforces after upload
+// (convex/utils/storageValidation.ts) — checked again here, before issuing
+// the upload URL, so an oversized/disallowed file is rejected up front.
+const MAX_LISTING_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
 
 /** Trims `value`, then throws unless the result is non-empty and within `maxLength`. */
 function assertRequiredText(value: string, label: string, maxLength: number): string {
@@ -124,6 +136,46 @@ function assertValidCurrency(currency: string): string {
     throw new ConvexError(`Currency must be one of: ${ALLOWED_CURRENCIES.join(", ")}.`);
   }
   return trimmed;
+}
+
+/**
+ * Verifies every submitted image id was actually uploaded and confirmed by
+ * this caller (via generateListingImageUploadUrl + confirmListingImageUpload)
+ * before it can be attached to a listing. Without this, any authenticated
+ * caller could submit an arbitrary storageId — including one uploaded and
+ * confirmed by a completely different seller — into their own listing.
+ */
+async function assertImagesOwnedByCaller(
+  ctx: MutationCtx,
+  imageIds: Id<"_storage">[],
+  userId: Id<"users">
+): Promise<void> {
+  const claims = await Promise.all(
+    imageIds.map((storageId) =>
+      ctx.db
+        .query("marketplaceListingImageUploads")
+        .withIndex("by_storageId", (q) => q.eq("storageId", storageId))
+        .unique()
+    )
+  );
+  if (claims.some((claim) => !claim || claim.uploadedBy !== userId)) {
+    throw new ConvexError(
+      "Each image must have been uploaded by you (via generateListingImageUploadUrl) before it can be used in a listing."
+    );
+  }
+}
+
+/**
+ * Per-caller write rate limit shared by createListing/updateListing/
+ * softDeleteListing/markListingSold — these are all orgless (no orgId to key
+ * a tenant limit by, unlike checkTenantWriteLimit), so this is keyed by the
+ * caller's own userId instead.
+ */
+async function enforceListingWriteRateLimit(ctx: MutationCtx, userId: Id<"users">): Promise<void> {
+  const status = await rateLimiter.limit(ctx, "marketplaceListingWrite", { key: userId });
+  if (!status.ok) {
+    throw new ConvexError("Too many requests. Please try again later.");
+  }
 }
 
 /**
@@ -221,11 +273,13 @@ function assertAndNormalizeTextFields(fields: UpdateListingFields): UpdateListin
 
 async function assertUpdateFieldsValid(
   ctx: MutationCtx,
-  fields: UpdateListingFields
+  fields: UpdateListingFields,
+  userId: Id<"users">
 ): Promise<UpdateListingFields> {
   if (fields.imageIds !== undefined) {
     assertImageCountWithinBounds(fields.imageIds);
     await assertMarketplaceListingImagesAllowed(ctx, fields.imageIds);
+    await assertImagesOwnedByCaller(ctx, fields.imageIds, userId);
   }
   if (fields.price !== undefined) assertValidPrice(fields.price);
   if (fields.mileage !== undefined) assertValidMileage(fields.mileage);
@@ -324,6 +378,97 @@ async function syncSellerProfileCache(
 
 // ─── Mutations ───────────────────────────────────────────────────────────────
 
+/**
+ * Issues a direct-upload URL for a listing image. Unlike vehicles.ts's
+ * generateUploadUrl, this is NOT tenant-gated — the feature's primary user is
+ * an individual seller (or unaffiliated dealer) with no orgId and no
+ * membership, so requireTenantAuth would lock them out entirely. Any
+ * authenticated user may call this; the mime type and size are validated
+ * before the URL is issued (mirroring vehicles.ts's validation-before-issue
+ * order), and calls are rate-limited per-caller since there's no orgId to key
+ * a tenant limit by.
+ *
+ * The returned storageId is NOT yet usable in createListing/updateListing —
+ * the caller must also call confirmListingImageUpload once the upload
+ * completes, which records that THEY are the one who uploaded it.
+ */
+export const generateListingImageUploadUrl = mutation({
+  args: {
+    mimeType: v.string(),
+    sizeInBytes: v.number(),
+  },
+  handler: async (ctx, args) => {
+    try {
+      const user = await requireAuth(ctx);
+
+      const status = await rateLimiter.limit(ctx, "marketplaceListingImageUpload", { key: user._id });
+      if (!status.ok) {
+        throw new ConvexError("Too many upload requests. Please try again later.");
+      }
+
+      if (!Number.isFinite(args.sizeInBytes) || args.sizeInBytes <= 0 || args.sizeInBytes > MAX_LISTING_IMAGE_SIZE_BYTES) {
+        throw new ConvexError("Listing image exceeds the allowed file size.");
+      }
+      const mimeType = args.mimeType.toLowerCase();
+      if (!(MARKETPLACE_LISTING_IMAGE_CONTENT_TYPES as readonly string[]).includes(mimeType)) {
+        throw new ConvexError("Listing image must be an allowed file type.");
+      }
+
+      return await ctx.storage.generateUploadUrl();
+    } catch (error) {
+      if (error instanceof ConvexError) throw error;
+      console.error("marketplaceListings.generateListingImageUploadUrl failed", error);
+      throw new ConvexError("An unexpected error occurred. Please try again later.");
+    }
+  },
+});
+
+/**
+ * Records that the calling user is the one who uploaded `storageId`, so
+ * createListing/updateListing can later verify (via assertImagesOwnedByCaller)
+ * that every image id in a listing was actually confirmed by its owner —
+ * closing off "claim/reuse someone else's storageId". Also re-validates the
+ * stored file is actually an allowed image type/size, defending against a
+ * client confirming an arbitrary non-image storageId it doesn't own the
+ * upload flow for.
+ *
+ * Idempotent for the SAME caller (confirming your own upload twice is a
+ * no-op); throws if a DIFFERENT user already confirmed this storageId.
+ */
+export const confirmListingImageUpload = mutation({
+  args: { storageId: v.id("_storage") },
+  handler: async (ctx, args) => {
+    try {
+      const user = await requireAuth(ctx);
+
+      await assertMarketplaceListingImagesAllowed(ctx, [args.storageId]);
+
+      const existing = await ctx.db
+        .query("marketplaceListingImageUploads")
+        .withIndex("by_storageId", (q) => q.eq("storageId", args.storageId))
+        .unique();
+
+      if (existing) {
+        if (existing.uploadedBy !== user._id) {
+          throw new ConvexError("This image was already uploaded by another user.");
+        }
+        return null;
+      }
+
+      await ctx.db.insert("marketplaceListingImageUploads", {
+        storageId: args.storageId,
+        uploadedBy: user._id,
+        createdAt: Date.now(),
+      });
+      return null;
+    } catch (error) {
+      if (error instanceof ConvexError) throw error;
+      console.error("marketplaceListings.confirmListingImageUpload failed", error);
+      throw new ConvexError("An unexpected error occurred. Please try again later.");
+    }
+  },
+});
+
 export const createListing = mutation({
   args: {
     sellerKind: sellerKindValidator,
@@ -346,9 +491,11 @@ export const createListing = mutation({
   handler: async (ctx, args) => {
     try {
       const user = await requireAuth(ctx);
+      await enforceListingWriteRateLimit(ctx, user._id);
 
       assertImageCountWithinBounds(args.imageIds);
       await assertMarketplaceListingImagesAllowed(ctx, args.imageIds);
+      await assertImagesOwnedByCaller(ctx, args.imageIds, user._id);
 
       assertValidPrice(args.price);
       assertValidMileage(args.mileage);
@@ -453,12 +600,13 @@ export const updateListing = mutation({
   handler: async (ctx, args) => {
     try {
       const user = await requireAuth(ctx);
+      await enforceListingWriteRateLimit(ctx, user._id);
 
       const listing = await requireOwnedListing(ctx, args.listingId, user._id);
       assertEditableListingStatus(listing.status);
 
       const { listingId, ...fields } = args;
-      const normalizedFields = await assertUpdateFieldsValid(ctx, fields);
+      const normalizedFields = await assertUpdateFieldsValid(ctx, fields, user._id);
 
       const patch: Partial<Doc<"marketplaceListings">> = {
         updatedAt: Date.now(),
@@ -485,6 +633,7 @@ export const softDeleteListing = mutation({
   handler: async (ctx, args) => {
     try {
       const user = await requireAuth(ctx);
+      await enforceListingWriteRateLimit(ctx, user._id);
 
       await requireOwnedListing(ctx, args.listingId, user._id);
 
@@ -514,6 +663,7 @@ export const markListingSold = mutation({
   handler: async (ctx, args) => {
     try {
       const user = await requireAuth(ctx);
+      await enforceListingWriteRateLimit(ctx, user._id);
 
       const listing = await requireOwnedListing(ctx, args.listingId, user._id);
       if (listing.status !== "LIVE") {
@@ -664,12 +814,57 @@ export const getMyListings = query({
   },
 });
 
-/** A LIVE listing with the raw seller contact fields stripped out. */
-function toPublicListing(
-  listing: Doc<"marketplaceListings">
-): Omit<Doc<"marketplaceListings">, "sellerPhone" | "sellerWhatsapp"> {
-  const { sellerPhone: _sellerPhone, sellerWhatsapp: _sellerWhatsapp, ...rest } = listing;
-  return rest;
+/**
+ * Shape returned for a LIVE listing to any caller who isn't its owner or a
+ * super admin. Deliberately an explicit allowlist (not "the raw doc minus a
+ * couple of fields") — the raw doc also carries sellerUserId, verifiedBy/At,
+ * removedBy/At/removalReason, rejectionReason, isDeleted/deletedAt/deletedBy,
+ * and raw `imageIds` storage ids, none of which an unauthenticated scraper
+ * (or any non-owner) should ever see: sellerUserId lets listings be
+ * correlated back to one internal user, and raw storage ids are internal
+ * references that shouldn't be exposed even though finding 1's ownership
+ * tracking now stops them from being reused.
+ */
+type PublicListing = {
+  id: Id<"marketplaceListings">;
+  sellerDisplayName: string;
+  sellerKind: Doc<"marketplaceListings">["sellerKind"];
+  make: string;
+  model: string;
+  year: number;
+  mileage: number;
+  price: number;
+  currency: string;
+  transmission: string;
+  fuelType: string;
+  city: string;
+  description: string;
+  condition: Doc<"marketplaceListings">["condition"];
+  imageUrls: (string | null)[];
+  createdAt: number;
+};
+
+/** Builds the PublicListing DTO, resolving `imageIds` to signed URLs (mirroring vehicles.ts's imageIds -> imageUrls pattern) instead of exposing raw storage ids. */
+async function toPublicListing(ctx: QueryCtx, listing: Doc<"marketplaceListings">): Promise<PublicListing> {
+  const imageUrls = await Promise.all(listing.imageIds.map((id) => ctx.storage.getUrl(id)));
+  return {
+    id: listing._id,
+    sellerDisplayName: listing.sellerDisplayName,
+    sellerKind: listing.sellerKind,
+    make: listing.make,
+    model: listing.model,
+    year: listing.year,
+    mileage: listing.mileage,
+    price: listing.price,
+    currency: listing.currency,
+    transmission: listing.transmission,
+    fuelType: listing.fuelType,
+    city: listing.city,
+    description: listing.description,
+    condition: listing.condition,
+    imageUrls,
+    createdAt: listing.createdAt,
+  };
 }
 
 /**
@@ -677,10 +872,19 @@ function toPublicListing(
  * seller or a super admin. Returns null (rather than throwing) when the
  * caller isn't entitled to see it, so we don't leak listing existence.
  *
- * Even in the public LIVE case, raw `sellerPhone`/`sellerWhatsapp` are only
- * included for the listing's owner or a super admin — every other caller
- * (including unauthenticated ones) gets `sellerDisplayName` only, so a LIVE
- * listing id can't be used to scrape a seller's real contact details.
+ * The owner branch of the entitlement check requires the caller's account
+ * not be disabled — requireAuth enforces this for every other mutation/query
+ * in this file, but this query resolves the caller manually (to also support
+ * anonymous/public reads), so that guard has to be repeated here explicitly;
+ * otherwise a disabled seller who still holds a valid session could keep
+ * reading their own PENDING/REJECTED listing, contact info included.
+ * isSuperAdminUser already enforces the same check for the admin branch.
+ *
+ * Even in the public LIVE case, raw `sellerPhone`/`sellerWhatsapp` (and every
+ * other non-allowlisted field — see toPublicListing) are only included for
+ * the listing's owner or a super admin — every other caller (including
+ * unauthenticated ones) gets the public DTO only, so a LIVE listing id can't
+ * be used to scrape a seller's real contact details or internal identifiers.
  */
 export const getListingById = query({
   args: { listingId: v.id("marketplaceListings") },
@@ -696,13 +900,14 @@ export const getListingById = query({
             .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
             .unique()
         : null;
-      const isEntitled = !!caller && (caller._id === listing.sellerUserId || isSuperAdminUser(caller));
+      const isOwner = !!caller && !caller.disabled && caller._id === listing.sellerUserId;
+      const isEntitled = isOwner || (!!caller && isSuperAdminUser(caller));
 
       if (listing.status !== "LIVE") {
         return isEntitled ? listing : null;
       }
 
-      return isEntitled ? listing : toPublicListing(listing);
+      return isEntitled ? listing : await toPublicListing(ctx, listing);
     } catch (error) {
       if (error instanceof ConvexError) throw error;
       console.error("marketplaceListings.getListingById failed", error);

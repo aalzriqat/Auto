@@ -25,6 +25,8 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
   marketplaceTradeInContact: { kind: "token bucket", rate: 3, period: 600000, capacity: 3 }, // Normalized buyer phone
   notificationWhatsapp: { kind: "token bucket", rate: 10, period: 60000, capacity: 10 }, // Outbound WhatsApp notification sends
   notificationPush: { kind: "token bucket", rate: 20, period: 60000, capacity: 20 }, // Outbound Web Push dispatch calls (each may fan out to several devices)
+  marketplaceListingImageUpload: { kind: "token bucket", rate: 10, period: 60000, capacity: 10 }, // Direct-listing image upload URLs, keyed by userId (orgless)
+  marketplaceListingWrite: { kind: "token bucket", rate: 30, period: 60000, capacity: 30 }, // Direct-listing create/update/delete/mark-sold, keyed by userId (orgless)
   // System-wide circuit breaker for create/standardApi/upload, checked in addition to
   // the per-org bucket above. Per-org limits give tenant fairness; this protects the
   // underlying Convex deployment from an aggregate spike across many orgs at once

@@ -3848,4 +3848,16 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_sellerUserId", ["sellerUserId"]),
+
+  // Ownership record for a storageId issued by
+  // marketplaceListings.generateListingImageUploadUrl, written by
+  // confirmListingImageUpload once the client's direct upload to that URL
+  // succeeds. createListing/updateListing check this table (by storageId)
+  // before accepting an id into imageIds, so an orgless caller can't claim or
+  // reuse another user's already-uploaded storageId.
+  marketplaceListingImageUploads: defineTable({
+    storageId: v.id("_storage"),
+    uploadedBy: v.id("users"),
+    createdAt: v.number(),
+  }).index("by_storageId", ["storageId"]),
 });
