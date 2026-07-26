@@ -12,6 +12,8 @@ import { BuyerSavedScreen } from "../account/BuyerSavedScreen";
 import { FinancingScreen } from "../financing/FinancingScreen";
 import { MarketplaceHomeScreen } from "./MarketplaceHomeScreen";
 import { MarketplaceScreen } from "./MarketplaceScreen";
+import { MyListingsScreen } from "./MyListingsScreen";
+import { SellCarScreen } from "./SellCarScreen";
 
 export type BuyerShellTab = "home" | "cars" | "favorites" | "financing" | "account";
 
@@ -46,24 +48,45 @@ export function BuyerShell() {
   const [active, setActive] = useState<BuyerShellTab>("home");
   const [carsMake, setCarsMake] = useState<string | undefined>(undefined);
   const [requestOpen, setRequestOpen] = useState(false);
+  const [sellOpen, setSellOpen] = useState(false);
+  const [myListingsOpen, setMyListingsOpen] = useState(false);
   const styles = useThemedStyles(makeStyles);
   const theme = useAppTheme();
   const statusBarStyle = useStatusBarStyle();
   const { t, textDirection } = useLocale();
   const insets = useSafeAreaInsets();
 
-  const goToTab = (tab: BuyerShellTab) => {
+  const closeOverlays = () => {
     setRequestOpen(false);
+    setSellOpen(false);
+    setMyListingsOpen(false);
+  };
+
+  const goToTab = (tab: BuyerShellTab) => {
+    closeOverlays();
     setActive(tab);
   };
 
   const openCars = (make?: string) => {
     setCarsMake(make);
-    setRequestOpen(false);
+    closeOverlays();
     setActive("cars");
   };
 
-  const openRequest = () => setRequestOpen(true);
+  const openRequest = () => {
+    closeOverlays();
+    setRequestOpen(true);
+  };
+
+  const openSell = () => {
+    closeOverlays();
+    setSellOpen(true);
+  };
+
+  const openMyListings = () => {
+    closeOverlays();
+    setMyListingsOpen(true);
+  };
 
   let content;
   if (requestOpen) {
@@ -84,6 +107,42 @@ export function BuyerShell() {
         </View>
       </View>
     );
+  } else if (sellOpen) {
+    content = (
+      <View style={styles.overlay}>
+        <View style={[styles.overlayBar, { direction: textDirection }]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t("back")}
+            style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
+            onPress={() => setSellOpen(false)}
+          >
+            <Icon color="text" name="back" size={20} />
+          </Pressable>
+        </View>
+        <View style={styles.overlayContent}>
+          <SellCarScreen embedded onViewMyListings={openMyListings} />
+        </View>
+      </View>
+    );
+  } else if (myListingsOpen) {
+    content = (
+      <View style={styles.overlay}>
+        <View style={[styles.overlayBar, { direction: textDirection }]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t("back")}
+            style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
+            onPress={() => setMyListingsOpen(false)}
+          >
+            <Icon color="text" name="back" size={20} />
+          </Pressable>
+        </View>
+        <View style={styles.overlayContent}>
+          <MyListingsScreen embedded onAddListing={openSell} />
+        </View>
+      </View>
+    );
   } else if (active === "home") {
     content = (
       <MarketplaceHomeScreen
@@ -91,7 +150,9 @@ export function BuyerShell() {
         onOpenFavorites={() => setActive("favorites")}
         onOpenFinancing={() => setActive("financing")}
         onOpenCompare={() => setActive("favorites")}
+        onOpenMyListings={openMyListings}
         onOpenRequest={openRequest}
+        onOpenSell={openSell}
       />
     );
   } else if (active === "cars") {
@@ -124,7 +185,7 @@ export function BuyerShell() {
         ]}
       >
         {BUYER_SHELL_TABS.map((tab) => {
-          const selected = tab.value === active && !requestOpen;
+          const selected = tab.value === active && !requestOpen && !sellOpen && !myListingsOpen;
           return (
             <Pressable
               key={tab.value}

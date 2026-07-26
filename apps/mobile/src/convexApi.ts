@@ -1252,6 +1252,42 @@ export type MobileMarketplaceOfferActionResult =
   | { success: true; leadId?: string }
   | { success: false };
 
+export type MobileMarketplaceListingSellerKind = "INDIVIDUAL" | "UNAFFILIATED_DEALER";
+export type MobileMarketplaceListingCondition = "EXCELLENT" | "GOOD" | "FAIR" | "POOR";
+export type MobileMarketplaceListingStatus = "PENDING_VERIFICATION" | "LIVE" | "REJECTED" | "SOLD" | "REMOVED";
+
+/**
+ * A seller's own direct-listing row, as returned by
+ * marketplaceListings.getMyListings — the raw listing doc plus a resolved
+ * thumbnailUrl (first image only; null if the listing has no images or the
+ * stored file can't be resolved).
+ */
+export interface MobileMarketplaceListing {
+  _id: string;
+  sellerKind: MobileMarketplaceListingSellerKind;
+  sellerDisplayName: string;
+  sellerPhone: string;
+  sellerWhatsapp?: string;
+  make: string;
+  model: string;
+  year: number;
+  mileage: number;
+  price: number;
+  currency: string;
+  transmission: string;
+  fuelType: string;
+  city: string;
+  description: string;
+  condition: MobileMarketplaceListingCondition;
+  imageIds: string[];
+  status: MobileMarketplaceListingStatus;
+  rejectionReason?: string;
+  removalReason?: string;
+  createdAt: number;
+  updatedAt: number;
+  thumbnailUrl: string | null;
+}
+
 export interface MobileVehiclePickerItem {
   _id: string;
   year: number;
@@ -1903,6 +1939,33 @@ type MarketplaceSubmitTradeInArgs = {
   consentAccepted: boolean;
   clientFingerprint: string;
   turnstileToken: string;
+};
+
+type MarketplaceCreateListingArgs = {
+  sellerKind: MobileMarketplaceListingSellerKind;
+  sellerDisplayName: string;
+  sellerPhone: string;
+  sellerWhatsapp?: string;
+  make: string;
+  model: string;
+  year: number;
+  mileage: number;
+  price: number;
+  currency: string;
+  transmission: string;
+  fuelType: string;
+  city: string;
+  description: string;
+  condition: MobileMarketplaceListingCondition;
+  imageIds: string[];
+};
+
+type MarketplaceUpdateListingArgs = Partial<Omit<MarketplaceCreateListingArgs, "sellerKind">> & {
+  listingId: string;
+};
+
+type MarketplaceListingIdArgs = {
+  listingId: string;
 };
 
 export type MobileReleaseInfo = {
@@ -2616,6 +2679,35 @@ export const api = {
       MobileMarketplaceOfferActionResult
     >("marketplaceTradeIns:declineOfferByPublicId"),
   },
+  marketplaceListings: {
+    generateListingImageUploadUrl: makeFunctionReference<
+      "mutation",
+      { mimeType: string; sizeInBytes: number },
+      string
+    >("marketplaceListings:generateListingImageUploadUrl"),
+    confirmListingImageUpload: makeFunctionReference<
+      "mutation",
+      { storageId: string },
+      { url: string | null }
+    >("marketplaceListings:confirmListingImageUpload"),
+    createListing: makeFunctionReference<"mutation", MarketplaceCreateListingArgs, string>(
+      "marketplaceListings:createListing",
+    ),
+    updateListing: makeFunctionReference<"mutation", MarketplaceUpdateListingArgs, null>(
+      "marketplaceListings:updateListing",
+    ),
+    getMyListings: makeFunctionReference<
+      "query",
+      Record<string, never>,
+      MobileMarketplaceListing[]
+    >("marketplaceListings:getMyListings"),
+    markListingSold: makeFunctionReference<"mutation", MarketplaceListingIdArgs, null>(
+      "marketplaceListings:markListingSold",
+    ),
+    softDeleteListing: makeFunctionReference<"mutation", MarketplaceListingIdArgs, null>(
+      "marketplaceListings:softDeleteListing",
+    ),
+  },
   vehicles: {
     list: makeFunctionReference<
       "query",
@@ -3223,6 +3315,30 @@ export const api = {
       BuyerTradeInStatusArgs,
       MobileMarketplaceOfferActionResult
     >;
+  };
+  marketplaceListings: {
+    generateListingImageUploadUrl: FunctionReference<
+      "mutation",
+      "public",
+      { mimeType: string; sizeInBytes: number },
+      string
+    >;
+    confirmListingImageUpload: FunctionReference<
+      "mutation",
+      "public",
+      { storageId: string },
+      { url: string | null }
+    >;
+    createListing: FunctionReference<"mutation", "public", MarketplaceCreateListingArgs, string>;
+    updateListing: FunctionReference<"mutation", "public", MarketplaceUpdateListingArgs, null>;
+    getMyListings: FunctionReference<
+      "query",
+      "public",
+      Record<string, never>,
+      MobileMarketplaceListing[]
+    >;
+    markListingSold: FunctionReference<"mutation", "public", MarketplaceListingIdArgs, null>;
+    softDeleteListing: FunctionReference<"mutation", "public", MarketplaceListingIdArgs, null>;
   };
   vehicles: {
     list: FunctionReference<
