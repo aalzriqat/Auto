@@ -1,4 +1,5 @@
 import { v, ConvexError } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
 import { mutation, query, MutationCtx, QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import {
@@ -942,6 +943,75 @@ export const getListingById = query({
     } catch (error) {
       if (error instanceof ConvexError) throw error;
       console.error("marketplaceListings.getListingById failed", error);
+      throw new ConvexError("An unexpected error occurred. Please try again later.");
+    }
+  },
+});
+
+/**
+ * Extra context joined onto each row of adminListPendingListings, resolved
+ * from the seller's cached marketplaceIndividualSellerProfiles row (see
+ * createListing's upsert of that table) — null when no profile row exists yet
+ * (e.g. the listing was seeded directly rather than created through
+ * createListing, which always upserts one).
+ */
+type AdminSellerProfileSummary = {
+  phone: string;
+  city?: string;
+  phoneVerifiedAt?: number;
+} | null;
+
+/**
+ * The admin verification queue backing query: every PENDING_VERIFICATION,
+ * non-deleted listing, oldest submission first, so admins clear the backlog
+ * fairly rather than newest-first (which is what getMyListings/getListingById
+ * use for their own, different purposes). Resolves each listing's imageIds to
+ * signed URLs (mirroring toPublicListing) and joins the seller's cached
+ * profile row for extra context (phone/city/phoneVerifiedAt) alongside the
+ * listing's own sellerPhone/sellerWhatsapp/sellerDisplayName fields — same
+ * paginated-list + per-row-join shape as adminUsers.listUsers.
+ */
+export const adminListPendingListings = query({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    try {
+      await requireSuperAdmin(ctx);
+
+      const page = await ctx.db
+        .query("marketplaceListings")
+        .withIndex("by_isDeleted_and_status", (q) =>
+          q.eq("isDeleted", false).eq("status", "PENDING_VERIFICATION")
+        )
+        .order("asc")
+        .paginate(args.paginationOpts);
+
+      const items = await Promise.all(
+        page.page.map(async (listing) => {
+          const imageUrls = (
+            await Promise.all(listing.imageIds.map((id) => ctx.storage.getUrl(id)))
+          ).filter((url): url is string => url !== null);
+
+          const sellerProfileDoc = await ctx.db
+            .query("marketplaceIndividualSellerProfiles")
+            .withIndex("by_sellerUserId", (q) => q.eq("sellerUserId", listing.sellerUserId))
+            .unique();
+
+          const sellerProfile: AdminSellerProfileSummary = sellerProfileDoc
+            ? {
+                phone: sellerProfileDoc.phone,
+                city: sellerProfileDoc.city,
+                phoneVerifiedAt: sellerProfileDoc.phoneVerifiedAt,
+              }
+            : null;
+
+          return { ...listing, imageUrls, sellerProfile };
+        })
+      );
+
+      return { ...page, page: items };
+    } catch (error) {
+      if (error instanceof ConvexError) throw error;
+      console.error("marketplaceListings.adminListPendingListings failed", error);
       throw new ConvexError("An unexpected error occurred. Please try again later.");
     }
   },
