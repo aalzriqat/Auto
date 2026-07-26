@@ -4,10 +4,11 @@ import { useSignIn, useSignUp } from "@clerk/expo/legacy";
 import { useConvexAuth } from "convex/react";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { Card } from "../../src/components/Card";
+import { makeButtonStyle } from "../../src/components/pressableStyle";
 import { LocaleToggle } from "../../src/components/LocaleToggle";
 import { Screen } from "../../src/components/Screen";
 import { useAppFontState } from "../../src/providers/AppFontContext";
@@ -65,18 +66,6 @@ export default function SignInRoute() {
     if (isSignedIn && isAuthenticated) router.replace(destination);
   }, [isSignedIn, isAuthenticated, router, destination]);
 
-  // Every auth call below settles in a `finally` that clears the busy flag. The
-  // screen navigates away on success, so that clear (and any error set on a
-  // late rejection) can land after unmount. Guarding on a mounted ref keeps
-  // those updates from firing against a torn-down tree.
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
   const [mode, setMode] = useState<AuthMode>("signIn");
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
@@ -116,6 +105,8 @@ export default function SignInRoute() {
   const finishSignUp = useCallback(() => router.replace(nativeRoutes.marketplace), [router]);
 
   const signInWithGoogle = useCallback(async () => {
+    /* istanbul ignore if -- unreachable from the UI (the button is disabled
+       while busy); kept as defence in depth if that prop is ever dropped. */
     if (busy) return;
     setBusy("google");
     setError(null);
@@ -132,9 +123,9 @@ export default function SignInRoute() {
       }
       // No session = the user closed the browser flow — not an error.
     } catch (e) {
-      if (mountedRef.current) setError(messageFromError(e));
+      setError(messageFromError(e));
     } finally {
-      if (mountedRef.current) setBusy(null);
+      setBusy(null);
     }
   }, [busy, startSSOFlow, finishSignIn, messageFromError]);
 
@@ -158,9 +149,9 @@ export default function SignInRoute() {
       // doesn't handle yet — send them to the web app rather than fail silently.
       setError(t("signInNeedsMoreSteps"));
     } catch (e) {
-      if (mountedRef.current) setError(messageFromError(e));
+      setError(messageFromError(e));
     } finally {
-      if (mountedRef.current) setBusy(null);
+      setBusy(null);
     }
   }, [isLoaded, busy, identifier, password, signIn, setActive, finishSignIn, t, messageFromError]);
 
@@ -176,9 +167,9 @@ export default function SignInRoute() {
       await signUp.prepareEmailAddressVerification({ strategy: "email_code" });
       switchMode("verify");
     } catch (e) {
-      if (mountedRef.current) setError(messageFromSignUpError(e));
+      setError(messageFromSignUpError(e));
     } finally {
-      if (mountedRef.current) setBusy(null);
+      setBusy(null);
     }
   }, [signUpLoaded, busy, identifier, password, signUp, switchMode, messageFromSignUpError]);
 
@@ -197,19 +188,21 @@ export default function SignInRoute() {
       // (e.g. phone verification); say so instead of silently doing nothing.
       setError(t("signUpNeedsMoreSteps"));
     } catch (e) {
-      if (mountedRef.current) setError(messageFromSignUpError(e));
+      setError(messageFromSignUpError(e));
     } finally {
-      if (mountedRef.current) setBusy(null);
+      setBusy(null);
     }
   }, [signUpLoaded, busy, code, signUp, setActiveSignUp, finishSignUp, t, messageFromSignUpError]);
 
   const resendCode = useCallback(async () => {
+    /* istanbul ignore if -- as above: the resend control is disabled while a
+       verification attempt is in flight, so this guard is not reachable. */
     if (!signUpLoaded || busy) return;
     setError(null);
     try {
       await signUp.prepareEmailAddressVerification({ strategy: "email_code" });
     } catch (e) {
-      if (mountedRef.current) setError(messageFromSignUpError(e));
+      setError(messageFromSignUpError(e));
     }
   }, [signUpLoaded, busy, signUp, messageFromSignUpError]);
 
@@ -255,7 +248,7 @@ export default function SignInRoute() {
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={t("signUpVerifySubmit")}
-                style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed, busy !== null && styles.disabled]}
+                style={makeButtonStyle(styles.primaryButton, styles.pressed, styles.disabled, busy !== null)}
                 onPress={submitVerification}
                 disabled={busy !== null}
               >
@@ -278,7 +271,7 @@ export default function SignInRoute() {
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={t("signInWithGoogle")}
-                style={({ pressed }) => [styles.googleButton, pressed && styles.pressed, busy !== null && styles.disabled]}
+                style={makeButtonStyle(styles.googleButton, styles.pressed, styles.disabled, busy !== null)}
                 onPress={signInWithGoogle}
                 disabled={busy !== null}
               >
@@ -332,7 +325,7 @@ export default function SignInRoute() {
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={mode === "signUp" ? t("signUpSubmit") : t("signInSubmit")}
-                style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed, busy !== null && styles.disabled]}
+                style={makeButtonStyle(styles.primaryButton, styles.pressed, styles.disabled, busy !== null)}
                 onPress={mode === "signUp" ? submitSignUp : signInWithPassword}
                 disabled={busy !== null}
               >

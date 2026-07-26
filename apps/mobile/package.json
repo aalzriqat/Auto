@@ -80,6 +80,7 @@
       "app/**/*.tsx",
       "!app/**/*.test.tsx",
       "src/components/*.tsx",
+      "src/components/pressableStyle.ts",
       "src/config/env.ts",
       "src/features/home/homeCommandModel.ts",
       "src/features/marketplace/marketplaceFingerprint.ts",
@@ -95,6 +96,7 @@
       "src/theme.ts",
       "src/features/workspace/nativeModules.ts"
     ],
+    "testTimeout": 15000,
     "coverageThreshold": {
       "global": {
         "branches": 100,

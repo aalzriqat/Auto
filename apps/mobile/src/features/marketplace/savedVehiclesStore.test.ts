@@ -41,6 +41,19 @@ describe("savedVehiclesStore", () => {
     ).toEqual([vehicle("a")]);
   });
 
+  test("keeps a saved direct listing, which has no organization", () => {
+    // Private-seller listings come back from browse with orgId: null. Rows
+    // saved before direct listings existed still carry a string, so both
+    // shapes have to survive a round-trip.
+    const directListing = { ...vehicle("d1"), orgId: null };
+
+    expect(deserializeSavedVehicles(JSON.stringify([directListing]))).toEqual([directListing]);
+  });
+
+  test("still rejects a row whose orgId is neither a string nor null", () => {
+    expect(deserializeSavedVehicles(JSON.stringify([{ ...vehicle("d2"), orgId: 7 }]))).toEqual([]);
+  });
+
   test("serialize and deserialize cap at MAX_SAVED_VEHICLES", () => {
     const many = Array.from({ length: MAX_SAVED_VEHICLES + 5 }, (_, i) => vehicle(`v${i}`));
     expect(deserializeSavedVehicles(serializeSavedVehicles(many))).toHaveLength(MAX_SAVED_VEHICLES);
