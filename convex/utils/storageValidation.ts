@@ -42,19 +42,50 @@ export async function assertStoredFileAllowed(
   return metadata;
 }
 
-export async function assertVehicleImagesAllowed(
+/**
+ * Shared image-batch validator — checks every storage id against a caller-supplied
+ * mime/size allowlist in parallel. `undefined` is treated as "nothing to check"
+ * (callers that require at least one image must enforce that separately, since
+ * Convex validators can't express "min length 1" declaratively).
+ */
+export async function assertImagesAllowed(
   ctx: MutationCtx | QueryCtx,
   imageIds: Id<"_storage">[] | undefined,
+  opts: { allowedContentTypes: readonly string[]; maxSizeBytes: number; label: string },
 ): Promise<void> {
   if (!imageIds) return;
   await Promise.all(
     imageIds.map((storageId) =>
       assertStoredFileAllowed(ctx, {
         storageId,
-        allowedContentTypes: VEHICLE_IMAGE_CONTENT_TYPES,
-        maxSizeBytes: 5 * 1024 * 1024,
-        label: "Vehicle image",
+        allowedContentTypes: opts.allowedContentTypes,
+        maxSizeBytes: opts.maxSizeBytes,
+        label: opts.label,
       })
     )
   );
+}
+
+export async function assertVehicleImagesAllowed(
+  ctx: MutationCtx | QueryCtx,
+  imageIds: Id<"_storage">[] | undefined,
+): Promise<void> {
+  await assertImagesAllowed(ctx, imageIds, {
+    allowedContentTypes: VEHICLE_IMAGE_CONTENT_TYPES,
+    maxSizeBytes: 5 * 1024 * 1024,
+    label: "Vehicle image",
+  });
+}
+
+export const MARKETPLACE_LISTING_IMAGE_CONTENT_TYPES = VEHICLE_IMAGE_CONTENT_TYPES;
+
+export async function assertMarketplaceListingImagesAllowed(
+  ctx: MutationCtx | QueryCtx,
+  imageIds: Id<"_storage">[] | undefined,
+): Promise<void> {
+  await assertImagesAllowed(ctx, imageIds, {
+    allowedContentTypes: MARKETPLACE_LISTING_IMAGE_CONTENT_TYPES,
+    maxSizeBytes: 5 * 1024 * 1024,
+    label: "Listing image",
+  });
 }

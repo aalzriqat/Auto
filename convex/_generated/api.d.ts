@@ -74,6 +74,7 @@ import type * as marketplaceBrowse from "../marketplaceBrowse.js";
 import type * as marketplaceBuyerActions from "../marketplaceBuyerActions.js";
 import type * as marketplaceBuyerPush from "../marketplaceBuyerPush.js";
 import type * as marketplaceDealers from "../marketplaceDealers.js";
+import type * as marketplaceListings from "../marketplaceListings.js";
 import type * as marketplaceReports from "../marketplaceReports.js";
 import type * as marketplaceRequests from "../marketplaceRequests.js";
 import type * as marketplaceResponses from "../marketplaceResponses.js";
@@ -259,6 +260,7 @@ declare const fullApi: ApiFromModules<{
   marketplaceBuyerActions: typeof marketplaceBuyerActions;
   marketplaceBuyerPush: typeof marketplaceBuyerPush;
   marketplaceDealers: typeof marketplaceDealers;
+  marketplaceListings: typeof marketplaceListings;
   marketplaceReports: typeof marketplaceReports;
   marketplaceRequests: typeof marketplaceRequests;
   marketplaceResponses: typeof marketplaceResponses;
