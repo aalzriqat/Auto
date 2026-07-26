@@ -524,6 +524,27 @@ describe("listing image upload ownership", () => {
     ).rejects.toThrow(/uploaded by you/i);
   });
 
+  test("updateListing rejects an image id confirmed by a different user, but the owner's own confirmed image still works", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asOwner = await seedUser(t, "seller_79", "seller79@test.com");
+    const asOther = await seedUser(t, "seller_80", "seller80@test.com");
+    const originalImageId = await seedImage(t, "seller_79");
+    const listingId = await asOwner.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [originalImageId],
+    });
+    const othersImageId = await seedImage(t, "seller_80");
+
+    await expect(
+      asOwner.mutation(api.marketplaceListings.updateListing, { listingId, imageIds: [othersImageId] })
+    ).rejects.toThrow(/uploaded by you/i);
+
+    const anotherOwnImageId = await seedImage(t, "seller_79");
+    await asOwner.mutation(api.marketplaceListings.updateListing, { listingId, imageIds: [anotherOwnImageId] });
+    const listing = await t.run((ctx) => ctx.db.get(listingId));
+    expect(listing?.imageIds).toEqual([anotherOwnImageId]);
+  });
+
   test("confirmListingImageUpload rejects a non-image storage id", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_78", "seller78@test.com");
