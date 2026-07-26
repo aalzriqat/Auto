@@ -159,6 +159,10 @@ function EditListingForm({
     },
   });
 
+  // zodResolver blocks an invalid save; without surfacing the message the
+  // seller just sees Save do nothing.
+  const fieldError = (name: keyof ListingUpdateValues) => form.formState.errors[name]?.message;
+
   async function onSubmit(values: ListingUpdateValues) {
     setIsSaving(true);
     try {
@@ -191,21 +195,22 @@ function EditListingForm({
   return (
     <form onSubmit={form.handleSubmit(onSubmit)} className="mt-4 space-y-3 border-t border-slate-200 pt-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <TextField size="compact" id={fieldId("sellerDisplayName")} label={t.sellerDisplayName} registration={form.register("sellerDisplayName")} />
-        <TextField size="compact" id={fieldId("sellerPhone")} label={t.sellerPhone} registration={form.register("sellerPhone")} />
-        <TextField size="compact" id={fieldId("sellerWhatsapp")} label={t.sellerWhatsapp} registration={form.register("sellerWhatsapp")} />
-        <TextField size="compact" id={fieldId("city")} label={t.city} registration={form.register("city")} />
-        <TextField size="compact" id={fieldId("make")} label={t.make} registration={form.register("make")} />
-        <TextField size="compact" id={fieldId("model")} label={t.model} registration={form.register("model")} />
-        <TextField size="compact" id={fieldId("year")} type="number" label={t.year} registration={form.register("year")} />
-        <TextField size="compact" id={fieldId("mileage")} type="number" min={0} label={t.mileage} registration={form.register("mileage")} />
-        <TextField size="compact" id={fieldId("price")} type="number" min={0} label={t.price} registration={form.register("price")} />
+        <TextField size="compact" id={fieldId("sellerDisplayName")} label={t.sellerDisplayName} registration={form.register("sellerDisplayName")} error={fieldError("sellerDisplayName")} />
+        <TextField size="compact" id={fieldId("sellerPhone")} label={t.sellerPhone} registration={form.register("sellerPhone")} error={fieldError("sellerPhone")} />
+        <TextField size="compact" id={fieldId("sellerWhatsapp")} label={t.sellerWhatsapp} registration={form.register("sellerWhatsapp")} error={fieldError("sellerWhatsapp")} />
+        <TextField size="compact" id={fieldId("city")} label={t.city} registration={form.register("city")} error={fieldError("city")} />
+        <TextField size="compact" id={fieldId("make")} label={t.make} registration={form.register("make")} error={fieldError("make")} />
+        <TextField size="compact" id={fieldId("model")} label={t.model} registration={form.register("model")} error={fieldError("model")} />
+        <TextField size="compact" id={fieldId("year")} type="number" label={t.year} registration={form.register("year")} error={fieldError("year")} />
+        <TextField size="compact" id={fieldId("mileage")} type="number" min={0} label={t.mileage} registration={form.register("mileage")} error={fieldError("mileage")} />
+        <TextField size="compact" id={fieldId("price")} type="number" min={0} label={t.price} registration={form.register("price")} error={fieldError("price")} />
         <SelectField
           size="compact"
           id={fieldId("currency")}
           label={t.currency}
           registration={form.register("currency")}
           options={codeOptions(ALLOWED_CURRENCIES)}
+        error={fieldError("currency")}
         />
         <SelectField
           size="compact"
@@ -213,6 +218,7 @@ function EditListingForm({
           label={t.transmission}
           registration={form.register("transmission")}
           options={TRANSMISSIONS.map((value) => ({ value, label: TRANSMISSION_LABELS[lang][value] }))}
+        error={fieldError("transmission")}
         />
         <SelectField
           size="compact"
@@ -220,6 +226,7 @@ function EditListingForm({
           label={t.fuelType}
           registration={form.register("fuelType")}
           options={FUEL_TYPE_LABELS_ORDER.map((value) => ({ value, label: FUEL_LABELS[lang][value] }))}
+        error={fieldError("fuelType")}
         />
         <SelectField
           size="compact"
@@ -227,9 +234,10 @@ function EditListingForm({
           label={t.condition}
           registration={form.register("condition")}
           options={LISTING_CONDITIONS.map((value) => ({ value, label: CONDITION_LABELS[lang][value] }))}
+        error={fieldError("condition")}
         />
       </div>
-      <TextAreaField size="compact" id={fieldId("description")} label={t.description} registration={form.register("description")} />
+      <TextAreaField size="compact" id={fieldId("description")} label={t.description} registration={form.register("description")} error={fieldError("description")} />
       <div className="flex gap-2">
         <button
           type="submit"
