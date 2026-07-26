@@ -596,6 +596,7 @@ const mobileFoundationStringEntries = [
   ["myListingsStatusRejected", "Rejected", "مرفوض"],
   ["myListingsStatusSold", "Sold", "مباع"],
   ["myListingsStatusRemoved", "Removed", "تمت إزالته"],
+  ["marketplacePrivateSeller", "Private seller", "بائع فردي"],
 ] as const satisfies ReadonlyArray<readonly [string, string, string]>;
 
 type MobileFoundationStringEntry = (typeof mobileFoundationStringEntries)[number];

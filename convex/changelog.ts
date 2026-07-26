@@ -1119,6 +1119,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "أصبحت خاصية \"بيع سيارتك\" وصفحة \"إعلاناتي\" متاحتين الآن على تطبيق الهاتف، بحيث يمكن لأي شخص إضافة سيارة للبيع وإدارة إعلاناته دون الحاجة لحساب معرض في أوتوفلو. يبقى كل إعلان جديد قيد التحقق حتى يراجعه أحد مسؤولي أوتوفلو ويوافق عليه.",
     publishedAt: releaseAt(2026, 7, 26, 3),
   },
+  {
+    type: "FEATURE",
+    titleEn: "Cars from private sellers now appear in the marketplace",
+    titleAr: "سيارات البائعين الأفراد تظهر الآن في السوق",
+    descriptionEn: "Approved listings from individuals and unaffiliated dealers now show up in marketplace search alongside dealership inventory on both web and mobile, marked with a \"Private seller\" badge. Trade-in offers stay a dealership-only option.",
+    descriptionAr: "أصبحت إعلانات الأفراد والمعارض غير المشتركة المعتمدة تظهر في بحث السوق إلى جانب مخزون المعارض على الويب والتطبيق، مع وسم \"بائع فردي\". يبقى عرض الاستبدال متاحاً لدى المعارض فقط.",
+    publishedAt: releaseAt(2026, 7, 27, 1),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

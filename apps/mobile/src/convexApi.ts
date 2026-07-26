@@ -1075,7 +1075,14 @@ export interface MobileMarketplaceDealer {
 }
 
 export interface MobileMarketplaceVehicle {
-  orgId: string;
+  /**
+   * "DIRECT" rows are admin-verified listings from individuals / unaffiliated
+   * dealers (marketplaceListings); "DEALER" rows come from a subscribed org's
+   * published inventory. Branch on this for anything org-scoped.
+   */
+  sellerType: "DEALER" | "DIRECT";
+  /** Null for DIRECT rows — a private seller has no organization. */
+  orgId: string | null;
   dealershipName: string;
   dealerBadges: string[];
   siteUrl: string | null;

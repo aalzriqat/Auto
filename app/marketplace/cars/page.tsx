@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "convex/react";
 import Link from "next/link";
 import { api } from "@/convex/_generated/api";
-import { Car, Globe2, MapPin, MessageCircle, Phone, Plus, Search, ShieldCheck, Store, Wallet, Zap } from "lucide-react";
+import { Car, Globe2, MapPin, MessageCircle, Phone, Plus, Search, ShieldCheck, Store, User, Wallet, Zap } from "lucide-react";
 import { buildWhatsAppDeepLink } from "@/lib/whatsappDeepLink";
 
 type Lang = "en" | "ar";
@@ -31,6 +31,7 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     financeAvailable: "Finance available",
     verifiedPhone: "Verified dealer",
     fastResponse: "Fast responder",
+    privateSeller: "Private seller",
     trustSelfReported: "Condition self-reported by dealer",
     trustPartnerVerified: "Condition partner-verified",
     trustNoAccidents: "No accidents disclosed",
@@ -63,6 +64,7 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     financeAvailable: "التمويل متاح",
     verifiedPhone: "معرض موثّق",
     fastResponse: "رد سريع",
+    privateSeller: "بائع فردي",
     trustSelfReported: "الحالة موضحة من قبل المعرض",
     trustPartnerVerified: "الحالة موثّقة من شريك خارجي",
     trustNoAccidents: "لا يوجد حوادث مصرح عنها",
@@ -120,7 +122,10 @@ type SearchFilters = {
 };
 
 type BrowseVehicle = {
-  orgId: string;
+  // "DIRECT" rows come from an individual or unaffiliated seller and carry no
+  // organization, so org-scoped actions (trade-in) are hidden for them.
+  sellerType: "DEALER" | "DIRECT";
+  orgId: string | null;
   dealershipName: string;
   dealerBadges: string[];
   siteUrl: string | null;
@@ -263,6 +268,15 @@ function VehicleCard({
           </p>
         )}
         <div className="flex flex-wrap gap-1.5">
+          {/* Buyers treat dealer and private listings very differently (recourse,
+              paperwork, negotiation), so the distinction has to be visible on the
+              card itself, not just on the detail page. */}
+          {vehicle.sellerType === "DIRECT" && (
+            <span className="inline-flex w-fit items-center gap-1 rounded-full bg-sky-50 text-sky-700 text-[11px] font-medium px-2 py-0.5">
+              <User className="h-3 w-3" />
+              {t.privateSeller}
+            </span>
+          )}
           {vehicle.financeAvailable && (
             <span className="inline-flex w-fit items-center gap-1 rounded-full bg-emerald-50 text-emerald-700 text-[11px] font-medium px-2 py-0.5">
               <Wallet className="h-3 w-3" />
@@ -294,12 +308,14 @@ function VehicleCard({
                 {t.viewListing}
               </a>
             )}
+            {vehicle.orgId && (
             <Link
               href={`/marketplace/tradein?orgId=${vehicle.orgId}&dealerName=${encodeURIComponent(vehicle.dealershipName)}`}
               className="flex-1 text-center text-sm font-medium rounded-lg border border-slate-300 py-2 text-slate-700 hover:bg-slate-50"
             >
               {t.tradeIn}
             </Link>
+            )}
           </div>
         </div>
       </div>

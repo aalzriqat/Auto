@@ -782,16 +782,23 @@ function VehicleDetailModal({
                 {saved ? t("marketplaceSavedRemove") : t("marketplaceSaveCar")}
               </Text>
             </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
-              onPress={() => {
-                onClose();
-                onTradeInPress({ orgId: shown.orgId, dealershipName: shown.dealershipName });
-              }}
-            >
-              <Text style={styles.secondaryButtonText}>{t("marketplaceRequestTradeIn")}</Text>
-            </Pressable>
+            {/* Trade-in is a dealer service — a private seller has no org to
+                route the request to, so the CTA is withheld rather than shown
+                and failing. */}
+            {shown.orgId ? (
+              <Pressable
+                accessibilityRole="button"
+                style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
+                onPress={() => {
+                  const orgId = shown.orgId;
+                  if (!orgId) return;
+                  onClose();
+                  onTradeInPress({ orgId, dealershipName: shown.dealershipName });
+                }}
+              >
+                <Text style={styles.secondaryButtonText}>{t("marketplaceRequestTradeIn")}</Text>
+              </Pressable>
+            ) : null}
             {listingUrl ? (
               <Pressable
                 accessibilityRole="button"
@@ -905,6 +912,11 @@ function VehicleCard({
           </Text>
         ) : null}
         <View style={styles.badgeRow}>
+          {/* Dealer vs private seller changes what a buyer can expect
+              (recourse, paperwork), so surface it on the card, not just in detail. */}
+          {vehicle.sellerType === "DIRECT" ? (
+            <Badge label={t("marketplacePrivateSeller")} tone="blue" />
+          ) : null}
           {isRecentlyListed(vehicle.listedAt) ? <Badge label={t("marketplaceNew")} tone="amber" /> : null}
           {vehicle.financeAvailable ? <Badge label={t("marketplaceFinanceAvailable")} /> : null}
           {vehicle.dealerBadges.includes("VERIFIED_PHONE") ? (
@@ -926,13 +938,20 @@ function VehicleCard({
               <Text style={styles.inlineButtonText}>{t("marketplaceOpenListing")}</Text>
             </Pressable>
           ) : null}
-          <Pressable
-            accessibilityRole="button"
-            style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
-            onPress={() => onTradeInPress({ orgId: vehicle.orgId, dealershipName: vehicle.dealershipName })}
-          >
-            <Text style={styles.secondaryButtonText}>{t("marketplaceRequestTradeIn")}</Text>
-          </Pressable>
+          {/* See VehicleDetailModal: trade-in is dealer-only. */}
+          {vehicle.orgId ? (
+            <Pressable
+              accessibilityRole="button"
+              style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
+              onPress={() => {
+                const orgId = vehicle.orgId;
+                if (!orgId) return;
+                onTradeInPress({ orgId, dealershipName: vehicle.dealershipName });
+              }}
+            >
+              <Text style={styles.secondaryButtonText}>{t("marketplaceRequestTradeIn")}</Text>
+            </Pressable>
+          ) : null}
         </View>
       </View>
       <VehicleDetailModal

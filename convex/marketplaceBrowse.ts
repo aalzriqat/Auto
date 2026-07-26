@@ -56,8 +56,8 @@ const SORT_LO = Number.MIN_SAFE_INTEGER;
  * "jump" between pages on a refresh even with no underlying data change.
  */
 export function compareBrowseVehicles(
-  a: { price: number | null; year: number; mileage: number | null; listedAt?: number | null; orgId?: string; id?: string },
-  b: { price: number | null; year: number; mileage: number | null; listedAt?: number | null; orgId?: string; id?: string },
+  a: { price: number | null; year: number; mileage: number | null; listedAt?: number | null; orgId?: string | null; id?: string },
+  b: { price: number | null; year: number; mileage: number | null; listedAt?: number | null; orgId?: string | null; id?: string },
   sortBy: BrowseSortBy
 ): number {
   const primary = ((): number => {
@@ -115,8 +115,21 @@ function estimateMonthlyPayment(price: number, financeCompany: FinanceCompanyTer
 
 type InspectionStatus = "NONE" | "SELF_REPORTED" | "PARTNER_VERIFIED";
 
+/**
+ * Which side of the marketplace a row came from. "DEALER" rows are projected
+ * from a subscribed org's published site inventory; "DIRECT" rows are
+ * admin-verified listings from an individual or an unaffiliated dealer
+ * (marketplaceListings). Frontends must branch on this rather than on
+ * `orgId == null` alone, so the distinction stays explicit in the UI.
+ */
+type BrowseSellerType = "DEALER" | "DIRECT";
+
 type BrowseVehicle = {
-  orgId: Id<"organizations">;
+  sellerType: BrowseSellerType;
+  // Null for DIRECT rows — a private seller has no organization. Anything
+  // org-scoped in the UI (trade-in offers, dealer site links) must be hidden
+  // for those rows rather than fed a placeholder id.
+  orgId: Id<"organizations"> | null;
   dealershipName: string;
   dealerBadges: string[];
   siteUrl: string | null;
@@ -263,6 +276,7 @@ export const search = query({
         if (args.maxMonthlyPayment != null && (estimatedMonthlyPayment ?? Infinity) > args.maxMonthlyPayment) continue;
 
         merged.push({
+          sellerType: "DEALER",
           orgId,
           dealershipName,
           dealerBadges: profile.badges,
@@ -293,6 +307,74 @@ export const search = query({
           dealerGuarantee: vehicle.dealerGuarantee ?? null,
         });
         if (merged.length >= MAX_MERGED_VEHICLES) break;
+      }
+    }
+
+    // Direct listings (individuals + unaffiliated dealers). These are the same
+    // rows the admin verification queue approves; only LIVE/SOLD ones are ever
+    // readable here, so a PENDING or REJECTED listing can never leak into
+    // public browse. Without this block the entire direct-listing feature is
+    // write-only — a seller could list and an admin could approve, but no
+    // buyer would ever see the result.
+    //
+    // FINANCE is dealer-only (a private seller has no finance company), so a
+    // finance-filtered search skips direct rows entirely rather than showing
+    // cars the filter's whole purpose is to exclude.
+    if (args.paymentType !== "FINANCE" && args.maxMonthlyPayment == null && merged.length < MAX_MERGED_VEHICLES) {
+      const liveListings = await ctx.db
+        .query("marketplaceListings")
+        .withIndex("by_isDeleted_and_status", (q) => q.eq("isDeleted", false).eq("status", "LIVE"))
+        .order("desc")
+        .take(MAX_MERGED_VEHICLES - merged.length);
+
+      for (const listing of liveListings) {
+        // Same case-insensitive contains/equality semantics as the dealer rows
+        // above, so a filter behaves identically on both sides of the union.
+        if (makeFilter && !listing.make.toLowerCase().includes(makeFilter)) continue;
+        if (modelFilter && !listing.model.toLowerCase().includes(modelFilter)) continue;
+        if (cityFilter && !listing.city.toLowerCase().includes(cityFilter)) continue;
+        if (transmissionFilter && listing.transmission.toLowerCase() !== transmissionFilter) continue;
+        if (fuelFilter && listing.fuelType.toLowerCase() !== fuelFilter) continue;
+        if (args.priceMin != null && listing.price < args.priceMin) continue;
+        if (args.priceMax != null && listing.price > args.priceMax) continue;
+
+        merged.push({
+          sellerType: "DIRECT",
+          orgId: null,
+          dealershipName: listing.sellerDisplayName,
+          dealerBadges: [],
+          siteUrl: null,
+          dealerPhone: listing.sellerPhone,
+          // Fall back to the listed phone so a seller who gave only a phone
+          // still gets a working WhatsApp deep-link (mirrors the dealer path).
+          dealerWhatsapp: listing.sellerWhatsapp ?? listing.sellerPhone,
+          id: listing._id,
+          // Direct listings have no published dealer site to deep-link into;
+          // `siteUrl` is null above, so the frontend never builds a slug URL.
+          slug: listing._id,
+          make: listing.make,
+          model: listing.model,
+          year: listing.year,
+          trim: null,
+          mileage: listing.mileage,
+          transmission: listing.transmission,
+          fuelType: listing.fuelType,
+          exteriorColor: null,
+          price: listing.price,
+          financePrice: null,
+          currency: listing.currency,
+          status: "AVAILABLE",
+          imageStorageIds: listing.imageIds,
+          listedAt: listing.createdAt,
+          financeAvailable: false,
+          estimatedMonthlyPayment: null,
+          // Private sellers get no inspection/guarantee claims — those signal
+          // dealer-backed verification and must not be implied here.
+          inspectionStatus: "NONE",
+          accidentDisclosed: null,
+          ownerCount: null,
+          dealerGuarantee: null,
+        });
       }
     }
 
