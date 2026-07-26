@@ -547,8 +547,10 @@ export const markListingSold = mutation({
  *    listing down does NOT overwrite the original approving admin's
  *    identity/timestamp — that audit trail needs to survive a takedown.
  */
+type AdminStatusTarget = "LIVE" | "REJECTED" | "REMOVED";
+
 function buildAdminStatusPatch(
-  status: "LIVE" | "REJECTED" | "REMOVED",
+  status: AdminStatusTarget,
   adminId: Id<"users">,
   trimmedReason: string | undefined
 ): Partial<Doc<"marketplaceListings">> {
@@ -564,7 +566,7 @@ function buildAdminStatusPatch(
 /** Throws unless `targetStatus` is a legal transition from `currentStatus`. */
 function assertValidAdminStatusTransition(
   currentStatus: Doc<"marketplaceListings">["status"],
-  targetStatus: "LIVE" | "REJECTED" | "REMOVED"
+  targetStatus: AdminStatusTarget
 ): void {
   if (targetStatus === "REMOVED") {
     if (currentStatus !== "LIVE") {
@@ -583,7 +585,7 @@ function assertValidAdminStatusTransition(
 
 /** REJECTED and REMOVED both require a non-empty reason; LIVE does not. */
 function assertAdminStatusReasonProvided(
-  status: "LIVE" | "REJECTED" | "REMOVED",
+  status: AdminStatusTarget,
   trimmedReason: string | undefined
 ): void {
   if (status === "REJECTED" && !trimmedReason) {
