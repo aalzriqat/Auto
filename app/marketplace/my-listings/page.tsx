@@ -15,6 +15,7 @@ import {
   listingUpdateSchema,
   type ListingUpdateValues,
 } from "../sell/listing.schema";
+import { TextField, SelectField, TextAreaField, codeOptions } from "../listingFields";
 
 type Lang = "en" | "ar";
 // getMyListings returns each raw listing doc plus a resolved thumbnailUrl
@@ -210,75 +211,31 @@ function EditListingForm({
   return (
     <form onSubmit={form.handleSubmit(onSubmit)} className="mt-4 space-y-3 border-t border-slate-200 pt-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div>
-          <label className="text-xs font-medium block mb-1">{t.sellerDisplayName}</label>
-          <input className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm" {...form.register("sellerDisplayName")} />
-        </div>
-        <div>
-          <label className="text-xs font-medium block mb-1">{t.sellerPhone}</label>
-          <input className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm" {...form.register("sellerPhone")} />
-        </div>
-        <div>
-          <label className="text-xs font-medium block mb-1">{t.sellerWhatsapp}</label>
-          <input className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm" {...form.register("sellerWhatsapp")} />
-        </div>
-        <div>
-          <label className="text-xs font-medium block mb-1">{t.city}</label>
-          <input className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm" {...form.register("city")} />
-        </div>
-        <div>
-          <label className="text-xs font-medium block mb-1">{t.make}</label>
-          <input className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm" {...form.register("make")} />
-        </div>
-        <div>
-          <label className="text-xs font-medium block mb-1">{t.model}</label>
-          <input className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm" {...form.register("model")} />
-        </div>
-        <div>
-          <label className="text-xs font-medium block mb-1">{t.year}</label>
-          <input type="number" className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm" {...form.register("year")} />
-        </div>
-        <div>
-          <label className="text-xs font-medium block mb-1">{t.mileage}</label>
-          <input type="number" min={0} className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm" {...form.register("mileage")} />
-        </div>
-        <div>
-          <label className="text-xs font-medium block mb-1">{t.price}</label>
-          <input type="number" min={0} className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm" {...form.register("price")} />
-        </div>
-        <div>
-          <label className="text-xs font-medium block mb-1">{t.currency}</label>
-          <select className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm bg-white" {...form.register("currency")}>
-            {ALLOWED_CURRENCIES.map((code) => (
-              <option key={code} value={code}>
-                {code}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="text-xs font-medium block mb-1">{t.transmission}</label>
-          <input className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm" {...form.register("transmission")} />
-        </div>
-        <div>
-          <label className="text-xs font-medium block mb-1">{t.fuelType}</label>
-          <input className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm" {...form.register("fuelType")} />
-        </div>
-        <div>
-          <label className="text-xs font-medium block mb-1">{t.condition}</label>
-          <select className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm bg-white" {...form.register("condition")}>
-            {LISTING_CONDITIONS.map((condition) => (
-              <option key={condition} value={condition}>
-                {condition}
-              </option>
-            ))}
-          </select>
-        </div>
+        <TextField size="compact" label={t.sellerDisplayName} registration={form.register("sellerDisplayName")} />
+        <TextField size="compact" label={t.sellerPhone} registration={form.register("sellerPhone")} />
+        <TextField size="compact" label={t.sellerWhatsapp} registration={form.register("sellerWhatsapp")} />
+        <TextField size="compact" label={t.city} registration={form.register("city")} />
+        <TextField size="compact" label={t.make} registration={form.register("make")} />
+        <TextField size="compact" label={t.model} registration={form.register("model")} />
+        <TextField size="compact" type="number" label={t.year} registration={form.register("year")} />
+        <TextField size="compact" type="number" min={0} label={t.mileage} registration={form.register("mileage")} />
+        <TextField size="compact" type="number" min={0} label={t.price} registration={form.register("price")} />
+        <SelectField
+          size="compact"
+          label={t.currency}
+          registration={form.register("currency")}
+          options={codeOptions(ALLOWED_CURRENCIES)}
+        />
+        <TextField size="compact" label={t.transmission} registration={form.register("transmission")} />
+        <TextField size="compact" label={t.fuelType} registration={form.register("fuelType")} />
+        <SelectField
+          size="compact"
+          label={t.condition}
+          registration={form.register("condition")}
+          options={codeOptions(LISTING_CONDITIONS)}
+        />
       </div>
-      <div>
-        <label className="text-xs font-medium block mb-1">{t.description}</label>
-        <textarea rows={3} className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm" {...form.register("description")} />
-      </div>
+      <TextAreaField size="compact" label={t.description} registration={form.register("description")} />
       <div className="flex gap-2">
         <button
           type="submit"

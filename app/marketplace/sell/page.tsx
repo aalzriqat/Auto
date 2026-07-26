@@ -25,6 +25,7 @@ import {
   listingSchema,
   type ListingFormValues,
 } from "./listing.schema";
+import { TextField, SelectField, TextAreaField, codeOptions } from "../listingFields";
 
 type Lang = "en" | "ar";
 
@@ -160,6 +161,17 @@ type UploadedImage = {
   previewUrl: string;
 };
 
+/**
+ * Object URLs are minted by the browser and always look like
+ * `blob:<origin>/<uuid>` — they can't carry a script-bearing scheme. Asserting
+ * that explicitly keeps a non-blob string from ever reaching an <img src>,
+ * even if the preview ever stops coming from URL.createObjectURL, and makes
+ * the guarantee visible to readers and static analysis instead of implicit.
+ */
+function safeObjectUrl(url: string): string | undefined {
+  return url.startsWith("blob:") ? url : undefined;
+}
+
 export default function MarketplaceSellPage() {
   const [lang, setLang] = useState<Lang>("en");
   useEffect(() => {
@@ -181,6 +193,17 @@ export default function MarketplaceSellPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedListingId, setSubmittedListingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Release any previews still held when the page unmounts (navigating away
+  // mid-listing, or after a successful submit swaps in the confirmation view).
+  // Reads through a ref so the cleanup isn't re-run on every image change.
+  const imagesRef = useRef<UploadedImage[]>([]);
+  imagesRef.current = images;
+  useEffect(() => {
+    return () => {
+      imagesRef.current.forEach((image) => URL.revokeObjectURL(image.previewUrl));
+    };
+  }, []);
 
   const form = useForm<ListingFormValues>({
     resolver: zodResolver(listingSchema),
@@ -249,7 +272,13 @@ export default function MarketplaceSellPage() {
   }
 
   function handleRemoveImage(index: number) {
-    setImages((prev) => prev.filter((_, i) => i !== index));
+    setImages((prev) => {
+      // Each preview holds a browser object URL that lives until it's revoked
+      // or the document unloads; dropping the state entry alone leaks it.
+      const removed = prev[index];
+      if (removed) URL.revokeObjectURL(removed.previewUrl);
+      return prev.filter((_, i) => i !== index);
+    });
   }
 
   async function onSubmit(values: ListingFormValues) {
@@ -366,210 +395,120 @@ export default function MarketplaceSellPage() {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label htmlFor="sellerDisplayName" className="text-sm font-medium block mb-1">
-                  {t.sellerDisplayName}
-                </label>
-                <input
-                  id="sellerDisplayName"
-                  placeholder={t.sellerDisplayNamePlaceholder}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  {...form.register("sellerDisplayName")}
-                />
-                {form.formState.errors.sellerDisplayName && (
-                  <p className="mt-1 text-xs text-rose-600">{form.formState.errors.sellerDisplayName.message}</p>
-                )}
-              </div>
-              <div>
-                <label htmlFor="sellerPhone" className="text-sm font-medium block mb-1">
-                  {t.sellerPhone}
-                </label>
-                <input
-                  id="sellerPhone"
-                  placeholder={t.sellerPhonePlaceholder}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  {...form.register("sellerPhone")}
-                />
-                {form.formState.errors.sellerPhone && (
-                  <p className="mt-1 text-xs text-rose-600">{form.formState.errors.sellerPhone.message}</p>
-                )}
-              </div>
-              <div>
-                <label htmlFor="sellerWhatsapp" className="text-sm font-medium block mb-1">
-                  {t.sellerWhatsapp}
-                </label>
-                <input
-                  id="sellerWhatsapp"
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  {...form.register("sellerWhatsapp")}
-                />
-                {form.formState.errors.sellerWhatsapp && (
-                  <p className="mt-1 text-xs text-rose-600">{form.formState.errors.sellerWhatsapp.message}</p>
-                )}
-              </div>
-              <div>
-                <label htmlFor="city" className="text-sm font-medium block mb-1">
-                  {t.city}
-                </label>
-                <input
-                  id="city"
-                  placeholder={t.cityPlaceholder}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  {...form.register("city")}
-                />
-                {form.formState.errors.city && (
-                  <p className="mt-1 text-xs text-rose-600">{form.formState.errors.city.message}</p>
-                )}
-              </div>
-              <div>
-                <label htmlFor="make" className="text-sm font-medium block mb-1">
-                  {t.make}
-                </label>
-                <input
-                  id="make"
-                  placeholder={t.makePlaceholder}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  {...form.register("make")}
-                />
-                {form.formState.errors.make && (
-                  <p className="mt-1 text-xs text-rose-600">{form.formState.errors.make.message}</p>
-                )}
-              </div>
-              <div>
-                <label htmlFor="model" className="text-sm font-medium block mb-1">
-                  {t.model}
-                </label>
-                <input
-                  id="model"
-                  placeholder={t.modelPlaceholder}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  {...form.register("model")}
-                />
-                {form.formState.errors.model && (
-                  <p className="mt-1 text-xs text-rose-600">{form.formState.errors.model.message}</p>
-                )}
-              </div>
-              <div>
-                <label htmlFor="year" className="text-sm font-medium block mb-1">
-                  {t.year}
-                </label>
-                <input
-                  id="year"
-                  type="number"
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  {...form.register("year")}
-                />
-                {form.formState.errors.year && (
-                  <p className="mt-1 text-xs text-rose-600">{form.formState.errors.year.message}</p>
-                )}
-              </div>
-              <div>
-                <label htmlFor="mileage" className="text-sm font-medium block mb-1">
-                  {t.mileage}
-                </label>
-                <input
-                  id="mileage"
-                  type="number"
-                  min={0}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  {...form.register("mileage")}
-                />
-                {form.formState.errors.mileage && (
-                  <p className="mt-1 text-xs text-rose-600">{form.formState.errors.mileage.message}</p>
-                )}
-              </div>
-              <div>
-                <label htmlFor="price" className="text-sm font-medium block mb-1">
-                  {t.price}
-                </label>
-                <input
-                  id="price"
-                  type="number"
-                  min={0}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  {...form.register("price")}
-                />
-                {form.formState.errors.price && (
-                  <p className="mt-1 text-xs text-rose-600">{form.formState.errors.price.message}</p>
-                )}
-              </div>
-              <div>
-                <label htmlFor="currency" className="text-sm font-medium block mb-1">
-                  {t.currency}
-                </label>
-                <select
-                  id="currency"
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 bg-white"
-                  {...form.register("currency")}
-                >
-                  {ALLOWED_CURRENCIES.map((code) => (
-                    <option key={code} value={code}>
-                      {code}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label htmlFor="transmission" className="text-sm font-medium block mb-1">
-                  {t.transmission}
-                </label>
-                <select
-                  id="transmission"
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 bg-white"
-                  {...form.register("transmission")}
-                >
-                  <option value="Automatic">{t.transmissionAutomatic}</option>
-                  <option value="Manual">{t.transmissionManual}</option>
-                </select>
-              </div>
-              <div>
-                <label htmlFor="fuelType" className="text-sm font-medium block mb-1">
-                  {t.fuelType}
-                </label>
-                <select
-                  id="fuelType"
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 bg-white"
-                  {...form.register("fuelType")}
-                >
-                  <option value="Gasoline">{t.fuelGasoline}</option>
-                  <option value="Diesel">{t.fuelDiesel}</option>
-                  <option value="Hybrid">{t.fuelHybrid}</option>
-                  <option value="Electric">{t.fuelElectric}</option>
-                </select>
-              </div>
-              <div>
-                <label htmlFor="condition" className="text-sm font-medium block mb-1">
-                  {t.condition}
-                </label>
-                <select
-                  id="condition"
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 bg-white"
-                  {...form.register("condition")}
-                >
-                  {LISTING_CONDITIONS.map((condition) => (
-                    <option key={condition} value={condition}>
-                      {t[`condition${condition.charAt(0)}${condition.slice(1).toLowerCase()}`] ?? condition}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <TextField
+                id="sellerDisplayName"
+                label={t.sellerDisplayName}
+                placeholder={t.sellerDisplayNamePlaceholder}
+                registration={form.register("sellerDisplayName")}
+                error={form.formState.errors.sellerDisplayName?.message}
+              />
+              <TextField
+                id="sellerPhone"
+                label={t.sellerPhone}
+                placeholder={t.sellerPhonePlaceholder}
+                registration={form.register("sellerPhone")}
+                error={form.formState.errors.sellerPhone?.message}
+              />
+              <TextField
+                id="sellerWhatsapp"
+                label={t.sellerWhatsapp}
+                registration={form.register("sellerWhatsapp")}
+                error={form.formState.errors.sellerWhatsapp?.message}
+              />
+              <TextField
+                id="city"
+                label={t.city}
+                placeholder={t.cityPlaceholder}
+                registration={form.register("city")}
+                error={form.formState.errors.city?.message}
+              />
+              <TextField
+                id="make"
+                label={t.make}
+                placeholder={t.makePlaceholder}
+                registration={form.register("make")}
+                error={form.formState.errors.make?.message}
+              />
+              <TextField
+                id="model"
+                label={t.model}
+                placeholder={t.modelPlaceholder}
+                registration={form.register("model")}
+                error={form.formState.errors.model?.message}
+              />
+              <TextField
+                id="year"
+                type="number"
+                label={t.year}
+                registration={form.register("year")}
+                error={form.formState.errors.year?.message}
+              />
+              <TextField
+                id="mileage"
+                type="number"
+                min={0}
+                label={t.mileage}
+                registration={form.register("mileage")}
+                error={form.formState.errors.mileage?.message}
+              />
+              <TextField
+                id="price"
+                type="number"
+                min={0}
+                label={t.price}
+                registration={form.register("price")}
+                error={form.formState.errors.price?.message}
+              />
+              <SelectField
+                id="currency"
+                label={t.currency}
+                registration={form.register("currency")}
+                options={codeOptions(ALLOWED_CURRENCIES)}
+                error={form.formState.errors.currency?.message}
+              />
+              <SelectField
+                id="transmission"
+                label={t.transmission}
+                registration={form.register("transmission")}
+                options={[
+                  { value: "Automatic", label: t.transmissionAutomatic },
+                  { value: "Manual", label: t.transmissionManual },
+                ]}
+                error={form.formState.errors.transmission?.message}
+              />
+              <SelectField
+                id="fuelType"
+                label={t.fuelType}
+                registration={form.register("fuelType")}
+                options={[
+                  { value: "Gasoline", label: t.fuelGasoline },
+                  { value: "Diesel", label: t.fuelDiesel },
+                  { value: "Hybrid", label: t.fuelHybrid },
+                  { value: "Electric", label: t.fuelElectric },
+                ]}
+                error={form.formState.errors.fuelType?.message}
+              />
+              <SelectField
+                id="condition"
+                label={t.condition}
+                registration={form.register("condition")}
+                options={LISTING_CONDITIONS.map((condition) => ({
+                  value: condition,
+                  label:
+                    t[`condition${condition.charAt(0)}${condition.slice(1).toLowerCase()}`] ?? condition,
+                }))}
+                error={form.formState.errors.condition?.message}
+              />
             </div>
 
-            <div>
-              <label htmlFor="description" className="text-sm font-medium block mb-1">
-                {t.description}
-              </label>
-              <textarea
-                id="description"
-                rows={4}
-                placeholder={t.descriptionPlaceholder}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                {...form.register("description")}
-              />
-              {form.formState.errors.description && (
-                <p className="mt-1 text-xs text-rose-600">{form.formState.errors.description.message}</p>
-              )}
-            </div>
+            <TextAreaField
+              id="description"
+              rows={4}
+              label={t.description}
+              placeholder={t.descriptionPlaceholder}
+              registration={form.register("description")}
+              error={form.formState.errors.description?.message}
+            />
 
             <div>
               <div className="flex items-center justify-between">
@@ -604,7 +543,11 @@ export default function MarketplaceSellPage() {
                       className="relative group aspect-video bg-slate-100 rounded-md overflow-hidden border border-slate-200"
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={image.previewUrl} alt={`Upload ${index + 1}`} className="object-cover w-full h-full" />
+                      <img
+                        src={safeObjectUrl(image.previewUrl)}
+                        alt={`Upload ${index + 1}`}
+                        className="object-cover w-full h-full"
+                      />
                       <button
                         type="button"
                         onClick={() => handleRemoveImage(index)}
