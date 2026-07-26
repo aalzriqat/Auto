@@ -3816,6 +3816,14 @@ export default defineSchema({
     verifiedBy: v.optional(v.id("users")),
     verifiedAt: v.optional(v.number()),
     rejectionReason: v.optional(v.string()),
+    // Set only on an admin takedown of an already-LIVE listing (-> REMOVED).
+    // Deliberately separate from verifiedBy/verifiedAt/rejectionReason so a
+    // takedown doesn't overwrite the original approval's audit trail, and
+    // separate from rejectionReason so intake rejection and post-live
+    // removal aren't conflated into the same field.
+    removedBy: v.optional(v.id("users")),
+    removedAt: v.optional(v.number()),
+    removalReason: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
     isDeleted: v.optional(v.boolean()),

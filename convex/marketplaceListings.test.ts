@@ -268,6 +268,93 @@ describe("createListing", () => {
     const listing = await t.run((ctx) => ctx.db.get(listingId));
     expect(listing?.sellerWhatsapp).toBeUndefined();
   });
+
+  test("rejects an empty (or whitespace-only) make, model, transmission, or fuelType", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_46", "seller46@test.com");
+    const imageId = await seedImage(t);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.createListing, { ...baseListing, make: "   ", imageIds: [imageId] })
+    ).rejects.toThrow(/make is required/i);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.createListing, { ...baseListing, model: "", imageIds: [imageId] })
+    ).rejects.toThrow(/model is required/i);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.createListing, {
+        ...baseListing,
+        transmission: "   ",
+        imageIds: [imageId],
+      })
+    ).rejects.toThrow(/transmission is required/i);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.createListing, {
+        ...baseListing,
+        fuelType: "",
+        imageIds: [imageId],
+      })
+    ).rejects.toThrow(/fuel type is required/i);
+  });
+
+  test("rejects an oversized model", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_47", "seller47@test.com");
+    const imageId = await seedImage(t);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.createListing, {
+        ...baseListing,
+        model: "x".repeat(61),
+        imageIds: [imageId],
+      })
+    ).rejects.toThrow(/model must be at most 60 characters/i);
+  });
+
+  test("rejects an invalid currency code and accepts a valid one", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_48", "seller48@test.com");
+    const imageId = await seedImage(t);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.createListing, {
+        ...baseListing,
+        currency: "not-a-currency",
+        imageIds: [imageId],
+      })
+    ).rejects.toThrow(/currency must be one of/i);
+
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      currency: "JOD",
+      imageIds: [imageId],
+    });
+    const listing = await t.run((ctx) => ctx.db.get(listingId));
+    expect(listing?.currency).toBe("JOD");
+  });
+
+  test("stores make, model, transmission, and fuelType trimmed, not raw", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_49", "seller49@test.com");
+    const imageId = await seedImage(t);
+
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      make: "  Toyota  ",
+      model: "  Corolla  ",
+      transmission: "  Automatic  ",
+      fuelType: "  Petrol  ",
+      imageIds: [imageId],
+    });
+
+    const listing = await t.run((ctx) => ctx.db.get(listingId));
+    expect(listing?.make).toBe("Toyota");
+    expect(listing?.model).toBe("Corolla");
+    expect(listing?.transmission).toBe("Automatic");
+    expect(listing?.fuelType).toBe("Petrol");
+  });
 });
 
 describe("ownership: update / soft-delete", () => {
@@ -464,6 +551,95 @@ describe("ownership: update / soft-delete", () => {
     expect(listing?.city).toBe("Amman");
   });
 
+  test("updateListing rejects an empty make/model/transmission/fuelType, an oversized model, and an invalid currency", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_50", "seller50@test.com");
+    const imageId = await seedImage(t);
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.updateListing, { listingId, make: "   " })
+    ).rejects.toThrow(/make is required/i);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.updateListing, { listingId, model: "" })
+    ).rejects.toThrow(/model is required/i);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.updateListing, { listingId, transmission: "   " })
+    ).rejects.toThrow(/transmission is required/i);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.updateListing, { listingId, fuelType: "" })
+    ).rejects.toThrow(/fuel type is required/i);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.updateListing, { listingId, model: "x".repeat(61) })
+    ).rejects.toThrow(/model must be at most 60 characters/i);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.updateListing, { listingId, currency: "not-a-currency" })
+    ).rejects.toThrow(/currency must be one of/i);
+  });
+
+  test("updateListing stores make/model/transmission/fuelType trimmed, not raw", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_51", "seller51@test.com");
+    const imageId = await seedImage(t);
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+
+    await asSeller.mutation(api.marketplaceListings.updateListing, {
+      listingId,
+      make: "  Honda  ",
+      model: "  Civic  ",
+      transmission: "  Manual  ",
+      fuelType: "  Diesel  ",
+    });
+
+    const listing = await t.run((ctx) => ctx.db.get(listingId));
+    expect(listing?.make).toBe("Honda");
+    expect(listing?.model).toBe("Civic");
+    expect(listing?.transmission).toBe("Manual");
+    expect(listing?.fuelType).toBe("Diesel");
+  });
+
+  test("updateListing keeps the cached seller profile in sync when phone/city change", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_52", "seller52@test.com");
+    const imageId = await seedImage(t);
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+
+    await asSeller.mutation(api.marketplaceListings.updateListing, {
+      listingId,
+      sellerPhone: "+962788888888",
+      city: "Irbid",
+    });
+
+    const seller = await t.run((ctx) =>
+      ctx.db
+        .query("users")
+        .withIndex("by_clerkId", (q) => q.eq("clerkId", "seller_52"))
+        .unique()
+    );
+    const profile = await t.run((ctx) =>
+      ctx.db
+        .query("marketplaceIndividualSellerProfiles")
+        .withIndex("by_sellerUserId", (q) => q.eq("sellerUserId", seller!._id))
+        .unique()
+    );
+    expect(profile?.phone).toBe("+962788888888");
+    expect(profile?.city).toBe("Irbid");
+  });
+
   test("updateListing rejects edits once a listing is SOLD", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_30", "seller30@test.com");
@@ -489,7 +665,11 @@ describe("ownership: update / soft-delete", () => {
       imageIds: [imageId],
     });
     await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, { listingId, status: "LIVE" });
-    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, { listingId, status: "REMOVED" });
+    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, {
+      listingId,
+      status: "REMOVED",
+      rejectionReason: "Fraudulent listing.",
+    });
 
     await expect(
       asSeller.mutation(api.marketplaceListings.updateListing, { listingId, price: 1 })
@@ -521,6 +701,74 @@ describe("ownership: update / soft-delete", () => {
     expect(listing?.rejectionReason).toBeUndefined();
     expect(listing?.verifiedBy).toBeUndefined();
     expect(listing?.verifiedAt).toBeUndefined();
+  });
+});
+
+describe("markListingSold", () => {
+  test("owner can mark their own LIVE listing SOLD", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_55", "seller55@test.com");
+    const asAdmin = await seedUser(t, "admin_19", "admin@autoflow.dev");
+    const imageId = await seedImage(t);
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, { listingId, status: "LIVE" });
+
+    await asSeller.mutation(api.marketplaceListings.markListingSold, { listingId });
+
+    const listing = await t.run((ctx) => ctx.db.get(listingId));
+    expect(listing?.status).toBe("SOLD");
+  });
+
+  test("a non-owner cannot mark someone else's listing SOLD", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_56", "seller56@test.com");
+    const asOther = await seedUser(t, "seller_57", "seller57@test.com");
+    const asAdmin = await seedUser(t, "admin_20", "admin@autoflow.dev");
+    const imageId = await seedImage(t);
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, { listingId, status: "LIVE" });
+
+    await expect(
+      asOther.mutation(api.marketplaceListings.markListingSold, { listingId })
+    ).rejects.toThrow(/not found or you don't have permission/i);
+
+    const listing = await t.run((ctx) => ctx.db.get(listingId));
+    expect(listing?.status).toBe("LIVE");
+  });
+
+  test("marking a non-LIVE listing (PENDING_VERIFICATION or already SOLD) SOLD is rejected", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_58", "seller58@test.com");
+    const asAdmin = await seedUser(t, "admin_21", "admin@autoflow.dev");
+    const imageId = await seedImage(t);
+
+    const pendingListingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+    await expect(
+      asSeller.mutation(api.marketplaceListings.markListingSold, { listingId: pendingListingId })
+    ).rejects.toThrow(/only a live listing can be marked sold/i);
+
+    const liveListingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, {
+      listingId: liveListingId,
+      status: "LIVE",
+    });
+    await asSeller.mutation(api.marketplaceListings.markListingSold, { listingId: liveListingId });
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.markListingSold, { listingId: liveListingId })
+    ).rejects.toThrow(/only a live listing can be marked sold/i);
   });
 });
 
@@ -641,17 +889,89 @@ describe("visibility + admin verification lifecycle", () => {
 
     // Cannot remove a PENDING_VERIFICATION listing.
     await expect(
-      asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, { listingId, status: "REMOVED" })
+      asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, {
+        listingId,
+        status: "REMOVED",
+        rejectionReason: "Fraudulent listing.",
+      })
     ).rejects.toThrow(/only a live listing/i);
 
     await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, { listingId, status: "LIVE" });
-    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, { listingId, status: "REMOVED" });
+    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, {
+      listingId,
+      status: "REMOVED",
+      rejectionReason: "Fraudulent listing.",
+    });
 
     const listing = await t.run((ctx) => ctx.db.get(listingId));
     expect(listing?.status).toBe("REMOVED");
 
     // Once REMOVED, it's no longer publicly reachable.
     expect(await t.query(api.marketplaceListings.getListingById, { listingId })).toBeNull();
+  });
+
+  test("removing a LIVE listing preserves the original approval's verifiedBy/verifiedAt and records removedBy/removedAt/removalReason distinctly", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_53", "seller53@test.com");
+    const asApprover = await seedUser(t, "admin_16", "admin@autoflow.dev");
+    const asRemover = await seedUser(t, "admin_17", "admin@autoflow.dev");
+    const imageId = await seedImage(t);
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+
+    await asApprover.mutation(api.marketplaceListings.adminSetListingStatus, { listingId, status: "LIVE" });
+    const afterApproval = await t.run((ctx) => ctx.db.get(listingId));
+    const originalVerifiedBy = afterApproval?.verifiedBy;
+    const originalVerifiedAt = afterApproval?.verifiedAt;
+    expect(originalVerifiedBy).toBeTypeOf("string");
+    expect(originalVerifiedAt).toBeTypeOf("number");
+
+    await asRemover.mutation(api.marketplaceListings.adminSetListingStatus, {
+      listingId,
+      status: "REMOVED",
+      rejectionReason: "Reported as fraudulent by a buyer.",
+    });
+
+    const afterRemoval = await t.run((ctx) => ctx.db.get(listingId));
+    expect(afterRemoval?.status).toBe("REMOVED");
+    // Original approval audit trail is untouched by the takedown.
+    expect(afterRemoval?.verifiedBy).toBe(originalVerifiedBy);
+    expect(afterRemoval?.verifiedAt).toBe(originalVerifiedAt);
+    // Takedown is recorded on its own, separate fields.
+    expect(afterRemoval?.removedBy).toBeTypeOf("string");
+    expect(afterRemoval?.removedAt).toBeTypeOf("number");
+    expect(afterRemoval?.removalReason).toBe("Reported as fraudulent by a buyer.");
+    // rejectionReason (intake-rejection field) is untouched by a removal.
+    expect(afterRemoval?.rejectionReason).toBeUndefined();
+  });
+
+  test("removing a listing requires a reason, and a whitespace-only reason is treated as no reason", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_54", "seller54@test.com");
+    const asAdmin = await seedUser(t, "admin_18", "admin@autoflow.dev");
+    const imageId = await seedImage(t);
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, { listingId, status: "LIVE" });
+
+    await expect(
+      asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, { listingId, status: "REMOVED" })
+    ).rejects.toThrow(/removal reason/i);
+
+    await expect(
+      asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, {
+        listingId,
+        status: "REMOVED",
+        rejectionReason: "   ",
+      })
+    ).rejects.toThrow(/removal reason/i);
+
+    const listing = await t.run((ctx) => ctx.db.get(listingId));
+    expect(listing?.status).toBe("LIVE");
   });
 
   test("editing a material field on a LIVE listing sends it back to PENDING_VERIFICATION", async () => {
@@ -672,6 +992,36 @@ describe("visibility + admin verification lifecycle", () => {
     expect(listing?.price).toBe(9999);
     expect(listing?.verifiedBy).toBeUndefined();
   });
+
+  test.each(["transmission", "fuelType", "city"] as const)(
+    "editing %s on a LIVE listing sends it back to PENDING_VERIFICATION",
+    async (field) => {
+      const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+      const asSeller = await seedUser(t, `seller_${field}`, `seller_${field}@test.com`);
+      const asAdmin = await seedUser(t, `admin_${field}`, "admin@autoflow.dev");
+      const imageId = await seedImage(t);
+      const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+        ...baseListing,
+        imageIds: [imageId],
+      });
+      await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, { listingId, status: "LIVE" });
+
+      const newValues: Record<string, string> = {
+        transmission: "Manual",
+        fuelType: "Diesel",
+        city: "Zarqa",
+      };
+      await asSeller.mutation(api.marketplaceListings.updateListing, {
+        listingId,
+        [field]: newValues[field],
+      });
+
+      const listing = await t.run((ctx) => ctx.db.get(listingId));
+      expect(listing?.status).toBe("PENDING_VERIFICATION");
+      expect((listing as unknown as Record<string, string>)?.[field]).toBe(newValues[field]);
+      expect(listing?.verifiedBy).toBeUndefined();
+    }
+  );
 
   test("editing only contact info on a LIVE listing does not reset it to PENDING_VERIFICATION", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));

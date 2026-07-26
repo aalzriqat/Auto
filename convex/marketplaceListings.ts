@@ -26,6 +26,9 @@ const MATERIAL_FIELDS = [
   "mileage",
   "price",
   "currency",
+  "transmission",
+  "fuelType",
+  "city",
   "condition",
   "description",
   "imageIds",
@@ -48,6 +51,16 @@ const MAX_SELLER_DISPLAY_NAME_LENGTH = 120;
 const MAX_SELLER_PHONE_LENGTH = 32;
 const MAX_CITY_LENGTH = 80;
 const MAX_DESCRIPTION_LENGTH = 5000;
+const MAX_MAKE_LENGTH = 60;
+const MAX_MODEL_LENGTH = 60;
+const MAX_TRANSMISSION_LENGTH = 40;
+const MAX_FUEL_TYPE_LENGTH = 40;
+
+// This repo has no existing shared currency-code allowlist (orgSettings.ts
+// stores an org's currency as a free-form string) — this app's two primary
+// markets per its i18n conventions are Jordan and USD-denominated deals, so
+// that's the floor for this allowlist until a broader one is needed.
+const ALLOWED_CURRENCIES = ["JOD", "USD"] as const;
 
 /** Trims `value`, then throws unless the result is non-empty and within `maxLength`. */
 function assertRequiredText(value: string, label: string, maxLength: number): string {
@@ -102,6 +115,15 @@ function assertValidYear(year: number): void {
   if (!Number.isInteger(year) || year < MIN_LISTING_YEAR || year > maxYear) {
     throw new ConvexError(`Year must be a whole number between ${MIN_LISTING_YEAR} and ${maxYear}.`);
   }
+}
+
+/** Trims `currency`, then throws unless it's one of ALLOWED_CURRENCIES. */
+function assertValidCurrency(currency: string): string {
+  const trimmed = currency.trim();
+  if (!(ALLOWED_CURRENCIES as readonly string[]).includes(trimmed)) {
+    throw new ConvexError(`Currency must be one of: ${ALLOWED_CURRENCIES.join(", ")}.`);
+  }
+  return trimmed;
 }
 
 /**
@@ -178,6 +200,21 @@ function assertAndNormalizeTextFields(fields: UpdateListingFields): UpdateListin
   }
   if (fields.description !== undefined) {
     normalized.description = assertRequiredText(fields.description, "Description", MAX_DESCRIPTION_LENGTH);
+  }
+  if (fields.make !== undefined) {
+    normalized.make = assertRequiredText(fields.make, "Make", MAX_MAKE_LENGTH);
+  }
+  if (fields.model !== undefined) {
+    normalized.model = assertRequiredText(fields.model, "Model", MAX_MODEL_LENGTH);
+  }
+  if (fields.transmission !== undefined) {
+    normalized.transmission = assertRequiredText(fields.transmission, "Transmission", MAX_TRANSMISSION_LENGTH);
+  }
+  if (fields.fuelType !== undefined) {
+    normalized.fuelType = assertRequiredText(fields.fuelType, "Fuel type", MAX_FUEL_TYPE_LENGTH);
+  }
+  if (fields.currency !== undefined) {
+    normalized.currency = assertValidCurrency(fields.currency);
   }
   return normalized;
 }
@@ -257,6 +294,34 @@ function resolveReviewResetFields(
   };
 }
 
+/**
+ * Keeps the cached `marketplaceIndividualSellerProfiles` row (used by
+ * createListing to skip re-collecting contact info, and by a future admin
+ * queue to show "already verified before" context) in sync when an edit
+ * actually changes sellerPhone and/or city. A no-op when neither field was
+ * touched. If the profile row is somehow missing (it should always exist,
+ * since createListing always upserts one), this skips rather than throwing —
+ * a stale/missing cache row isn't worth failing the whole edit over.
+ */
+async function syncSellerProfileCache(
+  ctx: MutationCtx,
+  sellerUserId: Id<"users">,
+  fields: UpdateListingFields
+): Promise<void> {
+  if (fields.sellerPhone === undefined && fields.city === undefined) return;
+
+  const profile = await ctx.db
+    .query("marketplaceIndividualSellerProfiles")
+    .withIndex("by_sellerUserId", (q) => q.eq("sellerUserId", sellerUserId))
+    .unique();
+  if (!profile) return;
+
+  const patch: Partial<Doc<"marketplaceIndividualSellerProfiles">> = { updatedAt: Date.now() };
+  if (fields.sellerPhone !== undefined) patch.phone = fields.sellerPhone;
+  if (fields.city !== undefined) patch.city = fields.city;
+  await ctx.db.patch(profile._id, patch);
+}
+
 // ─── Mutations ───────────────────────────────────────────────────────────────
 
 export const createListing = mutation({
@@ -298,6 +363,11 @@ export const createListing = mutation({
       const sellerWhatsapp = assertOptionalText(args.sellerWhatsapp, "Seller WhatsApp", MAX_SELLER_PHONE_LENGTH);
       const city = assertRequiredText(args.city, "City", MAX_CITY_LENGTH);
       const description = assertRequiredText(args.description, "Description", MAX_DESCRIPTION_LENGTH);
+      const make = assertRequiredText(args.make, "Make", MAX_MAKE_LENGTH);
+      const model = assertRequiredText(args.model, "Model", MAX_MODEL_LENGTH);
+      const transmission = assertRequiredText(args.transmission, "Transmission", MAX_TRANSMISSION_LENGTH);
+      const fuelType = assertRequiredText(args.fuelType, "Fuel type", MAX_FUEL_TYPE_LENGTH);
+      const currency = assertValidCurrency(args.currency);
 
       const now = Date.now();
       const listingId = await ctx.db.insert("marketplaceListings", {
@@ -306,14 +376,14 @@ export const createListing = mutation({
         sellerDisplayName,
         sellerPhone,
         sellerWhatsapp,
-        make: args.make,
-        model: args.model,
+        make,
+        model,
         year: args.year,
         mileage: args.mileage,
         price: args.price,
-        currency: args.currency,
-        transmission: args.transmission,
-        fuelType: args.fuelType,
+        currency,
+        transmission,
+        fuelType,
         city,
         description,
         condition: args.condition,
@@ -400,6 +470,7 @@ export const updateListing = mutation({
       if (reviewReset) Object.assign(patch, reviewReset);
 
       await ctx.db.patch(args.listingId, patch);
+      await syncSellerProfileCache(ctx, user._id, normalizedFields);
       return null;
     } catch (error) {
       if (error instanceof ConvexError) throw error;
@@ -433,6 +504,97 @@ export const softDeleteListing = mutation({
 });
 
 /**
+ * The only production path that can ever move a listing to SOLD: owner-only,
+ * and only reachable from LIVE (a listing has to have been publicly visible
+ * for a buyer to have bought it through). Any other current status — still
+ * pending, rejected, removed, or already sold — is rejected outright.
+ */
+export const markListingSold = mutation({
+  args: { listingId: v.id("marketplaceListings") },
+  handler: async (ctx, args) => {
+    try {
+      const user = await requireAuth(ctx);
+
+      const listing = await requireOwnedListing(ctx, args.listingId, user._id);
+      if (listing.status !== "LIVE") {
+        throw new ConvexError(
+          `Cannot mark a listing with status "${listing.status}" as sold. Only a LIVE listing can be marked sold.`
+        );
+      }
+
+      await ctx.db.patch(args.listingId, {
+        status: "SOLD",
+        updatedAt: Date.now(),
+      });
+      return null;
+    } catch (error) {
+      if (error instanceof ConvexError) throw error;
+      console.error("marketplaceListings.markListingSold failed", error);
+      throw new ConvexError("An unexpected error occurred. Please try again later.");
+    }
+  },
+});
+
+/**
+ * Fields to patch onto a listing whose status an admin is setting, beyond
+ * the status/updatedAt fields both targets share:
+ *  - LIVE (approval): stamp verifiedBy/verifiedAt.
+ *  - REJECTED (intake rejection): stamp rejectionReason only. verifiedBy/
+ *    verifiedAt are intentionally left untouched (a REJECTED listing was
+ *    never approved).
+ *  - REMOVED (post-live takedown): stamp removedBy/removedAt/removalReason
+ *    instead of verifiedBy/verifiedAt/rejectionReason, so taking a LIVE
+ *    listing down does NOT overwrite the original approving admin's
+ *    identity/timestamp — that audit trail needs to survive a takedown.
+ */
+function buildAdminStatusPatch(
+  status: "LIVE" | "REJECTED" | "REMOVED",
+  adminId: Id<"users">,
+  trimmedReason: string | undefined
+): Partial<Doc<"marketplaceListings">> {
+  if (status === "LIVE") {
+    return { verifiedBy: adminId, verifiedAt: Date.now() };
+  }
+  if (status === "REJECTED") {
+    return { rejectionReason: trimmedReason };
+  }
+  return { removedBy: adminId, removedAt: Date.now(), removalReason: trimmedReason };
+}
+
+/** Throws unless `targetStatus` is a legal transition from `currentStatus`. */
+function assertValidAdminStatusTransition(
+  currentStatus: Doc<"marketplaceListings">["status"],
+  targetStatus: "LIVE" | "REJECTED" | "REMOVED"
+): void {
+  if (targetStatus === "REMOVED") {
+    if (currentStatus !== "LIVE") {
+      throw new ConvexError(
+        `Cannot remove a listing with status "${currentStatus}". Only a LIVE listing can be taken down.`
+      );
+    }
+    return;
+  }
+  if (currentStatus !== "PENDING_VERIFICATION") {
+    throw new ConvexError(
+      `Cannot verify a listing with status "${currentStatus}". Only PENDING_VERIFICATION listings can be approved or rejected.`
+    );
+  }
+}
+
+/** REJECTED and REMOVED both require a non-empty reason; LIVE does not. */
+function assertAdminStatusReasonProvided(
+  status: "LIVE" | "REJECTED" | "REMOVED",
+  trimmedReason: string | undefined
+): void {
+  if (status === "REJECTED" && !trimmedReason) {
+    throw new ConvexError("A rejection reason is required.");
+  }
+  if (status === "REMOVED" && !trimmedReason) {
+    throw new ConvexError("A removal reason is required.");
+  }
+}
+
+/**
  * Groundwork for the admin verification queue (separate follow-up ticket):
  * a listing normally only leaves PENDING_VERIFICATION for LIVE or REJECTED
  * through this super-admin-gated mutation. It also lets a super admin take
@@ -456,28 +618,13 @@ export const adminSetListingStatus = mutation({
 
       const trimmedReason = args.rejectionReason?.trim();
 
-      if (args.status === "REMOVED") {
-        if (listing.status !== "LIVE") {
-          throw new ConvexError(
-            `Cannot remove a listing with status "${listing.status}". Only a LIVE listing can be taken down.`
-          );
-        }
-      } else if (listing.status !== "PENDING_VERIFICATION") {
-        throw new ConvexError(
-          `Cannot verify a listing with status "${listing.status}". Only PENDING_VERIFICATION listings can be approved or rejected.`
-        );
-      }
-
-      if (args.status === "REJECTED" && !trimmedReason) {
-        throw new ConvexError("A rejection reason is required.");
-      }
+      assertValidAdminStatusTransition(listing.status, args.status);
+      assertAdminStatusReasonProvided(args.status, trimmedReason);
 
       await ctx.db.patch(args.listingId, {
         status: args.status,
-        verifiedBy: admin._id,
-        verifiedAt: Date.now(),
-        rejectionReason: args.status === "REJECTED" || args.status === "REMOVED" ? trimmedReason : undefined,
         updatedAt: Date.now(),
+        ...buildAdminStatusPatch(args.status, admin._id, trimmedReason),
       });
       return null;
     } catch (error) {
