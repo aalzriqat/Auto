@@ -87,6 +87,107 @@ async function requireOwnedListing(
   return listing;
 }
 
+// Every field `updateListing` can change, mirrored from the persisted doc
+// shape so a helper working with these fields can assign straight into a
+// `Partial<Doc<"marketplaceListings">>` patch without casting.
+type UpdateListingFields = Partial<
+  Pick<
+    Doc<"marketplaceListings">,
+    | "sellerDisplayName"
+    | "sellerPhone"
+    | "sellerWhatsapp"
+    | "make"
+    | "model"
+    | "year"
+    | "mileage"
+    | "price"
+    | "currency"
+    | "transmission"
+    | "fuelType"
+    | "city"
+    | "description"
+    | "condition"
+    | "imageIds"
+  >
+>;
+
+function assertEditableListingStatus(status: Doc<"marketplaceListings">["status"]): void {
+  if (status === "SOLD" || status === "REMOVED") {
+    throw new ConvexError(`Cannot edit a listing with status "${status}".`);
+  }
+}
+
+async function assertUpdateFieldsValid(ctx: MutationCtx, fields: UpdateListingFields): Promise<void> {
+  if (fields.imageIds !== undefined) {
+    assertImageCountWithinBounds(fields.imageIds);
+    await assertMarketplaceListingImagesAllowed(ctx, fields.imageIds);
+  }
+  if (fields.price !== undefined) assertValidPrice(fields.price);
+  if (fields.mileage !== undefined) assertValidMileage(fields.mileage);
+  if (fields.year !== undefined) assertValidYear(fields.year);
+}
+
+function buildListingPatchFields(fields: UpdateListingFields): Partial<Doc<"marketplaceListings">> {
+  const patch: Partial<Doc<"marketplaceListings">> = {};
+  if (fields.sellerDisplayName !== undefined) patch.sellerDisplayName = fields.sellerDisplayName;
+  if (fields.sellerPhone !== undefined) patch.sellerPhone = fields.sellerPhone;
+  if (fields.sellerWhatsapp !== undefined) patch.sellerWhatsapp = fields.sellerWhatsapp;
+  if (fields.make !== undefined) patch.make = fields.make;
+  if (fields.model !== undefined) patch.model = fields.model;
+  if (fields.year !== undefined) patch.year = fields.year;
+  if (fields.mileage !== undefined) patch.mileage = fields.mileage;
+  if (fields.price !== undefined) patch.price = fields.price;
+  if (fields.currency !== undefined) patch.currency = fields.currency;
+  if (fields.transmission !== undefined) patch.transmission = fields.transmission;
+  if (fields.fuelType !== undefined) patch.fuelType = fields.fuelType;
+  if (fields.city !== undefined) patch.city = fields.city;
+  if (fields.description !== undefined) patch.description = fields.description;
+  if (fields.condition !== undefined) patch.condition = fields.condition;
+  if (fields.imageIds !== undefined) patch.imageIds = fields.imageIds;
+  return patch;
+}
+
+/** True when the edit touches any MATERIAL_FIELDS value away from what's currently persisted. */
+function isMaterialFieldChanged(fields: UpdateListingFields, listing: Doc<"marketplaceListings">): boolean {
+  return MATERIAL_FIELDS.some((field) => {
+    const nextValue = (fields as Record<string, unknown>)[field];
+    if (nextValue === undefined) return false;
+    if (field === "imageIds") {
+      const nextImages = nextValue as Id<"_storage">[];
+      const currentImages = listing.imageIds;
+      return (
+        nextImages.length !== currentImages.length ||
+        nextImages.some((id, i) => id !== currentImages[i])
+      );
+    }
+    return nextValue !== listing[field as keyof Doc<"marketplaceListings">];
+  });
+}
+
+/**
+ * Fields to merge into the patch when this edit needs to send (or re-send)
+ * the listing back through admin review: a REJECTED listing has no other
+ * path back to review, so ANY edit resets it to PENDING_VERIFICATION so the
+ * seller can resubmit whatever they fixed. A LIVE listing only resets when
+ * the edit changes a MATERIAL_FIELDS value that buyers are actually shown;
+ * a still-pending listing simply keeps collecting edits until an admin
+ * looks at it. Returns null when no re-review reset is needed.
+ */
+function resolveReviewResetFields(
+  listing: Doc<"marketplaceListings">,
+  materialChanged: boolean
+): Partial<Doc<"marketplaceListings">> | null {
+  const needsReviewReset =
+    listing.status === "REJECTED" || (materialChanged && listing.status === "LIVE");
+  if (!needsReviewReset) return null;
+  return {
+    status: "PENDING_VERIFICATION",
+    verifiedBy: undefined,
+    verifiedAt: undefined,
+    rejectionReason: undefined,
+  };
+}
+
 // ─── Mutations ───────────────────────────────────────────────────────────────
 
 export const createListing = mutation({
@@ -205,68 +306,19 @@ export const updateListing = mutation({
       const user = await requireAuth(ctx);
 
       const listing = await requireOwnedListing(ctx, args.listingId, user._id);
-
-      if (listing.status === "SOLD" || listing.status === "REMOVED") {
-        throw new ConvexError(`Cannot edit a listing with status "${listing.status}".`);
-      }
-
-      if (args.imageIds !== undefined) {
-        assertImageCountWithinBounds(args.imageIds);
-        await assertMarketplaceListingImagesAllowed(ctx, args.imageIds);
-      }
-      if (args.price !== undefined) assertValidPrice(args.price);
-      if (args.mileage !== undefined) assertValidMileage(args.mileage);
-      if (args.year !== undefined) assertValidYear(args.year);
+      assertEditableListingStatus(listing.status);
 
       const { listingId, ...fields } = args;
-      const patch: Partial<Doc<"marketplaceListings">> = { updatedAt: Date.now() };
-      if (fields.sellerDisplayName !== undefined) patch.sellerDisplayName = fields.sellerDisplayName;
-      if (fields.sellerPhone !== undefined) patch.sellerPhone = fields.sellerPhone;
-      if (fields.sellerWhatsapp !== undefined) patch.sellerWhatsapp = fields.sellerWhatsapp;
-      if (fields.make !== undefined) patch.make = fields.make;
-      if (fields.model !== undefined) patch.model = fields.model;
-      if (fields.year !== undefined) patch.year = fields.year;
-      if (fields.mileage !== undefined) patch.mileage = fields.mileage;
-      if (fields.price !== undefined) patch.price = fields.price;
-      if (fields.currency !== undefined) patch.currency = fields.currency;
-      if (fields.transmission !== undefined) patch.transmission = fields.transmission;
-      if (fields.fuelType !== undefined) patch.fuelType = fields.fuelType;
-      if (fields.city !== undefined) patch.city = fields.city;
-      if (fields.description !== undefined) patch.description = fields.description;
-      if (fields.condition !== undefined) patch.condition = fields.condition;
-      if (fields.imageIds !== undefined) patch.imageIds = fields.imageIds;
+      await assertUpdateFieldsValid(ctx, fields);
 
-      const materialChanged = MATERIAL_FIELDS.some((field) => {
-        const nextValue = (fields as Record<string, unknown>)[field];
-        if (nextValue === undefined) return false;
-        if (field === "imageIds") {
-          const nextImages = nextValue as Id<"_storage">[];
-          const currentImages = listing.imageIds;
-          return (
-            nextImages.length !== currentImages.length ||
-            nextImages.some((id, i) => id !== currentImages[i])
-          );
-        }
-        return nextValue !== listing[field as keyof Doc<"marketplaceListings">];
-      });
+      const patch: Partial<Doc<"marketplaceListings">> = {
+        updatedAt: Date.now(),
+        ...buildListingPatchFields(fields),
+      };
 
-      if (listing.status === "REJECTED") {
-        // A rejected listing has no other path back to review — route any
-        // edit back to PENDING_VERIFICATION so the seller can resubmit
-        // whatever they fixed, rather than leaving it stuck as REJECTED.
-        patch.status = "PENDING_VERIFICATION";
-        patch.verifiedBy = undefined;
-        patch.verifiedAt = undefined;
-        patch.rejectionReason = undefined;
-      } else if (materialChanged && listing.status === "LIVE") {
-        // Only a listing that already reached LIVE needs to go back through
-        // review for a material change; a still-pending listing simply keeps
-        // collecting edits until an admin looks at it.
-        patch.status = "PENDING_VERIFICATION";
-        patch.verifiedBy = undefined;
-        patch.verifiedAt = undefined;
-        patch.rejectionReason = undefined;
-      }
+      const materialChanged = isMaterialFieldChanged(fields, listing);
+      const reviewReset = resolveReviewResetFields(listing, materialChanged);
+      if (reviewReset) Object.assign(patch, reviewReset);
 
       await ctx.db.patch(args.listingId, patch);
       return null;
