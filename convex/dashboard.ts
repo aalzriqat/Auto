@@ -409,7 +409,7 @@ export const todayForRole = query({
     const chequesDueThisWeekRows = await ctx.db
       .query("postDatedCheques")
       .withIndex("by_org_status_and_chequeDate", (q) =>
-        q.eq("orgId", args.orgId).eq("status", "HELD").gte("chequeDate", now).lte("chequeDate", weekEnd),
+        q.eq("orgId", args.orgId).eq("status", "HELD").gte("chequeDate", todayStart).lte("chequeDate", weekEnd),
       )
       .filter((q) => q.neq(q.field("isDeleted"), true))
       .take(TODAY_FOR_ROLE_CAP);

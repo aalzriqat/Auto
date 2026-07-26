@@ -31,6 +31,7 @@ import { useAppFontState } from "../../providers/AppFontContext";
 import { useLocale } from "../../providers/LocaleProvider";
 import { getTypographyStyle, type AppTheme } from "../../theme";
 import { useAppTheme, useThemedStyles } from "../../providers/ThemeProvider";
+import { money } from "../workspace/modules/moduleShared";
 import { WorkspaceModuleLauncher } from "../workspace/WorkspaceModuleLauncher";
 import { SmoothAreaChart } from "./SmoothAreaChart";
 import { TodayAgenda } from "./TodayAgenda";
@@ -156,6 +157,7 @@ function getRoleStart(roleName: string | undefined): RoleStart | null {
 }
 
 const FINANCE_PERMISSIONS: readonly string[] = ["view:sales", "view:reports", "view:finance"];
+const VIEW_FINANCE_PERMISSION = "view:finance";
 
 // The owner/manager "performance" section (revenue hero, metric grid, team) reads
 // permission-gated numbers server-side; hide it for roles that would only see
@@ -163,6 +165,17 @@ const FINANCE_PERMISSIONS: readonly string[] = ["view:sales", "view:reports", "v
 function showsPerformanceSection(myMembership: MobileMyMembership): boolean {
   if (myMembership.roleName?.toUpperCase() === "OWNER") return true;
   return myMembership.permissions.some((permission) => FINANCE_PERMISSIONS.includes(permission));
+}
+
+// `dashboard.todayForRole` is gated server-side on `view:finance` specifically
+// (not the broader FINANCE_PERMISSIONS set above). Gate the panel + query on
+// the caller's ACTUAL permission, not a role-name heuristic — a custom role
+// literally named "ACCOUNTANT" without this permission must not mount the
+// query (it would just error), and any role that DOES have the permission
+// should see the panel regardless of its name.
+function hasViewFinancePermission(myMembership: MobileMyMembership): boolean {
+  if (myMembership.roleName?.toUpperCase() === "OWNER") return true;
+  return myMembership.permissions.includes(VIEW_FINANCE_PERMISSION);
 }
 
 function Header({ org }: { org: MobileOrgSummary }) {
@@ -333,31 +346,58 @@ function MetricCard({
 function MetricGridSection({
   stats,
   locale,
+  isAccountantRole,
+  todayForRole,
 }: {
   stats: MobileDashboardStats;
   locale: "en" | "ar";
+  isAccountantRole: boolean;
+  todayForRole?: MobileDashboardTodayForRole;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { t, textDirection } = useLocale();
   const type = useDashboardTypography();
   const [expanded, setExpanded] = useState(false);
 
+  // An accountant may have `view:finance` but not `view:vehicles` — forcing
+  // vehicles as the always-visible prominent tile would show a permission-
+  // withheld "0" as if it were real data. Show a finance-relevant figure
+  // instead for that role, and keep vehicles for every other role/no-role.
+  const collectionsDueToday = todayForRole?.collectionsDueToday ?? { count: 0, amount: 0 };
+  const showFinanceProminent = isAccountantRole && todayForRole !== undefined;
+
+  const vehiclesCard = (
+    <MetricCard
+      title={t("vehiclesUpper")}
+      value={plainNumber(stats.totalVehicles, locale)}
+      caption={`${plainNumber(stats.availableVehicles, locale)} ${t("available")}`}
+      icon="vehicles"
+      tone="success"
+      fullWidth={!showFinanceProminent}
+    />
+  );
+
   return (
     <View style={styles.metricSection}>
       <View style={styles.metricGrid}>
-        <MetricCard
-          title={t("vehiclesUpper")}
-          value={plainNumber(stats.totalVehicles, locale)}
-          caption={`${plainNumber(stats.availableVehicles, locale)} ${t("available")}`}
-          icon="vehicles"
-          tone="success"
-          fullWidth
-        />
+        {showFinanceProminent ? (
+          <MetricCard
+            title={t("collectionsDueToday")}
+            value={`${money(collectionsDueToday.amount, locale)} · ${plainNumber(collectionsDueToday.count, locale)}`}
+            caption={t("collectionsDueTodayCaption")}
+            icon="finance"
+            tone="info"
+            fullWidth
+          />
+        ) : (
+          vehiclesCard
+        )}
       </View>
 
       {expanded ? (
         <FadeSlideIn delay={0}>
           <View style={styles.metricGrid}>
+            {showFinanceProminent ? vehiclesCard : null}
             <MetricCard
               title={t("leadsUpper")}
               value={plainNumber(stats.activeLeads, locale)}
@@ -401,14 +441,15 @@ function MetricGridSection({
 // Wave 2 — role-aware Today data for accountants: collections due, cheques
 // due this week, and overdue receivables. Reuses the same panel/pill visual
 // language as DataQualityPanel below.
-function AccountantTodayPanel({ orgId }: Readonly<{ orgId: string }>) {
+// `todayForRole` is fetched by the caller (gated on the real `view:finance`
+// permission, using Convex's "skip" sentinel when the caller lacks it — see
+// hasViewFinancePermission) so this panel never fires the query itself.
+function AccountantTodayPanel({
+  todayForRole,
+}: Readonly<{ todayForRole: MobileDashboardTodayForRole | undefined }>) {
   const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
   const type = useDashboardTypography();
-  const todayForRole: MobileDashboardTodayForRole | undefined = useQuery(
-    api.dashboard.todayForRole,
-    { orgId },
-  );
 
   if (todayForRole === undefined) {
     return (
@@ -419,25 +460,28 @@ function AccountantTodayPanel({ orgId }: Readonly<{ orgId: string }>) {
     );
   }
 
-  const collectionsDueToday = todayForRole?.collectionsDueToday ?? { count: 0, amount: 0 };
-  const chequesDueThisWeek = todayForRole?.chequesDueThisWeek ?? { count: 0, amount: 0 };
-  const overdueReceivables = todayForRole?.overdueReceivables ?? { count: 0, amount: 0 };
+  const collectionsDueToday = todayForRole.collectionsDueToday;
+  const chequesDueThisWeek = todayForRole.chequesDueThisWeek;
+  const overdueReceivables = todayForRole.overdueReceivables;
 
   return (
     <Card style={[styles.panel, { direction: textDirection }]}>
       <Text style={[styles.panelTitle, type.label]}>{t("accountantTodayUpper")}</Text>
+      {todayForRole.truncated ? (
+        <Text style={[styles.panelTruncatedNote, type.caption]}>{t("todayForRolePartialTotal")}</Text>
+      ) : null}
       <View style={styles.qualityGrid}>
         <MetricPill
           label={t("collectionsDueToday")}
-          value={`${plainNumber(collectionsDueToday.amount, locale)} · ${plainNumber(collectionsDueToday.count, locale)}`}
+          value={`${money(collectionsDueToday.amount, locale)} · ${plainNumber(collectionsDueToday.count, locale)}`}
         />
         <MetricPill
           label={t("chequesDueThisWeek")}
-          value={`${plainNumber(chequesDueThisWeek.amount, locale)} · ${plainNumber(chequesDueThisWeek.count, locale)}`}
+          value={`${money(chequesDueThisWeek.amount, locale)} · ${plainNumber(chequesDueThisWeek.count, locale)}`}
         />
         <MetricPill
           label={t("overdueReceivables")}
-          value={`${plainNumber(overdueReceivables.amount, locale)} · ${plainNumber(overdueReceivables.count, locale)}`}
+          value={`${money(overdueReceivables.amount, locale)} · ${plainNumber(overdueReceivables.count, locale)}`}
         />
       </View>
     </Card>
@@ -651,6 +695,15 @@ function DashboardContent({
   const type = useDashboardTypography();
   const roleStart = getRoleStart(myMembership.roleName);
   const showsPerformance = showsPerformanceSection(myMembership);
+  // Gated on the caller's ACTUAL `view:finance` permission, not the role-name
+  // match `roleStart` uses — a differently-named role with the permission
+  // should still see this, and a role literally named ACCOUNTANT without it
+  // must not mount the query (which requires the permission server-side).
+  const canViewFinanceToday = hasViewFinancePermission(myMembership);
+  const todayForRole: MobileDashboardTodayForRole | undefined = useQuery(
+    api.dashboard.todayForRole,
+    canViewFinanceToday ? { orgId: org._id } : "skip",
+  );
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContentFull}>
@@ -664,9 +717,9 @@ function DashboardContent({
             <RoleStartCard orgId={org._id} start={roleStart} />
           </FadeSlideIn>
         ) : null}
-        {roleStart?.moduleId === "accounting" ? (
+        {canViewFinanceToday ? (
           <FadeSlideIn delay={100}>
-            <AccountantTodayPanel orgId={org._id} />
+            <AccountantTodayPanel todayForRole={todayForRole} />
           </FadeSlideIn>
         ) : null}
         <FadeSlideIn delay={70}>
@@ -705,7 +758,12 @@ function DashboardContent({
             <Text style={[styles.performanceEyebrow, type.label]}>{t("performanceUpper")}</Text>
             <SalesHero stats={stats} timeRange={timeRange} onChangeTimeRange={onChangeTimeRange} />
 
-            <MetricGridSection stats={stats} locale={locale} />
+            <MetricGridSection
+              stats={stats}
+              locale={locale}
+              isAccountantRole={roleStart?.moduleId === "accounting"}
+              todayForRole={todayForRole}
+            />
 
             <DataQualityPanel dataQuality={dataQuality} />
             <TeamPanel stats={stats} />
@@ -1114,6 +1172,11 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     color: theme.colors.mutedText,
     fontSize: 14,
     lineHeight: 20,
+  },
+  panelTruncatedNote: {
+    color: theme.colors.mutedText,
+    fontSize: 12,
+    fontStyle: "italic",
   },
   qualityGrid: {
     gap: theme.spacing.sm,

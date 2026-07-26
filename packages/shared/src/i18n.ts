@@ -103,6 +103,8 @@ const mobileFoundationStringEntries = [
   ["collectionsDueToday", "Due today", "مستحق اليوم"],
   ["chequesDueThisWeek", "Cheques this week", "شيكات هذا الأسبوع"],
   ["overdueReceivables", "Overdue receivables", "ذمم متأخرة"],
+  ["collectionsDueTodayCaption", "Outstanding collections", "تحصيلات مستحقة"],
+  ["todayForRolePartialTotal", "Partial total — some rows were capped", "إجمالي جزئي — تم تقييد بعض الصفوف"],
   ["todayAgendaAllCaughtUpTitle", "You're all caught up", "أنجزت كل شيء"],
   ["todayAgendaAllCaughtUpBody", "Nothing needs your attention right now.", "لا يوجد ما يحتاج انتباهك الآن."],
   ["todayAgendaOverdueTasks", "overdue tasks", "مهام متأخرة"],

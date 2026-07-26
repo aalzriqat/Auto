@@ -433,4 +433,45 @@ describe("dashboard.todayForRole", () => {
 
     await expect(asUser.query(api.dashboard.todayForRole, { orgId })).rejects.toThrow();
   });
+
+  test("includes a cheque due today, stored as UTC midnight of the due date rather than an offset from now", async () => {
+    const { t, orgId, asUser } = await setup(FINANCE_PERMISSIONS);
+    const { customerId } = await seedCustomerAndVehicle(t, orgId);
+    const now = Date.now();
+    const createdBy = await t.run((ctx) =>
+      ctx.db
+        .query("memberships")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .first()
+        .then((membership) => membership!.userId)
+    );
+
+    // Real accounting-date convention (lib/dateInput.ts's dateInputToUtcMs): a
+    // cheque due "today" is stored as UTC midnight of today's calendar date,
+    // not an offset from the current instant. `.gte("chequeDate", now)` would
+    // wrongly exclude this row for essentially the entire day, since
+    // chequeDate (today's midnight) is less than `now` (the current instant)
+    // except right at midnight itself.
+    const today = new Date();
+    const chequeDateToday = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+
+    await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", {
+        orgId,
+        customerId,
+        bank: "Arab Bank",
+        chequeNumber: "2001",
+        chequeDate: chequeDateToday,
+        amount: 750,
+        status: "HELD",
+        createdBy,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+
+    const result = await asUser.query(api.dashboard.todayForRole, { orgId });
+
+    expect(result.chequesDueThisWeek).toEqual({ count: 1, amount: 750 });
+  });
 });
