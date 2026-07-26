@@ -13,6 +13,7 @@ import {
   MARKETPLACE_LISTING_IMAGE_CONTENT_TYPES,
 } from "./utils/storageValidation";
 import { rateLimiter } from "./rateLimit";
+import { throwAppError, AppErrorCode } from "./utils/errors";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -803,22 +804,26 @@ export const getMyListings = query({
   args: {},
   handler: async (ctx) => {
     try {
-      // A brand-new account can reach this page before the Clerk -> Convex
-      // user-sync webhook has written its `users` row. A query can't create
-      // that row (no db.insert in a QueryCtx), and such a user provably has no
-      // listings yet, so return the empty result instead of throwing
-      // USER_NOT_FOUND and crashing the page into an error boundary.
+      // Resolved inline rather than via requireAuth because a brand-new
+      // account can reach this page before the Clerk -> Convex user-sync
+      // webhook has written its `users` row. A query can't create that row
+      // (no db.insert in a QueryCtx) and such a user provably has no listings
+      // yet, so the missing row returns an empty result instead of throwing
+      // USER_NOT_FOUND and crashing the page into an error boundary. Every
+      // other requireAuth check is still applied below.
       const identity = await ctx.auth.getUserIdentity();
       if (!identity) {
-        throw new ConvexError("Unauthenticated: You must be logged in.");
+        throwAppError(AppErrorCode.UNAUTHENTICATED, "Unauthenticated: You must be logged in.");
       }
-      const pendingSyncUser = await ctx.db
+      const user = await ctx.db
         .query("users")
         .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
         .unique();
-      if (!pendingSyncUser) return [];
+      if (!user) return [];
+      if (user.disabled) {
+        throwAppError(AppErrorCode.FORBIDDEN, "Forbidden: This account has been disabled.");
+      }
 
-      const user = await requireAuth(ctx);
       // isDeleted is part of the index equality prefix (not a post-hoc
       // .filter(), which isn't index-backed and would still scan every one
       // of this seller's rows — including all soft-deleted ones — before

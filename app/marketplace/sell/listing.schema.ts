@@ -9,6 +9,13 @@ export const ALLOWED_CURRENCIES = ["JOD", "USD", "SAR", "AED", "KWD", "EGP", "QA
 export const SELLER_KINDS = ["INDIVIDUAL", "UNAFFILIATED_DEALER"] as const;
 export const LISTING_CONDITIONS = ["EXCELLENT", "GOOD", "FAIR", "POOR"] as const;
 
+// The backend stores transmission/fuelType as free text (no enum to mirror),
+// so these are the values the UI offers. Shared by the create and edit forms
+// so editing a listing can't introduce a value the create form would never
+// produce.
+export const TRANSMISSIONS = ["Automatic", "Manual"] as const;
+export const FUEL_TYPES = ["Gasoline", "Diesel", "Hybrid", "Electric"] as const;
+
 // Same bound createListing enforces server-side (MAX_LISTING_IMAGES in
 // convex/marketplaceListings.ts) — checked client-side too so a seller finds
 // out before uploading 21 images, not after the mutation rejects it.

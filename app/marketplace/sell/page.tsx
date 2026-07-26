@@ -11,9 +11,11 @@ import { toast } from "@/components/ui/sonner";
 import { CheckCircle2, Car, Loader2, Upload, X } from "lucide-react";
 import {
   ALLOWED_CURRENCIES,
+  FUEL_TYPES,
   LISTING_CONDITIONS,
   MAX_LISTING_IMAGES,
   SELLER_KINDS,
+  TRANSMISSIONS,
   listingSchema,
   type ListingFormValues,
 } from "./listing.schema";
@@ -75,6 +77,7 @@ const STRINGS = {
   fuelHybrid: { en: "Hybrid", ar: "هايبرد" },
   fuelElectric: { en: "Electric", ar: "كهربائي" },
   images: { en: "Photos", ar: "الصور" },
+  removePhoto: { en: "Remove photo", ar: "إزالة الصورة" },
   imagesHint: { en: `Upload between 1 and ${MAX_LISTING_IMAGES} photos of the car.`, ar: `ارفع بين 1 و${MAX_LISTING_IMAGES} صورة للسيارة.` },
   uploadPhotos: { en: "Upload photos", ar: "رفع صور" },
   uploading: { en: "Uploading...", ar: "جاري الرفع..." },
@@ -96,6 +99,13 @@ const STRINGS = {
  * building the key from the enum at runtime, so adding a condition without its
  * translation is a compile error instead of silently rendering the raw enum.
  */
+const FUEL_LABEL_KEYS = {
+  Gasoline: "fuelGasoline",
+  Diesel: "fuelDiesel",
+  Hybrid: "fuelHybrid",
+  Electric: "fuelElectric",
+} as const satisfies Record<(typeof FUEL_TYPES)[number], keyof typeof STRINGS>;
+
 const CONDITION_LABEL_KEYS = {
   EXCELLENT: "conditionExcellent",
   GOOD: "conditionGood",
@@ -375,22 +385,17 @@ export default function MarketplaceSellPage() {
                 id="transmission"
                 label={t.transmission}
                 registration={form.register("transmission")}
-                options={[
-                  { value: "Automatic", label: t.transmissionAutomatic },
-                  { value: "Manual", label: t.transmissionManual },
-                ]}
+                options={TRANSMISSIONS.map((value) => ({
+                  value,
+                  label: value === "Automatic" ? t.transmissionAutomatic : t.transmissionManual,
+                }))}
                 error={form.formState.errors.transmission?.message}
               />
               <SelectField
                 id="fuelType"
                 label={t.fuelType}
                 registration={form.register("fuelType")}
-                options={[
-                  { value: "Gasoline", label: t.fuelGasoline },
-                  { value: "Diesel", label: t.fuelDiesel },
-                  { value: "Hybrid", label: t.fuelHybrid },
-                  { value: "Electric", label: t.fuelElectric },
-                ]}
+                options={FUEL_TYPES.map((value) => ({ value, label: t[FUEL_LABEL_KEYS[value]] }))}
                 error={form.formState.errors.fuelType?.message}
               />
               <SelectField
@@ -461,6 +466,7 @@ export default function MarketplaceSellPage() {
                       <button
                         type="button"
                         onClick={() => handleRemoveImage(index)}
+                        aria-label={`${t.removePhoto} ${index + 1}`}
                         className="absolute top-1 end-1 bg-black/50 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
                       >
                         <X className="w-4 h-4" />

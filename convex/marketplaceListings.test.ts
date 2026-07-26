@@ -1526,6 +1526,32 @@ describe("getMyListings", () => {
     expect(new Set(mine.map((l) => l._id))).toEqual(new Set(liveIds));
   });
 
+  test("still refuses a disabled account", async () => {
+    // getMyListings resolves the caller inline rather than through requireAuth
+    // (so an unsynced account can get an empty list instead of an error), so
+    // the disabled-account guard has to be re-asserted here explicitly.
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_82", "seller82@test.com");
+    const imageId = await seedImage(t, "seller_82");
+    await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+
+    await t.run(async (ctx) => {
+      const user = await ctx.db
+        .query("users")
+        .withIndex("by_clerkId", (q) => q.eq("clerkId", "seller_82"))
+        .unique();
+      if (!user) throw new Error("seed user missing");
+      await ctx.db.patch(user._id, { disabled: true });
+    });
+
+    await expect(asSeller.query(api.marketplaceListings.getMyListings, {})).rejects.toThrow(
+      /disabled/i
+    );
+  });
+
   test("returns an empty list (not USER_NOT_FOUND) for a signed-in account whose users row hasn't synced yet", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     // No seedUser: mimics a brand-new Clerk signup arriving before the

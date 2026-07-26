@@ -11,7 +11,9 @@ import { toast } from "@/components/ui/sonner";
 import { Car, ImageOff } from "lucide-react";
 import {
   ALLOWED_CURRENCIES,
+  FUEL_TYPES,
   LISTING_CONDITIONS,
+  TRANSMISSIONS,
   listingUpdateSchema,
   type ListingUpdateValues,
 } from "../sell/listing.schema";
@@ -100,6 +102,18 @@ const STATUS_BADGE_CLASS: Record<ListingStatus, string> = {
   REMOVED: "bg-slate-200 text-slate-700",
 };
 
+const TRANSMISSION_LABELS: Record<Lang, Record<(typeof TRANSMISSIONS)[number], string>> = {
+  en: { Automatic: "Automatic", Manual: "Manual" },
+  ar: { Automatic: "أوتوماتيك", Manual: "عادي" },
+};
+
+const FUEL_LABELS: Record<Lang, Record<(typeof FUEL_TYPES)[number], string>> = {
+  en: { Gasoline: "Gasoline", Diesel: "Diesel", Hybrid: "Hybrid", Electric: "Electric" },
+  ar: { Gasoline: "بنزين", Diesel: "ديزل", Hybrid: "هايبرد", Electric: "كهربائي" },
+};
+
+const FUEL_TYPE_LABELS_ORDER = FUEL_TYPES;
+
 const CONDITION_LABELS: Record<Lang, Record<Condition, string>> = {
   en: { EXCELLENT: "Excellent", GOOD: "Good", FAIR: "Fair", POOR: "Poor" },
   ar: { EXCELLENT: "ممتازة", GOOD: "جيدة", FAIR: "مقبولة", POOR: "ضعيفة" },
@@ -107,16 +121,22 @@ const CONDITION_LABELS: Record<Lang, Record<Condition, string>> = {
 
 function EditListingForm({
   listing,
+  lang,
   t,
   onSaved,
   onCancel,
 }: {
   readonly listing: ListingDoc;
+  readonly lang: Lang;
   readonly t: Record<string, string>;
   readonly onSaved: () => void;
   readonly onCancel: () => void;
 }) {
   const updateListing = useMutation(api.marketplaceListings.updateListing);
+  // Several cards can be expanded at once, so field ids are namespaced per
+  // listing — otherwise duplicate ids would point every label at the first
+  // matching control.
+  const fieldId = (name: string) => `${listing._id}-${name}`;
   const [isSaving, setIsSaving] = useState(false);
 
   const form = useForm<ListingUpdateValues>({
@@ -171,31 +191,45 @@ function EditListingForm({
   return (
     <form onSubmit={form.handleSubmit(onSubmit)} className="mt-4 space-y-3 border-t border-slate-200 pt-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <TextField size="compact" label={t.sellerDisplayName} registration={form.register("sellerDisplayName")} />
-        <TextField size="compact" label={t.sellerPhone} registration={form.register("sellerPhone")} />
-        <TextField size="compact" label={t.sellerWhatsapp} registration={form.register("sellerWhatsapp")} />
-        <TextField size="compact" label={t.city} registration={form.register("city")} />
-        <TextField size="compact" label={t.make} registration={form.register("make")} />
-        <TextField size="compact" label={t.model} registration={form.register("model")} />
-        <TextField size="compact" type="number" label={t.year} registration={form.register("year")} />
-        <TextField size="compact" type="number" min={0} label={t.mileage} registration={form.register("mileage")} />
-        <TextField size="compact" type="number" min={0} label={t.price} registration={form.register("price")} />
+        <TextField size="compact" id={fieldId("sellerDisplayName")} label={t.sellerDisplayName} registration={form.register("sellerDisplayName")} />
+        <TextField size="compact" id={fieldId("sellerPhone")} label={t.sellerPhone} registration={form.register("sellerPhone")} />
+        <TextField size="compact" id={fieldId("sellerWhatsapp")} label={t.sellerWhatsapp} registration={form.register("sellerWhatsapp")} />
+        <TextField size="compact" id={fieldId("city")} label={t.city} registration={form.register("city")} />
+        <TextField size="compact" id={fieldId("make")} label={t.make} registration={form.register("make")} />
+        <TextField size="compact" id={fieldId("model")} label={t.model} registration={form.register("model")} />
+        <TextField size="compact" id={fieldId("year")} type="number" label={t.year} registration={form.register("year")} />
+        <TextField size="compact" id={fieldId("mileage")} type="number" min={0} label={t.mileage} registration={form.register("mileage")} />
+        <TextField size="compact" id={fieldId("price")} type="number" min={0} label={t.price} registration={form.register("price")} />
         <SelectField
           size="compact"
+          id={fieldId("currency")}
           label={t.currency}
           registration={form.register("currency")}
           options={codeOptions(ALLOWED_CURRENCIES)}
         />
-        <TextField size="compact" label={t.transmission} registration={form.register("transmission")} />
-        <TextField size="compact" label={t.fuelType} registration={form.register("fuelType")} />
         <SelectField
           size="compact"
+          id={fieldId("transmission")}
+          label={t.transmission}
+          registration={form.register("transmission")}
+          options={TRANSMISSIONS.map((value) => ({ value, label: TRANSMISSION_LABELS[lang][value] }))}
+        />
+        <SelectField
+          size="compact"
+          id={fieldId("fuelType")}
+          label={t.fuelType}
+          registration={form.register("fuelType")}
+          options={FUEL_TYPE_LABELS_ORDER.map((value) => ({ value, label: FUEL_LABELS[lang][value] }))}
+        />
+        <SelectField
+          size="compact"
+          id={fieldId("condition")}
           label={t.condition}
           registration={form.register("condition")}
-          options={codeOptions(LISTING_CONDITIONS)}
+          options={LISTING_CONDITIONS.map((value) => ({ value, label: CONDITION_LABELS[lang][value] }))}
         />
       </div>
-      <TextAreaField size="compact" label={t.description} registration={form.register("description")} />
+      <TextAreaField size="compact" id={fieldId("description")} label={t.description} registration={form.register("description")} />
       <div className="flex gap-2">
         <button
           type="submit"
@@ -347,7 +381,13 @@ function ListingCard({ listing, lang, t }: { readonly listing: ListingDoc; reado
       </div>
 
       {isEditing && canEdit && (
-        <EditListingForm listing={listing} t={t} onSaved={() => setIsEditing(false)} onCancel={() => setIsEditing(false)} />
+        <EditListingForm
+          listing={listing}
+          lang={lang}
+          t={t}
+          onSaved={() => setIsEditing(false)}
+          onCancel={() => setIsEditing(false)}
+        />
       )}
     </div>
   );
