@@ -311,15 +311,20 @@ export const search = query({
     }
 
     // Direct listings (individuals + unaffiliated dealers). These are the same
-    // rows the admin verification queue approves; only LIVE/SOLD ones are ever
-    // readable here, so a PENDING or REJECTED listing can never leak into
-    // public browse. Without this block the entire direct-listing feature is
+    // rows the admin verification queue approves. Only LIVE ones are read here,
+    // so PENDING, REJECTED, REMOVED and SOLD listings can never reach public
+    // browse. Without this block the entire direct-listing feature is
     // write-only — a seller could list and an admin could approve, but no
     // buyer would ever see the result.
     //
     // FINANCE is dealer-only (a private seller has no finance company), so a
     // finance-filtered search skips direct rows entirely rather than showing
     // cars the filter's whole purpose is to exclude.
+    //
+    // The MAX_MERGED_VEHICLES budget is spent before filtering, so a very
+    // narrow filter can miss matches beyond the cap. That is the same tradeoff
+    // the dealer union above already makes, and it goes away with the keyset
+    // pagination redesign this query needs anyway.
     if (args.paymentType !== "FINANCE" && args.maxMonthlyPayment == null && merged.length < MAX_MERGED_VEHICLES) {
       const liveListings = await ctx.db
         .query("marketplaceListings")

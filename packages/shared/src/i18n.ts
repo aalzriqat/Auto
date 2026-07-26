@@ -136,7 +136,6 @@ const mobileFoundationStringEntries = [
   ["buildLabel", "Build", "الإصدار"],
   ["buyerAccountBuyerTitle", "Buyer account", "حساب المشتري"],
   ["buyerAccountSyncHint", "Save cars and requests on this device today. Sign-in to sync across devices is coming soon.", "احفظ السيارات والطلبات على هذا الجهاز الآن. قريباً تسجيل الدخول للمزامنة بين الأجهزة."],
-  ["buyerAccountComingSoon", "Buyer sign-in coming soon", "تسجيل دخول المشتري قريباً"],
   ["buyerAccountPreferences", "Preferences", "التفضيلات"],
   ["buyerAccountDealerQuestion", "Are you a car dealer?", "هل أنت تاجر سيارات؟"],
   ["buyerAccountDealerSignIn", "Dealer sign in", "دخول التاجر"],

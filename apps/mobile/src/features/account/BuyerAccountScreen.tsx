@@ -17,8 +17,11 @@ import { useOtaUpdate } from "../../updates/otaUpdateContext";
 /**
  * Buyer-side Account tab. Buyers browse anonymously, so this leads with
  * preferences (theme/language) and keeps the dealer entry visually secondary —
- * most buyers never need it. Full buyer sign-in/sync arrives in a later phase;
- * for now the buyer section states that plainly rather than showing dead buttons.
+ * most buyers never need it.
+ *
+ * The buyer section offers a real account CTA: signing up is what unlocks
+ * selling a car and keeping listings across devices. It is hidden once signed
+ * in, where the dealer-workspace card below becomes the useful entry point.
  */
 export function BuyerAccountScreen({ embedded = false }: Readonly<{ embedded?: boolean }> = {}) {
   const styles = useThemedStyles(makeStyles);
@@ -169,21 +172,6 @@ const makeStyles = (theme: AppTheme) =>
       color: theme.colors.mutedText,
       fontSize: 14,
       lineHeight: 20,
-    },
-    soonPill: {
-      alignSelf: "flex-start",
-      flexDirection: "row",
-      alignItems: "center",
-      gap: theme.spacing.xs,
-      borderRadius: theme.radius.sm,
-      backgroundColor: theme.colors.surfaceAlt,
-      paddingHorizontal: theme.spacing.sm,
-      paddingVertical: theme.spacing.xs,
-    },
-    soonText: {
-      color: theme.colors.mutedText,
-      fontSize: 12,
-      fontWeight: "700",
     },
     prefRow: {
       flexDirection: "row",
