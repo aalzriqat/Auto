@@ -217,12 +217,7 @@ export function SellCarScreen({
     try {
       const permission = await ensurePhotoLibraryPermission();
       if (!permission.granted) {
-        Alert.alert(
-          locale === "ar" ? "الإذن مطلوب" : "Permission needed",
-          locale === "ar"
-            ? "امنح التطبيق صلاحية الوصول إلى الصور لإضافة صور السيارة."
-            : "Allow photo access to add pictures of the car.",
-        );
+        Alert.alert(t("sellCarPhotoPermissionTitle"), t("sellCarPhotoPermissionBody"));
         return;
       }
 
@@ -237,36 +232,55 @@ export function SellCarScreen({
 
       setUploadingPhotos(true);
       setImagesError(null);
+
+      // Each photo is uploaded independently: one transient failure (a flaky
+      // fetch, a rejected slot) must not abandon the seller's remaining
+      // selections, and the count tells them how many actually need retrying
+      // instead of a single opaque "something went wrong".
+      let failedCount = 0;
       for (const asset of result.assets) {
-        const response = await fetch(asset.uri);
-        const blob = await response.blob();
-        const mimeType = (asset.mimeType || blob.type || "image/jpeg").toLowerCase();
-        const sizeInBytes = asset.fileSize ?? blob.size;
+        try {
+          const response = await fetch(asset.uri);
+          const blob = await response.blob();
+          const mimeType = (asset.mimeType || blob.type || "image/jpeg").toLowerCase();
+          const sizeInBytes = asset.fileSize ?? blob.size;
 
-        if (!ALLOWED_IMAGE_TYPES.includes(mimeType)) {
-          setImagesError(t("sellCarInvalidImageType"));
-          continue;
-        }
-        if (sizeInBytes > MAX_IMAGE_SIZE_BYTES) {
-          setImagesError(t("sellCarImageTooLarge"));
-          continue;
-        }
+          if (!ALLOWED_IMAGE_TYPES.includes(mimeType)) {
+            setImagesError(t("sellCarInvalidImageType"));
+            continue;
+          }
+          if (sizeInBytes > MAX_IMAGE_SIZE_BYTES) {
+            setImagesError(t("sellCarImageTooLarge"));
+            continue;
+          }
 
-        const postUrl = await generateUploadUrl({ mimeType, sizeInBytes });
-        const uploadResult = await fetch(postUrl, {
-          method: "POST",
-          headers: { "Content-Type": mimeType },
-          body: blob,
-        });
-        if (!uploadResult.ok) {
-          throw new Error(`Upload failed with status ${uploadResult.status}`);
+          const postUrl = await generateUploadUrl({ mimeType, sizeInBytes });
+          const uploadResult = await fetch(postUrl, {
+            method: "POST",
+            headers: { "Content-Type": mimeType },
+            body: blob,
+          });
+          if (!uploadResult.ok) {
+            throw new Error(`Upload failed with status ${uploadResult.status}`);
+          }
+          const { storageId } = (await uploadResult.json()) as { storageId: string };
+          const { url } = await confirmUpload({ storageId });
+          setImages((prev) => [...prev, { storageId, previewUrl: url }]);
+        } catch (assetError) {
+          failedCount += 1;
+          console.error("Mobile listing photo upload failed", assetError);
         }
-        const { storageId } = (await uploadResult.json()) as { storageId: string };
-        const { url } = await confirmUpload({ storageId });
-        setImages((prev) => [...prev, { storageId, previewUrl: url }]);
+      }
+
+      if (failedCount > 0) {
+        setImagesError(
+          failedCount === 1
+            ? t("sellCarPhotoUploadFailedOne")
+            : t("sellCarPhotoUploadFailedMany").replace("{count}", String(failedCount)),
+        );
       }
     } catch (error) {
-      console.error("Mobile listing photo upload failed", error);
+      console.error("Mobile listing photo picker failed", error);
       Alert.alert("AutoFlow", t("marketplaceListingGenericError"));
     } finally {
       setUploadingPhotos(false);

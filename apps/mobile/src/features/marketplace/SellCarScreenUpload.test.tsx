@@ -104,6 +104,45 @@ describe("SellCarScreen photo upload", () => {
     );
   });
 
+  test("keeps uploading the rest of the batch when one photo fails, and reports the failure count", async () => {
+    const generateUploadUrl = jest
+      .fn()
+      // First asset's slot request fails; the second must still be attempted.
+      .mockRejectedValueOnce(new Error("network blip"))
+      .mockResolvedValue("https://convex.test/upload-slot");
+    const confirmUpload = jest.fn().mockResolvedValue({ url: "https://convex.test/stored.jpg" });
+    mockUseMutation.mockImplementation(
+      ((ref: unknown) => {
+        if (ref === api.marketplaceListings.generateListingImageUploadUrl) return generateUploadUrl;
+        if (ref === api.marketplaceListings.confirmListingImageUpload) return confirmUpload;
+        return jest.fn();
+      }) as unknown as typeof useMutation,
+    );
+
+    (launchImageLibraryAsync as jest.Mock).mockResolvedValue({
+      canceled: false,
+      assets: [
+        { uri: "file:///tmp/a.jpg", mimeType: "image/jpeg", fileSize: 1000 },
+        { uri: "file:///tmp/b.jpg", mimeType: "image/jpeg", fileSize: 2000 },
+      ],
+    });
+
+    globalThis.fetch = jest.fn().mockImplementation(async (input: unknown) =>
+      typeof input === "string" && input.startsWith("file://")
+        ? { blob: async () => ({ type: "image/jpeg", size: 1500 }) }
+        : { ok: true, json: async () => ({ storageId: "kg2_second_ok" }) },
+    ) as unknown as typeof fetch;
+
+    const { getByText } = await renderScreen();
+    fireEvent.press(getByText("رفع صور"));
+
+    // The surviving asset still reaches confirm...
+    await waitFor(() => expect(confirmUpload).toHaveBeenCalledWith({ storageId: "kg2_second_ok" }));
+    expect(generateUploadUrl).toHaveBeenCalledTimes(2);
+    // ...and the seller is told exactly one photo needs retrying.
+    expect(getByText("تعذّر رفع صورة واحدة. الرجاء إضافتها مرة أخرى.")).toBeTruthy();
+  });
+
   test("rejects a disallowed image type client-side, before requesting an upload slot", async () => {
     const generateUploadUrl = jest.fn();
     mockUseMutation.mockImplementation(

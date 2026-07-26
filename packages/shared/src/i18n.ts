@@ -543,6 +543,22 @@ const mobileFoundationStringEntries = [
   ["sellCarPhotosLabel", "Photos", "الصور"],
   ["sellCarPhotosHint", "Upload between 1 and 20 photos of the car.", "ارفع بين 1 و20 صورة للسيارة."],
   ["sellCarUploadPhotos", "Upload photos", "رفع صور"],
+  ["sellCarPhotoPermissionTitle", "Permission needed", "الإذن مطلوب"],
+  [
+    "sellCarPhotoPermissionBody",
+    "Allow photo access to add pictures of the car.",
+    "امنح التطبيق صلاحية الوصول إلى الصور لإضافة صور السيارة.",
+  ],
+  [
+    "sellCarPhotoUploadFailedOne",
+    "One photo couldn't be uploaded. Please try adding it again.",
+    "تعذّر رفع صورة واحدة. الرجاء إضافتها مرة أخرى.",
+  ],
+  [
+    "sellCarPhotoUploadFailedMany",
+    "{count} photos couldn't be uploaded. Please try adding them again.",
+    "تعذّر رفع {count} صور. الرجاء إضافتها مرة أخرى.",
+  ],
   ["sellCarUploading", "Uploading...", "جاري الرفع..."],
   ["sellCarNoPhotosYet", "No photos added yet.", "لم تتم إضافة صور بعد."],
   ["sellCarRemovePhoto", "Remove photo", "إزالة الصورة"],
