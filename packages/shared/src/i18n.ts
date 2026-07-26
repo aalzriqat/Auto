@@ -597,6 +597,7 @@ const mobileFoundationStringEntries = [
   ["myListingsStatusSold", "Sold", "مباع"],
   ["myListingsStatusRemoved", "Removed", "تمت إزالته"],
   ["marketplacePrivateSeller", "Private seller", "بائع فردي"],
+  ["offlineBanner", "You're offline — reconnecting…", "أنت غير متصل — جاري إعادة الاتصال…"],
   ["signUpTitle", "Create an account", "إنشاء حساب"],
   ["signUpSubtitle", "Sell your car or save the ones you like. No dealership needed.", "بِع سيارتك أو احفظ ما يعجبك. لا حاجة لمعرض."],
   ["signUpEmailLabel", "Email", "البريد الإلكتروني"],

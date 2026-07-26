@@ -19,6 +19,7 @@ import { useEffect, useMemo, type ReactNode } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
+import { OfflineBanner } from "../components/OfflineBanner";
 import { validateMobileEnv } from "../config/env";
 import { PushNotificationsGate } from "../notifications/PushNotificationsGate";
 import { getTypographyStyle, type AppTheme } from "../theme";
@@ -116,6 +117,10 @@ export function AppProviders({ children }: { children: ReactNode }) {
             <ClerkProvider publishableKey={envResult.data.clerkPublishableKey} tokenCache={tokenCache}>
               <ConvexProviderWithClerk client={convex} useAuth={useAuth}>
                 <NativeUpdateGate>
+                  {/* Sits inside the Convex provider (it reads the socket
+                      state) and above every screen, so a dropped connection is
+                      reported once rather than per-screen. */}
+                  <OfflineBanner />
                   <PushNotificationsGate>{children}</PushNotificationsGate>
                 </NativeUpdateGate>
               </ConvexProviderWithClerk>

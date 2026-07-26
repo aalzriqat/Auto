@@ -1127,6 +1127,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "أصبحت إعلانات الأفراد والمعارض غير المشتركة المعتمدة تظهر في بحث السوق إلى جانب مخزون المعارض على الويب والتطبيق، مع وسم \"بائع فردي\". يبقى عرض الاستبدال متاحاً لدى المعارض فقط.",
     publishedAt: releaseAt(2026, 7, 27, 1),
   },
+  {
+    type: "FEATURE",
+    titleEn: "Create an AutoFlow account from the mobile app",
+    titleAr: "إنشاء حساب أوتوفلو من التطبيق",
+    descriptionEn: "Buyers and private sellers can now sign up directly in the app with an email and password, so listing a car no longer requires an existing dealership account. The app also shows a clear banner when it loses its connection, instead of leaving screens loading indefinitely.",
+    descriptionAr: "أصبح بإمكان المشترين والبائعين الأفراد إنشاء حساب مباشرة من التطبيق بالبريد الإلكتروني وكلمة المرور، فلم يعد عرض السيارة يتطلب حساب معرض. كما يظهر التطبيق تنبيهاً واضحاً عند انقطاع الاتصال بدل ترك الشاشات في حالة تحميل دائمة.",
+    publishedAt: releaseAt(2026, 7, 27, 2),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;
