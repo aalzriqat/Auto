@@ -32,6 +32,41 @@ describe("compareBrowseVehicles", () => {
 
     expect(sorted.map((r) => r.listedAt)).toEqual([3000, 2000, 1000, null]);
   });
+
+  it("newest: breaks ties on identical listedAt deterministically via org+vehicle id, regardless of input order", () => {
+    const listedCar = (orgId: string, id: string, listedAt: number | null) => ({
+      price: null,
+      year: 2020,
+      mileage: null,
+      listedAt,
+      orgId,
+      id,
+    });
+    const rows = [listedCar("orgA", "v2", 5000), listedCar("orgA", "v1", 5000), listedCar("orgB", "v1", 5000)];
+    const key = (r: ReturnType<typeof listedCar>) => `${r.orgId}:${r.id}`;
+    const expected = ["orgA:v1", "orgA:v2", "orgB:v1"];
+
+    const sorted = [...rows].sort((a, b) => compareBrowseVehicles(a, b, "newest"));
+    expect(sorted.map(key)).toEqual(expected);
+
+    // Same rows, reversed starting order -> same output, proving this is a
+    // real tie-break and not just incidental array/insertion order.
+    const sortedFromReversed = [...rows].reverse().sort((a, b) => compareBrowseVehicles(a, b, "newest"));
+    expect(sortedFromReversed.map(key)).toEqual(expected);
+  });
+
+  it("price_asc: breaks ties on identical price deterministically via org+vehicle id, same pattern as newest", () => {
+    const priceCar = (orgId: string, id: string, price: number | null) => ({ price, year: 2020, mileage: null, orgId, id });
+    const rows = [priceCar("orgA", "v2", 9000), priceCar("orgA", "v1", 9000), priceCar("orgB", "v1", 9000)];
+    const key = (r: ReturnType<typeof priceCar>) => `${r.orgId}:${r.id}`;
+    const expected = ["orgA:v1", "orgA:v2", "orgB:v1"];
+
+    const sorted = [...rows].sort((a, b) => compareBrowseVehicles(a, b, "price_asc"));
+    expect(sorted.map(key)).toEqual(expected);
+
+    const sortedFromReversed = [...rows].reverse().sort((a, b) => compareBrowseVehicles(a, b, "price_asc"));
+    expect(sortedFromReversed.map(key)).toEqual(expected);
+  });
 });
 
 const WEBSITE_PERMISSIONS = [

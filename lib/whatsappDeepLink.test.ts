@@ -21,4 +21,15 @@ describe("buildWhatsAppDeepLink", () => {
     const link = buildWhatsAppDeepLink("0791234567", "test");
     expect(link).toBe("https://wa.me/0791234567?text=test");
   });
+
+  test("returns null for a phone value with no digits at all", () => {
+    expect(buildWhatsAppDeepLink("WhatsApp unavailable", "hello")).toBeNull();
+    expect(buildWhatsAppDeepLink("", "hello")).toBeNull();
+    expect(buildWhatsAppDeepLink("---", "hello")).toBeNull();
+  });
+
+  test("returns a valid wa.me URL for a real number", () => {
+    const link = buildWhatsAppDeepLink("+962791234567", "hello");
+    expect(link).toBe("https://wa.me/962791234567?text=hello");
+  });
 });

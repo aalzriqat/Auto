@@ -84,14 +84,19 @@ const SORT_STRINGS: Record<Lang, Record<SortBy, string>> = {
     price_desc: "Price: High to Low",
     year_desc: "Year: Newest First",
     mileage_asc: "Mileage: Lowest First",
-    newest: "Newest Listings",
+    // Honesty check: this sorts by when the inventory row was created
+    // (createdAt / _creationTime), not a real publish/relist timestamp — see
+    // convex/marketplaceBrowse.ts's `listedAt`. "Recently Added" describes
+    // that accurately; "Newest Listings" would overclaim it reflects when a
+    // car became visible on the marketplace.
+    newest: "Recently Added",
   },
   ar: {
     price_asc: "السعر: من الأقل للأعلى",
     price_desc: "السعر: من الأعلى للأقل",
     year_desc: "سنة الصنع: الأحدث أولاً",
     mileage_asc: "الممشى: الأقل أولاً",
-    newest: "الأحدث إدراجاً",
+    newest: "الأحدث إضافةً",
   },
 };
 

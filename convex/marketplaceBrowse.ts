@@ -40,25 +40,48 @@ export type BrowseSortBy = "price_asc" | "price_desc" | "year_desc" | "mileage_a
 const SORT_HI = Number.MAX_SAFE_INTEGER;
 const SORT_LO = Number.MIN_SAFE_INTEGER;
 
-/** Pure comparator for the merged result set. Missing values always sort to the end, whichever direction is chosen, so a price-less/mileage-less/undated car never floats to the top. `listedAt` is optional on the input shape only so the existing `compareBrowseVehicles` unit tests (which build bare {price,year,mileage} fixtures) keep compiling. */
+/**
+ * Pure comparator for the merged result set. Missing values always sort to
+ * the end, whichever direction is chosen, so a price-less/mileage-less/undated
+ * car never floats to the top. `listedAt`/`orgId`/`id` are optional on the
+ * input shape only so the existing `compareBrowseVehicles` unit tests (which
+ * build bare {price,year,mileage} fixtures) keep compiling.
+ *
+ * Every sort mode falls through to the same deterministic tie-breaker (org id
+ * then vehicle id, ascending) whenever the primary key is equal — two rows
+ * with the identical price/year/mileage/listedAt (or both missing it) always
+ * resolve to the same stable order across repeated requests, instead of
+ * depending on the merge's incidental per-request insertion order. This
+ * matters once results are paginated: without it, a listing could appear to
+ * "jump" between pages on a refresh even with no underlying data change.
+ */
 export function compareBrowseVehicles(
-  a: { price: number | null; year: number; mileage: number | null; listedAt?: number | null },
-  b: { price: number | null; year: number; mileage: number | null; listedAt?: number | null },
+  a: { price: number | null; year: number; mileage: number | null; listedAt?: number | null; orgId?: string; id?: string },
+  b: { price: number | null; year: number; mileage: number | null; listedAt?: number | null; orgId?: string; id?: string },
   sortBy: BrowseSortBy
 ): number {
-  switch (sortBy) {
-    case "price_desc":
-      return (b.price ?? SORT_LO) - (a.price ?? SORT_LO);
-    case "year_desc":
-      return (b.year || 0) - (a.year || 0);
-    case "mileage_asc":
-      return (a.mileage ?? SORT_HI) - (b.mileage ?? SORT_HI);
-    case "newest":
-      return (b.listedAt ?? SORT_LO) - (a.listedAt ?? SORT_LO);
-    case "price_asc":
-    default:
-      return (a.price ?? SORT_HI) - (b.price ?? SORT_HI);
-  }
+  const primary = ((): number => {
+    switch (sortBy) {
+      case "price_desc":
+        return (b.price ?? SORT_LO) - (a.price ?? SORT_LO);
+      case "year_desc":
+        return (b.year || 0) - (a.year || 0);
+      case "mileage_asc":
+        return (a.mileage ?? SORT_HI) - (b.mileage ?? SORT_HI);
+      case "newest":
+        return (b.listedAt ?? SORT_LO) - (a.listedAt ?? SORT_LO);
+      case "price_asc":
+      default:
+        return (a.price ?? SORT_HI) - (b.price ?? SORT_HI);
+    }
+  })();
+  if (primary !== 0) return primary;
+
+  const aKey = `${a.orgId ?? ""}:${a.id ?? ""}`;
+  const bKey = `${b.orgId ?? ""}:${b.id ?? ""}`;
+  if (aKey < bKey) return -1;
+  if (aKey > bKey) return 1;
+  return 0;
 }
 
 type FinanceCompanyTerms = {
