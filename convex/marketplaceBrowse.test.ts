@@ -23,6 +23,50 @@ describe("compareBrowseVehicles", () => {
     // mileage_asc: lowest mileage first, null mileage last.
     expect(sort(rows, "mileage_asc").map((r) => r.mileage)).toEqual([15000, 90000, null]);
   });
+
+  it("newest: most-recently-listed first, undated cars last", () => {
+    const listedCar = (listedAt: number | null) => ({ price: null, year: 2020, mileage: null, listedAt });
+    const rows = [listedCar(1000), listedCar(3000), listedCar(null), listedCar(2000)];
+
+    const sorted = [...rows].sort((a, b) => compareBrowseVehicles(a, b, "newest"));
+
+    expect(sorted.map((r) => r.listedAt)).toEqual([3000, 2000, 1000, null]);
+  });
+
+  it("newest: breaks ties on identical listedAt deterministically via org+vehicle id, regardless of input order", () => {
+    const listedCar = (orgId: string, id: string, listedAt: number | null) => ({
+      price: null,
+      year: 2020,
+      mileage: null,
+      listedAt,
+      orgId,
+      id,
+    });
+    const rows = [listedCar("orgA", "v2", 5000), listedCar("orgA", "v1", 5000), listedCar("orgB", "v1", 5000)];
+    const key = (r: ReturnType<typeof listedCar>) => `${r.orgId}:${r.id}`;
+    const expected = ["orgA:v1", "orgA:v2", "orgB:v1"];
+
+    const sorted = [...rows].sort((a, b) => compareBrowseVehicles(a, b, "newest"));
+    expect(sorted.map(key)).toEqual(expected);
+
+    // Same rows, reversed starting order -> same output, proving this is a
+    // real tie-break and not just incidental array/insertion order.
+    const sortedFromReversed = [...rows].reverse().sort((a, b) => compareBrowseVehicles(a, b, "newest"));
+    expect(sortedFromReversed.map(key)).toEqual(expected);
+  });
+
+  it("price_asc: breaks ties on identical price deterministically via org+vehicle id, same pattern as newest", () => {
+    const priceCar = (orgId: string, id: string, price: number | null) => ({ price, year: 2020, mileage: null, orgId, id });
+    const rows = [priceCar("orgA", "v2", 9000), priceCar("orgA", "v1", 9000), priceCar("orgB", "v1", 9000)];
+    const key = (r: ReturnType<typeof priceCar>) => `${r.orgId}:${r.id}`;
+    const expected = ["orgA:v1", "orgA:v2", "orgB:v1"];
+
+    const sorted = [...rows].sort((a, b) => compareBrowseVehicles(a, b, "price_asc"));
+    expect(sorted.map(key)).toEqual(expected);
+
+    const sortedFromReversed = [...rows].reverse().sort((a, b) => compareBrowseVehicles(a, b, "price_asc"));
+    expect(sortedFromReversed.map(key)).toEqual(expected);
+  });
 });
 
 const WEBSITE_PERMISSIONS = [
@@ -50,6 +94,7 @@ async function seedPublishedDealer(
     withSpecs?: boolean;
     vehicleStatus?: "AVAILABLE" | "SOLD";
     showSoldVehicles?: boolean;
+    currency?: string;
     trust?: {
       inspectionStatus?: "SELF_REPORTED" | "PARTNER_VERIFIED";
       accidentDisclosed?: boolean;
@@ -70,7 +115,7 @@ async function seedPublishedDealer(
   await t.run((ctx) =>
     ctx.db.insert("orgSettings", {
       orgId,
-      currency: "JOD",
+      currency: opts.currency ?? "JOD",
       currencySymbol: "د.أ",
       enabledPaymentTypes: ["CASH"],
       dealershipName: opts.name,
@@ -375,6 +420,36 @@ describe("marketplaceBrowse.search", () => {
 
     const result = await t.query(api.marketplaceBrowse.search, {});
     expect(result.vehicles.map((v) => v.dealershipName)).toEqual(["Shows Sold"]);
+    // Finding 1: the row must expose its real status so the frontend can show
+    // a "Sold" badge and withhold the Call/WhatsApp CTA instead of inviting
+    // contact about a car that's already gone.
+    expect(result.vehicles[0].status).toBe("SOLD");
+  });
+
+  test("exposes AVAILABLE status for a normal in-stock vehicle", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedPublishedDealer(t, { name: "In Stock", subdomainSlug: "instock", city: "Amman" });
+
+    const result = await t.query(api.marketplaceBrowse.search, {});
+    expect(result.vehicles[0].status).toBe("AVAILABLE");
+  });
+
+  test("carries each org's real currency through, instead of assuming JOD (Finding 2)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedPublishedDealer(t, { name: "Default JOD Dealer", subdomainSlug: "defaultjoddealer", city: "Amman" });
+    await seedPublishedDealer(t, {
+      name: "USD Dealer",
+      subdomainSlug: "usddealer",
+      city: "Amman",
+      currency: "USD",
+    });
+
+    const result = await t.query(api.marketplaceBrowse.search, {});
+    const jodDealer = result.vehicles.find((v) => v.dealershipName === "Default JOD Dealer");
+    const usdDealer = result.vehicles.find((v) => v.dealershipName === "USD Dealer");
+
+    expect(jodDealer?.currency).toBe("JOD");
+    expect(usdDealer?.currency).toBe("USD");
   });
 
   test("still estimates the monthly payment from financePrice when the dealer hides public prices", async () => {

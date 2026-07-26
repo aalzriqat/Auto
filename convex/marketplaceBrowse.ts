@@ -27,30 +27,61 @@ const ESTIMATE_TERM_MONTHS = 60;
 const paymentTypeValidator = v.optional(v.union(v.literal("CASH"), v.literal("FINANCE")));
 
 const sortByValidator = v.optional(
-  v.union(v.literal("price_asc"), v.literal("price_desc"), v.literal("year_desc"), v.literal("mileage_asc"))
+  v.union(
+    v.literal("price_asc"),
+    v.literal("price_desc"),
+    v.literal("year_desc"),
+    v.literal("mileage_asc"),
+    v.literal("newest")
+  )
 );
-export type BrowseSortBy = "price_asc" | "price_desc" | "year_desc" | "mileage_asc";
+export type BrowseSortBy = "price_asc" | "price_desc" | "year_desc" | "mileage_asc" | "newest";
 
 const SORT_HI = Number.MAX_SAFE_INTEGER;
 const SORT_LO = Number.MIN_SAFE_INTEGER;
 
-/** Pure comparator for the merged result set. Missing values always sort to the end, whichever direction is chosen, so a price-less/mileage-less car never floats to the top. */
+/**
+ * Pure comparator for the merged result set. Missing values always sort to
+ * the end, whichever direction is chosen, so a price-less/mileage-less/undated
+ * car never floats to the top. `listedAt`/`orgId`/`id` are optional on the
+ * input shape only so the existing `compareBrowseVehicles` unit tests (which
+ * build bare {price,year,mileage} fixtures) keep compiling.
+ *
+ * Every sort mode falls through to the same deterministic tie-breaker (org id
+ * then vehicle id, ascending) whenever the primary key is equal — two rows
+ * with the identical price/year/mileage/listedAt (or both missing it) always
+ * resolve to the same stable order across repeated requests, instead of
+ * depending on the merge's incidental per-request insertion order. This
+ * matters once results are paginated: without it, a listing could appear to
+ * "jump" between pages on a refresh even with no underlying data change.
+ */
 export function compareBrowseVehicles(
-  a: { price: number | null; year: number; mileage: number | null },
-  b: { price: number | null; year: number; mileage: number | null },
+  a: { price: number | null; year: number; mileage: number | null; listedAt?: number | null; orgId?: string; id?: string },
+  b: { price: number | null; year: number; mileage: number | null; listedAt?: number | null; orgId?: string; id?: string },
   sortBy: BrowseSortBy
 ): number {
-  switch (sortBy) {
-    case "price_desc":
-      return (b.price ?? SORT_LO) - (a.price ?? SORT_LO);
-    case "year_desc":
-      return (b.year || 0) - (a.year || 0);
-    case "mileage_asc":
-      return (a.mileage ?? SORT_HI) - (b.mileage ?? SORT_HI);
-    case "price_asc":
-    default:
-      return (a.price ?? SORT_HI) - (b.price ?? SORT_HI);
-  }
+  const primary = ((): number => {
+    switch (sortBy) {
+      case "price_desc":
+        return (b.price ?? SORT_LO) - (a.price ?? SORT_LO);
+      case "year_desc":
+        return (b.year || 0) - (a.year || 0);
+      case "mileage_asc":
+        return (a.mileage ?? SORT_HI) - (b.mileage ?? SORT_HI);
+      case "newest":
+        return (b.listedAt ?? SORT_LO) - (a.listedAt ?? SORT_LO);
+      case "price_asc":
+      default:
+        return (a.price ?? SORT_HI) - (b.price ?? SORT_HI);
+    }
+  })();
+  if (primary !== 0) return primary;
+
+  const aKey = `${a.orgId ?? ""}:${a.id ?? ""}`;
+  const bKey = `${b.orgId ?? ""}:${b.id ?? ""}`;
+  if (aKey < bKey) return -1;
+  if (aKey > bKey) return 1;
+  return 0;
 }
 
 type FinanceCompanyTerms = {
@@ -103,6 +134,13 @@ type BrowseVehicle = {
   exteriorColor: string | null;
   price: number | null;
   financePrice: number | null;
+  currency: string;
+  // Only AVAILABLE/SOLD ever reach the merged result — projectedVehicleRows
+  // is queried by index for exactly those two statuses (see the loop below),
+  // and every other status is filtered out before this shape is built. Lets
+  // the frontend show a "Sold" badge and withhold the Call/WhatsApp CTA
+  // instead of inviting contact about a car that's already gone.
+  status: "AVAILABLE" | "SOLD";
   imageUrls: string[];
   listedAt: number | null;
   financeAvailable: boolean;
@@ -182,6 +220,12 @@ export const search = query({
         .unique();
       const dealerPhone = orgSettings?.dealershipPhone ?? null;
       const dealerWhatsapp = profile.whatsappNumber ?? orgSettings?.dealershipPhone ?? null;
+      // Orgs are not all guaranteed to price in JOD (orgSettings.currency is a
+      // free-form per-org string) — carry the org's real currency through so
+      // the frontend never mislabels a non-JOD org's prices. Cross-currency
+      // comparison for the price-sort modes is explicitly out of scope here;
+      // this only fixes the display label.
+      const currency = orgSettings?.currency ?? "JOD";
 
       // Project the org's inventory LIVE at query time (same projection the
       // website publish uses — respecting the dealer's public-display toggles —
@@ -237,6 +281,8 @@ export const search = query({
           exteriorColor: vehicle.exteriorColor ?? null,
           price: vehicle.price ?? null,
           financePrice: vehicle.financePrice ?? null,
+          currency,
+          status: vehicle.status === "SOLD" ? "SOLD" : "AVAILABLE",
           imageStorageIds: vehicle.imageStorageIds ?? [],
           listedAt: vehicle.listedAt ?? null,
           financeAvailable,

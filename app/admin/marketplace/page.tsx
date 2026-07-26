@@ -128,7 +128,12 @@ function WeeklyReportsView() {
   const markSent = useMutation(api.adminMarketplace.markWeeklyReportSentViaWhatsApp);
 
   async function handleSend(orgId: Id<"organizations">, phone: string, message: string) {
-    window.open(buildWhatsAppDeepLink(phone, message), "_blank", "noopener,noreferrer");
+    const whatsappUrl = buildWhatsAppDeepLink(phone, message);
+    if (!whatsappUrl) {
+      toast.error("This dealer's WhatsApp number has no usable digits — can't open a chat.");
+      return;
+    }
+    window.open(whatsappUrl, "_blank", "noopener,noreferrer");
     try {
       await markSent({ orgId });
     } catch {
@@ -338,7 +343,12 @@ export default function AdminMarketplacePage() {
   const markSpam = useMutation(api.adminMarketplace.markSpam);
 
   async function handleSend(matchId: Id<"marketplaceRequestMatches">, phone: string, message: string) {
-    window.open(buildWhatsAppDeepLink(phone, message), "_blank", "noopener,noreferrer");
+    const whatsappUrl = buildWhatsAppDeepLink(phone, message);
+    if (!whatsappUrl) {
+      toast.error("This dealer's WhatsApp number has no usable digits — can't open a chat.");
+      return;
+    }
+    window.open(whatsappUrl, "_blank", "noopener,noreferrer");
     try {
       await markMatchNotified({ matchId });
     } catch {
