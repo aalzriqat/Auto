@@ -1,7 +1,27 @@
 import { convexTest } from "convex-test";
-import { expect, test, describe } from "vitest";
+import { expect, test, describe, vi, afterEach } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+
+/**
+ * The Y/M/D `at` (a UTC ms instant) reads as in `timeZone`, expressed with
+ * this repo's "a calendar date IS its UTC midnight" convention (see
+ * lib/dateInput.ts's `dateInputToUtcMs`) — the same math `todayForRole`
+ * itself uses, kept independent here so tests don't depend on the test
+ * runner's own OS timezone.
+ */
+function startOfDayInTimeZone(timeZone: string, at: number): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(at));
+  const lookup = Object.fromEntries(
+    parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]),
+  );
+  return Date.UTC(Number(lookup.year), Number(lookup.month) - 1, Number(lookup.day));
+}
 
 const PERMISSIONS = ["view:customers", "view:vehicles", "view:users", "view:sales"];
 
@@ -296,5 +316,333 @@ describe("dashboard.stats", () => {
     expect(result.taskStats).toEqual({ total: 0, pending: 0, completed: 0, overdue: 0 });
     expect(result.teamTasks).toEqual([]);
     expect(result.topPerformer).toBeNull();
+  });
+});
+
+describe("dashboard.todayForRole", () => {
+  const FINANCE_PERMISSIONS = ["view:finance"];
+
+  async function seedCustomerAndVehicle(t: Awaited<ReturnType<typeof convexTest>>, orgId: string) {
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Sara", lastName: "Haddad" })
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "1HGCM82633A004352",
+        make: "Honda",
+        model: "Accord",
+        year: 2020,
+        mileage: 10000,
+        color: "Black",
+        fuelType: "Petrol",
+        transmission: "Automatic",
+        sellingPrice: 15000,
+        status: "AVAILABLE",
+      })
+    );
+    return { customerId, vehicleId };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test("aggregates collections due today, cheques due this week, and overdue receivables", async () => {
+    const { t, orgId, asUser } = await setup(FINANCE_PERMISSIONS);
+    const { customerId } = await seedCustomerAndVehicle(t, orgId);
+    const now = Date.now();
+    // No orgSettings row exists for this org, so `todayForRole` falls back to
+    // Asia/Amman — compute the expected boundary the same way, independent of
+    // whatever timezone the test runner's OS happens to be in.
+    const todayStart = startOfDayInTimeZone("Asia/Amman", now);
+    const createdBy = await t.run((ctx) =>
+      ctx.db
+        .query("memberships")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .first()
+        .then((membership) => membership!.userId)
+    );
+
+    // Due today, open — should count.
+    await t.run((ctx) =>
+      ctx.db.insert("receivables", {
+        orgId,
+        customerId,
+        sourceType: "INTERNAL_INSTALLMENT",
+        title: "Installment 1",
+        originalAmount: 500,
+        outstandingAmount: 500,
+        dueDate: todayStart + 60 * 60 * 1000,
+        status: "OPEN",
+        createdBy,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+
+    // Overdue (due yesterday, still open) — should count as overdue, not due-today.
+    await t.run((ctx) =>
+      ctx.db.insert("receivables", {
+        orgId,
+        customerId,
+        sourceType: "INTERNAL_INSTALLMENT",
+        title: "Installment 0",
+        originalAmount: 300,
+        outstandingAmount: 300,
+        dueDate: todayStart - 24 * 60 * 60 * 1000,
+        status: "OVERDUE",
+        createdBy,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+
+    // Already paid, due today — must be excluded from both buckets.
+    await t.run((ctx) =>
+      ctx.db.insert("receivables", {
+        orgId,
+        customerId,
+        sourceType: "INTERNAL_INSTALLMENT",
+        title: "Installment paid",
+        originalAmount: 200,
+        outstandingAmount: 0,
+        dueDate: todayStart + 60 * 60 * 1000,
+        status: "PAID",
+        createdBy,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+
+    // Held cheque due in 3 days — should count.
+    await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", {
+        orgId,
+        customerId,
+        bank: "Arab Bank",
+        chequeNumber: "1001",
+        chequeDate: now + 3 * 24 * 60 * 60 * 1000,
+        amount: 1200,
+        status: "HELD",
+        createdBy,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+
+    // Cleared cheque due in 3 days — must be excluded.
+    await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", {
+        orgId,
+        customerId,
+        bank: "Arab Bank",
+        chequeNumber: "1002",
+        chequeDate: now + 3 * 24 * 60 * 60 * 1000,
+        amount: 900,
+        status: "CLEARED",
+        createdBy,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+
+    const result = await asUser.query(api.dashboard.todayForRole, { orgId });
+
+    expect(result.collectionsDueToday).toEqual({ count: 1, amount: 500 });
+    expect(result.overdueReceivables).toEqual({ count: 1, amount: 300 });
+    expect(result.chequesDueThisWeek).toEqual({ count: 1, amount: 1200 });
+    expect(result.truncated).toBe(false);
+  });
+
+  test("rejects callers without view:finance permission", async () => {
+    const { orgId, asUser } = await setup(["view:vehicles"]);
+
+    await expect(asUser.query(api.dashboard.todayForRole, { orgId })).rejects.toThrow();
+  });
+
+  test("includes a cheque due today, stored as UTC midnight of the due date rather than an offset from now", async () => {
+    const { t, orgId, asUser } = await setup(FINANCE_PERMISSIONS);
+    const { customerId } = await seedCustomerAndVehicle(t, orgId);
+    const now = Date.now();
+    const createdBy = await t.run((ctx) =>
+      ctx.db
+        .query("memberships")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .first()
+        .then((membership) => membership!.userId)
+    );
+
+    // Real accounting-date convention (lib/dateInput.ts's dateInputToUtcMs): a
+    // cheque due "today" is stored as UTC midnight of today's calendar date,
+    // not an offset from the current instant. `.gte("chequeDate", now)` would
+    // wrongly exclude this row for essentially the entire day, since
+    // chequeDate (today's midnight) is less than `now` (the current instant)
+    // except right at midnight itself. No orgSettings row exists here, so
+    // "today" is Asia/Amman's calendar day (the fallback), not the test
+    // runner's own OS timezone.
+    const chequeDateToday = startOfDayInTimeZone("Asia/Amman", now);
+
+    await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", {
+        orgId,
+        customerId,
+        bank: "Arab Bank",
+        chequeNumber: "2001",
+        chequeDate: chequeDateToday,
+        amount: 750,
+        status: "HELD",
+        createdBy,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+
+    const result = await asUser.query(api.dashboard.todayForRole, { orgId });
+
+    expect(result.chequesDueThisWeek).toEqual({ count: 1, amount: 750 });
+  });
+
+  test("buckets a receivable due 'today' by Asia/Amman's calendar even when the UTC calendar date is still a day behind (near-midnight boundary)", async () => {
+    const { t, orgId, asUser } = await setup(FINANCE_PERMISSIONS);
+    const { customerId } = await seedCustomerAndVehicle(t, orgId);
+
+    // 2026-03-31 22:00 UTC = 2026-04-01 01:00 in Asia/Amman (UTC+3, no DST) —
+    // Amman's calendar day is already the 1st while UTC's is still the 31st.
+    // No orgSettings row exists for this org, so Asia/Amman is the fallback.
+    const now = Date.UTC(2026, 2, 31, 22, 0, 0);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+
+    const createdBy = await t.run((ctx) =>
+      ctx.db
+        .query("memberships")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .first()
+        .then((membership) => membership!.userId)
+    );
+
+    // Due "today" by Amman's calendar (April 1st, stored as its UTC midnight
+    // per the storage convention) — must be bucketed as due-today, NOT
+    // excluded, even though the UTC calendar date at this instant is still
+    // March 31st.
+    await t.run((ctx) =>
+      ctx.db.insert("receivables", {
+        orgId,
+        customerId,
+        sourceType: "INTERNAL_INSTALLMENT",
+        title: "Due today in Amman",
+        originalAmount: 400,
+        outstandingAmount: 400,
+        dueDate: Date.UTC(2026, 3, 1),
+        status: "OPEN",
+        createdBy,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+
+    // Due "yesterday" by Amman's calendar (March 31st) — must land in
+    // overdueReceivables, not collectionsDueToday.
+    await t.run((ctx) =>
+      ctx.db.insert("receivables", {
+        orgId,
+        customerId,
+        sourceType: "INTERNAL_INSTALLMENT",
+        title: "Overdue in Amman",
+        originalAmount: 250,
+        outstandingAmount: 250,
+        dueDate: Date.UTC(2026, 2, 31),
+        status: "OPEN",
+        createdBy,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+
+    const result = await asUser.query(api.dashboard.todayForRole, { orgId });
+
+    expect(result.collectionsDueToday).toEqual({ count: 1, amount: 400 });
+    expect(result.overdueReceivables).toEqual({ count: 1, amount: 250 });
+  });
+
+  test("uses the org's configured timezone instead of the Asia/Amman fallback", async () => {
+    const { t, orgId, asUser } = await setup(FINANCE_PERMISSIONS);
+    const { customerId } = await seedCustomerAndVehicle(t, orgId);
+
+    await t.run((ctx) =>
+      ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "JOD",
+        currencySymbol: "د.أ",
+        enabledPaymentTypes: ["CASH", "INSTALLMENT"],
+        timezone: "America/Los_Angeles",
+      })
+    );
+
+    // 2026-01-15 04:00 UTC = 2026-01-15 07:00 in Asia/Amman (already the
+    // 15th) but 2026-01-14 20:00 in America/Los_Angeles, PST in January
+    // (still the 14th) — the two zones disagree on what "today" is.
+    const now = Date.UTC(2026, 0, 15, 4, 0, 0);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+
+    const createdBy = await t.run((ctx) =>
+      ctx.db
+        .query("memberships")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .first()
+        .then((membership) => membership!.userId)
+    );
+
+    // Due on the 14th — "today" per the org's configured Los Angeles
+    // timezone, but "yesterday" per the Asia/Amman fallback. If the org's
+    // configured timezone were ignored, this would wrongly land in
+    // overdueReceivables instead.
+    await t.run((ctx) =>
+      ctx.db.insert("receivables", {
+        orgId,
+        customerId,
+        sourceType: "INTERNAL_INSTALLMENT",
+        title: "Due today in Los Angeles",
+        originalAmount: 600,
+        outstandingAmount: 600,
+        dueDate: Date.UTC(2026, 0, 14),
+        status: "OPEN",
+        createdBy,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+
+    const result = await asUser.query(api.dashboard.todayForRole, { orgId });
+
+    expect(result.collectionsDueToday).toEqual({ count: 1, amount: 600 });
+    expect(result.overdueReceivables).toEqual({ count: 0, amount: 0 });
+  });
+
+  test("returns the org's configured currency, defaulting to JOD when orgSettings has none set", async () => {
+    const { orgId, asUser } = await setup(FINANCE_PERMISSIONS);
+
+    const result = await asUser.query(api.dashboard.todayForRole, { orgId });
+
+    expect(result.currency).toBe("JOD");
+  });
+
+  test("returns the org's configured currency rather than hardcoding JOD", async () => {
+    const { t, orgId, asUser } = await setup(FINANCE_PERMISSIONS);
+
+    await t.run((ctx) =>
+      ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "AED",
+        currencySymbol: "د.إ",
+        enabledPaymentTypes: ["CASH", "INSTALLMENT"],
+      })
+    );
+
+    const result = await asUser.query(api.dashboard.todayForRole, { orgId });
+
+    expect(result.currency).toBe("AED");
   });
 });

@@ -1095,6 +1095,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "عند فتح صفحة أو محاولة إجراء لا يسمح به دورك، يعرض أوتوفلو الآن إشعاراً هادئاً بعنوان \"الوصول غير مسموح\" — مع تلميح للتواصل مع مديرك أو المسؤول — بدلاً من رسالة خطأ حمراء أو إعادتك إلى لوحة التحكم بصمت.",
     publishedAt: releaseAt(2026, 7, 20, 2),
   },
+  {
+    type: "IMPROVEMENT",
+    titleEn: "Mobile dashboard: tidier metrics, and a real Today for accountants",
+    titleAr: "لوحة التحكم على الهاتف: مؤشرات أهدأ، ويوم حقيقي للمحاسبين",
+    descriptionEn: "The mobile dashboard's inventory/leads/team/tasks grid now leads with the top metric and lets you tap \"See more\" to reveal the rest, instead of showing all four at once. Accountants also get a new Today panel with collections due today, cheques due this week, and overdue receivables.",
+    descriptionAr: "أصبحت شبكة المخزون والعملاء المحتملين والفريق والمهام في لوحة التحكم على الهاتف تعرض المؤشر الأهم أولاً، مع زر \"عرض المزيد\" لإظهار الباقي بدلاً من عرض الأربعة دفعة واحدة. كما حصل المحاسبون على لوحة \"اليوم\" الجديدة التي تعرض التحصيلات المستحقة اليوم والشيكات المستحقة هذا الأسبوع والذمم المتأخرة.",
+    publishedAt: releaseAt(2026, 7, 26, 1),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

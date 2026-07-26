@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { query } from "./_generated/server";
+import { query, QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { validateVinChecksum } from "../lib/vinHelpers";
@@ -358,6 +358,148 @@ export const stats = query({
       },
       teamTasks,
       topPerformer,
+    };
+  },
+});
+
+const OPEN_RECEIVABLE_STATUSES = ["OPEN", "PARTIALLY_PAID", "OVERDUE"] as const;
+const TODAY_FOR_ROLE_CAP = 2000;
+
+// Asia/Amman — this platform's primary/founding market (see lib/dateInput.ts's
+// comments on the same default) — is the fallback business timezone when an
+// org hasn't configured `orgSettings.timezone`.
+const DEFAULT_ORG_TIMEZONE = "Asia/Amman";
+
+/**
+ * The org's configured business timezone and currency, read from the same
+ * `orgSettings` row other Convex modules already use for this (see
+ * `getOrgCurrency` in `convex/accounting/workflowHooks.ts` and
+ * `getOrgCurrencyForReports` in `convex/accountingReports.ts`), so "today"
+ * boundary math and amount labeling both reflect the org's actual settings
+ * rather than the server process's own timezone or a hardcoded currency.
+ */
+async function getOrgTimezoneAndCurrency(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+): Promise<{ timezone: string; currency: string }> {
+  const settings = await ctx.db
+    .query("orgSettings")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .unique();
+  return {
+    timezone: settings?.timezone ?? DEFAULT_ORG_TIMEZONE,
+    currency: settings?.currency ?? "JOD",
+  };
+}
+
+/**
+ * Reads the wall-clock Y/M/D for `at` in `timeZone` via `Intl.DateTimeFormat`
+ * — no date-library dependency needed. Works for any IANA zone, DST or not;
+ * Jordan currently has no DST, but nothing here assumes that.
+ */
+function calendarDatePartsInTimeZone(
+  timeZone: string,
+  at: number,
+): { year: number; month: number; day: number } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(at));
+  const lookup: Record<string, string> = {};
+  for (const part of parts) {
+    if (part.type !== "literal") lookup[part.type] = part.value;
+  }
+  return { year: Number(lookup.year), month: Number(lookup.month), day: Number(lookup.day) };
+}
+
+/**
+ * Start of "today" as this org's business calendar sees it, expressed as a
+ * UTC millisecond timestamp — matching this repo's existing "a calendar date
+ * IS its UTC midnight" storage convention (see lib/dateInput.ts's
+ * `dateInputToUtcMs`, which every `dueDate`/`chequeDate` on these tables is
+ * stored with). Reading the wall-clock date in the ORG's timezone (rather
+ * than `new Date().setHours(0,0,0,0)`, which uses the server process's own
+ * timezone — almost certainly UTC in production) is what makes "today"
+ * actually mean today from the business's perspective, not the server's.
+ */
+function startOfTodayForOrg(timeZone: string, now: number): number {
+  const { year, month, day } = calendarDatePartsInTimeZone(timeZone, now);
+  return Date.UTC(year, month - 1, day);
+}
+
+/**
+ * Role-aware "today" data for accountant-shaped roles: collections due today,
+ * post-dated cheques due this week, and overdue receivables. Gated on
+ * `view:finance` — the same permission `dashboard.stats` already requires for
+ * any of its finance-shaped fields — rather than a new permission string.
+ * Bounded scans (`.take(N)`) — this is an aggregate summary, not a list endpoint.
+ */
+export const todayForRole = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+
+    const { timezone, currency } = await getOrgTimezoneAndCurrency(ctx, args.orgId);
+    const now = Date.now();
+    const todayStart = startOfTodayForOrg(timezone, now);
+    const todayEnd = todayStart + 24 * 60 * 60 * 1000 - 1;
+    const weekEnd = now + 7 * 24 * 60 * 60 * 1000;
+
+    const receivablesDueToday = await ctx.db
+      .query("receivables")
+      .withIndex("by_org_dueDate", (q) =>
+        q.eq("orgId", args.orgId).gte("dueDate", todayStart).lte("dueDate", todayEnd),
+      )
+      .filter((q) =>
+        q.and(
+          q.neq(q.field("isDeleted"), true),
+          q.or(...OPEN_RECEIVABLE_STATUSES.map((status) => q.eq(q.field("status"), status))),
+        ),
+      )
+      .take(TODAY_FOR_ROLE_CAP);
+
+    const overdueReceivableRows = await ctx.db
+      .query("receivables")
+      .withIndex("by_org_dueDate", (q) => q.eq("orgId", args.orgId).lt("dueDate", todayStart))
+      .filter((q) =>
+        q.and(
+          q.neq(q.field("isDeleted"), true),
+          q.or(...OPEN_RECEIVABLE_STATUSES.map((status) => q.eq(q.field("status"), status))),
+        ),
+      )
+      .take(TODAY_FOR_ROLE_CAP);
+
+    const chequesDueThisWeekRows = await ctx.db
+      .query("postDatedCheques")
+      .withIndex("by_org_status_and_chequeDate", (q) =>
+        q.eq("orgId", args.orgId).eq("status", "HELD").gte("chequeDate", todayStart).lte("chequeDate", weekEnd),
+      )
+      .filter((q) => q.neq(q.field("isDeleted"), true))
+      .take(TODAY_FOR_ROLE_CAP);
+
+    const sum = (rows: ReadonlyArray<{ amount?: number; outstandingAmount?: number }>, key: "amount" | "outstandingAmount") =>
+      rows.reduce((acc, row) => acc + (row[key] ?? 0), 0);
+
+    return {
+      collectionsDueToday: {
+        count: receivablesDueToday.length,
+        amount: sum(receivablesDueToday, "outstandingAmount"),
+      },
+      chequesDueThisWeek: {
+        count: chequesDueThisWeekRows.length,
+        amount: sum(chequesDueThisWeekRows, "amount"),
+      },
+      overdueReceivables: {
+        count: overdueReceivableRows.length,
+        amount: sum(overdueReceivableRows, "outstandingAmount"),
+      },
+      truncated:
+        receivablesDueToday.length === TODAY_FOR_ROLE_CAP ||
+        overdueReceivableRows.length === TODAY_FOR_ROLE_CAP ||
+        chequesDueThisWeekRows.length === TODAY_FOR_ROLE_CAP,
+      currency,
     };
   },
 });
