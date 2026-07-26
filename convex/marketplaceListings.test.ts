@@ -1460,3 +1460,181 @@ describe("getMyListings", () => {
     expect(new Set(mine.map((l) => l._id))).toEqual(new Set(liveIds));
   });
 });
+
+describe("adminListPendingListings", () => {
+  test("rejects a non-super-admin caller", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_82", "seller82@test.com");
+    const imageId = await seedImage(t, "seller_82");
+    await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+
+    await expect(
+      asSeller.query(api.marketplaceListings.adminListPendingListings, {
+        paginationOpts: { numItems: 10, cursor: null },
+      })
+    ).rejects.toThrow(/super-admin/i);
+  });
+
+  test("only returns non-deleted PENDING_VERIFICATION listings", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_83", "seller83@test.com");
+    const asAdmin = await seedUser(t, "admin_22", "admin@autoflow.dev");
+    const imageId = await seedImage(t, "seller_83");
+
+    // Still pending — should be returned.
+    const pendingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+
+    // LIVE — should NOT be returned.
+    const liveId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, { listingId: liveId, status: "LIVE" });
+
+    // REJECTED — should NOT be returned.
+    const rejectedId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, {
+      listingId: rejectedId,
+      status: "REJECTED",
+      rejectionReason: "Photos too blurry.",
+    });
+
+    // SOLD — should NOT be returned.
+    const soldId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, { listingId: soldId, status: "LIVE" });
+    await asSeller.mutation(api.marketplaceListings.markListingSold, { listingId: soldId });
+
+    // REMOVED — should NOT be returned.
+    const removedId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, { listingId: removedId, status: "LIVE" });
+    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, {
+      listingId: removedId,
+      status: "REMOVED",
+      rejectionReason: "Fraudulent listing.",
+    });
+
+    // Soft-deleted while still PENDING_VERIFICATION — should NOT be returned.
+    const softDeletedPendingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+    await asSeller.mutation(api.marketplaceListings.softDeleteListing, { listingId: softDeletedPendingId });
+
+    const page = await asAdmin.query(api.marketplaceListings.adminListPendingListings, {
+      paginationOpts: { numItems: 50, cursor: null },
+    });
+
+    const ids = page.page.map((row) => row._id);
+    expect(ids).toContain(pendingId);
+    expect(ids).not.toContain(liveId);
+    expect(ids).not.toContain(rejectedId);
+    expect(ids).not.toContain(soldId);
+    expect(ids).not.toContain(removedId);
+    expect(ids).not.toContain(softDeletedPendingId);
+  });
+
+  test("resolves image URLs and joins the seller's profile row", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_84", "seller84@test.com");
+    const asAdmin = await seedUser(t, "admin_23", "admin@autoflow.dev");
+    const imageId = await seedImage(t, "seller_84");
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+
+    const page = await asAdmin.query(api.marketplaceListings.adminListPendingListings, {
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+
+    const row = page.page.find((r) => r._id === listingId);
+    expect(row).toBeDefined();
+    expect(row?.imageUrls).toHaveLength(1);
+    expect(typeof row?.imageUrls[0]).toBe("string");
+    expect(row?.imageUrls[0]).not.toBe(imageId);
+    expect(row?.sellerProfile).not.toBeNull();
+    expect(row?.sellerProfile?.phone).toBe(baseListing.sellerPhone);
+    expect(row?.sellerProfile?.city).toBe(baseListing.city);
+  });
+
+  test("returns null sellerProfile when no profile row exists for the seller", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_85", "seller85@test.com");
+    const asAdmin = await seedUser(t, "admin_24", "admin@autoflow.dev");
+    const imageId = await seedImage(t, "seller_85");
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+
+    // Remove the profile row createListing upserted, to simulate a listing
+    // with no cached profile (e.g. seeded directly rather than through
+    // createListing).
+    await t.run(async (ctx) => {
+      const seller = await ctx.db
+        .query("users")
+        .withIndex("by_clerkId", (q) => q.eq("clerkId", "seller_85"))
+        .unique();
+      const profile = await ctx.db
+        .query("marketplaceIndividualSellerProfiles")
+        .withIndex("by_sellerUserId", (q) => q.eq("sellerUserId", seller!._id))
+        .unique();
+      if (profile) await ctx.db.delete(profile._id);
+    });
+
+    const page = await asAdmin.query(api.marketplaceListings.adminListPendingListings, {
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+
+    const row = page.page.find((r) => r._id === listingId);
+    expect(row).toBeDefined();
+    expect(row?.sellerProfile).toBeNull();
+  });
+
+  test("orders results oldest submission first", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_86", "seller86@test.com");
+    const asAdmin = await seedUser(t, "admin_25", "admin@autoflow.dev");
+    const imageId = await seedImage(t, "seller_86");
+
+    const firstId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+    const secondId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+    const thirdId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+
+    const page = await asAdmin.query(api.marketplaceListings.adminListPendingListings, {
+      paginationOpts: { numItems: 50, cursor: null },
+    });
+
+    const ids = page.page.map((row) => row._id);
+    const firstIndex = ids.indexOf(firstId);
+    const secondIndex = ids.indexOf(secondId);
+    const thirdIndex = ids.indexOf(thirdId);
+    expect(firstIndex).toBeGreaterThanOrEqual(0);
+    expect(secondIndex).toBeGreaterThan(firstIndex);
+    expect(thirdIndex).toBeGreaterThan(secondIndex);
+  });
+});
