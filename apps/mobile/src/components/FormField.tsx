@@ -34,6 +34,10 @@ export function FormField({
         {label}
       </Text>
       <TextInput
+        // React Native has no htmlFor equivalent, so the visible label above
+        // is not announced with the input; without this, every field in the
+        // app reads as an unlabelled text box.
+        accessibilityLabel={label}
         keyboardType={keyboardType}
         multiline={multiline}
         onChangeText={onChangeText}

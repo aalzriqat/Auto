@@ -1111,6 +1111,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "أصبح بإمكان الأفراد والمعارض المستقلة بدون اشتراك في أوتوفلو إضافة سيارة للبيع على المنصة وإدارتها من صفحة \"إعلاناتي\". يراجع أحد مسؤولي أوتوفلو كل إعلان جديد قبل أن يظهر للعامة.",
     publishedAt: releaseAt(2026, 7, 26, 2),
   },
+  {
+    type: "FEATURE",
+    titleEn: "Sell your car from the mobile app",
+    titleAr: "بيع سيارتك من تطبيق الهاتف",
+    descriptionEn: "The \"Sell your car\" and My Listings flows are now available on mobile, so anyone can list a car for sale and manage their ads without needing an AutoFlow dealership account. Every new listing stays pending verification until an AutoFlow admin reviews and approves it.",
+    descriptionAr: "أصبحت خاصية \"بيع سيارتك\" وصفحة \"إعلاناتي\" متاحتين الآن على تطبيق الهاتف، بحيث يمكن لأي شخص إضافة سيارة للبيع وإدارة إعلاناته دون الحاجة لحساب معرض في أوتوفلو. يبقى كل إعلان جديد قيد التحقق حتى يراجعه أحد مسؤولي أوتوفلو ويوافق عليه.",
+    publishedAt: releaseAt(2026, 7, 26, 3),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

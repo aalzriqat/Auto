@@ -56,6 +56,8 @@ export type MarketplaceHomeScreenProps = Readonly<{
   onOpenFinancing: () => void;
   onOpenCompare: () => void;
   onOpenRequest: () => void;
+  onOpenSell: () => void;
+  onOpenMyListings: () => void;
 }>;
 
 // The buyer's storefront landing (الرئيسية). A search-first hero, one-tap brand
@@ -68,6 +70,8 @@ export function MarketplaceHomeScreen({
   onOpenFinancing,
   onOpenCompare,
   onOpenRequest,
+  onOpenSell,
+  onOpenMyListings,
 }: MarketplaceHomeScreenProps) {
   const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
@@ -133,6 +137,22 @@ export function MarketplaceHomeScreen({
       body: t("homeActionFavoritesBody"),
       badge: savedCount > 0 ? formatNumber(savedCount, locale) : undefined,
       onPress: onOpenFavorites,
+    },
+    {
+      key: "sell",
+      icon: "vehicles",
+      tone: "green",
+      title: t("homeActionSellTitle"),
+      body: t("homeActionSellBody"),
+      onPress: onOpenSell,
+    },
+    {
+      key: "myListings",
+      icon: "sales",
+      tone: "blue",
+      title: t("homeActionMyListingsTitle"),
+      body: t("homeActionMyListingsBody"),
+      onPress: onOpenMyListings,
     },
   ];
 
@@ -627,10 +647,12 @@ const makeStyles = (theme: AppTheme) =>
     },
     actionsRow: {
       flexDirection: "row",
+      flexWrap: "wrap",
       gap: theme.spacing.sm,
     },
     actionTile: {
-      flex: 1,
+      flexBasis: "47%",
+      flexGrow: 1,
       gap: theme.spacing.sm,
       padding: theme.spacing.md,
     },
