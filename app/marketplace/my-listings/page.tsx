@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useConvexAuth, useQuery } from "convex/react";
@@ -8,7 +8,7 @@ import type { FunctionReturnType } from "convex/server";
 import Link from "next/link";
 import { api } from "@/convex/_generated/api";
 import { toast } from "@/components/ui/sonner";
-import { Car, Globe2, ImageOff, Store } from "lucide-react";
+import { Car, ImageOff } from "lucide-react";
 import {
   ALLOWED_CURRENCIES,
   LISTING_CONDITIONS,
@@ -16,104 +16,64 @@ import {
   type ListingUpdateValues,
 } from "../sell/listing.schema";
 import { TextField, SelectField, TextAreaField, codeOptions } from "../listingFields";
+import {
+  MarketplacePageShell,
+  translate,
+  useMarketplaceLang,
+  type Lang,
+  type Translations,
+} from "../marketplaceShell";
 
-type Lang = "en" | "ar";
 // getMyListings returns each raw listing doc plus a resolved thumbnailUrl
 // (first image only) that doesn't exist on the underlying schema doc.
 type ListingDoc = FunctionReturnType<typeof api.marketplaceListings.getMyListings>[number];
 type ListingStatus = ListingDoc["status"];
 type Condition = ListingDoc["condition"];
 
-const STRINGS: Record<Lang, Record<string, string>> = {
-  en: {
-    title: "My Listings",
-    subtitle: "Manage the cars you've listed for sale.",
-    toggleLang: "العربية",
-    backToBrowse: "Back to Browse Cars",
-    listAnotherCar: "List Another Car",
-    signInTitle: "Sign in to see your listings",
-    signInBody: "You'll need to be signed in to view and manage the cars you've listed.",
-    signInCta: "Sign in",
-    loading: "Loading your listings...",
-    empty: "You haven't listed any cars yet.",
-    listFirstCar: "List Your Car",
-    photosCount: "photos",
-    noPhotos: "No photos",
-    edit: "Edit",
-    save: "Save changes",
-    saving: "Saving...",
-    cancel: "Cancel",
-    markSold: "Mark as sold",
-    marking: "Marking...",
-    delete: "Delete",
-    deleting: "Deleting...",
-    confirmDelete: "Delete this listing? This can't be undone.",
-    rejectionReasonLabel: "Rejection reason",
-    removalReasonLabel: "Removal reason",
-    sellerDisplayName: "Your name",
-    sellerPhone: "Phone number",
-    sellerWhatsapp: "WhatsApp (optional)",
-    make: "Make",
-    model: "Model",
-    year: "Year",
-    mileage: "Mileage (km)",
-    price: "Price",
-    currency: "Currency",
-    transmission: "Transmission",
-    fuelType: "Fuel type",
-    city: "City",
-    description: "Description",
-    condition: "Condition",
-    updated: "Listing updated.",
-    markedSold: "Listing marked as sold.",
-    deleted: "Listing deleted.",
-    genericError: "Something went wrong. Please try again.",
-  },
-  ar: {
-    title: "إعلاناتي",
-    subtitle: "أدر السيارات التي أضفتها للبيع.",
-    toggleLang: "English",
-    backToBrowse: "الرجوع إلى تصفّح السيارات",
-    listAnotherCar: "أضف سيارة أخرى",
-    signInTitle: "سجّل الدخول لعرض إعلاناتك",
-    signInBody: "تحتاج إلى تسجيل الدخول لعرض وإدارة السيارات التي أضفتها.",
-    signInCta: "تسجيل الدخول",
-    loading: "جاري تحميل إعلاناتك...",
-    empty: "لم تقم بإضافة أي سيارة بعد.",
-    listFirstCar: "أضف سيارتك",
-    photosCount: "صور",
-    noPhotos: "لا توجد صور",
-    edit: "تعديل",
-    save: "حفظ التعديلات",
-    saving: "جاري الحفظ...",
-    cancel: "إلغاء",
-    markSold: "تعليم كمباعة",
-    marking: "جاري التعليم...",
-    delete: "حذف",
-    deleting: "جاري الحذف...",
-    confirmDelete: "هل تريد حذف هذا الإعلان؟ لا يمكن التراجع عن هذا الإجراء.",
-    rejectionReasonLabel: "سبب الرفض",
-    removalReasonLabel: "سبب الإزالة",
-    sellerDisplayName: "اسمك",
-    sellerPhone: "رقم الهاتف",
-    sellerWhatsapp: "واتساب (اختياري)",
-    make: "الماركة",
-    model: "الموديل",
-    year: "سنة الصنع",
-    mileage: "الممشى (كم)",
-    price: "السعر",
-    currency: "العملة",
-    transmission: "ناقل الحركة",
-    fuelType: "نوع الوقود",
-    city: "المدينة",
-    description: "الوصف",
-    condition: "الحالة",
-    updated: "تم تحديث الإعلان.",
-    markedSold: "تم تعليم الإعلان كمباع.",
-    deleted: "تم حذف الإعلان.",
-    genericError: "حدث خطأ ما. الرجاء المحاولة مرة أخرى.",
-  },
-};
+const STRINGS = {
+  title: { en: "My Listings", ar: "إعلاناتي" },
+  subtitle: { en: "Manage the cars you've listed for sale.", ar: "أدر السيارات التي أضفتها للبيع." },
+  toggleLang: { en: "العربية", ar: "English" },
+  backToBrowse: { en: "Back to Browse Cars", ar: "الرجوع إلى تصفّح السيارات" },
+  listAnotherCar: { en: "List Another Car", ar: "أضف سيارة أخرى" },
+  signInTitle: { en: "Sign in to see your listings", ar: "سجّل الدخول لعرض إعلاناتك" },
+  signInBody: { en: "You'll need to be signed in to view and manage the cars you've listed.", ar: "تحتاج إلى تسجيل الدخول لعرض وإدارة السيارات التي أضفتها." },
+  signInCta: { en: "Sign in", ar: "تسجيل الدخول" },
+  loading: { en: "Loading your listings...", ar: "جاري تحميل إعلاناتك..." },
+  empty: { en: "You haven't listed any cars yet.", ar: "لم تقم بإضافة أي سيارة بعد." },
+  listFirstCar: { en: "List Your Car", ar: "أضف سيارتك" },
+  photosCount: { en: "photos", ar: "صور" },
+  noPhotos: { en: "No photos", ar: "لا توجد صور" },
+  edit: { en: "Edit", ar: "تعديل" },
+  save: { en: "Save changes", ar: "حفظ التعديلات" },
+  saving: { en: "Saving...", ar: "جاري الحفظ..." },
+  cancel: { en: "Cancel", ar: "إلغاء" },
+  markSold: { en: "Mark as sold", ar: "تعليم كمباعة" },
+  marking: { en: "Marking...", ar: "جاري التعليم..." },
+  delete: { en: "Delete", ar: "حذف" },
+  deleting: { en: "Deleting...", ar: "جاري الحذف..." },
+  confirmDelete: { en: "Delete this listing? This can't be undone.", ar: "هل تريد حذف هذا الإعلان؟ لا يمكن التراجع عن هذا الإجراء." },
+  rejectionReasonLabel: { en: "Rejection reason", ar: "سبب الرفض" },
+  removalReasonLabel: { en: "Removal reason", ar: "سبب الإزالة" },
+  sellerDisplayName: { en: "Your name", ar: "اسمك" },
+  sellerPhone: { en: "Phone number", ar: "رقم الهاتف" },
+  sellerWhatsapp: { en: "WhatsApp (optional)", ar: "واتساب (اختياري)" },
+  make: { en: "Make", ar: "الماركة" },
+  model: { en: "Model", ar: "الموديل" },
+  year: { en: "Year", ar: "سنة الصنع" },
+  mileage: { en: "Mileage (km)", ar: "الممشى (كم)" },
+  price: { en: "Price", ar: "السعر" },
+  currency: { en: "Currency", ar: "العملة" },
+  transmission: { en: "Transmission", ar: "ناقل الحركة" },
+  fuelType: { en: "Fuel type", ar: "نوع الوقود" },
+  city: { en: "City", ar: "المدينة" },
+  description: { en: "Description", ar: "الوصف" },
+  condition: { en: "Condition", ar: "الحالة" },
+  updated: { en: "Listing updated.", ar: "تم تحديث الإعلان." },
+  markedSold: { en: "Listing marked as sold.", ar: "تم تعليم الإعلان كمباع." },
+  deleted: { en: "Listing deleted.", ar: "تم حذف الإعلان." },
+  genericError: { en: "Something went wrong. Please try again.", ar: "حدث خطأ ما. الرجاء المحاولة مرة أخرى." },
+} satisfies Translations;
 
 const STATUS_LABELS: Record<Lang, Record<ListingStatus, string>> = {
   en: {
@@ -394,35 +354,14 @@ function ListingCard({ listing, lang, t }: { readonly listing: ListingDoc; reado
 }
 
 export default function MyListingsPage() {
-  const [lang, setLang] = useState<Lang>("en");
-  useEffect(() => {
-    const browserLang = typeof navigator !== "undefined" ? navigator.language : "en";
-    if (browserLang.toLowerCase().startsWith("ar")) setLang("ar");
-  }, []);
-  const t = STRINGS[lang];
-  const dir = lang === "ar" ? "rtl" : "ltr";
+  const { lang, toggleLang, dir } = useMarketplaceLang();
+  const t = translate(STRINGS, lang);
 
   const { isAuthenticated, isLoading: isAuthLoading } = useConvexAuth();
   const listings = useQuery(api.marketplaceListings.getMyListings, isAuthenticated ? {} : "skip");
 
   return (
-    <main dir={dir} className="min-h-screen bg-slate-50 text-slate-950">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto max-w-3xl px-4 py-4 flex items-center justify-between">
-          <Link href="/marketplace/cars" className="flex items-center gap-2 font-semibold">
-            <Store className="h-5 w-5" />
-            AutoFlow
-          </Link>
-          <button
-            type="button"
-            onClick={() => setLang(lang === "en" ? "ar" : "en")}
-            className="text-sm text-slate-600 hover:text-slate-950"
-          >
-            <Globe2 className="h-4 w-4 inline me-1" />
-            {t.toggleLang}
-          </button>
-        </div>
-      </header>
+    <MarketplacePageShell dir={dir} toggleLabel={t.toggleLang} onToggleLang={toggleLang}>
 
       <section className="mx-auto max-w-3xl px-4 py-10">
         <div className="flex items-center justify-between flex-wrap gap-3">
@@ -479,6 +418,6 @@ export default function MyListingsPage() {
           </Link>
         </div>
       </section>
-    </main>
+    </MarketplacePageShell>
   );
 }

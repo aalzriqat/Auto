@@ -8,15 +8,7 @@ import Link from "next/link";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { toast } from "@/components/ui/sonner";
-import {
-  CheckCircle2,
-  Car,
-  Globe2,
-  Loader2,
-  Store,
-  Upload,
-  X,
-} from "lucide-react";
+import { CheckCircle2, Car, Loader2, Upload, X } from "lucide-react";
 import {
   ALLOWED_CURRENCIES,
   LISTING_CONDITIONS,
@@ -26,8 +18,12 @@ import {
   type ListingFormValues,
 } from "./listing.schema";
 import { TextField, SelectField, TextAreaField, codeOptions } from "../listingFields";
-
-type Lang = "en" | "ar";
+import {
+  MarketplacePageShell,
+  translate,
+  useMarketplaceLang,
+  type Translations,
+} from "../marketplaceShell";
 
 // Mirrors convex/utils/storageValidation.ts's MARKETPLACE_LISTING_IMAGE_CONTENT_TYPES
 // / max size — checked client-side too so a rejected file is caught before an
@@ -35,126 +31,77 @@ type Lang = "en" | "ar";
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
 const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
 
-const STRINGS: Record<Lang, Record<string, string>> = {
-  en: {
-    title: "List Your Car",
-    subtitle: "Sell your own car, or list inventory as a dealer without an AutoFlow account.",
-    toggleLang: "العربية",
-    backToBrowse: "Back to Browse Cars",
-    myListings: "My Listings",
-    signInTitle: "Sign in to list your car",
-    signInBody: "You'll need an AutoFlow account so we can verify your listing and let you manage it afterward.",
-    signInCta: "Sign in",
-    loading: "Loading...",
-    sellerKindLabel: "Who's selling?",
-    sellerKindIndividual: "I'm selling my own car",
-    sellerKindDealer: "I'm a dealer without an AutoFlow account",
-    sellerDisplayName: "Your name",
-    sellerDisplayNamePlaceholder: "e.g. Ahmad Khalil",
-    sellerPhone: "Phone number",
-    sellerPhonePlaceholder: "e.g. +962 7 9999 9999",
-    sellerWhatsapp: "WhatsApp (optional, if different)",
-    make: "Make",
-    makePlaceholder: "e.g. Toyota",
-    model: "Model",
-    modelPlaceholder: "e.g. Camry",
-    year: "Year",
-    mileage: "Mileage (km)",
-    price: "Price",
-    currency: "Currency",
-    transmission: "Transmission",
-    fuelType: "Fuel type",
-    city: "City",
-    cityPlaceholder: "e.g. Amman",
-    description: "Description",
-    descriptionPlaceholder: "Condition details, service history, extras...",
-    condition: "Condition",
-    conditionExcellent: "Excellent",
-    conditionGood: "Good",
-    conditionFair: "Fair",
-    conditionPoor: "Poor",
-    transmissionAutomatic: "Automatic",
-    transmissionManual: "Manual",
-    fuelGasoline: "Gasoline",
-    fuelDiesel: "Diesel",
-    fuelHybrid: "Hybrid",
-    fuelElectric: "Electric",
-    images: "Photos",
-    imagesHint: `Upload between 1 and ${MAX_LISTING_IMAGES} photos of the car.`,
-    uploadPhotos: "Upload photos",
-    uploading: "Uploading...",
-    noImagesYet: "No photos added yet.",
-    imagesRequired: "At least one photo is required.",
-    tooManyImages: `You can upload at most ${MAX_LISTING_IMAGES} photos.`,
-    invalidImageType: "Only JPEG, PNG, or WEBP images are allowed.",
-    imageTooLarge: "Image exceeds the 5MB size limit.",
-    submit: "Submit listing",
-    submitting: "Submitting...",
-    successTitle: "Listing submitted!",
-    successBody: "Your listing is now PENDING VERIFICATION — it will not appear publicly until an AutoFlow admin reviews and approves it.",
-    viewMyListings: "View My Listings",
-    genericError: "Something went wrong. Please try again.",
-  },
-  ar: {
-    title: "أضف سيارتك للبيع",
-    subtitle: "بع سيارتك الخاصة، أو أضف مخزونك كمعرض بدون حساب أوتوفلو.",
-    toggleLang: "English",
-    backToBrowse: "الرجوع إلى تصفّح السيارات",
-    myListings: "إعلاناتي",
-    signInTitle: "سجّل الدخول لإضافة سيارتك",
-    signInBody: "تحتاج إلى حساب أوتوفلو حتى نتمكن من التحقق من إعلانك والسماح لك بإدارته لاحقاً.",
-    signInCta: "تسجيل الدخول",
-    loading: "جاري التحميل...",
-    sellerKindLabel: "من البائع؟",
-    sellerKindIndividual: "أنا أبيع سيارتي الخاصة",
-    sellerKindDealer: "أنا معرض بدون حساب أوتوفلو",
-    sellerDisplayName: "اسمك",
-    sellerDisplayNamePlaceholder: "مثال: أحمد خليل",
-    sellerPhone: "رقم الهاتف",
-    sellerPhonePlaceholder: "مثال: 7 9999 9999 962+",
-    sellerWhatsapp: "واتساب (اختياري، إن كان مختلفاً)",
-    make: "الماركة",
-    makePlaceholder: "مثال: تويوتا",
-    model: "الموديل",
-    modelPlaceholder: "مثال: كامري",
-    year: "سنة الصنع",
-    mileage: "الممشى (كم)",
-    price: "السعر",
-    currency: "العملة",
-    transmission: "ناقل الحركة",
-    fuelType: "نوع الوقود",
-    city: "المدينة",
-    cityPlaceholder: "مثال: عمّان",
-    description: "الوصف",
-    descriptionPlaceholder: "تفاصيل الحالة، سجل الصيانة، الإضافات...",
-    condition: "الحالة",
-    conditionExcellent: "ممتازة",
-    conditionGood: "جيدة",
-    conditionFair: "مقبولة",
-    conditionPoor: "ضعيفة",
-    transmissionAutomatic: "أوتوماتيك",
-    transmissionManual: "عادي",
-    fuelGasoline: "بنزين",
-    fuelDiesel: "ديزل",
-    fuelHybrid: "هايبرد",
-    fuelElectric: "كهربائي",
-    images: "الصور",
-    imagesHint: `ارفع بين 1 و${MAX_LISTING_IMAGES} صورة للسيارة.`,
-    uploadPhotos: "رفع صور",
-    uploading: "جاري الرفع...",
-    noImagesYet: "لم تتم إضافة صور بعد.",
-    imagesRequired: "مطلوب صورة واحدة على الأقل.",
-    tooManyImages: `يمكنك رفع ${MAX_LISTING_IMAGES} صورة كحد أقصى.`,
-    invalidImageType: "يُسمح فقط بصور JPEG أو PNG أو WEBP.",
-    imageTooLarge: "حجم الصورة يتجاوز الحد الأقصى (5 ميجابايت).",
-    submit: "إرسال الإعلان",
-    submitting: "جاري الإرسال...",
-    successTitle: "تم إرسال الإعلان!",
-    successBody: "إعلانك الآن قيد التحقق (PENDING VERIFICATION) — لن يظهر للعامة حتى يراجعه ويوافق عليه أحد مسؤولي أوتوفلو.",
-    viewMyListings: "عرض إعلاناتي",
-    genericError: "حدث خطأ ما. الرجاء المحاولة مرة أخرى.",
-  },
-};
+const STRINGS = {
+  title: { en: "List Your Car", ar: "أضف سيارتك للبيع" },
+  subtitle: { en: "Sell your own car, or list inventory as a dealer without an AutoFlow account.", ar: "بع سيارتك الخاصة، أو أضف مخزونك كمعرض بدون حساب أوتوفلو." },
+  toggleLang: { en: "العربية", ar: "English" },
+  backToBrowse: { en: "Back to Browse Cars", ar: "الرجوع إلى تصفّح السيارات" },
+  myListings: { en: "My Listings", ar: "إعلاناتي" },
+  signInTitle: { en: "Sign in to list your car", ar: "سجّل الدخول لإضافة سيارتك" },
+  signInBody: { en: "You'll need an AutoFlow account so we can verify your listing and let you manage it afterward.", ar: "تحتاج إلى حساب أوتوفلو حتى نتمكن من التحقق من إعلانك والسماح لك بإدارته لاحقاً." },
+  signInCta: { en: "Sign in", ar: "تسجيل الدخول" },
+  loading: { en: "Loading...", ar: "جاري التحميل..." },
+  sellerKindLabel: { en: "Who's selling?", ar: "من البائع؟" },
+  sellerKindIndividual: { en: "I'm selling my own car", ar: "أنا أبيع سيارتي الخاصة" },
+  sellerKindDealer: { en: "I'm a dealer without an AutoFlow account", ar: "أنا معرض بدون حساب أوتوفلو" },
+  sellerDisplayName: { en: "Your name", ar: "اسمك" },
+  sellerDisplayNamePlaceholder: { en: "e.g. Ahmad Khalil", ar: "مثال: أحمد خليل" },
+  sellerPhone: { en: "Phone number", ar: "رقم الهاتف" },
+  sellerPhonePlaceholder: { en: "e.g. +962 7 9999 9999", ar: "مثال: 7 9999 9999 962+" },
+  sellerWhatsapp: { en: "WhatsApp (optional, if different)", ar: "واتساب (اختياري، إن كان مختلفاً)" },
+  make: { en: "Make", ar: "الماركة" },
+  makePlaceholder: { en: "e.g. Toyota", ar: "مثال: تويوتا" },
+  model: { en: "Model", ar: "الموديل" },
+  modelPlaceholder: { en: "e.g. Camry", ar: "مثال: كامري" },
+  year: { en: "Year", ar: "سنة الصنع" },
+  mileage: { en: "Mileage (km)", ar: "الممشى (كم)" },
+  price: { en: "Price", ar: "السعر" },
+  currency: { en: "Currency", ar: "العملة" },
+  transmission: { en: "Transmission", ar: "ناقل الحركة" },
+  fuelType: { en: "Fuel type", ar: "نوع الوقود" },
+  city: { en: "City", ar: "المدينة" },
+  cityPlaceholder: { en: "e.g. Amman", ar: "مثال: عمّان" },
+  description: { en: "Description", ar: "الوصف" },
+  descriptionPlaceholder: { en: "Condition details, service history, extras...", ar: "تفاصيل الحالة، سجل الصيانة، الإضافات..." },
+  condition: { en: "Condition", ar: "الحالة" },
+  conditionExcellent: { en: "Excellent", ar: "ممتازة" },
+  conditionGood: { en: "Good", ar: "جيدة" },
+  conditionFair: { en: "Fair", ar: "مقبولة" },
+  conditionPoor: { en: "Poor", ar: "ضعيفة" },
+  transmissionAutomatic: { en: "Automatic", ar: "أوتوماتيك" },
+  transmissionManual: { en: "Manual", ar: "عادي" },
+  fuelGasoline: { en: "Gasoline", ar: "بنزين" },
+  fuelDiesel: { en: "Diesel", ar: "ديزل" },
+  fuelHybrid: { en: "Hybrid", ar: "هايبرد" },
+  fuelElectric: { en: "Electric", ar: "كهربائي" },
+  images: { en: "Photos", ar: "الصور" },
+  imagesHint: { en: `Upload between 1 and ${MAX_LISTING_IMAGES} photos of the car.`, ar: `ارفع بين 1 و${MAX_LISTING_IMAGES} صورة للسيارة.` },
+  uploadPhotos: { en: "Upload photos", ar: "رفع صور" },
+  uploading: { en: "Uploading...", ar: "جاري الرفع..." },
+  noImagesYet: { en: "No photos added yet.", ar: "لم تتم إضافة صور بعد." },
+  imagesRequired: { en: "At least one photo is required.", ar: "مطلوب صورة واحدة على الأقل." },
+  tooManyImages: { en: `You can upload at most ${MAX_LISTING_IMAGES} photos.`, ar: `يمكنك رفع ${MAX_LISTING_IMAGES} صورة كحد أقصى.` },
+  invalidImageType: { en: "Only JPEG, PNG, or WEBP images are allowed.", ar: "يُسمح فقط بصور JPEG أو PNG أو WEBP." },
+  imageTooLarge: { en: "Image exceeds the 5MB size limit.", ar: "حجم الصورة يتجاوز الحد الأقصى (5 ميجابايت)." },
+  submit: { en: "Submit listing", ar: "إرسال الإعلان" },
+  submitting: { en: "Submitting...", ar: "جاري الإرسال..." },
+  successTitle: { en: "Listing submitted!", ar: "تم إرسال الإعلان!" },
+  successBody: { en: "Your listing is now PENDING VERIFICATION — it will not appear publicly until an AutoFlow admin reviews and approves it.", ar: "إعلانك الآن قيد التحقق (PENDING VERIFICATION) — لن يظهر للعامة حتى يراجعه ويوافق عليه أحد مسؤولي أوتوفلو." },
+  viewMyListings: { en: "View My Listings", ar: "عرض إعلاناتي" },
+  genericError: { en: "Something went wrong. Please try again.", ar: "حدث خطأ ما. الرجاء المحاولة مرة أخرى." },
+} satisfies Translations;
+
+/**
+ * Maps each condition enum value to its STRINGS key. Explicit rather than
+ * building the key from the enum at runtime, so adding a condition without its
+ * translation is a compile error instead of silently rendering the raw enum.
+ */
+const CONDITION_LABEL_KEYS = {
+  EXCELLENT: "conditionExcellent",
+  GOOD: "conditionGood",
+  FAIR: "conditionFair",
+  POOR: "conditionPoor",
+} as const satisfies Record<(typeof LISTING_CONDITIONS)[number], keyof typeof STRINGS>;
 
 type UploadedImage = {
   storageId: Id<"_storage">;
@@ -173,13 +120,8 @@ function safeObjectUrl(url: string): string | undefined {
 }
 
 export default function MarketplaceSellPage() {
-  const [lang, setLang] = useState<Lang>("en");
-  useEffect(() => {
-    const browserLang = typeof navigator !== "undefined" ? navigator.language : "en";
-    if (browserLang.toLowerCase().startsWith("ar")) setLang("ar");
-  }, []);
-  const t = STRINGS[lang];
-  const dir = lang === "ar" ? "rtl" : "ltr";
+  const { lang, toggleLang, dir } = useMarketplaceLang();
+  const t = translate(STRINGS, lang);
 
   const { isAuthenticated, isLoading: isAuthLoading } = useConvexAuth();
 
@@ -317,23 +259,7 @@ export default function MarketplaceSellPage() {
   }
 
   return (
-    <main dir={dir} className="min-h-screen bg-slate-50 text-slate-950">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto max-w-3xl px-4 py-4 flex items-center justify-between">
-          <Link href="/marketplace/cars" className="flex items-center gap-2 font-semibold">
-            <Store className="h-5 w-5" />
-            AutoFlow
-          </Link>
-          <button
-            type="button"
-            onClick={() => setLang(lang === "en" ? "ar" : "en")}
-            className="text-sm text-slate-600 hover:text-slate-950"
-          >
-            <Globe2 className="h-4 w-4 inline me-1" />
-            {t.toggleLang}
-          </button>
-        </div>
-      </header>
+    <MarketplacePageShell dir={dir} toggleLabel={t.toggleLang} onToggleLang={toggleLang}>
 
       <section className="mx-auto max-w-3xl px-4 py-10">
         <div className="flex items-center gap-2 text-slate-500 mb-2">
@@ -494,8 +420,7 @@ export default function MarketplaceSellPage() {
                 registration={form.register("condition")}
                 options={LISTING_CONDITIONS.map((condition) => ({
                   value: condition,
-                  label:
-                    t[`condition${condition.charAt(0)}${condition.slice(1).toLowerCase()}`] ?? condition,
+                  label: CONDITION_LABEL_KEYS[condition] ? t[CONDITION_LABEL_KEYS[condition]] : condition,
                 }))}
                 error={form.formState.errors.condition?.message}
               />
@@ -585,6 +510,6 @@ export default function MarketplaceSellPage() {
           )}
         </div>
       </section>
-    </main>
+    </MarketplacePageShell>
   );
 }
