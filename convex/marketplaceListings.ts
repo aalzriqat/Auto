@@ -1,7 +1,12 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query, MutationCtx, QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
-import { requireAuth, requireSuperAdmin, isSuperAdminUser } from "./utils/tenancy";
+import {
+  requireAuth,
+  requireOrCreateAuthenticatedUser,
+  requireSuperAdmin,
+  isSuperAdminUser,
+} from "./utils/tenancy";
 import {
   assertMarketplaceListingImagesAllowed,
   MARKETPLACE_LISTING_IMAGE_CONTENT_TYPES,
@@ -399,7 +404,7 @@ export const generateListingImageUploadUrl = mutation({
   },
   handler: async (ctx, args) => {
     try {
-      const user = await requireAuth(ctx);
+      const user = await requireOrCreateAuthenticatedUser(ctx);
 
       const status = await rateLimiter.limit(ctx, "marketplaceListingImageUpload", { key: user._id });
       if (!status.ok) {
@@ -439,7 +444,7 @@ export const confirmListingImageUpload = mutation({
   args: { storageId: v.id("_storage") },
   handler: async (ctx, args) => {
     try {
-      const user = await requireAuth(ctx);
+      const user = await requireOrCreateAuthenticatedUser(ctx);
 
       await assertMarketplaceListingImagesAllowed(ctx, [args.storageId]);
 
@@ -490,7 +495,7 @@ export const createListing = mutation({
   },
   handler: async (ctx, args) => {
     try {
-      const user = await requireAuth(ctx);
+      const user = await requireOrCreateAuthenticatedUser(ctx);
       await enforceListingWriteRateLimit(ctx, user._id);
 
       assertImageCountWithinBounds(args.imageIds);
@@ -793,19 +798,45 @@ export const getMyListings = query({
   args: {},
   handler: async (ctx) => {
     try {
+      // A brand-new account can reach this page before the Clerk -> Convex
+      // user-sync webhook has written its `users` row. A query can't create
+      // that row (no db.insert in a QueryCtx), and such a user provably has no
+      // listings yet, so return the empty result instead of throwing
+      // USER_NOT_FOUND and crashing the page into an error boundary.
+      const identity = await ctx.auth.getUserIdentity();
+      if (!identity) {
+        throw new ConvexError("Unauthenticated: You must be logged in.");
+      }
+      const pendingSyncUser = await ctx.db
+        .query("users")
+        .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
+        .unique();
+      if (!pendingSyncUser) return [];
+
       const user = await requireAuth(ctx);
       // isDeleted is part of the index equality prefix (not a post-hoc
       // .filter(), which isn't index-backed and would still scan every one
       // of this seller's rows — including all soft-deleted ones — before
       // the take(200) slice). This keeps the read bounded to live/pending
       // rows only, regardless of how many deleted listings the seller has.
-      return await ctx.db
+      const listings = await ctx.db
         .query("marketplaceListings")
         .withIndex("by_sellerUserId_and_isDeleted", (q) =>
           q.eq("sellerUserId", user._id).eq("isDeleted", false)
         )
         .order("desc")
         .take(200);
+
+      // The seller's own management view needs a real thumbnail (not just raw
+      // storage ids, which aren't directly renderable) — resolve only the
+      // first image per listing rather than the whole gallery, since this is
+      // a list view of up to 200 rows.
+      return await Promise.all(
+        listings.map(async (listing) => ({
+          ...listing,
+          thumbnailUrl: listing.imageIds[0] ? await ctx.storage.getUrl(listing.imageIds[0]) : null,
+        }))
+      );
     } catch (error) {
       if (error instanceof ConvexError) throw error;
       console.error("marketplaceListings.getMyListings failed", error);

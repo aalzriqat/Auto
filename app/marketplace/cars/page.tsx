@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "convex/react";
 import Link from "next/link";
 import { api } from "@/convex/_generated/api";
-import { Car, Globe2, MapPin, MessageCircle, Phone, Search, ShieldCheck, Store, Wallet, Zap } from "lucide-react";
+import { Car, Globe2, MapPin, MessageCircle, Phone, Plus, Search, ShieldCheck, Store, Wallet, Zap } from "lucide-react";
 import { buildWhatsAppDeepLink } from "@/lib/whatsappDeepLink";
 
 type Lang = "en" | "ar";
@@ -40,6 +40,7 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     sold: "Sold",
     toggleLang: "العربية",
     requestInstead: "Can't find it? Request a car instead",
+    listYourCar: "List Your Car",
   },
   ar: {
     title: "تصفّح السيارات",
@@ -71,6 +72,7 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     sold: "تم البيع",
     toggleLang: "English",
     requestInstead: "لم تجد ما تبحث عنه؟ اطلب سيارة بدلاً من ذلك",
+    listYourCar: "أضف سيارتك للبيع",
   },
 };
 
@@ -424,14 +426,23 @@ export default function MarketplaceCarsPage() {
             <Store className="h-5 w-5" />
             AutoFlow
           </Link>
-          <button
-            type="button"
-            onClick={() => setLang(lang === "en" ? "ar" : "en")}
-            className="text-sm text-slate-600 hover:text-slate-950"
-          >
-            <Globe2 className="h-4 w-4 inline me-1" />
-            {t.toggleLang}
-          </button>
+          <div className="flex items-center gap-4">
+            <Link
+              href="/marketplace/sell"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-slate-950 text-white text-sm font-medium px-3 py-1.5 hover:bg-slate-800"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {t.listYourCar}
+            </Link>
+            <button
+              type="button"
+              onClick={() => setLang(lang === "en" ? "ar" : "en")}
+              className="text-sm text-slate-600 hover:text-slate-950"
+            >
+              <Globe2 className="h-4 w-4 inline me-1" />
+              {t.toggleLang}
+            </button>
+          </div>
         </div>
       </header>
 

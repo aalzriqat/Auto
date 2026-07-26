@@ -1103,6 +1103,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "أصبحت شبكة المخزون والعملاء المحتملين والفريق والمهام في لوحة التحكم على الهاتف تعرض المؤشر الأهم أولاً، مع زر \"عرض المزيد\" لإظهار الباقي بدلاً من عرض الأربعة دفعة واحدة. كما حصل المحاسبون على لوحة \"اليوم\" الجديدة التي تعرض التحصيلات المستحقة اليوم والشيكات المستحقة هذا الأسبوع والذمم المتأخرة.",
     publishedAt: releaseAt(2026, 7, 26, 1),
   },
+  {
+    type: "FEATURE",
+    titleEn: "List your car for sale — no dealership account needed",
+    titleAr: "أضف سيارتك للبيع — بدون حاجة لحساب معرض",
+    descriptionEn: "Individuals and independent dealers without an AutoFlow subscription can now list a car for sale on the marketplace and manage it from My Listings. Every new listing is reviewed by an AutoFlow admin before it appears publicly.",
+    descriptionAr: "أصبح بإمكان الأفراد والمعارض المستقلة بدون اشتراك في أوتوفلو إضافة سيارة للبيع على المنصة وإدارتها من صفحة \"إعلاناتي\". يراجع أحد مسؤولي أوتوفلو كل إعلان جديد قبل أن يظهر للعامة.",
+    publishedAt: releaseAt(2026, 7, 26, 2),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

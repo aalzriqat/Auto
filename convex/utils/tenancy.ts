@@ -14,6 +14,8 @@ function isMutationCtx(ctx: QueryCtx | MutationCtx): ctx is MutationCtx {
  * Result returned by all auth helpers so callers have typed access
  * to the resolved user, membership, and role without extra DB lookups.
  */
+type AuthIdentity = NonNullable<Awaited<ReturnType<MutationCtx["auth"]["getUserIdentity"]>>>;
+
 export interface TenantAuthContext {
   user: Doc<"users">;
   membership: Doc<"memberships">;
@@ -46,6 +48,61 @@ export async function requireAuth(ctx: QueryCtx | MutationCtx): Promise<Doc<"use
     throwAppError(AppErrorCode.FORBIDDEN, "Forbidden: This account has been disabled.");
   }
 
+  return user;
+}
+
+function placeholderEmailForSubject(subject: string): string {
+  const safeSubject = subject.replace(/[^a-zA-Z0-9._+-]/g, "_");
+  return `no-email-${safeSubject}@autoflow.local`;
+}
+
+function nameFromIdentity(identity: AuthIdentity): string | undefined {
+  return identity.name ?? identity.givenName ?? identity.preferredUsername ?? identity.email;
+}
+
+/**
+ * requireAuth, but creates the `users` row if it doesn't exist yet.
+ *
+ * The row is normally written by the Clerk -> Convex webhook, which is
+ * asynchronous: a user who signs up and immediately acts can arrive before it
+ * lands. Any entry point a brand-new account can hit as its FIRST authenticated
+ * write must use this instead of requireAuth, or that user dead-ends on
+ * USER_NOT_FOUND until the webhook catches up. Queries can't insert, so they
+ * have to degrade gracefully (return an empty result) rather than call this.
+ */
+export async function requireOrCreateAuthenticatedUser(ctx: MutationCtx): Promise<Doc<"users">> {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) {
+    throwAppError(AppErrorCode.UNAUTHENTICATED, "Unauthenticated: You must be logged in.");
+  }
+
+  const existingUser = await ctx.db
+    .query("users")
+    .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
+    .unique();
+
+  if (existingUser) {
+    if (existingUser.disabled) {
+      throwAppError(AppErrorCode.FORBIDDEN, "Forbidden: This account has been disabled.");
+    }
+    return existingUser;
+  }
+
+  const email =
+    typeof identity.email === "string" && identity.email.trim()
+      ? identity.email.trim().toLowerCase()
+      : placeholderEmailForSubject(identity.subject);
+
+  const userId = await ctx.db.insert("users", {
+    clerkId: identity.subject,
+    email,
+    name: nameFromIdentity(identity),
+    imageUrl: identity.pictureUrl,
+  });
+  const user = await ctx.db.get(userId);
+  if (!user) {
+    throwAppError(AppErrorCode.USER_NOT_FOUND, "User not found in the database. Please contact support.");
+  }
   return user;
 }
 
