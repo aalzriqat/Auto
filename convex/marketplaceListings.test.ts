@@ -609,10 +609,27 @@ describe("listing image upload ownership", () => {
     const asSeller = await seedUser(t, "seller_79", "seller79@test.com");
     const imageId = await storeRawImage(t);
 
-    await asSeller.mutation(api.marketplaceListings.confirmListingImageUpload, { storageId: imageId });
-    await expect(
-      asSeller.mutation(api.marketplaceListings.confirmListingImageUpload, { storageId: imageId })
-    ).resolves.toBeNull();
+    const first = await asSeller.mutation(api.marketplaceListings.confirmListingImageUpload, {
+      storageId: imageId,
+    });
+    const second = await asSeller.mutation(api.marketplaceListings.confirmListingImageUpload, {
+      storageId: imageId,
+    });
+    // Re-confirming is a no-op that still resolves the same stored-image URL,
+    // so a retrying client gets a usable preview either way.
+    expect(first.url).toEqual(expect.any(String));
+    expect(second.url).toBe(first.url);
+  });
+
+  test("confirmListingImageUpload returns the stored image URL for the client preview", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_81", "seller81@test.com");
+    const imageId = await storeRawImage(t);
+
+    const result = await asSeller.mutation(api.marketplaceListings.confirmListingImageUpload, {
+      storageId: imageId,
+    });
+    expect(result.url).toEqual(expect.any(String));
   });
 
   test("confirming a storage id already claimed by someone else throws", async () => {

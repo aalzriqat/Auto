@@ -105,19 +105,15 @@ const CONDITION_LABEL_KEYS = {
 
 type UploadedImage = {
   storageId: Id<"_storage">;
-  previewUrl: string;
+  /**
+   * URL of the image as actually stored in Convex, returned by
+   * confirmListingImageUpload. Deliberately not a local
+   * URL.createObjectURL(file) preview: this proves the upload landed, and
+   * there is no object URL whose lifetime the client has to manage.
+   * Null only if storage can't resolve a URL, which the UI falls back on.
+   */
+  previewUrl: string | null;
 };
-
-/**
- * Object URLs are minted by the browser and always look like
- * `blob:<origin>/<uuid>` — they can't carry a script-bearing scheme. Asserting
- * that explicitly keeps a non-blob string from ever reaching an <img src>,
- * even if the preview ever stops coming from URL.createObjectURL, and makes
- * the guarantee visible to readers and static analysis instead of implicit.
- */
-function safeObjectUrl(url: string): string | undefined {
-  return url.startsWith("blob:") ? url : undefined;
-}
 
 export default function MarketplaceSellPage() {
   const { lang, toggleLang, dir } = useMarketplaceLang();
@@ -135,17 +131,6 @@ export default function MarketplaceSellPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedListingId, setSubmittedListingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Release any previews still held when the page unmounts (navigating away
-  // mid-listing, or after a successful submit swaps in the confirmation view).
-  // Reads through a ref so the cleanup isn't re-run on every image change.
-  const imagesRef = useRef<UploadedImage[]>([]);
-  imagesRef.current = images;
-  useEffect(() => {
-    return () => {
-      imagesRef.current.forEach((image) => URL.revokeObjectURL(image.previewUrl));
-    };
-  }, []);
 
   const form = useForm<ListingFormValues>({
     resolver: zodResolver(listingSchema),
@@ -201,9 +186,9 @@ export default function MarketplaceSellPage() {
           body: file,
         });
         const { storageId } = (await response.json()) as { storageId: Id<"_storage"> };
-        await confirmUpload({ storageId });
+        const { url } = await confirmUpload({ storageId });
 
-        setImages((prev) => [...prev, { storageId, previewUrl: URL.createObjectURL(file) }]);
+        setImages((prev) => [...prev, { storageId, previewUrl: url }]);
       }
     } catch (error) {
       toast.error(error);
@@ -214,13 +199,7 @@ export default function MarketplaceSellPage() {
   }
 
   function handleRemoveImage(index: number) {
-    setImages((prev) => {
-      // Each preview holds a browser object URL that lives until it's revoked
-      // or the document unloads; dropping the state entry alone leaks it.
-      const removed = prev[index];
-      if (removed) URL.revokeObjectURL(removed.previewUrl);
-      return prev.filter((_, i) => i !== index);
-    });
+    setImages((prev) => prev.filter((_, i) => i !== index));
   }
 
   async function onSubmit(values: ListingFormValues) {
@@ -467,12 +446,18 @@ export default function MarketplaceSellPage() {
                       key={image.storageId}
                       className="relative group aspect-video bg-slate-100 rounded-md overflow-hidden border border-slate-200"
                     >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={safeObjectUrl(image.previewUrl)}
-                        alt={`Upload ${index + 1}`}
-                        className="object-cover w-full h-full"
-                      />
+                      {image.previewUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element -- Convex storage URL, not a local/static asset next/image can optimize
+                        <img
+                          src={image.previewUrl}
+                          alt={`Upload ${index + 1}`}
+                          className="object-cover w-full h-full"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-slate-400">
+                          <Car className="h-6 w-6" />
+                        </div>
+                      )}
                       <button
                         type="button"
                         onClick={() => handleRemoveImage(index)}

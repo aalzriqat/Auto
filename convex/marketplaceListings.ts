@@ -458,7 +458,7 @@ export const confirmListingImageUpload = mutation({
         if (existing.uploadedBy !== user._id) {
           throw new ConvexError("This image was already uploaded by another user.");
         }
-        return null;
+        return { url: await ctx.storage.getUrl(args.storageId) };
       }
 
       await ctx.db.insert("marketplaceListingImageUploads", {
@@ -466,7 +466,11 @@ export const confirmListingImageUpload = mutation({
         uploadedBy: user._id,
         createdAt: Date.now(),
       });
-      return null;
+      // Hand back the stored image's URL so the client can preview what was
+      // actually persisted, rather than a local object URL built from the
+      // picked File — that keeps the preview honest (it proves the upload
+      // landed) and leaves no object URL for the client to have to revoke.
+      return { url: await ctx.storage.getUrl(args.storageId) };
     } catch (error) {
       if (error instanceof ConvexError) throw error;
       console.error("marketplaceListings.confirmListingImageUpload failed", error);
