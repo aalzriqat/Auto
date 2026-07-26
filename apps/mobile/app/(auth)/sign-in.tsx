@@ -50,7 +50,16 @@ export default function SignInRoute() {
   const { isLoaded: signUpLoaded, signUp, setActive: setActiveSignUp } = useSignUp();
   const { startSSOFlow } = useSSO();
 
-  const destination = returnTo === "marketplace" ? nativeRoutes.marketplace : nativeRoutes.dealerWorkspaces;
+  // Set once a registration completes. Activating the new session flips
+  // isSignedIn, which fires the redirect effect below — without this it would
+  // race finishSignUp and win, dumping a brand-new buyer on the dealer
+  // workspace picker (an empty state, for an account with no org).
+  const [justSignedUp, setJustSignedUp] = useState(false);
+
+  const destination =
+    returnTo === "marketplace" || justSignedUp
+      ? nativeRoutes.marketplace
+      : nativeRoutes.dealerWorkspaces;
 
   // Single source of truth for "signed in → leave the sign-in screen". Covers
   // every path (Google SSO, password, or an already-active session on launch);
@@ -102,7 +111,12 @@ export default function SignInRoute() {
 
   // A freshly self-registered account has no org, so the workspace picker would
   // only show an empty state — send new accounts to the marketplace instead.
-  const finishSignUp = useCallback(() => router.replace(nativeRoutes.marketplace), [router]);
+  // Flagging it also repoints `destination`, so the redirect effect agrees
+  // rather than immediately overriding this navigation.
+  const finishSignUp = useCallback(() => {
+    setJustSignedUp(true);
+    router.replace(nativeRoutes.marketplace);
+  }, [router]);
 
   const signInWithGoogle = useCallback(async () => {
     /* istanbul ignore if -- unreachable from the UI (the button is disabled

@@ -311,6 +311,26 @@ describe("SignInRoute", () => {
       expect(mockReplace).toHaveBeenCalledWith("/marketplace");
     });
 
+    test("keeps a new buyer on the marketplace once the session goes live", async () => {
+      // Activating the session flips Clerk's isSignedIn, which fires the
+      // mount-time redirect effect. That effect defaults to the dealer
+      // workspace picker, so without the sign-up flag it overrides the
+      // navigation and strands a brand-new account on an empty state.
+      mockAttemptVerification.mockResolvedValue({ status: "complete", createdSessionId: "sess_live" });
+      mockSetActiveSignUp.mockImplementation(async () => {
+        mockIsSignedIn = true;
+        mockIsAuthenticated = true;
+      });
+      const screen = await renderScreen();
+      await reachVerifyStep(screen);
+
+      await fireEvent.changeText(screen.getByLabelText(AR.code), "123456");
+      await fireEvent.press(screen.getByLabelText(AR.confirm));
+
+      await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/marketplace"));
+      expect(mockReplace).not.toHaveBeenCalledWith("/workspaces");
+    });
+
     test("explains an incomplete verification instead of doing nothing", async () => {
       mockAttemptVerification.mockResolvedValue({ status: "missing_requirements" });
       const screen = await renderScreen();
