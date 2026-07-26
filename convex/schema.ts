@@ -3823,6 +3823,7 @@ export default defineSchema({
     deletedBy: v.optional(v.id("users")),
   })
     .index("by_sellerUserId", ["sellerUserId"])
+    .index("by_sellerUserId_and_isDeleted", ["sellerUserId", "isDeleted"])
     .index("by_status", ["status"])
     .index("by_isDeleted_and_status", ["isDeleted", "status"]),
 

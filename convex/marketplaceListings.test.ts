@@ -188,6 +188,86 @@ describe("createListing", () => {
       })
     ).rejects.toThrow(/year/i);
   });
+
+  test("rejects an empty (or whitespace-only) sellerPhone", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_39", "seller39@test.com");
+    const imageId = await seedImage(t);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.createListing, {
+        ...baseListing,
+        sellerPhone: "   ",
+        imageIds: [imageId],
+      })
+    ).rejects.toThrow(/seller phone is required/i);
+  });
+
+  test("rejects an empty (or whitespace-only) sellerDisplayName", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_40", "seller40@test.com");
+    const imageId = await seedImage(t);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.createListing, {
+        ...baseListing,
+        sellerDisplayName: "",
+        imageIds: [imageId],
+      })
+    ).rejects.toThrow(/seller display name is required/i);
+  });
+
+  test("rejects an oversized description", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_41", "seller41@test.com");
+    const imageId = await seedImage(t);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.createListing, {
+        ...baseListing,
+        description: "x".repeat(5001),
+        imageIds: [imageId],
+      })
+    ).rejects.toThrow(/description must be at most 5000 characters/i);
+  });
+
+  test("stores free-text fields trimmed, not raw", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_42", "seller42@test.com");
+    const imageId = await seedImage(t);
+
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      sellerDisplayName: "  Sami K.  ",
+      sellerPhone: "  +962791234567  ",
+      sellerWhatsapp: "  +962791111111  ",
+      city: "  Amman  ",
+      description: "  Well maintained, single owner.  ",
+      imageIds: [imageId],
+    });
+
+    const listing = await t.run((ctx) => ctx.db.get(listingId));
+    expect(listing?.sellerDisplayName).toBe("Sami K.");
+    expect(listing?.sellerPhone).toBe("+962791234567");
+    expect(listing?.sellerWhatsapp).toBe("+962791111111");
+    expect(listing?.city).toBe("Amman");
+    expect(listing?.description).toBe("Well maintained, single owner.");
+  });
+
+  test("treats a whitespace-only sellerWhatsapp as not provided rather than rejecting it", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_43", "seller43@test.com");
+    const imageId = await seedImage(t);
+
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      sellerWhatsapp: "   ",
+      imageIds: [imageId],
+    });
+
+    const listing = await t.run((ctx) => ctx.db.get(listingId));
+    expect(listing?.sellerWhatsapp).toBeUndefined();
+  });
 });
 
 describe("ownership: update / soft-delete", () => {
@@ -340,6 +420,48 @@ describe("ownership: update / soft-delete", () => {
     await expect(
       asSeller.mutation(api.marketplaceListings.updateListing, { listingId, year: 1900 })
     ).rejects.toThrow(/year/i);
+  });
+
+  test("updateListing rejects an empty sellerPhone, an empty sellerDisplayName, and an oversized description", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_44", "seller44@test.com");
+    const imageId = await seedImage(t);
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.updateListing, { listingId, sellerPhone: "   " })
+    ).rejects.toThrow(/seller phone is required/i);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.updateListing, { listingId, sellerDisplayName: "" })
+    ).rejects.toThrow(/seller display name is required/i);
+
+    await expect(
+      asSeller.mutation(api.marketplaceListings.updateListing, { listingId, description: "x".repeat(5001) })
+    ).rejects.toThrow(/description must be at most 5000 characters/i);
+  });
+
+  test("updateListing stores free-text fields trimmed, not raw", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_45", "seller45@test.com");
+    const imageId = await seedImage(t);
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+
+    await asSeller.mutation(api.marketplaceListings.updateListing, {
+      listingId,
+      sellerDisplayName: "  Sami K. Jr.  ",
+      city: "  Amman  ",
+    });
+
+    const listing = await t.run((ctx) => ctx.db.get(listingId));
+    expect(listing?.sellerDisplayName).toBe("Sami K. Jr.");
+    expect(listing?.city).toBe("Amman");
   });
 
   test("updateListing rejects edits once a listing is SOLD", async () => {

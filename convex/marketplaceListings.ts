@@ -40,6 +40,42 @@ const MAX_LISTING_IMAGES = 20;
 // marketplace intake flows (see marketplaceTradeIns.ts / marketplaceWhatsAppIntake.ts).
 const MIN_LISTING_YEAR = 1980;
 
+// Free-text field bounds: keep listings reachable (non-empty contact info)
+// and bounded (a public-facing description can't grow into something that
+// trips Convex document size limits, surfacing as a generic error instead of
+// a clear validation message).
+const MAX_SELLER_DISPLAY_NAME_LENGTH = 120;
+const MAX_SELLER_PHONE_LENGTH = 32;
+const MAX_CITY_LENGTH = 80;
+const MAX_DESCRIPTION_LENGTH = 5000;
+
+/** Trims `value`, then throws unless the result is non-empty and within `maxLength`. */
+function assertRequiredText(value: string, label: string, maxLength: number): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new ConvexError(`${label} is required.`);
+  }
+  if (trimmed.length > maxLength) {
+    throw new ConvexError(`${label} must be at most ${maxLength} characters.`);
+  }
+  return trimmed;
+}
+
+/**
+ * Same bound as assertRequiredText, but for optional fields (sellerWhatsapp):
+ * `undefined` passes through untouched, and a value that's only whitespace
+ * is treated as "not provided" rather than rejected, since this field isn't
+ * required in the first place.
+ */
+function assertOptionalText(value: string | undefined, label: string, maxLength: number): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length > maxLength) {
+    throw new ConvexError(`${label} must be at most ${maxLength} characters.`);
+  }
+  return trimmed || undefined;
+}
+
 function assertImageCountWithinBounds(imageIds: Id<"_storage">[]): void {
   if (imageIds.length === 0) {
     throw new ConvexError("At least one image is required to list a vehicle.");
@@ -117,7 +153,39 @@ function assertEditableListingStatus(status: Doc<"marketplaceListings">["status"
   }
 }
 
-async function assertUpdateFieldsValid(ctx: MutationCtx, fields: UpdateListingFields): Promise<void> {
+/** Trims/bounds-checks whichever free-text fields are present, returning a copy with those replaced by their trimmed values. */
+function assertAndNormalizeTextFields(fields: UpdateListingFields): UpdateListingFields {
+  const normalized: UpdateListingFields = { ...fields };
+  if (fields.sellerDisplayName !== undefined) {
+    normalized.sellerDisplayName = assertRequiredText(
+      fields.sellerDisplayName,
+      "Seller display name",
+      MAX_SELLER_DISPLAY_NAME_LENGTH
+    );
+  }
+  if (fields.sellerPhone !== undefined) {
+    normalized.sellerPhone = assertRequiredText(fields.sellerPhone, "Seller phone", MAX_SELLER_PHONE_LENGTH);
+  }
+  if (fields.sellerWhatsapp !== undefined) {
+    normalized.sellerWhatsapp = assertOptionalText(
+      fields.sellerWhatsapp,
+      "Seller WhatsApp",
+      MAX_SELLER_PHONE_LENGTH
+    );
+  }
+  if (fields.city !== undefined) {
+    normalized.city = assertRequiredText(fields.city, "City", MAX_CITY_LENGTH);
+  }
+  if (fields.description !== undefined) {
+    normalized.description = assertRequiredText(fields.description, "Description", MAX_DESCRIPTION_LENGTH);
+  }
+  return normalized;
+}
+
+async function assertUpdateFieldsValid(
+  ctx: MutationCtx,
+  fields: UpdateListingFields
+): Promise<UpdateListingFields> {
   if (fields.imageIds !== undefined) {
     assertImageCountWithinBounds(fields.imageIds);
     await assertMarketplaceListingImagesAllowed(ctx, fields.imageIds);
@@ -125,6 +193,7 @@ async function assertUpdateFieldsValid(ctx: MutationCtx, fields: UpdateListingFi
   if (fields.price !== undefined) assertValidPrice(fields.price);
   if (fields.mileage !== undefined) assertValidMileage(fields.mileage);
   if (fields.year !== undefined) assertValidYear(fields.year);
+  return assertAndNormalizeTextFields(fields);
 }
 
 function buildListingPatchFields(fields: UpdateListingFields): Partial<Doc<"marketplaceListings">> {
@@ -220,13 +289,23 @@ export const createListing = mutation({
       assertValidMileage(args.mileage);
       assertValidYear(args.year);
 
+      const sellerDisplayName = assertRequiredText(
+        args.sellerDisplayName,
+        "Seller display name",
+        MAX_SELLER_DISPLAY_NAME_LENGTH
+      );
+      const sellerPhone = assertRequiredText(args.sellerPhone, "Seller phone", MAX_SELLER_PHONE_LENGTH);
+      const sellerWhatsapp = assertOptionalText(args.sellerWhatsapp, "Seller WhatsApp", MAX_SELLER_PHONE_LENGTH);
+      const city = assertRequiredText(args.city, "City", MAX_CITY_LENGTH);
+      const description = assertRequiredText(args.description, "Description", MAX_DESCRIPTION_LENGTH);
+
       const now = Date.now();
       const listingId = await ctx.db.insert("marketplaceListings", {
         sellerUserId: user._id,
         sellerKind: args.sellerKind,
-        sellerDisplayName: args.sellerDisplayName,
-        sellerPhone: args.sellerPhone,
-        sellerWhatsapp: args.sellerWhatsapp,
+        sellerDisplayName,
+        sellerPhone,
+        sellerWhatsapp,
         make: args.make,
         model: args.model,
         year: args.year,
@@ -235,8 +314,8 @@ export const createListing = mutation({
         currency: args.currency,
         transmission: args.transmission,
         fuelType: args.fuelType,
-        city: args.city,
-        description: args.description,
+        city,
+        description,
         condition: args.condition,
         imageIds: args.imageIds,
         status: "PENDING_VERIFICATION",
@@ -258,16 +337,16 @@ export const createListing = mutation({
       if (existingProfile) {
         await ctx.db.patch(existingProfile._id, {
           sellerKind: args.sellerKind,
-          phone: args.sellerPhone,
-          city: args.city,
+          phone: sellerPhone,
+          city,
           updatedAt: now,
         });
       } else {
         await ctx.db.insert("marketplaceIndividualSellerProfiles", {
           sellerUserId: user._id,
           sellerKind: args.sellerKind,
-          phone: args.sellerPhone,
-          city: args.city,
+          phone: sellerPhone,
+          city,
           createdAt: now,
           updatedAt: now,
         });
@@ -309,14 +388,14 @@ export const updateListing = mutation({
       assertEditableListingStatus(listing.status);
 
       const { listingId, ...fields } = args;
-      await assertUpdateFieldsValid(ctx, fields);
+      const normalizedFields = await assertUpdateFieldsValid(ctx, fields);
 
       const patch: Partial<Doc<"marketplaceListings">> = {
         updatedAt: Date.now(),
-        ...buildListingPatchFields(fields),
+        ...buildListingPatchFields(normalizedFields),
       };
 
-      const materialChanged = isMaterialFieldChanged(fields, listing);
+      const materialChanged = isMaterialFieldChanged(normalizedFields, listing);
       const reviewReset = resolveReviewResetFields(listing, materialChanged);
       if (reviewReset) Object.assign(patch, reviewReset);
 
@@ -416,14 +495,16 @@ export const getMyListings = query({
   handler: async (ctx) => {
     try {
       const user = await requireAuth(ctx);
-      // The isDeleted filter is applied by the query itself (before take),
-      // not on the resolved array afterward — otherwise a seller with 200+
-      // deleted listings could have their live listings pushed out of the
-      // take(200) budget entirely.
+      // isDeleted is part of the index equality prefix (not a post-hoc
+      // .filter(), which isn't index-backed and would still scan every one
+      // of this seller's rows — including all soft-deleted ones — before
+      // the take(200) slice). This keeps the read bounded to live/pending
+      // rows only, regardless of how many deleted listings the seller has.
       return await ctx.db
         .query("marketplaceListings")
-        .withIndex("by_sellerUserId", (q) => q.eq("sellerUserId", user._id))
-        .filter((q) => q.neq(q.field("isDeleted"), true))
+        .withIndex("by_sellerUserId_and_isDeleted", (q) =>
+          q.eq("sellerUserId", user._id).eq("isDeleted", false)
+        )
         .order("desc")
         .take(200);
     } catch (error) {
