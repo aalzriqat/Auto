@@ -346,12 +346,12 @@ function MetricCard({
 function MetricGridSection({
   stats,
   locale,
-  isAccountantRole,
+  showFinanceMetricProminent,
   todayForRole,
 }: {
   stats: MobileDashboardStats;
   locale: "en" | "ar";
-  isAccountantRole: boolean;
+  showFinanceMetricProminent: boolean;
   todayForRole?: MobileDashboardTodayForRole;
 }) {
   const styles = useThemedStyles(makeStyles);
@@ -359,12 +359,16 @@ function MetricGridSection({
   const type = useDashboardTypography();
   const [expanded, setExpanded] = useState(false);
 
-  // An accountant may have `view:finance` but not `view:vehicles` — forcing
+  // A caller may have `view:finance` but not `view:vehicles` — forcing
   // vehicles as the always-visible prominent tile would show a permission-
   // withheld "0" as if it were real data. Show a finance-relevant figure
-  // instead for that role, and keep vehicles for every other role/no-role.
+  // instead when the caller actually has `view:finance` (the same permission
+  // that gates `todayForRole` itself — a role-NAME heuristic here would wrongly
+  // keep showing "Vehicles: 0" to a differently-named role that has the
+  // permission), and keep vehicles for every other role/no-role.
   const collectionsDueToday = todayForRole?.collectionsDueToday ?? { count: 0, amount: 0 };
-  const showFinanceProminent = isAccountantRole && todayForRole !== undefined;
+  const showFinanceProminent = showFinanceMetricProminent && todayForRole !== undefined;
+  const currency = todayForRole?.currency ?? "JOD";
 
   const vehiclesCard = (
     <MetricCard
@@ -383,7 +387,7 @@ function MetricGridSection({
         {showFinanceProminent ? (
           <MetricCard
             title={t("collectionsDueToday")}
-            value={`${money(collectionsDueToday.amount, locale)} · ${plainNumber(collectionsDueToday.count, locale)}`}
+            value={`${money(collectionsDueToday.amount, locale, currency)} · ${plainNumber(collectionsDueToday.count, locale)}`}
             caption={t("collectionsDueTodayCaption")}
             icon="finance"
             tone="info"
@@ -463,6 +467,7 @@ function AccountantTodayPanel({
   const collectionsDueToday = todayForRole.collectionsDueToday;
   const chequesDueThisWeek = todayForRole.chequesDueThisWeek;
   const overdueReceivables = todayForRole.overdueReceivables;
+  const currency = todayForRole.currency;
 
   return (
     <Card style={[styles.panel, { direction: textDirection }]}>
@@ -473,15 +478,15 @@ function AccountantTodayPanel({
       <View style={styles.qualityGrid}>
         <MetricPill
           label={t("collectionsDueToday")}
-          value={`${money(collectionsDueToday.amount, locale)} · ${plainNumber(collectionsDueToday.count, locale)}`}
+          value={`${money(collectionsDueToday.amount, locale, currency)} · ${plainNumber(collectionsDueToday.count, locale)}`}
         />
         <MetricPill
           label={t("chequesDueThisWeek")}
-          value={`${money(chequesDueThisWeek.amount, locale)} · ${plainNumber(chequesDueThisWeek.count, locale)}`}
+          value={`${money(chequesDueThisWeek.amount, locale, currency)} · ${plainNumber(chequesDueThisWeek.count, locale)}`}
         />
         <MetricPill
           label={t("overdueReceivables")}
-          value={`${money(overdueReceivables.amount, locale)} · ${plainNumber(overdueReceivables.count, locale)}`}
+          value={`${money(overdueReceivables.amount, locale, currency)} · ${plainNumber(overdueReceivables.count, locale)}`}
         />
       </View>
     </Card>
@@ -761,7 +766,7 @@ function DashboardContent({
             <MetricGridSection
               stats={stats}
               locale={locale}
-              isAccountantRole={roleStart?.moduleId === "accounting"}
+              showFinanceMetricProminent={canViewFinanceToday}
               todayForRole={todayForRole}
             />
 

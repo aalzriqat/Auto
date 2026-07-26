@@ -179,6 +179,7 @@ export interface MobileDashboardTodayForRole {
   chequesDueThisWeek: MobileDashboardTodayForRoleBucket;
   overdueReceivables: MobileDashboardTodayForRoleBucket;
   truncated: boolean;
+  currency: string;
 }
 
 export interface MobilePageResult<T> {

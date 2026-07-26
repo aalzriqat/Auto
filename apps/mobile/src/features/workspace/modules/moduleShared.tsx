@@ -216,16 +216,34 @@ export function compactNumber(value: number, locale: "en" | "ar"): string {
   }
 }
 
-export function money(value: number | undefined | null, locale: "en" | "ar"): string {
+// Decimal places to display per currency. JOD keeps this screen's existing
+// whole-currency display convention (0) rather than its ISO subdivision (the
+// ledger itself still stores JOD in 3-decimal minor units — see
+// convex/utils/money.ts's CURRENCY_SCALES — this is a display-only choice).
+// KWD/BHD/OMR are genuinely 3-decimal currencies (1000 fils/baisa per unit),
+// so they need the extra precision or a value like "5.500" would render as
+// misleadingly-rounded "6". Everything else defaults to the standard 2.
+const CURRENCY_DISPLAY_FRACTION_DIGITS: Record<string, number> = {
+  JOD: 0,
+  KWD: 3,
+  BHD: 3,
+  OMR: 3,
+};
+
+function fractionDigitsForCurrency(currency: string): number {
+  return CURRENCY_DISPLAY_FRACTION_DIGITS[currency.toUpperCase()] ?? 2;
+}
+
+export function money(value: number | undefined | null, locale: "en" | "ar", currency: string = "JOD"): string {
   const safeValue = Number.isFinite(value ?? 0) ? Number(value ?? 0) : 0;
   try {
     return new Intl.NumberFormat(locale === "ar" ? "ar-JO" : "en-US", {
-      maximumFractionDigits: 0,
+      maximumFractionDigits: fractionDigitsForCurrency(currency),
       style: "currency",
-      currency: "JOD",
+      currency,
     }).format(safeValue);
   } catch {
-    return `${Math.round(safeValue)} JOD`;
+    return `${Math.round(safeValue)} ${currency}`;
   }
 }
 
