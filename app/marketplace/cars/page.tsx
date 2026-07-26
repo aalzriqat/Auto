@@ -297,26 +297,31 @@ function VehicleCard({
             without scrolling the card out of view. */}
         <div className="mt-auto sticky bottom-0 flex flex-col gap-2 bg-white pt-2">
           <ContactBar vehicle={vehicle} lang={lang} />
-          <div className="flex gap-2">
-            {vehicle.siteUrl && (
-              <a
-                href={`${vehicle.siteUrl}/inventory/${vehicle.slug}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex-1 text-center text-sm font-medium rounded-lg bg-slate-950 text-white py-2 hover:bg-slate-800"
-              >
-                {t.viewListing}
-              </a>
-            )}
-            {vehicle.orgId && (
-            <Link
-              href={`/marketplace/tradein?orgId=${vehicle.orgId}&dealerName=${encodeURIComponent(vehicle.dealershipName)}`}
-              className="flex-1 text-center text-sm font-medium rounded-lg border border-slate-300 py-2 text-slate-700 hover:bg-slate-50"
-            >
-              {t.tradeIn}
-            </Link>
-            )}
-          </div>
+          {/* A private seller has neither a dealer site to link to nor an org to
+              route a trade-in request to, so this whole row drops out rather
+              than rendering an empty gap under the contact buttons. */}
+          {(vehicle.siteUrl || vehicle.orgId) && (
+            <div className="flex gap-2">
+              {vehicle.siteUrl && (
+                <a
+                  href={`${vehicle.siteUrl}/inventory/${vehicle.slug}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-1 text-center text-sm font-medium rounded-lg bg-slate-950 text-white py-2 hover:bg-slate-800"
+                >
+                  {t.viewListing}
+                </a>
+              )}
+              {vehicle.orgId && (
+                <Link
+                  href={`/marketplace/tradein?orgId=${vehicle.orgId}&dealerName=${encodeURIComponent(vehicle.dealershipName)}`}
+                  className="flex-1 text-center text-sm font-medium rounded-lg border border-slate-300 py-2 text-slate-700 hover:bg-slate-50"
+                >
+                  {t.tradeIn}
+                </Link>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
