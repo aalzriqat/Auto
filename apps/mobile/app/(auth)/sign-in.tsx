@@ -4,7 +4,7 @@ import { useSignIn, useSignUp } from "@clerk/expo/legacy";
 import { useConvexAuth } from "convex/react";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { Card } from "../../src/components/Card";
@@ -65,6 +65,18 @@ export default function SignInRoute() {
     if (isSignedIn && isAuthenticated) router.replace(destination);
   }, [isSignedIn, isAuthenticated, router, destination]);
 
+  // Every auth call below settles in a `finally` that clears the busy flag. The
+  // screen navigates away on success, so that clear (and any error set on a
+  // late rejection) can land after unmount. Guarding on a mounted ref keeps
+  // those updates from firing against a torn-down tree.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const [mode, setMode] = useState<AuthMode>("signIn");
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
@@ -120,9 +132,9 @@ export default function SignInRoute() {
       }
       // No session = the user closed the browser flow — not an error.
     } catch (e) {
-      setError(messageFromError(e));
+      if (mountedRef.current) setError(messageFromError(e));
     } finally {
-      setBusy(null);
+      if (mountedRef.current) setBusy(null);
     }
   }, [busy, startSSOFlow, finishSignIn, messageFromError]);
 
@@ -146,9 +158,9 @@ export default function SignInRoute() {
       // doesn't handle yet — send them to the web app rather than fail silently.
       setError(t("signInNeedsMoreSteps"));
     } catch (e) {
-      setError(messageFromError(e));
+      if (mountedRef.current) setError(messageFromError(e));
     } finally {
-      setBusy(null);
+      if (mountedRef.current) setBusy(null);
     }
   }, [isLoaded, busy, identifier, password, signIn, setActive, finishSignIn, t, messageFromError]);
 
@@ -164,9 +176,9 @@ export default function SignInRoute() {
       await signUp.prepareEmailAddressVerification({ strategy: "email_code" });
       switchMode("verify");
     } catch (e) {
-      setError(messageFromSignUpError(e));
+      if (mountedRef.current) setError(messageFromSignUpError(e));
     } finally {
-      setBusy(null);
+      if (mountedRef.current) setBusy(null);
     }
   }, [signUpLoaded, busy, identifier, password, signUp, switchMode, messageFromSignUpError]);
 
@@ -185,9 +197,9 @@ export default function SignInRoute() {
       // (e.g. phone verification); say so instead of silently doing nothing.
       setError(t("signUpNeedsMoreSteps"));
     } catch (e) {
-      setError(messageFromSignUpError(e));
+      if (mountedRef.current) setError(messageFromSignUpError(e));
     } finally {
-      setBusy(null);
+      if (mountedRef.current) setBusy(null);
     }
   }, [signUpLoaded, busy, code, signUp, setActiveSignUp, finishSignUp, t, messageFromSignUpError]);
 
@@ -197,7 +209,7 @@ export default function SignInRoute() {
     try {
       await signUp.prepareEmailAddressVerification({ strategy: "email_code" });
     } catch (e) {
-      setError(messageFromSignUpError(e));
+      if (mountedRef.current) setError(messageFromSignUpError(e));
     }
   }, [signUpLoaded, busy, signUp, messageFromSignUpError]);
 
@@ -242,6 +254,7 @@ export default function SignInRoute() {
 
               <Pressable
                 accessibilityRole="button"
+                accessibilityLabel={t("signUpVerifySubmit")}
                 style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed, busy !== null && styles.disabled]}
                 onPress={submitVerification}
                 disabled={busy !== null}
@@ -251,7 +264,12 @@ export default function SignInRoute() {
                 </Text>
               </Pressable>
 
-              <Pressable accessibilityRole="button" onPress={resendCode} disabled={busy !== null}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("signUpResendCode")}
+                onPress={resendCode}
+                disabled={busy !== null}
+              >
                 <Text style={[styles.switchAction, type("caption")]}>{t("signUpResendCode")}</Text>
               </Pressable>
             </>
@@ -259,6 +277,7 @@ export default function SignInRoute() {
             <>
               <Pressable
                 accessibilityRole="button"
+                accessibilityLabel={t("signInWithGoogle")}
                 style={({ pressed }) => [styles.googleButton, pressed && styles.pressed, busy !== null && styles.disabled]}
                 onPress={signInWithGoogle}
                 disabled={busy !== null}
@@ -312,6 +331,7 @@ export default function SignInRoute() {
 
               <Pressable
                 accessibilityRole="button"
+                accessibilityLabel={mode === "signUp" ? t("signUpSubmit") : t("signInSubmit")}
                 style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed, busy !== null && styles.disabled]}
                 onPress={mode === "signUp" ? submitSignUp : signInWithPassword}
                 disabled={busy !== null}
@@ -333,6 +353,7 @@ export default function SignInRoute() {
                 </Text>
                 <Pressable
                   accessibilityRole="button"
+                  accessibilityLabel={mode === "signUp" ? t("signUpSwitchToSignIn") : t("signUpSwitchToSignUp")}
                   onPress={() => switchMode(mode === "signUp" ? "signIn" : "signUp")}
                   disabled={busy !== null}
                 >
