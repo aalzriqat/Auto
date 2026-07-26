@@ -62,7 +62,7 @@ describe("SellCarScreen", () => {
     expect(queryByText("إرسال الإعلان")).toBeNull();
 
     fireEvent.press(getByText("تسجيل الدخول"));
-    await waitFor(() => expect(mockPush).toHaveBeenCalledWith("/sign-in"));
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith("/sign-in?returnTo=marketplace"));
   });
 
   test("renders the create-listing form for a signed-in seller", async () => {

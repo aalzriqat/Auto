@@ -172,7 +172,7 @@ export function MyListingsScreen({
           hint={t("myListingsSignInBody")}
           icon="vehicles"
           title={t("myListingsSignInTitle")}
-          onAction={() => router.push(nativeRoutes.signIn)}
+          onAction={() => router.push(`${nativeRoutes.signIn}?returnTo=marketplace`)}
         />
       </ScrollView>
     );

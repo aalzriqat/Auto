@@ -45,13 +45,23 @@ export function BuyerAccountScreen({ embedded = false }: Readonly<{ embedded?: b
           <Text style={styles.title}>{t("account")}</Text>
         </View>
 
+        {/* Buyer sign-in/sign-up is real now (see app/(auth)/sign-in.tsx), so
+            this leads with the action instead of a "coming soon" pill. Signed-in
+            buyers get their listings entry; signed-out ones get the account CTA. */}
         <Card style={styles.card}>
           <Text style={styles.cardTitle}>{t("buyerAccountBuyerTitle")}</Text>
           <Text style={styles.cardBody}>{t("buyerAccountSyncHint")}</Text>
-          <View style={styles.soonPill}>
-            <Icon color="mutedText" name="notifications" size={14} />
-            <Text style={styles.soonText}>{t("buyerAccountComingSoon")}</Text>
-          </View>
+          {!isSignedIn ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t("signUpTitle")}
+              style={({ pressed }) => [styles.updateButton, pressed && styles.pressed]}
+              onPress={() => router.push(`${nativeRoutes.signIn}?returnTo=marketplace`)}
+            >
+              <Icon color="primary" name="team" size={16} />
+              <Text style={styles.updateButtonText}>{t("signUpTitle")}</Text>
+            </Pressable>
+          ) : null}
         </Card>
 
         <Card style={styles.card}>

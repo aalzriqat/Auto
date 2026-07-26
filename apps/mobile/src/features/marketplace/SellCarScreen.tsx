@@ -341,7 +341,7 @@ export function SellCarScreen({
           hint={t("sellCarSignInBody")}
           icon="vehicles"
           title={t("sellCarSignInTitle")}
-          onAction={() => router.push(nativeRoutes.signIn)}
+          onAction={() => router.push(`${nativeRoutes.signIn}?returnTo=marketplace`)}
         />
       </ScrollView>
     );

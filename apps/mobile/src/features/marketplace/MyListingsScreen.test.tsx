@@ -73,7 +73,7 @@ describe("MyListingsScreen", () => {
     expect(getByText("سجّل الدخول لعرض إعلاناتك")).toBeTruthy();
 
     fireEvent.press(getByText("تسجيل الدخول"));
-    await waitFor(() => expect(mockPush).toHaveBeenCalledWith("/sign-in"));
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith("/sign-in?returnTo=marketplace"));
   });
 
   test("shows an empty state when the seller has no listings", async () => {
