@@ -14,6 +14,7 @@ import {
   ScrollText,
   BarChart3,
   Handshake,
+  ShieldCheck,
   type LucideIcon,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
@@ -42,6 +43,7 @@ export const navGroups: NavGroup[] = [
     items: [
       { name: "Analytics", href: "/admin/analytics", icon: BarChart3 },
       { name: "Marketplace", href: "/admin/marketplace", icon: Handshake },
+      { name: "Listing Verification", href: "/admin/marketplace-listings", icon: ShieldCheck },
     ],
   },
   {
