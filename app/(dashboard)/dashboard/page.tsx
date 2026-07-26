@@ -239,6 +239,48 @@ function Onboarding({ onComplete }: { onComplete: (orgId: string) => void }) {
   );
 }
 
+// Choice screen shown before the Onboarding wizard to any orgless,
+// non-support-agent user — so someone who only wants to buy/sell a car as an
+// individual isn't funneled straight into "name your dealership" with no
+// escape hatch.
+function OnboardingChoice({
+  onSelectDealership,
+  onSelectIndividual,
+}: {
+  onSelectDealership: () => void;
+  onSelectIndividual: () => void;
+}) {
+  const { t } = useLanguage();
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-muted/50 p-4">
+      <div className="max-w-lg w-full bg-background p-8 rounded-xl border shadow-sm space-y-6">
+        <div>
+          <h2 className="text-xl font-bold">{t("WelcomeToAutoFlow")}</h2>
+          <p className="text-muted-foreground text-sm">{t("HowWillYouUseAutoFlow")}</p>
+        </div>
+        <div className="space-y-3">
+          <button
+            type="button"
+            onClick={onSelectDealership}
+            className="w-full text-start rounded-lg border p-4 hover:bg-muted transition-colors"
+          >
+            <p className="font-semibold">{t("IRunADealership")}</p>
+            <p className="text-sm text-muted-foreground mt-1">{t("IRunADealershipDesc")}</p>
+          </button>
+          <button
+            type="button"
+            onClick={onSelectIndividual}
+            className="w-full text-start rounded-lg border p-4 hover:bg-muted transition-colors"
+          >
+            <p className="font-semibold">{t("IAmAnIndividual")}</p>
+            <p className="text-sm text-muted-foreground mt-1">{t("IAmAnIndividualDesc")}</p>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Spinner() {
   return (
     <div className="flex h-screen items-center justify-center bg-muted/30 flex-col gap-4">
@@ -260,12 +302,22 @@ export default function DashboardEntryPage() {
   const isSupportAgent = useQuery(api.supportAgentAuth.isSupportAgent, isAuthenticated ? {} : "skip");
 
   const [isOnboarding, setIsOnboarding] = useState(false);
+  // Gates which orgless screen renders: null shows the choice screen first,
+  // "DEALERSHIP" proceeds into the existing Onboarding wizard unchanged,
+  // "INDIVIDUAL" redirects out to the public marketplace via the effect below.
+  const [entryChoice, setEntryChoice] = useState<"DEALERSHIP" | "INDIVIDUAL" | null>(null);
 
   useEffect(() => {
     if (orgs && orgs.length === 0 && isSupportAgent === false && !isOnboarding) {
       setIsOnboarding(true);
     }
   }, [orgs, isSupportAgent, isOnboarding]);
+
+  useEffect(() => {
+    if (entryChoice === "INDIVIDUAL") {
+      router.replace("/marketplace/cars");
+    }
+  }, [entryChoice, router]);
 
   useEffect(() => {
     if (orgs && orgs.length > 0 && !isOnboarding) {
@@ -298,7 +350,19 @@ export default function DashboardEntryPage() {
   }
 
   if (isOnboarding || orgs.length === 0) {
-    return <Onboarding onComplete={(newOrgId) => router.replace(`/${newOrgId}/dashboard`)} />;
+    if (entryChoice === "DEALERSHIP") {
+      return <Onboarding onComplete={(newOrgId) => router.replace(`/${newOrgId}/dashboard`)} />;
+    }
+    if (entryChoice === "INDIVIDUAL") {
+      // Redirect is in flight via the effect above.
+      return <Spinner />;
+    }
+    return (
+      <OnboardingChoice
+        onSelectDealership={() => setEntryChoice("DEALERSHIP")}
+        onSelectIndividual={() => setEntryChoice("INDIVIDUAL")}
+      />
+    );
   }
 
   // orgs.length > 0 — redirect is in flight via the effect above.

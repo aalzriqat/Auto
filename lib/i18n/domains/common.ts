@@ -226,6 +226,11 @@ export const commonEn = {
 
   // Onboarding wizard
   WelcomeToAutoFlow: "Welcome to AutoFlow",
+  HowWillYouUseAutoFlow: "How will you be using AutoFlow?",
+  IRunADealership: "I run a dealership",
+  IRunADealershipDesc: "Set up your dealership workspace: inventory, customers, leads, and sales.",
+  IAmAnIndividual: "I'm an individual — I want to browse or sell a car",
+  IAmAnIndividualDesc: "Browse cars for sale, or list your own car on the marketplace. No dealership required.",
   StartByNamingYourDealership: "Start by naming your dealership.",
   DealershipName: "Dealership Name",
   DealershipNamePlaceholder: "e.g. Al Mada Motors",
@@ -1041,6 +1046,11 @@ export const commonAr = {
 
   // Onboarding wizard
   WelcomeToAutoFlow: "مرحباً بك في أوتو فلو",
+  HowWillYouUseAutoFlow: "كيف ستستخدم أوتوفلو؟",
+  IRunADealership: "أدير معرض سيارات",
+  IRunADealershipDesc: "أنشئ مساحة عمل معرضك: المخزون والعملاء والعملاء المحتملين والمبيعات.",
+  IAmAnIndividual: "أنا فرد — أريد تصفّح أو بيع سيارة",
+  IAmAnIndividualDesc: "تصفّح السيارات المعروضة للبيع، أو أضف سيارتك الخاصة على المنصة. لا حاجة لمعرض سيارات.",
   StartByNamingYourDealership: "ابدأ بتسمية معرضك.",
   DealershipName: "اسم المعرض",
   DealershipNamePlaceholder: "مثال: معرض المدى للسيارات",

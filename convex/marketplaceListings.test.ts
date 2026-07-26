@@ -94,6 +94,55 @@ function contactFields(listing: unknown): { sellerPhone?: string; sellerWhatsapp
   return listing as { sellerPhone?: string; sellerWhatsapp?: string } | null;
 }
 
+describe("brand-new account whose users row hasn't synced yet", () => {
+  // The Clerk -> Convex user-sync webhook is asynchronous, so a just-signed-up
+  // individual seller can reach the listing flow before their users row exists.
+  // These entry points must self-heal (create the row) rather than dead-end on
+  // USER_NOT_FOUND, which is what the dealership path already does via
+  // organizations.create.
+  const UNSYNCED = "clerk_user_unsynced_seller";
+
+  test("generateListingImageUploadUrl creates the missing users row instead of failing", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asNew = t.withIdentity({ subject: UNSYNCED, email: "brand-new@example.com" });
+
+    await expect(
+      asNew.mutation(api.marketplaceListings.generateListingImageUploadUrl, {
+        mimeType: "image/jpeg",
+        sizeInBytes: 1024,
+      })
+    ).resolves.toEqual(expect.any(String));
+
+    const created = await t.run((ctx) =>
+      ctx.db.query("users").withIndex("by_clerkId", (q) => q.eq("clerkId", UNSYNCED)).unique()
+    );
+    expect(created?.email).toBe("brand-new@example.com");
+  });
+
+  test("createListing succeeds end-to-end for an account with no pre-existing users row", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asNew = t.withIdentity({ subject: UNSYNCED, email: "brand-new@example.com" });
+
+    // Claim an image the same way the real client does, via the mutation
+    // itself — this is the first call that has to self-heal the users row.
+    const storageId = await storeRawImage(t);
+    await asNew.mutation(api.marketplaceListings.confirmListingImageUpload, { storageId });
+
+    const listingId = await asNew.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [storageId],
+    });
+
+    const listing = await t.run((ctx) => ctx.db.get(listingId));
+    expect(listing?.status).toBe("PENDING_VERIFICATION");
+
+    const owner = await t.run((ctx) =>
+      ctx.db.query("users").withIndex("by_clerkId", (q) => q.eq("clerkId", UNSYNCED)).unique()
+    );
+    expect(listing?.sellerUserId).toBe(owner?._id);
+  });
+});
+
 describe("createListing", () => {
   test("rejects a listing with zero images", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
@@ -560,10 +609,27 @@ describe("listing image upload ownership", () => {
     const asSeller = await seedUser(t, "seller_79", "seller79@test.com");
     const imageId = await storeRawImage(t);
 
-    await asSeller.mutation(api.marketplaceListings.confirmListingImageUpload, { storageId: imageId });
-    await expect(
-      asSeller.mutation(api.marketplaceListings.confirmListingImageUpload, { storageId: imageId })
-    ).resolves.toBeNull();
+    const first = await asSeller.mutation(api.marketplaceListings.confirmListingImageUpload, {
+      storageId: imageId,
+    });
+    const second = await asSeller.mutation(api.marketplaceListings.confirmListingImageUpload, {
+      storageId: imageId,
+    });
+    // Re-confirming is a no-op that still resolves the same stored-image URL,
+    // so a retrying client gets a usable preview either way.
+    expect(first.url).toEqual(expect.any(String));
+    expect(second.url).toBe(first.url);
+  });
+
+  test("confirmListingImageUpload returns the stored image URL for the client preview", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_81", "seller81@test.com");
+    const imageId = await storeRawImage(t);
+
+    const result = await asSeller.mutation(api.marketplaceListings.confirmListingImageUpload, {
+      storageId: imageId,
+    });
+    expect(result.url).toEqual(expect.any(String));
   });
 
   test("confirming a storage id already claimed by someone else throws", async () => {
@@ -1458,6 +1524,61 @@ describe("getMyListings", () => {
     const mine = await asSeller.query(api.marketplaceListings.getMyListings, {});
     expect(mine).toHaveLength(3);
     expect(new Set(mine.map((l) => l._id))).toEqual(new Set(liveIds));
+  });
+
+  test("still refuses a disabled account", async () => {
+    // getMyListings resolves the caller inline rather than through requireAuth
+    // (so an unsynced account can get an empty list instead of an error), so
+    // the disabled-account guard has to be re-asserted here explicitly.
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_82", "seller82@test.com");
+    const imageId = await seedImage(t, "seller_82");
+    await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+
+    await t.run(async (ctx) => {
+      const user = await ctx.db
+        .query("users")
+        .withIndex("by_clerkId", (q) => q.eq("clerkId", "seller_82"))
+        .unique();
+      if (!user) throw new Error("seed user missing");
+      await ctx.db.patch(user._id, { disabled: true });
+    });
+
+    await expect(asSeller.query(api.marketplaceListings.getMyListings, {})).rejects.toThrow(
+      /disabled/i
+    );
+  });
+
+  test("returns an empty list (not USER_NOT_FOUND) for a signed-in account whose users row hasn't synced yet", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    // No seedUser: mimics a brand-new Clerk signup arriving before the
+    // Clerk -> Convex webhook has written the users row.
+    const asUnsynced = t.withIdentity({ subject: "clerk_user_never_synced" });
+    await expect(asUnsynced.query(api.marketplaceListings.getMyListings, {})).resolves.toEqual([]);
+  });
+
+  test("resolves the first image to a thumbnailUrl, and returns null for a listing with no images stored", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_39", "seller39@test.com");
+    const imageId = await seedImage(t, "seller_39");
+
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+
+    const mine = await asSeller.query(api.marketplaceListings.getMyListings, {});
+    const listing = mine.find((l) => l._id === listingId);
+    expect(listing?.thumbnailUrl).toEqual(expect.any(String));
+
+    // A listing can only reach 0 images via direct seeding (createListing
+    // itself rejects an empty imageIds array) — simulate that shape directly.
+    await t.run(async (ctx) => ctx.db.patch(listingId, { imageIds: [] }));
+    const mineAfterClear = await asSeller.query(api.marketplaceListings.getMyListings, {});
+    expect(mineAfterClear.find((l) => l._id === listingId)?.thumbnailUrl).toBeNull();
   });
 });
 
