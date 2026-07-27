@@ -93,9 +93,9 @@ jest.mock("convex/react", () => ({
   },
 }));
 
-import { LocaleProvider } from "../../src/providers/LocaleProvider";
-import { ThemeProvider } from "../../src/providers/ThemeProvider";
-import SignInRoute from "./sign-in";
+import { LocaleProvider } from "../../providers/LocaleProvider";
+import { ThemeProvider } from "../../providers/ThemeProvider";
+import SignInRoute from "../../../app/(auth)/sign-in";
 
 // Default locale is Arabic (DEFAULT_LOCALE = "ar"), so assertions use the AR strings.
 const AR = {
