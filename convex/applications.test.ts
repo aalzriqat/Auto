@@ -561,7 +561,7 @@ describe("applications.updateStatus permissions", () => {
     ).rejects.toThrow(/application quote not found/i);
   });
 
-  test("closing an approved application through status update requires finalization permission", async () => {
+  test("an approved application cannot be closed through a bare status update", async () => {
     const { orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await asUser.mutation(api.quotes.saveQuote, {
       orgId,
@@ -575,14 +575,22 @@ describe("applications.updateStatus permissions", () => {
     await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
     await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
 
-    await asUser.mutation(api.applications.updateStatus, {
-      orgId,
-      applicationId,
-      status: "CLOSED",
-    });
+    // finalizeDeal is what closes an application: it creates the sale, marks the
+    // vehicle sold and posts the accounting, then sets CLOSED together with
+    // finalizedSaleId. Letting updateStatus set CLOSED on its own skipped all of
+    // that and produced an application that finalizeDeal then refuses forever
+    // (it requires APPROVED), stranding the deal.
+    await expect(
+      asUser.mutation(api.applications.updateStatus, {
+        orgId,
+        applicationId,
+        status: "CLOSED",
+      })
+    ).rejects.toThrow(/finalizing the deal/i);
 
     const app = await asUser.query(api.applications.get, { orgId, applicationId });
-    expect(app?.status).toBe("CLOSED");
+    expect(app?.status).toBe("APPROVED");
+    expect(app?.finalizedSaleId).toBeUndefined();
   });
 });
 
