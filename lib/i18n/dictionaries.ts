@@ -63,4 +63,16 @@ export const dictionaries = {
 export function getDictionary(locale: Locale) {
   return dictionaries[locale];
 }
+
+/**
+ * Every key the dictionaries actually define.
+ *
+ * Components that take a `t` prop should type it as `Translate` rather than
+ * `(key: string) => string`. The loose form silently accepts a key that does
+ * not exist, and `t` returns the key itself when it can't resolve one — so a
+ * typo ships as raw text on screen (that is how "ExportPDF" ended up rendering
+ * as a button label and "MessagesExpand" as an aria-label).
+ */
+export type TranslationKey = keyof typeof en;
+export type Translate = (key: TranslationKey) => string;
 // force reload 
