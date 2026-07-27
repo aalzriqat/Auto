@@ -441,3 +441,52 @@ describe("customers.mergeCustomers", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("customers — soft-deleted rows must not block reuse", () => {
+  test("a returning customer can be re-created after being deleted", async () => {
+    const { orgId, asUser } = await setup();
+
+    const customerId = await asUser.mutation(api.customers.create, {
+      orgId,
+      firstName: "Returning",
+      lastName: "Buyer",
+      email: "returning@example.com",
+      phone: "+962790000001",
+    });
+    await asUser.mutation(api.customers.softDelete, { orgId, customerId });
+
+    // The duplicate checks in create never filtered isDeleted, so a deleted
+    // customer's phone and email stayed reserved forever — and staff cannot see
+    // or restore the row holding them, because it is deleted. checkDuplicates
+    // and getByEmail both filter correctly, so this was an inconsistency rather
+    // than a deliberate policy.
+    const recreatedId = await asUser.mutation(api.customers.create, {
+      orgId,
+      firstName: "Returning",
+      lastName: "Buyer",
+      email: "returning@example.com",
+      phone: "+962790000001",
+    });
+    expect(recreatedId).toBeDefined();
+    expect(recreatedId).not.toBe(customerId);
+  });
+
+  test("bulk import does not silently skip a previously deleted customer", async () => {
+    const { orgId, asUser } = await setup();
+
+    const customerId = await asUser.mutation(api.customers.create, {
+      orgId,
+      firstName: "Bulk",
+      lastName: "Buyer",
+      phone: "+962790000002",
+    });
+    await asUser.mutation(api.customers.softDelete, { orgId, customerId });
+
+    const result = await asUser.mutation(api.customers.importBulk, {
+      orgId,
+      customers: [{ firstName: "Bulk", lastName: "Buyer", phone: "+962790000002" }],
+    });
+    expect(result.inserted).toBe(1);
+    expect(result.skipped).toBe(0);
+  });
+});
