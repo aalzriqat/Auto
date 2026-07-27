@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Cairo, IBM_Plex_Sans_Arabic, Inter, Montserrat, Playfair_Display } from "next/font/google";
 import { headers } from "next/headers";
 import { Analytics } from "@vercel/analytics/next";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 import ConvexClientProvider from "@/components/ConvexClientProvider";
 import { ClerkProviderWithLocale } from "@/components/providers/ClerkProviderWithLocale";
@@ -76,6 +77,7 @@ export default async function RootLayout({
           </ClerkProviderWithLocale>
         </LanguageProvider>
         {showAnalytics ? <Analytics /> : null}
+        {showAnalytics ? <SpeedInsights /> : null}
       </body>
     </html>
   );
