@@ -1,6 +1,6 @@
 import { v } from "convex/values";
-import { internalMutation, internalQuery } from "./_generated/server";
-import { Doc } from "./_generated/dataModel";
+import { internalMutation, internalQuery, QueryCtx } from "./_generated/server";
+import { Doc, Id } from "./_generated/dataModel";
 import { notifyManagers, notifyUser } from "./utils/notifications";
 import { nextGeneratedLeadAssignee } from "./utils/leadAssignment";
 import { hasPlanFeature } from "./subscriptions";
@@ -18,17 +18,32 @@ export const getSettingsByOrg = internalQuery({
   },
 });
 
+/**
+ * A sender's number can be stored on either `phone` or `whatsapp`, so this
+ * checks both — via their indexes. Collecting every customer in the org and
+ * scanning in JS meant each inbound message loaded the whole customer table.
+ */
+async function lookupCustomerByPhone(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  phone: string
+): Promise<Doc<"customers"> | null> {
+  const [byPhone, byWhatsapp] = await Promise.all([
+    ctx.db
+      .query("customers")
+      .withIndex("by_org_phone", (q) => q.eq("orgId", orgId).eq("phone", phone))
+      .first(),
+    ctx.db
+      .query("customers")
+      .withIndex("by_org_whatsapp", (q) => q.eq("orgId", orgId).eq("whatsapp", phone))
+      .first(),
+  ]);
+  return byPhone ?? byWhatsapp ?? null;
+}
+
 export const findCustomerByPhone = internalQuery({
   args: { orgId: v.id("organizations"), phone: v.string() },
-  handler: async (ctx, args) => {
-    const customers = await ctx.db
-      .query("customers")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
-    return customers.find(
-      (c) => c.phone === args.phone || c.whatsapp === args.phone
-    ) ?? null;
-  },
+  handler: async (ctx, args) => lookupCustomerByPhone(ctx, args.orgId, args.phone),
 });
 
 /**
@@ -47,13 +62,7 @@ export const handleIncomingMessage = internalMutation({
     if (!(await hasPlanFeature(ctx, orgId, "whatsapp"))) return;
 
     // Find or create customer
-    const customers = await ctx.db
-      .query("customers")
-      .withIndex("by_org", (q) => q.eq("orgId", orgId))
-      .collect();
-
-    let customer: Doc<"customers"> | null =
-      customers.find((c) => c.phone === senderPhone || c.whatsapp === senderPhone) ?? null;
+    let customer: Doc<"customers"> | null = await lookupCustomerByPhone(ctx, orgId, senderPhone);
 
     if (!customer) {
       const nameParts = (senderName ?? "WhatsApp Contact").split(" ");

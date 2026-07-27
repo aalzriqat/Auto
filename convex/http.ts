@@ -406,6 +406,16 @@ async function processMetaMessagingWebhook<T extends { messageId?: string }>(
     source: VerifiedWebhookSource;
     parseMessage: (message: Record<string, unknown>, contacts: Record<string, unknown>[]) => T;
     dispatch: (message: T) => Promise<void>;
+    /**
+     * Optional per-change ownership check, run AFTER the signature is verified
+     * and BEFORE anything is dispatched. Returning false aborts the whole
+     * delivery with 403.
+     *
+     * Needed wherever the target tenant comes from the request URL rather than
+     * from the signed payload: the signature only proves Meta sent the body, not
+     * that the body belongs to the org named in the query string.
+     */
+    assertChangeAllowed?: (change: Record<string, unknown> | undefined) => Promise<boolean>;
   },
 ): Promise<Response> {
   const rawBody = await args.request.text();
@@ -427,6 +437,9 @@ async function processMetaMessagingWebhook<T extends { messageId?: string }>(
   for (const entry of recordArray(body?.entry)) {
     for (const changeRecord of recordArray(entry.changes)) {
       const change = optionalRecord(changeRecord.value);
+      if (args.assertChangeAllowed && !(await args.assertChangeAllowed(change))) {
+        return new Response("Forbidden", { status: 403 });
+      }
       const contacts = recordArray(change?.contacts);
       statusUpdateCount += recordArray(change?.statuses).length;
 
@@ -818,6 +831,20 @@ http.route({
       appSecret,
       source: "whatsapp",
       parseMessage: parseWhatsAppMessage,
+      // WHATSAPP_APP_SECRET is a single app-level secret shared by every org, so
+      // a valid signature proves only that Meta sent this body — it says nothing
+      // about which tenant it belongs to, while `orgId` comes straight from an
+      // unauthenticated query parameter. Without binding the two, a delivery for
+      // one dealer's number could be pointed at another dealer's orgId and
+      // inject customers and leads into their CRM. Bind the signed payload's
+      // phone_number_id to the org's own configured number. (The GET handshake
+      // above already binds, via the per-org whatsappWebhookSecret.)
+      assertChangeAllowed: async (change) => {
+        const phoneNumberId = optionalMetaId(optionalRecord(change?.metadata)?.phone_number_id);
+        if (!phoneNumberId) return false;
+        const settings = await ctx.runQuery(internal.whatsapp.getSettingsByOrg, { orgId });
+        return settings?.whatsappPhoneNumberId === phoneNumberId;
+      },
       dispatch: async (message) => {
         if (!message.senderPhone) throw new Error("Message without sender phone");
         await ctx.runMutation(internal.whatsapp.handleIncomingMessage, {
