@@ -540,29 +540,40 @@ export const update = mutation({
         "Salesperson cannot approve cancellation of their own sale."
       );
       const cancellationDate = Date.now();
-      await cancelCompletedSaleOperationalRecords(ctx, {
-        orgId: args.orgId,
-        sale,
-        actorId: user._id,
-        reason: "Sale cancelled",
-        reversalDate: cancellationDate,
-      });
-      // Post reversal journal entry for the original SALE_COMPLETED GL event
-      await hookSaleCancelled(ctx, {
-        orgId: args.orgId,
-        saleId: args.saleId,
-        reason: "Sale cancelled",
-        actorId: user._id,
-        reversalDate: cancellationDate,
-      });
-      if (sale.commissionAmount != null && sale.commissionAmount > 0) {
-        await hookCommissionReversed(ctx, {
+      // Only a sale that actually COMPLETED has operational records to reverse.
+      // This branch used to run for any non-CANCELLED sale, which included
+      // PENDING drafts — and createDraft explicitly performs no inventory,
+      // deposit, CRM or accounting side effects, so there was nothing to undo.
+      // Running the reversal anyway wiped the trade-in vehicle's own
+      // purchasePrice (restoreTradeInVehicle clears it once tradeInValue > 0),
+      // destroying real acquisition cost that feeds capitalized cost, COGS and
+      // margin. Cancelling a draft is now just a status change, which is the
+      // correct semantics for work that was never done.
+      if (sale.status === "COMPLETED") {
+        await cancelCompletedSaleOperationalRecords(ctx, {
+          orgId: args.orgId,
+          sale,
+          actorId: user._id,
+          reason: "Sale cancelled",
+          reversalDate: cancellationDate,
+        });
+        // Post reversal journal entry for the original SALE_COMPLETED GL event
+        await hookSaleCancelled(ctx, {
           orgId: args.orgId,
           saleId: args.saleId,
           reason: "Sale cancelled",
           actorId: user._id,
           reversalDate: cancellationDate,
         });
+        if (sale.commissionAmount != null && sale.commissionAmount > 0) {
+          await hookCommissionReversed(ctx, {
+            orgId: args.orgId,
+            saleId: args.saleId,
+            reason: "Sale cancelled",
+            actorId: user._id,
+            reversalDate: cancellationDate,
+          });
+        }
       }
     }
 
