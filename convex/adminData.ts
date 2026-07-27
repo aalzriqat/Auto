@@ -43,6 +43,46 @@ function assertAdminTable(table: string): { table: TableNames; index: string } {
   return entry;
 }
 
+/**
+ * Resolves a client-supplied id string and PROVES it belongs to the
+ * client-supplied table.
+ *
+ * `assertAdminMayMutateTable` can only see the table *name* the caller claims,
+ * while `ctx.db.get/patch/delete` resolve by the id's *real* table. Without
+ * this check the two disagree, and a caller could pass a financial record's id
+ * under `table:"vehicles"` (which clears the financial guard) and still mutate
+ * or delete that financial row — silently unbalancing the ledger and writing an
+ * audit entry naming the wrong table.
+ */
+function assertIdBelongsToTable(
+  ctx: { db: { normalizeId: (t: TableNames, id: string) => Id<TableNames> | null } },
+  table: TableNames,
+  rawId: string
+): Id<TableNames> {
+  const id = ctx.db.normalizeId(table, rawId);
+  if (!id) {
+    throwAppError(
+      AppErrorCode.VALIDATION_FAILED,
+      `Record ${rawId} does not belong to table ${table}.`
+    );
+  }
+  return id;
+}
+
+/**
+ * `patch` is `v.any()`, so it can carry any field — including `orgId`, which
+ * would silently move a record between tenants and corrupt both dealers' books.
+ * Tenancy is not an editable attribute from this surface.
+ */
+function assertPatchDoesNotRetenant(patch: unknown): void {
+  if (patch && typeof patch === "object" && "orgId" in (patch as Record<string, unknown>)) {
+    throwAppError(
+      AppErrorCode.VALIDATION_FAILED,
+      "orgId cannot be changed through the admin data browser — a record cannot be moved between organizations."
+    );
+  }
+}
+
 export const listAdminTables = query({
   args: {},
   handler: async (ctx) => {
@@ -90,10 +130,11 @@ export const adminUpdateRecord = mutation({
   args: { table: v.string(), id: v.string(), patch: v.any() },
   handler: async (ctx, args) => {
     const admin = await requireSuperAdmin(ctx);
-    assertAdminTable(args.table);
+    const { table } = assertAdminTable(args.table);
     assertAdminMayMutateTable(args.table, "adminUpdateRecord");
+    assertPatchDoesNotRetenant(args.patch);
 
-    const id = args.id as Id<TableNames>;
+    const id = assertIdBelongsToTable(ctx, table, args.id);
     const before = await ctx.db.get(id);
     if (!before) throwAppError(AppErrorCode.VALIDATION_FAILED, "Record not found.");
 
@@ -175,10 +216,10 @@ export const adminHardDelete = mutation({
   args: { table: v.string(), id: v.string() },
   handler: async (ctx, args) => {
     const admin = await requireSuperAdmin(ctx);
-    assertAdminTable(args.table);
+    const { table } = assertAdminTable(args.table);
     assertAdminMayMutateTable(args.table, "adminHardDelete");
 
-    const id = args.id as Id<TableNames>;
+    const id = assertIdBelongsToTable(ctx, table, args.id);
     const before = await ctx.db.get(id);
     if (!before) throwAppError(AppErrorCode.VALIDATION_FAILED, "Record not found.");
 

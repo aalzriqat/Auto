@@ -12,6 +12,19 @@ export const DEFAULT_SETTINGS = {
   enabledPaymentTypes: ["CASH", "INSTALLMENT"],
 };
 
+/**
+ * Currencies the app can actually denominate money in. This MUST stay a subset
+ * of the scale table in `utils/money.ts` — `scaleForCurrency` silently falls
+ * back to scale 2 for anything it doesn't recognise, so an unlisted code (say
+ * "JD" for the Jordanian Dinar, which is really 3-decimal JOD) would store
+ * every amount at the wrong scale. Combined with the change-lock below, that
+ * mistake would be permanent. The settings UI offers exactly this list; this is
+ * the server-side enforcement of it.
+ */
+export const SUPPORTED_CURRENCIES = [
+  "JOD", "SAR", "AED", "KWD", "EGP", "QAR", "BHD", "OMR", "USD", "EUR", "GBP", "JPY",
+] as const;
+
 export function definedPatchFields(fields: Record<string, unknown>): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(fields)) {
@@ -85,6 +98,17 @@ export const upsert = mutation({
     await requireOwner(ctx, args.orgId);
     if (args.reservationHoldDays !== undefined && args.reservationHoldDays <= 0) {
       throw new Error("Reservation hold days must be greater than zero.");
+    }
+    // The UI is a fixed <Select>, but this mutation is directly callable — and
+    // an unrecognised code silently mis-scales every stored amount (see
+    // SUPPORTED_CURRENCIES). Validate before the change-lock below runs.
+    if (
+      args.currency !== undefined &&
+      !(SUPPORTED_CURRENCIES as readonly string[]).includes(args.currency)
+    ) {
+      throw new ConvexError(
+        `Unsupported currency "${args.currency}". Supported: ${SUPPORTED_CURRENCIES.join(", ")}.`
+      );
     }
     const touchesWhatsApp =
       args.whatsappPhoneNumberId !== undefined ||
@@ -218,6 +242,19 @@ export const setGeneratedLeadAutoAssignmentEnabled = mutation({
 export const getLogoUrl = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
+    // Same graceful-degradation shape as `get` above: this renders in the
+    // Sidebar/TopNav on every dashboard page, so a stale activeOrgId or a
+    // mid-logout call must return null rather than throw. It must NOT return
+    // another org's logo to a non-member, which is what having no guard at all
+    // did — every caller is an authenticated dashboard surface.
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+    try {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SETTINGS]);
+    } catch {
+      return null;
+    }
+
     const settings = await ctx.db
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))

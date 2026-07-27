@@ -20,6 +20,27 @@ import {
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 
+/** Longest span an interactive report may request. */
+const MAX_REPORT_RANGE_MS = 366 * 24 * 60 * 60 * 1000;
+
+/**
+ * Interactive reports collect their whole result set, so an unbounded or
+ * inverted range is both a correctness bug (silently empty results) and a cost
+ * one. Reject rather than clamp: a caller asking for ten years should be told,
+ * not quietly handed one.
+ */
+function assertReportRange(startDate: number, endDate: number): void {
+  if (!Number.isFinite(startDate) || !Number.isFinite(endDate)) {
+    throw new ConvexError("Report start and end dates must be valid timestamps.");
+  }
+  if (startDate > endDate) {
+    throw new ConvexError("Report start date must not be after the end date.");
+  }
+  if (endDate - startDate > MAX_REPORT_RANGE_MS) {
+    throw new ConvexError("Interactive reports are limited to 366 days. Narrow the range.");
+  }
+}
+
 export const getSalesAndProfitReport = query({
   args: {
     orgId: v.id("organizations"),
@@ -34,16 +55,22 @@ export const getSalesAndProfitReport = query({
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
     }
 
-    // Use index range — avoids collecting ALL org sales.
-    // Only COMPLETED non-deleted sales are counted.
+    assertReportRange(args.startDate, args.endDate);
+
+    // Both bounds belong in the index range. With only `gte(startDate)` indexed
+    // and `lte(endDate)` in .filter(), the scan was proportional to everything
+    // sold AFTER startDate — a one-day report on an old date walked the org's
+    // entire subsequent sales history before discarding almost all of it.
     const salesInDateRange = await ctx.db
       .query("sales")
       .withIndex("by_org_saleDate", (q) =>
-        q.eq("orgId", args.orgId).gte("saleDate", args.startDate)
+        q
+          .eq("orgId", args.orgId)
+          .gte("saleDate", args.startDate)
+          .lte("saleDate", args.endDate)
       )
       .filter((q) =>
         q.and(
-          q.lte(q.field("saleDate"), args.endDate),
           q.eq(q.field("status"), "COMPLETED"),
           q.neq(q.field("isDeleted"), true)
         )
@@ -528,16 +555,22 @@ export const getSalespersonPerformance = query({
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
     }
 
-    // Use index range — avoids collecting ALL org sales.
-    // Only COMPLETED non-deleted sales are counted.
+    assertReportRange(args.startDate, args.endDate);
+
+    // Both bounds belong in the index range. With only `gte(startDate)` indexed
+    // and `lte(endDate)` in .filter(), the scan was proportional to everything
+    // sold AFTER startDate — a one-day report on an old date walked the org's
+    // entire subsequent sales history before discarding almost all of it.
     const salesInDateRange = await ctx.db
       .query("sales")
       .withIndex("by_org_saleDate", (q) =>
-        q.eq("orgId", args.orgId).gte("saleDate", args.startDate)
+        q
+          .eq("orgId", args.orgId)
+          .gte("saleDate", args.startDate)
+          .lte("saleDate", args.endDate)
       )
       .filter((q) =>
         q.and(
-          q.lte(q.field("saleDate"), args.endDate),
           q.eq(q.field("status"), "COMPLETED"),
           q.neq(q.field("isDeleted"), true)
         )

@@ -2065,13 +2065,28 @@ async function queueCustomerReminder(
   return reminderId;
 }
 
+/** Organizations processed per scheduled continuation of the reminder cron. */
+const REMINDER_ORG_BATCH_SIZE = 50;
+
 export const processDailyCollectionReminders = internalMutation({
-  args: {},
-  handler: async (ctx) => {
+  // `cursor` is supplied by this mutation's own scheduled continuation; the
+  // cron itself invokes it with no arguments.
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
     const now = Date.now();
     const dueSoonLimit = now + 2 * DAY_MS;
     const chequeLimit = now + 3 * DAY_MS;
-    const organizations = await ctx.db.query("organizations").take(200);
+
+    // Was `.take(200)`. Convex's default order is ascending _creationTime, so
+    // that processed the same OLDEST 200 organizations every single day and
+    // silently skipped every tenant created after them — their receivables
+    // never flipped to OVERDUE and no customer reminder was ever sent, with no
+    // error to notice. Paginate across scheduled continuations instead, the
+    // same shape changelog.broadcastNewEntry already uses for org fan-out.
+    const page = await ctx.db
+      .query("organizations")
+      .paginate({ cursor: args.cursor ?? null, numItems: REMINDER_ORG_BATCH_SIZE });
+    const organizations = page.page;
     let queued = 0;
     let markedOverdue = 0;
 
@@ -2131,7 +2146,13 @@ export const processDailyCollectionReminders = internalMutation({
       }
     }
 
-    return { queued, markedOverdue };
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.collections.processDailyCollectionReminders, {
+        cursor: page.continueCursor,
+      });
+    }
+
+    return { queued, markedOverdue, isDone: page.isDone };
   },
 });
 

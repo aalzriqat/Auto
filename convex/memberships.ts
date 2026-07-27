@@ -335,10 +335,12 @@ export const add = mutation({
 
     const email = args.userEmail.toLowerCase().trim();
 
-    // Find the target user by email
+    // Find the target user by email. `users` is the one table shared by every
+    // tenant, so a .filter() here read every user in the deployment on every
+    // invite; by_email turns that into an index lookup.
     const targetUser = await ctx.db
       .query("users")
-      .filter((q) => q.eq(q.field("email"), email))
+      .withIndex("by_email", (q) => q.eq("email", email))
       .first();
 
     if (!targetUser) {
@@ -870,10 +872,12 @@ export const prepareDirectAccount = internalMutation({
 
     const email = normalizeEmail(args.email);
 
-    // Find the target user by email
+    // Find the target user by email. `users` is the one table shared by every
+    // tenant, so a .filter() here read every user in the deployment on every
+    // invite; by_email turns that into an index lookup.
     const targetUser = await ctx.db
       .query("users")
-      .filter((q) => q.eq(q.field("email"), email))
+      .withIndex("by_email", (q) => q.eq("email", email))
       .first();
 
     if (targetUser) {

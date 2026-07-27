@@ -224,6 +224,61 @@ describe("adminData", () => {
     expect((untouched as any).isDeleted).toBeUndefined();
   });
 
+  test("update and hard-delete reject a financial-table id passed under a non-financial table", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asAdmin } = await seedOrgWithVehicle(t);
+
+    const transactionId = await t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId,
+        type: "IN",
+        amount: 1000,
+        date: Date.now(),
+        category: "OTHER",
+        description: "Financial record",
+      })
+    );
+
+    // Declaring table:"vehicles" clears both assertAdminTable and
+    // assertAdminMayMutateTable, but the id belongs to `transactions` — a
+    // financial table. ctx.db.patch/delete resolve by the id's REAL table, so
+    // without normalizeId the financial guard is fully bypassable.
+    await expect(
+      asAdmin.mutation(api.adminData.adminUpdateRecord, {
+        table: "vehicles",
+        id: transactionId,
+        patch: { amount: 1 },
+      })
+    ).rejects.toThrow(/does not belong to table/i);
+
+    await expect(
+      asAdmin.mutation(api.adminData.adminHardDelete, {
+        table: "vehicles",
+        id: transactionId,
+      })
+    ).rejects.toThrow(/does not belong to table/i);
+
+    // The financial row must be untouched and still present.
+    const untouched = await t.run((ctx) => ctx.db.get(transactionId));
+    expect(untouched).toMatchObject({ amount: 1000 });
+  });
+
+  test("update rejects a patch that would move a record to another org", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { vehicleId, asAdmin } = await seedOrgWithVehicle(t);
+    const otherOrgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() })
+    );
+
+    await expect(
+      asAdmin.mutation(api.adminData.adminUpdateRecord, {
+        table: "vehicles",
+        id: vehicleId,
+        patch: { orgId: otherOrgId },
+      })
+    ).rejects.toThrow(/orgId/i);
+  });
+
   test("every admin mutation writes an adminAuditLog entry", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { vehicleId, asAdmin } = await seedOrgWithVehicle(t);

@@ -63,9 +63,14 @@ export const list = query({
 
     const page = await Promise.all(
       pageResult.page.map(async (sale) => {
-        const vehicle = await ctx.db.get(sale.vehicleId);
-        const customer = await ctx.db.get(sale.customerId);
-        const salesperson = await ctx.db.get(sale.salespersonId);
+        // Fetch the three hydration reads together — they are independent, and
+        // awaiting them in sequence made each row cost three round trips
+        // instead of one.
+        const [vehicle, customer, salesperson] = await Promise.all([
+          ctx.db.get(sale.vehicleId),
+          ctx.db.get(sale.customerId),
+          ctx.db.get(sale.salespersonId),
+        ]);
 
         return {
           ...sale,
