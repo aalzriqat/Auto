@@ -587,6 +587,30 @@ describe("marketplaceBrowse.search — direct listings", () => {
     expect((await t.query(api.marketplaceBrowse.search, { make: "Suzuki" })).vehicles).toHaveLength(0);
   });
 
+  test("shows direct listings alongside dealer inventory in one result set", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedPublishedDealer(t, { name: "Amman Motors", subdomainSlug: "ammanmotors", city: "Amman" });
+    await seedListing(t, { make: "Kia", price: 9000 });
+
+    const result = await t.query(api.marketplaceBrowse.search, {});
+
+    // Each source keeps its own candidate budget, so a busy dealer side can
+    // never starve private sellers out of the results entirely.
+    const sellerTypes = result.vehicles.map((v) => v.sellerType).sort();
+    expect(sellerTypes).toEqual(["DEALER", "DIRECT"]);
+  });
+
+  test("sorts direct and dealer rows together rather than appending one after the other", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedPublishedDealer(t, { name: "Amman Motors", subdomainSlug: "ammanmotors", city: "Amman" });
+    await seedListing(t, { make: "Kia", price: 1 });
+
+    const result = await t.query(api.marketplaceBrowse.search, { sortBy: "price_asc" });
+
+    // Cheapest first regardless of which side of the marketplace it came from.
+    expect(result.vehicles[0]?.sellerType).toBe("DIRECT");
+  });
+
   test("excludes direct listings from finance-filtered searches", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     await seedListing(t);

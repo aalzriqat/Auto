@@ -321,16 +321,22 @@ export const search = query({
     // finance-filtered search skips direct rows entirely rather than showing
     // cars the filter's whole purpose is to exclude.
     //
-    // The MAX_MERGED_VEHICLES budget is spent before filtering, so a very
+    // Each source gets its own MAX_MERGED_VEHICLES budget rather than sharing
+    // one. Sharing meant a busy marketplace starved direct listings entirely —
+    // once filtered dealer rows reached the cap, the listings query never ran
+    // and private sellers became invisible again, which is the exact failure
+    // this block exists to fix.
+    //
+    // Within a source the budget is still spent before filtering, so a very
     // narrow filter can miss matches beyond the cap. That is the same tradeoff
     // the dealer union above already makes, and it goes away with the keyset
     // pagination redesign this query needs anyway.
-    if (args.paymentType !== "FINANCE" && args.maxMonthlyPayment == null && merged.length < MAX_MERGED_VEHICLES) {
+    if (args.paymentType !== "FINANCE" && args.maxMonthlyPayment == null) {
       const liveListings = await ctx.db
         .query("marketplaceListings")
         .withIndex("by_isDeleted_and_status", (q) => q.eq("isDeleted", false).eq("status", "LIVE"))
         .order("desc")
-        .take(MAX_MERGED_VEHICLES - merged.length);
+        .take(MAX_MERGED_VEHICLES);
 
       for (const listing of liveListings) {
         // Same case-insensitive contains/equality semantics as the dealer rows

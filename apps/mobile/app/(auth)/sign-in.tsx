@@ -4,7 +4,7 @@ import { useSignIn, useSignUp } from "@clerk/expo/legacy";
 import { useConvexAuth } from "convex/react";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { Card } from "../../src/components/Card";
@@ -37,6 +37,10 @@ WebBrowser.maybeCompleteAuthSession();
  */
 type AuthMode = "signIn" | "signUp" | "verify";
 
+// Text-only links wrap a caption-sized Text, so their tappable area is roughly
+// one line high — well under the 44pt minimum both platforms ask for.
+const TAP_SLOP = { top: 12, bottom: 12, left: 12, right: 12 };
+
 export default function SignInRoute() {
   const router = useRouter();
   // Lets the caller (e.g. the sell flow) bring the user back where they were
@@ -50,14 +54,17 @@ export default function SignInRoute() {
   const { isLoaded: signUpLoaded, signUp, setActive: setActiveSignUp } = useSignUp();
   const { startSSOFlow } = useSSO();
 
-  // Set once a registration completes. Activating the new session flips
-  // isSignedIn, which fires the redirect effect below — without this it would
-  // race finishSignUp and win, dumping a brand-new buyer on the dealer
-  // workspace picker (an empty state, for an account with no org).
-  const [justSignedUp, setJustSignedUp] = useState(false);
+  // Marks that the session being activated came from a registration. Must be a
+  // ref, set synchronously *before* the session is activated: activating flips
+  // isSignedIn, which re-renders and fires the redirect effect below. A state
+  // update would not have landed by then, so the effect would compute the
+  // dealer workspace picker and navigate there first — a visible flash of an
+  // empty workspace list, plus a stray history entry, for an account that by
+  // definition has no organization.
+  const cameFromSignUp = useRef(false);
 
   const destination =
-    returnTo === "marketplace" || justSignedUp
+    returnTo === "marketplace" || cameFromSignUp.current
       ? nativeRoutes.marketplace
       : nativeRoutes.dealerWorkspaces;
 
@@ -80,7 +87,14 @@ export default function SignInRoute() {
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<null | "google" | "password" | "signUp" | "verify">(null);
+  const [busy, setBusy] = useState<null | "google" | "password" | "signUp" | "verify" | "resend">(null);
+
+  // `busy` drives the UI, but it is state: two taps in the same frame both read
+  // the pre-update value and fire the request twice (and `disabled` has not
+  // re-rendered yet either). This ref flips synchronously, so it is what
+  // actually prevents a double submit — duplicate sign-in attempts, or a second
+  // verification email that trips Clerk's rate limit.
+  const inFlight = useRef(false);
 
   // Switching between sign-in and sign-up must not carry a stale error or code
   // across — the previous mode's failure message is meaningless in the new one.
@@ -111,17 +125,11 @@ export default function SignInRoute() {
 
   // A freshly self-registered account has no org, so the workspace picker would
   // only show an empty state — send new accounts to the marketplace instead.
-  // Flagging it also repoints `destination`, so the redirect effect agrees
-  // rather than immediately overriding this navigation.
-  const finishSignUp = useCallback(() => {
-    setJustSignedUp(true);
-    router.replace(nativeRoutes.marketplace);
-  }, [router]);
+  const finishSignUp = useCallback(() => router.replace(nativeRoutes.marketplace), [router]);
 
   const signInWithGoogle = useCallback(async () => {
-    /* istanbul ignore if -- unreachable from the UI (the button is disabled
-       while busy); kept as defence in depth if that prop is ever dropped. */
-    if (busy) return;
+    if (inFlight.current) return;
+    inFlight.current = true;
     setBusy("google");
     setError(null);
     try {
@@ -139,12 +147,14 @@ export default function SignInRoute() {
     } catch (e) {
       setError(messageFromError(e));
     } finally {
+      inFlight.current = false;
       setBusy(null);
     }
-  }, [busy, startSSOFlow, finishSignIn, messageFromError]);
+  }, [startSSOFlow, finishSignIn, messageFromError]);
 
   const signInWithPassword = useCallback(async () => {
-    if (!isLoaded || busy || !identifier.trim() || !password) return;
+    if (!isLoaded || inFlight.current || !identifier.trim() || !password) return;
+    inFlight.current = true;
     setBusy("password");
     setError(null);
     try {
@@ -165,12 +175,14 @@ export default function SignInRoute() {
     } catch (e) {
       setError(messageFromError(e));
     } finally {
+      inFlight.current = false;
       setBusy(null);
     }
-  }, [isLoaded, busy, identifier, password, signIn, setActive, finishSignIn, t, messageFromError]);
+  }, [isLoaded, identifier, password, signIn, setActive, finishSignIn, t, messageFromError]);
 
   const submitSignUp = useCallback(async () => {
-    if (!signUpLoaded || busy || !identifier.trim() || !password) return;
+    if (!signUpLoaded || inFlight.current || !identifier.trim() || !password) return;
+    inFlight.current = true;
     setBusy("signUp");
     setError(null);
     try {
@@ -183,17 +195,21 @@ export default function SignInRoute() {
     } catch (e) {
       setError(messageFromSignUpError(e));
     } finally {
+      inFlight.current = false;
       setBusy(null);
     }
-  }, [signUpLoaded, busy, identifier, password, signUp, switchMode, messageFromSignUpError]);
+  }, [signUpLoaded, identifier, password, signUp, switchMode, messageFromSignUpError]);
 
   const submitVerification = useCallback(async () => {
-    if (!signUpLoaded || busy || !code.trim()) return;
+    if (!signUpLoaded || inFlight.current || !code.trim()) return;
+    inFlight.current = true;
     setBusy("verify");
     setError(null);
     try {
       const attempt = await signUp.attemptEmailAddressVerification({ code: code.trim() });
       if (attempt.status === "complete") {
+        // Before activating: see cameFromSignUp.
+        cameFromSignUp.current = true;
         await setActiveSignUp({ session: attempt.createdSessionId });
         finishSignUp();
         return;
@@ -204,21 +220,70 @@ export default function SignInRoute() {
     } catch (e) {
       setError(messageFromSignUpError(e));
     } finally {
+      inFlight.current = false;
       setBusy(null);
     }
-  }, [signUpLoaded, busy, code, signUp, setActiveSignUp, finishSignUp, t, messageFromSignUpError]);
+  }, [signUpLoaded, code, signUp, setActiveSignUp, finishSignUp, t, messageFromSignUpError]);
 
   const resendCode = useCallback(async () => {
-    /* istanbul ignore if -- as above: the resend control is disabled while a
-       verification attempt is in flight, so this guard is not reachable. */
-    if (!signUpLoaded || busy) return;
+    if (!signUpLoaded || inFlight.current) return;
+    inFlight.current = true;
+    // Marks itself busy like every other handler. Without this the control's
+    // disabled={busy !== null} only blocked it during a *verification*
+    // attempt, so repeat taps each sent another email and quickly tripped
+    // Clerk's rate limit.
+    setBusy("resend");
     setError(null);
     try {
       await signUp.prepareEmailAddressVerification({ strategy: "email_code" });
     } catch (e) {
       setError(messageFromSignUpError(e));
+    } finally {
+      inFlight.current = false;
+      setBusy(null);
     }
-  }, [signUpLoaded, busy, signUp, messageFromSignUpError]);
+  }, [signUpLoaded, signUp, messageFromSignUpError]);
+
+  // Per-mode copy, keyed rather than nested ternaries in the JSX: three modes
+  // times title/body/labels was most of this component's branch weight.
+  const copy = {
+    signIn: {
+      title: t("signIn"),
+      body: t("signedOutSubtitle"),
+      identifierLabel: t("signInIdentifierLabel"),
+      identifierPlaceholder: t("signInIdentifierPlaceholder"),
+      passwordLabel: t("signInPasswordLabel"),
+      passwordPlaceholder: t("signInPasswordPlaceholder"),
+      submit: t("signInSubmit"),
+      submitting: t("signInSubmitting"),
+      switchPrompt: t("signUpNoAccount"),
+      switchAction: t("signUpSwitchToSignUp"),
+    },
+    signUp: {
+      title: t("signUpTitle"),
+      body: t("signUpSubtitle"),
+      identifierLabel: t("signUpEmailLabel"),
+      identifierPlaceholder: t("signUpEmailPlaceholder"),
+      passwordLabel: t("signUpPasswordLabel"),
+      passwordPlaceholder: t("signUpPasswordPlaceholder"),
+      submit: t("signUpSubmit"),
+      submitting: t("signUpSubmitting"),
+      switchPrompt: t("signUpHaveAccount"),
+      switchAction: t("signUpSwitchToSignIn"),
+    },
+    verify: {
+      title: t("signUpVerifyTitle"),
+      body: t("signUpVerifyBody"),
+      identifierLabel: "",
+      identifierPlaceholder: "",
+      passwordLabel: "",
+      passwordPlaceholder: "",
+      submit: t("signUpVerifySubmit"),
+      submitting: t("signUpVerifySubmitting"),
+      switchPrompt: "",
+      switchAction: "",
+    },
+  }[mode];
 
   return (
     <Screen scroll padding="lg">
@@ -226,16 +291,8 @@ export default function SignInRoute() {
         <View style={styles.header}>
           <View style={styles.headerText}>
             <Text style={[styles.brand, type("label")]}>{t("appName")}</Text>
-            <Text style={[styles.title, type("title")]}>
-              {mode === "signIn" ? t("signIn") : mode === "signUp" ? t("signUpTitle") : t("signUpVerifyTitle")}
-            </Text>
-            <Text style={[styles.body, type("body")]}>
-              {mode === "signIn"
-                ? t("signedOutSubtitle")
-                : mode === "signUp"
-                  ? t("signUpSubtitle")
-                  : t("signUpVerifyBody")}
-            </Text>
+            <Text style={[styles.title, type("title")]}>{copy.title}</Text>
+            <Text style={[styles.body, type("body")]}>{copy.body}</Text>
           </View>
           <LocaleToggle />
         </View>
@@ -267,17 +324,31 @@ export default function SignInRoute() {
                 disabled={busy !== null}
               >
                 <Text style={[styles.primaryLabel, type("label")]}>
-                  {busy === "verify" ? t("signUpVerifySubmitting") : t("signUpVerifySubmit")}
+                  {busy === "verify" ? copy.submitting : copy.submit}
                 </Text>
               </Pressable>
 
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={t("signUpResendCode")}
+                hitSlop={TAP_SLOP}
                 onPress={resendCode}
                 disabled={busy !== null}
               >
                 <Text style={[styles.switchAction, type("caption")]}>{t("signUpResendCode")}</Text>
+              </Pressable>
+
+              {/* Without a way back, a typo in the email address is a dead end:
+                  no code ever arrives and the credential form is unreachable
+                  short of killing the app. */}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("signUpChangeEmail")}
+                hitSlop={TAP_SLOP}
+                onPress={() => switchMode("signUp")}
+                disabled={busy !== null}
+              >
+                <Text style={[styles.switchAction, type("caption")]}>{t("signUpChangeEmail")}</Text>
               </Pressable>
             </>
           ) : (
@@ -303,14 +374,14 @@ export default function SignInRoute() {
               </View>
 
               <Text style={[styles.label, type("label")]}>
-                {mode === "signUp" ? t("signUpEmailLabel") : t("signInIdentifierLabel")}
+                {copy.identifierLabel}
               </Text>
               <TextInput
-                accessibilityLabel={mode === "signUp" ? t("signUpEmailLabel") : t("signInIdentifierLabel")}
+                accessibilityLabel={copy.identifierLabel}
                 style={[styles.input, type("body")]}
                 value={identifier}
                 onChangeText={setIdentifier}
-                placeholder={mode === "signUp" ? t("signUpEmailPlaceholder") : t("signInIdentifierPlaceholder")}
+                placeholder={copy.identifierPlaceholder}
                 placeholderTextColor={theme.colors.mutedText}
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -320,14 +391,14 @@ export default function SignInRoute() {
               />
 
               <Text style={[styles.label, type("label")]}>
-                {mode === "signUp" ? t("signUpPasswordLabel") : t("signInPasswordLabel")}
+                {copy.passwordLabel}
               </Text>
               <TextInput
-                accessibilityLabel={mode === "signUp" ? t("signUpPasswordLabel") : t("signInPasswordLabel")}
+                accessibilityLabel={copy.passwordLabel}
                 style={[styles.input, type("body")]}
                 value={password}
                 onChangeText={setPassword}
-                placeholder={mode === "signUp" ? t("signUpPasswordPlaceholder") : t("signInPasswordPlaceholder")}
+                placeholder={copy.passwordPlaceholder}
                 placeholderTextColor={theme.colors.mutedText}
                 secureTextEntry
                 autoCapitalize="none"
@@ -338,35 +409,26 @@ export default function SignInRoute() {
 
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={mode === "signUp" ? t("signUpSubmit") : t("signInSubmit")}
+                accessibilityLabel={copy.submit}
                 style={makeButtonStyle(styles.primaryButton, styles.pressed, styles.disabled, busy !== null)}
                 onPress={mode === "signUp" ? submitSignUp : signInWithPassword}
                 disabled={busy !== null}
               >
                 <Text style={[styles.primaryLabel, type("label")]}>
-                  {mode === "signUp"
-                    ? busy === "signUp"
-                      ? t("signUpSubmitting")
-                      : t("signUpSubmit")
-                    : busy === "password"
-                      ? t("signInSubmitting")
-                      : t("signInSubmit")}
+                  {busy === "signUp" || busy === "password" ? copy.submitting : copy.submit}
                 </Text>
               </Pressable>
 
               <View style={styles.switchRow}>
-                <Text style={[styles.dividerText, type("caption")]}>
-                  {mode === "signUp" ? t("signUpHaveAccount") : t("signUpNoAccount")}
-                </Text>
+                <Text style={[styles.dividerText, type("caption")]}>{copy.switchPrompt}</Text>
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel={mode === "signUp" ? t("signUpSwitchToSignIn") : t("signUpSwitchToSignUp")}
+                  accessibilityLabel={copy.switchAction}
+                  hitSlop={TAP_SLOP}
                   onPress={() => switchMode(mode === "signUp" ? "signIn" : "signUp")}
                   disabled={busy !== null}
                 >
-                  <Text style={[styles.switchAction, type("caption")]}>
-                    {mode === "signUp" ? t("signUpSwitchToSignIn") : t("signUpSwitchToSignUp")}
-                  </Text>
+                  <Text style={[styles.switchAction, type("caption")]}>{copy.switchAction}</Text>
                 </Pressable>
               </View>
             </>

@@ -74,6 +74,7 @@ const AR = {
   signingIn: "جارٍ تسجيل الدخول…",
   creatingAccount: "جاري إنشاء الحساب…",
   confirming: "جاري التأكيد…",
+  changeEmail: "استخدام بريد آخر",
 };
 
 async function renderScreen() {
@@ -118,13 +119,12 @@ beforeEach(() => {
   ].forEach((fn) => fn.mockReset());
 });
 
-test("Google sign-in shows a spinner, disables the form, and ignores a second tap", async () => {
+test("Google sign-in shows a spinner and disables the form while in flight", async () => {
   const gate = deferred();
   mockStartSSOFlow.mockReturnValue(gate.promise);
   const screen = await renderScreen();
-  const googleButton = screen.getByLabelText(AR.google);
 
-  const press = fireEvent.press(googleButton);
+  const press = fireEvent.press(screen.getByLabelText(AR.google));
 
   // The spinner replaces the button's visible label (the accessibility label
   // stays, which is how it is still queryable), and the form goes disabled.
@@ -132,14 +132,10 @@ test("Google sign-in shows a spinner, disables the form, and ignores a second ta
   expect(screen.getByLabelText(AR.google).props.accessibilityState?.disabled).toBe(true);
   expect(screen.getByLabelText(AR.submitSignIn).props.accessibilityState?.disabled).toBe(true);
 
-  // A second tap while in flight must not start another SSO round-trip.
-  const secondPress = fireEvent.press(googleButton);
-
   gate.release({ createdSessionId: null, setActive: undefined });
-  await Promise.all([press, secondPress]);
-
-  expect(mockStartSSOFlow).toHaveBeenCalledTimes(1);
+  await press;
 });
+
 
 test("password sign-in shows its submitting label while in flight", async () => {
   const gate = deferred();
@@ -196,18 +192,18 @@ test("verification shows its confirming label and blocks a resend while in fligh
   expect(mockPrepareVerification).not.toHaveBeenCalled();
 });
 
-test("pressed feedback resolves on the interactive controls", async () => {
-  // Pressable resolves its style callback with { pressed }, so the pressed
-  // styling only evaluates while a touch is actually down.
+test("the interactive controls accept press gestures without tearing down", async () => {
+  // A smoke test, not a styling assertion: React Native resolves the pressed
+  // style callback internally and never exposes `pressed: true` to fireEvent.
+  // The resolved variants are unit-tested directly in pressableStyle.test.ts.
   const screen = await renderScreen();
 
   for (const label of [AR.google, AR.submitSignIn, AR.createAccount]) {
     const control = screen.getByLabelText(label);
     await fireEvent(control, "pressIn");
     await fireEvent(control, "pressOut");
+    expect(screen.getByLabelText(label).props.accessibilityState?.disabled).toBeFalsy();
   }
-
-  expect(screen.getByLabelText(AR.submitSignIn)).toBeTruthy();
 });
 
 test("the handlers themselves ignore a re-entrant call while busy", async () => {
@@ -228,4 +224,28 @@ test("the handlers themselves ignore a re-entrant call while busy", async () => 
   await press;
 
   expect(mockStartSSOFlow).toHaveBeenCalledTimes(1);
+});
+
+test("a resend in flight blocks a second resend from sending another email", async () => {
+  // resendCode used to skip the busy flag entirely, so disabled={busy !== null}
+  // only covered it during a *verification* attempt. Each extra tap sent
+  // another email and quickly tripped Clerk's rate limit.
+  const gate = deferred();
+  const screen = await renderScreen();
+  await fireEvent.press(screen.getByLabelText(AR.createAccount));
+  await waitFor(() => expect(screen.getByLabelText(AR.email)).toBeTruthy());
+  await fillCredentials(screen);
+  await fireEvent.press(screen.getByLabelText(AR.submitSignUp));
+  await waitFor(() => expect(screen.getByLabelText(AR.confirm)).toBeTruthy());
+
+  mockPrepareVerification.mockReset();
+  mockPrepareVerification.mockReturnValue(gate.promise);
+
+  const resend = screen.getByLabelText(AR.resend);
+  const first = fireEvent.press(resend);
+  const second = fireEvent.press(resend);
+  gate.release();
+  await Promise.all([first, second]);
+
+  expect(mockPrepareVerification).toHaveBeenCalledTimes(1);
 });

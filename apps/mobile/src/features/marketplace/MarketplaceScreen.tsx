@@ -928,31 +928,36 @@ function VehicleCard({
         </View>
         <TrustFacts vehicle={vehicle} />
         <ContactBar vehicle={vehicle} variant="inline" />
-        <View style={styles.actionRow}>
-          {listingUrl ? (
-            <Pressable
-              accessibilityRole="button"
-              style={({ pressed }) => [styles.inlineButton, pressed && styles.pressed]}
-              onPress={() => openExternalUrl(listingUrl)}
-            >
-              <Text style={styles.inlineButtonText}>{t("marketplaceOpenListing")}</Text>
-            </Pressable>
-          ) : null}
-          {/* See VehicleDetailModal: trade-in is dealer-only. */}
-          {vehicle.orgId ? (
-            <Pressable
-              accessibilityRole="button"
-              style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
-              onPress={() => {
-                const orgId = vehicle.orgId;
-                if (!orgId) return;
-                onTradeInPress({ orgId, dealershipName: vehicle.dealershipName });
-              }}
-            >
-              <Text style={styles.secondaryButtonText}>{t("marketplaceRequestTradeIn")}</Text>
-            </Pressable>
-          ) : null}
-        </View>
+        {/* A private seller has no dealer site to open and no org to route a
+            trade-in to, so the row itself drops out rather than leaving blank
+            space under the contact bar (matches the web card). */}
+        {listingUrl || vehicle.orgId ? (
+          <View style={styles.actionRow}>
+            {listingUrl ? (
+              <Pressable
+                accessibilityRole="button"
+                style={({ pressed }) => [styles.inlineButton, pressed && styles.pressed]}
+                onPress={() => openExternalUrl(listingUrl)}
+              >
+                <Text style={styles.inlineButtonText}>{t("marketplaceOpenListing")}</Text>
+              </Pressable>
+            ) : null}
+            {/* See VehicleDetailModal: trade-in is dealer-only. */}
+            {vehicle.orgId ? (
+              <Pressable
+                accessibilityRole="button"
+                style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
+                onPress={() => {
+                  const orgId = vehicle.orgId;
+                  if (!orgId) return;
+                  onTradeInPress({ orgId, dealershipName: vehicle.dealershipName });
+                }}
+              >
+                <Text style={styles.secondaryButtonText}>{t("marketplaceRequestTradeIn")}</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
       </View>
       <VehicleDetailModal
         vehicle={vehicle}

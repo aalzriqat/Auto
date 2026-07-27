@@ -27,8 +27,29 @@ const mockSignUpCreate = jest.fn();
 const mockPrepareVerification = jest.fn();
 const mockAttemptVerification = jest.fn();
 
-let mockIsSignedIn: boolean;
-let mockIsAuthenticated: boolean;
+/**
+ * Auth state behind a tiny external store rather than plain variables. Clerk's
+ * real hooks are state-backed, so activating a session re-renders the screen
+ * and re-runs its redirect effect. A mutated module variable would not, which
+ * would let the sign-up redirect test below pass even with the guard it exists
+ * to protect removed.
+ */
+const mockAuth = { isSignedIn: false, isAuthenticated: false };
+const mockAuthListeners = new Set<() => void>();
+let mockAuthVersion = 0;
+const mockSubscribeAuth = (cb: () => void) => {
+  mockAuthListeners.add(cb);
+  return () => void mockAuthListeners.delete(cb);
+};
+// Snapshot is a version counter: useSyncExternalStore compares with Object.is,
+// so returning the (mutated) state object itself would never look changed.
+const mockGetAuthVersion = () => mockAuthVersion;
+const mockSetAuth = (next: Partial<typeof mockAuth>) => {
+  Object.assign(mockAuth, next);
+  mockAuthVersion += 1;
+  mockAuthListeners.forEach((cb) => cb());
+};
+
 let mockSearchParams: Record<string, string>;
 
 jest.mock("expo-router", () => ({
@@ -39,7 +60,11 @@ jest.mock("expo-router", () => ({
 jest.mock("expo-web-browser", () => ({ maybeCompleteAuthSession: jest.fn() }));
 
 jest.mock("@clerk/expo", () => ({
-  useAuth: () => ({ isSignedIn: mockIsSignedIn }),
+  useAuth: () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("react").useSyncExternalStore(mockSubscribeAuth, mockGetAuthVersion);
+    return { isSignedIn: mockAuth.isSignedIn };
+  },
   useSSO: () => ({ startSSOFlow: mockStartSSOFlow }),
 }));
 
@@ -60,7 +85,13 @@ jest.mock("@clerk/expo/legacy", () => ({
   }),
 }));
 
-jest.mock("convex/react", () => ({ useConvexAuth: () => ({ isAuthenticated: mockIsAuthenticated }) }));
+jest.mock("convex/react", () => ({
+  useConvexAuth: () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("react").useSyncExternalStore(mockSubscribeAuth, mockGetAuthVersion);
+    return { isAuthenticated: mockAuth.isAuthenticated };
+  },
+}));
 
 import { LocaleProvider } from "../../src/providers/LocaleProvider";
 import { ThemeProvider } from "../../src/providers/ThemeProvider";
@@ -80,6 +111,7 @@ const AR = {
   code: "رمز التحقق",
   confirm: "تأكيد",
   resend: "إعادة إرسال الرمز",
+  changeEmail: "استخدام بريد آخر",
   google: "المتابعة عبر Google",
   // The mode-switch link. In sign-in mode the primary button is "تسجيل الدخول"
   // and the link is "إنشاء حساب"; in sign-up mode they swap, so each label
@@ -150,22 +182,21 @@ describe("SignInRoute", () => {
       mockPrepareVerification,
       mockAttemptVerification,
     ].forEach((fn) => fn.mockReset());
-    mockIsSignedIn = false;
-    mockIsAuthenticated = false;
+    mockAuth.isSignedIn = false;
+    mockAuth.isAuthenticated = false;
+    mockAuthVersion += 1;
     mockSearchParams = {};
   });
 
   describe("redirect on an already-active session", () => {
     test("sends a signed-in dealer to the workspace picker", async () => {
-      mockIsSignedIn = true;
-      mockIsAuthenticated = true;
+      mockSetAuth({ isSignedIn: true, isAuthenticated: true });
       await renderScreen();
       await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/workspaces"));
     });
 
     test("honours returnTo so the sell flow lands back on the marketplace", async () => {
-      mockIsSignedIn = true;
-      mockIsAuthenticated = true;
+      mockSetAuth({ isSignedIn: true, isAuthenticated: true });
       mockSearchParams = { returnTo: "marketplace" };
       await renderScreen();
       await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/marketplace"));
@@ -174,8 +205,7 @@ describe("SignInRoute", () => {
     test("stays put when Clerk is signed in but Convex has not accepted the token", async () => {
       // Redirecting on isSignedIn alone bounced the user straight back here
       // from home, trapping them with no way to retry.
-      mockIsSignedIn = true;
-      mockIsAuthenticated = false;
+      mockSetAuth({ isSignedIn: true, isAuthenticated: false });
       await renderScreen();
       expect(mockReplace).not.toHaveBeenCalled();
     });
@@ -318,8 +348,7 @@ describe("SignInRoute", () => {
       // navigation and strands a brand-new account on an empty state.
       mockAttemptVerification.mockResolvedValue({ status: "complete", createdSessionId: "sess_live" });
       mockSetActiveSignUp.mockImplementation(async () => {
-        mockIsSignedIn = true;
-        mockIsAuthenticated = true;
+        mockSetAuth({ isSignedIn: true, isAuthenticated: true });
       });
       const screen = await renderScreen();
       await reachVerifyStep(screen);
@@ -413,6 +442,18 @@ describe("SignInRoute", () => {
       await fireEvent.press(screen.getByLabelText(AR.resend));
 
       await waitFor(() => expect(screen.getByText("Too many attempts.")).toBeTruthy());
+    });
+
+    test("lets a mistyped email be corrected instead of dead-ending on the code step", async () => {
+      // No code ever arrives for a typo'd address, and without a way back the
+      // credential form is unreachable short of killing the app.
+      const screen = await renderScreen();
+      await reachVerifyStep(screen);
+
+      await fireEvent.press(screen.getByLabelText(AR.changeEmail));
+
+      await waitFor(() => expect(screen.getByLabelText(AR.email)).toBeTruthy());
+      expect(screen.queryByLabelText(AR.confirm)).toBeNull();
     });
 
     test("clears a stale error and returns to the sign-in form on switch", async () => {
