@@ -162,7 +162,14 @@ export const update = mutation({
         throw new ConvexError(`A role named "${roleName}" already exists in this organization.`);
       }
 
-      patch.name = roleName;
+      // The system OWNER role is stored normalized. The guard above accepts any
+      // casing/spacing that normalizes to "OWNER", but isSystemOwnerRole()'s
+      // legacy fallback matches `role.name === "OWNER"` EXACTLY — so storing
+      // "owner" verbatim made an org whose isSystemOwnerRole flag is unset stop
+      // being recognised as having an owner at all. That locks it out of every
+      // requireOwner path, including this mutation, so it cannot be undone from
+      // the app. Custom roles keep the name exactly as typed.
+      patch.name = roleIsOwner ? normalizeRoleName(roleName) : roleName;
     }
     if (args.permissions !== undefined) {
       const invalidPermissions = getInvalidPermissions(args.permissions);
