@@ -10,6 +10,13 @@ import { formatAccountingDate, periodLabel } from "./types";
 type AccountingPeriodsTableProps = {
   periods: readonly PeriodSummary[];
   canManageFinance: boolean;
+  /**
+   * Locking is irreversible and needs the narrower reopen:accounting_periods
+   * grant, so it is gated separately from the rest of the period actions —
+   * a plain MANAGE_FINANCE holder sees Open and Close but not Lock. The backend
+   * is still the authority; this only avoids offering an action that would fail.
+   */
+  canLockPeriod: boolean;
   busyAction: string | null;
   t: Translate;
   onOpen: (periodId: Id<"accountingPeriods">) => void;
@@ -32,6 +39,7 @@ function periodBusyAction(periodId: Id<"accountingPeriods">, action: "open" | "c
 function PeriodActionButton({
   period,
   busy,
+  canLockPeriod,
   t,
   onOpen,
   onClose,
@@ -39,6 +47,7 @@ function PeriodActionButton({
 }: Readonly<{
   period: PeriodSummary;
   busy: boolean;
+  canLockPeriod: boolean;
   t: Translate;
   onOpen: () => void;
   onClose: () => void;
@@ -61,6 +70,7 @@ function PeriodActionButton({
     );
   }
   if (period.status === "CLOSED") {
+    if (!canLockPeriod) return null;
     return (
       <Button size="sm" variant="outline" disabled={busy} onClick={onLock}>
         {busy && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -86,6 +96,7 @@ export function accountingPeriodActionKey(periodId: Id<"accountingPeriods">, act
 export function AccountingPeriodsTable({
   periods,
   canManageFinance,
+  canLockPeriod,
   busyAction,
   t,
   onOpen,
@@ -125,6 +136,7 @@ export function AccountingPeriodsTable({
                       <PeriodActionButton
                         period={period}
                         busy={periodActionIsBusy(period._id, busyAction)}
+                        canLockPeriod={canLockPeriod}
                         t={t}
                         onOpen={() => onOpen(period._id)}
                         onClose={() => onClose(period._id)}

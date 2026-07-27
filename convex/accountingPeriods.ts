@@ -510,7 +510,19 @@ export const lock = mutation({
     periodId: v.id("accountingPeriods"),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // Locking is the one period transition with NO way back: reopen() refuses
+    // LOCKED outright and nothing else in the product moves a period out of it,
+    // so a mistaken lock permanently freezes that period's books — any error
+    // found later can never be corrected through the app. That makes it strictly
+    // more consequential than reopening, which is recoverable, yet it used to
+    // need only MANAGE_FINANCE — a permission the default ACCOUNTANT role
+    // template carries. Gate it behind the same narrow grant reopen requires, so
+    // the irreversible operation is never easier to reach than the reversible
+    // one.
+    const { user } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.MANAGE_FINANCE,
+      PERMISSIONS.REOPEN_PERIODS,
+    ]);
     await requireFeature(ctx, args.orgId, "accounting");
 
     const period = await ctx.db.get(args.periodId);
