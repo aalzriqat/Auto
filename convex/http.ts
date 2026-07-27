@@ -763,7 +763,11 @@ http.route({
       return new Response("Bad request", { status: 400 });
     }
 
-    const rateLimited = await enforceWebhookRateLimit(ctx, orgId);
+    // Keyed on the caller, not on the orgId in the query string. `orgId` is
+    // unauthenticated at this point, so keying on it let anyone exhaust a
+    // chosen tenant's webhook quota and silence their WhatsApp lead channel.
+    // Same pattern the Clerk and Resend webhooks above already use.
+    const rateLimited = await enforceWebhookRateLimit(ctx, clientIp(request));
     if (rateLimited) return rateLimited;
 
     const settings = await ctx.runQuery(internal.whatsapp.getSettingsByOrg, {
@@ -811,7 +815,10 @@ http.route({
     const orgId = url.searchParams.get("orgId") as Id<"organizations"> | null;
     if (!orgId) return new Response("Bad request", { status: 400 });
 
-    const rateLimited = await enforceWebhookRateLimit(ctx, orgId);
+    // Keyed on the caller, not the unauthenticated `orgId` — see the GET
+    // handler above. Signature verification (inside processMetaMessagingWebhook)
+    // is the real gate; this only bounds unverified work.
+    const rateLimited = await enforceWebhookRateLimit(ctx, clientIp(request));
     if (rateLimited) return rateLimited;
 
     let appSecret: string;
@@ -1449,10 +1456,12 @@ http.route({
         summary: "Token exchange failed",
         error: message,
       });
-      return Response.redirect(
-        `${settingsUrl}?connected=facebook&error=1&errorMessage=${encodeURIComponent(message)}`,
-        302,
-      );
+      // The detail is already captured server-side by logWebhookEvent above.
+      // Reflecting it into the redirect put a raw internal exception — possibly
+      // naming Meta API internals — into the user's URL bar, browser history and
+      // any referrer logging. The Instagram sibling redirects with a generic
+      // flag; match it.
+      return Response.redirect(`${settingsUrl}?connected=facebook&error=1`, 302);
     }
 
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
@@ -1850,6 +1859,12 @@ http.route({
     try {
       const url = new URL(request.url);
       const provider = (url.searchParams.get("provider") ?? "").toLowerCase();
+
+      // Every other webhook route in this file bounds unverified work; this one
+      // settles money and had no limit at all, so an unauthenticated caller
+      // could force unbounded signature-verification work against it.
+      const rateLimited = await enforceWebhookRateLimit(ctx, clientIp(request));
+      if (rateLimited) return rateLimited;
 
       const rawBody = await request.text();
       const verification = await verifyPaymentWebhook(
