@@ -820,11 +820,29 @@ export const drainDueMembershipOffboardingJobs = internalAction({
       { now: Date.now(), limit: MEMBERSHIP_OFFBOARDING_DRAIN_LIMIT }
     );
 
+    // Isolate each job. This ran unguarded, so one job that threw aborted the
+    // whole drain — and because the failing job stays due, every subsequent
+    // 5-minute tick re-fetched it first and aborted again. A single poison job
+    // therefore stranded every later-queued removal indefinitely, leaving
+    // offboarded people with live access and nothing surfacing it.
+    let succeeded = 0;
+    const failures: Array<{ jobId: Id<"membershipOffboardingJobs">; error: string }> = [];
     for (const job of dueJobs) {
-      await ctx.runAction(internal.memberships.processMembershipOffboardingJob, { jobId: job._id });
+      try {
+        await ctx.runAction(internal.memberships.processMembershipOffboardingJob, { jobId: job._id });
+        succeeded += 1;
+      } catch (error) {
+        // processMembershipOffboardingJob owns its own retry/backoff bookkeeping;
+        // this only stops one bad job from blocking the queue behind it.
+        console.error("[memberships] offboarding job failed", job._id, error);
+        failures.push({
+          jobId: job._id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
-    return { processed: dueJobs.length };
+    return { processed: dueJobs.length, succeeded, failed: failures.length, failures };
   },
 });
 
