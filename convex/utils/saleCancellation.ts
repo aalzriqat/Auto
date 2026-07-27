@@ -335,6 +335,57 @@ async function reinstateAppliedDeposits(
   }
 }
 
+/**
+ * Soft-deletes the VEHICLE_SALE row this sale wrote to the legacy `transactions`
+ * cashflow ledger.
+ *
+ * Every other record a completed sale touches is reversed above, but the
+ * cashflow row was left behind — and reports.getProfitAndLoss sums that table,
+ * so a cancelled sale kept being reported as revenue forever, with no way for an
+ * operator to reconcile it against a sale that no longer exists.
+ *
+ * `transactions` has no saleId, so the row is matched on org + vehicle +
+ * customer + VEHICLE_SALE among rows not already deleted. That is exact here: a
+ * vehicle is SOLD for the lifetime of a completed sale and cannot be sold again
+ * until this cancellation restores it, so at most one live sale row can exist
+ * for that pair at a time.
+ *
+ * DEPOSIT rows are deliberately left alone — cancelling a sale reinstates the
+ * deposit against the quote rather than refunding it, so that cash really was
+ * received and still is held.
+ */
+async function voidSaleCashflowTransaction(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    sale: Doc<"sales">;
+    actorId: Id<"users">;
+    reversalDate: number;
+  }
+) {
+  const saleRows = await ctx.db
+    .query("transactions")
+    .withIndex("by_org_vehicle", (q) =>
+      q.eq("orgId", args.orgId).eq("vehicleId", args.sale.vehicleId)
+    )
+    .filter((q) =>
+      q.and(
+        q.eq(q.field("category"), "VEHICLE_SALE"),
+        q.eq(q.field("customerId"), args.sale.customerId),
+        q.neq(q.field("isDeleted"), true)
+      )
+    )
+    .collect();
+
+  for (const row of saleRows) {
+    await ctx.db.patch(row._id, {
+      isDeleted: true,
+      deletedAt: args.reversalDate,
+      deletedBy: args.actorId,
+    });
+  }
+}
+
 export async function cancelCompletedSaleOperationalRecords(
   ctx: MutationCtx,
   args: {
@@ -386,6 +437,12 @@ export async function cancelCompletedSaleOperationalRecords(
     quoteId: args.sale.quoteId,
     actorId: args.actorId,
     reason: args.reason,
+    reversalDate: args.reversalDate,
+  });
+  await voidSaleCashflowTransaction(ctx, {
+    orgId: args.orgId,
+    sale: args.sale,
+    actorId: args.actorId,
     reversalDate: args.reversalDate,
   });
   await syncVehicleHoldStatus(ctx, args.sale.vehicleId, args.actorId);
