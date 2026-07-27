@@ -294,12 +294,35 @@ describe("vehicles.softDelete", () => {
     const orgId2 = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() })
     );
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId: orgId2,
+        plan: "professional",
+        status: "active",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+    // The caller must be a genuine member of the SECOND org. Without this the
+    // mutation is rejected by requireTenantAuth on membership alone, and this
+    // test passes without ever reaching the vehicle-belongs-to-this-org check
+    // it is named for — it passed even with that check deleted. A user who
+    // legitimately works at two dealerships is the real threat model.
+    const roleId2 = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId: orgId2, name: "ADMIN", permissions: PERMISSIONS })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("memberships", { orgId: orgId2, userId, roleId: roleId2 })
+    );
 
     const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
 
     await expect(
       asUser.mutation(api.vehicles.softDelete, { orgId: orgId2, vehicleId })
-    ).rejects.toThrow();
+    ).rejects.toThrow(/not found in this organization/i);
+
+    const untouched = await t.run((ctx) => ctx.db.get(vehicleId));
+    expect(untouched?.isDeleted).toBeUndefined();
   });
 });
 
