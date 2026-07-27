@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { query, mutation } from "./_generated/server";
 import { QueryCtx } from "./_generated/server";
@@ -410,6 +410,18 @@ export const setConversationVehicle = mutation({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
     await requireFeature(ctx, args.orgId, "socialInbox");
+
+    // The vehicle id comes straight from the caller and gets stamped onto
+    // instagramEvents/facebookEvents and the linked lead. Readers
+    // (listConversations, listConversationEvents, and the Instagram engagement
+    // views) resolve it with a bare ctx.db.get and return year/make/model as
+    // vehicleSummary, so an unchecked id here is a cross-tenant read: point a
+    // conversation at another dealership's vehicle and its details come back
+    // through your own inbox. Bind it to the caller's org before it is stored.
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle || vehicle.orgId !== args.orgId) {
+      throw new ConvexError("Vehicle not found in this organization.");
+    }
 
     const [igEvents, fbEvents] = await Promise.all([
       ctx.db
