@@ -6,7 +6,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
 import { hookPaymentLinkReceived } from "./accounting/workflowHooks";
-import { allocatePaymentToReceivable, createCanonicalPayment } from "./subledger";
+import { allocatePaymentToReceivable, createCanonicalPayment, getReceivableOutstandingMinor } from "./subledger";
 import { fromMinorUnits, toMinorUnits, scaleForCurrency } from "./utils/money";
 
 const statusValidator = v.union(
@@ -103,13 +103,25 @@ async function createCanonicalIntentSettlement(
   };
 
   if (intent.receivableDocumentId && !intent.paymentAllocationId) {
-    links.paymentAllocationId = await allocatePaymentToReceivable(ctx, {
-      orgId: intent.orgId,
-      paymentId: canonicalPaymentId,
-      receivableDocumentId: intent.receivableDocumentId,
-      amountMinor: intent.amountMinor,
-      actorId,
-    });
+    // Clamp to what is still owed, exactly as the legacy mirror below already
+    // does. allocatePaymentToReceivable THROWS when the amount exceeds the
+    // outstanding balance, and a Convex mutation is atomic — so if the
+    // receivable was partly settled through another channel after this intent
+    // was created, the throw rolled back the entire settlement including the
+    // canonical payment row. The provider has already confirmed the money, and
+    // its retries would hit the same throw, so the payment was lost outright.
+    // Any excess correctly stays on the payment as an unapplied balance.
+    const outstandingMinor = await getReceivableOutstandingMinor(ctx, intent.receivableDocumentId);
+    const allocatableMinor = Math.min(intent.amountMinor, outstandingMinor);
+    if (allocatableMinor > 0) {
+      links.paymentAllocationId = await allocatePaymentToReceivable(ctx, {
+        orgId: intent.orgId,
+        paymentId: canonicalPaymentId,
+        receivableDocumentId: intent.receivableDocumentId,
+        amountMinor: allocatableMinor,
+        actorId,
+      });
+    }
   } else if (intent.paymentAllocationId) {
     links.paymentAllocationId = intent.paymentAllocationId;
   }
