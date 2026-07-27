@@ -6,6 +6,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { requireTenantAuth } from "./utils/tenancy";
 import { refreshDealerBadges, checkMarketplaceQuota, consumeMarketplaceLead, getOwnProfile } from "./marketplaceDealers";
 import { calculateUnifiedMurabaha } from "../lib/financing";
+import { assertFiniteNumber } from "./utils/money";
 
 const MAX_NOTE_CHARS = 1000;
 const MAX_LISTED_REQUESTS = 100;
@@ -41,6 +42,13 @@ async function buildFinanceOffer(
   if (!company || company.orgId !== orgId || !company.isActive) {
     throw new ConvexError("Finance company not found.");
   }
+  // Guard before the range checks below: comparisons against NaN are all false,
+  // so a non-finite term or down payment would pass every one of them and reach
+  // calculateUnifiedMurabaha, which then returns NaN for the whole offer —
+  // stored as a frozen snapshot and served to the buyer as their quote.
+  assertFiniteNumber(args.vehiclePrice, "vehicle price");
+  assertFiniteNumber(args.downPayment, "down payment");
+  assertFiniteNumber(args.termMonths, "term");
   if (args.termMonths <= 0 || args.termMonths > company.maxTermMonths) {
     throw new ConvexError(`Term must be between 1 and ${company.maxTermMonths} months for this finance company.`);
   }
@@ -177,8 +185,11 @@ export const respond = mutation({
       .unique();
     if (!match) throw new ConvexError("This request was not routed to your dealership.");
 
-    if (args.offerPriceJod !== undefined && args.offerPriceJod < 0) {
-      throw new ConvexError("Offer price must be non-negative.");
+    if (args.offerPriceJod !== undefined) {
+      assertFiniteNumber(args.offerPriceJod, "offer price");
+      if (args.offerPriceJod < 0) {
+        throw new ConvexError("Offer price must be non-negative.");
+      }
     }
 
     // Kind-specific shape: a concrete match needs a real vehicle; a sourcing
@@ -197,8 +208,12 @@ export const respond = mutation({
       }
     }
 
-    if (args.sourcingRange && args.sourcingRange.minJod > args.sourcingRange.maxJod) {
-      throw new ConvexError("Sourcing range minimum can't exceed its maximum.");
+    if (args.sourcingRange) {
+      assertFiniteNumber(args.sourcingRange.minJod, "sourcing range minimum");
+      assertFiniteNumber(args.sourcingRange.maxJod, "sourcing range maximum");
+      if (args.sourcingRange.minJod > args.sourcingRange.maxJod) {
+        throw new ConvexError("Sourcing range minimum can't exceed its maximum.");
+      }
     }
 
     // Compute the finance offer when the dealer supplied finance terms. Needs a

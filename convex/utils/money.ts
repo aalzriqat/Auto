@@ -61,6 +61,20 @@ export function assertValidMinorAmount(amount: number, label = "amount"): void {
   }
 }
 
+/**
+ * Rejects NaN and ±Infinity for a caller-supplied number that is validated by
+ * range comparisons rather than by minor-unit rules (a decimal price, a term, a
+ * rate). Convex accepts both as legitimate v.number() values, and EVERY
+ * comparison against NaN is false — so `x < 0`, `x > max` and `x === 0` all pass
+ * it, and the value flows on into arithmetic that silently yields NaN and gets
+ * stored. Call this before comparison-based validation, not after.
+ */
+export function assertFiniteNumber(value: number, label = "value"): void {
+  if (!Number.isFinite(value)) {
+    throw new ConvexError(`Invalid ${label}: ${value}. Must be a finite number.`);
+  }
+}
+
 export function assertSameCurrency(a: string, b: string, context = ""): void {
   if (a.toUpperCase() !== b.toUpperCase()) {
     throw new ConvexError(

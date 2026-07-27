@@ -50,7 +50,7 @@ import { paymentMethodValidator, type PaymentMethod } from "./utils/paymentMetho
 import { runWithIdempotency } from "./utils/idempotency";
 import { drainEntries } from "./accountingOutbox";
 import { postedSourceExpenseEvent } from "./utils/prepaidSourceLedger";
-import { toMinorUnits } from "./utils/money";
+import { toMinorUnits, assertValidMinorAmount } from "./utils/money";
 
 /** UTC "YYYY-MM" for a timestamp — the month recognition of that expense begins. */
 export function toYearMonth(timestamp: number): string {
@@ -751,9 +751,16 @@ function validateCorrectionInputs(
   remainingRefundableTaxMinor: number
 ): void {
   const { refundMinor, refundTaxMinor, writeOffMinor, newTermMonths } = inputs;
-  if (refundMinor < 0 || writeOffMinor < 0 || refundTaxMinor < 0) {
-    throw new ConvexError("Refund, VAT, and write-off amounts cannot be negative.");
-  }
+  // Every other check in this function is a comparison, and every comparison
+  // against NaN is false — including the remaining-balance cap below and the
+  // `writeOffMinor > 0` test that decides whether a second approver is needed.
+  // Convex accepts NaN as a valid v.number(), so a non-finite amount passed
+  // validation, skipped the maker-checker gate, and was patched onto totalMinor,
+  // poisoning the schedule's arithmetic permanently. Validate fail-closed first,
+  // so the comparisons that follow only ever see real integers.
+  assertValidMinorAmount(refundMinor, "refund amount");
+  assertValidMinorAmount(writeOffMinor, "write-off amount");
+  assertValidMinorAmount(refundTaxMinor, "refund VAT amount");
   if (refundMinor > 0 && !inputs.refundPaymentMethod) {
     throw new ConvexError("A payment method is required to record a refund.");
   }
