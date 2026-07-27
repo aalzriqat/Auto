@@ -17,8 +17,11 @@ import { useOtaUpdate } from "../../updates/otaUpdateContext";
 /**
  * Buyer-side Account tab. Buyers browse anonymously, so this leads with
  * preferences (theme/language) and keeps the dealer entry visually secondary —
- * most buyers never need it. Full buyer sign-in/sync arrives in a later phase;
- * for now the buyer section states that plainly rather than showing dead buttons.
+ * most buyers never need it.
+ *
+ * The buyer section offers a real account CTA: signing up is what unlocks
+ * selling a car and keeping listings across devices. It is hidden once signed
+ * in, where the dealer-workspace card below becomes the useful entry point.
  */
 export function BuyerAccountScreen({ embedded = false }: Readonly<{ embedded?: boolean }> = {}) {
   const styles = useThemedStyles(makeStyles);
@@ -45,13 +48,23 @@ export function BuyerAccountScreen({ embedded = false }: Readonly<{ embedded?: b
           <Text style={styles.title}>{t("account")}</Text>
         </View>
 
+        {/* Buyer sign-in/sign-up is real now (see app/(auth)/sign-in.tsx), so
+            this leads with the action instead of a "coming soon" pill. Signed-in
+            buyers get their listings entry; signed-out ones get the account CTA. */}
         <Card style={styles.card}>
           <Text style={styles.cardTitle}>{t("buyerAccountBuyerTitle")}</Text>
           <Text style={styles.cardBody}>{t("buyerAccountSyncHint")}</Text>
-          <View style={styles.soonPill}>
-            <Icon color="mutedText" name="notifications" size={14} />
-            <Text style={styles.soonText}>{t("buyerAccountComingSoon")}</Text>
-          </View>
+          {!isSignedIn ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t("signUpTitle")}
+              style={({ pressed }) => [styles.updateButton, pressed && styles.pressed]}
+              onPress={() => router.push(`${nativeRoutes.signIn}?returnTo=marketplace`)}
+            >
+              <Icon color="primary" name="team" size={16} />
+              <Text style={styles.updateButtonText}>{t("signUpTitle")}</Text>
+            </Pressable>
+          ) : null}
         </Card>
 
         <Card style={styles.card}>
@@ -159,21 +172,6 @@ const makeStyles = (theme: AppTheme) =>
       color: theme.colors.mutedText,
       fontSize: 14,
       lineHeight: 20,
-    },
-    soonPill: {
-      alignSelf: "flex-start",
-      flexDirection: "row",
-      alignItems: "center",
-      gap: theme.spacing.xs,
-      borderRadius: theme.radius.sm,
-      backgroundColor: theme.colors.surfaceAlt,
-      paddingHorizontal: theme.spacing.sm,
-      paddingVertical: theme.spacing.xs,
-    },
-    soonText: {
-      color: theme.colors.mutedText,
-      fontSize: 12,
-      fontWeight: "700",
     },
     prefRow: {
       flexDirection: "row",

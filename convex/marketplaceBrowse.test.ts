@@ -470,3 +470,154 @@ describe("marketplaceBrowse.search", () => {
     expect(result.vehicles[0].estimatedMonthlyPayment).toBe(183);
   });
 });
+
+/**
+ * Direct listings (individuals / unaffiliated dealers) must surface in the same
+ * public browse as dealer inventory. Before these tests, `search` unioned only
+ * opted-in dealer orgs, so an admin-approved LIVE listing was invisible to every
+ * buyer — the seller and admin halves of the feature worked while the read half
+ * did not exist. These lock that read path in place.
+ */
+describe("marketplaceBrowse.search — direct listings", () => {
+  const seedListing = async (
+    t: ReturnType<typeof convexTest>,
+    overrides: Partial<{
+      make: string;
+      model: string;
+      city: string;
+      price: number;
+      transmission: string;
+      fuelType: string;
+      status: "PENDING_VERIFICATION" | "LIVE" | "REJECTED" | "SOLD" | "REMOVED";
+      isDeleted: boolean;
+      sellerWhatsapp: string;
+    }> = {}
+  ) =>
+    t.run(async (ctx) => {
+      const sellerUserId = await ctx.db.insert("users", {
+        clerkId: `seller-${Math.random()}`,
+        email: "seller@example.com",
+      });
+      const now = Date.now();
+      return ctx.db.insert("marketplaceListings", {
+        sellerUserId,
+        sellerKind: "INDIVIDUAL",
+        sellerDisplayName: "Sami K.",
+        sellerPhone: "+962791234567",
+        make: overrides.make ?? "Toyota",
+        model: overrides.model ?? "Corolla",
+        year: 2020,
+        mileage: 45000,
+        price: overrides.price ?? 12000,
+        currency: "JOD",
+        transmission: overrides.transmission ?? "Automatic",
+        fuelType: overrides.fuelType ?? "Petrol",
+        city: overrides.city ?? "Amman",
+        description: "Well maintained.",
+        condition: "GOOD",
+        imageIds: [],
+        status: overrides.status ?? "LIVE",
+        createdAt: now,
+        updatedAt: now,
+        isDeleted: overrides.isDeleted ?? false,
+        ...(overrides.sellerWhatsapp ? { sellerWhatsapp: overrides.sellerWhatsapp } : {}),
+      });
+    });
+
+  test("a LIVE direct listing appears in public browse, flagged as a private seller", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedListing(t);
+
+    const result = await t.query(api.marketplaceBrowse.search, {});
+
+    expect(result.vehicles).toHaveLength(1);
+    const row = result.vehicles[0];
+    expect(row.sellerType).toBe("DIRECT");
+    // No org backs a private listing, so nothing org-scoped may be fabricated.
+    expect(row.orgId).toBeNull();
+    expect(row.dealershipName).toBe("Sami K.");
+    expect(row.make).toBe("Toyota");
+    // A private seller carries no dealer-backed trust or finance claims.
+    expect(row.financeAvailable).toBe(false);
+    expect(row.dealerGuarantee).toBeNull();
+    expect(row.inspectionStatus).toBe("NONE");
+  });
+
+  test("falls back to the listed phone for WhatsApp when the seller gave no separate number", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedListing(t);
+
+    const result = await t.query(api.marketplaceBrowse.search, {});
+
+    expect(result.vehicles[0].dealerWhatsapp).toBe("+962791234567");
+  });
+
+  test.each([
+    ["PENDING_VERIFICATION" as const],
+    ["REJECTED" as const],
+    ["SOLD" as const],
+    ["REMOVED" as const],
+  ])("never exposes a %s listing to public browse", async (status) => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedListing(t, { status });
+
+    const result = await t.query(api.marketplaceBrowse.search, {});
+
+    expect(result.vehicles).toHaveLength(0);
+  });
+
+  test("never exposes a soft-deleted listing", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedListing(t, { isDeleted: true });
+
+    const result = await t.query(api.marketplaceBrowse.search, {});
+
+    expect(result.vehicles).toHaveLength(0);
+  });
+
+  test("applies the same make/city/price filters as dealer rows", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedListing(t, { make: "Toyota", city: "Amman", price: 12000 });
+    await seedListing(t, { make: "Honda", city: "Irbid", price: 30000 });
+
+    expect((await t.query(api.marketplaceBrowse.search, { make: "toyota" })).vehicles).toHaveLength(1);
+    expect((await t.query(api.marketplaceBrowse.search, { city: "irbid" })).vehicles).toHaveLength(1);
+    expect((await t.query(api.marketplaceBrowse.search, { priceMax: 20000 })).vehicles).toHaveLength(1);
+    expect((await t.query(api.marketplaceBrowse.search, { priceMin: 20000 })).vehicles).toHaveLength(1);
+    expect((await t.query(api.marketplaceBrowse.search, { make: "Suzuki" })).vehicles).toHaveLength(0);
+  });
+
+  test("shows direct listings alongside dealer inventory in one result set", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedPublishedDealer(t, { name: "Amman Motors", subdomainSlug: "ammanmotors", city: "Amman" });
+    await seedListing(t, { make: "Kia", price: 9000 });
+
+    const result = await t.query(api.marketplaceBrowse.search, {});
+
+    // Each source keeps its own candidate budget, so a busy dealer side can
+    // never starve private sellers out of the results entirely.
+    const sellerTypes = result.vehicles.map((v) => v.sellerType).sort();
+    expect(sellerTypes).toEqual(["DEALER", "DIRECT"]);
+  });
+
+  test("sorts direct and dealer rows together rather than appending one after the other", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedPublishedDealer(t, { name: "Amman Motors", subdomainSlug: "ammanmotors", city: "Amman" });
+    await seedListing(t, { make: "Kia", price: 1 });
+
+    const result = await t.query(api.marketplaceBrowse.search, { sortBy: "price_asc" });
+
+    // Cheapest first regardless of which side of the marketplace it came from.
+    expect(result.vehicles[0]?.sellerType).toBe("DIRECT");
+  });
+
+  test("excludes direct listings from finance-filtered searches", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedListing(t);
+
+    // A private seller has no finance company, so a buyer filtering for finance
+    // must not be shown cars that can never satisfy that filter.
+    expect((await t.query(api.marketplaceBrowse.search, { paymentType: "FINANCE" })).vehicles).toHaveLength(0);
+    expect((await t.query(api.marketplaceBrowse.search, { maxMonthlyPayment: 500 })).vehicles).toHaveLength(0);
+  });
+});

@@ -22,6 +22,9 @@ jest.mock("@clerk/expo/token-cache", () => ({
 
 jest.mock("convex/react", () => ({
   ConvexReactClient: jest.fn().mockImplementation(() => ({})),
+  // OfflineBanner reads the socket state; report a healthy connection so the
+  // banner stays out of these font-loading assertions.
+  useConvexConnectionState: () => ({ isWebSocketConnected: true, hasEverConnected: true }),
 }));
 
 jest.mock("convex/react-clerk", () => ({

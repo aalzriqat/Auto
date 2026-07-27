@@ -14,7 +14,12 @@ export const MAX_SAVED_VEHICLES = 50;
 
 export interface SavedVehicle {
   id: string;
-  orgId: string;
+  /**
+   * Null for a saved direct listing (individual / unaffiliated seller), which
+   * belongs to no organization. Rows saved before direct listings existed are
+   * always strings, so both shapes have to stay readable.
+   */
+  orgId: string | null;
   title: string;
   price?: number;
   monthlyPayment?: number;
@@ -29,7 +34,7 @@ function isSavedVehicle(value: unknown): value is SavedVehicle {
   return (
     typeof record.id === "string" &&
     record.id.length > 0 &&
-    typeof record.orgId === "string" &&
+    (typeof record.orgId === "string" || record.orgId === null) &&
     typeof record.title === "string" &&
     typeof record.savedAt === "number"
   );

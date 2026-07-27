@@ -1119,6 +1119,22 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "أصبحت خاصية \"بيع سيارتك\" وصفحة \"إعلاناتي\" متاحتين الآن على تطبيق الهاتف، بحيث يمكن لأي شخص إضافة سيارة للبيع وإدارة إعلاناته دون الحاجة لحساب معرض في أوتوفلو. يبقى كل إعلان جديد قيد التحقق حتى يراجعه أحد مسؤولي أوتوفلو ويوافق عليه.",
     publishedAt: releaseAt(2026, 7, 26, 3),
   },
+  {
+    type: "FEATURE",
+    titleEn: "Cars from private sellers now appear in the marketplace",
+    titleAr: "سيارات البائعين الأفراد تظهر الآن في السوق",
+    descriptionEn: "Approved listings from individuals and unaffiliated dealers now show up in marketplace search alongside dealership inventory on both web and mobile, marked with a \"Private seller\" badge. Trade-in offers stay a dealership-only option.",
+    descriptionAr: "أصبحت إعلانات الأفراد والمعارض غير المشتركة المعتمدة تظهر في بحث السوق إلى جانب مخزون المعارض على الويب والتطبيق، مع وسم \"بائع فردي\". يبقى عرض الاستبدال متاحاً لدى المعارض فقط.",
+    publishedAt: releaseAt(2026, 7, 27, 1),
+  },
+  {
+    type: "FEATURE",
+    titleEn: "Create an AutoFlow account from the mobile app",
+    titleAr: "إنشاء حساب أوتوفلو من التطبيق",
+    descriptionEn: "Buyers and private sellers can now sign up directly in the app with an email and password, so listing a car no longer requires an existing dealership account. The app also shows a clear banner when it loses its connection, instead of leaving screens loading indefinitely.",
+    descriptionAr: "أصبح بإمكان المشترين والبائعين الأفراد إنشاء حساب مباشرة من التطبيق بالبريد الإلكتروني وكلمة المرور، فلم يعد عرض السيارة يتطلب حساب معرض. كما يظهر التطبيق تنبيهاً واضحاً عند انقطاع الاتصال بدل ترك الشاشات في حالة تحميل دائمة.",
+    publishedAt: releaseAt(2026, 7, 27, 2),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;
