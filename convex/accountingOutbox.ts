@@ -21,6 +21,7 @@ import { PostCommand, postAccountingEvent } from "./accounting/postingEngine";
 import { prepaidPostingBlockedReason } from "./utils/prepaidSourceLedger";
 import { payrollPostingBlockedReason } from "./utils/payrollSourceLedger";
 import { reverseAccountingEvent } from "./accounting/reversals";
+import { checkPostingAllowed } from "./accountingPeriods";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
@@ -249,6 +250,24 @@ export async function drainEntries(
   let held = 0;
 
   for (const p of entries) {
+    // A drain is org-wide, but the events that trigger one (a period opening, a
+    // chart being initialized) are not specific to any entry. So an entry whose
+    // own period simply isn't open yet gets swept into every unrelated drain and
+    // charged an attempt each time — ten unrelated period-opens and a perfectly
+    // valid entry dead-letters, after which no drain will ever touch it again
+    // and its GL impact silently disappears until someone spots it in the FAILED
+    // list. Waiting on your own period is not failing, so hold instead: the
+    // entry stays PENDING with a visible reason and posts by itself the moment
+    // its period opens. A CLOSED or LOCKED period is a different matter — that
+    // is a deliberate refusal that will not resolve on its own, so it still
+    // burns attempts and dead-letters as designed.
+    const periodCheck = await checkPostingAllowed(ctx, p.orgId, p.accountingDate);
+    if (!periodCheck.ok && periodCheck.waiting) {
+      await markEntryHeld(ctx, p, periodCheck.reason);
+      held++;
+      continue;
+    }
+
     // Posting-side guard. What makes an entry drain is "a period covering THIS
     // entry's date opened" — which says nothing about whether the entry is
     // still coherent with the rest of the ledger. A prepaid correction queued

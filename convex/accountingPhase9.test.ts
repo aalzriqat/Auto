@@ -210,6 +210,58 @@ describe("Phase 9 — supplier payable payment method", () => {
 
 // ─── Accounting outbox (no silent skips) ──────────────────────────────────────
 
+/**
+ * Makes a queued outbox entry permanently unpostable, in a way unrelated to
+ * accounting periods: postPendingEntry requires `currency` and throws without
+ * it. Used to exercise the retry/dead-letter path with a blocker that genuinely
+ * never resolves by itself.
+ */
+async function breakQueuedEntry(
+  t: Awaited<ReturnType<typeof seedDealer>>["t"],
+  orgId: string,
+  sourceId: string
+) {
+  await t.run(async (ctx) => {
+    const entry = await ctx.db
+      .query("pendingAccountingEvents")
+      .withIndex("by_org_source", (q) =>
+        q.eq("orgId", orgId as any).eq("sourceType", "expenses").eq("sourceId", sourceId)
+      )
+      .unique();
+    await ctx.db.patch(entry!._id, { currency: undefined });
+  });
+}
+
+/** Restores what breakQueuedEntry removed, so the entry can post again. */
+async function repairQueuedEntry(
+  t: Awaited<ReturnType<typeof seedDealer>>["t"],
+  orgId: string,
+  sourceId: string
+) {
+  await t.run(async (ctx) => {
+    const entry = await ctx.db
+      .query("pendingAccountingEvents")
+      .withIndex("by_org_source", (q) =>
+        q.eq("orgId", orgId as any).eq("sourceType", "expenses").eq("sourceId", sourceId)
+      )
+      .unique();
+    await ctx.db.patch(entry!._id, { currency: "JOD" });
+  });
+}
+
+async function openFullYearPeriod(asUser: any, orgId: string) {
+  const fiscalYear = new Date().getUTCFullYear();
+  await asUser.mutation(api.accountingPeriods.create, {
+    orgId,
+    startDate: Date.UTC(fiscalYear, 0, 1),
+    endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+    fiscalYear,
+    periodNumber: 1,
+  });
+  const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
+  await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+}
+
 describe("Phase 9 — accounting outbox", () => {
   test("event with no open period is enqueued, then posts when a period opens", async () => {
     const { t, orgId, asUser } = await seedDealer("outbox", /* openPeriod */ false);
@@ -252,7 +304,15 @@ describe("Phase 9 — accounting outbox", () => {
       category: "OFFICE", status: "PAID",
     });
 
-    // Never open a period, so every drain attempt fails the same way.
+    // Corrupt the queued entry so posting it fails for a reason that will never
+    // resolve on its own, then open a period so the period check passes and the
+    // entry is genuinely attempted. A missing period is deliberately NOT used as
+    // the failure cause here: that blocker clears the moment an operator opens
+    // the period, so the outbox now holds such entries rather than charging them
+    // an attempt.
+    await breakQueuedEntry(t, orgId, expenseId.toString());
+    await openFullYearPeriod(asUser, orgId);
+
     for (let i = 0; i < 10; i++) {
       await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
     }
@@ -270,6 +330,53 @@ describe("Phase 9 — accounting outbox", () => {
     expect(pending).toHaveLength(0);
   });
 
+  test("an event waiting for its own period is not dead-lettered by other periods opening", async () => {
+    const { t, orgId, asUser } = await seedDealer("outbox_collateral", /* openPeriod */ false);
+
+    const fiscalYear = new Date().getUTCFullYear();
+    // Dated in December — the org will not open that period until year end.
+    const decemberExpenseId = await asUser.mutation(api.expenses.create, {
+      orgId, title: "December expense", amount: 90,
+      date: Date.UTC(fiscalYear, 11, 15),
+      category: "OFFICE", status: "PAID",
+    });
+
+    // The org works through the year normally, opening one month at a time.
+    // Every open schedules an ORG-WIDE drain, which reaches the December entry
+    // even though December is nowhere near being open. The entry is not broken
+    // and nothing about it failed — it is simply waiting for its own period.
+    for (let month = 0; month < 10; month++) {
+      await asUser.mutation(api.accountingPeriods.create, {
+        orgId,
+        fiscalYear,
+        periodNumber: month + 1,
+        startDate: Date.UTC(fiscalYear, month, 1),
+        endDate: Date.UTC(fiscalYear, month + 1, 0, 23, 59, 59, 999),
+      });
+      const periods = await asUser.query(api.accountingPeriods.list, { orgId });
+      const thisMonth = periods.find((p) => p.periodNumber === month + 1)!;
+      await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: thisMonth._id });
+      await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    }
+
+    const failed = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "FAILED" });
+    expect(failed).toHaveLength(0);
+
+    // December finally opens — the entry must still be drainable and post.
+    await asUser.mutation(api.accountingPeriods.create, {
+      orgId, fiscalYear, periodNumber: 12,
+      startDate: Date.UTC(fiscalYear, 11, 1),
+      endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+    });
+    const allPeriods = await asUser.query(api.accountingPeriods.list, { orgId });
+    const december = allPeriods.find((p) => p.periodNumber === 12)!;
+    await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: december._id });
+    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+
+    const posted = await eventForSource(asUser, orgId, "expenses", decemberExpenseId.toString());
+    expect(posted?.status).toBe("POSTED");
+  });
+
   test("retryFailed resets a FAILED event back to PENDING for another drain attempt", async () => {
     const { t, orgId, asUser } = await seedDealer("outbox_retry", /* openPeriod */ false);
 
@@ -278,21 +385,17 @@ describe("Phase 9 — accounting outbox", () => {
       category: "OFFICE", status: "PAID",
     });
 
+    await breakQueuedEntry(t, orgId, expenseId.toString());
+    await openFullYearPeriod(asUser, orgId);
+
     for (let i = 0; i < 10; i++) {
       await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
     }
     const failed = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "FAILED" });
     expect(failed).toHaveLength(1);
 
-    // Fix the underlying cause (no open period), then retry.
-    const fiscalYear = new Date().getUTCFullYear();
-    await asUser.mutation(api.accountingPeriods.create, {
-      orgId, startDate: Date.UTC(fiscalYear, 0, 1),
-      endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
-      fiscalYear, periodNumber: 1,
-    });
-    const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
-    await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+    // Fix the underlying cause, then retry.
+    await repairQueuedEntry(t, orgId, expenseId.toString());
 
     await asUser.mutation(api.accountingOutbox.retryFailed, { orgId, pendingEventId: failed[0]._id });
     const afterRetry = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "PENDING" });

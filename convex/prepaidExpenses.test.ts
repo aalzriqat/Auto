@@ -2160,8 +2160,13 @@ describe("prepaid corrections — the outbox refuses to post them against an unb
 
     const result = await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
 
-    expect(result.held).toBe(1);
+    // Both queued entries are held, for different reasons: the write-off by the
+    // prepaid guard (its asset debit hasn't posted), and the 2025-dated asset
+    // debit itself because no period covers 2025 in this org. Neither is
+    // failing, so neither burns a retry attempt.
+    expect(result.held).toBe(2);
     expect(result.posted).toBe(0);
+    expect(result.failed).toBe(0);
     // Prepaid Expenses is untouched: no credit without its debit.
     expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
     expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(0);
