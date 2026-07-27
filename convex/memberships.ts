@@ -37,6 +37,13 @@ async function countOwners(ctx: MutationCtx, orgId: Id<"organizations">): Promis
   let ownerCount = 0;
   for (const membership of memberships) {
     if (membership.offboardingStatus) continue;
+    // An impersonation grant is a super admin's temporary membership that
+    // COPIES the target's roleId (adminImpersonation.ts), so impersonating the
+    // sole owner made this count 2 and quietly disarmed every last-owner guard
+    // below — the real owner could then leave, and the org was left with none
+    // once the temporary membership expired. subscriptions.ts:320 already
+    // excludes both for exactly this reason; this is the same rule.
+    if (membership.impersonationGrantId) continue;
     const role = await ctx.db.get(membership.roleId);
     if (isSystemOwnerRole(role)) ownerCount++;
   }

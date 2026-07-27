@@ -1933,6 +1933,42 @@ describe("memberships.updateRole", () => {
     });
   });
 
+  test("an impersonation grant does not count as an owner for the last-owner guard", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, roleId: ownerRoleId } = await setupOrg(t, "user_sole_owner");
+
+    // A super admin impersonates the sole owner. adminImpersonation copies the
+    // target's roleId, so this temporary membership also looks like an OWNER.
+    const impersonatorUserId = await t.run((ctx: any) =>
+      ctx.db.insert("users", { clerkId: "user_imp2", email: "imp2@test.com" })
+    );
+    const impersonationMembershipId = await t.run((ctx: any) =>
+      ctx.db.insert("memberships", { orgId, userId: impersonatorUserId, roleId: ownerRoleId })
+    ) as Id<"memberships">;
+    const grantId = await t.run((ctx: any) =>
+      ctx.db.insert("impersonationGrants", {
+        actorUserId: impersonatorUserId,
+        targetUserId: impersonatorUserId,
+        orgId,
+        membershipId: impersonationMembershipId,
+        reason: "support",
+        grantedAt: Date.now(),
+        expiresAt: Date.now() + 60_000,
+      })
+    );
+    await t.run((ctx: any) =>
+      ctx.db.patch(impersonationMembershipId, { impersonationGrantId: grantId })
+    );
+
+    // The real, sole owner must still be blocked from leaving. Counting the
+    // temporary membership made countOwners return 2 and let them walk out,
+    // leaving the org with no owner once the grant expired.
+    const asRealOwner = t.withIdentity({ subject: "user_sole_owner" });
+    await expect(
+      asRealOwner.mutation(api.memberships.leave, { orgId })
+    ).rejects.toThrow(/last owner/i);
+  });
+
   test("blocks impersonation sessions from changing owner memberships", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId, roleId: ownerRoleId } = await setupOrg(t, "user_real_owner");
