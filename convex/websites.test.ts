@@ -446,3 +446,62 @@ describe("dealer website leads", () => {
     });
   });
 });
+
+describe("public lead abuse logging survives rejection", () => {
+  beforeEach(() => {
+    process.env.CLERK_JWT_ISSUER_DOMAIN = "https://test.clerk.accounts.dev";
+    process.env.NEXT_PUBLIC_APP_URL = "https://test.example.com";
+    process.env.TURNSTILE_SECRET_KEY = "test_turnstile_secret_123456";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ success: true, action: "turnstile-spin-v1" }), {
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+  });
+
+  afterEach(() => {
+    restoreEnv("CLERK_JWT_ISSUER_DOMAIN", ORIGINAL_CLERK_ISSUER);
+    restoreEnv("NEXT_PUBLIC_APP_URL", ORIGINAL_APP_URL);
+    restoreEnv("TURNSTILE_SECRET_KEY", ORIGINAL_TURNSTILE_SECRET);
+    vi.unstubAllGlobals();
+  });
+
+  test("a rejected submission still records its abuse event", async () => {
+    const { convex, orgId } = await publishDealerWebsite();
+
+    // No email, phone or WhatsApp — rejected as validation_failed, and the
+    // rejection is supposed to be recorded for abuse monitoring first.
+    await expect(
+      convex.action(api.websites.submitPublicLead, {
+        host: "premiumcars.autoflowdealer.com",
+        formType: "contact",
+        firstName: "No Contact",
+        message: "No way to reach me",
+        turnstileToken: "valid-token",
+        clientFingerprint: "abuse-visitor-1",
+      }),
+    ).rejects.toThrow(/email, phone, or WhatsApp/i);
+
+    // A Convex mutation is atomic, so recording the event and then throwing
+    // from the same mutation rolled the event straight back. Four of the five
+    // abuse reasons did exactly that, leaving the monitoring table holding only
+    // duplicate_suppressed — the one branch that returns instead of throwing.
+    await convex.run(async (ctx) => {
+      const abuseEvents = await ctx.db
+        .query("websiteLeadAbuseEvents")
+        .withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId))
+        .collect();
+      expect(abuseEvents.some((e) => e.reason === "validation_failed")).toBe(true);
+      expect(abuseEvents.some((e) => e.detail === "missing_contact_method")).toBe(true);
+    });
+
+    // And no CRM rows were created by the rejected submission.
+    await convex.run(async (ctx) => {
+      const leads = await ctx.db.query("leads").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect();
+      expect(leads).toHaveLength(0);
+    });
+  });
+});
