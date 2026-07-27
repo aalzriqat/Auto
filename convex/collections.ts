@@ -103,6 +103,26 @@ const approvalRequestTypeValidator = v.union(
   v.literal("CANCEL_RECEIVABLE")
 );
 
+/**
+ * A refund may only be issued against a receivable whose outstanding balance
+ * still reflects real collections.
+ *
+ * CANCELLED receivables have had outstandingAmount zeroed by the write-off, so
+ * the `originalAmount - outstandingAmount` formula used for refund eligibility
+ * reads them as fully paid when nothing was ever collected. REFUNDED ones have
+ * already been refunded once.
+ */
+function assertRefundableReceivableStatus(status: ReceivableStatus): void {
+  if (status === "CANCELLED") {
+    throw new ConvexError(
+      "This receivable was cancelled, so nothing was collected against it. A cancelled receivable cannot be refunded."
+    );
+  }
+  if (status === "REFUNDED") {
+    throw new ConvexError("This receivable has already been refunded.");
+  }
+}
+
 type ReceivableStatus = Doc<"receivables">["status"];
 type ReceivablePatch = Partial<Pick<Doc<"receivables">, "outstandingAmount" | "status" | "lastPaymentAt" | "updatedAt" | "dueDate" | "notes">>;
 type CanonicalPaymentMethod = Parameters<typeof createCanonicalPayment>[1]["method"];
@@ -1466,6 +1486,13 @@ export const requestApproval = mutation({
     if (args.requestType === "REFUND") {
       assertPositiveAmount(args.requestedAmount ?? 0, "Refund amount");
       if (!args.disbursementMethod) throw new ConvexError("Disbursement method is required for refund requests.");
+      // Refund eligibility is derived as originalAmount - outstandingAmount.
+      // Cancelling a receivable zeroes outstandingAmount, which makes a written
+      // -off, never-collected receivable indistinguishable from a fully paid
+      // one — so a refund against it would disburse real cash and post a GL
+      // refund for money that was never received. Blocked here and again at
+      // approval time, so neither gate alone is load-bearing.
+      assertRefundableReceivableStatus(receivable.status);
     }
     if (args.requestType === "RESCHEDULE" && !args.requestedDueDate) {
       throw new ConvexError("New due date is required for reschedule requests.");
@@ -1655,6 +1682,11 @@ export const respondToApproval = mutation({
           } else if (request.requestType === "REFUND") {
             const refundAmount = roundMoney(request.requestedAmount ?? 0, currency);
             assertPositiveAmount(refundAmount, "Refund amount");
+            // Re-checked at approval time, not just at request time: the
+            // receivable can be cancelled while a refund request sits PENDING,
+            // and paidAmount below would then read the full original amount as
+            // "collected". See assertRefundableReceivableStatus.
+            assertRefundableReceivableStatus(receivable.status);
             const paidAmount = roundMoney(receivable.originalAmount - receivable.outstandingAmount, currency);
             if (refundAmount > paidAmount) throw new ConvexError("Refund amount cannot exceed collected amount.");
 
