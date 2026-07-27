@@ -137,3 +137,72 @@ describe("getExpensesReport — prepaid amortization", () => {
     expect(report.expenses).toHaveLength(0);
   });
 });
+
+describe("getInventoryReport — investment valuation", () => {
+  test("landed costs add to the purchase price instead of replacing it", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "VIN-LANDED-1",
+        make: "Toyota",
+        model: "Corolla",
+        year: 2022,
+        mileage: 30_000,
+        color: "Silver",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        sellingPrice: 24_000,
+        purchasePrice: 20_000,
+        landedCostTotal: 500, // shipping + customs, additive to purchasePrice
+        status: "AVAILABLE",
+      })
+    );
+
+    const report = await asUser.query(api.reports.getInventoryReport, { orgId });
+
+    // 20,000 purchase + 500 landed. Reading landedCostTotal as a fallback for
+    // purchasePrice reported 500 and silently dropped the whole 20,000.
+    expect(report.totalValue).toBe(20_500);
+    expect(report.vehicles[0].totalInvestment).toBe(20_500);
+  });
+
+  test("deleted and reversed expenses are excluded from inventory investment", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "VIN-LANDED-2",
+        make: "Kia",
+        model: "Rio",
+        year: 2021,
+        mileage: 40_000,
+        color: "Blue",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        sellingPrice: 12_000,
+        purchasePrice: 10_000,
+        status: "AVAILABLE",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("expenses", {
+        orgId, vehicleId, title: "Deleted repair", amount: 900,
+        date: Date.now(), category: "REPAIR", isDeleted: true,
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("expenses", {
+        orgId, vehicleId, title: "Reversed repair", amount: 700,
+        date: Date.now(), category: "REPAIR", reversedAt: Date.now(),
+      })
+    );
+
+    const report = await asUser.query(api.reports.getInventoryReport, { orgId });
+
+    expect(report.vehicles[0].totalExpenses).toBe(0);
+    expect(report.totalValue).toBe(10_000);
+  });
+});

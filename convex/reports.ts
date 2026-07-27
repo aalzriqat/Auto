@@ -199,16 +199,38 @@ export const getInventoryReport = query({
     let totalValue = 0;
 
     const enrichedInventory = activeInventory.map((vehicle) => {
-      const expenses = expensesByVehicle.get(vehicle._id) ?? [];
+      // Deleted and reversed expenses are not part of a vehicle's cost. The
+      // previous sum took every row, so a mistake that was deleted or reversed
+      // still inflated reported inventory investment.
+      const expenses = (expensesByVehicle.get(vehicle._id) ?? []).filter(
+        (exp) => exp.isDeleted !== true && exp.reversedAt == null
+      );
       const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
-      const basePrice = vehicle.landedCostTotal ?? vehicle.purchasePrice ?? vehicle.sellingPrice ?? 0;
-      const totalInvestment = basePrice + totalExpenses;
+
+      // Mirrors computeVehicleCapitalizedCost (utils/vehicleCost.ts), which is
+      // the authoritative basis the GL and commissions use — kept inline rather
+      // than called so this report doesn't issue a second expense query per
+      // vehicle on top of the one above.
+      //
+      // This was `landedCostTotal ?? purchasePrice ?? sellingPrice ?? 0`. That
+      // is a FALLBACK, but landedCostTotal holds only the landed-cost items
+      // (shipping, customs) and is additive to purchasePrice — so any vehicle
+      // with landed costs recorded had its entire purchase price dropped from
+      // the org's reported inventory value. A 20,000 car with 500 of shipping
+      // reported 500, and recording more landed costs made it worse.
+      const capitalizedExpenses = expenses
+        .filter((exp) => exp.accountingTreatment === "CAPITALIZED_INVENTORY")
+        .reduce((sum, exp) => sum + (exp.capitalizedAmount ?? 0), 0);
+      const totalInvestment =
+        vehicle.sourceType === "SOURCED"
+          ? (vehicle.sourceCost ?? 0)
+          : (vehicle.purchasePrice ?? 0) + (vehicle.landedCostTotal ?? 0) + capitalizedExpenses;
 
       totalValue += totalInvestment;
 
       return {
         ...vehicle,
-        purchasePrice: basePrice,
+        purchasePrice: vehicle.purchasePrice ?? 0,
         totalExpenses,
         totalInvestment,
       };
