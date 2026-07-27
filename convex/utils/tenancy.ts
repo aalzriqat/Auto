@@ -222,9 +222,28 @@ export async function requireTenantAuth(
 
   // membership.impersonationGrantId means this is a super admin's temporary
   // membership from an active impersonation session (see
-  // convex/adminImpersonation.ts) — audit every write made under it. `user`
-  // here is the real admin, since the temp membership belongs to their own
-  // userId, so this never misattributes the write to the impersonated member.
+  // convex/adminImpersonation.ts).
+  //
+  // Verify the grant is still live on every call. Expiry used to rest entirely
+  // on a single fire-and-forget ctx.scheduler.runAfter that deletes the
+  // membership — with no retry and no sweep behind it, so a scheduled call that
+  // failed or was delayed left cross-tenant access valid indefinitely. Checking
+  // here makes the session fail closed: the grant's own expiresAt/revokedAt is
+  // the authority, and the scheduled cleanup becomes housekeeping rather than
+  // the security boundary. Applies to reads as well as writes.
+  if (membership.impersonationGrantId) {
+    const grant = await ctx.db.get(membership.impersonationGrantId);
+    if (!grant || grant.revokedAt || grant.expiresAt <= Date.now()) {
+      throwAppError(
+        AppErrorCode.UNAUTHORIZED,
+        "Unauthorized: This impersonation session has ended."
+      );
+    }
+  }
+
+  // Audit every write made under an impersonation session. `user` here is the
+  // real admin, since the temp membership belongs to their own userId, so this
+  // never misattributes the write to the impersonated member.
   if (membership.impersonationGrantId && isMutationCtx(ctx)) {
     const label = requiredPermissions.length > 0 ? requiredPermissions.join(",") : "tenant-write";
     await writeAuditLog(ctx, user, {
