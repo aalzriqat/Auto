@@ -209,11 +209,15 @@ export function countActiveFilters(fields: SearchFields): number {
   return count;
 }
 
-function openExternalUrl(url: string | null) {
+// Takes the caller's translate function rather than reaching for a hook: this
+// is a module-level helper, and the buyer marketplace defaults to Arabic, so a
+// hardcoded English alert would surface untranslated on an otherwise Arabic
+// screen for the Call / WhatsApp / open-listing failure path.
+function openExternalUrl(url: string | null, t: Translate) {
   if (!url) return;
   Linking.openURL(url).catch((error: unknown) => {
     console.error("Failed to open marketplace link", error);
-    Alert.alert("AutoFlow", "Unable to open this link right now.");
+    Alert.alert("AutoFlow", t("marketplaceLinkOpenFailed"));
   });
 }
 
@@ -589,7 +593,7 @@ function ContactBar({
           accessibilityRole="button"
           accessibilityLabel={t("marketplaceCall")}
           style={({ pressed }) => [styles.contactButton, styles.contactButtonCall, pressed && styles.pressed]}
-          onPress={() => openExternalUrl(telUrl)}
+          onPress={() => openExternalUrl(telUrl, t)}
         >
           <Icon color="onPrimary" name="call" size={18} />
           <Text style={styles.contactButtonText}>{t("marketplaceCall")}</Text>
@@ -600,7 +604,7 @@ function ContactBar({
           accessibilityRole="button"
           accessibilityLabel={t("marketplaceWhatsapp")}
           style={({ pressed }) => [styles.contactButton, styles.contactButtonWhatsapp, pressed && styles.pressed]}
-          onPress={() => openExternalUrl(whatsappUrl)}
+          onPress={() => openExternalUrl(whatsappUrl, t)}
         >
           <Icon color="onPrimary" name="whatsapp" size={18} />
           <Text style={styles.contactButtonText}>{t("marketplaceWhatsapp")}</Text>
@@ -803,7 +807,7 @@ function VehicleDetailModal({
               <Pressable
                 accessibilityRole="button"
                 style={({ pressed }) => [styles.inlineButton, pressed && styles.pressed]}
-                onPress={() => openExternalUrl(listingUrl)}
+                onPress={() => openExternalUrl(listingUrl, t)}
               >
                 <Text style={styles.inlineButtonText}>{t("marketplaceOpenListing")}</Text>
               </Pressable>
@@ -937,7 +941,7 @@ function VehicleCard({
               <Pressable
                 accessibilityRole="button"
                 style={({ pressed }) => [styles.inlineButton, pressed && styles.pressed]}
-                onPress={() => openExternalUrl(listingUrl)}
+                onPress={() => openExternalUrl(listingUrl, t)}
               >
                 <Text style={styles.inlineButtonText}>{t("marketplaceOpenListing")}</Text>
               </Pressable>
@@ -1435,7 +1439,7 @@ function DealerCard({
         {dealer.siteUrl ? (
           <Pressable
             style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
-            onPress={() => openExternalUrl(dealer.siteUrl)}
+            onPress={() => openExternalUrl(dealer.siteUrl, t)}
           >
             <Text style={styles.primaryButtonText}>{t("marketplaceOpenListing")}</Text>
           </Pressable>
@@ -1443,7 +1447,7 @@ function DealerCard({
         {dealer.phone ? (
           <Pressable
             style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
-            onPress={() => openExternalUrl(`tel:${dealer.phone}`)}
+            onPress={() => openExternalUrl(`tel:${dealer.phone}`, t)}
           >
             <Text style={styles.secondaryButtonText}>{t("marketplaceCallDealer")}</Text>
           </Pressable>

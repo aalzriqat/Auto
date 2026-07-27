@@ -111,6 +111,14 @@ function validateSellCarFields(
       .replace("{max}", String(maxYear));
   }
 
+  // Checked before the numeric guard below: an empty field converts to 0, which
+  // is a legitimate mileage for a brand-new car, so `< 0` lets it through and
+  // the listing publishes as "0 km" with no warning. Price avoids this only
+  // because its guard is `<= 0`.
+  if (!trimOrUndefined(fields.mileage)) {
+    return t("sellCarMileageRequired");
+  }
+
   const mileage = Number(fields.mileage);
   if (!Number.isFinite(mileage) || mileage < 0) {
     return t("sellCarMileageInvalid");
