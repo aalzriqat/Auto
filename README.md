@@ -112,4 +112,3 @@ The web app deploys to Vercel; the Convex backend deploys via the Convex CLI; th
 ## License
 
 Proprietary. All rights reserved.
-// protection probe
