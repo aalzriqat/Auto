@@ -174,9 +174,10 @@ describe("Tenancy Utilities", () => {
         impersonationGrantId: "grant1",
       };
       const mockRole = { _id: "r1", name: "SALES", permissions: [] };
+      const liveGrant = { _id: "grant1", expiresAt: Date.now() + 60_000 };
 
       const ctx = createMockCtx(mockIdentity, {
-        get: { "org1": { _id: "org1" }, "r1": mockRole },
+        get: { "org1": { _id: "org1" }, "r1": mockRole, "grant1": liveGrant },
       }, { asMutationCtx: true });
 
       ctx.db.query = vi.fn()
@@ -188,6 +189,32 @@ describe("Tenancy Utilities", () => {
       expect(ctx.db.insert).toHaveBeenCalledWith(
         "adminAuditLog",
         expect.objectContaining({ action: "impersonated-write:tenant-write" })
+      );
+    });
+
+    it.each([
+      ["expired", { _id: "grant1", expiresAt: Date.now() - 1 }],
+      ["revoked", { _id: "grant1", expiresAt: Date.now() + 60_000, revokedAt: Date.now() - 1 }],
+      ["deleted", undefined],
+    ])("rejects an impersonated session whose grant is %s", async (_label, grant) => {
+      // Expiry used to rest entirely on a fire-and-forget scheduled cleanup
+      // with no retry, so a missed run left cross-tenant access live forever.
+      // The grant itself is the authority now.
+      const mockMembership = {
+        _id: "m1", orgId: "org1", userId: "u1", roleId: "r1", impersonationGrantId: "grant1",
+      };
+      const mockRole = { _id: "r1", name: "SALES", permissions: [] };
+
+      const ctx = createMockCtx(mockIdentity, {
+        get: { "org1": { _id: "org1" }, "r1": mockRole, ...(grant ? { "grant1": grant } : {}) },
+      }, { asMutationCtx: true });
+
+      ctx.db.query = vi.fn()
+        .mockReturnValueOnce({ withIndex: () => ({ unique: () => Promise.resolve(mockUser) }) })
+        .mockReturnValueOnce({ withIndex: () => ({ unique: () => Promise.resolve(mockMembership) }) });
+
+      await expect(requireTenantAuth(ctx, mockOrgId as any)).rejects.toThrow(
+        /impersonation session has ended/i
       );
     });
   });

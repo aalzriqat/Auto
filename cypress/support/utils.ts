@@ -280,12 +280,29 @@ export function expectVisibleTableCell(
   return findLoadedCell();
 }
 
-export function hideDashboardFeedbackWidget(): Cypress.Chainable<JQuery<HTMLBodyElement>> {
-  return cy.get("body").then(($body) => {
-    const feedbackTrigger = $body.find('button[aria-label="Send Feedback"]');
-    if (feedbackTrigger.length > 0) {
-      feedbackTrigger.css("display", "none");
-    }
+/**
+ * Keeps the floating "Send Feedback" button from covering a control the spec is
+ * about to click. It is `fixed bottom-[5.5rem] end-5 z-40`, so on a short
+ * viewport it sits directly over the bottom-right action of a wizard step, and
+ * Cypress refuses to click an element another element covers.
+ *
+ * This injects a stylesheet rule rather than setting an inline style on the
+ * node. An inline style is wiped the next time React re-renders the widget, and
+ * cy.click() retries for 15 seconds — easily long enough for a re-render to
+ * restore the button and re-cover the target, which is exactly how the sales
+ * spec failed intermittently on main as well as on branches. A rule in a style
+ * tag is not owned by React, so it holds for the rest of the page's life.
+ *
+ * This affects the E2E run only; the widget is untouched in the product.
+ */
+const HIDE_FEEDBACK_STYLE_ID = "e2e-hide-feedback-widget";
+
+export function hideDashboardFeedbackWidget(): Cypress.Chainable<JQuery<HTMLHeadElement>> {
+  return cy.get("head").then(($head) => {
+    if ($head.find(`#${HIDE_FEEDBACK_STYLE_ID}`).length > 0) return;
+    $head.append(
+      `<style id="${HIDE_FEEDBACK_STYLE_ID}">button[aria-label="Send Feedback"]{display:none !important;}</style>`,
+    );
   });
 }
 

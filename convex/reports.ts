@@ -20,6 +20,27 @@ import {
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 
+/** Longest span an interactive report may request. */
+const MAX_REPORT_RANGE_MS = 366 * 24 * 60 * 60 * 1000;
+
+/**
+ * Interactive reports collect their whole result set, so an unbounded or
+ * inverted range is both a correctness bug (silently empty results) and a cost
+ * one. Reject rather than clamp: a caller asking for ten years should be told,
+ * not quietly handed one.
+ */
+function assertReportRange(startDate: number, endDate: number): void {
+  if (!Number.isFinite(startDate) || !Number.isFinite(endDate)) {
+    throw new ConvexError("Report start and end dates must be valid timestamps.");
+  }
+  if (startDate > endDate) {
+    throw new ConvexError("Report start date must not be after the end date.");
+  }
+  if (endDate - startDate > MAX_REPORT_RANGE_MS) {
+    throw new ConvexError("Interactive reports are limited to 366 days. Narrow the range.");
+  }
+}
+
 export const getSalesAndProfitReport = query({
   args: {
     orgId: v.id("organizations"),
@@ -34,16 +55,22 @@ export const getSalesAndProfitReport = query({
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
     }
 
-    // Use index range — avoids collecting ALL org sales.
-    // Only COMPLETED non-deleted sales are counted.
+    assertReportRange(args.startDate, args.endDate);
+
+    // Both bounds belong in the index range. With only `gte(startDate)` indexed
+    // and `lte(endDate)` in .filter(), the scan was proportional to everything
+    // sold AFTER startDate — a one-day report on an old date walked the org's
+    // entire subsequent sales history before discarding almost all of it.
     const salesInDateRange = await ctx.db
       .query("sales")
       .withIndex("by_org_saleDate", (q) =>
-        q.eq("orgId", args.orgId).gte("saleDate", args.startDate)
+        q
+          .eq("orgId", args.orgId)
+          .gte("saleDate", args.startDate)
+          .lte("saleDate", args.endDate)
       )
       .filter((q) =>
         q.and(
-          q.lte(q.field("saleDate"), args.endDate),
           q.eq(q.field("status"), "COMPLETED"),
           q.neq(q.field("isDeleted"), true)
         )
@@ -172,16 +199,38 @@ export const getInventoryReport = query({
     let totalValue = 0;
 
     const enrichedInventory = activeInventory.map((vehicle) => {
-      const expenses = expensesByVehicle.get(vehicle._id) ?? [];
+      // Deleted and reversed expenses are not part of a vehicle's cost. The
+      // previous sum took every row, so a mistake that was deleted or reversed
+      // still inflated reported inventory investment.
+      const expenses = (expensesByVehicle.get(vehicle._id) ?? []).filter(
+        (exp) => exp.isDeleted !== true && exp.reversedAt == null
+      );
       const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
-      const basePrice = vehicle.landedCostTotal ?? vehicle.purchasePrice ?? vehicle.sellingPrice ?? 0;
-      const totalInvestment = basePrice + totalExpenses;
+
+      // Mirrors computeVehicleCapitalizedCost (utils/vehicleCost.ts), which is
+      // the authoritative basis the GL and commissions use — kept inline rather
+      // than called so this report doesn't issue a second expense query per
+      // vehicle on top of the one above.
+      //
+      // This was `landedCostTotal ?? purchasePrice ?? sellingPrice ?? 0`. That
+      // is a FALLBACK, but landedCostTotal holds only the landed-cost items
+      // (shipping, customs) and is additive to purchasePrice — so any vehicle
+      // with landed costs recorded had its entire purchase price dropped from
+      // the org's reported inventory value. A 20,000 car with 500 of shipping
+      // reported 500, and recording more landed costs made it worse.
+      const capitalizedExpenses = expenses
+        .filter((exp) => exp.accountingTreatment === "CAPITALIZED_INVENTORY")
+        .reduce((sum, exp) => sum + (exp.capitalizedAmount ?? 0), 0);
+      const totalInvestment =
+        vehicle.sourceType === "SOURCED"
+          ? (vehicle.sourceCost ?? 0)
+          : (vehicle.purchasePrice ?? 0) + (vehicle.landedCostTotal ?? 0) + capitalizedExpenses;
 
       totalValue += totalInvestment;
 
       return {
         ...vehicle,
-        purchasePrice: basePrice,
+        purchasePrice: vehicle.purchasePrice ?? 0,
         totalExpenses,
         totalInvestment,
       };
@@ -528,16 +577,22 @@ export const getSalespersonPerformance = query({
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
     }
 
-    // Use index range — avoids collecting ALL org sales.
-    // Only COMPLETED non-deleted sales are counted.
+    assertReportRange(args.startDate, args.endDate);
+
+    // Both bounds belong in the index range. With only `gte(startDate)` indexed
+    // and `lte(endDate)` in .filter(), the scan was proportional to everything
+    // sold AFTER startDate — a one-day report on an old date walked the org's
+    // entire subsequent sales history before discarding almost all of it.
     const salesInDateRange = await ctx.db
       .query("sales")
       .withIndex("by_org_saleDate", (q) =>
-        q.eq("orgId", args.orgId).gte("saleDate", args.startDate)
+        q
+          .eq("orgId", args.orgId)
+          .gte("saleDate", args.startDate)
+          .lte("saleDate", args.endDate)
       )
       .filter((q) =>
         q.and(
-          q.lte(q.field("saleDate"), args.endDate),
           q.eq(q.field("status"), "COMPLETED"),
           q.neq(q.field("isDeleted"), true)
         )

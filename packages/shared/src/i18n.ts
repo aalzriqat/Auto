@@ -48,7 +48,7 @@ const mobileFoundationStringEntries = [
   ["homeCommandSurfaceBody", "Search, pick a workspace, then jump straight into sales, stock, leads, or messages.", "ابحث، اختر مساحة، ثم انتقل مباشرة إلى المبيعات أو المخزون أو الرسائل."],
   ["homeResultsCount", "results", "نتائج"],
   ["homeSearchWorkspaces", "Search workspaces", "البحث في مساحات العمل"],
-  ["homeSearchPlaceholder", "Search showroom or role...", "ابحث باسم المعرض أو الدور..."],
+  ["workspacePickerSearchPlaceholder", "Search showroom or role...", "ابحث باسم المعرض أو الدور..."],
   ["homeWorkspacesKicker", "Workspaces", "المساحات"],
   ["homeChoose", "Choose", "اختيار"],
   ["homeNoMatchingWorkspacesTitle", "No matching workspaces", "لا توجد نتائج"],
@@ -125,7 +125,6 @@ const mobileFoundationStringEntries = [
   ["retry", "Retry", "إعادة المحاولة"],
   ["close", "Close", "إغلاق"],
   ["account", "Account", "الحساب"],
-  ["signOut", "Sign out", "تسجيل الخروج"],
   ["signOutConfirmBody", "You'll need to sign in again to access your workspaces.", "رح تحتاج تسجّل دخول مرة ثانية للوصول لمساحات عملك."],
   ["cancel", "Cancel", "إلغاء"],
   ["team", "Team", "الفريق"],
@@ -235,7 +234,6 @@ const mobileFoundationStringEntries = [
   ["marketplaceCarsEmpty", "No vehicles match these filters yet.", "لا توجد سيارات مطابقة لهذه الفلاتر."],
   ["marketplaceDealersEmpty", "No dealers are listed yet.", "لا توجد معارض مدرجة بعد."],
   ["marketplaceLoadMore", "Load more", "تحميل المزيد"],
-  ["marketplaceViewDetails", "Details", "التفاصيل"],
   ["marketplaceOpenListing", "Open listing", "فتح الإعلان"],
   ["marketplaceCallDealer", "Call dealer", "اتصال بالمعرض"],
   ["marketplaceCall", "Call", "اتصال"],
@@ -620,6 +618,19 @@ const mobileFoundationStringEntries = [
   ["signUpError", "We couldn't create your account. Please try again.", "تعذّر إنشاء الحساب. حاول مرة أخرى."],
   ["signUpNeedsMoreSteps", "This account needs extra setup. Please finish signing up on the AutoFlow website.", "يحتاج هذا الحساب إلى خطوات إضافية. أكمل التسجيل من موقع أوتوفلو."],
 ] as const satisfies ReadonlyArray<readonly [string, string, string]>;
+
+/**
+ * Exported solely so a test can assert there are no duplicate keys.
+ *
+ * These entries are an array of tuples, not an object literal, so TypeScript
+ * cannot flag a repeated key — `Object.fromEntries` below just lets the last
+ * one win, silently. That already shipped three times: `homeSearchPlaceholder`
+ * was defined for both the workspace picker and the buyer home screen, so
+ * dealer staff searching showrooms saw the marketplace's "Search by make,
+ * model or type…". Keep `rejects duplicate string keys` in shared.test.ts.
+ */
+export const mobileFoundationStringEntriesForTest: readonly (readonly [string, string, string])[] =
+  mobileFoundationStringEntries;
 
 type MobileFoundationStringEntry = (typeof mobileFoundationStringEntries)[number];
 

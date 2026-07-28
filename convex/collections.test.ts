@@ -340,7 +340,7 @@ describe("Collections", () => {
 
   test("approved_refund_posts_outbound_payment_and_reopens_balance", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       orgId,
@@ -424,7 +424,7 @@ describe("Collections", () => {
 
   test("approved_cancel_marks_canonical_receivable_cancelled", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       orgId,
@@ -475,7 +475,7 @@ describe("Collections", () => {
 
   test("approved_cancel_reverses_a_posted_receivable_created_event", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     // Unlike the other tests in this file, this one needs an actual posted
     // GL entry (not just an outbox entry) to verify the reversal — so it
@@ -618,7 +618,7 @@ describe("Collections", () => {
 
   test("bank_refund_posts_gl_entry_to_bank_account_not_cash_on_hand", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       orgId,
@@ -680,7 +680,7 @@ describe("Collections", () => {
 
   test("cancel_of_partially_paid_receivable_is_blocked", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       orgId,
@@ -716,7 +716,7 @@ describe("Collections", () => {
 
   test("card_refund_routes_to_bank_account_not_cash_on_hand", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       orgId,
@@ -791,7 +791,7 @@ describe("Collections", () => {
 
   test("cheque_refund_approval_posts_cheque_method_to_event_outbox", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       orgId,
@@ -846,7 +846,7 @@ describe("Collections", () => {
 
   test("cancel_of_receivable_with_held_cheque_is_blocked", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       orgId,
@@ -884,7 +884,7 @@ describe("Collections", () => {
 
   test("approved_reschedule_moves_overdue_receivable_to_new_due_date", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
     const tomorrow = Date.now() + 24 * 60 * 60 * 1000;
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
@@ -2116,5 +2116,91 @@ describe("Collections", () => {
       expect(reminder?.sentAt).toBeTypeOf("number");
     });
     await t.finishAllScheduledFunctions(() => undefined);
+  });
+});
+
+describe("refund eligibility", () => {
+  test("a cancelled, never-paid receivable cannot be refunded", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
+
+    // Nothing was ever collected against this receivable.
+    const receivableId = await insertReceivable(t, {
+      orgId,
+      customerId,
+      amount: 10_000,
+      status: "OPEN",
+      createdBy: userId,
+    });
+
+    // Writing it off zeroes outstandingAmount and marks it CANCELLED.
+    const cancelRequestId = await asFinance.mutation(api.collections.requestApproval, {
+      orgId,
+      receivableId,
+      requestType: "CANCEL_RECEIVABLE",
+      reason: "Customer defaulted; writing off",
+    });
+    await asApprover.mutation(api.collections.respondToApproval, {
+      orgId,
+      requestId: cancelRequestId,
+      status: "APPROVED",
+    });
+
+    const cancelled = await t.run((ctx) => ctx.db.get(receivableId));
+    expect(cancelled?.status).toBe("CANCELLED");
+    expect(cancelled?.outstandingAmount).toBe(0);
+
+    // paidAmount is derived as originalAmount - outstandingAmount, so a
+    // cancelled receivable looks fully paid. Refunding it would disburse real
+    // cash and post a GL refund for money that was never collected.
+    await expect(
+      asFinance.mutation(api.collections.requestApproval, {
+        orgId,
+        receivableId,
+        requestType: "REFUND",
+        requestedAmount: 10_000,
+        disbursementMethod: "CASH",
+        reason: "Refund",
+      })
+    ).rejects.toThrow(/cancel/i);
+  });
+
+
+  test("a receivable cancelled while a refund request is pending cannot be approved", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
+
+    // 4,000 of 10,000 genuinely collected, so the refund request is valid now.
+    const receivableId = await insertReceivable(t, {
+      orgId,
+      customerId,
+      amount: 10_000,
+      outstandingAmount: 6_000,
+      status: "PARTIALLY_PAID",
+      createdBy: userId,
+    });
+
+    const refundRequestId = await asFinance.mutation(api.collections.requestApproval, {
+      orgId,
+      receivableId,
+      requestType: "REFUND",
+      requestedAmount: 4_000,
+      disbursementMethod: "CASH",
+      reason: "Customer returned the vehicle",
+    });
+
+    // The receivable is written off while the request sits PENDING, which
+    // zeroes outstandingAmount and makes paidAmount read as the full 10,000.
+    await t.run((ctx) =>
+      ctx.db.patch(receivableId, { status: "CANCELLED", outstandingAmount: 0 })
+    );
+
+    await expect(
+      asApprover.mutation(api.collections.respondToApproval, {
+        orgId,
+        requestId: refundRequestId,
+        status: "APPROVED",
+      })
+    ).rejects.toThrow(/cancelled/i);
   });
 });

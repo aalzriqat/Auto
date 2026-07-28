@@ -610,3 +610,75 @@ describe("Phase 9 — commission payment GL posting", () => {
     });
   });
 });
+
+// ─── Payment-link settlement must never discard a confirmed payment ──────────
+
+describe("payment intent settlement clamping", () => {
+  test("settles even when the receivable was partly paid through another channel", async () => {
+    const { t, orgId, asUser, customerId, userId } = await seedDealer("clamp");
+
+    // A 1,000.000 JOD receivable, and a payment link raised for the full amount.
+    const receivableDocumentId = await t.run(async (ctx) =>
+      ctx.db.insert("receivableDocuments", {
+        orgId,
+        documentType: "INVOICE",
+        documentNumber: "REC-CLAMP-1",
+        payerType: "CUSTOMER",
+        customerId,
+        sourceType: "manual",
+        sourceId: "clamp-test",
+        originalAmountMinor: 1_000_000,
+        currency: "JOD",
+        scale: 3,
+        issueDate: Date.now(),
+        dueDate: Date.now() + 86_400_000,
+        status: "OPEN",
+        createdAt: Date.now(),
+        createdBy: userId,
+      })
+    );
+
+    const intentId = await asUser.mutation(api.paymentIntents.create, {
+      orgId,
+      customerId,
+      amountMinor: 1_000_000,
+      currency: "JOD",
+      provider: "tap",
+      externalId: "tap_clamp_1",
+      receivableDocumentId,
+    });
+
+    // The customer pays 600.000 in cash before the link settles, leaving only
+    // 400.000 outstanding — less than the intent's amount.
+    const cashPaymentId = await t.run(async (ctx) => {
+      const { createCanonicalPayment, allocatePaymentToReceivable } = await import("./subledger");
+      const paymentId = await createCanonicalPayment(ctx as any, {
+        orgId, direction: "IN", payerType: "CUSTOMER", customerId,
+        method: "CASH", amountMinor: 600_000, currency: "JOD",
+        idempotencyKey: "clamp_cash_1", actorId: userId, status: "SETTLED",
+      });
+      await allocatePaymentToReceivable(ctx as any, {
+        orgId, paymentId, receivableDocumentId, amountMinor: 600_000, actorId: userId,
+      });
+      return paymentId;
+    });
+    expect(cashPaymentId).toBeTruthy();
+
+    // The provider now confirms the link. This must not throw: a throw rolls
+    // back the whole mutation, so a payment the provider has already taken
+    // would be lost, and its retries would fail identically.
+    await t.mutation(internal.paymentIntents.settleByExternalId, {
+      provider: "tap",
+      externalId: "tap_clamp_1",
+      amountMinor: 1_000_000,
+      currency: "JOD",
+      providerSignatureVerifiedAt: Date.now(),
+    });
+
+    const intent = await t.run((ctx) => ctx.db.get(intentId));
+    expect(intent?.status).toBe("SETTLED");
+    // The canonical payment is recorded in full; only the allocation is clamped,
+    // so the extra 600.000 remains as an unapplied balance on the payment.
+    expect(intent?.canonicalPaymentId).toBeTruthy();
+  });
+});

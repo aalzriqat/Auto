@@ -213,7 +213,7 @@ function AuthenticatedHome() {
             accessibilityLabel={t("homeSearchWorkspaces")}
             autoCorrect={false}
             onChangeText={setWorkspaceQuery}
-            placeholder={t("homeSearchPlaceholder")}
+            placeholder={t("workspacePickerSearchPlaceholder")}
             placeholderTextColor={theme.colors.subtleText}
             style={[styles.searchInput, type.body, { textAlign: textDirection === "rtl" ? "right" : "left" }]}
             value={workspaceQuery}

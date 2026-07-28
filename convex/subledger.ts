@@ -8,7 +8,7 @@ import { requireFeature } from "./subscriptions";
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
-async function getReceivableOutstandingMinor(
+export async function getReceivableOutstandingMinor(
   ctx: QueryCtx | MutationCtx,
   receivableId: Id<"receivableDocuments">
 ): Promise<number> {

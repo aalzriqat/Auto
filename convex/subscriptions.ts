@@ -430,7 +430,8 @@ export const requestUpgrade = action({
 
     const [user, org] = await Promise.all([
       ctx.runQuery(internal.subscriptions._getCallerUser, { clerkId: identity.subject }),
-      ctx.runQuery(internal.subscriptions._getOrg, { orgId: args.orgId }),
+      // Membership-checked: throws unless the caller belongs to args.orgId.
+      ctx.runQuery(internal.subscriptions._requireMemberOrg, { orgId: args.orgId }),
     ]);
 
     if (!org) throw new ConvexError("Organization not found");
@@ -463,6 +464,24 @@ export const _getCallerUser = internalQuery({
 export const _getOrg = internalQuery({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => ctx.db.get(args.orgId),
+});
+
+/**
+ * Membership-checked counterpart to `_getOrg`, for action call paths.
+ *
+ * `requestUpgrade` is an action, so it has no `ctx.db` and cannot call
+ * `requireTenantAuth` itself. Convex propagates the caller's identity through
+ * `ctx.runQuery`, so the check belongs in an internalQuery — the same shape
+ * `facebookEngagement.requireSendDmAccess` uses. Without this, any signed-in
+ * user could pass any orgId and read that org's name and plan (and have an
+ * upgrade email sent on its behalf).
+ */
+export const _requireMemberOrg = internalQuery({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId);
+    return await ctx.db.get(args.orgId);
+  },
 });
 
 export const adminUpdateSubscription = mutation({

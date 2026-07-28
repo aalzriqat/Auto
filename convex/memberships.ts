@@ -37,6 +37,13 @@ async function countOwners(ctx: MutationCtx, orgId: Id<"organizations">): Promis
   let ownerCount = 0;
   for (const membership of memberships) {
     if (membership.offboardingStatus) continue;
+    // An impersonation grant is a super admin's temporary membership that
+    // COPIES the target's roleId (adminImpersonation.ts), so impersonating the
+    // sole owner made this count 2 and quietly disarmed every last-owner guard
+    // below — the real owner could then leave, and the org was left with none
+    // once the temporary membership expired. subscriptions.ts:320 already
+    // excludes both for exactly this reason; this is the same rule.
+    if (membership.impersonationGrantId) continue;
     const role = await ctx.db.get(membership.roleId);
     if (isSystemOwnerRole(role)) ownerCount++;
   }
@@ -335,10 +342,12 @@ export const add = mutation({
 
     const email = args.userEmail.toLowerCase().trim();
 
-    // Find the target user by email
+    // Find the target user by email. `users` is the one table shared by every
+    // tenant, so a .filter() here read every user in the deployment on every
+    // invite; by_email turns that into an index lookup.
     const targetUser = await ctx.db
       .query("users")
-      .filter((q) => q.eq(q.field("email"), email))
+      .withIndex("by_email", (q) => q.eq("email", email))
       .first();
 
     if (!targetUser) {
@@ -811,11 +820,44 @@ export const drainDueMembershipOffboardingJobs = internalAction({
       { now: Date.now(), limit: MEMBERSHIP_OFFBOARDING_DRAIN_LIMIT }
     );
 
+    // Isolate each job. This ran unguarded, so one job that threw aborted the
+    // whole drain — and because the failing job stays due, every subsequent
+    // 5-minute tick re-fetched it first and aborted again. A single poison job
+    // therefore stranded every later-queued removal indefinitely, leaving
+    // offboarded people with live access and nothing surfacing it.
+    // Counted from the job's reported outcome, not from "the call didn't throw".
+    // processMembershipOffboardingJob resolves normally with {status: "RETRYING"}
+    // for every expected failure — no CLERK_SECRET_KEY, no Clerk id, a non-2xx
+    // response, a fetch exception — so treating any non-throwing call as a
+    // success reported a completely stalled queue as "succeeded: N, failed: 0"
+    // and hid the stall from everything consuming this result.
+    let succeeded = 0;
+    let retrying = 0;
+    const failures: Array<{ jobId: Id<"membershipOffboardingJobs">; error: string }> = [];
     for (const job of dueJobs) {
-      await ctx.runAction(internal.memberships.processMembershipOffboardingJob, { jobId: job._id });
+      try {
+        const result = await ctx.runAction(internal.memberships.processMembershipOffboardingJob, {
+          jobId: job._id,
+        });
+        // null means the job was already gone or already SUCCEEDED — nothing to
+        // do, and not a fresh completion either way.
+        if (result?.status === "RETRYING") {
+          retrying += 1;
+        } else {
+          succeeded += 1;
+        }
+      } catch (error) {
+        // processMembershipOffboardingJob owns its own retry/backoff bookkeeping;
+        // this only stops one bad job from blocking the queue behind it.
+        console.error("[memberships] offboarding job failed", job._id, error);
+        failures.push({
+          jobId: job._id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
-    return { processed: dueJobs.length };
+    return { processed: dueJobs.length, succeeded, retrying, failed: failures.length, failures };
   },
 });
 
@@ -870,10 +912,12 @@ export const prepareDirectAccount = internalMutation({
 
     const email = normalizeEmail(args.email);
 
-    // Find the target user by email
+    // Find the target user by email. `users` is the one table shared by every
+    // tenant, so a .filter() here read every user in the deployment on every
+    // invite; by_email turns that into an index lookup.
     const targetUser = await ctx.db
       .query("users")
-      .filter((q) => q.eq(q.field("email"), email))
+      .withIndex("by_email", (q) => q.eq("email", email))
       .first();
 
     if (targetUser) {

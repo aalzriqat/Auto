@@ -5,6 +5,32 @@ import {
   nativeRoutes,
   normalizeLocale,
 } from ".";
+import { mobileFoundationStringEntriesForTest } from "./i18n";
+
+describe("i18n string table", () => {
+  test("rejects duplicate string keys", () => {
+    const seen = new Map<string, number>();
+    const duplicates: string[] = [];
+    mobileFoundationStringEntriesForTest.forEach(([key], index) => {
+      if (seen.has(key)) {
+        duplicates.push(`"${key}" (index ${seen.get(key)} overridden by index ${index})`);
+      } else {
+        seen.set(key, index);
+      }
+    });
+    // Object.fromEntries lets the LAST entry win, so a duplicate silently
+    // replaces an earlier string with an unrelated one. TypeScript can't catch
+    // it in an array of tuples — this test is the only guard.
+    expect(duplicates).toEqual([]);
+  });
+
+  test("every key has a non-empty English and Arabic string", () => {
+    const bad = mobileFoundationStringEntriesForTest
+      .filter(([, en, ar]) => !en?.trim() || !ar?.trim())
+      .map(([key]) => key);
+    expect(bad).toEqual([]);
+  });
+});
 
 describe("shared helpers", () => {
   test("normalizes supported locales", () => {

@@ -14,7 +14,26 @@ const http = httpRouter();
 const WEBHOOK_RAW_PAYLOAD_MAX_CHARS = 700_000;
 const WEBHOOK_PAYLOAD_PREVIEW_CHARS = 16_384;
 
-function clientIp(request: Request): string {
+/**
+ * The caller's IP, for rate-limit keying.
+ *
+ * Prefers Convex's own request metadata, which is derived from the connection
+ * rather than read off a header. `x-forwarded-for` is supplied by the client,
+ * so keying a limit on it alone lets an attacker rotate the header and get a
+ * fresh bucket per request — the limit stops being a limit.
+ *
+ * The header remains a fallback for two real cases: convex-test does not
+ * implement `ctx.meta` at all, and `ip` is null whenever the execution was not
+ * triggered by an HTTP request. Falling back is strictly better than throwing,
+ * and "unknown" still yields one shared bucket rather than no limit.
+ */
+async function clientIp(ctx: ActionCtx, request: Request): Promise<string> {
+  try {
+    const metadata = await ctx.meta?.getRequestMetadata();
+    if (metadata?.ip) return metadata.ip;
+  } catch {
+    // Runtime without request metadata (e.g. convex-test) — use the header.
+  }
   return (
     request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown"
   );
@@ -406,6 +425,16 @@ async function processMetaMessagingWebhook<T extends { messageId?: string }>(
     source: VerifiedWebhookSource;
     parseMessage: (message: Record<string, unknown>, contacts: Record<string, unknown>[]) => T;
     dispatch: (message: T) => Promise<void>;
+    /**
+     * Optional per-change ownership check, run AFTER the signature is verified
+     * and BEFORE anything is dispatched. Returning false aborts the whole
+     * delivery with 403.
+     *
+     * Needed wherever the target tenant comes from the request URL rather than
+     * from the signed payload: the signature only proves Meta sent the body, not
+     * that the body belongs to the org named in the query string.
+     */
+    assertChangeAllowed?: (change: Record<string, unknown> | undefined) => Promise<boolean>;
   },
 ): Promise<Response> {
   const rawBody = await args.request.text();
@@ -427,6 +456,9 @@ async function processMetaMessagingWebhook<T extends { messageId?: string }>(
   for (const entry of recordArray(body?.entry)) {
     for (const changeRecord of recordArray(entry.changes)) {
       const change = optionalRecord(changeRecord.value);
+      if (args.assertChangeAllowed && !(await args.assertChangeAllowed(change))) {
+        return new Response("Forbidden", { status: 403 });
+      }
       const contacts = recordArray(change?.contacts);
       statusUpdateCount += recordArray(change?.statuses).length;
 
@@ -514,7 +546,7 @@ http.route({
   path: "/clerk-webhook",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    const rateLimited = await enforceWebhookRateLimit(ctx, clientIp(request));
+    const rateLimited = await enforceWebhookRateLimit(ctx, await clientIp(ctx, request));
     if (rateLimited) return rateLimited;
 
     let webhookSecret: string;
@@ -627,7 +659,7 @@ http.route({
   path: "/resend-inbound",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    const rateLimited = await enforceWebhookRateLimit(ctx, clientIp(request));
+    const rateLimited = await enforceWebhookRateLimit(ctx, await clientIp(ctx, request));
     if (rateLimited) return rateLimited;
 
     let webhookSecret: string;
@@ -750,7 +782,11 @@ http.route({
       return new Response("Bad request", { status: 400 });
     }
 
-    const rateLimited = await enforceWebhookRateLimit(ctx, orgId);
+    // Keyed on the caller, not on the orgId in the query string. `orgId` is
+    // unauthenticated at this point, so keying on it let anyone exhaust a
+    // chosen tenant's webhook quota and silence their WhatsApp lead channel.
+    // Same pattern the Clerk and Resend webhooks above already use.
+    const rateLimited = await enforceWebhookRateLimit(ctx, await clientIp(ctx, request));
     if (rateLimited) return rateLimited;
 
     const settings = await ctx.runQuery(internal.whatsapp.getSettingsByOrg, {
@@ -798,7 +834,10 @@ http.route({
     const orgId = url.searchParams.get("orgId") as Id<"organizations"> | null;
     if (!orgId) return new Response("Bad request", { status: 400 });
 
-    const rateLimited = await enforceWebhookRateLimit(ctx, orgId);
+    // Keyed on the caller, not the unauthenticated `orgId` — see the GET
+    // handler above. Signature verification (inside processMetaMessagingWebhook)
+    // is the real gate; this only bounds unverified work.
+    const rateLimited = await enforceWebhookRateLimit(ctx, await clientIp(ctx, request));
     if (rateLimited) return rateLimited;
 
     let appSecret: string;
@@ -818,6 +857,20 @@ http.route({
       appSecret,
       source: "whatsapp",
       parseMessage: parseWhatsAppMessage,
+      // WHATSAPP_APP_SECRET is a single app-level secret shared by every org, so
+      // a valid signature proves only that Meta sent this body — it says nothing
+      // about which tenant it belongs to, while `orgId` comes straight from an
+      // unauthenticated query parameter. Without binding the two, a delivery for
+      // one dealer's number could be pointed at another dealer's orgId and
+      // inject customers and leads into their CRM. Bind the signed payload's
+      // phone_number_id to the org's own configured number. (The GET handshake
+      // above already binds, via the per-org whatsappWebhookSecret.)
+      assertChangeAllowed: async (change) => {
+        const phoneNumberId = optionalMetaId(optionalRecord(change?.metadata)?.phone_number_id);
+        if (!phoneNumberId) return false;
+        const settings = await ctx.runQuery(internal.whatsapp.getSettingsByOrg, { orgId });
+        return settings?.whatsappPhoneNumberId === phoneNumberId;
+      },
       dispatch: async (message) => {
         if (!message.senderPhone) throw new Error("Message without sender phone");
         await ctx.runMutation(internal.whatsapp.handleIncomingMessage, {
@@ -1422,10 +1475,12 @@ http.route({
         summary: "Token exchange failed",
         error: message,
       });
-      return Response.redirect(
-        `${settingsUrl}?connected=facebook&error=1&errorMessage=${encodeURIComponent(message)}`,
-        302,
-      );
+      // The detail is already captured server-side by logWebhookEvent above.
+      // Reflecting it into the redirect put a raw internal exception — possibly
+      // naming Meta API internals — into the user's URL bar, browser history and
+      // any referrer logging. The Instagram sibling redirects with a generic
+      // flag; match it.
+      return Response.redirect(`${settingsUrl}?connected=facebook&error=1`, 302);
     }
 
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
@@ -1824,6 +1879,12 @@ http.route({
       const url = new URL(request.url);
       const provider = (url.searchParams.get("provider") ?? "").toLowerCase();
 
+      // Every other webhook route in this file bounds unverified work; this one
+      // settles money and had no limit at all, so an unauthenticated caller
+      // could force unbounded signature-verification work against it.
+      const rateLimited = await enforceWebhookRateLimit(ctx, await clientIp(ctx, request));
+      if (rateLimited) return rateLimited;
+
       const rawBody = await request.text();
       const verification = await verifyPaymentWebhook(
         provider,
@@ -2033,7 +2094,7 @@ http.route({
       });
 
       if (isNewVisitor) {
-        const ip = clientIp(request);
+        const ip = await clientIp(ctx, request);
         if (ip !== "unknown") {
           await ctx.scheduler.runAfter(0, internal.siteVisitors.enrichVisitorGeo, { siteVisitorId, ip });
         }

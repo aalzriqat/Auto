@@ -63,9 +63,14 @@ export const list = query({
 
     const page = await Promise.all(
       pageResult.page.map(async (sale) => {
-        const vehicle = await ctx.db.get(sale.vehicleId);
-        const customer = await ctx.db.get(sale.customerId);
-        const salesperson = await ctx.db.get(sale.salespersonId);
+        // Fetch the three hydration reads together — they are independent, and
+        // awaiting them in sequence made each row cost three round trips
+        // instead of one.
+        const [vehicle, customer, salesperson] = await Promise.all([
+          ctx.db.get(sale.vehicleId),
+          ctx.db.get(sale.customerId),
+          ctx.db.get(sale.salespersonId),
+        ]);
 
         return {
           ...sale,
@@ -535,29 +540,40 @@ export const update = mutation({
         "Salesperson cannot approve cancellation of their own sale."
       );
       const cancellationDate = Date.now();
-      await cancelCompletedSaleOperationalRecords(ctx, {
-        orgId: args.orgId,
-        sale,
-        actorId: user._id,
-        reason: "Sale cancelled",
-        reversalDate: cancellationDate,
-      });
-      // Post reversal journal entry for the original SALE_COMPLETED GL event
-      await hookSaleCancelled(ctx, {
-        orgId: args.orgId,
-        saleId: args.saleId,
-        reason: "Sale cancelled",
-        actorId: user._id,
-        reversalDate: cancellationDate,
-      });
-      if (sale.commissionAmount != null && sale.commissionAmount > 0) {
-        await hookCommissionReversed(ctx, {
+      // Only a sale that actually COMPLETED has operational records to reverse.
+      // This branch used to run for any non-CANCELLED sale, which included
+      // PENDING drafts — and createDraft explicitly performs no inventory,
+      // deposit, CRM or accounting side effects, so there was nothing to undo.
+      // Running the reversal anyway wiped the trade-in vehicle's own
+      // purchasePrice (restoreTradeInVehicle clears it once tradeInValue > 0),
+      // destroying real acquisition cost that feeds capitalized cost, COGS and
+      // margin. Cancelling a draft is now just a status change, which is the
+      // correct semantics for work that was never done.
+      if (sale.status === "COMPLETED") {
+        await cancelCompletedSaleOperationalRecords(ctx, {
+          orgId: args.orgId,
+          sale,
+          actorId: user._id,
+          reason: "Sale cancelled",
+          reversalDate: cancellationDate,
+        });
+        // Post reversal journal entry for the original SALE_COMPLETED GL event
+        await hookSaleCancelled(ctx, {
           orgId: args.orgId,
           saleId: args.saleId,
           reason: "Sale cancelled",
           actorId: user._id,
           reversalDate: cancellationDate,
         });
+        if (sale.commissionAmount != null && sale.commissionAmount > 0) {
+          await hookCommissionReversed(ctx, {
+            orgId: args.orgId,
+            saleId: args.saleId,
+            reason: "Sale cancelled",
+            actorId: user._id,
+            reversalDate: cancellationDate,
+          });
+        }
       }
     }
 

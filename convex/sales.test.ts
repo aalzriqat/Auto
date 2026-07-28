@@ -695,4 +695,64 @@ describe("commission accrual lock respects reversals", () => {
     const sale = await t.run((ctx) => ctx.db.get(saleId));
     expect(sale?.commissionAmount).toBe(400);
   });
+
+  test("cancelling a never-completed draft does not wipe the trade-in vehicle's acquisition cost", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, vehicleId, customerId, userId, asAdmin } = await seedSalesOrg(t, "draftcancel");
+
+    // Cancellation needs approve:requests AND a different actor than the
+    // salesperson (assertDifferentActors), so seed a separate manager.
+    const managerId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "user_draftcancel_mgr", email: "mgr.draftcancel@example.com", name: "Manager" })
+    );
+    const managerRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", {
+        orgId,
+        name: "Manager",
+        permissions: ["view:sales", "edit:sales", "approve:requests", "view:vehicles"],
+      })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: managerId, roleId: managerRoleId }));
+    const asManager = t.withIdentity({ subject: "user_draftcancel_mgr", clerkId: "user_draftcancel_mgr" });
+
+    // A vehicle the dealer genuinely bought — its purchasePrice is real
+    // inventory cost data, and feeds capitalized cost / COGS / margin.
+    const tradeInVehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "VIN-TRADEIN-DRAFT",
+        make: "Nissan",
+        model: "Sunny",
+        year: 2018,
+        color: "White",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 90000,
+        sellingPrice: 8000,
+        purchasePrice: 6500,
+        status: "AVAILABLE",
+      })
+    );
+
+    // createDraft is documented as having NO inventory/deposit/accounting side
+    // effects, so this draft never touched the trade-in vehicle at all.
+    const saleId = await asAdmin.mutation(api.sales.createDraft, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 15000,
+      saleDate: Date.now(),
+      tradeInVehicleId,
+      tradeInValue: 5000,
+    });
+
+    await asManager.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
+
+    // Reversing a completion that never happened must not destroy the
+    // trade-in vehicle's independent acquisition cost.
+    const tradeInAfter = await t.run((ctx) => ctx.db.get(tradeInVehicleId));
+    expect(tradeInAfter?.purchasePrice).toBe(6500);
+    expect(tradeInAfter?.status).toBe("AVAILABLE");
+  });
 });

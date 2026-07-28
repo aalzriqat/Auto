@@ -164,11 +164,46 @@ async function runTriggerAlarms(ctx: MutationCtx) {
   // Look for tasks due in the next 15 minutes (or overdue) that haven't been triggered
   const upcomingThreshold = now + 15 * 60 * 1000;
 
-  const allPendingTasks = await ctx.db
-    .query("tasks")
-    .withIndex("by_status_alarm", (q) => q.eq("status", "PENDING"))
-    .filter((q) => q.neq(q.field("alarmTriggered"), true))
-    .collect();
+  // `alarmTriggered` is the second field of by_status_alarm, so untriggered
+  // tasks can be read directly from the index instead of being sifted out
+  // afterwards. The previous shape — withIndex(status) + .filter(alarmTriggered
+  // != true) + .collect() — was a POST-READ filter: it loaded every PENDING
+  // task in the entire deployment, including ones already alarmed, on every
+  // 5-minute run. Alarmed tasks stay PENDING until a human completes them, so
+  // that read set only ever grew; once it crossed Convex's per-mutation read
+  // limit this cron would throw on every run and alarms would stop firing for
+  // every tenant at once. Two bounded index reads instead, since a range can't
+  // express "!= true" over an optional boolean (undefined | false | true).
+  const ALARM_SCAN_LIMIT = 500;
+  const [neverFlagged, explicitlyFalse] = await Promise.all([
+    ctx.db
+      .query("tasks")
+      .withIndex("by_status_alarm", (q) =>
+        q.eq("status", "PENDING").eq("alarmTriggered", undefined)
+      )
+      .take(ALARM_SCAN_LIMIT),
+    ctx.db
+      .query("tasks")
+      .withIndex("by_status_alarm", (q) =>
+        q.eq("status", "PENDING").eq("alarmTriggered", false)
+      )
+      .take(ALARM_SCAN_LIMIT),
+  ]);
+  const allPendingTasks = [...neverFlagged, ...explicitlyFalse];
+
+  // A task only leaves this candidate pool once its alarm fires, and the index
+  // returns oldest-created-first with no org partitioning. So if untriggered
+  // PENDING tasks ever exceed the cap, old far-future tasks can hold every scan
+  // slot ahead of newer ones that are actually due, and their alarms are delayed
+  // indefinitely — the same starvation the unbounded read caused, just under the
+  // cap and silent. Saturating the limit is the signal that this is happening.
+  if (neverFlagged.length === ALARM_SCAN_LIMIT || explicitlyFalse.length === ALARM_SCAN_LIMIT) {
+    console.warn(
+      `[crons] triggerAlarms hit the ${ALARM_SCAN_LIMIT}-task scan limit ` +
+        `(neverFlagged=${neverFlagged.length}, explicitlyFalse=${explicitlyFalse.length}). ` +
+        `Due alarms may be starved behind older untriggered tasks.`
+    );
+  }
 
   let triggeredCount = 0;
 

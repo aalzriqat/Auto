@@ -82,4 +82,38 @@ describe("roles", () => {
       })
     ).rejects.toThrow(/reserved system role/i);
   });
+
+  test("renaming the OWNER role keeps it recognisable as the system owner role", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const orgId = await t.run((ctx: any) =>
+      ctx.db.insert("organizations", { name: "Legacy Dealer", createdAt: Date.now() })
+    ) as Id<"organizations">;
+    await t.run((ctx: any) =>
+      ctx.db.insert("subscriptions", {
+        orgId, plan: "professional", status: "active",
+        createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
+    const userId = await t.run((ctx: any) =>
+      ctx.db.insert("users", { clerkId: "legacy_owner", email: "legacy-owner@test.com" })
+    ) as Id<"users">;
+    // A legacy org seeded before the isSystemOwnerRole flag existed. Owner
+    // status falls back to an EXACT match on the name "OWNER".
+    const ownerRoleId = await t.run((ctx: any) =>
+      ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ALL_PERMISSIONS })
+    ) as Id<"roles">;
+    await t.run((ctx: any) => ctx.db.insert("memberships", { orgId, userId, roleId: ownerRoleId }));
+    const asOwner = t.withIdentity({ subject: "legacy_owner" });
+
+    // "owner" normalizes to OWNER so the rename guard permits it.
+    await asOwner.mutation(api.roles.update, { orgId, roleId: ownerRoleId, name: "owner" });
+
+    // The owner must still be able to perform owner-only actions afterwards.
+    // Storing the name unnormalized broke the exact-match fallback and locked
+    // the org out of every requireOwner path — including roles.update itself,
+    // so it could never be undone from the app.
+    await expect(
+      asOwner.mutation(api.roles.create, { orgId, name: "Auditor", permissions: [] })
+    ).resolves.toBeDefined();
+  });
 });

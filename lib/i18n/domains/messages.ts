@@ -1,4 +1,6 @@
 export const messagesEn = {
+  MessagesExpand: "Expand conversation",
+  MessagesMinimize: "Minimize conversation",
   Messages: "Messages",
   MessagesNewDm: "New message",
   MessagesNewGroup: "New group",
@@ -30,6 +32,8 @@ export const messagesEn = {
 };
 
 export const messagesAr = {
+  MessagesExpand: "توسيع المحادثة",
+  MessagesMinimize: "تصغير المحادثة",
   Messages: "الرسائل",
   MessagesNewDm: "رسالة جديدة",
   MessagesNewGroup: "مجموعة جديدة",
