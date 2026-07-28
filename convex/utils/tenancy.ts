@@ -220,10 +220,33 @@ export async function requireTenantAuth(
     }
   }
 
+  await enforceImpersonationGrant(ctx, { user, membership, orgId, requiredPermissions });
+
+  return { user, membership, role };
+}
+
+/**
+ * Everything that applies only when the caller is acting through an
+ * impersonation session — verifying the grant is still live, and auditing the
+ * write. Split out of requireTenantAuth so the ordinary membership path reads as
+ * one straight line; both halves key off the same membership.impersonationGrantId
+ * and are a no-op for a normal member.
+ */
+async function enforceImpersonationGrant(
+  ctx: QueryCtx | MutationCtx,
+  args: {
+    user: Doc<"users">;
+    membership: Doc<"memberships">;
+    orgId: Id<"organizations">;
+    requiredPermissions: Permission[];
+  }
+): Promise<void> {
   // membership.impersonationGrantId means this is a super admin's temporary
   // membership from an active impersonation session (see
   // convex/adminImpersonation.ts).
-  //
+  const grantId = args.membership.impersonationGrantId;
+  if (!grantId) return;
+
   // Verify the grant is still live on every call. Expiry used to rest entirely
   // on a single fire-and-forget ctx.scheduler.runAfter that deletes the
   // membership — with no retry and no sweep behind it, so a scheduled call that
@@ -231,30 +254,26 @@ export async function requireTenantAuth(
   // here makes the session fail closed: the grant's own expiresAt/revokedAt is
   // the authority, and the scheduled cleanup becomes housekeeping rather than
   // the security boundary. Applies to reads as well as writes.
-  if (membership.impersonationGrantId) {
-    const grant = await ctx.db.get(membership.impersonationGrantId);
-    if (!grant || grant.revokedAt || grant.expiresAt <= Date.now()) {
-      throwAppError(
-        AppErrorCode.UNAUTHORIZED,
-        "Unauthorized: This impersonation session has ended."
-      );
-    }
+  const grant = await ctx.db.get(grantId);
+  if (!grant || grant.revokedAt || grant.expiresAt <= Date.now()) {
+    throwAppError(
+      AppErrorCode.UNAUTHORIZED,
+      "Unauthorized: This impersonation session has ended."
+    );
   }
 
   // Audit every write made under an impersonation session. `user` here is the
   // real admin, since the temp membership belongs to their own userId, so this
   // never misattributes the write to the impersonated member.
-  if (membership.impersonationGrantId && isMutationCtx(ctx)) {
-    const label = requiredPermissions.length > 0 ? requiredPermissions.join(",") : "tenant-write";
-    await writeAuditLog(ctx, user, {
-      action: `impersonated-write:${label}`,
-      orgId,
-      targetTable: "impersonationGrants",
-      targetId: membership.impersonationGrantId,
-    });
-  }
-
-  return { user, membership, role };
+  if (!isMutationCtx(ctx)) return;
+  const label =
+    args.requiredPermissions.length > 0 ? args.requiredPermissions.join(",") : "tenant-write";
+  await writeAuditLog(ctx, args.user, {
+    action: `impersonated-write:${label}`,
+    orgId: args.orgId,
+    targetTable: "impersonationGrants",
+    targetId: grantId,
+  });
 }
 
 // ─── Owner-only guard ────────────────────────────────────────────────────────

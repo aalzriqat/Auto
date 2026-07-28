@@ -3,8 +3,7 @@ import { httpRouter } from "convex/server";
 import { httpAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Webhook } from "svix";
-import { DataModel, Id } from "./_generated/dataModel";
-import { GenericActionCtx } from "convex/server";
+import { Id } from "./_generated/dataModel";
 import { getValidatedEnv } from "./utils/env";
 import { verifyPaymentWebhook } from "./utils/paymentWebhook";
 import { rateLimiter } from "./rateLimit";
@@ -28,7 +27,7 @@ const WEBHOOK_PAYLOAD_PREVIEW_CHARS = 16_384;
  * triggered by an HTTP request. Falling back is strictly better than throwing,
  * and "unknown" still yields one shared bucket rather than no limit.
  */
-async function clientIp(ctx: GenericActionCtx<DataModel>, request: Request): Promise<string> {
+async function clientIp(ctx: ActionCtx, request: Request): Promise<string> {
   try {
     const metadata = await ctx.meta?.getRequestMetadata();
     if (metadata?.ip) return metadata.ip;
