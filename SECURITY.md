@@ -1,21 +1,47 @@
 # Security Policy
 
-## Supported Versions
+## Reporting a vulnerability
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
+Please report security issues privately — **do not open a public issue.**
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
+Use GitHub's [private vulnerability reporting](https://github.com/aalzriqat/Auto/security/advisories/new)
+on this repository. It is enabled, and it is the preferred channel.
 
-## Reporting a Vulnerability
+What helps most in a report:
 
-Use this section to tell people how to report a vulnerability.
+- the affected area (web dashboard, Convex backend, mobile app, dealer website, marketplace)
+- steps to reproduce, or a proof of concept
+- what an attacker gains — data read, data written, or access escalated
+- whether it crosses an organization boundary (this is a multi-tenant system, so
+  anything that reads or writes another dealership's data is treated as high severity)
 
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+You can expect an acknowledgement within a few days.
+
+## Scope
+
+In scope:
+
+- the Next.js dashboard and its API surface
+- the Convex backend (`convex/`), including scheduled jobs and webhooks
+- the Expo mobile app and the public marketplace
+- published dealer websites
+
+Out of scope:
+
+- findings in build tooling that is not shipped to users — for example the Gradle
+  toolchain artifacts recorded in `apps/mobile/android/gradle/verification-metadata.xml`
+- vulnerabilities in third-party services (Clerk, Convex, Vercel, Expo) that should be
+  reported to those vendors directly
+- reports produced only by an automated scanner, with no demonstrated impact
+
+## Handling of tenant data
+
+Every record is scoped to an organization. Authorization is enforced server-side in
+`convex/utils/tenancy.ts`; the frontend is never the enforcement point. Reports that
+demonstrate a way around those guards are prioritized above everything else.
+
+## Automated scanning
+
+Semgrep, osv-scanner, Checkov, ZAP and Nuclei run in `.github/workflows/security.yml`,
+alongside CodeQL and Dependabot. These report rather than gate, so that findings can be
+triaged before any of them blocks a merge.
