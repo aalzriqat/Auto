@@ -571,6 +571,8 @@ const mobileFoundationStringEntries = [
   ["sellCarYearInvalid", "Year must be between {min} and {max}.", "يجب أن تكون السنة بين {min} و{max}."],
   ["sellCarPriceInvalid", "Price must be greater than zero.", "يجب أن يكون السعر أكبر من صفر."],
   ["sellCarMileageInvalid", "Mileage cannot be negative.", "لا يمكن أن يكون الممشى بالسالب."],
+  ["sellCarMileageRequired", "Enter the car's mileage.", "أدخل ممشى السيارة."],
+  ["marketplaceLinkOpenFailed", "Unable to open this link right now.", "تعذّر فتح هذا الرابط حالياً."],
   ["marketplaceListingGenericError", "Something went wrong. Please try again.", "حدث خطأ ما. الرجاء المحاولة مرة أخرى."],
   ["myListingsTitle", "My Listings", "إعلاناتي"],
   ["myListingsSubtitle", "Manage the cars you've listed for sale.", "أدر السيارات التي أضفتها للبيع."],

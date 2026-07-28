@@ -60,6 +60,17 @@ const publicLeadBaseArgs = {
 
 type PublicLeadFormType = (typeof WEBSITE_FORM_TYPES)[number];
 type PublicLeadResult = { success: true; leadId: Id<"leads">; duplicate?: true };
+/**
+ * A submission refused for an abuse reason that was recorded first. A Convex
+ * mutation is atomic, so throwing from createPublicLead would roll the abuse
+ * record back along with everything else — the monitoring table would only ever
+ * hold duplicate_suppressed, the single branch that returns rather than throws.
+ * The mutation hands the refusal back instead, letting the record commit, and
+ * submitPublicLead (an action, so not part of that transaction) raises it to the
+ * caller. The message reaching the client is unchanged.
+ */
+type PublicLeadRejection = { success: false; message: string };
+type PublicLeadOutcome = PublicLeadResult | PublicLeadRejection;
 type BlocklistKind = "fingerprint" | "ipHash" | "email" | "emailDomain" | "phone";
 
 const sectionInputValidator = v.object({
@@ -938,17 +949,19 @@ export const submitPublicLead = action({
     await enforcePublicLeadRateLimit(ctx, "websiteLeadFingerprint", clientFingerprint);
 
     const { turnstileToken: _turnstileToken, ...leadArgs } = args;
-    const result: PublicLeadResult = await ctx.runMutation(internal.websites.createPublicLead, {
+    const result: PublicLeadOutcome = await ctx.runMutation(internal.websites.createPublicLead, {
       ...leadArgs,
       clientFingerprint,
     });
+    // Raised out here, after the mutation committed its abuse record.
+    if (!result.success) throw new ConvexError(result.message);
     return result;
   },
 });
 
 export const createPublicLead = internalMutation({
   args: publicLeadBaseArgs,
-  handler: async (ctx, args): Promise<PublicLeadResult> => {
+  handler: async (ctx, args): Promise<PublicLeadOutcome> => {
     const host = normalizedWebsiteHost(args.host);
     const formType = args.formType as PublicLeadFormType;
     const clientFingerprint = normalizeLimitKey(
@@ -959,8 +972,20 @@ export const createPublicLead = internalMutation({
     const clientIpHash = normalizeLimitKey(args.clientIpHash, "Client IP hash", PUBLIC_LEAD_MAX_IP_HASH_CHARS);
 
     if (!clientFingerprint) throw new ConvexError("Request verification failed. Please try again.");
+
+    // Resolved before the form-type check so the abuse record below has an
+    // orgId: websiteLeadAbuseEvents.orgId is required by the schema, and the
+    // old ordering passed undefined, so that insert failed validation and the
+    // unsupported-form-type case was never recorded at all.
+    const domain = await ctx.db
+      .query("websiteDomains")
+      .withIndex("by_domain", (q) => q.eq("domain", host))
+      .unique();
+    if (!domain || domain.status !== "active") throw new ConvexError("Website not found.");
+
     if (!WEBSITE_FORM_TYPES.includes(formType)) {
       await recordWebsiteLeadAbuseEvent(ctx, {
+        orgId: domain.orgId,
         host,
         formType: args.formType,
         reason: "validation_failed",
@@ -968,14 +993,8 @@ export const createPublicLead = internalMutation({
         clientIpHash,
         detail: "unsupported_form_type",
       });
-      throw new ConvexError("Unsupported website form.");
+      return { success: false, message: "Unsupported website form." };
     }
-
-    const domain = await ctx.db
-      .query("websiteDomains")
-      .withIndex("by_domain", (q) => q.eq("domain", host))
-      .unique();
-    if (!domain || domain.status !== "active") throw new ConvexError("Website not found.");
     if (!(await hasPlanFeature(ctx, domain.orgId, "websiteBuilder"))) throw new ConvexError("Website not found.");
 
     const settings = await ctx.db.get(domain.websiteSettingsId);
@@ -999,7 +1018,7 @@ export const createPublicLead = internalMutation({
         clientIpHash,
         detail: "missing_contact_method",
       });
-      throw new ConvexError("Provide an email, phone, or WhatsApp number.");
+      return { success: false, message: "Provide an email, phone, or WhatsApp number." };
     }
 
     const contactKey = email ?? phone ?? whatsapp;
@@ -1025,7 +1044,7 @@ export const createPublicLead = internalMutation({
         contactKey,
         detail: block.kind,
       });
-      throw new ConvexError("This request cannot be accepted.");
+      return { success: false, message: "This request cannot be accepted." };
     }
 
     try {
@@ -1044,7 +1063,10 @@ export const createPublicLead = internalMutation({
         contactKey,
         detail: error instanceof Error ? error.message : "rate_limited",
       });
-      throw error;
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : "Too many requests. Please try again later.",
+      };
     }
 
     const sections = snapshotSectionMap(snapshot.snapshotJson);

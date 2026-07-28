@@ -158,7 +158,10 @@ const VALID_STATUS_TRANSITIONS: Record<FinanceApplicationStatus, readonly Financ
   DRAFT: ["PENDING_DOCS"],
   PENDING_DOCS: ["UNDER_REVIEW", "REJECTED"],
   UNDER_REVIEW: ["APPROVED", "REJECTED", "PENDING_DOCS"],
-  APPROVED: ["CLOSED"],
+  // APPROVED is terminal for this mutation on purpose. The only legitimate way
+  // out of it is finalizeDeal, which patches CLOSED itself after creating the
+  // sale — see the guard in updateStatus.
+  APPROVED: [],
   REJECTED: ["PENDING_DOCS"],
   CLOSED: [],
   CANCELLED: [],
@@ -506,6 +509,18 @@ export const updateStatus = mutation({
       throw new ConvexError("Application not found");
     }
 
+    // CLOSED is not a status you set; it is what finalizeDeal leaves behind
+    // once it has created the sale, marked the vehicle sold, resolved deposits
+    // and posted the accounting — and it always writes finalizedSaleId with it.
+    // Setting it here skipped every one of those preconditions and produced a
+    // CLOSED application with no sale, which finalizeDeal then rejects forever
+    // because it requires APPROVED. The deal could never be completed.
+    if (args.status === "CLOSED") {
+      throw new ConvexError(
+        "An application is closed by finalizing the deal, not by setting its status. Use finalizeDeal."
+      );
+    }
+
     const allowedNextStatuses = VALID_STATUS_TRANSITIONS[app.status];
     if (!allowedNextStatuses.includes(args.status)) {
       throw new ConvexError(
@@ -532,10 +547,6 @@ export const updateStatus = mutation({
       await assertRequiredApplicationDocumentsComplete(ctx, app, quote);
       approvedBy = auth.user._id;
       approvedAt = Date.now();
-    }
-
-    if (args.status === "CLOSED") {
-      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.FINALIZE_FINANCED_DEAL]);
     }
 
     const patchedAt = Date.now();

@@ -47,6 +47,9 @@ export function AccountingSetupTab() {
   const redriveOutbox = useMutation(api.accountingOutbox.redrive);
 
   const canManageFinance = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
+  // Locking a period can never be undone in-product, so it needs the same
+  // narrow grant reopening does rather than plain finance management.
+  const canLockPeriod = canManageFinance && hasPermission(PERMISSIONS.REOPEN_PERIODS);
 
   async function runSetupAction<T>(
     actionName: string,
@@ -162,6 +165,7 @@ export function AccountingSetupTab() {
       <AccountingPeriodsTable
         periods={setupStatus.recentPeriods}
         canManageFinance={canManageFinance}
+        canLockPeriod={canLockPeriod}
         busyAction={busyAction}
         t={t}
         onOpen={(periodId) =>

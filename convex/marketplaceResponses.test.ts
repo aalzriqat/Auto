@@ -456,3 +456,55 @@ describe("getStatusForBuyer respondedCount", () => {
     expect(status).toMatchObject({ matchedCount: 2, respondedCount: 1 });
   });
 });
+
+describe("marketplaceResponses.respond — non-finite numeric inputs", () => {
+  test("a NaN finance term cannot produce a NaN quote for the buyer", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asSales } = await seedDealerOrg(t);
+    const requestId = await seedRequest(t);
+    await seedMatch(t, requestId, orgId);
+    const vehicleId = await seedVehicle(t, orgId);
+    const financeCompanyId = await seedFinanceCompany(t, orgId);
+
+    // Convex accepts NaN as a valid v.number(), and every range check here is a
+    // comparison — all of which are false for NaN. The term sailed through
+    // validation into calculateUnifiedMurabaha, which returned NaN for every
+    // field of the offer. That snapshot is frozen on the response and served
+    // verbatim to the anonymous buyer's Request Room.
+    await expect(
+      asSales.mutation(api.marketplaceResponses.respond, {
+        orgId,
+        requestId,
+        kind: "HAVE_MATCH",
+        vehicleId,
+        offerPriceJod: 20000,
+        financeCompanyId,
+        downPayment: 4000,
+        termMonths: NaN,
+      })
+    ).rejects.toThrow(/must be a finite number/i);
+
+    const responses = await t.run((ctx) =>
+      ctx.db.query("marketplaceResponses").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(responses).toHaveLength(0);
+  });
+
+  test("a NaN offer price is rejected", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asSales } = await seedDealerOrg(t);
+    const requestId = await seedRequest(t);
+    await seedMatch(t, requestId, orgId);
+    const vehicleId = await seedVehicle(t, orgId);
+
+    await expect(
+      asSales.mutation(api.marketplaceResponses.respond, {
+        orgId,
+        requestId,
+        kind: "HAVE_MATCH",
+        vehicleId,
+        offerPriceJod: NaN,
+      })
+    ).rejects.toThrow(/must be a finite number/i);
+  });
+});

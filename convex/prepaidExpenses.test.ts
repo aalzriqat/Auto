@@ -2160,8 +2160,13 @@ describe("prepaid corrections — the outbox refuses to post them against an unb
 
     const result = await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
 
-    expect(result.held).toBe(1);
+    // Both queued entries are held, for different reasons: the write-off by the
+    // prepaid guard (its asset debit hasn't posted), and the 2025-dated asset
+    // debit itself because no period covers 2025 in this org. Neither is
+    // failing, so neither burns a retry attempt.
+    expect(result.held).toBe(2);
     expect(result.posted).toBe(0);
+    expect(result.failed).toBe(0);
     // Prepaid Expenses is untouched: no credit without its debit.
     expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
     expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(0);
@@ -2375,5 +2380,55 @@ describe("prepaid corrections — the outbox refuses to post them against an unb
     );
     expect(rows.every((r) => r.status === "POSTED")).toBe(true);
     expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(300_000);
+  });
+});
+
+describe("prepaid corrections — non-finite money inputs", () => {
+  test("a NaN refund is rejected instead of corrupting the schedule", async () => {
+    const { t, orgId, asOwner } = await seedDealer("nan-refund");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+
+    // Every guard in validateCorrectionInputs is a comparison, and every
+    // comparison against NaN is false — including the remaining-balance cap.
+    // So NaN sailed through validation and was patched straight onto
+    // totalMinor, permanently poisoning the schedule's arithmetic.
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId,
+        scheduleId: schedule!._id,
+        refundMinor: NaN,
+        refundPaymentMethod: "CASH",
+        reason: "Non-finite refund",
+      })
+    ).rejects.toThrow(/invalid minor-unit/i);
+
+    const after = await scheduleForExpense(t, expenseId);
+    expect(Number.isFinite(after!.totalMinor)).toBe(true);
+    expect(after!.totalMinor).toBe(1_200_000);
+  });
+
+  test("a NaN write-off cannot slip past the maker-checker approval gate", async () => {
+    const { t, orgId, asOwner } = await seedDealer("nan-writeoff");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId,
+        scheduleId: schedule!._id,
+        writeOffMinor: NaN,
+        reason: "Non-finite write-off",
+      })
+    ).rejects.toThrow(/invalid minor-unit/i);
+
+    const after = await scheduleForExpense(t, expenseId);
+    expect(Number.isFinite(after!.totalMinor)).toBe(true);
   });
 });

@@ -305,7 +305,7 @@ describe("Phase 1 — accounting periods", () => {
   });
 
   test("can close and lock a period", async () => {
-    const { orgId, asUser } = await seedPhase1Dealer();
+    const { t, orgId, userId, asUser } = await seedPhase1Dealer();
 
     const periodId = await asUser.mutation(api.accountingPeriods.create, {
       orgId,
@@ -321,10 +321,34 @@ describe("Phase 1 — accounting periods", () => {
     expect(closed?.status).toBe("CLOSED");
     expect(closed?.closedAt).toBeTruthy();
 
+    await grantReopenPermission(t, orgId, userId);
     await asUser.mutation(api.accountingPeriods.lock, { orgId, periodId });
     const locked = await asUser.query(api.accountingPeriods.get, { orgId, periodId });
     expect(locked?.status).toBe("LOCKED");
   });
+
+  /**
+   * seedPhase1Dealer's role is a plain finance role (manage:finance only).
+   * Locking and reopening both require the narrower reopen:accounting_periods
+   * grant — the "Finance Controller" role real orgs create — so tests that
+   * exercise either transition have to opt into it explicitly.
+   */
+  async function grantReopenPermission(
+    t: Awaited<ReturnType<typeof seedPhase1Dealer>>["t"],
+    orgId: any,
+    userId: any
+  ) {
+    await t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+        .unique();
+      const role = await ctx.db.get(membership!.roleId);
+      await ctx.db.patch(membership!.roleId, {
+        permissions: [...role!.permissions, "reopen:accounting_periods"],
+      });
+    });
+  }
 
   async function makeOwner(t: Awaited<ReturnType<typeof seedPhase1Dealer>>["t"], orgId: any, userId: any) {
     await t.run(async (ctx) => {
@@ -385,6 +409,33 @@ describe("Phase 1 — accounting periods", () => {
     ).rejects.toThrow(/missing required permissions/i);
   });
 
+  test("a plain MANAGE_FINANCE holder without REOPEN_PERIODS cannot lock a period", async () => {
+    const { orgId, asUser } = await seedPhase1Dealer();
+
+    const periodId = await asUser.mutation(api.accountingPeriods.create, {
+      orgId,
+      fiscalYear: 2026,
+      periodNumber: 1,
+      startDate: JAN_2026_START,
+      endDate: JAN_2026_END,
+      openImmediately: true,
+    });
+    await asUser.mutation(api.accountingPeriods.close, { orgId, periodId });
+
+    // Locking is strictly irreversible — reopen() refuses LOCKED outright, and
+    // nothing in the product transitions a period back out of it. So it must be
+    // gated at least as tightly as reopen, which is recoverable. Guarding the
+    // reversible operation while leaving the irreversible one open to every
+    // ACCOUNTANT (a default role template that carries MANAGE_FINANCE) is
+    // backwards.
+    await expect(
+      asUser.mutation(api.accountingPeriods.lock, { orgId, periodId })
+    ).rejects.toThrow(/missing required permissions/i);
+
+    const stillClosed = await asUser.query(api.accountingPeriods.get, { orgId, periodId });
+    expect(stillClosed?.status).toBe("CLOSED");
+  });
+
   test("a non-owner role explicitly granted REOPEN_PERIODS (a controller role) CAN reopen", async () => {
     const { t, orgId, userId, asUser } = await seedPhase1Dealer();
 
@@ -431,6 +482,7 @@ describe("Phase 1 — accounting periods", () => {
       openImmediately: true,
     });
     await asUser.mutation(api.accountingPeriods.close, { orgId, periodId });
+    await grantReopenPermission(t, orgId, userId);
     await asUser.mutation(api.accountingPeriods.lock, { orgId, periodId });
     await makeOwner(t, orgId, userId);
 

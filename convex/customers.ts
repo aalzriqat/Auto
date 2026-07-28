@@ -275,6 +275,7 @@ export const create = mutation({
         .withIndex("by_org_email", (q) =>
           q.eq("orgId", args.orgId).eq("email", normalizedEmail)
         )
+        .filter((q) => q.neq(q.field("isDeleted"), true))
         .unique();
 
       if (existing) {
@@ -292,6 +293,7 @@ export const create = mutation({
         .withIndex("by_org_phone", (q) =>
           q.eq("orgId", args.orgId).eq("phone", normalizedPhone)
         )
+        .filter((q) => q.neq(q.field("isDeleted"), true))
         .unique();
 
       if (existingByPhone) {
@@ -381,6 +383,7 @@ export const update = mutation({
           .withIndex("by_org_email", (q) =>
             q.eq("orgId", args.orgId).eq("email", normalizedEmail)
           )
+          .filter((q) => q.neq(q.field("isDeleted"), true))
           .unique();
 
         if (existing) {
@@ -400,6 +403,7 @@ export const update = mutation({
           .withIndex("by_org_phone", (q) =>
             q.eq("orgId", args.orgId).eq("phone", normalizedPhone)
           )
+          .filter((q) => q.neq(q.field("isDeleted"), true))
           .unique();
 
         if (existingByPhone) {
@@ -621,6 +625,7 @@ export const importBulk = mutation({
         const existing = await ctx.db
           .query("customers")
           .withIndex("by_org_email", (q) => q.eq("orgId", args.orgId).eq("email", normalizedEmail))
+          .filter((q) => q.neq(q.field("isDeleted"), true))
           .unique();
         if (existing) { skipped++; continue; }
       }
@@ -629,6 +634,7 @@ export const importBulk = mutation({
         const existingByPhone = await ctx.db
           .query("customers")
           .withIndex("by_org_phone", (q) => q.eq("orgId", args.orgId).eq("phone", normalizedPhone))
+          .filter((q) => q.neq(q.field("isDeleted"), true))
           .unique();
         if (existingByPhone) { skipped++; continue; }
       }
@@ -801,6 +807,7 @@ export const mergeCustomers = mutation({
       const existing = await ctx.db
         .query("customers")
         .withIndex("by_org_phone", (q) => q.eq("orgId", args.orgId).eq("phone", normalizedPhone))
+        .filter((q) => q.neq(q.field("isDeleted"), true))
         .unique();
       if (existing && existing._id !== survivor._id && existing._id !== loser._id) {
         delete mergedFields.phone;
@@ -813,6 +820,7 @@ export const mergeCustomers = mutation({
       const existing = await ctx.db
         .query("customers")
         .withIndex("by_org_email", (q) => q.eq("orgId", args.orgId).eq("email", normalizedEmail))
+        .filter((q) => q.neq(q.field("isDeleted"), true))
         .unique();
       if (existing && existing._id !== survivor._id && existing._id !== loser._id) {
         delete mergedFields.email;

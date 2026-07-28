@@ -7,6 +7,7 @@ import { api } from "./_generated/api";
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
+    check: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
   },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
@@ -754,5 +755,52 @@ describe("commission accrual lock respects reversals", () => {
     const tradeInAfter = await t.run((ctx) => ctx.db.get(tradeInVehicleId));
     expect(tradeInAfter?.purchasePrice).toBe(6500);
     expect(tradeInAfter?.status).toBe("AVAILABLE");
+  });
+});
+
+describe("cancelled sales must not stay on the P&L", () => {
+  test("cancelling a completed sale removes its revenue from the profit and loss report", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, vehicleId, customerId, userId, asAdmin } = await seedSalesOrg(t, "plcancel");
+
+    // Cancellation needs approve:requests AND an actor other than the
+    // salesperson, so seed a manager alongside.
+    const managerId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "user_plcancel_mgr", email: "mgr.plcancel@example.com", name: "Manager" })
+    );
+    const managerRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", {
+        orgId,
+        name: "Manager",
+        permissions: ["view:sales", "edit:sales", "approve:requests", "view:vehicles", "view:reports"],
+      })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: managerId, roleId: managerRoleId }));
+    const asManager = t.withIdentity({ subject: "user_plcancel_mgr", clerkId: "user_plcancel_mgr" });
+
+    const saleDate = Date.now();
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 15000,
+      saleDate,
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+
+    const range = { startDate: saleDate - 86_400_000, endDate: saleDate + 86_400_000 };
+    const before = await asManager.query(api.reports.getProfitAndLoss, { orgId, ...range });
+    expect(before.totalRevenue).toBe(15000);
+
+    await asManager.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
+
+    // getProfitAndLoss reads the legacy `transactions` cashflow ledger, and the
+    // cancellation path reverses receivables, deposits, payables, deferrals and
+    // the trade-in — but never the VEHICLE_SALE transaction row. So a sale that
+    // was cancelled kept being reported as revenue indefinitely.
+    const after = await asManager.query(api.reports.getProfitAndLoss, { orgId, ...range });
+    expect(after.totalRevenue).toBe(0);
   });
 });

@@ -9,6 +9,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { requireTenantAuth } from "./utils/tenancy";
 import { resolveGeneratedLeadAssignee, getOrCreateMarketplaceBuyerCustomer } from "./utils/leadAssignment";
 import { getOwnProfile } from "./marketplaceDealers";
+import { assertFiniteNumber } from "./utils/money";
 
 const MAX_NAME_CHARS = 80;
 const MAX_MAKE_MODEL_CHARS = 60;
@@ -137,6 +138,9 @@ export const makeOffer = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MARKETPLACE_RESPOND]);
+    // `< 0` is false for NaN, so a non-finite offer would pass this check and be
+    // stored as the amount the seller was quoted.
+    assertFiniteNumber(args.offerAmountJod, "offer amount");
     if (args.offerAmountJod < 0) throw new ConvexError("Offer amount must be non-negative.");
 
     const tradeIn = await ctx.db.get(args.tradeInRequestId);

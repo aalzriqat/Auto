@@ -28,11 +28,24 @@ const periodStatusValidator = v.union(
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
-export async function assertPostingAllowed(
+/**
+ * Whether `accountingDate` can be posted into right now, as data rather than an
+ * exception, so callers that need to branch on the answer don't have to catch
+ * and string-match. `waiting: true` marks the blockers that clear on their own
+ * once an operator opens the relevant period — as opposed to a CLOSED/LOCKED
+ * period, which is a deliberate refusal that will not resolve by itself. The
+ * accounting outbox relies on that distinction to decide whether an entry is
+ * failing or merely queued (see accountingOutbox.drainEntries).
+ */
+export type PostingAllowed =
+  | { ok: true; periodId: Id<"accountingPeriods"> }
+  | { ok: false; waiting: boolean; reason: string };
+
+export async function checkPostingAllowed(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   accountingDate: number
-): Promise<Id<"accountingPeriods">> {
+): Promise<PostingAllowed> {
   const period = await ctx.db
     .query("accountingPeriods")
     .withIndex("by_org_startDate", (q) => q.eq("orgId", orgId))
@@ -45,21 +58,40 @@ export async function assertPostingAllowed(
     .first();
 
   if (!period) {
-    throw new ConvexError(
-      `No accounting period found for date ${new Date(accountingDate).toISOString().slice(0, 10)}. Create and open a period first.`
-    );
+    return {
+      ok: false,
+      waiting: true,
+      reason: `No accounting period found for date ${new Date(accountingDate).toISOString().slice(0, 10)}. Create and open a period first.`,
+    };
   }
+  const label = `${period.fiscalYear}-${String(period.periodNumber).padStart(2, "0")}`;
   if (period.status === "CLOSED" || period.status === "LOCKED") {
-    throw new ConvexError(
-      `Accounting period ${period.fiscalYear}-${String(period.periodNumber).padStart(2, "0")} is ${period.status}. Posting into closed or locked periods is not allowed.`
-    );
+    return {
+      ok: false,
+      waiting: false,
+      reason: `Accounting period ${label} is ${period.status}. Posting into closed or locked periods is not allowed.`,
+    };
   }
   if (period.status === "FUTURE") {
-    throw new ConvexError(
-      `Accounting period ${period.fiscalYear}-${String(period.periodNumber).padStart(2, "0")} has not been opened yet.`
-    );
+    return {
+      ok: false,
+      waiting: true,
+      reason: `Accounting period ${label} has not been opened yet.`,
+    };
   }
-  return period._id;
+  return { ok: true, periodId: period._id };
+}
+
+export async function assertPostingAllowed(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  accountingDate: number
+): Promise<Id<"accountingPeriods">> {
+  const result = await checkPostingAllowed(ctx, orgId, accountingDate);
+  if (!result.ok) {
+    throw new ConvexError(result.reason);
+  }
+  return result.periodId;
 }
 
 export async function getOpenPeriodForDate(
@@ -510,7 +542,19 @@ export const lock = mutation({
     periodId: v.id("accountingPeriods"),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // Locking is the one period transition with NO way back: reopen() refuses
+    // LOCKED outright and nothing else in the product moves a period out of it,
+    // so a mistaken lock permanently freezes that period's books — any error
+    // found later can never be corrected through the app. That makes it strictly
+    // more consequential than reopening, which is recoverable, yet it used to
+    // need only MANAGE_FINANCE — a permission the default ACCOUNTANT role
+    // template carries. Gate it behind the same narrow grant reopen requires, so
+    // the irreversible operation is never easier to reach than the reversible
+    // one.
+    const { user } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.MANAGE_FINANCE,
+      PERMISSIONS.REOPEN_PERIODS,
+    ]);
     await requireFeature(ctx, args.orgId, "accounting");
 
     const period = await ctx.db.get(args.periodId);
@@ -577,6 +621,13 @@ export const reopen = mutation({
       orgId: args.orgId, actorId: user._id, actionType: "REOPEN_PERIOD",
       resourceType: "accountingPeriods", resourceId: args.periodId.toString(),
       description: `Reopened period ${period.fiscalYear}-${String(period.periodNumber).padStart(2, "0")}: ${reopenReason}`,
+    });
+    // Same reason open() drains: this period accepts postings again, so any
+    // event held back because its date fell in a closed period can go now.
+    // Without this the entries sit until some unrelated period opens, which for
+    // a reopened prior period may be never.
+    await ctx.scheduler.runAfter(0, internal.accountingOutbox.drainPendingAccountingEvents, {
+      orgId: args.orgId,
     });
     return args.periodId;
   },

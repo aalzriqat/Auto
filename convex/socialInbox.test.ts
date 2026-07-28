@@ -328,3 +328,85 @@ describe("socialInbox.listEventsForConversation", () => {
     expect(events[0].vehicleSuggestion?.missingDetails).toContain("year");
   });
 });
+
+describe("socialInbox.setConversationVehicle tenant isolation", () => {
+  test("refuses a vehicle that belongs to another organization", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, userId } = await seedOrgWithEditor(t);
+
+    // setConversationVehicle needs approve:requests, which the shared fixture
+    // role does not carry.
+    await t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+        .unique();
+      const role = await ctx.db.get(membership!.roleId);
+      await ctx.db.patch(membership!.roleId, {
+        permissions: [...role!.permissions, "approve:requests"],
+      });
+    });
+    const asEditor = t.withIdentity({ subject: "inbox_editor_001" });
+
+    // A second, unrelated dealership with a vehicle of its own.
+    const otherOrgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Rival Motors", createdAt: Date.now() })
+    );
+    const foreignVehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: otherOrgId,
+        vin: "RIVALVIN0000000001",
+        make: "Rival",
+        model: "Secret Model",
+        trim: "Confidential",
+        year: 2031,
+        mileage: 10,
+        color: "Black",
+        fuelType: "Electric",
+        transmission: "Automatic",
+        sellingPrice: 99000,
+        status: "AVAILABLE",
+      })
+    );
+
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "Cross",
+        lastName: "Tenant",
+        instagramUserId: "ig_cross_1",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "cross_ig_1",
+        kind: "dm",
+        senderInstagramId: "ig_cross_1",
+        senderUsername: "cross_handle",
+        customerId,
+        text: "interested",
+      })
+    );
+
+    // Attaching another org's vehicle used to succeed, and listConversations /
+    // listConversationEvents then resolved it with a bare ctx.db.get and handed
+    // back "2031 Rival Secret Model" as vehicleSummary — a cross-tenant read.
+    await expect(
+      asEditor.mutation(api.socialInbox.setConversationVehicle, {
+        orgId,
+        customerId,
+        vehicleId: foreignVehicleId,
+      })
+    ).rejects.toThrow(/vehicle not found/i);
+
+    const events = await asEditor.query(api.socialInbox.listEventsForConversation, {
+      orgId,
+      customerId,
+      platform: "instagram",
+      conversationKind: "dm",
+    });
+    expect(events[0].vehicleId ?? null).toBeNull();
+    expect(events[0].vehicleSummary).toBeNull();
+  });
+});
