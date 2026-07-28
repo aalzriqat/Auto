@@ -14,6 +14,13 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
+
+# Least-privilege default for every job here: this workflow only reads the
+# repository. Without an explicit block, jobs inherit the repository-wide
+# default token scope, which is broader than anything below needs.
+permissions:
+  contents: read
+
 jobs:
   cypress:
     runs-on: ubuntu-latest

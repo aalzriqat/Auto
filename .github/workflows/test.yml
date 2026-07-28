@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [ "main" ]
 
+
+# Least-privilege default for every job here: this workflow only reads the
+# repository. Without an explicit block, jobs inherit the repository-wide
+# default token scope, which is broader than anything below needs.
+permissions:
+  contents: read
+
 jobs:
   unit-and-integration:
     runs-on: ubuntu-latest
