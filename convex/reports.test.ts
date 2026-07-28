@@ -204,5 +204,49 @@ describe("getInventoryReport — investment valuation", () => {
 
     expect(report.vehicles[0].totalExpenses).toBe(0);
     expect(report.totalValue).toBe(10_000);
+    // The point of this test is the investment figure, which is what feeds
+    // margin — asserting only totalExpenses left the capitalized-cost path
+    // itself unchecked. 10,000 purchase and nothing else: both the deleted and
+    // the reversed expense must be absent, not merely absent from totalExpenses.
+    expect(report.vehicles[0].totalInvestment).toBe(10_000);
+  });
+});
+
+describe("reports range guard", () => {
+  test("rejects a range longer than the interactive limit", async () => {
+    const { orgId, asUser } = await setup();
+    const endDate = Date.UTC(2026, 0, 1);
+    const startDate = endDate - 400 * 24 * 60 * 60 * 1000;
+
+    await expect(
+      asUser.query(api.reports.getSalesAndProfitReport, { orgId, startDate, endDate })
+    ).rejects.toThrow(/limited to 366 days/i);
+
+    await expect(
+      asUser.query(api.reports.getSalespersonPerformance, { orgId, startDate, endDate })
+    ).rejects.toThrow(/limited to 366 days/i);
+  });
+
+  test("rejects a start date after the end date", async () => {
+    const { orgId, asUser } = await setup();
+    const startDate = Date.UTC(2026, 5, 1);
+    const endDate = Date.UTC(2026, 0, 1);
+
+    await expect(
+      asUser.query(api.reports.getSalesAndProfitReport, { orgId, startDate, endDate })
+    ).rejects.toThrow(/must not be after the end date/i);
+  });
+
+  test("accepts a range at the limit", async () => {
+    const { orgId, asUser } = await setup();
+    const endDate = Date.UTC(2026, 0, 1);
+    const startDate = endDate - 366 * 24 * 60 * 60 * 1000;
+
+    const report = await asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId,
+      startDate,
+      endDate,
+    });
+    expect(report).toBeTruthy();
   });
 });
