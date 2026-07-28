@@ -3,7 +3,8 @@ import { httpRouter } from "convex/server";
 import { httpAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Webhook } from "svix";
-import { Id } from "./_generated/dataModel";
+import { DataModel, Id } from "./_generated/dataModel";
+import { GenericActionCtx } from "convex/server";
 import { getValidatedEnv } from "./utils/env";
 import { verifyPaymentWebhook } from "./utils/paymentWebhook";
 import { rateLimiter } from "./rateLimit";
@@ -14,7 +15,26 @@ const http = httpRouter();
 const WEBHOOK_RAW_PAYLOAD_MAX_CHARS = 700_000;
 const WEBHOOK_PAYLOAD_PREVIEW_CHARS = 16_384;
 
-function clientIp(request: Request): string {
+/**
+ * The caller's IP, for rate-limit keying.
+ *
+ * Prefers Convex's own request metadata, which is derived from the connection
+ * rather than read off a header. `x-forwarded-for` is supplied by the client,
+ * so keying a limit on it alone lets an attacker rotate the header and get a
+ * fresh bucket per request — the limit stops being a limit.
+ *
+ * The header remains a fallback for two real cases: convex-test does not
+ * implement `ctx.meta` at all, and `ip` is null whenever the execution was not
+ * triggered by an HTTP request. Falling back is strictly better than throwing,
+ * and "unknown" still yields one shared bucket rather than no limit.
+ */
+async function clientIp(ctx: GenericActionCtx<DataModel>, request: Request): Promise<string> {
+  try {
+    const metadata = await ctx.meta?.getRequestMetadata();
+    if (metadata?.ip) return metadata.ip;
+  } catch {
+    // Runtime without request metadata (e.g. convex-test) — use the header.
+  }
   return (
     request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown"
   );
@@ -527,7 +547,7 @@ http.route({
   path: "/clerk-webhook",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    const rateLimited = await enforceWebhookRateLimit(ctx, clientIp(request));
+    const rateLimited = await enforceWebhookRateLimit(ctx, await clientIp(ctx, request));
     if (rateLimited) return rateLimited;
 
     let webhookSecret: string;
@@ -640,7 +660,7 @@ http.route({
   path: "/resend-inbound",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    const rateLimited = await enforceWebhookRateLimit(ctx, clientIp(request));
+    const rateLimited = await enforceWebhookRateLimit(ctx, await clientIp(ctx, request));
     if (rateLimited) return rateLimited;
 
     let webhookSecret: string;
@@ -767,7 +787,7 @@ http.route({
     // unauthenticated at this point, so keying on it let anyone exhaust a
     // chosen tenant's webhook quota and silence their WhatsApp lead channel.
     // Same pattern the Clerk and Resend webhooks above already use.
-    const rateLimited = await enforceWebhookRateLimit(ctx, clientIp(request));
+    const rateLimited = await enforceWebhookRateLimit(ctx, await clientIp(ctx, request));
     if (rateLimited) return rateLimited;
 
     const settings = await ctx.runQuery(internal.whatsapp.getSettingsByOrg, {
@@ -818,7 +838,7 @@ http.route({
     // Keyed on the caller, not the unauthenticated `orgId` — see the GET
     // handler above. Signature verification (inside processMetaMessagingWebhook)
     // is the real gate; this only bounds unverified work.
-    const rateLimited = await enforceWebhookRateLimit(ctx, clientIp(request));
+    const rateLimited = await enforceWebhookRateLimit(ctx, await clientIp(ctx, request));
     if (rateLimited) return rateLimited;
 
     let appSecret: string;
@@ -1863,7 +1883,7 @@ http.route({
       // Every other webhook route in this file bounds unverified work; this one
       // settles money and had no limit at all, so an unauthenticated caller
       // could force unbounded signature-verification work against it.
-      const rateLimited = await enforceWebhookRateLimit(ctx, clientIp(request));
+      const rateLimited = await enforceWebhookRateLimit(ctx, await clientIp(ctx, request));
       if (rateLimited) return rateLimited;
 
       const rawBody = await request.text();
@@ -2075,7 +2095,7 @@ http.route({
       });
 
       if (isNewVisitor) {
-        const ip = clientIp(request);
+        const ip = await clientIp(ctx, request);
         if (ip !== "unknown") {
           await ctx.scheduler.runAfter(0, internal.siteVisitors.enrichVisitorGeo, { siteVisitorId, ip });
         }

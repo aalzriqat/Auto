@@ -1547,6 +1547,14 @@ describe("memberships.remove", () => {
     try {
       const drained = await t.action(internal.memberships.drainDueMembershipOffboardingJobs, {});
       expect(drained.processed).toBeGreaterThan(0);
+      // processMembershipOffboardingJob resolves with {status: "RETRYING"} for
+      // every expected failure — a missing CLERK_SECRET_KEY like this one, a
+      // missing Clerk id, a non-2xx response, a fetch exception. It does not
+      // throw, so counting every non-throwing call as a success reported a
+      // total offboarding stall as "succeeded: N, failed: 0".
+      expect(drained.succeeded).toBe(0);
+      expect(drained.retrying).toBe(drained.processed);
+      expect(drained.failed).toBe(0);
     } finally {
       if (originalSecret === undefined) {
         delete process.env.CLERK_SECRET_KEY;

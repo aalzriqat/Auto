@@ -191,6 +191,20 @@ async function runTriggerAlarms(ctx: MutationCtx) {
   ]);
   const allPendingTasks = [...neverFlagged, ...explicitlyFalse];
 
+  // A task only leaves this candidate pool once its alarm fires, and the index
+  // returns oldest-created-first with no org partitioning. So if untriggered
+  // PENDING tasks ever exceed the cap, old far-future tasks can hold every scan
+  // slot ahead of newer ones that are actually due, and their alarms are delayed
+  // indefinitely — the same starvation the unbounded read caused, just under the
+  // cap and silent. Saturating the limit is the signal that this is happening.
+  if (neverFlagged.length === ALARM_SCAN_LIMIT || explicitlyFalse.length === ALARM_SCAN_LIMIT) {
+    console.warn(
+      `[crons] triggerAlarms hit the ${ALARM_SCAN_LIMIT}-task scan limit ` +
+        `(neverFlagged=${neverFlagged.length}, explicitlyFalse=${explicitlyFalse.length}). ` +
+        `Due alarms may be starved behind older untriggered tasks.`
+    );
+  }
+
   let triggeredCount = 0;
 
   for (const task of allPendingTasks) {
