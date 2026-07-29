@@ -1143,6 +1143,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "أصبحت الحقول المخصصة ومراحل مسار المبيعات مقصورة تماماً على المعرض الذي يملكها، فلا يمكن الاطلاع على إعدادات معرض آخر أو بياناته أو تعديلها من حساب مختلف. كما أصبح تغيير صلاحيات أعضاء الفريق أكثر أماناً: لم يعد بإمكان الموظف تغيير دوره بنفسه أو منح دور يحمل صلاحيات لا يملكها هو.",
     publishedAt: releaseAt(2026, 7, 29, 1),
   },
+  {
+    type: "FIX",
+    titleEn: "Minimum profit is now enforced on every financed quote",
+    titleAr: "تطبيق الحد الأدنى للربح على كل عرض تمويل",
+    descriptionEn: "A financed quote priced below the vehicle's minimum profit is now refused everywhere — the sales wizard, the quick quote dialog, and the mobile app — until a manager approves it, instead of only being blocked on some screens. The check runs again when the deal is finalized, so an approval that was later withdrawn, or a minimum that was raised in the meantime, is caught before the sale is recorded.",
+    descriptionAr: "أصبح عرض التمويل المسعّر دون الحد الأدنى لربح المركبة مرفوضاً في كل الشاشات — معالج المبيعات ونافذة العرض السريع وتطبيق الجوال — إلى أن يعتمده المدير، بدل أن يُمنع في بعض الشاشات فقط. ويُعاد الفحص عند إتمام الصفقة، فيُكتشف سحب الاعتماد لاحقاً أو رفع الحد الأدنى قبل تسجيل البيع.",
+    publishedAt: releaseAt(2026, 7, 29, 2),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

@@ -19,6 +19,7 @@ import {
   getOrgCurrency,
 } from "./accounting/workflowHooks";
 import { toMinorUnits } from "./utils/money";
+import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
@@ -893,6 +894,20 @@ export const finalizeDeal = mutation({
           throw new ConvexError("Application finance company does not match the quote.");
         }
         await assertRequiredApplicationDocumentsComplete(ctx, app, quote);
+
+        // Re-verify at the commit point, not just at quote time: the approval
+        // could have been rejected or the vehicle's minimum raised in between.
+        // Quotes written before `desiredProfit` existed carry no margin to check
+        // and are let through — the check binds from this deploy forward rather
+        // than stranding deals already in flight.
+        if (quote.desiredProfit !== undefined && quoteModeRequiresMinimumProfit(quote.mode)) {
+          await assertProfitApproved(ctx, {
+            orgId: args.orgId,
+            vehicleId: app.vehicleId,
+            desiredProfit: quote.desiredProfit,
+            subject: "deal",
+          });
+        }
 
         const quoteMode: QuoteMode | undefined = app.quoteModeAtSubmission ?? quote.mode;
         const financingType =

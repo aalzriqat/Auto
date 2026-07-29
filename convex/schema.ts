@@ -1454,6 +1454,11 @@ export default defineSchema({
 
     // Core parameters
     vehiclePrice: v.number(),
+    // The dealer's own margin on the deal, as the client that built the quote
+    // defines it. Checked against the vehicle's `minimumProfit` by
+    // convex/utils/profitApproval.ts. Optional only for quotes written before
+    // that check existed — new quotes always carry it (absent is read as 0).
+    desiredProfit: v.optional(v.number()),
     downPayment: v.number(),
     termMonths: v.number(),
 
