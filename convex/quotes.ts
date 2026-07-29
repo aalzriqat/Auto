@@ -4,6 +4,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { advanceLeadStage } from "./utils/leadStageHelpers";
 import { notifyUser, getActorName } from "./utils/notifications";
+import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
 
 const quoteModeValidator = v.optional(v.union(
   v.literal("CASH"),
@@ -60,6 +61,9 @@ export const saveQuote = mutation({
     mode: quoteModeValidator,
     leadId: v.optional(v.id("leads")),
     vehiclePrice: v.number(),
+    // The dealer margin the client is quoting. Absent is read as zero, so a
+    // caller that omits it can never slip a below-minimum deal past the check.
+    desiredProfit: v.optional(v.number()),
     downPayment: v.number(),
     termMonths: v.number(),
     totalFinancedAmount: v.optional(v.number()),
@@ -127,6 +131,19 @@ export const saveQuote = mutation({
       }
     }
 
+    // The UI blocks a below-minimum financed quote unless a manager approved it;
+    // enforce the same rule here so a direct API call, an older client, or the
+    // mobile app cannot write one. Financed quotes are single-vehicle, so this
+    // checks the resolved `vehicleId` rather than the line items.
+    if (quoteModeRequiresMinimumProfit(args.mode)) {
+      await assertProfitApproved(ctx, {
+        orgId: args.orgId,
+        vehicleId,
+        desiredProfit: args.desiredProfit ?? 0,
+        subject: "quote",
+      });
+    }
+
     if (args.leadId) {
       const lead = await ctx.db.get(args.leadId);
       if (!lead || lead.orgId !== args.orgId) {
@@ -151,6 +168,9 @@ export const saveQuote = mutation({
       ...quoteArgs,
       vehicleId,
       vehiclePrice,
+      // Always written, never left undefined: `applications.finalizeDeal` reads
+      // its absence as "quote predates this check" and skips its re-verification.
+      desiredProfit: args.desiredProfit ?? 0,
       ...(args.mode === "MANUAL_FINANCE_COMPANY" && manualProviderName !== undefined ? { manualProviderName } : {}),
       ...(args.mode === "MANUAL_FINANCE_COMPANY" && manualProfitRate !== undefined ? { manualProfitRate } : {}),
       ...(args.mode === "MANUAL_FINANCE_COMPANY" && manualInsuranceRate !== undefined ? { manualInsuranceRate } : {}),

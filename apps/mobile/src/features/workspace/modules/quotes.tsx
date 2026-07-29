@@ -108,6 +108,10 @@ export function QuotesModule({ orgId }: { orgId: string }) {
       Alert.alert(locale === "ar" ? "حقول مطلوبة" : "Required fields");
       return;
     }
+    // No explicit margin field here: the price starts at the vehicle's list
+    // price, so whatever the user added on top is the dealer margin. The backend
+    // checks it against the vehicle's minimum profit for financed quotes.
+    const listPrice = (vehicles ?? []).find((vehicle) => vehicle._id === form.vehicleId)?.sellingPrice ?? 0;
     setSaving(true);
     try {
       await saveQuote({
@@ -117,6 +121,7 @@ export function QuotesModule({ orgId }: { orgId: string }) {
         companyId: form.mode === "CONFIGURED_FINANCE_COMPANY" ? maybeText(form.companyId) : undefined,
         mode: form.mode,
         vehiclePrice,
+        desiredProfit: vehiclePrice - listPrice,
         downPayment,
         termMonths,
         monthlyInstallment: parseOptionalNumber(form.monthlyInstallment),

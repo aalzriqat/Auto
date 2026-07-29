@@ -161,12 +161,22 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
     setIsSubmitting(true);
     try {
       const values = form.getValues();
+      // This dialog has no explicit margin field: the quoted price is the
+      // vehicle's list price with the user's markup already typed into it, so
+      // the margin is the difference. The backend checks it against the
+      // vehicle's minimum profit for financed quotes.
+      const quotedVehicle = (availableVehicles ?? []).find(
+        (vehicle: Doc<"vehicles">) => vehicle._id === values.vehicleId
+      );
+      const desiredProfit = Number(values.vehiclePrice) - (quotedVehicle?.sellingPrice ?? 0);
       await saveQuote({
         orgId: activeOrgId,
         vehicleId: values.vehicleId as Id<"vehicles">,
         customerId: values.customerId as Id<"customers">,
+        mode: companyResult.isCash ? "CASH" : "CONFIGURED_FINANCE_COMPANY",
         companyId: companyResult.isCash ? undefined : (companyResult.companyId as Id<"financeCompanies">),
         vehiclePrice: Number(values.vehiclePrice),
+        desiredProfit,
         downPayment: Number(values.downPayment),
         termMonths: Number(values.termMonths),
         totalFinancedAmount: companyResult.totalFinancedAmount,
