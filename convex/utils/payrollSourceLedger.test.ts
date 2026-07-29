@@ -127,6 +127,45 @@ describe("payrollPaidBlockedReason fails closed", () => {
     expect(reason).toMatch(/could not be resolved/i);
   });
 
+  test("blocks a salary settlement whose payslip reference does not resolve", async () => {
+    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId } = await seed(t, "salunres");
+
+    const reason = await t.run((ctx: any) =>
+      payrollPostingBlockedReason(
+        ctx,
+        paidEntry(orgId, { itemId: "not-a-real-convex-id", salaryMinor: 100000 })
+      )
+    );
+
+    expect(reason).toMatch(/could not be resolved/i);
+  });
+
+  test("blocks a salary settlement whose payslip belongs to another org", async () => {
+    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, foreignItemId } = await seed(t, "salcross");
+
+    const reason = await t.run((ctx: any) =>
+      payrollPostingBlockedReason(
+        ctx,
+        paidEntry(orgId, { itemId: foreignItemId, salaryMinor: 100000 })
+      )
+    );
+
+    expect(reason).toMatch(/could not be resolved/i);
+  });
+
+  test("still blocks a salary settlement whose accrual has not posted", async () => {
+    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, ownItemId } = await seed(t, "salunposted");
+
+    const reason = await t.run((ctx: any) =>
+      payrollPostingBlockedReason(ctx, paidEntry(orgId, { itemId: ownItemId, salaryMinor: 100000 }))
+    );
+
+    expect(reason).toMatch(/salary accrual behind it has not posted/i);
+  });
+
   test("allows a settlement whose payslip resolves in-org with no outstanding accruals", async () => {
     const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, ownItemId } = await seed(t, "happy");

@@ -322,14 +322,13 @@ export type OrgScopedTable = {
 export async function requireOwnedRow<T extends OrgScopedTable>(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
-  table: T,
+  // Not needed to load the row — it binds T, documents intent at the call site,
+  // and makes an id typed against the wrong table a compile error.
+  _table: T,
   id: Id<T>,
   notFoundMessage = "Record not found in this organization."
 ): Promise<Doc<T>> {
   const doc = await ctx.db.get(id);
-  // `table` is not needed to load the row — it binds T and documents intent at
-  // the call site, and guards against an id typed against the wrong table.
-  void table;
   if (!doc || (doc as { orgId?: Id<"organizations"> }).orgId !== orgId) {
     throw new ConvexError(notFoundMessage);
   }
