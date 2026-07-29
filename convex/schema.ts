@@ -2998,6 +2998,10 @@ export default defineSchema({
     value: v.string(),
   })
     .index("by_org", ["orgId"])
+    // The tenant-scoped lookup. `by_entity` below is NOT org-scoped, so reading
+    // through it returns other dealerships' values for the same entity id —
+    // always enter this table by org (see convex/orgCustomFields.ts).
+    .index("by_org_entity", ["orgId", "entityType", "entityId"])
     .index("by_entity", ["entityType", "entityId"])
     .index("by_entity_field", ["entityId", "fieldId"]),
 

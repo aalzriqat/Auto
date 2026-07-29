@@ -421,9 +421,11 @@ export const updateRole = mutation({
     newRoleId: v.id("roles"),
   },
   handler: async (ctx, args) => {
-    const { user: callingUser, membership: callingMembership } = await requireTenantAuth(ctx, args.orgId, [
-      PERMISSIONS.MANAGE_USERS,
-    ]);
+    const {
+      user: callingUser,
+      membership: callingMembership,
+      role: callingRole,
+    } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_USERS]);
 
     const membership = await ctx.db.get(args.membershipId);
     if (!membership || membership.orgId !== args.orgId) {
@@ -462,6 +464,24 @@ export const updateRole = mutation({
       }
       if (membership.userId === callingUser._id) {
         throw new ConvexError("You cannot change your own OWNER role. Transfer ownership first.");
+      }
+    }
+
+    // Non-owner → non-owner transitions. The self-target and last-owner guards
+    // above only fire when an OWNER membership is involved, so without this a
+    // MANAGE_USERS holder could hand themselves any non-OWNER role — including
+    // one carrying permissions they do not hold — and RBAC would collapse to
+    // "OWNER" vs "everything short of OWNER". An OWNER is exempt: they already
+    // hold every permission, so neither rule can restrain them.
+    if (!isSystemOwnerRole(callingRole)) {
+      if (membership.userId === callingUser._id) {
+        throw new ConvexError("You cannot change your own role. Ask an owner to change it for you.");
+      }
+      const escalated = newRole.permissions.filter((p) => !callingRole.permissions.includes(p));
+      if (escalated.length > 0) {
+        throw new ConvexError(
+          `Forbidden: You cannot grant permissions you do not hold yourself: ${escalated.join(", ")}`
+        );
       }
     }
 

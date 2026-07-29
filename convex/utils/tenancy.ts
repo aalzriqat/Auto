@@ -1,5 +1,6 @@
 import { QueryCtx, MutationCtx } from "../_generated/server";
-import { Id, Doc } from "../_generated/dataModel";
+import { Id, Doc, TableNames } from "../_generated/dataModel";
+import { ConvexError } from "convex/values";
 import { Permission, isSystemOwnerRole } from "./permissions";
 import { throwAppError, AppErrorCode } from "./errors";
 import { getValidatedEnv } from "./env";
@@ -291,4 +292,46 @@ export async function requireOwner(
     throwAppError(AppErrorCode.FORBIDDEN, "Forbidden: Only the organization owner can perform this action.");
   }
   return authCtx;
+}
+
+// ─── Row-ownership guard ─────────────────────────────────────────────────────
+
+/**
+ * Every table whose documents carry an `orgId`, i.e. every tenant-scoped table.
+ * Derived from the schema, so a new tenant table is covered automatically and a
+ * non-tenant table is a compile error at the call site.
+ */
+export type OrgScopedTable = {
+  [T in TableNames]: Doc<T> extends { orgId: Id<"organizations"> } ? T : never;
+}[TableNames];
+
+/**
+ * Loads a row by a **caller-supplied id** and proves it belongs to `orgId`.
+ *
+ * `requireTenantAuth` / `requireOwner` only prove the caller may act inside the
+ * org they named — they say nothing about the row they are about to touch. Any
+ * handler that takes both an `orgId` and a document id must bridge that gap
+ * before `ctx.db.patch` / `ctx.db.delete`, or an authenticated member of org A
+ * can mutate org B's rows by passing a foreign id. Omitting the check is
+ * invisible in review, so route the lookup through this helper rather than
+ * hand-writing `get` + `orgId !==` at each of the ~220 sites.
+ *
+ * Fails closed: a missing row and a foreign row raise the same error, so the
+ * response cannot be used to probe for the existence of another org's records.
+ */
+export async function requireOwnedRow<T extends OrgScopedTable>(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  table: T,
+  id: Id<T>,
+  notFoundMessage = "Record not found in this organization."
+): Promise<Doc<T>> {
+  const doc = await ctx.db.get(id);
+  // `table` is not needed to load the row — it binds T and documents intent at
+  // the call site, and guards against an id typed against the wrong table.
+  void table;
+  if (!doc || (doc as { orgId?: Id<"organizations"> }).orgId !== orgId) {
+    throw new ConvexError(notFoundMessage);
+  }
+  return doc;
 }

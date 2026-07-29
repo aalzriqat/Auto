@@ -1,6 +1,6 @@
-import { v, ConvexError } from "convex/values";
+import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { requireTenantAuth, requireOwner } from "./utils/tenancy";
+import { requireTenantAuth, requireOwner, requireOwnedRow } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 
 // ─── Seed data ────────────────────────────────────────────────────────────────
@@ -96,10 +96,7 @@ export const update = mutation({
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
 
-    const company = await ctx.db.get(args.companyId);
-    if (!company || company.orgId !== args.orgId) {
-      throw new ConvexError("Valuation company not found.");
-    }
+    await requireOwnedRow(ctx, args.orgId, "orgValuationCompanies", args.companyId, "Valuation company not found.");
 
     const patch: Record<string, unknown> = {};
     if (args.name !== undefined) patch.name = args.name;
@@ -121,10 +118,7 @@ export const remove = mutation({
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
 
-    const company = await ctx.db.get(args.companyId);
-    if (!company || company.orgId !== args.orgId) {
-      throw new ConvexError("Valuation company not found.");
-    }
+    await requireOwnedRow(ctx, args.orgId, "orgValuationCompanies", args.companyId, "Valuation company not found.");
 
     await ctx.db.delete(args.companyId);
   },

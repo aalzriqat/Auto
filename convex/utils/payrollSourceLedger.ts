@@ -63,14 +63,21 @@ async function payrollPaidBlockedReason(
     return "the salary accrual behind it has not posted to the ledger yet, so this would clear a Salaries Payable that was never accrued";
   }
   const itemId = ctx.db.normalizeId("payrollItems", rawItemId);
+  // Fail closed on an unresolvable payslip, exactly as advanceRecoveryBlockedReason
+  // does above: if the reference does not normalize, or the row is missing or
+  // belongs to another org, the prerequisite accruals cannot be checked at all —
+  // skipping the check would post the credits unverified.
+  const loaded = itemId ? await ctx.db.get(itemId) : null;
+  const item = loaded && loaded.orgId === orgId ? loaded : null;
+
   const commissionMinor = typeof payload.commissionMinor === "number" ? payload.commissionMinor : 0;
-  if (commissionMinor > 0 && itemId) {
-    const item = await ctx.db.get(itemId);
-    if (item && item.orgId === orgId) {
-      for (const saleId of item.commissionSaleIds) {
-        if (!(await prereqPosted(ctx, orgId, `commission_accrued_${saleId}`))) {
-          return "a commission accrual behind it has not posted to the ledger yet, so this would clear a Commission Payable that was never accrued";
-        }
+  if (commissionMinor > 0) {
+    if (!item) {
+      return "its payslip could not be resolved in this organization, so the commission accruals behind the Commission Payable it clears cannot be verified";
+    }
+    for (const saleId of item.commissionSaleIds) {
+      if (!(await prereqPosted(ctx, orgId, `commission_accrued_${saleId}`))) {
+        return "a commission accrual behind it has not posted to the ledger yet, so this would clear a Commission Payable that was never accrued";
       }
     }
   }
@@ -80,10 +87,13 @@ async function payrollPaidBlockedReason(
   // recovery allocation rows record exactly which advances.
   const advanceRecoveredMinor =
     typeof payload.advanceRecoveredMinor === "number" ? payload.advanceRecoveredMinor : 0;
-  if (advanceRecoveredMinor > 0 && itemId) {
+  if (advanceRecoveredMinor > 0) {
+    if (!item) {
+      return "its payslip could not be resolved in this organization, so the advance issuances behind the Employee Advances it credits cannot be verified";
+    }
     const recoveries = await ctx.db
       .query("employeeAdvanceRecoveries")
-      .withIndex("by_payroll_item", (q) => q.eq("payrollItemId", itemId))
+      .withIndex("by_payroll_item", (q) => q.eq("payrollItemId", item._id))
       .collect();
     for (const rec of recoveries) {
       if (rec.orgId !== orgId) continue;
