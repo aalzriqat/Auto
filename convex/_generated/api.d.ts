@@ -155,6 +155,7 @@ import type * as utils_payrollSourceLedger from "../utils/payrollSourceLedger.js
 import type * as utils_permissions from "../utils/permissions.js";
 import type * as utils_prepaidRecognitionEvents from "../utils/prepaidRecognitionEvents.js";
 import type * as utils_prepaidSourceLedger from "../utils/prepaidSourceLedger.js";
+import type * as utils_profitApproval from "../utils/profitApproval.js";
 import type * as utils_saleCancellation from "../utils/saleCancellation.js";
 import type * as utils_saleCompletion from "../utils/saleCompletion.js";
 import type * as utils_saleHelpers from "../utils/saleHelpers.js";
@@ -341,6 +342,7 @@ declare const fullApi: ApiFromModules<{
   "utils/permissions": typeof utils_permissions;
   "utils/prepaidRecognitionEvents": typeof utils_prepaidRecognitionEvents;
   "utils/prepaidSourceLedger": typeof utils_prepaidSourceLedger;
+  "utils/profitApproval": typeof utils_profitApproval;
   "utils/saleCancellation": typeof utils_saleCancellation;
   "utils/saleCompletion": typeof utils_saleCompletion;
   "utils/saleHelpers": typeof utils_saleHelpers;

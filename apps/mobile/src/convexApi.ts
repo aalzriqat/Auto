@@ -1828,6 +1828,8 @@ type QuoteSaveArgs = OrgScopedArgs & {
   mode?: MobileQuoteMode;
   leadId?: string;
   vehiclePrice: number;
+  /** Dealer margin, checked server-side against the vehicle's minimumProfit. */
+  desiredProfit?: number;
   downPayment: number;
   termMonths: number;
   totalFinancedAmount?: number;

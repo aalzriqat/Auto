@@ -52,6 +52,10 @@ export function buildWizardQuotePayload({
         : wizardData.selectedCompanyId,
     mode,
     vehiclePrice: wizardData.vehiclePrice + (wizardData.desiredProfit || 0),
+    // Sent separately from the folded-in price so the backend can check it
+    // against the vehicle's minimum profit — the price alone cannot be
+    // decomposed once the user edits it.
+    desiredProfit: wizardData.desiredProfit || 0,
     downPayment: wizardData.downPayment,
     termMonths: wizardData.termMonths,
     totalFinancedAmount: selectedResult.totalFinancedAmount,

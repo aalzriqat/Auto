@@ -456,6 +456,7 @@ export function SalesWizardScreen({
         companyId: !isCash && !manual ? selectedCompanyId : undefined,
         mode: isCash ? "CASH" : manual ? "MANUAL_FINANCE_COMPANY" : "CONFIGURED_FINANCE_COMPANY",
         vehiclePrice: price,
+        desiredProfit: profit,
         downPayment: down,
         termMonths: isCash ? 0 : term,
         totalFinancedAmount: selectedResult?.financedAmount,

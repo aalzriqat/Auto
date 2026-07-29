@@ -1145,6 +1145,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
   },
   {
     type: "FIX",
+    titleEn: "Minimum profit is now enforced on every financed quote",
+    titleAr: "تطبيق الحد الأدنى للربح على كل عرض تمويل",
+    descriptionEn: "A financed quote priced below the vehicle's minimum profit is now refused everywhere — the sales wizard, the quick quote dialog, and the mobile app — until a manager approves it, instead of only being blocked on some screens. The check runs again when the deal is finalized, so an approval that was later withdrawn, or a minimum that was raised in the meantime, is caught before the sale is recorded.",
+    descriptionAr: "أصبح عرض التمويل المسعّر دون الحد الأدنى لربح المركبة مرفوضاً في كل الشاشات — معالج المبيعات ونافذة العرض السريع وتطبيق الجوال — إلى أن يعتمده المدير، بدل أن يُمنع في بعض الشاشات فقط. ويُعاد الفحص عند إتمام الصفقة، فيُكتشف سحب الاعتماد لاحقاً أو رفع الحد الأدنى قبل تسجيل البيع.",
+    publishedAt: releaseAt(2026, 7, 29, 2),
+  },
+  {
+    type: "FIX",
     titleEn: "Accepting or declining a trade-in offer works again in the app",
     titleAr: "قبول عرض استبدال السيارة أو رفضه يعمل مجدداً في التطبيق",
     descriptionEn: "Looking up a trade-in offer in the app and tapping Accept or Decline did nothing — the buttons were wired to something that was never finished on our side. Both now work, and accepting creates the lead with the dealership exactly as it does on the website.",
