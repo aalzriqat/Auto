@@ -1159,6 +1159,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "كان البحث عن عرض استبدال في التطبيق ثم الضغط على قبول أو رفض لا يؤدي إلى أي نتيجة، لأن الزرين كانا مرتبطين بخدمة لم تكتمل لدينا. أصبح الزران يعملان الآن، ويؤدي القبول إلى إنشاء الطلب لدى المعرض تماماً كما في الموقع.",
     publishedAt: releaseAt(2026, 7, 29, 3),
   },
+  {
+    type: "FIX",
+    titleEn: "Invalid amounts are rejected instead of quietly breaking a record",
+    titleAr: "رفض المبالغ غير الصالحة بدل تعطيل السجل بصمت",
+    descriptionEn: "An unreadable number entered as a supplier cost, work-order cost, commission, payment amount, or disbursement used to be saved as-is and then skipped by everything downstream — the record looked fine but was never costed, accrued, or reported. These are now refused at entry with a clear message. Scheduling a test drive also now requires the salesperson to be a member of your dealership.",
+    descriptionAr: "كان الرقم غير القابل للقراءة عند إدخاله كتكلفة مورّد أو تكلفة أمر عمل أو عمولة أو مبلغ دفعة أو صرف يُحفظ كما هو ثم تتجاهله بقية العمليات، فيبدو السجل سليماً بينما لا تُحتسب تكلفته ولا يُستحق ولا يظهر في التقارير. أصبحت هذه المبالغ مرفوضة عند الإدخال برسالة واضحة. كما أصبح جدولة تجربة القيادة تتطلب أن يكون موظف المبيعات عضواً في معرضك.",
+    publishedAt: releaseAt(2026, 7, 29, 4),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

@@ -7,7 +7,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
 import { hookPaymentLinkReceived } from "./accounting/workflowHooks";
 import { allocatePaymentToReceivable, createCanonicalPayment, getReceivableOutstandingMinor } from "./subledger";
-import { fromMinorUnits, toMinorUnits, scaleForCurrency } from "./utils/money";
+import { fromMinorUnits, toMinorUnits, scaleForCurrency, assertValidMinorAmount } from "./utils/money";
 
 const statusValidator = v.union(
   v.literal("PENDING"),
@@ -247,6 +247,9 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
+    // Before the range check, not after: NaN fails `<= 0` and would otherwise
+    // be stored as the intent's amount and stranded there.
+    assertValidMinorAmount(args.amountMinor, "payment amount");
     if (args.amountMinor <= 0) throw new ConvexError("Amount must be positive.");
     const provider = args.provider.trim().toLowerCase();
     if (!provider) throw new ConvexError("Provider is required.");

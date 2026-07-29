@@ -73,6 +73,50 @@ async function setup() {
   return { t, orgId, userId, customerId, vehicleId, otherVehicleId, asUser };
 }
 
+describe("test_drives.create salesperson tenancy", () => {
+  test("refuses a salespersonId that is not a member of the org", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+
+    // A real user, but in a different dealership. `create` verified the vehicle
+    // and the customer against the org and never the salesperson — and then
+    // notified them, pushing this org's vehicle label and a link into its
+    // dashboard to an outsider.
+    const outsiderId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "user_outsider", email: "outsider@other.com", name: "Outsider" })
+    );
+
+    await expect(
+      asUser.mutation(api.test_drives.create, {
+        orgId,
+        vehicleId,
+        customerId,
+        salespersonId: outsiderId,
+        startTime: Date.now(),
+      })
+    ).rejects.toThrow(/not a member/i);
+
+    const rows = await t.run((ctx) => ctx.db.query("test_drives").collect());
+    expect(rows).toHaveLength(0);
+    const notifications = await t.run((ctx) => ctx.db.query("notifications").collect());
+    expect(notifications).toHaveLength(0);
+  });
+
+  test("still accepts a salesperson who is a member", async () => {
+    const { t, orgId, customerId, vehicleId, userId, asUser } = await setup();
+
+    const id = await asUser.mutation(api.test_drives.create, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      startTime: Date.now(),
+    });
+
+    const row = await t.run((ctx) => ctx.db.get(id));
+    expect(row?.salespersonId).toBe(userId);
+  });
+});
+
 describe("test_drives.create lead stage advance", () => {
   test("advances an open lead for the same customer+vehicle to TEST_DRIVE", async () => {
     const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();

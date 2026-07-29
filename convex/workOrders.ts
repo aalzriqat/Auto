@@ -4,7 +4,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { hookExpensePosted, getOrgCurrency } from "./accounting/workflowHooks";
-import { toMinorUnits } from "./utils/money";
+import { toMinorUnits, assertFiniteNumber } from "./utils/money";
 import { Id } from "./_generated/dataModel";
 import { MutationCtx } from "./_generated/server";
 
@@ -109,6 +109,13 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
 
+    // A NaN in any task cost makes totalCost NaN, and `totalCost > 0` is false
+    // for NaN — so the work order would persist while its expense and GL
+    // posting were silently skipped, with no error anywhere.
+    for (const task of args.tasks) {
+      assertFiniteNumber(task.partsCost, "parts cost");
+      assertFiniteNumber(task.laborCost, "labor cost");
+    }
     const totalCost = args.tasks.reduce((sum, task) => sum + task.partsCost + task.laborCost, 0);
 
     let expenseId: Id<"expenses"> | undefined = undefined;
@@ -178,6 +185,13 @@ export const update = mutation({
       );
     }
 
+    // A NaN in any task cost makes totalCost NaN, and `totalCost > 0` is false
+    // for NaN — so the work order would persist while its expense and GL
+    // posting were silently skipped, with no error anywhere.
+    for (const task of args.tasks) {
+      assertFiniteNumber(task.partsCost, "parts cost");
+      assertFiniteNumber(task.laborCost, "labor cost");
+    }
     const totalCost = args.tasks.reduce((sum, task) => sum + task.partsCost + task.laborCost, 0);
 
     let expenseId = wo.expenseId;

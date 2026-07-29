@@ -294,6 +294,34 @@ export async function requireOwner(
   return authCtx;
 }
 
+// ─── Member-reference guard ──────────────────────────────────────────────────
+
+/**
+ * Proves a caller-supplied **user** id is a member of `orgId`.
+ *
+ * The row-ownership counterpart for user references. A handler that accepts an
+ * arbitrary `users` id and then stores it, assigns work to it, or — worst —
+ * notifies it, is leaking across tenants just as surely as one that patches a
+ * foreign row: `notifyUser` will happily push this org's vehicle and customer
+ * detail, plus a deep link into its dashboard, to somebody who was never in it.
+ */
+export async function requireOrgMember(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  userId: Id<"users">,
+  code: AppErrorCode = AppErrorCode.SALESPERSON_NOT_MEMBER,
+  message = "Salesperson is not a member of this organization."
+): Promise<Doc<"memberships">> {
+  const membership = await ctx.db
+    .query("memberships")
+    .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+    .unique();
+  if (!membership) {
+    throwAppError(code, message);
+  }
+  return membership;
+}
+
 // ─── Row-ownership guard ─────────────────────────────────────────────────────
 
 /**

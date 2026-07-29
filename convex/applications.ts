@@ -18,7 +18,7 @@ import {
   hookCommissionReversed,
   getOrgCurrency,
 } from "./accounting/workflowHooks";
-import { toMinorUnits } from "./utils/money";
+import { toMinorUnits, assertValidMinorAmount } from "./utils/money";
 import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
 import {
   allocatePaymentToReceivable,
@@ -1003,6 +1003,10 @@ export const confirmDisbursement = mutation({
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // The expected-amount comparison further down is skipped whenever the quote
+    // carries no totalFinancedAmount — a schema-legal state — so it cannot be
+    // relied on to reject NaN. Validate the input unconditionally.
+    assertValidMinorAmount(args.disbursedAmountMinor, "disbursed amount");
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
 
     return await runWithIdempotency(

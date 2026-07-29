@@ -10,7 +10,7 @@ import { CreateVehicleSchema, UpdateVehicleSchema } from "./validations/vehicles
 import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
 import { internal } from "./_generated/api";
 import { getOrgCurrency, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
-import { toMinorUnits } from "./utils/money";
+import { toMinorUnits, assertFiniteNumber } from "./utils/money";
 import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePaymentMethod, type AcquisitionPaymentMethod, type PaymentMethod } from "./utils/paymentMethods";
 import { syncVehicleHoldStatus, getDefaultReservationExpiry } from "./utils/depositHelpers";
 import {
@@ -625,6 +625,7 @@ export const create = mutation({
       if (args.sourceCost === undefined || args.sourceCost === null) {
         throw new ConvexError("Sourced vehicles require a supplier cost (sourceCost).");
       }
+      assertFiniteNumber(args.sourceCost, "supplier cost");
     }
 
     // A purchase price with no declared payment method would silently post as
@@ -1452,6 +1453,8 @@ export const createSourced = mutation({
     if (!args.sourcedFromName.trim()) {
       throw new ConvexError("Sourced vehicles require a supplier dealer name (sourcedFromName).");
     }
+    // NaN fails `<= 0`, so it would flow into cost, COGS and profit unchecked.
+    assertFiniteNumber(args.sourceCost, "supplier cost");
     if (args.sourceCost <= 0) {
       throw new ConvexError("Supplier cost must be greater than zero.");
     }

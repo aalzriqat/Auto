@@ -1,6 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireTenantAuth, requireOrgMember } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { advanceLeadStageForCustomerVehicle } from "./utils/leadStageHelpers";
 import { notifyUser, getActorName } from "./utils/notifications";
@@ -70,6 +70,12 @@ export const create = mutation({
     
     const customer = await ctx.db.get(args.customerId);
     if (!customer || customer.isDeleted || customer.orgId !== args.orgId) throw new ConvexError("Customer not found");
+
+    // The vehicle and customer above are tied back to the org but the
+    // salesperson was not, and this handler notifies them — so any authenticated
+    // member could push this org's vehicle detail and a link into its dashboard
+    // to an arbitrary user, including one in another dealership.
+    await requireOrgMember(ctx, args.orgId, args.salespersonId);
 
     const testDriveId = await ctx.db.insert("test_drives", {
       orgId: args.orgId,
