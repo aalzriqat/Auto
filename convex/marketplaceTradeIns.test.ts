@@ -294,6 +294,46 @@ describe("getStatusForBuyer / acceptOffer / declineOffer", () => {
     expect(tradeIn?.status).toBe("OFFERED");
   });
 
+  test("acceptOfferByPublicId returns success:false for a malformed phone without throwing", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, asSales } = await seedDealer(t);
+    const { tradeInRequestId } = await t.mutation(internal.marketplaceTradeIns.createTradeInRequest, {
+      ...baseTradeInMutationArgs,
+      orgId,
+    });
+    await asSales.mutation(api.marketplaceTradeIns.makeOffer, { orgId, tradeInRequestId, offerAmountJod: 3500 });
+
+    // normalizePhone throws on this; for a field the buyer types by hand that is
+    // an ordinary input error, and these endpoints promise not to throw.
+    const result = await t.mutation(api.marketplaceTradeIns.acceptOfferByPublicId, {
+      tradeInRequestId,
+      buyerPhone: "not-a-phone",
+    });
+    expect(result).toEqual({ success: false });
+
+    const tradeIn = await t.run((ctx) => ctx.db.get(tradeInRequestId));
+    expect(tradeIn?.status).toBe("OFFERED");
+  });
+
+  test("declineOfferByPublicId returns success:false for a malformed phone without throwing", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, asSales } = await seedDealer(t);
+    const { tradeInRequestId } = await t.mutation(internal.marketplaceTradeIns.createTradeInRequest, {
+      ...baseTradeInMutationArgs,
+      orgId,
+    });
+    await asSales.mutation(api.marketplaceTradeIns.makeOffer, { orgId, tradeInRequestId, offerAmountJod: 3500 });
+
+    const result = await t.mutation(api.marketplaceTradeIns.declineOfferByPublicId, {
+      tradeInRequestId,
+      buyerPhone: "",
+    });
+    expect(result).toEqual({ success: false });
+
+    const tradeIn = await t.run((ctx) => ctx.db.get(tradeInRequestId));
+    expect(tradeIn?.status).toBe("OFFERED");
+  });
+
   test("declineOfferByPublicId returns success:false when the offer is no longer live", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const { orgId } = await seedDealer(t);

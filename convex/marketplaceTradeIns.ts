@@ -229,6 +229,29 @@ async function resolveActionableOffer(
   return { ok: true, tradeIn };
 }
 
+/**
+ * The gate, for the public-id endpoints that must not throw.
+ *
+ * `normalizePhone` raises on a malformed number, which for a field the buyer
+ * types by hand is an ordinary input error, not an exception — catching it here
+ * keeps those endpoints total, as their `{ success }` contract promises.
+ */
+async function resolveActionableOfferQuietly(
+  ctx: MutationCtx,
+  rawTradeInRequestId: string,
+  buyerPhone: string
+): Promise<Doc<"marketplaceTradeInRequests"> | null> {
+  const tradeInRequestId = ctx.db.normalizeId("marketplaceTradeInRequests", rawTradeInRequestId.trim());
+  if (!tradeInRequestId) return null;
+  let gate: OfferGate;
+  try {
+    gate = await resolveActionableOffer(ctx, tradeInRequestId, buyerPhone);
+  } catch {
+    return null;
+  }
+  return gate.ok ? gate.tradeIn : null;
+}
+
 /** Maps a gate failure back to the message the public web page has always shown. */
 function offerGateError(reason: "NOT_FOUND" | "NO_ACTIVE_OFFER"): ConvexError<string> {
   return new ConvexError(
@@ -312,11 +335,9 @@ export const declineOffer = mutation({
 export const acceptOfferByPublicId = mutation({
   args: { tradeInRequestId: v.string(), buyerPhone: v.string() },
   handler: async (ctx, args): Promise<{ success: true; leadId: Id<"leads"> } | { success: false }> => {
-    const tradeInRequestId = ctx.db.normalizeId("marketplaceTradeInRequests", args.tradeInRequestId.trim());
-    if (!tradeInRequestId) return { success: false };
-    const gate = await resolveActionableOffer(ctx, tradeInRequestId, args.buyerPhone);
-    if (!gate.ok) return { success: false };
-    return { success: true, leadId: await applyOfferAcceptance(ctx, gate.tradeIn) };
+    const tradeIn = await resolveActionableOfferQuietly(ctx, args.tradeInRequestId, args.buyerPhone);
+    if (!tradeIn) return { success: false };
+    return { success: true, leadId: await applyOfferAcceptance(ctx, tradeIn) };
   },
 });
 
@@ -324,11 +345,9 @@ export const acceptOfferByPublicId = mutation({
 export const declineOfferByPublicId = mutation({
   args: { tradeInRequestId: v.string(), buyerPhone: v.string() },
   handler: async (ctx, args): Promise<{ success: true } | { success: false }> => {
-    const tradeInRequestId = ctx.db.normalizeId("marketplaceTradeInRequests", args.tradeInRequestId.trim());
-    if (!tradeInRequestId) return { success: false };
-    const gate = await resolveActionableOffer(ctx, tradeInRequestId, args.buyerPhone);
-    if (!gate.ok) return { success: false };
-    await ctx.db.patch(gate.tradeIn._id, { status: "DECLINED", respondedAt: Date.now() });
+    const tradeIn = await resolveActionableOfferQuietly(ctx, args.tradeInRequestId, args.buyerPhone);
+    if (!tradeIn) return { success: false };
+    await ctx.db.patch(tradeIn._id, { status: "DECLINED", respondedAt: Date.now() });
     return { success: true };
   },
 });

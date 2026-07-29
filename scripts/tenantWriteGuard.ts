@@ -92,6 +92,39 @@ function taintedIdentifiers(chunk: string, idArgs: Set<string>): Set<string> {
 }
 
 /**
+ * The caller-supplied document-id arguments of an org-scoped handler, or null if
+ * this is not one: no `args` block, no `orgId`, or no id arguments at all.
+ */
+function orgScopedIdArgs(chunk: string): Set<string> | null {
+  const argsSource = chunk.match(/args:\s*\{([\s\S]*?)\n\s*handler:/)?.[1];
+  if (!argsSource) return null;
+  if (!/\borgId:\s*v\.id\("organizations"\)/.test(argsSource)) return null;
+
+  const idArgs = new Set<string>();
+  for (const m of argsSource.matchAll(/(\w+):\s*[^,\n]*v\.id\("(\w+)"\)/g)) {
+    if (m[1] !== "orgId") idArgs.add(m[1]);
+  }
+  return idArgs.size > 0 ? idArgs : null;
+}
+
+/**
+ * Built once from a fixed method list, not from any caller input — the pattern
+ * is effectively a literal.
+ */
+const WRITE_CALL = new RegExp(`ctx\\.db\\.(${WRITE_METHODS.join("|")})\\(`, "g");
+
+/** `ctx.db.patch|delete|replace` calls whose id traces back to a tainted name. */
+function collectTaintedWrites(chunk: string, tainted: Set<string>): string[] {
+  const writes: string[] = [];
+  for (const m of chunk.matchAll(WRITE_CALL)) {
+    const argument = firstArgument(chunk, m.index! + m[0].length).trim();
+    const root = argument.replace(/^args\./, "").match(/^[A-Za-z_$][\w$]*/)?.[0];
+    if (root && tainted.has(root)) writes.push(`${m[1]}(${argument})`);
+  }
+  return writes;
+}
+
+/**
  * Scans one Convex module's source for the shape.
  *
  * Scope, stated precisely so the result is not over-read:
@@ -117,30 +150,13 @@ export function findUnguardedTenantWrites(source: string, file: string): Unguard
   for (const raw of chunks) {
     const chunk = "export const " + raw;
     const functionName = raw.match(/^(\w+)/)?.[1];
-    if (!functionName) continue;
-
     const kind = chunk.match(/=\s*(internalMutation|mutation)\(/)?.[1];
-    if (!kind) continue;
+    if (!functionName || !kind) continue;
 
-    const argsSource = chunk.match(/args:\s*\{([\s\S]*?)\n\s*handler:/)?.[1];
-    if (!argsSource) continue;
-    if (!/\borgId:\s*v\.id\("organizations"\)/.test(argsSource)) continue;
+    const idArgs = orgScopedIdArgs(chunk);
+    if (!idArgs) continue;
 
-    const idArgs = new Set<string>();
-    for (const m of argsSource.matchAll(/(\w+):\s*[^,\n]*v\.id\("(\w+)"\)/g)) {
-      if (m[1] !== "orgId") idArgs.add(m[1]);
-    }
-    if (idArgs.size === 0) continue;
-
-    const tainted = taintedIdentifiers(chunk, idArgs);
-
-    const writes: string[] = [];
-    const writeCall = new RegExp(`ctx\\.db\\.(${WRITE_METHODS.join("|")})\\(`, "g");
-    for (const m of chunk.matchAll(writeCall)) {
-      const argument = firstArgument(chunk, m.index! + m[0].length).trim();
-      const root = argument.replace(/^args\./, "").match(/^[A-Za-z_$][\w$]*/)?.[0];
-      if (root && tainted.has(root)) writes.push(`${m[1]}(${argument})`);
-    }
+    const writes = collectTaintedWrites(chunk, taintedIdentifiers(chunk, idArgs));
     if (writes.length === 0) continue;
 
     if (PROOF_PATTERNS.some((p) => p.test(chunk))) continue;

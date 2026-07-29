@@ -58,6 +58,19 @@ describe("mobile convexApi contract extraction", () => {
   test("accepts a function that does exist", () => {
     expect(checkReference(CONVEX_ROOT, "quotes:saveQuote")).toBeNull();
   });
+
+  // Both of these would otherwise resolve to a real export and pass while the
+  // mobile binding is broken: split(":") drops the trailing segment, and an
+  // unescaped function segment goes straight into a RegExp.
+  test.each(["quotes:saveQuote:stale", "quotes:.+", "quotes:", ":saveQuote", "quotes"])(
+    "rejects the malformed reference %s",
+    (reference) => {
+      expect(checkReference(CONVEX_ROOT, reference)).toMatchObject({
+        reference,
+        reason: "malformed-reference",
+      });
+    }
+  );
 });
 
 describe("every backend function the mobile app declares exists", () => {

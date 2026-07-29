@@ -27,7 +27,7 @@ import path from "node:path";
 export interface BrokenReference {
   /** The declared "module:function" string. */
   reference: string;
-  reason: "module-missing" | "export-missing";
+  reason: "malformed-reference" | "module-missing" | "export-missing";
   /** Path the module was expected at, relative to the repo root. */
   expectedModule: string;
 }
@@ -54,8 +54,24 @@ export function referencePaths(source: string): string[] {
   return out;
 }
 
+/**
+ * A well-formed reference: `path/to/module:functionName`, both segments made of
+ * identifier-safe characters only.
+ *
+ * Validating the shape is load-bearing, not defensive tidiness. `split(":")`
+ * discards extra segments, so `quotes:saveQuote:stale` would be checked as
+ * `quotes:saveQuote` and pass while the actual mobile binding is broken. And an
+ * unvalidated function segment goes straight into a `RegExp`, so `quotes:.+`
+ * would match some unrelated export and pass.
+ */
+const WELL_FORMED_REFERENCE = /^[A-Za-z0-9_/]+:[A-Za-z0-9_]+$/;
+
 /** Resolves one reference against the backend source tree. */
 export function checkReference(convexRoot: string, reference: string): BrokenReference | null {
+  if (!WELL_FORMED_REFERENCE.test(reference)) {
+    return { reference, reason: "malformed-reference", expectedModule: "—" };
+  }
+
   const [modulePath, functionName] = reference.split(":");
   const file = path.join(convexRoot, `${modulePath}.ts`);
   const expectedModule = `convex/${modulePath}.ts`;
@@ -65,8 +81,9 @@ export function checkReference(convexRoot: string, reference: string): BrokenRef
   }
 
   const source = fs.readFileSync(file, "utf8");
-  // Convex only routes top-level `export const` bindings.
-  const exported = new RegExp(`^export const ${functionName}\\b`, "m").test(source);
+  // Convex only routes top-level `export const` bindings. `functionName` is
+  // known identifier-safe by the check above, so it carries no metacharacters.
+  const exported = new RegExp(String.raw`^export const ${functionName}\b`, "m").test(source);
   return exported ? null : { reference, reason: "export-missing", expectedModule };
 }
 
