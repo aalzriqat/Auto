@@ -227,6 +227,92 @@ describe("getStatusForBuyer / acceptOffer / declineOffer", () => {
     expect(customers[0]).toMatchObject({ firstName: "Lina", phone: baseTradeInArgs.buyerPhone });
   });
 
+  // The mobile Offers tab calls these two by a raw pasted id. Neither existed on
+  // the backend until now, so buyer accept/decline was dead in the shipped app.
+  test("acceptOfferByPublicId accepts a raw id string and returns the created lead", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, asSales } = await seedDealer(t);
+    const { tradeInRequestId } = await t.mutation(internal.marketplaceTradeIns.createTradeInRequest, {
+      ...baseTradeInMutationArgs,
+      orgId,
+    });
+    await asSales.mutation(api.marketplaceTradeIns.makeOffer, { orgId, tradeInRequestId, offerAmountJod: 3500 });
+
+    const result = await t.mutation(api.marketplaceTradeIns.acceptOfferByPublicId, {
+      tradeInRequestId,
+      buyerPhone: baseTradeInArgs.buyerPhone,
+    });
+    expect(result.success).toBe(true);
+
+    const tradeIn = await t.run((ctx) => ctx.db.get(tradeInRequestId));
+    expect(tradeIn).toMatchObject({ status: "ACCEPTED" });
+    expect(tradeIn?.leadId).toBeTruthy();
+  });
+
+  test("declineOfferByPublicId accepts a raw id string", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, asSales } = await seedDealer(t);
+    const { tradeInRequestId } = await t.mutation(internal.marketplaceTradeIns.createTradeInRequest, {
+      ...baseTradeInMutationArgs,
+      orgId,
+    });
+    await asSales.mutation(api.marketplaceTradeIns.makeOffer, { orgId, tradeInRequestId, offerAmountJod: 3500 });
+
+    const result = await t.mutation(api.marketplaceTradeIns.declineOfferByPublicId, {
+      tradeInRequestId,
+      buyerPhone: baseTradeInArgs.buyerPhone,
+    });
+    expect(result.success).toBe(true);
+
+    const tradeIn = await t.run((ctx) => ctx.db.get(tradeInRequestId));
+    expect(tradeIn?.status).toBe("DECLINED");
+  });
+
+  // A malformed id, a wrong phone, and an offer that is not live all collapse to
+  // the same { success: false }: distinguishing them would turn this
+  // unauthenticated endpoint into an oracle for whether a phone number has a
+  // trade-in with a given dealership.
+  test.each([
+    ["a malformed id", { tradeInRequestId: "not-a-real-id", useRealId: false, phone: baseTradeInArgs.buyerPhone }],
+    ["a wrong phone", { tradeInRequestId: "", useRealId: true, phone: "+962700000000" }],
+  ])("acceptOfferByPublicId returns success:false for %s without throwing", async (_label, spec) => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, asSales } = await seedDealer(t);
+    const { tradeInRequestId } = await t.mutation(internal.marketplaceTradeIns.createTradeInRequest, {
+      ...baseTradeInMutationArgs,
+      orgId,
+    });
+    await asSales.mutation(api.marketplaceTradeIns.makeOffer, { orgId, tradeInRequestId, offerAmountJod: 3500 });
+
+    const result = await t.mutation(api.marketplaceTradeIns.acceptOfferByPublicId, {
+      tradeInRequestId: spec.useRealId ? tradeInRequestId : spec.tradeInRequestId,
+      buyerPhone: spec.phone,
+    });
+    expect(result).toEqual({ success: false });
+
+    const tradeIn = await t.run((ctx) => ctx.db.get(tradeInRequestId));
+    expect(tradeIn?.status).toBe("OFFERED");
+  });
+
+  test("declineOfferByPublicId returns success:false when the offer is no longer live", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId } = await seedDealer(t);
+    const { tradeInRequestId } = await t.mutation(internal.marketplaceTradeIns.createTradeInRequest, {
+      ...baseTradeInMutationArgs,
+      orgId,
+    });
+
+    // Still PENDING — no offer has been made.
+    const result = await t.mutation(api.marketplaceTradeIns.declineOfferByPublicId, {
+      tradeInRequestId,
+      buyerPhone: baseTradeInArgs.buyerPhone,
+    });
+    expect(result).toEqual({ success: false });
+
+    const tradeIn = await t.run((ctx) => ctx.db.get(tradeInRequestId));
+    expect(tradeIn?.status).toBe("PENDING");
+  });
+
   test("declineOffer sets status to DECLINED", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealer(t);

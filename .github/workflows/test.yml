@@ -136,6 +136,46 @@ jobs:
     - name: Convex tsconfig type check
       run: pnpm typecheck:convex
 
+  # apps/** and packages/** are excluded from the root lint, typecheck and
+  # vitest runs (see vitest.config.ts / eslint.config.mjs), and until now no
+  # workflow ran their own scripts either — so the mobile app's 100% coverage
+  # gate had never executed once, and a mobile screen calling a backend function
+  # that does not exist compiled, shipped, and failed on a user's phone. These
+  # scripts already existed; nothing invoked them.
+  mobile-and-shared:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        persist-credentials: false
+
+    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      with:
+        version: 11.13.0
+
+    - name: Use Node.js
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: '22.21.1'
+        cache: 'pnpm'
+
+    - name: Install dependencies
+      run: pnpm install --frozen-lockfile --ignore-scripts
+
+    # Runs before the app checks: packages/shared is what apps/mobile builds on.
+    - name: Shared package type check
+      run: pnpm shared:typecheck
+
+    - name: Shared package tests
+      run: pnpm shared:test
+
+    - name: Mobile type check
+      run: pnpm mobile:typecheck
+
+    - name: Mobile tests
+      run: pnpm mobile:test
+
   dealer-worker:
     runs-on: ubuntu-latest
 
