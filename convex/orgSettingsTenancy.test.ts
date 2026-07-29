@@ -378,6 +378,64 @@ describe("orgCustomerStatuses cross-tenant guards", () => {
   });
 });
 
+// Found by scripts/tenantWriteGuard.ts, not by review — the identical shape,
+// in a module nobody thought to check alongside the org* family.
+describe("feedback cross-tenant guards", () => {
+  test("setStatus refuses a feedback id belonging to another org", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { attacker, victim, asAttacker } = await setupTwoOrgs(t, "fb1");
+
+    const feedbackId = await t.run((ctx: any) =>
+      ctx.db.insert("feedback", {
+        orgId: victim.orgId,
+        userId: victim.userId,
+        type: "BUG" as const,
+        title: "Victim's private bug report",
+        status: "OPEN" as const,
+        createdAt: Date.now(),
+      })
+    );
+
+    await expect(
+      asAttacker.mutation(api.feedback.setStatus, {
+        orgId: attacker.orgId,
+        feedbackId,
+        status: "CLOSED",
+      })
+    ).rejects.toThrow(/not found/i);
+
+    const row: any = await t.run((ctx: any) => ctx.db.get(feedbackId));
+    expect(row.status).toBe("OPEN");
+    expect(row.resolvedAt).toBeUndefined();
+  });
+
+  test("an owner can still close their own org's feedback", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { attacker, asAttacker } = await setupTwoOrgs(t, "fb2");
+
+    const feedbackId = await t.run((ctx: any) =>
+      ctx.db.insert("feedback", {
+        orgId: attacker.orgId,
+        userId: attacker.userId,
+        type: "FEATURE" as const,
+        title: "Own request",
+        status: "OPEN" as const,
+        createdAt: Date.now(),
+      })
+    );
+
+    await asAttacker.mutation(api.feedback.setStatus, {
+      orgId: attacker.orgId,
+      feedbackId,
+      status: "CLOSED",
+    });
+
+    const row: any = await t.run((ctx: any) => ctx.db.get(feedbackId));
+    expect(row.status).toBe("CLOSED");
+    expect(row.resolvedAt).toBeTypeOf("number");
+  });
+});
+
 describe("orgValuationCompanies cross-tenant guards", () => {
   test("update and remove refuse a company id belonging to another org", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));

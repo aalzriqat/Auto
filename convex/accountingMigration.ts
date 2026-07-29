@@ -11,7 +11,7 @@ import { query, mutation, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { QueryCtx, MutationCtx } from "./_generated/server";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireTenantAuth, requireOwnedRow } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { postAccountingEvent } from "./accounting/postingEngine";
 import { getOrgCurrency, hookVehiclePrepExpenseReclassified } from "./accounting/workflowHooks";
@@ -773,6 +773,9 @@ export const postVehicleOpeningBalanceForVehicle = internalMutation({
         actorId: args.actorId,
       });
       for (const be of args.baseFoldedExpenses) {
+        // Expense ids arrive from the caller's plan, not from a lookup made
+        // here, so they are tied back to the org before being rewritten.
+        await requireOwnedRow(ctx, args.orgId, "expenses", be.expenseId, "Expense not found in this organization.");
         await ctx.db.patch(be.expenseId, {
           accountingTreatment: "CAPITALIZED_INVENTORY",
           capitalizedAmount: be.netAmount,
@@ -780,6 +783,7 @@ export const postVehicleOpeningBalanceForVehicle = internalMutation({
       }
     }
     for (const r of args.reclassifications) {
+      await requireOwnedRow(ctx, args.orgId, "expenses", r.expenseId, "Expense not found in this organization.");
       await hookVehiclePrepExpenseReclassified(ctx, {
         orgId: args.orgId,
         expenseId: r.expenseId,
