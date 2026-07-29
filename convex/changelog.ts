@@ -1151,6 +1151,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "أصبح عرض التمويل المسعّر دون الحد الأدنى لربح المركبة مرفوضاً في كل الشاشات — معالج المبيعات ونافذة العرض السريع وتطبيق الجوال — إلى أن يعتمده المدير، بدل أن يُمنع في بعض الشاشات فقط. ويُعاد الفحص عند إتمام الصفقة، فيُكتشف سحب الاعتماد لاحقاً أو رفع الحد الأدنى قبل تسجيل البيع.",
     publishedAt: releaseAt(2026, 7, 29, 2),
   },
+  {
+    type: "FIX",
+    titleEn: "Accepting or declining a trade-in offer works again in the app",
+    titleAr: "قبول عرض استبدال السيارة أو رفضه يعمل مجدداً في التطبيق",
+    descriptionEn: "Looking up a trade-in offer in the app and tapping Accept or Decline did nothing — the buttons were wired to something that was never finished on our side. Both now work, and accepting creates the lead with the dealership exactly as it does on the website.",
+    descriptionAr: "كان البحث عن عرض استبدال في التطبيق ثم الضغط على قبول أو رفض لا يؤدي إلى أي نتيجة، لأن الزرين كانا مرتبطين بخدمة لم تكتمل لدينا. أصبح الزران يعملان الآن، ويؤدي القبول إلى إنشاء الطلب لدى المعرض تماماً كما في الموقع.",
+    publishedAt: releaseAt(2026, 7, 29, 3),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

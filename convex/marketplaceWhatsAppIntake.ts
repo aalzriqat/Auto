@@ -3,6 +3,7 @@ import { internalAction, internalMutation, internalQuery, ActionCtx, MutationCtx
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { isSystemOwnerRole } from "./utils/permissions";
+import { requireOwnedRow } from "./utils/tenancy";
 import { notifyManagers } from "./utils/notifications";
 import { getValidatedEnv } from "./utils/env";
 import { listOptedInDealerProfiles } from "./marketplaceDealers";
@@ -295,6 +296,11 @@ export const saveFlowState = internalMutation({
     const { flowId, orgId, phone, ...stateFields } = args;
     const fields = { ...stateFields, updatedAt: Date.now() };
     if (flowId) {
+      // The caller finds the active flow by phone alone (`getActiveFlow`), while
+      // orgId is resolved separately from the WhatsApp number the message
+      // arrived on. One seller texting two dealerships would otherwise write the
+      // second conversation's state over the first dealership's flow row.
+      await requireOwnedRow(ctx, orgId, "marketplaceWhatsAppFlows", flowId, "Intake flow not found in this organization.");
       await ctx.db.patch(flowId, fields);
       return flowId;
     }

@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { requireAuth, requireTenantAuth, requireOwner, requireSuperAdmin } from "./utils/tenancy";
+import { requireAuth, requireTenantAuth, requireOwner, requireOwnedRow, requireSuperAdmin } from "./utils/tenancy";
 import { notifyUser } from "./utils/notifications";
 
 export const submit = mutation({
@@ -114,6 +114,10 @@ export const setStatus = mutation({
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
+    // requireOwner proves the caller owns the org they named, not that this
+    // feedback row belongs to it — without this an owner of any org could open
+    // and close any other dealership's feedback by passing its id.
+    await requireOwnedRow(ctx, args.orgId, "feedback", args.feedbackId, "Feedback not found in this organization.");
     const patch: Record<string, unknown> = { status: args.status };
     if (args.status === "CLOSED") patch.resolvedAt = Date.now();
     await ctx.db.patch(args.feedbackId, patch);

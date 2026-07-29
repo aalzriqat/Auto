@@ -1,7 +1,7 @@
 import { ConvexError, v } from "convex/values";
-import { action, internalMutation, mutation, query, QueryCtx } from "./_generated/server";
+import { action, internalMutation, mutation, query, MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { normalizeRequiredText, normalizeText } from "./websites";
 import { normalizePhone, verifyPublicSubmission } from "./marketplaceRequests";
 import { notifyByPermission } from "./utils/notifications";
@@ -204,45 +204,112 @@ export const getStatusForBuyerByPublicId = query({
   },
 });
 
-/** Public: buyer accepts an offer — creates an attributed lead in the dealer's existing pipeline (same as marketplaceResponses.respond), phone-gated. No Purchase Order is created: Phase 34 (Purchase Orders) doesn't exist in this codebase yet, so this stays a lead like every other marketplace conversion until that phase ships. */
+/** Why a buyer may not act on an offer, or the offer if they may. */
+type OfferGate =
+  | { ok: true; tradeIn: Doc<"marketplaceTradeInRequests"> }
+  | { ok: false; reason: "NOT_FOUND" | "NO_ACTIVE_OFFER" };
+
+/**
+ * Single gate for both entry points, so the phone check and the status check
+ * cannot drift between the web page and the mobile app.
+ *
+ * "No such request" and "wrong phone" are one reason on purpose: reporting them
+ * apart would turn this unauthenticated endpoint into an oracle for whether a
+ * given phone number has a trade-in with a given dealership.
+ */
+async function resolveActionableOffer(
+  ctx: MutationCtx,
+  tradeInRequestId: Id<"marketplaceTradeInRequests">,
+  buyerPhone: string
+): Promise<OfferGate> {
+  const tradeIn = await ctx.db.get(tradeInRequestId);
+  if (!tradeIn) return { ok: false, reason: "NOT_FOUND" };
+  if (tradeIn.buyerPhone !== normalizePhone(buyerPhone, "Phone")) return { ok: false, reason: "NOT_FOUND" };
+  if (tradeIn.status !== "OFFERED") return { ok: false, reason: "NO_ACTIVE_OFFER" };
+  return { ok: true, tradeIn };
+}
+
+/**
+ * The gate, for the public-id endpoints that must not throw.
+ *
+ * `normalizePhone` raises on a malformed number, which for a field the buyer
+ * types by hand is an ordinary input error, not an exception — catching it here
+ * keeps those endpoints total, as their `{ success }` contract promises.
+ */
+async function resolveActionableOfferQuietly(
+  ctx: MutationCtx,
+  rawTradeInRequestId: string,
+  buyerPhone: string
+): Promise<Doc<"marketplaceTradeInRequests"> | null> {
+  const tradeInRequestId = ctx.db.normalizeId("marketplaceTradeInRequests", rawTradeInRequestId.trim());
+  if (!tradeInRequestId) return null;
+  let gate: OfferGate;
+  try {
+    gate = await resolveActionableOffer(ctx, tradeInRequestId, buyerPhone);
+  } catch {
+    return null;
+  }
+  return gate.ok ? gate.tradeIn : null;
+}
+
+/** Maps a gate failure back to the message the public web page has always shown. */
+function offerGateError(reason: "NOT_FOUND" | "NO_ACTIVE_OFFER"): ConvexError<string> {
+  return new ConvexError(
+    reason === "NOT_FOUND" ? "Trade-in request not found." : "This trade-in request has no active offer."
+  );
+}
+
+/**
+ * The accept effect. Shared by the typed and public-id entry points so the two
+ * can never drift on what accepting an offer actually does.
+ *
+ * Creates an attributed lead in the dealer's existing pipeline (same as
+ * marketplaceResponses.respond). No Purchase Order is created: Phase 34
+ * (Purchase Orders) doesn't exist in this codebase yet, so this stays a lead
+ * like every other marketplace conversion until that phase ships.
+ */
+async function applyOfferAcceptance(
+  ctx: MutationCtx,
+  tradeIn: Doc<"marketplaceTradeInRequests">
+): Promise<Id<"leads">> {
+  const customerId = await getOrCreateMarketplaceBuyerCustomer(
+    ctx,
+    tradeIn.orgId,
+    tradeIn.buyerPhone,
+    tradeIn.buyerFirstName
+  );
+
+  const vehicleDescription = `${tradeIn.currentYear} ${tradeIn.currentMake} ${tradeIn.currentModel}`;
+  const noteLines = [
+    `Marketplace trade-in: buyer's current car is a ${vehicleDescription}, ${tradeIn.currentMileage.toLocaleString()} km, ${tradeIn.condition} condition.`,
+    `Accepted offer: ${tradeIn.offerAmountJod} JOD.`,
+  ];
+  if (tradeIn.notes) noteLines.push(tradeIn.notes);
+
+  const assignedUserId = await resolveGeneratedLeadAssignee(ctx, tradeIn.orgId);
+
+  const leadId = await ctx.db.insert("leads", {
+    orgId: tradeIn.orgId,
+    customerId,
+    assignedUserId,
+    source: "Marketplace trade-in",
+    sourceChannel: "marketplace",
+    stage: "NEW",
+    notes: noteLines.join(" "),
+  });
+
+  await ctx.db.patch(tradeIn._id, { status: "ACCEPTED", respondedAt: Date.now(), leadId });
+
+  return leadId;
+}
+
+/** Public: buyer accepts an offer, phone-gated. Throws on a bad id/phone — the web page at /marketplace/tradein/[id] surfaces the message. */
 export const acceptOffer = mutation({
   args: { tradeInRequestId: v.id("marketplaceTradeInRequests"), buyerPhone: v.string() },
   handler: async (ctx, args): Promise<{ leadId: Id<"leads"> }> => {
-    const tradeIn = await ctx.db.get(args.tradeInRequestId);
-    if (!tradeIn) throw new ConvexError("Trade-in request not found.");
-    const normalizedPhone = normalizePhone(args.buyerPhone, "Phone");
-    if (tradeIn.buyerPhone !== normalizedPhone) throw new ConvexError("Trade-in request not found.");
-    if (tradeIn.status !== "OFFERED") throw new ConvexError("This trade-in request has no active offer.");
-
-    const customerId = await getOrCreateMarketplaceBuyerCustomer(
-      ctx,
-      tradeIn.orgId,
-      tradeIn.buyerPhone,
-      tradeIn.buyerFirstName
-    );
-
-    const vehicleDescription = `${tradeIn.currentYear} ${tradeIn.currentMake} ${tradeIn.currentModel}`;
-    const noteLines = [
-      `Marketplace trade-in: buyer's current car is a ${vehicleDescription}, ${tradeIn.currentMileage.toLocaleString()} km, ${tradeIn.condition} condition.`,
-      `Accepted offer: ${tradeIn.offerAmountJod} JOD.`,
-    ];
-    if (tradeIn.notes) noteLines.push(tradeIn.notes);
-
-    const assignedUserId = await resolveGeneratedLeadAssignee(ctx, tradeIn.orgId);
-
-    const leadId = await ctx.db.insert("leads", {
-      orgId: tradeIn.orgId,
-      customerId,
-      assignedUserId,
-      source: "Marketplace trade-in",
-      sourceChannel: "marketplace",
-      stage: "NEW",
-      notes: noteLines.join(" "),
-    });
-
-    await ctx.db.patch(args.tradeInRequestId, { status: "ACCEPTED", respondedAt: Date.now(), leadId });
-
-    return { leadId };
+    const gate = await resolveActionableOffer(ctx, args.tradeInRequestId, args.buyerPhone);
+    if (!gate.ok) throw offerGateError(gate.reason);
+    return { leadId: await applyOfferAcceptance(ctx, gate.tradeIn) };
   },
 });
 
@@ -250,12 +317,37 @@ export const acceptOffer = mutation({
 export const declineOffer = mutation({
   args: { tradeInRequestId: v.id("marketplaceTradeInRequests"), buyerPhone: v.string() },
   handler: async (ctx, args) => {
-    const tradeIn = await ctx.db.get(args.tradeInRequestId);
-    if (!tradeIn) throw new ConvexError("Trade-in request not found.");
-    const normalizedPhone = normalizePhone(args.buyerPhone, "Phone");
-    if (tradeIn.buyerPhone !== normalizedPhone) throw new ConvexError("Trade-in request not found.");
-    if (tradeIn.status !== "OFFERED") throw new ConvexError("This trade-in request has no active offer.");
+    const gate = await resolveActionableOffer(ctx, args.tradeInRequestId, args.buyerPhone);
+    if (!gate.ok) throw offerGateError(gate.reason);
+    await ctx.db.patch(gate.tradeIn._id, { status: "DECLINED", respondedAt: Date.now() });
+  },
+});
 
-    await ctx.db.patch(args.tradeInRequestId, { status: "DECLINED", respondedAt: Date.now() });
+/**
+ * Public/mobile-safe accept, by a pasted/link id string.
+ *
+ * The mobile Offers tab types a raw id into a text field, so a malformed one
+ * must not blow up on the `v.id` validator — same convention as
+ * `getStatusForBuyerByPublicId` above. Returns a result object rather than
+ * throwing so the caller can render one "couldn't update that offer" state for
+ * every reason it might have failed.
+ */
+export const acceptOfferByPublicId = mutation({
+  args: { tradeInRequestId: v.string(), buyerPhone: v.string() },
+  handler: async (ctx, args): Promise<{ success: true; leadId: Id<"leads"> } | { success: false }> => {
+    const tradeIn = await resolveActionableOfferQuietly(ctx, args.tradeInRequestId, args.buyerPhone);
+    if (!tradeIn) return { success: false };
+    return { success: true, leadId: await applyOfferAcceptance(ctx, tradeIn) };
+  },
+});
+
+/** Public/mobile-safe decline, by a pasted/link id string. See acceptOfferByPublicId. */
+export const declineOfferByPublicId = mutation({
+  args: { tradeInRequestId: v.string(), buyerPhone: v.string() },
+  handler: async (ctx, args): Promise<{ success: true } | { success: false }> => {
+    const tradeIn = await resolveActionableOfferQuietly(ctx, args.tradeInRequestId, args.buyerPhone);
+    if (!tradeIn) return { success: false };
+    await ctx.db.patch(tradeIn._id, { status: "DECLINED", respondedAt: Date.now() });
+    return { success: true };
   },
 });
