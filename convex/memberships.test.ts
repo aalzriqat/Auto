@@ -1834,6 +1834,112 @@ describe("memberships.updateRole", () => {
     });
   });
 
+  // A MANAGE_USERS holder used to be restrained only when an OWNER membership
+  // was on either side of the change. Everything below that line was open: they
+  // could re-role themselves, and hand out permissions they did not hold.
+  async function setupManagerAndMember(t: any, seed: string, managerPermissions: string[]) {
+    const { orgId } = await setupOrg(t, `owner_${seed}`);
+    const managerRoleId = await t.run((ctx: any) =>
+      ctx.db.insert("roles", { orgId, name: "MANAGER", permissions: managerPermissions })
+    ) as Id<"roles">;
+    const salesRoleId = await t.run((ctx: any) =>
+      ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
+    ) as Id<"roles">;
+    const managerUserId = await t.run((ctx: any) =>
+      ctx.db.insert("users", { clerkId: `mgr_${seed}`, email: `mgr-${seed}@test.com` })
+    );
+    const managerMembershipId = await t.run((ctx: any) =>
+      ctx.db.insert("memberships", { orgId, userId: managerUserId, roleId: managerRoleId })
+    ) as Id<"memberships">;
+    const memberUserId = await t.run((ctx: any) =>
+      ctx.db.insert("users", { clerkId: `mbr_${seed}`, email: `mbr-${seed}@test.com` })
+    );
+    const memberMembershipId = await t.run((ctx: any) =>
+      ctx.db.insert("memberships", { orgId, userId: memberUserId, roleId: salesRoleId })
+    ) as Id<"memberships">;
+    return {
+      orgId,
+      managerRoleId,
+      salesRoleId,
+      managerMembershipId,
+      memberMembershipId,
+      asManager: t.withIdentity({ subject: `mgr_${seed}` }),
+    };
+  }
+
+  test("prevents a manager from re-roling themselves", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, salesRoleId, managerMembershipId, managerRoleId, asManager } =
+      await setupManagerAndMember(t, "self", ADMIN_PERMISSIONS);
+
+    await expect(
+      asManager.mutation(api.memberships.updateRole, {
+        orgId,
+        membershipId: managerMembershipId,
+        newRoleId: salesRoleId,
+      })
+    ).rejects.toThrow(/cannot change your own role/i);
+
+    await t.run(async (ctx: any) => {
+      const membership = await ctx.db.get(managerMembershipId);
+      expect(membership?.roleId).toBe(managerRoleId);
+    });
+  });
+
+  test("prevents a manager from granting permissions they do not hold", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, memberMembershipId, salesRoleId, asManager } = await setupManagerAndMember(
+      t,
+      "escalate",
+      ADMIN_PERMISSIONS
+    );
+
+    const superRoleId = await t.run((ctx: any) =>
+      ctx.db.insert("roles", {
+        orgId,
+        name: "SUPER SALES",
+        permissions: [...ADMIN_PERMISSIONS, "delete:vehicles", "manage:finance"],
+      })
+    ) as Id<"roles">;
+
+    await expect(
+      asManager.mutation(api.memberships.updateRole, {
+        orgId,
+        membershipId: memberMembershipId,
+        newRoleId: superRoleId,
+      })
+    ).rejects.toThrow(/cannot grant permissions you do not hold/i);
+
+    await t.run(async (ctx: any) => {
+      const membership = await ctx.db.get(memberMembershipId);
+      expect(membership?.roleId).toBe(salesRoleId);
+    });
+  });
+
+  test("still lets a manager assign a role within their own permission set", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, memberMembershipId, asManager } = await setupManagerAndMember(
+      t,
+      "subset",
+      [...ADMIN_PERMISSIONS, "view:vehicles"]
+    );
+
+    const subsetRoleId = await t.run((ctx: any) =>
+      ctx.db.insert("roles", { orgId, name: "RECEPTION", permissions: ["view:vehicles"] })
+    ) as Id<"roles">;
+
+    await asManager.mutation(api.memberships.updateRole, {
+      orgId,
+      membershipId: memberMembershipId,
+      newRoleId: subsetRoleId,
+    });
+
+    await t.run(async (ctx: any) => {
+      const membership = await ctx.db.get(memberMembershipId);
+      expect(membership?.roleId).toBe(subsetRoleId);
+    });
+  });
+
   test("prevents a manager from demoting an owner", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId, roleId: ownerRoleId } = await setupOrg(t, "user_owner_demote");

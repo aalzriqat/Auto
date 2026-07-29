@@ -1,6 +1,8 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { requireTenantAuth, requireOwner } from "./utils/tenancy";
+import { requireTenantAuth, requireOwner, requireOwnedRow } from "./utils/tenancy";
+
+const FIELD_NOT_FOUND = "Custom field not found in this organization.";
 
 // ─── Field definitions ─────────────────────────────────────────────────────────
 
@@ -71,6 +73,7 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
+    await requireOwnedRow(ctx, args.orgId, "orgCustomFields", args.fieldId, FIELD_NOT_FOUND);
     const { fieldId, orgId, ...fields } = args;
     const patch: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(fields)) {
@@ -88,6 +91,10 @@ export const remove = mutation({
   args: { orgId: v.id("organizations"), fieldId: v.id("orgCustomFields") },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
+    // Without this the delete below removes another org's field definition
+    // while the value cleanup only ever touches the caller's own org, orphaning
+    // the victim's value rows behind a definition that no longer exists.
+    await requireOwnedRow(ctx, args.orgId, "orgCustomFields", args.fieldId, FIELD_NOT_FOUND);
     // Delete all values for this field
     const values = await ctx.db
       .query("orgCustomFieldValues")
@@ -110,10 +117,13 @@ export const getValues = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId);
+    // Entity ids are caller-supplied and `by_entity` is not org-scoped, so this
+    // must enter the table by org — otherwise any member of any org reads
+    // another dealership's custom-field data by naming its entity id.
     return await ctx.db
       .query("orgCustomFieldValues")
-      .withIndex("by_entity", (q) =>
-        q.eq("entityType", args.entityType).eq("entityId", args.entityId)
+      .withIndex("by_org_entity", (q) =>
+        q.eq("orgId", args.orgId).eq("entityType", args.entityType).eq("entityId", args.entityId)
       )
       .collect();
   },
@@ -128,10 +138,20 @@ export const setValues = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId);
+
+    // Reject the whole payload before writing anything: a field definition the
+    // caller's org does not own can only have come from another dealership, and
+    // accepting it would stamp this org's id onto that org's entity.
+    for (const { fieldId } of args.values) {
+      await requireOwnedRow(ctx, args.orgId, "orgCustomFields", fieldId, FIELD_NOT_FOUND);
+    }
+
+    // Org-scoped for the same reason as getValues — `by_entity` alone would
+    // hand back another org's rows to patch and delete.
     const existing = await ctx.db
       .query("orgCustomFieldValues")
-      .withIndex("by_entity", (q) =>
-        q.eq("entityType", args.entityType).eq("entityId", args.entityId)
+      .withIndex("by_org_entity", (q) =>
+        q.eq("orgId", args.orgId).eq("entityType", args.entityType).eq("entityId", args.entityId)
       )
       .collect();
 

@@ -1137,6 +1137,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
   },
   {
     type: "FIX",
+    titleEn: "Stronger separation between dealerships, and tighter role changes",
+    titleAr: "فصل أقوى بين المعارض وضبط أدق لتغيير الصلاحيات",
+    descriptionEn: "Custom fields and sales pipeline stages are now strictly limited to the dealership that owns them, so one dealership's settings and custom-field data can never be read or changed from another account. Changing a teammate's role also got safer: staff can no longer change their own role or grant a role that carries permissions they do not hold themselves.",
+    descriptionAr: "أصبحت الحقول المخصصة ومراحل مسار المبيعات مقصورة تماماً على المعرض الذي يملكها، فلا يمكن الاطلاع على إعدادات معرض آخر أو بياناته أو تعديلها من حساب مختلف. كما أصبح تغيير صلاحيات أعضاء الفريق أكثر أماناً: لم يعد بإمكان الموظف تغيير دوره بنفسه أو منح دور يحمل صلاحيات لا يملكها هو.",
+    publishedAt: releaseAt(2026, 7, 29, 1),
+  },
+  {
+    type: "FIX",
     titleEn: "Minimum profit is now enforced on every financed quote",
     titleAr: "تطبيق الحد الأدنى للربح على كل عرض تمويل",
     descriptionEn: "A financed quote priced below the vehicle's minimum profit is now refused everywhere — the sales wizard, the quick quote dialog, and the mobile app — until a manager approves it, instead of only being blocked on some screens. The check runs again when the deal is finalized, so an approval that was later withdrawn, or a minimum that was raised in the meantime, is caught before the sale is recorded.",

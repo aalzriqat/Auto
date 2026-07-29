@@ -1,7 +1,9 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { requireTenantAuth, requireOwner } from "./utils/tenancy";
+import { requireTenantAuth, requireOwner, requireOwnedRow } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+
+const STAGE_NOT_FOUND = "Pipeline stage not found in this organization.";
 
 export const DEFAULT_STAGES = [
   { stageKey: "NEW", label: "New", color: "#6b7280", order: 0 },
@@ -58,6 +60,7 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
+    await requireOwnedRow(ctx, args.orgId, "orgPipelineStages", args.stageId, STAGE_NOT_FOUND);
     const { stageId, orgId, ...fields } = args;
     const patch: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(fields)) {
@@ -78,6 +81,11 @@ export const reorder = mutation({
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
+    // Check every id up front: a partial reorder that threw halfway would leave
+    // the caller's own stages renumbered against a list they never applied.
+    for (const stageId of args.orderedIds) {
+      await requireOwnedRow(ctx, args.orgId, "orgPipelineStages", stageId, STAGE_NOT_FOUND);
+    }
     for (let i = 0; i < args.orderedIds.length; i++) {
       await ctx.db.patch(args.orderedIds[i], { order: i });
     }
