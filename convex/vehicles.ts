@@ -1650,10 +1650,16 @@ export const getRelations = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
 
     // 1. Fetch Sales (a vehicle has at most a handful of sales)
+    // Soft-deleted rows are excluded from all three lists below: this is the
+    // vehicle's live relations panel, and a deleted sale, lead or expense
+    // reappearing there is the same leak `isDeleted` exists to prevent.
     const sales = await ctx.db
       .query("sales")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.eq(q.field("vehicleId"), args.vehicleId))
+      .filter((q) => q.and(
+        q.eq(q.field("vehicleId"), args.vehicleId),
+        q.neq(q.field("isDeleted"), true)
+      ))
       .take(20);
 
     const enrichedSales = await Promise.all(
@@ -1672,7 +1678,10 @@ export const getRelations = query({
     const leads = await ctx.db
       .query("leads")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.eq(q.field("vehicleId"), args.vehicleId))
+      .filter((q) => q.and(
+        q.eq(q.field("vehicleId"), args.vehicleId),
+        q.neq(q.field("isDeleted"), true)
+      ))
       .take(50);
 
     const enrichedLeads = await Promise.all(
@@ -1691,6 +1700,7 @@ export const getRelations = query({
     const expenses = await ctx.db
       .query("expenses")
       .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
+      .filter((q) => q.neq(q.field("isDeleted"), true))
       .take(200);
 
     const enrichedExpenses = await Promise.all(
