@@ -2,7 +2,8 @@ import { v, ConvexError } from "convex/values";
 import { mutation, query, MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireTenantAuth, requireOrgMember } from "./utils/tenancy";
+import { AppErrorCode } from "./utils/errors";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { validateInput } from "./utils/validation";
@@ -337,6 +338,18 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_EXPENSES]);
     await assertSalaryExpenseAllowed(ctx, args.orgId, args.category);
+    // A caller-supplied users id, stored and later hydrated into `payer.name` by
+    // the expense list — so an unvalidated one discloses a foreign user's
+    // identity inside the caller's own org.
+    if (args.payerId) {
+      await requireOrgMember(
+        ctx,
+        args.orgId,
+        args.payerId,
+        AppErrorCode.ASSIGNED_USER_NOT_MEMBER,
+        "The selected payer is not a member of this organization."
+      );
+    }
     const status = args.status ?? "PAID";
     const paymentMethod = status === "PAID" ? normalizePaymentMethod(args.paymentMethod) : args.paymentMethod;
     if (args.taxAmount !== undefined && args.taxAmount > args.amount) {
@@ -560,6 +573,15 @@ export const update = mutation({
     if (args.vendor !== undefined) patch.vendor = args.vendor;
     if (args.paymentMethod !== undefined) patch.paymentMethod = args.paymentMethod;
     if (args.payerId !== undefined) {
+      if (args.payerId !== null) {
+        await requireOrgMember(
+          ctx,
+          args.orgId,
+          args.payerId,
+          AppErrorCode.ASSIGNED_USER_NOT_MEMBER,
+          "The selected payer is not a member of this organization."
+        );
+      }
       patch.payerId = args.payerId === null ? undefined : args.payerId;
     }
     if (args.notes !== undefined) patch.notes = args.notes;

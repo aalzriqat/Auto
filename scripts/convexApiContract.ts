@@ -13,13 +13,17 @@
  * `marketplaceTradeIns.acceptOfferByPublicId` / `declineOfferByPublicId`, and
  * neither existed. Buyer trade-in accept and decline were dead in production.
  *
- * NOTE on the extraction: an earlier version of this check used
- * `/makeFunctionReference<[\s\S]*?>\(/` and silently skipped every declaration
- * whose generic arguments contained a nested `>` — 70 of 193 here, since most
- * are written multi-line with nested generics. It reported clean coverage over
- * a third of the file. `referencePaths` below anchors on the call's string
- * argument instead, and `expectedReferenceCount` pins the total so a future
- * regex change cannot quietly shrink the surface again.
+ * NOTE on the extraction — it has been wrong twice, in the same way:
+ *   1. `/makeFunctionReference<[\s\S]*?>\(/` terminated at the first `>` and
+ *      skipped every declaration with a nested generic.
+ *   2. Anchoring on `\("…"\)` skipped every declaration whose argument carries
+ *      a Prettier trailing comma — 70 of 193 — and because each of those then
+ *      matched the NEXT declaration's string, the total stayed at 193 and the
+ *      count pin never fired. Real coverage was 123/193 while the test asserted
+ *      full coverage.
+ * Both times the count looked right. That is why `findDuplicateReferences` now
+ * backs the count: this file never declares one backend function twice, so a
+ * duplicate is proof the extractor mis-parsed something.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -27,7 +31,7 @@ import path from "node:path";
 export interface BrokenReference {
   /** The declared "module:function" string. */
   reference: string;
-  reason: "malformed-reference" | "module-missing" | "export-missing";
+  reason: "malformed-reference" | "module-missing" | "export-missing" | "not-client-reachable";
   /** Path the module was expected at, relative to the repo root. */
   expectedModule: string;
 }
@@ -47,11 +51,30 @@ export function referencePaths(source: string): string[] {
     const at = source.indexOf(marker, from);
     if (at === -1) break;
     const rest = source.slice(at + marker.length);
-    const arg = rest.match(/\(\s*"([^"]+)"\s*\)/);
+    // The `,?` is load-bearing — see the note at the top of this file.
+    const arg = rest.match(/\(\s*"([^"]+)"\s*,?\s*\)/);
     if (arg) out.push(arg[1]);
     from = at + marker.length;
   }
   return out;
+}
+
+/**
+ * Declarations that did not yield their own reference.
+ *
+ * A count cannot detect the extraction drifting, because the failure mode is
+ * duplication rather than loss: a skipped declaration picks up its neighbour's
+ * string, so the length stays exactly right. `convexApi.ts` never declares the
+ * same backend function twice, so any duplicate means a mis-parse.
+ */
+export function findDuplicateReferences(references: string[]): string[] {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const reference of references) {
+    if (seen.has(reference)) duplicates.add(reference);
+    seen.add(reference);
+  }
+  return [...duplicates];
 }
 
 /**
@@ -80,11 +103,40 @@ export function checkReference(convexRoot: string, reference: string): BrokenRef
     return { reference, reason: "module-missing", expectedModule };
   }
 
-  const source = fs.readFileSync(file, "utf8");
+  // Block comments are stripped first: `/^export const x\b/m` matches happily
+  // inside `/* ... */`, so commenting a function out left the gate green while
+  // the mobile binding was dead. Line comments never match the anchor.
+  const source = stripBlockComments(fs.readFileSync(file, "utf8"));
+
   // Convex only routes top-level `export const` bindings. `functionName` is
   // known identifier-safe by the check above, so it carries no metacharacters.
-  const exported = new RegExp(String.raw`^export const ${functionName}\b`, "m").test(source);
-  return exported ? null : { reference, reason: "export-missing", expectedModule };
+  const anchor = new RegExp(String.raw`^export const ${functionName}\b`, "m").exec(source);
+  if (!anchor) {
+    return { reference, reason: "export-missing", expectedModule };
+  }
+
+  // Slice to the next top-level export by index rather than by a regex
+  // lookahead. JS has no `\Z`, so a lookahead written that way silently fails to
+  // match the LAST export in a file and reports it missing — which is exactly
+  // what happened to the two functions this whole check was built for.
+  const bodyStart = anchor.index + anchor[0].length;
+  const nextExport = source.indexOf("\nexport const ", bodyStart);
+  const body = source.slice(bodyStart, nextExport === -1 ? undefined : nextExport);
+
+  // `internal*` functions exist and are exported but are NOT reachable from a
+  // client, so a mobile reference to one type-checks, passes an existence check,
+  // and then fails at runtime on a device — the exact class this file exists to
+  // catch.
+  if (/^\s*=\s*internal(Query|Mutation|Action)\s*\(/.test(body)) {
+    return { reference, reason: "not-client-reachable", expectedModule };
+  }
+
+  return null;
+}
+
+/** Removes block-comment spans so a commented-out export cannot satisfy the check. */
+function stripBlockComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "");
 }
 
 export function findBrokenReferences(contractSource: string, convexRoot: string): BrokenReference[] {

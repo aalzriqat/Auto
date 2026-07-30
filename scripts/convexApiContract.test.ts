@@ -9,7 +9,13 @@
 import { describe, expect, test } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { findBrokenReferences, referencePaths, checkReference } from "./convexApiContract";
+import os from "node:os";
+import {
+  findBrokenReferences,
+  referencePaths,
+  checkReference,
+  findDuplicateReferences,
+} from "./convexApiContract";
 
 const REPO_ROOT = path.resolve(__dirname, "..");
 const CONVEX_ROOT = path.join(REPO_ROOT, "convex");
@@ -34,6 +40,18 @@ describe("mobile convexApi contract extraction", () => {
     expect(referencePaths(source)).toEqual(["marketplaceTradeIns:acceptOfferByPublicId"]);
   });
 
+  test("reads a wrapped declaration whose argument carries a trailing comma", () => {
+    // Prettier's output for any declaration long enough to wrap. 70 of the 193
+    // real ones look like this, and all 70 were being skipped.
+    const source = `
+    isSuperAdmin: makeFunctionReference<"query", Record<string, never>, boolean>(
+      "adminAuth:isSuperAdmin",
+    ),
+    getMe: makeFunctionReference<"query", Record<string, never>, MobileUser>("users:getMe"),
+`;
+    expect(referencePaths(source)).toEqual(["adminAuth:isSuperAdmin", "users:getMe"]);
+  });
+
   test("reads a single-line declaration", () => {
     const source = `saveQuote: makeFunctionReference<"mutation", QuoteSaveArgs, string>("quotes:saveQuote"),`;
     expect(referencePaths(source)).toEqual(["quotes:saveQuote"]);
@@ -53,6 +71,33 @@ describe("mobile convexApi contract extraction", () => {
       reason: "module-missing",
       expectedModule: "convex/noSuchModule.ts",
     });
+  });
+
+  test("accepts the LAST export in a module", () => {
+    // Regression: a `\Z` lookahead (not a thing in JS) meant the final export in
+    // a file never matched and was reported missing.
+    expect(checkReference(CONVEX_ROOT, "marketplaceTradeIns:declineOfferByPublicId")).toBeNull();
+  });
+
+  test("rejects an export that is only present inside a block comment", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "convex-contract-"));
+    fs.writeFileSync(
+      path.join(dir, "ghost.ts"),
+      ["/*", "export const ghostFn = query({});", "*/", "export const realFn = query({});", ""].join("\n")
+    );
+    expect(checkReference(dir, "ghost:ghostFn")).toMatchObject({ reason: "export-missing" });
+    expect(checkReference(dir, "ghost:realFn")).toBeNull();
+  });
+
+  test("rejects a reference to an internal-only function", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "convex-contract-"));
+    fs.writeFileSync(
+      path.join(dir, "priv.ts"),
+      ["export const hidden = internalMutation({});", "export const open = mutation({});", ""].join("\n")
+    );
+    // Exists and is exported, but no client can call it — it would fail on a device.
+    expect(checkReference(dir, "priv:hidden")).toMatchObject({ reason: "not-client-reachable" });
+    expect(checkReference(dir, "priv:open")).toBeNull();
   });
 
   test("accepts a function that does exist", () => {
@@ -78,6 +123,16 @@ describe("every backend function the mobile app declares exists", () => {
 
   test("the whole contract surface is covered, not a subset of it", () => {
     expect(referencePaths(contractSource)).toHaveLength(EXPECTED_REFERENCE_COUNT);
+  });
+
+  // The count alone is not enough. The extractor's real failure mode is
+  // duplication, not loss: a declaration whose own argument is skipped picks up
+  // the next one's string, so the length stays exactly right while a third of
+  // the surface goes unchecked. That is precisely what shipped.
+  test("every declaration yields its own reference, with no duplicates", () => {
+    const references = referencePaths(contractSource);
+    expect(findDuplicateReferences(references)).toEqual([]);
+    expect(new Set(references).size).toBe(EXPECTED_REFERENCE_COUNT);
   });
 
   test("no mobile screen calls a function that is not on the backend", () => {

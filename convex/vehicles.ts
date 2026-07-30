@@ -10,7 +10,7 @@ import { CreateVehicleSchema, UpdateVehicleSchema } from "./validations/vehicles
 import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
 import { internal } from "./_generated/api";
 import { getOrgCurrency, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
-import { toMinorUnits } from "./utils/money";
+import { toMinorUnits, assertFiniteNumber } from "./utils/money";
 import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePaymentMethod, type AcquisitionPaymentMethod, type PaymentMethod } from "./utils/paymentMethods";
 import { syncVehicleHoldStatus, getDefaultReservationExpiry } from "./utils/depositHelpers";
 import {
@@ -625,6 +625,7 @@ export const create = mutation({
       if (args.sourceCost === undefined || args.sourceCost === null) {
         throw new ConvexError("Sourced vehicles require a supplier cost (sourceCost).");
       }
+      assertFiniteNumber(args.sourceCost, "supplier cost");
     }
 
     // A purchase price with no declared payment method would silently post as
@@ -997,6 +998,14 @@ export const upsertLandedCosts = mutation({
     }
     if (vehicle.status === "SOLD") {
       throw new ConvexError("Cannot edit landed costs on a sold vehicle — its inventory has already been relieved.");
+    }
+
+    // For a non-SOURCED vehicle a NaN total blows up later in toMinorUnits and
+    // rolls the mutation back, but that GL block is skipped entirely for SOURCED
+    // vehicles — so NaN would land in vehicleLandedCosts.total and
+    // vehicles.landedCostTotal with no error at all.
+    for (const item of args.items) {
+      assertFiniteNumber(item.amount, "landed cost amount");
     }
 
     const items = args.items
@@ -1452,8 +1461,28 @@ export const createSourced = mutation({
     if (!args.sourcedFromName.trim()) {
       throw new ConvexError("Sourced vehicles require a supplier dealer name (sourcedFromName).");
     }
+    // NaN fails `<= 0`, so it would flow into cost, COGS and profit unchecked.
+    // Unlike create/update this path runs no Zod schema at all, so every numeric
+    // field here needs an explicit guard — not just the one with a range check.
+    assertFiniteNumber(args.sourceCost, "supplier cost");
+    assertFiniteNumber(args.sellingPrice, "selling price");
+    assertFiniteNumber(args.year, "year");
+    assertFiniteNumber(args.mileage, "mileage");
     if (args.sourceCost <= 0) {
       throw new ConvexError("Supplier cost must be greater than zero.");
+    }
+    // The ranges are lifted from CreateVehicleSchema, the schema the `create`
+    // path does run, so the two entry points accept the same numbers. They are
+    // deliberately not stricter than it: `sellingPrice: 0` is legal there and
+    // means "not priced yet".
+    if (args.sellingPrice < 0) {
+      throw new ConvexError("Selling price cannot be negative.");
+    }
+    if (args.mileage < 0) {
+      throw new ConvexError("Mileage cannot be negative.");
+    }
+    if (args.year < 1900 || args.year > 2100) {
+      throw new ConvexError("Year must be valid.");
     }
     if (!args.make.trim() || !args.model.trim() || !args.color.trim()) {
       throw new ConvexError("Make, model, and color are required.");
@@ -1800,6 +1829,22 @@ export const importBulk = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
+
+    // Bulk import runs no Zod schema, and its two range filters (`sourceCost <= 0`
+    // at the SOURCED check, `valuationAmount <= 0` on valuations) are both false
+    // for NaN — so NaN passed straight into vehicles and vehicleValuations. Every
+    // numeric field is validated up front, before any row is written, so a bad
+    // cell fails the whole import rather than half-applying it.
+    for (const row of args.vehicles) {
+      assertFiniteNumber(row.year, "year");
+      assertFiniteNumber(row.sellingPrice, "selling price");
+      if (row.mileage !== undefined) assertFiniteNumber(row.mileage, "mileage");
+      if (row.purchasePrice !== undefined) assertFiniteNumber(row.purchasePrice, "purchase price");
+      if (row.sourceCost !== undefined) assertFiniteNumber(row.sourceCost, "supplier cost");
+      for (const val of row.valuations ?? []) {
+        assertFiniteNumber(val.valuationAmount, "valuation amount");
+      }
+    }
 
     // Resolve (and lazily create) finance companies referenced by name only.
     // Created inert (isActive: false, zero rates) — an Owner must configure

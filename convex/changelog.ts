@@ -1160,6 +1160,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     publishedAt: releaseAt(2026, 7, 29, 3),
   },
   {
+    type: "FIX",
+    titleEn: "Invalid amounts are rejected instead of quietly breaking a record",
+    titleAr: "رفض المبالغ غير الصالحة بدل تعطيل السجل بصمت",
+    descriptionEn: "An unreadable number entered as a supplier cost, work-order cost, commission, payment amount, or disbursement used to be saved as-is and then skipped by everything downstream — the record looked fine but was never costed, accrued, or reported. These are now refused at entry with a clear message. Assigning work also got stricter: a test-drive salesperson, branch manager or expense payer must be a current member of your dealership, and a teammate who is being removed can no longer be picked or notified.",
+    descriptionAr: "كان الرقم غير القابل للقراءة عند إدخاله كتكلفة مورّد أو تكلفة أمر عمل أو عمولة أو مبلغ دفعة أو صرف يُحفظ كما هو ثم تتجاهله بقية العمليات، فيبدو السجل سليماً بينما لا تُحتسب تكلفته ولا يُستحق ولا يظهر في التقارير. أصبحت هذه المبالغ مرفوضة عند الإدخال برسالة واضحة. كما أصبح إسناد المهام أكثر صرامة: يجب أن يكون موظف تجربة القيادة أو مدير الفرع أو دافع المصروف عضواً حالياً في معرضك، ولم يعد بإمكان اختيار أو إشعار عضو قيد الإزالة من الفريق.",
+    publishedAt: releaseAt(2026, 7, 29, 4),
+  },
+  {
     type: "FEATURE",
     titleEn: "Every lead now keeps a full activity trail",
     titleAr: "أصبح لكل عميل محتمل سجل نشاط كامل",

@@ -1,6 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireTenantAuth, requireOrgMember } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { advanceLeadStageForCustomerVehicle } from "./utils/leadStageHelpers";
 import { notifyUser, getActorName } from "./utils/notifications";
@@ -71,6 +71,12 @@ export const create = mutation({
     const customer = await ctx.db.get(args.customerId);
     if (!customer || customer.isDeleted || customer.orgId !== args.orgId) throw new ConvexError("Customer not found");
 
+    // The vehicle and customer above are tied back to the org but the
+    // salesperson was not, and this handler notifies them — so any authenticated
+    // member could push this org's vehicle detail and a link into its dashboard
+    // to an arbitrary user, including one in another dealership.
+    await requireOrgMember(ctx, args.orgId, args.salespersonId);
+
     const testDriveId = await ctx.db.insert("test_drives", {
       orgId: args.orgId,
       vehicleId: args.vehicleId,
@@ -121,6 +127,16 @@ export const complete = mutation({
     });
 
     const vehicle = await ctx.db.get(td.vehicleId);
+    // `create` now validates the salesperson, but rows written before it did may
+    // still carry a foreign user id — and this notifies whoever is stored. Skip
+    // the notification rather than throw: the completion itself is legitimate and
+    // must not be blocked by bad historical data.
+    const salespersonMembership = await ctx.db
+      .query("memberships")
+      .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", td.salespersonId))
+      .unique();
+    // Offboarded counts as gone, matching requireOrgMember on the write path.
+    if (!salespersonMembership || salespersonMembership.offboardingStatus) return;
     await notifyUser(
       ctx,
       args.orgId,

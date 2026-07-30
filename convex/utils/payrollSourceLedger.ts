@@ -18,7 +18,14 @@ import { MutationCtx } from "../_generated/server";
  */
 const PAYROLL_SETTLEMENT_EVENT_TYPES = new Set(["PAYROLL_PAID", "EMPLOYEE_ADVANCE_RECOVERED"]);
 
-/** Whether a domain event with this idempotency key is on the books (posted, not reversed). */
+/**
+ * Whether a domain event with this idempotency key is actually on the books.
+ *
+ * Requires POSTED rather than merely "not REVERSED": `accountingEvents.status`
+ * also admits PENDING and FAILED, and treating those as posted would let a
+ * settlement clear a payable whose accrual has not landed — the exact condition
+ * this module exists to prevent.
+ */
 async function prereqPosted(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
@@ -27,7 +34,7 @@ async function prereqPosted(
   const event = await ctx.db
     .query("accountingEvents")
     .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
-    .filter((q) => q.neq(q.field("status"), "REVERSED"))
+    .filter((q) => q.eq(q.field("status"), "POSTED"))
     .first();
   return event !== null;
 }
@@ -103,7 +110,12 @@ async function payrollPaidBlockedReason(
       .withIndex("by_payroll_item", (q) => q.eq("payrollItemId", item._id))
       .collect();
     for (const rec of recoveries) {
-      if (rec.orgId !== orgId) continue;
+      // A cross-org recovery row means the payslip and its allocations disagree
+      // about tenancy. Skipping it would be an ALLOW on unverifiable evidence —
+      // every other branch in this file blocks in that situation.
+      if (rec.orgId !== orgId) {
+        return "one of its advance-recovery rows belongs to another organization, so the Employee Advances it credits cannot be verified";
+      }
       if (!(await prereqPosted(ctx, orgId, `employee_advance_paid_${rec.advanceId}`))) {
         return "an advance issuance behind it has not posted to the ledger yet, so this would credit an Employee Advances balance that was never debited";
       }

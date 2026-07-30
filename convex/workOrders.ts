@@ -4,7 +4,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { hookExpensePosted, getOrgCurrency } from "./accounting/workflowHooks";
-import { toMinorUnits } from "./utils/money";
+import { toMinorUnits, assertFiniteNumber } from "./utils/money";
 import { Id } from "./_generated/dataModel";
 import { MutationCtx } from "./_generated/server";
 
@@ -53,6 +53,21 @@ async function createWorkOrderExpense(
   });
 
   return expenseId;
+}
+
+/**
+ * A NaN in any task cost makes totalCost NaN, and `totalCost > 0` is false for
+ * NaN — so the work order would persist while its expense and GL posting were
+ * silently skipped, with no error anywhere. Shared by `create` and `update` so
+ * the rule cannot drift between the two.
+ */
+function assertTaskCostsFinite(
+  tasks: ReadonlyArray<{ partsCost: number; laborCost: number }>
+): void {
+  for (const task of tasks) {
+    assertFiniteNumber(task.partsCost, "parts cost");
+    assertFiniteNumber(task.laborCost, "labor cost");
+  }
 }
 
 export const list = query({
@@ -109,6 +124,7 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
 
+    assertTaskCostsFinite(args.tasks);
     const totalCost = args.tasks.reduce((sum, task) => sum + task.partsCost + task.laborCost, 0);
 
     let expenseId: Id<"expenses"> | undefined = undefined;
@@ -178,6 +194,7 @@ export const update = mutation({
       );
     }
 
+    assertTaskCostsFinite(args.tasks);
     const totalCost = args.tasks.reduce((sum, task) => sum + task.partsCost + task.laborCost, 0);
 
     let expenseId = wo.expenseId;
