@@ -14,7 +14,7 @@
  */
 import { describe, expect, test } from "vitest";
 import path from "node:path";
-import { auditConvexBackend, findUnguardedTenantWrites } from "./tenantWriteGuard";
+import { auditConvexBackend, findUnguardedTenantWrites, summarizeCoverage } from "./tenantWriteGuard";
 
 const CONVEX_ROOT = path.resolve(__dirname, "..", "convex");
 
@@ -138,6 +138,21 @@ export const adminTouch = mutation({
 });
 `;
     expect(findUnguardedTenantWrites(source, "adminLeads.ts")).toEqual([]);
+  });
+});
+
+describe("the analyzer's coverage does not shrink silently", () => {
+  // A guard that quietly stops looking is worse than no guard: green then means
+  // "nothing examined". These numbers make a shape the parser cannot read — args
+  // hoisted into a shared validator const, say — fail here instead of passing.
+  // If a real change moves them, update them in the same commit, deliberately.
+  test("the analysed surface matches the pinned counts", () => {
+    expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
+      totalMutations: 417,
+      analysed: 276,
+      skippedNoArgsBlock: 5,
+      skippedNoOrgId: 136,
+    });
   });
 });
 

@@ -127,6 +127,15 @@ export const complete = mutation({
     });
 
     const vehicle = await ctx.db.get(td.vehicleId);
+    // `create` now validates the salesperson, but rows written before it did may
+    // still carry a foreign user id — and this notifies whoever is stored. Skip
+    // the notification rather than throw: the completion itself is legitimate and
+    // must not be blocked by bad historical data.
+    const salespersonMembership = await ctx.db
+      .query("memberships")
+      .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", td.salespersonId))
+      .unique();
+    if (!salespersonMembership) return;
     await notifyUser(
       ctx,
       args.orgId,

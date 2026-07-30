@@ -1,7 +1,8 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { requireTenantAuth, requireOwner } from "./utils/tenancy";
+import { requireTenantAuth, requireOwner, requireOrgMember } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { AppErrorCode } from "./utils/errors";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { requireFeature } from "./subscriptions";
 
@@ -42,6 +43,19 @@ export const add = mutation({
     await requireOwner(ctx, args.orgId);
     await requireFeature(ctx, args.orgId, "multiBranch");
 
+    // A caller-supplied users id that gets stored and later hydrated into
+    // `manager.name || manager.email` by `list` — so an unvalidated one turns a
+    // foreign user's identity into a disclosure inside the caller's own org.
+    if (args.managerId) {
+      await requireOrgMember(
+        ctx,
+        args.orgId,
+        args.managerId,
+        AppErrorCode.ASSIGNED_USER_NOT_MEMBER,
+        "The selected branch manager is not a member of this organization."
+      );
+    }
+
     await ctx.db.insert("branches", {
       orgId: args.orgId,
       name: args.name.trim(),
@@ -74,6 +88,19 @@ export const update = mutation({
 
     const branch = await ctx.db.get(args.id);
     if (!branch || branch.orgId !== args.orgId) throw new ConvexError("Branch not found.");
+
+    // A caller-supplied users id that gets stored and later hydrated into
+    // `manager.name || manager.email` by `list` — so an unvalidated one turns a
+    // foreign user's identity into a disclosure inside the caller's own org.
+    if (args.managerId) {
+      await requireOrgMember(
+        ctx,
+        args.orgId,
+        args.managerId,
+        AppErrorCode.ASSIGNED_USER_NOT_MEMBER,
+        "The selected branch manager is not a member of this organization."
+      );
+    }
 
     await ctx.db.patch(args.id, {
       name: args.name.trim(),

@@ -58,6 +58,24 @@ async function requireRealOwner(ctx: MutationCtx, orgId: Id<"organizations">) {
   return auth;
 }
 
+/**
+ * A MANAGE_USERS holder must not hand out permissions they do not hold — by ANY
+ * door. `updateRole` enforced this; `add` and `prepareDirectAccount` did not,
+ * gating only the OWNER role. So the same escalation stayed reachable: invite
+ * (or directly provision) a second account at an address you control, give it a
+ * richer role, and sign in as it. Fixing one entry point was half a control
+ * surface. OWNER is exempt — it already holds every permission.
+ */
+function assertCanGrantRole(callingRole: Doc<"roles">, newRole: Doc<"roles">) {
+  if (isSystemOwnerRole(callingRole)) return;
+  const escalated = newRole.permissions.filter((p) => !callingRole.permissions.includes(p));
+  if (escalated.length > 0) {
+    throw new ConvexError(
+      `Forbidden: You cannot grant permissions you do not hold yourself: ${escalated.join(", ")}`
+    );
+  }
+}
+
 async function requireOwnerForOwnerRole(ctx: MutationCtx, orgId: Id<"organizations">, roleId: Id<"roles">) {
   const role = await ctx.db.get(roleId);
   if (!role || role.orgId !== orgId || role.isDeleted) {
@@ -325,10 +343,13 @@ export const add = mutation({
     roleId: v.id("roles"),
   },
   handler: async (ctx, args) => {
-    const { user: callingUser } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_USERS]);
+    const { user: callingUser, role: callingRole } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.MANAGE_USERS,
+    ]);
 
     // Verify the role belongs to this org
     const role = await requireOwnerForOwnerRole(ctx, args.orgId, args.roleId);
+    assertCanGrantRole(callingRole, role);
 
     const memberGate = await ctx.runQuery(internal.subscriptions.canAddMember, { orgId: args.orgId });
     if (!memberGate.allowed) {
@@ -477,12 +498,7 @@ export const updateRole = mutation({
       if (membership.userId === callingUser._id) {
         throw new ConvexError("You cannot change your own role. Ask an owner to change it for you.");
       }
-      const escalated = newRole.permissions.filter((p) => !callingRole.permissions.includes(p));
-      if (escalated.length > 0) {
-        throw new ConvexError(
-          `Forbidden: You cannot grant permissions you do not hold yourself: ${escalated.join(", ")}`
-        );
-      }
+      assertCanGrantRole(callingRole, newRole);
     }
 
     await ctx.db.patch(args.membershipId, {
@@ -926,9 +942,12 @@ export const prepareDirectAccount = internalMutation({
     roleId: v.id("roles"),
   },
   handler: async (ctx, args) => {
-    const { user: callingUser } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_USERS]);
+    const { user: callingUser, role: callingRole } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.MANAGE_USERS,
+    ]);
 
     const role = await requireOwnerForOwnerRole(ctx, args.orgId, args.roleId);
+    assertCanGrantRole(callingRole, role);
 
     const email = normalizeEmail(args.email);
 
