@@ -75,7 +75,9 @@ jobs:
             echo "::warning::EXPO_TOKEN secret not set — skipping OTA publish. Add it (expo.dev > Account > Access tokens) to enable auto-publish of main to the '${CHANNEL}' channel."
             exit 0
           fi
-          npx --yes eas-cli@latest update \
+          # Pinned deliberately — see the note in build-apk.yml. Bump in step
+          # with that workflow so builds and OTA updates use one CLI version.
+          npx --yes --ignore-scripts eas-cli@21.4.0 update \
             --channel "$CHANNEL" \
             --environment "$CHANNEL" \
             --message "CI: main@${GITHUB_SHA::7}" \
