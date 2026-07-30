@@ -92,7 +92,17 @@ jobs:
           # `--json` implies --non-interactive and waits for the build to finish,
           # then prints a JSON array describing the build(s). Redirect it to a
           # file so the human-readable progress still streams to the Actions log.
-          npx --yes eas-cli@latest build \
+          #
+          # eas-cli is pinned rather than `@latest` for the same reason every
+          # action above is pinned by SHA: an unpinned CLI means a release
+          # published upstream can change or break a build with no commit here.
+          # Bump deliberately.
+          #
+          # `--ignore-scripts` blocks lifecycle scripts during the on-demand
+          # install of the CLI's dependency tree, the same protection the
+          # `pnpm install` above already applies. Verified against 21.4.0: the
+          # CLI loads and runs with it set.
+          npx --yes --ignore-scripts eas-cli@21.4.0 build \
             --platform android \
             --profile "$PROFILE" \
             --non-interactive \

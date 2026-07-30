@@ -1201,6 +1201,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
   },
   {
     type: "FIX",
+    titleEn: "Dashboard profit now matches your reports",
+    titleAr: "أصبح ربح لوحة التحكم مطابقاً لتقاريرك",
+    descriptionEn: "The profit line on the dashboard worked out each vehicle's cost differently from the sales reports and the accounting ledger, and always in the flattering direction: it ignored shipping and customs costs, left a deleted expense counting against you forever, and dropped a drop-shipped vehicle's sale out of the profit figure entirely. All three now use the same cost as your reports. The panel on a vehicle also stops listing sales, leads and expenses you had deleted.",
+    descriptionAr: "كان خط الربح في لوحة التحكم يحسب تكلفة المركبة بطريقة تختلف عن تقارير المبيعات ودفاتر المحاسبة، ودائماً في الاتجاه المتحيّز: فكان يتجاهل تكاليف الشحن والتخليص، ويُبقي المصروف المحذوف محسوباً عليك إلى الأبد، ويُسقط بيع المركبة الموردة من طرف آخر من الربح تماماً. أصبحت الثلاثة تستخدم التكلفة نفسها التي تعتمدها تقاريرك. كما لم تعد لوحة المركبة تعرض عمليات البيع أو العملاء المحتملين أو المصاريف التي حذفتها.",
+    publishedAt: releaseAt(2026, 7, 30, 6),
+  },
+  {
+    type: "FIX",
     titleEn: "Dealer visibility and seat limits no longer depend on how old your account is",
     titleAr: "لم تعد ظهور المعرض وحدود المقاعد تعتمد على عمر حسابك",
     descriptionEn: "A dealership whose marketplace profile had been removed and re-created was still taking up one of the slots the buyer search considers, which could hide other dealerships from buyers. Dealer badges are also recalculated for every dealership now, not just the first batch, and a platform-wide announcement reaches every dealership rather than stopping partway through. Seat counting against your plan limit is exact instead of estimated.",
