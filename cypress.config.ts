@@ -34,6 +34,21 @@ export default defineConfig({
     NEXT_PUBLIC_CONVEX_URL: process.env.NEXT_PUBLIC_CONVEX_URL,
   },
 
+  // Matches Playwright's "Desktop Chrome" (1280x720). Cypress defaults to
+  // 1000x660, so the two suites — which cover the same flows by design — were
+  // asserting against different layouts, and the shorter one was the only place
+  // a flake lived.
+  //
+  // Concretely: the feedback FAB is `fixed bottom-[5.5rem] end-5`, and at 660px
+  // tall the sales wizard's footer lands in that same bottom-right region once
+  // Cypress scrolls "Submit Sale" into view. Cypress then refuses to click a
+  // covered element and times out on a button that is perfectly usable — five
+  // times in one afternoon, on main as well as on branches. Playwright clicks
+  // the identical button with no special handling and has never flaked, which is
+  // what pointed at viewport geometry rather than the widget.
+  viewportWidth: 1280,
+  viewportHeight: 720,
+
   e2e: {
     baseUrl: process.env.CYPRESS_BASE_URL ?? "http://localhost:3000",
     supportFile: "cypress/support/e2e.ts",
