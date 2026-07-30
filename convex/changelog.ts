@@ -1225,6 +1225,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
   },
   {
     type: "FIX",
+    titleEn: "Arabic translations restored across sales, vehicles and settings",
+    titleAr: "استعادة الترجمات العربية في المبيعات والمركبات والإعدادات",
+    descriptionEn: "Twenty-six labels were appearing in English inside the Arabic interface, or as their raw internal name in both languages — including the warning shown when a financed quote exceeds the finance company's limit, the sale price field, the cash drawer's Opened At column, and the Facebook Page picker. All are translated now, and a missing Arabic translation can no longer be added without the build failing.",
+    descriptionAr: "كانت ستة وعشرون تسمية تظهر بالإنجليزية داخل الواجهة العربية، أو باسمها الداخلي في كلتا اللغتين — منها التنبيه الذي يظهر عندما يتجاوز عرض التمويل حد شركة التمويل، وحقل سعر البيع، وعمود وقت الفتح في صندوق النقد، وقائمة اختيار صفحة فيسبوك. جميعها مترجمة الآن، ولم يعد بالإمكان إضافة تسمية بلا ترجمة عربية دون أن يفشل بناء النظام.",
+    publishedAt: releaseAt(2026, 7, 30, 8),
+  },
+  {
+    type: "FIX",
     titleEn: "The app and the website now calculate financing with the same engine",
     titleAr: "أصبح التطبيق والموقع يحسبان التمويل بالمحرك نفسه",
     descriptionEn: "The murabaha calculation existed in three separate copies — the website, the mobile sales wizard, and the mobile workspace preview — and the third had already drifted from the other two, so the same deal could show a different total. There is one copy now, shared by all of them, and a test that fails if they ever diverge again.",

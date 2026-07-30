@@ -409,6 +409,9 @@ export const settingsEn = {
   FacebookConnectedSuccess: "Facebook connected successfully.",
   FacebookConnectFailed: "Failed to connect Facebook. Please try again.",
   FacebookDisconnectedSuccess: "Facebook disconnected.",
+  SelectFacebookPage: "Select a Facebook Page",
+  SelectFacebookPageDescription: "You manage more than one Page. Choose the one this dealership should post to.",
+  SelectManager: "Select manager",
   FacebookAutoReply: "Auto-reply to comments & DMs",
   FacebookAutoReplyDescription:
     "When someone comments on a post or sends a Messenger DM, automatically send one of the replies below (rotated in order).",
@@ -1071,6 +1074,9 @@ export const settingsAr = {
   FacebookConnectedSuccess: "تم ربط فيسبوك بنجاح.",
   FacebookConnectFailed: "فشل ربط فيسبوك. يرجى المحاولة مرة أخرى.",
   FacebookDisconnectedSuccess: "تم قطع اتصال فيسبوك.",
+  SelectFacebookPage: "اختر صفحة فيسبوك",
+  SelectFacebookPageDescription: "أنت تدير أكثر من صفحة. اختر الصفحة التي سينشر عليها هذا المعرض.",
+  SelectManager: "اختر المدير",
   FacebookAutoReply: "الرد التلقائي على التعليقات والرسائل المباشرة",
   FacebookAutoReplyDescription:
     "عند تعليق أحدهم على منشور أو إرسال رسالة ماسنجر، يتم إرسال أحد الردود أدناه تلقائيًا (بالتناوب).",
