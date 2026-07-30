@@ -313,20 +313,26 @@ async function runSubscriptionReminders(ctx: ActionCtx): Promise<string> {
 // ─── Instagram token refresh cron ────────────────────────────────────────────
 
 export const triggerInstagramTokenRefresh = internalAction({
-  args: {},
-  handler: async (ctx: ActionCtx) => {
+  // Optional so the cron can invoke it with no arguments; set when this action
+  // reschedules itself for the next page of orgs.
+  args: { cursor: v.optional(v.string()) },
+  // The explicit return type is load-bearing, not decoration: the body
+  // references `internal.crons` to reschedule itself, so without it the inferred
+  // type of this export feeds back into the `internal` type it depends on.
+  // TypeScript resolves that cycle by widening, and the damage lands in *other*
+  // files — every `ctx.db.get()` in the codebase degrades to a union of all 142
+  // table types. Same reason triggerSocialAutoReplyRetries below is annotated.
+  handler: async (ctx: ActionCtx, args): Promise<string> => {
     const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
-    const orgs: Doc<"orgSettings">[] = await ctx.runQuery(
+    const page = await ctx.runQuery(
       internal.socialIntegrations.getOrgsNeedingInstagramRefresh,
-      { withinMs: SEVEN_DAYS_MS }
+      { withinMs: SEVEN_DAYS_MS, cursor: args.cursor }
     );
 
     let refreshed = 0;
-    for (const org of orgs) {
+    for (const orgId of page.orgIds) {
       try {
-        await ctx.runAction(internal.socialIntegrations.refreshInstagramToken, {
-          orgId: org.orgId,
-        });
+        await ctx.runAction(internal.socialIntegrations.refreshInstagramToken, { orgId });
         refreshed++;
       } catch (err) {
         // Individual failures are already logged inside refreshInstagramToken;
@@ -334,13 +340,21 @@ export const triggerInstagramTokenRefresh = internalAction({
       }
     }
 
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.crons.triggerInstagramTokenRefresh, {
+        cursor: page.continueCursor,
+      });
+    }
+
+    // Logged per page rather than once per run: a run that dies partway through
+    // still leaves a record of what it managed to refresh.
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
       source: "instagram",
       status: "success",
-      summary: `Instagram token refresh cron: refreshed ${refreshed}/${orgs.length} token(s).`,
+      summary: `Instagram token refresh cron: refreshed ${refreshed}/${page.orgIds.length} token(s) in this page.`,
     });
 
-    return `Refreshed ${refreshed}/${orgs.length} Instagram token(s).`;
+    return `Refreshed ${refreshed}/${page.orgIds.length} Instagram token(s)${page.isDone ? "" : "; more pages scheduled"}.`;
   },
 });
 
