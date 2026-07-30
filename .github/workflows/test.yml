@@ -67,6 +67,74 @@ jobs:
         fi
       if: always()
 
+  # SonarCloud currently analyses this repo in Automatic Analysis mode, which
+  # does NOT read sonar-project.properties — so every exclusion in that file is
+  # dead config. That is why `load-tests/**` and `testsprite_tests/**` are still
+  # analysed and still contribute vulnerabilities to the Security Rating gate,
+  # and why `sonar.javascript.lcov.reportPaths` has never actually delivered a
+  # coverage report.
+  #
+  # This job runs the scanner from CI, which makes that file authoritative. It
+  # activates the moment a SONAR_TOKEN repo secret exists and is skipped
+  # otherwise — the same opt-in shape as CYPRESS_RECORD_KEY in cypress.yml — so
+  # merging it changes nothing until the token is added.
+  #
+  # ORDERING IS MANDATORY, not advisory: SonarCloud REJECTS a CI submission while
+  # Automatic Analysis is enabled ("You are running CI analysis while Automatic
+  # Analysis is enabled") and the scanner exits non-zero. So switch Automatic
+  # Analysis off in the SonarCloud UI in the same sitting as adding the token, or
+  # this job goes red on every push in between. It is not a required check, so it
+  # will not block a merge either way.
+  sonarcloud:
+    runs-on: ubuntu-latest
+    # Forked PRs get no secrets, so the scan would always be a no-op there.
+    if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
+    # Job-level so the scan step's own `if` can read it — a step cannot see the
+    # `env` block declared on itself.
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+    steps:
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        persist-credentials: false
+        # Sonar needs full history to attribute new code to the right commits.
+        fetch-depth: 0
+
+    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      with:
+        version: 11.13.0
+
+    - name: Use Node.js
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: '22.21.1'
+        cache: 'pnpm'
+
+    - name: Install dependencies
+      run: pnpm install --frozen-lockfile --ignore-scripts
+
+    # Produces coverage/lcov.info, which sonar-project.properties points at.
+    #
+    # NOTE: `test:coverage:sonar` restricts --coverage.include to 7 convex
+    # modules, so everything else reports 0%. Against a gate with a
+    # coverage-on-new-code condition that will read as a regression the first
+    # time it runs. Widen the include list (or scope the gate) before treating
+    # Sonar's coverage number as meaningful — the security rating, which is what
+    # this PR is about, is unaffected.
+    - name: Generate coverage for Sonar
+      run: pnpm test:coverage:sonar
+      env:
+        NODE_ENV: test
+
+    - name: SonarCloud scan
+      if: ${{ env.SONAR_TOKEN != '' }}
+      uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
+
+    - name: Note when the scan is skipped
+      if: ${{ env.SONAR_TOKEN == '' }}
+      run: echo "::notice::SONAR_TOKEN is not set — skipping the SonarCloud scan. Until it is, SonarCloud analyses this repo in Automatic Analysis mode, which ignores sonar-project.properties."
+
   type-check:
     runs-on: ubuntu-latest
 

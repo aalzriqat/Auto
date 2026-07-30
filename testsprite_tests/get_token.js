@@ -101,7 +101,14 @@ function httpPost(url, body, headers = {}) {
     { Authorization: `Bearer ${secretKey}` }
   );
   if (ticketRes.status !== 200) {
-    console.error("ERROR creating sign-in ticket:", ticketRes.body);
+    // Never echo the raw response: on this endpoint the body carries the
+    // sign-in ticket JWT, and Clerk's error payloads reflect request data back.
+    // CI logs are retained and widely readable — a status plus Clerk's own
+    // error codes is enough to debug without putting credentials in them.
+    const codes = Array.isArray(ticketRes.body?.errors)
+      ? ticketRes.body.errors.map((e) => e.code || e.message).join(", ")
+      : "unknown error";
+    console.error(`ERROR creating sign-in ticket: HTTP ${ticketRes.status} (${codes})`);
     process.exit(1);
   }
   // Extract just the ticket JWT from the full URL
