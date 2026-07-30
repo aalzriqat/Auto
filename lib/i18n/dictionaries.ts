@@ -36,7 +36,27 @@ const en = {
   ...payrollEn,
 };
 
-const ar = {
+/**
+ * Typed as `typeof en` rather than cast to it.
+ *
+ * This was `} as unknown as typeof en`, and that cast is what let the two
+ * dictionaries drift: it told the compiler to stop checking, so a key added to
+ * English with no Arabic counterpart was silently legal. `t` falls back to the
+ * English string when Arabic has no entry, so the result is English text inside
+ * an otherwise Arabic RTL screen — no error, nothing in the console. Eight keys
+ * had accumulated that way, one of them the validation message a salesperson
+ * sees when a quote exceeds the finance company's limit.
+ *
+ * An annotation instead of a cast makes a missing Arabic translation a
+ * compile-time error at the point it is introduced. It is
+ * `Record<keyof typeof en, string>` rather than `typeof en` because some domain
+ * dictionaries are `as const`, which would otherwise require each Arabic string
+ * to equal the English literal — key parity is the property worth enforcing, not
+ * value identity. Spread properties are exempt from excess-property checking, so
+ * an Arabic-only leftover is still tolerated — and harmless, since `t`'s
+ * parameter type is derived from `en`, which makes such a key unreachable.
+ */
+const ar: Record<keyof typeof en, string> = {
   ...commonAr,
   ...dashboardAr,
   ...vehiclesAr,
@@ -53,7 +73,7 @@ const ar = {
   ...messagesAr,
   ...marketplaceAr,
   ...payrollAr,
-} as unknown as typeof en;
+};
 
 export const dictionaries = {
   en,
