@@ -83,7 +83,11 @@ export default function ApprovalsPage() {
           </div>
         ) : (
           filteredApprovals.map((request: ApprovalRequest) => (
-            <Card key={request._id} className="relative overflow-hidden flex flex-col">
+            <Card
+              key={request._id}
+              data-testid="approval-card"
+              className="relative overflow-hidden flex flex-col"
+            >
               <div className="absolute top-0 left-0 w-1 h-full bg-yellow-500" />
               <CardHeader className="pb-3">
                 <div className="flex items-start justify-between">
