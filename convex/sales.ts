@@ -16,9 +16,8 @@ import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { getOrgCurrency, hookCommissionAccrued, hookCommissionPaid, hookCommissionReversed, hookSaleCancelled } from "./accounting/workflowHooks";
-import { toMinorUnits } from "./utils/money";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
-import { fromMinorUnits } from "./utils/money";
+import { toMinorUnits, fromMinorUnits, assertFiniteNumber } from "./utils/money";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -902,6 +901,11 @@ export const setCommissionAmount = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_COMMISSIONS]);
+
+    // `Math.max(0, NaN)` is NaN, so without this the sale's commission is set to
+    // NaN permanently: every downstream `> 0` / `<= 0` guard reads false, so it
+    // is never accrued, never paid, and never reported as outstanding.
+    assertFiniteNumber(args.commissionAmount, "commission amount");
 
     const sale = await ctx.db.get(args.saleId);
     if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {

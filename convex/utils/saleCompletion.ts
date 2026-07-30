@@ -10,6 +10,7 @@ import {
 } from "./saleHelpers";
 import { resolveDepositsForQuote } from "./depositHelpers";
 import { throwAppError, AppErrorCode } from "./errors";
+import { requireOrgMember } from "./tenancy";
 import {
   hookSaleCompleted,
   hookCommissionAccrued,
@@ -132,15 +133,7 @@ async function prepareSaleCompletion(
     }
   }
 
-  const membership = await ctx.db
-    .query("memberships")
-    .withIndex("by_org_user", (q) =>
-      q.eq("orgId", args.orgId).eq("userId", args.salespersonId)
-    )
-    .unique();
-  if (!membership) {
-    throwAppError(AppErrorCode.SALESPERSON_NOT_MEMBER, "Salesperson is not a member of this organization.");
-  }
+  const membership = await requireOrgMember(ctx, args.orgId, args.salespersonId);
 
   const orgSettings = await ctx.db
     .query("orgSettings")

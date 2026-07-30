@@ -294,6 +294,44 @@ export async function requireOwner(
   return authCtx;
 }
 
+// ─── Member-reference guard ──────────────────────────────────────────────────
+
+/**
+ * Proves a caller-supplied **user** id is a member of `orgId`.
+ *
+ * The row-ownership counterpart for user references. A handler that accepts an
+ * arbitrary `users` id and then stores it, assigns work to it, or — worst —
+ * notifies it, is leaking across tenants just as surely as one that patches a
+ * foreign row: `notifyUser` will happily push this org's vehicle and customer
+ * detail, plus a deep link into its dashboard, to somebody who was never in it.
+ */
+export async function requireOrgMember(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  userId: Id<"users">,
+  code: AppErrorCode = AppErrorCode.SALESPERSON_NOT_MEMBER,
+  message = "Salesperson is not a member of this organization."
+): Promise<Doc<"memberships">> {
+  const membership = await ctx.db
+    .query("memberships")
+    .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+    .unique();
+  // An offboarding membership is not an active one: `requireTenantAuth` above
+  // refuses to authenticate its owner, so accepting it here would let a user
+  // who can no longer sign in to this org still be assigned its work and
+  // notified with its data. Both cases raise the same error — the caller has no
+  // business learning which of the two it was.
+  // An offboarding membership is not an active one: `requireTenantAuth` above
+  // refuses to authenticate its owner, so accepting it here would let a user
+  // who can no longer sign in to this org still be assigned its work and
+  // notified with its data. Both cases raise the same error — the caller has no
+  // business learning which of the two it was.
+  if (!membership || membership.offboardingStatus) {
+    throwAppError(code, message);
+  }
+  return membership;
+}
+
 // ─── Row-ownership guard ─────────────────────────────────────────────────────
 
 /**

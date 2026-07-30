@@ -98,7 +98,9 @@ function taintedIdentifiers(chunk: string, idArgs: Set<string>): Set<string> {
 function orgScopedIdArgs(chunk: string): Set<string> | null {
   const argsSource = chunk.match(/args:\s*\{([\s\S]*?)\n\s*handler:/)?.[1];
   if (!argsSource) return null;
-  if (!/\borgId:\s*v\.id\("organizations"\)/.test(argsSource)) return null;
+  // `v.optional(...)` counts: an org-scoped handler is no less org-scoped for
+  // taking the id optionally, and two live mutations are written that way.
+  if (!/\borgId:\s*(v\.optional\()?v\.id\("organizations"\)/.test(argsSource)) return null;
 
   const idArgs = new Set<string>();
   for (const m of argsSource.matchAll(/(\w+):\s*[^,\n]*v\.id\("(\w+)"\)/g)) {
@@ -192,4 +194,60 @@ export function auditConvexBackend(convexRoot: string): UnguardedWrite[] {
       path.relative(convexRoot, file).split(path.sep).join("/")
     )
   );
+}
+
+/**
+ * How much of the backend this analyzer actually looks at.
+ *
+ * The guard disables itself silently on any shape it cannot parse — args hoisted
+ * into a shared validator const, or no inline `args` block — and says nothing.
+ * That is the same failure mode the mobile contract check just had: a green
+ * result meaning "nothing examined" is indistinguishable from "nothing wrong".
+ * `scripts/tenantWriteGuard.test.ts` pins these numbers, so a refactor that
+ * shrinks the analysed surface fails CI instead of passing quietly.
+ *
+ * KNOWN BLIND SPOT, deliberately recorded rather than papered over: only
+ * `patch`/`delete`/`replace` are analysed. `ctx.db.insert` is not, because a
+ * caller-supplied id reaches an insert as a *field value* rather than as the
+ * call's subject. That is why the `test_drives.create` salesperson leak (audit
+ * H-6) was invisible here for as long as it existed. User-reference args are
+ * guarded by `requireOrgMember` at the call sites instead; extending this
+ * analyzer to cover them is follow-up work, not something this file claims.
+ */
+export interface GuardCoverage {
+  totalMutations: number;
+  analysed: number;
+  skippedNoArgsBlock: number;
+  skippedNoOrgId: number;
+}
+
+export function summarizeCoverage(convexRoot: string): GuardCoverage {
+  const coverage: GuardCoverage = {
+    totalMutations: 0,
+    analysed: 0,
+    skippedNoArgsBlock: 0,
+    skippedNoOrgId: 0,
+  };
+
+  for (const file of convexSourceFiles(convexRoot)) {
+    const source = fs.readFileSync(file, "utf8");
+    for (const raw of source.split(/\nexport const /).slice(1)) {
+      const chunk = "export const " + raw;
+      if (!/=\s*(internalMutation|mutation)\(/.test(chunk)) continue;
+      coverage.totalMutations++;
+
+      const argsSource = chunk.match(/args:\s*\{([\s\S]*?)\n\s*handler:/)?.[1];
+      if (!argsSource) {
+        coverage.skippedNoArgsBlock++;
+        continue;
+      }
+      if (/\borgId:\s*(v\.optional\()?v\.id\("organizations"\)/.test(argsSource)) {
+        coverage.analysed++;
+      } else {
+        coverage.skippedNoOrgId++;
+      }
+    }
+  }
+
+  return coverage;
 }
