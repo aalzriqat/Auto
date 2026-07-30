@@ -316,7 +316,17 @@ export async function requireOrgMember(
     .query("memberships")
     .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
     .unique();
-  if (!membership) {
+  // An offboarding membership is not an active one: `requireTenantAuth` above
+  // refuses to authenticate its owner, so accepting it here would let a user
+  // who can no longer sign in to this org still be assigned its work and
+  // notified with its data. Both cases raise the same error — the caller has no
+  // business learning which of the two it was.
+  // An offboarding membership is not an active one: `requireTenantAuth` above
+  // refuses to authenticate its owner, so accepting it here would let a user
+  // who can no longer sign in to this org still be assigned its work and
+  // notified with its data. Both cases raise the same error — the caller has no
+  // business learning which of the two it was.
+  if (!membership || membership.offboardingStatus) {
     throwAppError(code, message);
   }
   return membership;

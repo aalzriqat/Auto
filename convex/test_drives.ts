@@ -135,7 +135,8 @@ export const complete = mutation({
       .query("memberships")
       .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", td.salespersonId))
       .unique();
-    if (!salespersonMembership) return;
+    // Offboarded counts as gone, matching requireOrgMember on the write path.
+    if (!salespersonMembership || salespersonMembership.offboardingStatus) return;
     await notifyUser(
       ctx,
       args.orgId,

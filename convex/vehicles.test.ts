@@ -235,6 +235,69 @@ describe("vehicles.createSourced", () => {
       asReception.mutation(api.vehicles.createSourced, { orgId, ...sourcedArgs })
     ).rejects.toThrow(/create:vehicles/);
   });
+
+  // This path runs no Zod schema, so the numeric bounds `create` gets from
+  // CreateVehicleSchema have to be restated here. The bounds are matched to that
+  // schema, not invented: `sellingPrice: 0` is legal in both (means "not priced
+  // yet"), which is why these cases use negatives rather than zero.
+  describe("numeric bounds match CreateVehicleSchema", () => {
+    async function asSourcer() {
+      const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+      const orgId = await t.run((ctx) =>
+        ctx.db.insert("organizations", { name: "Bounds Dealer", createdAt: Date.now() })
+      );
+      await t.run((ctx) =>
+        ctx.db.insert("subscriptions", {
+          orgId,
+          plan: "professional",
+          status: "active",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        })
+      );
+      const userId = await t.run((ctx) =>
+        ctx.db.insert("users", { clerkId: "bounds_sourcer", email: "bounds@test.com", name: "Bounds" })
+      );
+      const roleId = await t.run((ctx) =>
+        ctx.db.insert("roles", {
+          orgId,
+          name: "SALES",
+          permissions: ["view:vehicles", "create:vehicles:request", "view:sales"],
+        })
+      );
+      await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+      return { t, orgId, asUser: t.withIdentity({ subject: "bounds_sourcer" }) };
+    }
+
+    test.each([
+      ["a negative selling price", { sellingPrice: -1 }, /selling price/i],
+      ["negative mileage", { mileage: -1 }, /mileage/i],
+      ["a year before 1900", { year: 1899 }, /year/i],
+      ["a year after 2100", { year: 2101 }, /year/i],
+    ])("rejects %s", async (_label, override, expected) => {
+      const { t, orgId, asUser } = await asSourcer();
+
+      await expect(
+        asUser.mutation(api.vehicles.createSourced, { orgId, ...sourcedArgs, ...override })
+      ).rejects.toThrow(expected);
+
+      const rows = await t.run((ctx) => ctx.db.query("vehicles").collect());
+      expect(rows).toHaveLength(0);
+    });
+
+    test("still accepts a zero selling price, as CreateVehicleSchema does", async () => {
+      const { t, orgId, asUser } = await asSourcer();
+
+      const vehicleId = await asUser.mutation(api.vehicles.createSourced, {
+        orgId,
+        ...sourcedArgs,
+        sellingPrice: 0,
+      });
+
+      const vehicle = await t.run((ctx) => ctx.db.get(vehicleId));
+      expect(vehicle?.sellingPrice).toBe(0);
+    });
+  });
 });
 
 describe("vehicles.update — protected lifecycle transitions", () => {

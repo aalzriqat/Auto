@@ -134,4 +134,149 @@ describe("money entry points reject NaN", () => {
     const expenses = await t.run((ctx: any) => ctx.db.query("expenses").collect());
     expect(expenses).toHaveLength(0);
   });
+
+  test("workOrders.update refuses a NaN task cost on an existing order", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seed(t, "woup");
+
+    const workOrderId = await ids.asOwner.mutation(api.workOrders.create, {
+      orgId: ids.orgId,
+      vehicleId: ids.vehicleId,
+      title: "Brake job",
+      status: "OPEN",
+      tasks: [{ id: "t1", description: "Pads", partsCost: 40, laborCost: 25, completed: false }],
+    });
+
+    await expect(
+      ids.asOwner.mutation(api.workOrders.update, {
+        orgId: ids.orgId,
+        workOrderId,
+        title: "Brake job",
+        status: "COMPLETED",
+        tasks: [{ id: "t1", description: "Pads", partsCost: 40, laborCost: NaN, completed: true }],
+      })
+    ).rejects.toThrow(/labor cost/i);
+
+    // The order keeps its last good total rather than becoming NaN in place.
+    const order: any = await t.run((ctx: any) => ctx.db.get(workOrderId));
+    expect(order.totalCost).toBe(65);
+    expect(order.status).toBe("OPEN");
+  });
+
+  // Pinned to record *which* layer rejects it. `create` runs
+  // CreateVehicleSchema, and Zod's `z.number()` already refuses NaN — which is
+  // exactly why `createSourced` above needed an explicit guard instead: that
+  // path runs no Zod schema at all. If `create` is ever refactored off Zod,
+  // this test starts failing rather than the gap reopening silently.
+  test("vehicles.create rejects a NaN supplier cost on the SOURCED branch", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seed(t, "vcs");
+
+    await expect(
+      ids.asOwner.mutation(api.vehicles.create, {
+        orgId: ids.orgId,
+        vin: "VNSRCDNAN1234",
+        make: "Toyota",
+        model: "Corolla",
+        year: 2024,
+        color: "White",
+        fuelType: "Petrol",
+        transmission: "Automatic",
+        mileage: 0,
+        sellingPrice: 21000,
+        status: "SOURCING",
+        sourceType: "SOURCED",
+        sourcedFromName: "العطيوي",
+        sourceCost: NaN,
+      })
+    ).rejects.toThrow(/sourceCost: Expected number, received nan/i);
+
+    const rows = await t.run((ctx: any) =>
+      ctx.db.query("vehicles").withIndex("by_org", (q: any) => q.eq("orgId", ids.orgId)).collect()
+    );
+    expect(rows).toHaveLength(1);
+  });
+
+  test("vehicles.upsertLandedCosts refuses a NaN item amount", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seed(t, "lc");
+
+    await expect(
+      ids.asOwner.mutation(api.vehicles.upsertLandedCosts, {
+        orgId: ids.orgId,
+        vehicleId: ids.vehicleId,
+        items: [
+          { label: "Shipping", amount: 500 },
+          { label: "Customs", amount: NaN },
+        ],
+      })
+    ).rejects.toThrow(/landed cost/i);
+
+    // A NaN here would have been written straight onto the vehicle as
+    // landedCostTotal, poisoning every cost and profit figure that reads it.
+    const rows = await t.run((ctx: any) => ctx.db.query("vehicleLandedCosts").collect());
+    expect(rows).toHaveLength(0);
+    const vehicle: any = await t.run((ctx: any) => ctx.db.get(ids.vehicleId));
+    expect(vehicle.landedCostTotal).toBeUndefined();
+  });
+
+  test("vehicles.importBulk validates every row before writing any of them", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seed(t, "imp");
+
+    const row = (vin: string, sellingPrice: number) => ({
+      make: "Toyota",
+      model: "Corolla",
+      year: 2024,
+      vin,
+      color: "White",
+      fuelType: "Petrol",
+      transmission: "Automatic",
+      sellingPrice,
+    });
+
+    await expect(
+      ids.asOwner.mutation(api.vehicles.importBulk, {
+        orgId: ids.orgId,
+        // The good row comes first deliberately: a per-row guard would have
+        // committed it before reaching the bad one, leaving a half-done import.
+        vehicles: [row("VINBULKGOOD11", 20000), row("VINBULKBAD112", NaN)],
+      })
+    ).rejects.toThrow(/selling price/i);
+
+    const rows: any[] = await t.run((ctx: any) =>
+      ctx.db.query("vehicles").withIndex("by_org", (q: any) => q.eq("orgId", ids.orgId)).collect()
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].vin).toBe(`VIN-NAN-imp`);
+  });
+
+  test("sales.setCommissionAmount refuses a NaN amount that Math.max would pass through", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seed(t, "comm");
+
+    const saleId = await t.run(async (ctx: any) =>
+      ctx.db.insert("sales", {
+        orgId: ids.orgId,
+        vehicleId: ids.vehicleId,
+        customerId: ids.customerId,
+        salespersonId: ids.userId,
+        salePrice: 20000,
+        saleDate: Date.now(),
+        status: "PENDING",
+      })
+    );
+
+    await expect(
+      ids.asOwner.mutation(api.sales.setCommissionAmount, {
+        orgId: ids.orgId,
+        saleId,
+        commissionAmount: NaN,
+      })
+    ).rejects.toThrow(/commission/i);
+
+    // `Math.max(0, NaN)` is NaN, so the clamp that looks like a floor is not one.
+    const sale: any = await t.run((ctx: any) => ctx.db.get(saleId));
+    expect(sale.commissionAmount).toBeUndefined();
+  });
 });

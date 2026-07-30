@@ -1471,6 +1471,19 @@ export const createSourced = mutation({
     if (args.sourceCost <= 0) {
       throw new ConvexError("Supplier cost must be greater than zero.");
     }
+    // The ranges are lifted from CreateVehicleSchema, the schema the `create`
+    // path does run, so the two entry points accept the same numbers. They are
+    // deliberately not stricter than it: `sellingPrice: 0` is legal there and
+    // means "not priced yet".
+    if (args.sellingPrice < 0) {
+      throw new ConvexError("Selling price cannot be negative.");
+    }
+    if (args.mileage < 0) {
+      throw new ConvexError("Mileage cannot be negative.");
+    }
+    if (args.year < 1900 || args.year > 2100) {
+      throw new ConvexError("Year must be valid.");
+    }
     if (!args.make.trim() || !args.model.trim() || !args.color.trim()) {
       throw new ConvexError("Make, model, and color are required.");
     }
