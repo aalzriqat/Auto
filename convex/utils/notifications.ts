@@ -179,22 +179,30 @@ export async function notifyByPermission(
 }
 
 /** Notifies every member of the org (org-wide events like broadcasts/membership changes). */
+/**
+ * Returns how many members were actually notified. Callers that record a
+ * recipient count used to re-query the same memberships to get it, doubling the
+ * reads and counting rows this function skipped (`excludeUserId`).
+ */
 export async function notifyAllMembers(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
   type: NotificationType,
   data?: NotificationData,
   opts?: DispatchOpts & { excludeUserId?: Id<"users"> }
-) {
+): Promise<number> {
   const memberships = await ctx.db
     .query("memberships")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
     .collect();
 
+  let notified = 0;
   for (const membership of memberships) {
     if (opts?.excludeUserId && membership.userId === opts.excludeUserId) continue;
     await dispatch(ctx, orgId, membership.userId, type, data, opts);
+    notified++;
   }
+  return notified;
 }
 
 /** Notifies only the org's OWNER(s) — for security/financially sensitive events. */

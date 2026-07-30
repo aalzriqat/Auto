@@ -164,6 +164,9 @@ export const planGateValidator = v.union(
   v.literal("marketplaceFeatured")
 );
 
+/** Page size for the exact seat count in `canAddMember`. */
+const SEAT_COUNT_BATCH_SIZE = 100;
+
 const PLAN_GATE_LABELS: Record<PlanGate, string> = {
   socialInbox: "Social Inbox",
   whatsapp: "WhatsApp",
@@ -309,23 +312,41 @@ export const canAddMember = internalQuery({
     const plan = PLANS[planId];
     if (plan.maxUsers === -1) return { allowed: true };
 
-    // Fetch enough rows to account for impersonation/offboarding rows that will
-    // be excluded, so the real-member count isn't undercounted by the prefix.
-    const memberships = await ctx.db
-      .query("memberships")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .take(plan.maxUsers + 50);
+    // Impersonation grants and memberships pending offboarding are not seats, so
+    // they have to be excluded — but excluding them in memory after a
+    // `.take(maxUsers + 50)` made the seat count a guess. The prefix is ordered
+    // by _creationTime, not by whether a row is a real seat: an org with more
+    // than `maxUsers + 50` membership rows undercounts its real members by
+    // however many live seats fall past the prefix, and undercounting is the
+    // direction that hands out a free seat.
+    //
+    // Counting is exact instead. `maxUsers` is single-digit to low-double-digit
+    // on every paid plan, so this stops as soon as the cap is reached and reads
+    // no more rows than the old prefix did in the ordinary case.
+    let realMembers = 0;
+    let cursor: string | null = null;
+    for (;;) {
+      const page = await ctx.db
+        .query("memberships")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .paginate({ cursor, numItems: SEAT_COUNT_BATCH_SIZE });
 
-    // Exclude impersonation grants and members pending offboarding.
-    const realMembers = memberships.filter((m) => !m.impersonationGrantId && !m.offboardingStatus);
-    if (realMembers.length >= plan.maxUsers) {
-      return {
-        allowed: false,
-        limit: plan.maxUsers,
-        current: realMembers.length,
-        upgradeRequired: planId as PlanId,
-      };
+      for (const m of page.page) {
+        if (!m.impersonationGrantId && !m.offboardingStatus) realMembers++;
+      }
+
+      if (realMembers >= plan.maxUsers) {
+        return {
+          allowed: false,
+          limit: plan.maxUsers,
+          current: realMembers,
+          upgradeRequired: planId as PlanId,
+        };
+      }
+      if (page.isDone) break;
+      cursor = page.continueCursor;
     }
+
     return { allowed: true };
   },
 });

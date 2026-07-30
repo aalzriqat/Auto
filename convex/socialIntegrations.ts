@@ -641,20 +641,38 @@ export const exchangeCodeForToken = internalAction({
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Queries all org-settings rows that have a live Instagram token expiring within `withinMs`. */
+const INSTAGRAM_REFRESH_ORG_BATCH_SIZE = 100;
+
+/**
+ * One page of orgs whose Instagram token expires within `withinMs`.
+ *
+ * This used to `.collect()` every org's settings row platform-wide and filter in
+ * memory, on a daily cron — unbounded in tenant count, and the one cron of the
+ * batch still shaped that way. It also returned whole `orgSettings` documents,
+ * carrying every org's Instagram access token across the query/action boundary
+ * to a caller that only ever read `.orgId`; it now returns just the ids.
+ */
 export const getOrgsNeedingInstagramRefresh = internalQuery({
-  args: { withinMs: v.number() },
+  args: { withinMs: v.number(), cursor: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const cutoff = Date.now() + args.withinMs;
-    const rows = await ctx.db
+    const page = await ctx.db
       .query("orgSettings")
       .withIndex("by_org")
-      .collect();
-    return rows.filter(
-      (s) =>
-        s.instagramAccessToken &&
-        s.instagramTokenExpiresAt !== undefined &&
-        s.instagramTokenExpiresAt <= cutoff
-    );
+      .paginate({ cursor: args.cursor ?? null, numItems: INSTAGRAM_REFRESH_ORG_BATCH_SIZE });
+
+    return {
+      orgIds: page.page
+        .filter(
+          (s) =>
+            s.instagramAccessToken &&
+            s.instagramTokenExpiresAt !== undefined &&
+            s.instagramTokenExpiresAt <= cutoff
+        )
+        .map((s) => s.orgId),
+      isDone: page.isDone,
+      continueCursor: page.continueCursor,
+    };
   },
 });
 
