@@ -1,9 +1,9 @@
 import { convexTest } from "convex-test";
-import { expect, test, describe } from "vitest";
+import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
-import { computeBadges, MarketplaceBadge, checkMarketplaceQuota, effectiveFoundingWindowEndsAt, compareDealerRank } from "./marketplaceDealers";
+import { computeBadges, MarketplaceBadge, checkMarketplaceQuota, effectiveFoundingWindowEndsAt, compareDealerRank, listOptedInDealerProfiles } from "./marketplaceDealers";
 
 async function seedDealer(t: ReturnType<typeof convexTest>, opts?: { name?: string; suspended?: boolean }) {
   const orgId = await t.run(async (ctx) =>
@@ -354,5 +354,115 @@ describe("recomputeAllDealerBadges", () => {
       ctx.db.query("marketplaceDealerProfiles").withIndex("by_org", (q) => q.eq("orgId", dealer.orgId)).unique()
     );
     expect(profile?.badges).toContain("FINANCE_AVAILABLE");
+  });
+});
+
+describe("listOptedInDealerProfiles does not spend its limit on deleted rows", () => {
+  /**
+   * Inserts `count` opted-in profiles directly, marking the first
+   * `deletedPrefix` of them as soft-deleted. Direct inserts because the point is
+   * the read path's ordering, and the index is ascending by _creationTime — so
+   * the deleted ones are exactly the rows a `.take()` reaches first.
+   */
+  async function seedProfiles(t: ReturnType<typeof convexTest>, count: number, deletedPrefix: number) {
+    for (let i = 0; i < count; i++) {
+      const orgId = await t.run((ctx) =>
+        ctx.db.insert("organizations", { name: `Dealer ${i}`, createdAt: Date.now() })
+      );
+      await t.run((ctx) =>
+        ctx.db.insert("marketplaceDealerProfiles", {
+          orgId,
+          isOptedIn: true,
+          isDeleted: i < deletedPrefix ? true : undefined,
+          areas: [],
+          brandsCarried: [],
+          badges: [],
+          totalResponses: 0,
+          totalAccepted: 0,
+          leadsUsedThisPeriod: 0,
+          tier: "FREE_FOUNDING",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        })
+      );
+    }
+  }
+
+  test("a limit of N returns N live dealers even when the oldest rows are deleted", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    // 4 deleted, then 3 live. Filtering after the take returned 1 of 3 live
+    // dealers for a limit of 5; the other 2 were invisible to public browse,
+    // affordability search and WhatsApp intake with nothing to indicate it.
+    await seedProfiles(t, 7, 4);
+
+    const profiles = await t.run((ctx) => listOptedInDealerProfiles(ctx, 5));
+
+    expect(profiles).toHaveLength(3);
+    expect(profiles.every((p) => !p.isDeleted)).toBe(true);
+  });
+
+  test("the limit still caps the result when there are more live dealers than it", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedProfiles(t, 6, 0);
+
+    const profiles = await t.run((ctx) => listOptedInDealerProfiles(ctx, 4));
+
+    expect(profiles).toHaveLength(4);
+  });
+});
+
+describe("recomputeAllDealerBadges pages across every dealer", () => {
+  test("recomputes past the first batch instead of stopping at one collect", async () => {
+    // convex-test only advances its scheduler when the clock moves, so a
+    // `runAfter(0, ...)` continuation stays pending under real timers and the
+    // assertion below would see page one only — passing for the wrong reason.
+    // Same recipe as liveChat.test.ts.
+    vi.useFakeTimers();
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+
+    // Note what this does and does not prove. The old unbounded `.collect()`
+    // handled 105 rows fine — its failure mode only appears at a budget limit no
+    // test can reach. So this is not a pre-fix reproduction; it seeds past the
+    // 100-row page boundary to prove the paginated version still reaches the
+    // tail. It fails if the continuation is not rescheduled, which is the way
+    // this rewrite would plausibly go wrong.
+    const orgIds: Id<"organizations">[] = [];
+    for (let i = 0; i < 105; i++) {
+      const orgId = await t.run((ctx) =>
+        ctx.db.insert("organizations", { name: `Dealer ${i}`, createdAt: Date.now() })
+      );
+      orgIds.push(orgId);
+      await t.run((ctx) =>
+        ctx.db.insert("marketplaceDealerProfiles", {
+          orgId,
+          isOptedIn: true,
+          areas: [],
+          brandsCarried: [],
+          // Stale: computeBadges will drop FAST_RESPONSE, since there is no
+          // response history to support it. Seeing it gone proves this row was
+          // visited.
+          badges: ["FAST_RESPONSE"],
+          totalResponses: 0,
+          totalAccepted: 0,
+          leadsUsedThisPeriod: 0,
+          tier: "FREE_FOUNDING",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        })
+      );
+    }
+
+    try {
+      await t.mutation(internal.marketplaceDealers.recomputeAllDealerBadges, {});
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      const stillStale = await t.run(async (ctx) => {
+        const rows = await ctx.db.query("marketplaceDealerProfiles").collect();
+        return rows.filter((r) => r.badges.includes("FAST_RESPONSE")).length;
+      });
+      expect(stillStale).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -1215,6 +1215,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "كان خط الربح في لوحة التحكم يحسب تكلفة المركبة بطريقة تختلف عن تقارير المبيعات ودفاتر المحاسبة، ودائماً في الاتجاه المتحيّز: فكان يتجاهل تكاليف الشحن والتخليص، ويُبقي المصروف المحذوف محسوباً عليك إلى الأبد، ويُسقط بيع المركبة الموردة من طرف آخر من الربح تماماً. أصبحت الثلاثة تستخدم التكلفة نفسها التي تعتمدها تقاريرك. كما لم تعد لوحة المركبة تعرض عمليات البيع أو العملاء المحتملين أو المصاريف التي حذفتها.",
     publishedAt: releaseAt(2026, 7, 30, 6),
   },
+  {
+    type: "FIX",
+    titleEn: "Dealer visibility and seat limits no longer depend on how old your account is",
+    titleAr: "لم تعد ظهور المعرض وحدود المقاعد تعتمد على عمر حسابك",
+    descriptionEn: "A dealership whose marketplace profile had been removed and re-created was still taking up one of the slots the buyer search considers, which could hide other dealerships from buyers. Dealer badges are also recalculated for every dealership now, not just the first batch, and a platform-wide announcement reaches every dealership rather than stopping partway through. Seat counting against your plan limit is exact instead of estimated.",
+    descriptionAr: "كان المعرض الذي أُزيل ملفه في السوق ثم أُعيد إنشاؤه يشغل أحد المواضع التي يأخذها بحث المشترين في الحسبان، مما قد يحجب معارض أخرى عن المشترين. كما تُحتسب شارات المعارض الآن لكل معرض، لا للدفعة الأولى فقط، ويصل الإعلان العام إلى كل المعارض بدلاً من التوقف في منتصف الطريق. واحتساب المقاعد مقابل حد خطتك أصبح دقيقاً بدلاً من تقديري.",
+    publishedAt: releaseAt(2026, 7, 30, 7),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

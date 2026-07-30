@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { query, mutation, internalMutation, QueryCtx, MutationCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -125,24 +126,64 @@ export async function refreshDealerBadges(ctx: MutationCtx, profile: Doc<"market
   }
 }
 
-/** Opted-in, non-deleted dealer profiles — shared by every marketplace flow that fans out across the dealer network (public browse, buyer-request matching, badge recompute, phone-number resolution). Pass a limit to cap a `.take()`, or omit it for `.collect()`. */
+/**
+ * Opted-in, non-deleted dealer profiles — shared by every marketplace flow that
+ * fans out across the dealer network (public browse, buyer-request matching,
+ * badge recompute, phone-number resolution). Pass a limit to cap a `.take()`, or
+ * omit it for `.collect()`.
+ *
+ * The `isDeleted` check is part of the query, not a filter applied afterwards.
+ * It used to run after the `.take()`, so a soft-deleted profile still consumed
+ * one of the caller's slots: with 40 of the oldest 100 opted-in profiles
+ * deleted, a `limit` of 100 yielded 60 dealers and the caller had no way to
+ * know. Callers treat the limit as "how many dealers I can afford to consider",
+ * and now that is what they get.
+ */
 export async function listOptedInDealerProfiles(
   ctx: QueryCtx | MutationCtx,
   limit?: number
 ): Promise<Doc<"marketplaceDealerProfiles">[]> {
-  const query = ctx.db.query("marketplaceDealerProfiles").withIndex("by_opted_in", (q) => q.eq("isOptedIn", true));
-  const profiles = limit !== undefined ? await query.take(limit) : await query.collect();
-  return profiles.filter((profile) => !profile.isDeleted);
+  const query = ctx.db
+    .query("marketplaceDealerProfiles")
+    .withIndex("by_opted_in", (q) => q.eq("isOptedIn", true))
+    .filter((q) => q.neq(q.field("isDeleted"), true));
+  return limit !== undefined ? await query.take(limit) : await query.collect();
 }
 
-/** Daily cron entrypoint (Phase 60) — recomputes FAST_RESPONSE/FINANCE_AVAILABLE for every opted-in dealer, since both can drift without any single triggering event (rolling average decay, a finance company being deactivated). */
+const BADGE_RECOMPUTE_BATCH_SIZE = 100;
+
+/**
+ * Daily cron entrypoint (Phase 60) — recomputes FAST_RESPONSE/FINANCE_AVAILABLE
+ * for every opted-in dealer, since both can drift without any single triggering
+ * event (rolling average decay, a finance company being deactivated).
+ *
+ * Paginated across scheduled continuations rather than one unbounded `.collect()`
+ * plus a patch per row. That shape is a hard cliff, not a slow query: once the
+ * dealer network outgrows a single mutation's budget the whole run throws and
+ * rolls back, so every dealer's badges silently freeze at once. Same shape as
+ * collections.processDailyCollectionReminders and changelog.broadcastNewEntry.
+ */
 export const recomputeAllDealerBadges = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const profiles = await listOptedInDealerProfiles(ctx);
-    for (const profile of profiles) {
+  // Optional so the cron can invoke it with no arguments.
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("marketplaceDealerProfiles")
+      .withIndex("by_opted_in", (q) => q.eq("isOptedIn", true))
+      .filter((q) => q.neq(q.field("isDeleted"), true))
+      .paginate({ cursor: args.cursor ?? null, numItems: BADGE_RECOMPUTE_BATCH_SIZE });
+
+    for (const profile of page.page) {
       await refreshDealerBadges(ctx, profile);
     }
+
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.marketplaceDealers.recomputeAllDealerBadges, {
+        cursor: page.continueCursor,
+      });
+    }
+
+    return { recomputed: page.page.length, isDone: page.isDone };
   },
 });
 
