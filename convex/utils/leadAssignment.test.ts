@@ -118,6 +118,62 @@ describe("generated lead assignment", () => {
     expect(assignee).toBe(customSalesId);
   });
 
+  test("skips a sales member excluded from auto assignment", async () => {
+    const { t, orgId, salesRoleId } = await seedOrg(true);
+    const excludedId = await addMember(t, orgId, salesRoleId, "On Leave");
+    const activeId = await addMember(t, orgId, salesRoleId, "Sales Two");
+
+    await t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", excludedId))
+        .unique();
+      await ctx.db.patch(membership!._id, { excludeFromLeadAutoAssignment: true });
+    });
+
+    // Two draws in a row: an excluded member must not surface on either.
+    const first = await t.run((ctx) => nextGeneratedLeadAssignee(ctx, orgId));
+    const second = await t.run((ctx) => nextGeneratedLeadAssignee(ctx, orgId));
+
+    expect(first).toBe(activeId);
+    expect(second).toBe(activeId);
+  });
+
+  test("excluding every sales member leaves generated leads unassigned", async () => {
+    const { t, orgId, salesRoleId } = await seedOrg(true);
+    const onlySalesId = await addMember(t, orgId, salesRoleId, "Sales One");
+
+    await t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", onlySalesId))
+        .unique();
+      await ctx.db.patch(membership!._id, { excludeFromLeadAutoAssignment: true });
+    });
+
+    const assignee = await t.run((ctx) => nextGeneratedLeadAssignee(ctx, orgId));
+    expect(assignee).toBeNull();
+  });
+
+  test("an explicit route still reaches an excluded member", async () => {
+    // Exclusion removes someone from *automatic* distribution only — a manager
+    // pointing the website form at them by hand is a deliberate choice.
+    const { t, orgId, salesRoleId } = await seedOrg(true);
+    const excludedId = await addMember(t, orgId, salesRoleId, "On Leave");
+    await addMember(t, orgId, salesRoleId, "Sales Two");
+
+    await t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", excludedId))
+        .unique();
+      await ctx.db.patch(membership!._id, { excludeFromLeadAutoAssignment: true });
+    });
+
+    const explicit = await t.run((ctx) => resolveGeneratedLeadAssignee(ctx, orgId, excludedId));
+    expect(explicit).toBe(excludedId);
+  });
+
   test("keeps a valid explicit route without advancing the round-robin cursor", async () => {
     const { t, orgId, salesRoleId, managerRoleId } = await seedOrg(true);
     const routedUserId = await addMember(t, orgId, managerRoleId, "Routed Manager");

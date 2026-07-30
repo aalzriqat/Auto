@@ -1,6 +1,7 @@
 import { MutationCtx } from "../_generated/server";
 import { Id } from "../_generated/dataModel";
 import { Doc } from "../_generated/dataModel";
+import { recordLeadActivity } from "./leadActivity";
 
 export async function markVehicleAsSold(
   ctx: MutationCtx,
@@ -64,6 +65,15 @@ export async function closeLeadsAsWon(
     const lead = await ctx.db.get(args.leadId);
     if (lead && lead.orgId === args.orgId && lead.stage !== "WON" && lead.stage !== "LOST") {
       await ctx.db.patch(args.leadId, { stage: "WON" as const });
+      await recordLeadActivity(ctx, {
+        orgId: args.orgId,
+        leadId: args.leadId,
+        action: "STAGE_CHANGED",
+        actorLabel: "Sale recorded",
+        field: "stage",
+        fromValue: lead.stage,
+        toValue: "WON",
+      });
     }
     return;
   }
@@ -84,5 +94,14 @@ export async function closeLeadsAsWon(
 
   for (const lead of leads) {
     await ctx.db.patch(lead._id, { stage: "WON" as const });
+    await recordLeadActivity(ctx, {
+      orgId: args.orgId,
+      leadId: lead._id,
+      action: "STAGE_CHANGED",
+      actorLabel: "Sale recorded",
+      field: "stage",
+      fromValue: lead.stage,
+      toValue: "WON",
+    });
   }
 }

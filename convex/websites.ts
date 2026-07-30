@@ -23,6 +23,7 @@ import { resolveGeneratedLeadAssignee } from "./utils/leadAssignment";
 import { notifyUser } from "./utils/notifications";
 import { getValidatedEnv } from "./utils/env";
 import { rateLimiter } from "./rateLimit";
+import { recordLeadCreated } from "./utils/leadActivity";
 import { hasPlanFeature, requireFeature } from "./subscriptions";
 
 const PUBLIC_LEAD_MAX_NAME_CHARS = 80;
@@ -1157,6 +1158,15 @@ export const createPublicLead = internalMutation({
       source: `Dealer website: ${formType}`,
       stage: formType === "test_drive" ? "TEST_DRIVE" : "NEW",
       notes: message,
+    });
+
+    await recordLeadCreated(ctx, {
+      orgId: domain.orgId,
+      leadId,
+      actorLabel: "Dealer website",
+      stage: formType === "test_drive" ? "TEST_DRIVE" : "NEW",
+      assignedUserId,
+      source: `Dealer website: ${formType}`,
     });
 
     if (assignedUserId) {

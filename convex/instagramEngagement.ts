@@ -13,6 +13,7 @@ import { buildSmartReplyText } from "./utils/smartReplyBuilder";
 import { matchVehicleFromText, suggestVehiclesFromText } from "./utils/vehicleTextMatch";
 import { attachSharedMobileNumberToCustomer, extractSharedMobileNumber } from "./utils/socialMobile";
 import { nextGeneratedLeadAssignee } from "./utils/leadAssignment";
+import { recordLeadCreated, recordLeadActivity, describeLeadFieldValue } from "./utils/leadActivity";
 import { mobileReceivedAutoReplyText } from "./utils/socialMobileReply";
 
 const AUTO_REPLY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 reply per sender per 24h
@@ -173,6 +174,15 @@ export const handleIncomingInstagramEvent = internalMutation({
           source: label,
           stage: "NEW",
           notes: text ? `First ${label}: "${text.slice(0, 200)}"` : `Lead created from ${label}`,
+        });
+
+        await recordLeadCreated(ctx, {
+          orgId,
+          leadId,
+          actorLabel: label,
+          stage: "NEW",
+          assignedUserId,
+          source: label,
         });
 
         await notifyManagers(
@@ -881,6 +891,14 @@ export const patchEventVehicle = internalMutation({
       const lead = await ctx.db.get(event.leadId);
       if (lead && !lead.vehicleId) {
         await ctx.db.patch(event.leadId, { vehicleId: args.vehicleId });
+        await recordLeadActivity(ctx, {
+          orgId: lead.orgId,
+          leadId: event.leadId,
+          action: "UPDATED",
+          actorLabel: "Instagram vehicle match",
+          field: "vehicleId",
+          toValue: await describeLeadFieldValue(ctx, "vehicleId", args.vehicleId),
+        });
       }
     }
   },

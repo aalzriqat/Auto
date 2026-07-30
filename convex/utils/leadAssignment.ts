@@ -40,6 +40,10 @@ async function eligibleSalesUsers(ctx: MutationCtx, orgId: Id<"organizations">) 
 
   const eligible: Array<Id<"users">> = [];
   for (const membership of memberships) {
+    // An explicit opt-out wins over the role check — a manager can park a rep
+    // who is on leave without stripping their role and their access with it.
+    if (membership.excludeFromLeadAutoAssignment === true) continue;
+
     const role = await ctx.db.get(membership.roleId);
     if (!canReceiveGeneratedLeads(role)) continue;
 

@@ -36,12 +36,35 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { SearchableSelect } from "@/components/ui/searchable-select";
+import { SearchableSelect, SearchableSelectOption } from "@/components/ui/searchable-select";
 
 import { leadSchema, LeadFormValues, LeadDialogProps } from "./lead.schema";
 import { CustomFieldsSection, useSaveCustomFieldValues } from "@/components/custom-fields/CustomFieldsSection";
+import { LeadActivityTrail } from "./LeadActivityTrail";
+import { LeadCustomerMessages } from "./LeadCustomerMessages";
 import { translateLeadSourceLabel, translatePipelineStageLabel } from "@/lib/i18n/defaultLabels";
 
+/**
+ * Pins a lead's stored value into a dropdown's option list when it isn't
+ * already there.
+ *
+ * A lead's value legitimately falls outside these lists all the time: the
+ * social and marketplace automations write sources like "Facebook DM" that
+ * nobody configured under Settings, the customer or salesperson may sit past
+ * the 100-row page these dropdowns load, and a lead can point at a vehicle
+ * that has since been sold (the vehicle query only asks for AVAILABLE).
+ * Both Select implementations resolve their display label by looking the
+ * value up in `options` and fall back to the placeholder on a miss — so an
+ * unpinned value renders as "Select customer" on a lead that plainly has one.
+ */
+function withCurrentOption(
+  options: SearchableSelectOption[],
+  current: SearchableSelectOption | null
+): SearchableSelectOption[] {
+  if (!current?.value || current.value === "none") return options;
+  if (options.some((o) => o.value === current.value)) return options;
+  return [current, ...options];
+}
 
 export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
   const { activeOrgId } = useOrg();
@@ -69,19 +92,93 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
     { initialNumItems: 100 }
   );
 
+  const vehicleOptions = useMemo(
+    () =>
+      withCurrentOption(
+        vehicles?.map((v: Doc<"vehicles">) => ({
+          value: v._id as string,
+          label: `${v.year} ${v.make} ${v.model}`,
+          subLabel: `${v.vin} · ${v.sellingPrice.toLocaleString()} JOD${v.status === "RESERVED" ? " · Reserved (pending deal)" : ""}`,
+        })) ?? [],
+        lead?.vehicleId
+          ? {
+              value: lead.vehicleId as string,
+              label:
+                lead.vehicleSummary ||
+                (lead.vehicle ? `${lead.vehicle.year} ${lead.vehicle.make} ${lead.vehicle.model}` : "") ||
+                (t("Unknown" as any) || "Unknown vehicle"),
+            }
+          : null
+      ),
+    [vehicles, lead, t]
+  );
+
+  const assigneeOptions = useMemo(
+    () =>
+      withCurrentOption(
+        memberships?.map((m) => ({
+          value: m.userId as string,
+          label: m.userName,
+          subLabel: m.roleName || undefined,
+        })) ?? [],
+        lead?.assignedUserId
+          ? {
+              value: lead.assignedUserId as string,
+              label:
+                lead.assignedUserName ||
+                lead.assignedUser?.name ||
+                lead.assignedUser?.email ||
+                (t("Unknown" as any) || "Unknown user"),
+            }
+          : null
+      ),
+    [memberships, lead, t]
+  );
+
+  // Source is a free-text column, not an FK, so the same pinning applies to its
+  // raw string: an automation-written "Facebook DM" is a valid source that no
+  // org has in its configured list.
+  const sourceOptions = useMemo(() => {
+    const configured =
+      dynamicLeadSources && dynamicLeadSources.length > 0
+        ? dynamicLeadSources
+            .filter((s: Doc<"orgLeadSources">) => s.isActive)
+            .map((s: Doc<"orgLeadSources">) => s.label)
+        : ["Walk-in", "Website", "Facebook", "Instagram", "Referral", "Phone", "Other"];
+
+    return lead?.source && !configured.includes(lead.source)
+      ? [lead.source, ...configured]
+      : configured;
+  }, [dynamicLeadSources, lead]);
+
   const createLead = useMutation(api.leads.create);
   const updateLead = useMutation(api.leads.update);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({});
   const saveCustomFields = useSaveCustomFieldValues();
+  // `customers.selectorOptions` searches server-side but still returns a
+  // capped window, so a lead's own customer can fall outside it — pin it in.
   const customerOptions = useMemo(
     () =>
-      customerSelectorOptions?.map((customer) => ({
-        value: customer._id,
-        label: `${customer.firstName} ${customer.lastName}`,
-        subLabel: customer.phone || customer.email || undefined,
-      })) ?? [],
-    [customerSelectorOptions],
+      withCurrentOption(
+        customerSelectorOptions?.map((customer) => ({
+          value: customer._id as string,
+          label: `${customer.firstName} ${customer.lastName}`,
+          subLabel: customer.phone || customer.email || undefined,
+        })) ?? [],
+        lead
+          ? {
+              value: lead.customerId as string,
+              label:
+                lead.customerName ||
+                (lead.customer ? `${lead.customer.firstName} ${lead.customer.lastName}` : "") ||
+                (t("Unknown" as any) || "Unknown customer"),
+              subLabel:
+                lead.phone || lead.customer?.phone || lead.email || lead.customer?.email || undefined,
+            }
+          : null
+      ),
+    [customerSelectorOptions, lead, t],
   );
 
   const form = useForm<LeadFormValues>({
@@ -195,6 +292,12 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
           </DialogDescription>
         </DialogHeader>
 
+        {/* Shown above the form deliberately: on a social lead the first thing
+            a rep needs is what the customer actually asked, not the fields. */}
+        {activeOrgId && lead && (
+          <LeadCustomerMessages orgId={activeOrgId} leadId={lead._id} />
+        )}
+
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -230,11 +333,7 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                         onValueChange={field.onChange}
                         placeholder={t("SelectVehicle" as any) || "Select a vehicle"}
                         noneLabel={t("NoSpecificVehicle" as any) || "No specific vehicle yet"}
-                        options={vehicles?.map((v: Doc<"vehicles">) => ({
-                          value: v._id,
-                          label: `${v.year} ${v.make} ${v.model}`,
-                          subLabel: `${v.vin} · ${v.sellingPrice.toLocaleString()} JOD${v.status === "RESERVED" ? " · Reserved (pending deal)" : ""}`,
-                        })) ?? []}
+                        options={vehicleOptions}
                       />
                     </FormControl>
                     <FormMessage />
@@ -254,11 +353,7 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                         onValueChange={field.onChange}
                         placeholder={t("NoAssigned" as any) || "Unassigned"}
                         noneLabel={t("NoAssigned" as any) || "Unassigned"}
-                        options={memberships?.map((m) => ({
-                          value: m.userId,
-                          label: m.userName,
-                          subLabel: m.roleName || undefined,
-                        })) ?? []}
+                        options={assigneeOptions}
                       />
                     </FormControl>
                     <FormMessage />
@@ -316,20 +411,9 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        {(dynamicLeadSources && dynamicLeadSources.length > 0
-                          ? dynamicLeadSources.filter((s: Doc<"orgLeadSources">) => s.isActive)
-                          : [
-                              { label: "Walk-in" },
-                              { label: "Website" },
-                              { label: "Facebook" },
-                              { label: "Instagram" },
-                              { label: "Referral" },
-                              { label: "Phone" },
-                              { label: "Other" },
-                            ]
-                        ).map((s: { label: string }) => (
-                          <SelectItem key={s.label} value={s.label}>
-                            {translateLeadSourceLabel(s.label, locale)}
+                        {sourceOptions.map((label: string) => (
+                          <SelectItem key={label} value={label}>
+                            {translateLeadSourceLabel(label, locale)}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -370,6 +454,18 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
               <div className="rounded-md border border-green-300 bg-green-50 px-3 py-2 text-sm text-green-800">
                 {t("ConvertedToSale" as any) || "Converted to Sale"} — {linkedSale.salePrice.toLocaleString()} JOD{" "}
                 {t("OnDate" as any) || "on"} {new Date(linkedSale.saleDate).toLocaleDateString(locale === "ar" ? "ar" : "en-US")}
+              </div>
+            )}
+            {activeOrgId && lead && (
+              <div className="border-t pt-4">
+                <h4 className="text-sm font-medium mb-3">
+                  {t("ActivityTrail" as any) || "Activity Trail"}
+                </h4>
+                <LeadActivityTrail
+                  orgId={activeOrgId}
+                  leadId={lead._id}
+                  canAddUpdates={!lead.isDeleted}
+                />
               </div>
             )}
             <div className="flex justify-end gap-2 pt-4">

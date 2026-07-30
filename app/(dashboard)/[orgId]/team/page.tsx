@@ -17,7 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Trash2, ShieldAlert, Pencil, Check, X, RefreshCw, Search } from "lucide-react";
+import { Plus, Trash2, ShieldAlert, Pencil, Check, X, RefreshCw, Search, UserRoundCheck, UserRoundX } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/sonner";
 import {
@@ -76,6 +76,7 @@ export default function TeamPage() {
 
   const removeMember = useAction(api.memberships.remove);
   const updateCommissionRate = useMutation(api.memberships.updateCommissionRate);
+  const setLeadAutoAssignmentExcluded = useMutation(api.memberships.setLeadAutoAssignmentExcluded);
   const syncRolePermissions = useMutation(api.memberships.syncRolePermissionsToTemplate);
   const createRole = useMutation(api.roles.create);
   const deleteRole = useMutation(api.roles.remove);
@@ -109,6 +110,28 @@ export default function TeamPage() {
   const roleOptions = Array.from(new Set((memberships ?? []).map((m) => m.roleName)));
 
   const filteredMemberships = sortedMemberships?.filter((m) => roleFilter === "ALL" || m.roleName === roleFilter);
+
+  // Removes a member from the generated-lead round robin without touching
+  // their role or access — for someone on leave, or a manager who only holds
+  // the SALES role so they show up in reports.
+  async function handleToggleAutoAssignment(member: any) {
+    if (!activeOrgId) return;
+    const excluded = !member.excludeFromLeadAutoAssignment;
+    try {
+      await setLeadAutoAssignmentExcluded({
+        orgId: activeOrgId,
+        membershipId: member._id as Id<"memberships">,
+        excluded,
+      });
+      toast.success(
+        excluded
+          ? t("ExcludedFromAutoLeadsToast" as any) || "Removed from automatic lead assignment."
+          : t("IncludedInAutoLeadsToast" as any) || "Added back to automatic lead assignment."
+      );
+    } catch (e: any) {
+      toast.error(e);
+    }
+  }
 
   async function handleSaveCommission(membershipId: string) {
     if (!activeOrgId) return;
@@ -248,6 +271,11 @@ export default function TeamPage() {
                           <div className="flex flex-col">
                             <span className="font-medium">{member.userName}</span>
                             <span className="text-xs text-muted-foreground">{member.userEmail}</span>
+                            {(member as any).excludeFromLeadAutoAssignment && (
+                              <Badge variant="outline" className="mt-0.5 w-fit text-[10px] py-0 px-1.5 font-normal">
+                                {t("NoAutoLeads" as any) || "No auto leads"}
+                              </Badge>
+                            )}
                           </div>
                         </div>
                       </TableCell>
@@ -322,6 +350,20 @@ export default function TeamPage() {
                       {canManageUsers && (
                         <TableCell className="text-end">
                           <div className="flex justify-end gap-2">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleToggleAutoAssignment(member)}
+                              title={
+                                (member as any).excludeFromLeadAutoAssignment
+                                  ? t("IncludeInAutoLeads" as any) || "Include in automatic lead assignment"
+                                  : t("ExcludeFromAutoLeads" as any) || "Exclude from automatic lead assignment"
+                              }
+                            >
+                              {(member as any).excludeFromLeadAutoAssignment
+                                ? <UserRoundX className="h-4 w-4 text-amber-600" />
+                                : <UserRoundCheck className="h-4 w-4 text-muted-foreground" />}
+                            </Button>
                             <Button
                               variant="outline"
                               size="sm"
