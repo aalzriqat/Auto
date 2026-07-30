@@ -21,6 +21,10 @@
     "./whatsapp": {
       "types": "./src/whatsapp.ts",
       "default": "./src/whatsapp.ts"
+    },
+    "./financing": {
+      "types": "./src/financing.ts",
+      "default": "./src/financing.ts"
     }
   },
   "scripts": {
