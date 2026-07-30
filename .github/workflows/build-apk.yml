@@ -97,7 +97,12 @@ jobs:
           # action above is pinned by SHA: an unpinned CLI means a release
           # published upstream can change or break a build with no commit here.
           # Bump deliberately.
-          npx --yes eas-cli@21.4.0 build \
+          #
+          # `--ignore-scripts` blocks lifecycle scripts during the on-demand
+          # install of the CLI's dependency tree, the same protection the
+          # `pnpm install` above already applies. Verified against 21.4.0: the
+          # CLI loads and runs with it set.
+          npx --yes --ignore-scripts eas-cli@21.4.0 build \
             --platform android \
             --profile "$PROFILE" \
             --non-interactive \
