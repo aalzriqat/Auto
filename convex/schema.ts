@@ -536,6 +536,12 @@ export default defineSchema({
     // live heartbeat/interval, to avoid repeating the liveChatPresence cost
     // (see convex/schema.ts liveChatPresence comment) on a much lower-value feature.
     lastSeenAt: v.optional(v.number()),
+    // Opts this member out of the generated-lead round robin (social, website,
+    // WhatsApp, marketplace trade-ins). They keep every lead already assigned
+    // to them and can still be assigned one by hand — this only removes them
+    // from automatic distribution, for someone on leave, a manager who holds
+    // the SALES role for reporting, or a rep who shouldn't take new work.
+    excludeFromLeadAutoAssignment: v.optional(v.boolean()),
   })
     .index("by_user", ["userId"])
     .index("by_org", ["orgId"])
@@ -908,6 +914,45 @@ export default defineSchema({
     .index("by_org_stage", ["orgId", "stage"])
     .index("by_org_assigned", ["orgId", "assignedUserId"])
     .index("by_org_customer", ["orgId", "customerId"]),
+
+  // Append-only audit trail for leads. Rows are never patched or deleted —
+  // not even when the lead itself is soft-deleted — so the timeline stays
+  // truthful across a delete/restore cycle. Every writer funnels through
+  // convex/utils/leadActivity.ts; one row per changed field, so a single
+  // `leads.update` that moves stage and salesperson emits two rows.
+  leadActivities: defineTable({
+    orgId: v.id("organizations"),
+    leadId: v.id("leads"),
+    // Absent for automation writes with no signed-in caller: social webhooks,
+    // marketplace conversions, and stage advances triggered by a test drive
+    // or a completed sale. `actorLabel` names the source in that case.
+    actorUserId: v.optional(v.id("users")),
+    actorLabel: v.optional(v.string()),
+    action: v.union(
+      v.literal("CREATED"),
+      v.literal("STAGE_CHANGED"),
+      v.literal("ASSIGNED"),
+      v.literal("UNASSIGNED"),
+      v.literal("UPDATED"),
+      v.literal("DELETED"),
+      v.literal("RESTORED"),
+      // A salesperson's own progress update. The only action a user can author
+      // directly, and still append-only: each update is its own row rather
+      // than an overwrite of the lead's single `notes` field, so the history
+      // of what was tried survives instead of being replaced.
+      v.literal("NOTE")
+    ),
+    // The lead column that moved. Values are stored as rendered strings, not
+    // raw ids, so the timeline still reads correctly after the referenced
+    // customer/vehicle/user row is renamed or removed.
+    field: v.optional(v.string()),
+    fromValue: v.optional(v.string()),
+    toValue: v.optional(v.string()),
+    note: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_org_lead", ["orgId", "leadId", "createdAt"])
+    .index("by_org_created", ["orgId", "createdAt"]),
 
   sales: defineTable({
     orgId: v.id("organizations"),

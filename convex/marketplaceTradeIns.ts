@@ -8,6 +8,7 @@ import { notifyByPermission } from "./utils/notifications";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireTenantAuth } from "./utils/tenancy";
 import { resolveGeneratedLeadAssignee, getOrCreateMarketplaceBuyerCustomer } from "./utils/leadAssignment";
+import { recordLeadCreated } from "./utils/leadActivity";
 import { getOwnProfile } from "./marketplaceDealers";
 import { assertFiniteNumber } from "./utils/money";
 
@@ -296,6 +297,15 @@ async function applyOfferAcceptance(
     sourceChannel: "marketplace",
     stage: "NEW",
     notes: noteLines.join(" "),
+  });
+
+  await recordLeadCreated(ctx, {
+    orgId: tradeIn.orgId,
+    leadId,
+    actorLabel: "Marketplace trade-in",
+    stage: "NEW",
+    assignedUserId,
+    source: "Marketplace trade-in",
   });
 
   await ctx.db.patch(tradeIn._id, { status: "ACCEPTED", respondedAt: Date.now(), leadId });

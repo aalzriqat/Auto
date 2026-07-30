@@ -296,6 +296,7 @@ export const list = query({
           commissionRate: m.commissionRate ?? 0,
           lastSeenAt: m.lastSeenAt,
           offboardingStatus: m.offboardingStatus,
+          excludeFromLeadAutoAssignment: m.excludeFromLeadAutoAssignment === true,
         };
       })
     );
@@ -1469,6 +1470,38 @@ export const updateCommissionRate = mutation({
 
     await notifyUser(ctx, args.orgId, membership.userId, "membership.commission_rate_changed", {
       rate: args.commissionRate,
+    });
+  },
+});
+
+/**
+ * Opts a member in or out of the generated-lead round robin (social, website,
+ * WhatsApp and marketplace conversions).
+ *
+ * Deliberately separate from disabling the user or changing their role: a rep
+ * on leave should stop *receiving* new leads without losing their access or
+ * their existing pipeline. Leads already assigned to them are untouched, and a
+ * manager can still assign them a lead by hand.
+ */
+export const setLeadAutoAssignmentExcluded = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    membershipId: v.id("memberships"),
+    excluded: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_USERS]);
+
+    const membership = await ctx.db.get(args.membershipId);
+    if (!membership || membership.orgId !== args.orgId) {
+      throw new ConvexError("Membership not found in this organization.");
+    }
+    if (membership.offboardingStatus) {
+      throw new ConvexError("Membership removal is already in progress.");
+    }
+
+    await ctx.db.patch(args.membershipId, {
+      excludeFromLeadAutoAssignment: args.excluded ? true : undefined,
     });
   },
 });

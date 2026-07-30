@@ -146,10 +146,15 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // "nothing examined". These numbers make a shape the parser cannot read — args
   // hoisted into a shared validator const, say — fail here instead of passing.
   // If a real change moves them, update them in the same commit, deliberately.
+  // Moved from 417/276 by #154, which added `leads.addNote` (guarded with
+  // requireOwnedRow) and `memberships.setLeadAutoAssignmentExcluded` (guarded
+  // with an explicit `membership.orgId !== args.orgId`). Both were checked by
+  // hand before this pin was raised — the point of the pin is that raising it is
+  // a decision someone made, not something a test run did on its own.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 417,
-      analysed: 276,
+      totalMutations: 419,
+      analysed: 278,
       skippedNoArgsBlock: 5,
       skippedNoOrgId: 136,
     });
