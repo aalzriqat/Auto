@@ -646,3 +646,177 @@ describe("dashboard.todayForRole", () => {
     expect(result.currency).toBe("AED");
   });
 });
+
+/**
+ * The dashboard's profit line used to derive a vehicle's cost by hand, and it
+ * disagreed with the GL and with every report in four separate ways. All four
+ * pushed reported profit in the *optimistic* direction, which is the direction
+ * nobody questions.
+ */
+describe("dashboard.stats profit uses the authoritative cost basis", () => {
+  const PROFIT_PERMISSIONS = [
+    "view:customers",
+    "view:vehicles",
+    "view:users",
+    "view:sales",
+    "view:expenses",
+  ];
+
+  const SALE_DATE = Date.UTC(2026, 5, 29);
+
+  async function seedSale(
+    t: any,
+    orgId: any,
+    vehicle: Record<string, unknown>,
+    salePrice: number
+  ) {
+    const userId = await t.run((ctx: any) =>
+      ctx.db
+        .query("memberships")
+        .withIndex("by_org", (q: any) => q.eq("orgId", orgId))
+        .first()
+        .then((membership: any) => membership!.userId)
+    );
+    const vehicleId = await t.run((ctx: any) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "LCOC76CA9R4807883",
+        make: "BYD",
+        model: "QIN L",
+        year: 2024,
+        mileage: 100,
+        color: "White",
+        fuelType: "Hybrid",
+        transmission: "Automatic",
+        sellingPrice: salePrice,
+        status: "SOLD",
+        ...vehicle,
+      })
+    );
+    const customerId = await t.run((ctx: any) =>
+      ctx.db.insert("customers", { orgId, firstName: "Sara", lastName: "Haddad" })
+    );
+    await t.run((ctx: any) =>
+      ctx.db.insert("sales", {
+        orgId,
+        vehicleId,
+        customerId,
+        salespersonId: userId,
+        salePrice,
+        saleDate: SALE_DATE,
+        status: "COMPLETED",
+      })
+    );
+    return { vehicleId, userId };
+  }
+
+  function profitOf(result: any): number {
+    return result.salesTrend.reduce((sum: number, point: any) => sum + point.Profit, 0);
+  }
+
+  test("a soft-deleted expense stops counting against profit", async () => {
+    const { t, orgId, asUser } = await setup(PROFIT_PERMISSIONS);
+    const { vehicleId } = await seedSale(t, orgId, { purchasePrice: 16000 }, 19600);
+
+    await t.run((ctx: any) =>
+      ctx.db.insert("expenses", {
+        orgId,
+        vehicleId,
+        title: "Detailing, entered twice by mistake",
+        amount: 1000,
+        date: SALE_DATE,
+        category: "DETAILING",
+        status: "PAID",
+        isDeleted: true,
+        deletedAt: Date.now(),
+      })
+    );
+
+    const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "ALL_TIME" });
+
+    // 19,600 minus 16,000. The deleted 1,000 is gone from both figures; before
+    // the fix it sat in the dashboard's costs forever while the reports it
+    // summarizes already showed the corrected number.
+    expect(profitOf(result)).toBe(3600);
+    expect(result.salesTrend.reduce((s: number, p: any) => s + p.Expenses, 0)).toBe(0);
+  });
+
+  test("a SOURCED vehicle's sale contributes profit off sourceCost", async () => {
+    const { t, orgId, asUser } = await setup(PROFIT_PERMISSIONS);
+    // No purchasePrice at all: the shape of a sourced row written before
+    // `create` began mirroring sourceCost into purchasePrice.
+    await seedSale(
+      t,
+      orgId,
+      { sourceType: "SOURCED", sourceCost: 18000, sourcedFromName: "Al-Safeer" },
+      21000
+    );
+
+    const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "ALL_TIME" });
+
+    // The old `purchasePrice !== undefined` gate skipped this sale entirely, so
+    // a real 3,000 margin was reported as no margin at all.
+    expect(profitOf(result)).toBe(3000);
+  });
+
+  test("landed costs are part of the cost basis, not a replacement for it", async () => {
+    const { t, orgId, asUser } = await setup(PROFIT_PERMISSIONS);
+    await seedSale(t, orgId, { purchasePrice: 16000, landedCostTotal: 1200 }, 19600);
+
+    const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "ALL_TIME" });
+
+    // 19,600 minus (16,000 + 1,200). The old inline derivation ignored
+    // landedCostTotal outright and reported 3,600.
+    expect(profitOf(result)).toBe(2400);
+  });
+
+  test("a capitalized expense is charged to the vehicle once, not twice", async () => {
+    const { t, orgId, asUser } = await setup(PROFIT_PERMISSIONS);
+    const { vehicleId } = await seedSale(t, orgId, { purchasePrice: 16000 }, 19600);
+
+    // Capitalized into Vehicle Inventory at posting time, so it is already
+    // inside computeVehicleCapitalizedCost. Deducting it again as a period
+    // expense, which is what a naive fix does, would report 2,200.
+    await t.run((ctx: any) =>
+      ctx.db.insert("expenses", {
+        orgId,
+        vehicleId,
+        title: "Engine mount",
+        amount: 700,
+        date: SALE_DATE,
+        category: "REPAIR",
+        status: "PAID",
+        accountingTreatment: "CAPITALIZED_INVENTORY",
+        capitalizedAmount: 700,
+      })
+    );
+
+    const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "ALL_TIME" });
+
+    expect(profitOf(result)).toBe(2900);
+  });
+
+  test("a vehicle-linked expense that was NOT capitalized still reduces profit", async () => {
+    const { t, orgId, asUser } = await setup(PROFIT_PERMISSIONS);
+    const { vehicleId } = await seedSale(t, orgId, { purchasePrice: 16000 }, 19600);
+
+    // Marketing spend on a specific car is expensed as incurred, never
+    // capitalized. It is outside the cost basis, so it has to be deducted as a
+    // period expense or it silently stops counting at all.
+    await t.run((ctx: any) =>
+      ctx.db.insert("expenses", {
+        orgId,
+        vehicleId,
+        title: "Instagram boost for this car",
+        amount: 300,
+        date: SALE_DATE,
+        category: "MARKETING",
+        status: "PAID",
+      })
+    );
+
+    const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "ALL_TIME" });
+
+    expect(profitOf(result)).toBe(3300);
+  });
+});

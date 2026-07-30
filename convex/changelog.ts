@@ -1201,6 +1201,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
   },
   {
     type: "FIX",
+    titleEn: "Dashboard profit now matches your reports",
+    titleAr: "أصبح ربح لوحة التحكم مطابقاً لتقاريرك",
+    descriptionEn: "The profit line on the dashboard worked out each vehicle's cost differently from the sales reports and the accounting ledger, and always in the flattering direction: it ignored shipping and customs costs, left a deleted expense counting against you forever, and dropped a drop-shipped vehicle's sale out of the profit figure entirely. All three now use the same cost as your reports. The panel on a vehicle also stops listing sales, leads and expenses you had deleted.",
+    descriptionAr: "كان خط الربح في لوحة التحكم يحسب تكلفة المركبة بطريقة تختلف عن تقارير المبيعات ودفاتر المحاسبة، ودائماً في الاتجاه المتحيّز: فكان يتجاهل تكاليف الشحن والتخليص، ويُبقي المصروف المحذوف محسوباً عليك إلى الأبد، ويُسقط بيع المركبة الموردة من طرف آخر من الربح تماماً. أصبحت الثلاثة تستخدم التكلفة نفسها التي تعتمدها تقاريرك. كما لم تعد لوحة المركبة تعرض عمليات البيع أو العملاء المحتملين أو المصاريف التي حذفتها.",
+    publishedAt: releaseAt(2026, 7, 30, 6),
+  },
+  {
+    type: "FIX",
     titleEn: "Arabic translations restored across sales, vehicles and settings",
     titleAr: "استعادة الترجمات العربية في المبيعات والمركبات والإعدادات",
     descriptionEn: "Twenty-six labels were appearing in English inside the Arabic interface, or as their raw internal name in both languages — including the warning shown when a financed quote exceeds the finance company's limit, the sale price field, the cash drawer's Opened At column, and the Facebook Page picker. All are translated now, and a missing Arabic translation can no longer be added without the build failing.",

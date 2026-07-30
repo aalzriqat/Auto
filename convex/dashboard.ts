@@ -4,6 +4,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { validateVinChecksum } from "../lib/vinHelpers";
 import { isSystemOwnerRole, PERMISSIONS, type Permission } from "./utils/permissions";
+import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 
 function canRoleView(role: Doc<"roles">, permission: Permission): boolean {
   return isSystemOwnerRole(role) || role.permissions.includes(permission);
@@ -146,23 +147,30 @@ export const stats = query({
     const monthlySales: Record<string, number> = {};
     const monthlyProfits: Record<string, number> = {};
 
-    // Fetch all expenses to deduct from profit
+    // Fetch all expenses to deduct from profit.
+    //
+    // Soft-deleted and reversed rows are excluded here, matching every other
+    // reader (getSalesReport, getInventoryReport, computeVehicleCapitalizedCost).
+    // Without it, deleting an expense left it inflating this org's costs and
+    // deflating its profit on the dashboard forever, while the reports it is
+    // meant to summarize showed the corrected figure.
     let allExpenses: Doc<"expenses">[] = [];
     if (canViewCostMetrics) {
       if (filterStart > 0) {
         allExpenses = await ctx.db
           .query("expenses")
           .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId).gte("date", filterStart))
+          .filter((q) => q.and(q.neq(q.field("isDeleted"), true), q.eq(q.field("reversedAt"), undefined)))
           .collect();
       } else {
         allExpenses = await ctx.db
           .query("expenses")
           .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+          .filter((q) => q.and(q.neq(q.field("isDeleted"), true), q.eq(q.field("reversedAt"), undefined)))
           .take(5000);
       }
     }
 
-    const vehicleExpenses: Record<string, number> = {};
     const generalExpensesByMonth: Record<string, number> = {};
     const totalExpensesByMonth: Record<string, number> = {};
 
@@ -174,11 +182,43 @@ export const stats = query({
         totalExpensesByMonth[key] = (totalExpensesByMonth[key] || 0) + exp.amount;
       }
 
-      if (canViewProfitMetrics && exp.vehicleId) {
-        vehicleExpenses[exp.vehicleId] = (vehicleExpenses[exp.vehicleId] || 0) + exp.amount;
-      } else if (canViewProfitMetrics) {
-        generalExpensesByMonth[key] = (generalExpensesByMonth[key] || 0) + exp.amount;
-      }
+      if (!canViewProfitMetrics) continue;
+
+      // A reconditioning expense that was capitalized into Vehicle Inventory is
+      // already inside the vehicle's cost basis below. Deducting it here as well
+      // would charge it to profit twice. Everything else — operating costs, and
+      // vehicle-linked costs that were expensed rather than capitalized, such as
+      // marketing on a specific car — is a period expense and belongs here.
+      if (exp.vehicleId && exp.accountingTreatment === "CAPITALIZED_INVENTORY") continue;
+
+      generalExpensesByMonth[key] = (generalExpensesByMonth[key] || 0) + exp.amount;
+    }
+
+    // Cost basis for the profit line. This used to be
+    // `vehicle.purchasePrice + <every expense logged against the vehicle>`,
+    // computed inline, which disagreed with the GL and the reports in three
+    // ways: it skipped the sale entirely when `purchasePrice` was absent (so a
+    // SOURCED vehicle costed off `sourceCost` contributed revenue with no cost,
+    // reading as pure profit or as nothing at all), it ignored `landedCostTotal`,
+    // and it deducted non-capitalizable expenses as if they were inventory cost.
+    // computeVehicleCapitalizedCost is the one authority the GL's COGS and the
+    // commission basis already use.
+    //
+    // Computed once per distinct vehicle, not once per sale — which also removes
+    // the `ctx.db.get` that ran inside the old per-sale loop.
+    const PROFIT_VEHICLE_CAP = 500;
+    const soldVehicleIds = Array.from(new Set(activeSales.map((s) => s.vehicleId)));
+    const costedVehicleIds = soldVehicleIds.slice(0, PROFIT_VEHICLE_CAP);
+    const profitTruncated = soldVehicleIds.length > PROFIT_VEHICLE_CAP;
+    const capitalizedCostByVehicle = new Map<string, number>();
+    if (canViewProfitMetrics) {
+      await Promise.all(
+        costedVehicleIds.map(async (vehicleId) => {
+          const vehicle = await ctx.db.get(vehicleId);
+          if (!vehicle || vehicle.orgId !== args.orgId) return;
+          capitalizedCostByVehicle.set(vehicleId, await computeVehicleCapitalizedCost(ctx, vehicle));
+        })
+      );
     }
 
     if (activeSales.length > 0) {
@@ -187,12 +227,13 @@ export const stats = query({
 
         monthlySales[key] = (monthlySales[key] || 0) + sale.salePrice;
 
-        // Calculate profit if purchase price is available
-        const vehicle = await ctx.db.get(sale.vehicleId);
-        if (canViewProfitMetrics && vehicle && vehicle.purchasePrice !== undefined) {
-          const vehicleCost = vehicle.purchasePrice + (vehicleExpenses[sale.vehicleId] || 0);
-          const profit = sale.salePrice - vehicleCost;
-          monthlyProfits[key] = (monthlyProfits[key] || 0) + profit;
+        // A vehicle past the cap, or whose row is gone, is absent from the map.
+        // Skip it rather than book its full sale price as profit. The omission is
+        // reported as `truncated.profit`, alongside the vehicles/sales/members
+        // flags this query already returns.
+        const cost = capitalizedCostByVehicle.get(sale.vehicleId);
+        if (canViewProfitMetrics && cost !== undefined) {
+          monthlyProfits[key] = (monthlyProfits[key] || 0) + (sale.salePrice - cost);
         }
       }
     } else {
@@ -349,6 +390,7 @@ export const stats = query({
         vehicles: vehiclesTruncated,
         sales: salesTruncated,
         members: membersTruncated,
+        profit: profitTruncated,
       },
       taskStats: {
         total: totalTasks,
