@@ -3,6 +3,7 @@ import { internalMutation, internalQuery, QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { notifyManagers, notifyUser } from "./utils/notifications";
 import { nextGeneratedLeadAssignee } from "./utils/leadAssignment";
+import { recordLeadCreated } from "./utils/leadActivity";
 import { hasPlanFeature } from "./subscriptions";
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -103,6 +104,15 @@ export const handleIncomingMessage = internalMutation({
         notes: messageText
           ? `First WhatsApp message: "${messageText.slice(0, 200)}"`
           : "Lead created from WhatsApp message",
+      });
+
+      await recordLeadCreated(ctx, {
+        orgId,
+        leadId,
+        actorLabel: "WhatsApp",
+        stage: "NEW",
+        assignedUserId,
+        source: "WhatsApp",
       });
 
       await notifyManagers(

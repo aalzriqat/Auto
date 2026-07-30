@@ -2,6 +2,7 @@ import { ConvexError, v } from "convex/values";
 import { mutation, MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { getOrCreateMarketplaceBuyerCustomer, resolveGeneratedLeadAssignee } from "./utils/leadAssignment";
+import { recordLeadCreated } from "./utils/leadActivity";
 
 /**
  * Buyer-side actions on a Request Room, taken by an anonymous buyer with no
@@ -85,7 +86,7 @@ async function unlockContactAndCreateLead(
   ];
   if (response.note) noteLines.push(response.note);
 
-  await ctx.db.insert("leads", {
+  const leadId = await ctx.db.insert("leads", {
     orgId: response.orgId,
     customerId,
     assignedUserId,
@@ -95,6 +96,15 @@ async function unlockContactAndCreateLead(
     marketplaceRequestId: request._id,
     stage: "NEW",
     notes: noteLines.join(" "),
+  });
+
+  await recordLeadCreated(ctx, {
+    orgId: response.orgId,
+    leadId,
+    actorLabel: "Marketplace offer",
+    stage: "NEW",
+    assignedUserId,
+    source: "Marketplace offer",
   });
 
   await ctx.db.patch(response._id, { contactUnlockedAt: now });

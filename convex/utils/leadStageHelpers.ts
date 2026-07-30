@@ -1,16 +1,22 @@
 import { MutationCtx } from "../_generated/server";
 import { Id } from "../_generated/dataModel";
 import { LEAD_STAGES, LeadStage } from "../constants";
+import { recordLeadActivity } from "./leadActivity";
 
 const stageIndex = (stage: LeadStage) => LEAD_STAGES.indexOf(stage);
 
 /**
  * Moves a lead forward to `targetStage`, never backward and never once it's
  * WON/LOST — those are terminal and shouldn't be disturbed by automation.
+ *
+ * `trigger` names what caused the move on the audit trail. It matters more
+ * here than on a human edit: a stage that changes on its own is exactly the
+ * kind of thing a salesperson gets blamed for, so the trail has to say
+ * "Test drive logged" rather than an anonymous "System".
  */
 export async function advanceLeadStage(
   ctx: MutationCtx,
-  args: { leadId: Id<"leads">; targetStage: LeadStage }
+  args: { leadId: Id<"leads">; targetStage: LeadStage; trigger?: string }
 ): Promise<void> {
   const lead = await ctx.db.get(args.leadId);
   if (!lead) return;
@@ -18,6 +24,16 @@ export async function advanceLeadStage(
   if (stageIndex(lead.stage) >= stageIndex(args.targetStage)) return;
 
   await ctx.db.patch(args.leadId, { stage: args.targetStage });
+
+  await recordLeadActivity(ctx, {
+    orgId: lead.orgId,
+    leadId: args.leadId,
+    action: "STAGE_CHANGED",
+    actorLabel: args.trigger ?? "Automation",
+    field: "stage",
+    fromValue: lead.stage,
+    toValue: args.targetStage,
+  });
 }
 
 /**
@@ -33,6 +49,7 @@ export async function advanceLeadStageForCustomerVehicle(
     customerId: Id<"customers">;
     vehicleId: Id<"vehicles">;
     targetStage: LeadStage;
+    trigger?: string;
   }
 ): Promise<void> {
   const leads = await ctx.db
@@ -44,6 +61,10 @@ export async function advanceLeadStageForCustomerVehicle(
     if (lead.isDeleted) continue;
     if (lead.stage === "WON" || lead.stage === "LOST") continue;
     if (lead.vehicleId && lead.vehicleId !== args.vehicleId) continue;
-    await advanceLeadStage(ctx, { leadId: lead._id, targetStage: args.targetStage });
+    await advanceLeadStage(ctx, {
+      leadId: lead._id,
+      targetStage: args.targetStage,
+      trigger: args.trigger,
+    });
   }
 }

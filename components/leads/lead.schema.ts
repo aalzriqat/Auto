@@ -22,8 +22,26 @@ export const leadSchema = z.object({
 
 export type LeadFormValues = z.infer<typeof leadSchema>;
 
+/**
+ * The leads page passes the hydrated row from `api.leads.list` (flat
+ * `customerName`/`vehicleSummary`/… fields); `api.leads.get` returns nested
+ * objects instead. Both shapes are accepted so the dialog can always name the
+ * lead's current customer, vehicle and salesperson — see `withCurrentOption`
+ * in LeadDialog.tsx for why that matters.
+ */
 export interface LeadDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  lead?: (Doc<"leads"> & { customer?: any; vehicle?: any; assignedUser?: any }) | null;
+  lead?:
+    | (Doc<"leads"> & {
+        customer?: Doc<"customers"> | null;
+        vehicle?: Doc<"vehicles"> | null;
+        assignedUser?: { _id: string; name?: string; email?: string } | null;
+        customerName?: string | null;
+        phone?: string | null;
+        email?: string | null;
+        vehicleSummary?: string | null;
+        assignedUserName?: string | null;
+      })
+    | null;
 }
