@@ -151,12 +151,19 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // with an explicit `membership.orgId !== args.orgId`). Both were checked by
   // hand before this pin was raised — the point of the pin is that raising it is
   // a decision someone made, not something a test run did on its own.
+  //
+  // Then 419→420 by #156's `adminBroadcasts.fanOutToAllOrgs`, which lands in
+  // `skippedNoOrgId` rather than `analysed`. That is correct, not a hole: it
+  // takes a `broadcastId` and no `orgId`, so there is no "the org you named"
+  // for a write to escape from. It is an internalMutation reachable only from
+  // `create`, which is requireSuperAdmin-gated, and its cross-org writes are
+  // the entire point of a platform-wide broadcast.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 419,
+      totalMutations: 420,
       analysed: 278,
       skippedNoArgsBlock: 5,
-      skippedNoOrgId: 136,
+      skippedNoOrgId: 137,
     });
   });
 });
