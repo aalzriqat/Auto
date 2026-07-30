@@ -198,7 +198,11 @@ export const updateQuoteStatus = mutation({
     await ctx.db.patch(quoteId, { status });
 
     if (status === "SHARED" && existing.leadId) {
-      await advanceLeadStage(ctx, { leadId: existing.leadId, targetStage: "NEGOTIATION" });
+      await advanceLeadStage(ctx, {
+        leadId: existing.leadId,
+        targetStage: "NEGOTIATION",
+        trigger: "Quote sent",
+      });
     }
 
     if (status === "ACCEPTED") {

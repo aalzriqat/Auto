@@ -1,10 +1,16 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, notifyUser, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
+import {
+  MAX_NOTE_LENGTH,
+  recordLeadActivity,
+  recordLeadCreated,
+  recordLeadFieldChanges,
+} from "./utils/leadActivity";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -207,6 +213,76 @@ export const getLinkedSale = query({
   },
 });
 
+/** A lead panel is a summary, not an inbox — cap the fan-out. */
+const MAX_CUSTOMER_MESSAGES = 25;
+
+/**
+ * Read-only digest of what the customer actually said, across Instagram and
+ * Facebook, for the lead's customer. This is what a salesperson opening a
+ * social-generated lead needs first: the lead's `notes` field only ever holds
+ * the truncated *first* message, so everything the customer asked afterwards
+ * was invisible from the lead.
+ *
+ * Deliberately separate from `socialInbox.listEventsForCustomer`: that one is
+ * gated behind the `socialInbox` plan feature and would throw inside the lead
+ * dialog for orgs that don't have it. Reading the messages attached to your
+ * own lead is core lead context, not the Social Inbox product.
+ *
+ * There is no mutation counterpart — inbound customer messages are a record of
+ * what was said and are not editable from anywhere in the app.
+ */
+export const customerMessages = query({
+  args: {
+    orgId: v.id("organizations"),
+    leadId: v.id("leads"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+
+    const lead = await requireOwnedRow(
+      ctx, args.orgId, "leads", args.leadId, "Lead not found in this organization."
+    );
+
+    const [igEvents, fbEvents] = await Promise.all([
+      ctx.db
+        .query("instagramEvents")
+        .withIndex("by_org_customer", (q) =>
+          q.eq("orgId", args.orgId).eq("customerId", lead.customerId)
+        )
+        .collect(),
+      ctx.db
+        .query("facebookEvents")
+        .withIndex("by_org_customer", (q) =>
+          q.eq("orgId", args.orgId).eq("customerId", lead.customerId)
+        )
+        .collect(),
+    ]);
+
+    const merged = [
+      ...igEvents.map((ev) => ({ platform: "instagram" as const, ev })),
+      ...fbEvents.map((ev) => ({ platform: "facebook" as const, ev })),
+    ]
+      .filter(({ ev }) => Boolean(ev.text?.trim()))
+      .sort((a, b) => b.ev._creationTime - a.ev._creationTime);
+
+    return {
+      total: merged.length,
+      // An auto-reply is not an answer — a canned "thanks, we'll be in touch"
+      // shouldn't make a question look handled, so only a manual reply counts.
+      unansweredCount: merged.filter(({ ev }) => !ev.manualRepliedAt).length,
+      messages: merged.slice(0, MAX_CUSTOMER_MESSAGES).map(({ platform, ev }) => ({
+        id: ev._id,
+        platform,
+        kind: ev.kind,
+        text: ev.text as string,
+        createdAt: ev._creationTime,
+        autoRepliedAt: ev.autoRepliedAt ?? null,
+        manualRepliedAt: ev.manualRepliedAt ?? null,
+      })),
+    };
+  },
+});
+
 // ─── Mutations ───────────────────────────────────────────────────────────────
 
 /**
@@ -268,6 +344,15 @@ export const create = mutation({
       stage: args.stage ?? "NEW",
       notes: args.notes,
       createdBy: user._id,
+    });
+
+    await recordLeadCreated(ctx, {
+      orgId: args.orgId,
+      leadId: id,
+      actorUserId: user._id,
+      stage: args.stage ?? "NEW",
+      assignedUserId: args.assignedUserId,
+      source: args.source.trim(),
     });
 
     const actorName = await getActorName(ctx);
@@ -354,7 +439,20 @@ export const update = mutation({
     if (args.stage !== undefined) patch.stage = args.stage;
     if (args.notes !== undefined) patch.notes = args.notes;
 
-    if (Object.keys(patch).length > 0) {
+    // Diff before patching, while `lead` still holds the old values. The count
+    // is the number of fields that actually moved — the edit dialog resubmits
+    // every field on every save, so `patch` being non-empty says nothing about
+    // whether anything changed. Gating on real changes keeps both the audit
+    // trail and the manager notification free of no-op saves.
+    const changeCount = await recordLeadFieldChanges(ctx, {
+      orgId: args.orgId,
+      leadId: args.leadId,
+      before: lead,
+      patch,
+      actorUserId: user._id,
+    });
+
+    if (changeCount > 0) {
       patch.updatedAt = Date.now();
       patch.updatedBy = user._id;
       await ctx.db.patch(args.leadId, patch);
@@ -384,6 +482,58 @@ export const update = mutation({
 });
 
 /**
+ * Appends a salesperson's progress update to the lead's trail.
+ *
+ * This is the replacement for editing the single `notes` field over and over:
+ * each update is its own immutable row, so "called twice, no answer" from
+ * Tuesday is still there after Thursday's "customer wants a test drive". There
+ * is intentionally no edit or delete counterpart — a follow-up log that can be
+ * rewritten after the fact answers no question worth asking.
+ */
+export const addNote = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    leadId: v.id("leads"),
+    note: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_LEADS]);
+
+    const note = args.note.trim();
+    if (!note) {
+      throw new ConvexError("Update cannot be empty.");
+    }
+    if (note.length > MAX_NOTE_LENGTH) {
+      throw new ConvexError(`Update must be ${MAX_NOTE_LENGTH} characters or fewer.`);
+    }
+
+    const lead = await requireOwnedRow(
+      ctx, args.orgId, "leads", args.leadId, "Lead not found in this organization."
+    );
+    if (lead.isDeleted) {
+      throw new ConvexError("Lead not found in this organization.");
+    }
+
+    const statusLimit = await checkTenantWriteLimit(ctx, "create", args.orgId);
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
+    await recordLeadActivity(ctx, {
+      orgId: args.orgId,
+      leadId: args.leadId,
+      action: "NOTE",
+      actorUserId: user._id,
+      note,
+    });
+
+    // The lead's own timestamp moves too, so "last touched" on the list stays
+    // honest for a rep who is following up without changing any field.
+    await ctx.db.patch(args.leadId, { updatedAt: Date.now(), updatedBy: user._id });
+  },
+});
+
+/**
  * Soft deletes a lead.
  */
 // TODO: Add admin recovery endpoint if needed
@@ -406,6 +556,17 @@ export const softDelete = mutation({
       isDeleted: true,
       deletedAt: Date.now(),
       deletedBy: identity.subject
+    });
+
+    // Appended, not cleared: the trail outlives the lead so a restore brings
+    // back the full history, and so a deletion is itself answerable for.
+    await recordLeadActivity(ctx, {
+      orgId: args.orgId,
+      leadId: args.leadId,
+      action: "DELETED",
+      actorUserId: user._id,
+      field: "stage",
+      fromValue: lead.stage,
     });
 
     const actorName = await getActorName(ctx);

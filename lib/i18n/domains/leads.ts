@@ -61,6 +61,40 @@ export const leadsEn = {
   CreatedBy: "Created By",
   LastUpdatedBy: "Last Updated By",
   System: "System",
+
+  // Activity trail
+  ActivityTrail: "Activity Trail",
+  NoActivityYet: "No activity recorded yet.",
+  ActivityCreated: "Lead created",
+  ActivityStageChanged: "Stage changed",
+  ActivityAssigned: "Assigned",
+  ActivityUnassigned: "Unassigned",
+  ActivityUpdated: "Updated",
+  ActivityDeleted: "Lead deleted",
+  ActivityRestored: "Lead restored",
+  ActivityFieldStage: "stage",
+  ActivityFieldAssignedUserId: "salesperson",
+  ActivityFieldCustomerId: "customer",
+  ActivityFieldVehicleId: "vehicle",
+  ActivityFieldSource: "source",
+  ActivityFieldNotes: "notes",
+  ActivityArrow: "→",
+  ActivityEmptyValue: "(none)",
+  Unknown: "Unknown",
+
+  // Salesperson updates (append-only)
+  ActivityNote: "Update",
+  AddUpdate: "Add update",
+  AddUpdatePlaceholder: "Log an update — what you did and what happens next",
+  UpdatesArePermanent: "Updates are permanent and can't be edited.",
+  UpdateAdded: "Update added",
+
+  // Read-only customer message summary
+  CustomerMessages: "What the customer asked",
+  ReadOnly: "Read-only",
+  Unanswered: "unanswered",
+  Replied: "Replied",
+  ShowAllMessages: "Show all {count}",
 };
 
 export const leadsAr = {
@@ -126,4 +160,38 @@ export const leadsAr = {
   CreatedBy: "أنشئ بواسطة",
   LastUpdatedBy: "آخر تحديث بواسطة",
   System: "النظام",
+
+  // Activity trail
+  ActivityTrail: "سجل النشاط",
+  NoActivityYet: "لم يُسجَّل أي نشاط بعد.",
+  ActivityCreated: "تم إنشاء العميل المحتمل",
+  ActivityStageChanged: "تم تغيير المرحلة",
+  ActivityAssigned: "تم التعيين",
+  ActivityUnassigned: "تم إلغاء التعيين",
+  ActivityUpdated: "تم التحديث",
+  ActivityDeleted: "تم حذف العميل المحتمل",
+  ActivityRestored: "تمت استعادة العميل المحتمل",
+  ActivityFieldStage: "المرحلة",
+  ActivityFieldAssignedUserId: "مندوب المبيعات",
+  ActivityFieldCustomerId: "العميل",
+  ActivityFieldVehicleId: "المركبة",
+  ActivityFieldSource: "المصدر",
+  ActivityFieldNotes: "الملاحظات",
+  ActivityArrow: "←",
+  ActivityEmptyValue: "(لا شيء)",
+  Unknown: "غير معروف",
+
+  // Salesperson updates (append-only)
+  ActivityNote: "تحديث",
+  AddUpdate: "إضافة تحديث",
+  AddUpdatePlaceholder: "سجّل تحديثاً — ما الذي قمت به وما هي الخطوة التالية",
+  UpdatesArePermanent: "التحديثات دائمة ولا يمكن تعديلها.",
+  UpdateAdded: "تمت إضافة التحديث",
+
+  // Read-only customer message summary
+  CustomerMessages: "ما سأل عنه العميل",
+  ReadOnly: "للقراءة فقط",
+  Unanswered: "بدون رد",
+  Replied: "تم الرد",
+  ShowAllMessages: "عرض الكل ({count})",
 };

@@ -6,6 +6,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { suggestVehiclesFromText } from "./utils/vehicleTextMatch";
+import { recordLeadActivity, describeLeadFieldValue } from "./utils/leadActivity";
 import { requireFeature } from "./subscriptions";
 
 /**
@@ -462,7 +463,17 @@ export const setConversationVehicle = mutation({
     await Promise.all(
       Array.from(allLeadIds).map(async (leadId) => {
         const lead = await ctx.db.get(leadId);
-        if (lead && !lead.vehicleId) await ctx.db.patch(leadId, { vehicleId: args.vehicleId });
+        if (lead && !lead.vehicleId) {
+          await ctx.db.patch(leadId, { vehicleId: args.vehicleId });
+          await recordLeadActivity(ctx, {
+            orgId: lead.orgId,
+            leadId,
+            action: "UPDATED",
+            actorLabel: "Social inbox vehicle match",
+            field: "vehicleId",
+            toValue: await describeLeadFieldValue(ctx, "vehicleId", args.vehicleId),
+          });
+        }
       })
     );
   },
