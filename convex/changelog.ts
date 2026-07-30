@@ -1209,6 +1209,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
   },
   {
     type: "FIX",
+    titleEn: "Dealer visibility and seat limits no longer depend on how old your account is",
+    titleAr: "لم تعد ظهور المعرض وحدود المقاعد تعتمد على عمر حسابك",
+    descriptionEn: "A dealership whose marketplace profile had been removed and re-created was still taking up one of the slots the buyer search considers, which could hide other dealerships from buyers. Dealer badges are also recalculated for every dealership now, not just the first batch, and a platform-wide announcement reaches every dealership rather than stopping partway through. Seat counting against your plan limit is exact instead of estimated.",
+    descriptionAr: "كان المعرض الذي أُزيل ملفه في السوق ثم أُعيد إنشاؤه يشغل أحد المواضع التي يأخذها بحث المشترين في الحسبان، مما قد يحجب معارض أخرى عن المشترين. كما تُحتسب شارات المعارض الآن لكل معرض، لا للدفعة الأولى فقط، ويصل الإعلان العام إلى كل المعارض بدلاً من التوقف في منتصف الطريق. واحتساب المقاعد مقابل حد خطتك أصبح دقيقاً بدلاً من تقديري.",
+    publishedAt: releaseAt(2026, 7, 30, 7),
+  },
+  {
+    type: "FIX",
     titleEn: "Arabic translations restored across sales, vehicles and settings",
     titleAr: "استعادة الترجمات العربية في المبيعات والمركبات والإعدادات",
     descriptionEn: "Twenty-six labels were appearing in English inside the Arabic interface, or as their raw internal name in both languages — including the warning shown when a financed quote exceeds the finance company's limit, the sale price field, the cash drawer's Opened At column, and the Facebook Page picker. All are translated now, and a missing Arabic translation can no longer be added without the build failing.",
