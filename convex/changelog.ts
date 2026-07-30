@@ -1223,6 +1223,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "كان المعرض الذي أُزيل ملفه في السوق ثم أُعيد إنشاؤه يشغل أحد المواضع التي يأخذها بحث المشترين في الحسبان، مما قد يحجب معارض أخرى عن المشترين. كما تُحتسب شارات المعارض الآن لكل معرض، لا للدفعة الأولى فقط، ويصل الإعلان العام إلى كل المعارض بدلاً من التوقف في منتصف الطريق. واحتساب المقاعد مقابل حد خطتك أصبح دقيقاً بدلاً من تقديري.",
     publishedAt: releaseAt(2026, 7, 30, 7),
   },
+  {
+    type: "FIX",
+    titleEn: "The app and the website now calculate financing with the same engine",
+    titleAr: "أصبح التطبيق والموقع يحسبان التمويل بالمحرك نفسه",
+    descriptionEn: "The murabaha calculation existed in three separate copies — the website, the mobile sales wizard, and the mobile workspace preview — and the third had already drifted from the other two, so the same deal could show a different total. There is one copy now, shared by all of them, and a test that fails if they ever diverge again.",
+    descriptionAr: "كان حساب المرابحة موجوداً في ثلاث نسخ منفصلة — الموقع، ومعالج المبيعات في التطبيق، ومعاينة مساحة العمل في التطبيق — وكانت النسخة الثالثة قد انحرفت عن الأخريين، فكان يمكن أن يظهر للصفقة نفسها إجمالي مختلف. أصبحت هناك نسخة واحدة يشترك فيها الجميع، مع اختبار يفشل إن تباعدت مرة أخرى.",
+    publishedAt: releaseAt(2026, 7, 30, 9),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

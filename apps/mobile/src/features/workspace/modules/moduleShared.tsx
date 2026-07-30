@@ -1,3 +1,4 @@
+import { calculateUnifiedMurabaha } from "@autoflow/shared/financing";
 import { useRouter } from "expo-router";
 import { Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { FadeSlideIn } from "../../../components/Motion";
@@ -866,35 +867,39 @@ export function vehicleListPriceLabel(
     : locale === "ar" ? "بدون سعر" : "No list price";
 }
 
+/**
+ * Finance preview for the workspace modules.
+ *
+ * This was a third hand-written copy of the Murabaha math, and it had already
+ * drifted: it clamped `financedAmount` and `totalContractValue` with
+ * `Math.max(0, …)`, which the canonical engine does not. The clamp is not
+ * cosmetic — a down payment larger than the vehicle price produces a negative
+ * financed amount, and the two implementations then disagree about both the
+ * total and the monthly figure for the same deal.
+ *
+ * It delegates to the shared engine now. The clamps are gone rather than pushed
+ * into the engine: a down payment exceeding the price is bad input, and the
+ * honest fix is for the caller to reject it, not for the model to quietly
+ * report a floor of zero and let a nonsense deal look plausible.
+ */
 export function calculateFinancePreview(input: FinancePreviewInput) {
-  if (input.vehiclePrice <= 0 || input.termMonths <= 0) {
-    return {
-      financedAmount: 0,
-      monthlyInstallment: 0,
-      totalContractValue: 0,
-      totalProfit: 0,
-    };
-  }
-
-  const years = input.termMonths / 12;
-  const baseAmount = input.includesCommissionInDebt
-    ? input.vehiclePrice - input.downPayment + input.adminFees
-    : input.vehiclePrice - input.downPayment + input.adminFees + input.commission;
-  const financedAmount = Math.max(0, baseAmount);
-  const totalProfit = financedAmount * (input.profitRate / 100) * years;
-  const debtBeforeInsurance = financedAmount + totalProfit;
-  const insuranceAmount = debtBeforeInsurance * (input.insuranceRate / 100) * years;
-  const totalContractValue = Math.max(
-    0,
-    debtBeforeInsurance + insuranceAmount + (input.includesCommissionInDebt ? input.commission : 0),
-  );
-  const paymentMonths = Math.max(0, input.termMonths - input.gracePeriodMonths);
+  const result = calculateUnifiedMurabaha({
+    vehiclePrice: input.vehiclePrice,
+    downPayment: input.downPayment,
+    commission: input.commission,
+    processingFees: input.adminFees,
+    annualProfitRate: input.profitRate,
+    annualInsuranceRate: input.insuranceRate,
+    termMonths: input.termMonths,
+    gracePeriodMonths: input.gracePeriodMonths,
+    includesCommissionInDebt: input.includesCommissionInDebt,
+  });
 
   return {
-    financedAmount,
-    monthlyInstallment: paymentMonths > 0 ? totalContractValue / paymentMonths : 0,
-    totalContractValue,
-    totalProfit,
+    financedAmount: result.financedAmount,
+    monthlyInstallment: result.monthlyInstallment,
+    totalContractValue: result.totalContractValue,
+    totalProfit: result.totalProfit,
   };
 }
 
