@@ -1199,6 +1199,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "كان تعديل عميل محتمل تم إنشاؤه عبر إنستغرام أو فيسبوك أو واتساب يُظهر حقلي العميل ومصدر العميل المحتمل فارغين، لأن العميل كان خارج الصفحة الأولى التي تحمّلها القائمة المنسدلة ولأن المصدر (\"رسالة إنستغرام\") لم يكن ضمن قائمة المصادر المعرّفة. أصبح الحقلان الآن يعرضان القيم الفعلية. ويشمل الإصلاح نفسه العميل المحتمل المرتبط بمركبة تم بيعها لاحقاً.",
     publishedAt: releaseAt(2026, 7, 30, 5),
   },
+  {
+    type: "FIX",
+    titleEn: "Arabic translations restored across sales, vehicles and settings",
+    titleAr: "استعادة الترجمات العربية في المبيعات والمركبات والإعدادات",
+    descriptionEn: "Twenty-six labels were appearing in English inside the Arabic interface, or as their raw internal name in both languages — including the warning shown when a financed quote exceeds the finance company's limit, the sale price field, the cash drawer's Opened At column, and the Facebook Page picker. All are translated now, and a missing Arabic translation can no longer be added without the build failing.",
+    descriptionAr: "كانت ستة وعشرون تسمية تظهر بالإنجليزية داخل الواجهة العربية، أو باسمها الداخلي في كلتا اللغتين — منها التنبيه الذي يظهر عندما يتجاوز عرض التمويل حد شركة التمويل، وحقل سعر البيع، وعمود وقت الفتح في صندوق النقد، وقائمة اختيار صفحة فيسبوك. جميعها مترجمة الآن، ولم يعد بالإمكان إضافة تسمية بلا ترجمة عربية دون أن يفشل بناء النظام.",
+    publishedAt: releaseAt(2026, 7, 30, 8),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

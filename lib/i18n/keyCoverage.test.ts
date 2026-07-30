@@ -20,7 +20,35 @@ import { dictionaries } from "./dictionaries";
  */
 
 const SCAN_ROOTS = ["app", "components", "hooks"];
-const LITERAL_T_CALL = /\bt\(\s*"([^"]+)"\s*\)/g;
+
+/**
+ * Matches `t("Key")` and `t("Key" as any)` alike.
+ *
+ * The optional cast is the whole point. `t`'s parameter is
+ * `keyof typeof dictionaries.en | (string & {})`, and TypeScript resolves a
+ * string literal against the `keyof` half first — so a key that is not in the
+ * English dictionary is an error at the call site, and the codebase silences it
+ * with `as any`. That is by far the common form: **2,462** call sites use the
+ * cast against 704 plain ones.
+ *
+ * Requiring `"Key"` to be followed immediately by `)` therefore checked 22% of
+ * the surface and reported the other 78% as clean. Which is how eight `sales.*`
+ * keys shipped present in English and absent in Arabic, one of them
+ * ("sales.ExceedsFinancingLimit") on a live validation message in the F&I flow,
+ * while this file's own tests passed.
+ *
+ * The cast is also exactly the signal worth checking hardest: a call site that
+ * had to silence the compiler to name a key is the one most likely to have named
+ * a key that does not exist.
+ */
+const LITERAL_T_CALL = /\bt\(\s*"([^"]+)"(?:\s+as\s+\w+)?\s*\)/g;
+
+/**
+ * Pinned so a regex change cannot quietly shrink the checked surface again — the
+ * exact failure this file is being fixed for. If a real change moves these,
+ * update them in the same commit, deliberately.
+ */
+export const EXPECTED_SCAN_COVERAGE = { minimumKeys: 700, minimumCallSites: 3100 };
 
 function collectSourceFiles(dir: string, acc: string[] = []): string[] {
   if (!fs.existsSync(dir)) return acc;
@@ -36,28 +64,40 @@ function collectSourceFiles(dir: string, acc: string[] = []): string[] {
 }
 
 /** Only literal `t("Key")` calls are checkable; dynamic keys are skipped by design. */
-function collectLiteralKeys(): Map<string, string> {
+function collectLiteralKeys(): { usages: Map<string, string>; callSites: number } {
   const usages = new Map<string, string>();
+  let callSites = 0;
   for (const file of SCAN_ROOTS.flatMap((root) => collectSourceFiles(root))) {
     const source = fs.readFileSync(file, "utf8");
     for (const match of source.matchAll(LITERAL_T_CALL)) {
       const key = match[1];
+      callSites++;
       if (!usages.has(key)) {
         const line = source.slice(0, match.index).split("\n").length;
         usages.set(key, `${file}:${line}`);
       }
     }
   }
-  return usages;
+  return { usages, callSites };
 }
 
 describe("i18n key coverage", () => {
-  const usages = collectLiteralKeys();
+  const { usages, callSites } = collectLiteralKeys();
 
   test("finds translation usages to check", () => {
     // Guards against the scan silently matching nothing (e.g. after a refactor
     // moves components), which would make the assertions below vacuous.
     expect(usages.size).toBeGreaterThan(100);
+  });
+
+  test("scans the whole t() surface, not the fraction that skips the cast", () => {
+    // Floors rather than exact figures: labels are added constantly, and a test
+    // that fails on every new one is a test people delete. They still fail hard
+    // if the regex stops matching `as any`, which drops the call-site count by
+    // roughly three quarters — the precise regression this file already shipped
+    // once.
+    expect(usages.size).toBeGreaterThanOrEqual(EXPECTED_SCAN_COVERAGE.minimumKeys);
+    expect(callSites).toBeGreaterThanOrEqual(EXPECTED_SCAN_COVERAGE.minimumCallSites);
   });
 
   test("every literal t() key exists in the English dictionary", () => {
