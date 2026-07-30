@@ -1207,6 +1207,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "كان تعديل عميل محتمل تم إنشاؤه عبر إنستغرام أو فيسبوك أو واتساب يُظهر حقلي العميل ومصدر العميل المحتمل فارغين، لأن العميل كان خارج الصفحة الأولى التي تحمّلها القائمة المنسدلة ولأن المصدر (\"رسالة إنستغرام\") لم يكن ضمن قائمة المصادر المعرّفة. أصبح الحقلان الآن يعرضان القيم الفعلية. ويشمل الإصلاح نفسه العميل المحتمل المرتبط بمركبة تم بيعها لاحقاً.",
     publishedAt: releaseAt(2026, 7, 30, 5),
   },
+  {
+    type: "FIX",
+    titleEn: "Dashboard profit now matches your reports",
+    titleAr: "أصبح ربح لوحة التحكم مطابقاً لتقاريرك",
+    descriptionEn: "The profit line on the dashboard worked out each vehicle's cost differently from the sales reports and the accounting ledger, and always in the flattering direction: it ignored shipping and customs costs, left a deleted expense counting against you forever, and dropped a drop-shipped vehicle's sale out of the profit figure entirely. All three now use the same cost as your reports. The panel on a vehicle also stops listing sales, leads and expenses you had deleted.",
+    descriptionAr: "كان خط الربح في لوحة التحكم يحسب تكلفة المركبة بطريقة تختلف عن تقارير المبيعات ودفاتر المحاسبة، ودائماً في الاتجاه المتحيّز: فكان يتجاهل تكاليف الشحن والتخليص، ويُبقي المصروف المحذوف محسوباً عليك إلى الأبد، ويُسقط بيع المركبة الموردة من طرف آخر من الربح تماماً. أصبحت الثلاثة تستخدم التكلفة نفسها التي تعتمدها تقاريرك. كما لم تعد لوحة المركبة تعرض عمليات البيع أو العملاء المحتملين أو المصاريف التي حذفتها.",
+    publishedAt: releaseAt(2026, 7, 30, 6),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

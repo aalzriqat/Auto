@@ -44,8 +44,31 @@ export function requireAuthenticatedContext() {
   return orgId;
 }
 
+/**
+ * Deterministic per-VU pseudorandom source (mulberry32).
+ *
+ * A load generator wants spread, not unpredictability — and `Math.random()`
+ * gives a different traffic profile on every run, so two runs are never
+ * comparable and a bad result cannot be reproduced. Seeding from the VU and
+ * iteration counters keeps the mix varied across virtual users while making the
+ * whole run repeatable. It is also not a security primitive, which is what
+ * static analysis flags `Math.random()` for.
+ */
+let randomCallCount = 0;
+
+function nextRandom() {
+  const vu = Number(__VU) || 0;
+  const iter = Number(__ITER) || 0;
+  let seed = (vu * 0x9e3779b1 + iter * 0x85ebca6b + randomCallCount++) >>> 0;
+  seed = (seed + 0x6d2b79f5) >>> 0;
+  let t = seed;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
 export function pickPath(paths) {
-  return paths[Math.floor(Math.random() * paths.length)];
+  return paths[Math.floor(nextRandom() * paths.length)];
 }
 
 export function requestPath(baseUrl, path, headers, tags) {
@@ -87,5 +110,5 @@ export function pauseBetweenRequests() {
   const minSleep = Number(__ENV.MIN_SLEEP_SECONDS || "1");
   const maxSleep = Number(__ENV.MAX_SLEEP_SECONDS || "4");
   const spread = Math.max(maxSleep - minSleep, 0);
-  sleep(minSleep + Math.random() * spread);
+  sleep(minSleep + nextRandom() * spread);
 }

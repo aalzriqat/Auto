@@ -1538,3 +1538,60 @@ describe("vehicles.exportData", () => {
     });
   });
 });
+
+describe("vehicles.getRelations excludes soft-deleted rows", () => {
+  test("a deleted sale, lead and expense stay out of the relations panel", async () => {
+    const { t, orgId, userId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Rana", lastName: "Khalil" })
+    );
+
+    // One live and one deleted row of each kind. Deleting a record has to
+    // remove it from the vehicle's panel too, or it reads as still active on
+    // the one screen a salesperson checks before quoting the car.
+    for (const isDeleted of [false, true]) {
+      await t.run((ctx) =>
+        ctx.db.insert("sales", {
+          orgId,
+          vehicleId,
+          customerId,
+          salespersonId: userId,
+          salePrice: 20000,
+          saleDate: Date.now(),
+          status: "PENDING",
+          ...(isDeleted ? { isDeleted: true, deletedAt: Date.now() } : {}),
+        })
+      );
+      await t.run((ctx) =>
+        ctx.db.insert("leads", {
+          orgId,
+          customerId,
+          vehicleId,
+          source: "Walk-in",
+          stage: "NEW",
+          ...(isDeleted ? { isDeleted: true, deletedAt: Date.now() } : {}),
+        })
+      );
+      await t.run((ctx) =>
+        ctx.db.insert("expenses", {
+          orgId,
+          vehicleId,
+          title: isDeleted ? "Voided repair" : "Repair",
+          amount: 100,
+          date: Date.now(),
+          category: "REPAIR",
+          status: "PAID",
+          ...(isDeleted ? { isDeleted: true, deletedAt: Date.now() } : {}),
+        })
+      );
+    }
+
+    const relations = await asUser.query(api.vehicles.getRelations, { orgId, vehicleId });
+
+    expect(relations.sales).toHaveLength(1);
+    expect(relations.leads).toHaveLength(1);
+    expect(relations.expenses).toHaveLength(1);
+    expect(relations.expenses[0].title).toBe("Repair");
+  });
+});
