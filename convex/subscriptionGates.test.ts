@@ -1,11 +1,11 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 
-type TestConvex = ReturnType<typeof convexTest>;
+type TestConvex = ReturnType<typeof convexTestWithComponents>;
 type PaidPlan = "starter" | "professional" | "enterprise";
 
 async function seedOwnerOrg(
@@ -54,7 +54,7 @@ async function seedOwnerOrg(
 
 describe("subscription feature gates", () => {
   test("free orgs are blocked from paid direct API surfaces", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwnerOrg(t);
 
     await expect(asOwner.mutation(api.chartOfAccounts.initialize, { orgId }))
@@ -93,7 +93,7 @@ describe("subscription feature gates", () => {
   });
 
   test("expired subscriptions fall back to free-plan access", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwnerOrg(t, {
       plan: "professional",
       currentPeriodEnd: Date.now() - 60_000,
@@ -104,7 +104,7 @@ describe("subscription feature gates", () => {
   });
 
   test("professional plans allow professional gates but not enterprise gates", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwnerOrg(t, { plan: "professional" });
 
     await expect(asOwner.mutation(api.chartOfAccounts.initialize, { orgId })).resolves.toBe(true);
@@ -143,7 +143,7 @@ describe("subscription feature gates", () => {
   });
 
   test("enterprise plans allow enterprise-only gates", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwnerOrg(t, { plan: "enterprise" });
 
     await expect(asOwner.mutation(api.websites.startSetup, { orgId })).resolves.toBeDefined();

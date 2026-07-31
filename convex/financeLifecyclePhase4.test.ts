@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -28,7 +28,7 @@ const FINANCE_LIFECYCLE_PERMISSIONS = {
 let applicationSeedCounter = 0;
 
 async function seedFinanceLifecycleDealer(tag = "fl4") {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: `Finance Lifecycle ${tag}`, createdAt: Date.now() })
   );
@@ -154,7 +154,7 @@ async function seedFinanceLifecycleDealer(tag = "fl4") {
 }
 
 async function seedFinanceApplication(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   args: {
     orgId: Id<"organizations">;
     customerId: Id<"customers">;

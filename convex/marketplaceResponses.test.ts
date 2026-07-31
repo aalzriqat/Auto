@@ -1,11 +1,11 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { calculateUnifiedMurabaha } from "../lib/financing";
 
-async function seedVehicle(t: ReturnType<typeof convexTest>, orgId: Id<"organizations">) {
+async function seedVehicle(t: ReturnType<typeof convexTestWithComponents>, orgId: Id<"organizations">) {
   return await t.run((ctx) =>
     ctx.db.insert("vehicles", {
       orgId,
@@ -23,7 +23,7 @@ async function seedVehicle(t: ReturnType<typeof convexTest>, orgId: Id<"organiza
   );
 }
 
-async function seedFinanceCompany(t: ReturnType<typeof convexTest>, orgId: Id<"organizations">) {
+async function seedFinanceCompany(t: ReturnType<typeof convexTestWithComponents>, orgId: Id<"organizations">) {
   return await t.run((ctx) =>
     ctx.db.insert("financeCompanies", {
       orgId,
@@ -47,7 +47,7 @@ const CAN_SOURCE_REPLY = {
   sourcingRange: { minJod: 15000, maxJod: 18000, etaDays: 14 },
 };
 
-async function seedDealerOrg(t: ReturnType<typeof convexTest>, opts?: { name?: string }) {
+async function seedDealerOrg(t: ReturnType<typeof convexTestWithComponents>, opts?: { name?: string }) {
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: opts?.name ?? "Dealer Org", createdAt: Date.now() })
   );
@@ -77,7 +77,7 @@ async function seedDealerOrg(t: ReturnType<typeof convexTest>, opts?: { name?: s
 }
 
 async function seedRequest(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   overrides?: Partial<{ status: "OPEN" | "MATCHED" | "FULFILLED" | "EXPIRED" | "SPAM"; buyerPhone: string }>
 ) {
   return await t.run((ctx) =>
@@ -100,7 +100,7 @@ async function seedRequest(
 }
 
 async function seedMatch(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   requestId: Id<"marketplaceRequests">,
   orgId: Id<"organizations">,
   overrides?: Partial<{ matchedAt: number; notifiedAt: number }>
@@ -117,7 +117,7 @@ async function seedMatch(
 
 describe("respond", () => {
   test("records the response but creates NO customer or lead (lead now waits for buyer consent)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealerOrg(t);
     const requestId = await seedRequest(t);
     await seedMatch(t, requestId, orgId);
@@ -140,7 +140,7 @@ describe("respond", () => {
   });
 
   test("computes the finance offer from the dealer's finance company + down/term — dealer never types the installment", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealerOrg(t);
     const requestId = await seedRequest(t);
     await seedMatch(t, requestId, orgId);
@@ -180,7 +180,7 @@ describe("respond", () => {
   });
 
   test("moves the request to OFFERS_RECEIVED on a positive reply, never FULFILLED", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealerOrg(t);
     const requestId = await seedRequest(t);
     await seedMatch(t, requestId, orgId);
@@ -196,7 +196,7 @@ describe("respond", () => {
   });
 
   test("requires a vehicle for HAVE_MATCH and a sourcing range for CAN_SOURCE", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealerOrg(t);
     const requestId = await seedRequest(t);
     await seedMatch(t, requestId, orgId);
@@ -211,7 +211,7 @@ describe("respond", () => {
   });
 
   test("writes a response.sent marketplace event", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealerOrg(t);
     const requestId = await seedRequest(t);
     await seedMatch(t, requestId, orgId);
@@ -230,7 +230,7 @@ describe("respond", () => {
   });
 
   test("updates responseScore using notifiedAt, falling back to matchedAt", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealerOrg(t);
     const requestId = await seedRequest(t);
     const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
@@ -247,7 +247,7 @@ describe("respond", () => {
   });
 
   test("awards FAST_RESPONSE once enough quick responses are recorded (Phase 60)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealerOrg(t);
 
     for (let i = 0; i < 3; i++) {
@@ -265,7 +265,7 @@ describe("respond", () => {
   });
 
   test("moves to OFFERS_RECEIVED on a positive reply but stays MATCHED on NOT_AVAILABLE", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId: orgA, asSales: asSalesA } = await seedDealerOrg(t, { name: "Dealer A" });
     const { orgId: orgB, asSales: asSalesB } = await seedDealerOrg(t, { name: "Dealer B" });
     const requestId = await seedRequest(t);
@@ -280,7 +280,7 @@ describe("respond", () => {
   });
 
   test("rejects a response from an org the request was never routed to", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealerOrg(t);
     const requestId = await seedRequest(t);
     // Deliberately no marketplaceRequestMatches row for this org.
@@ -291,7 +291,7 @@ describe("respond", () => {
   });
 
   test("rejects a response to a SPAM request", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealerOrg(t);
     const requestId = await seedRequest(t, { status: "SPAM" });
     await seedMatch(t, requestId, orgId);
@@ -302,7 +302,7 @@ describe("respond", () => {
   });
 
   test("rejects a response to an EXPIRED request", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealerOrg(t);
     const requestId = await seedRequest(t, { status: "EXPIRED" });
     await seedMatch(t, requestId, orgId);
@@ -313,7 +313,7 @@ describe("respond", () => {
   });
 
   test("rejects a negative offer price", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealerOrg(t);
     const requestId = await seedRequest(t);
     await seedMatch(t, requestId, orgId);
@@ -331,7 +331,7 @@ describe("respond", () => {
   });
 
   test("blocks a response once a FREE_FOUNDING dealer's window has expired (Phase 63)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealerOrg(t);
     const requestId = await seedRequest(t);
     await seedMatch(t, requestId, orgId);
@@ -349,7 +349,7 @@ describe("respond", () => {
   });
 
   test("blocks a response once a LEAD_PACKAGE dealer's quota is exhausted (Phase 63)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealerOrg(t);
     const requestId = await seedRequest(t);
     await seedMatch(t, requestId, orgId);
@@ -369,7 +369,7 @@ describe("respond", () => {
   });
 
   test("consumes one lead from a LEAD_PACKAGE dealer's quota on a successful response (Phase 63)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealerOrg(t);
     const requestId = await seedRequest(t);
     await seedMatch(t, requestId, orgId);
@@ -392,7 +392,7 @@ describe("respond", () => {
   });
 
   test("does not consume quota for a FEATURED dealer and allows unlimited responses", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealerOrg(t);
     await t.run((ctx) =>
       ctx.db
@@ -417,7 +417,7 @@ describe("respond", () => {
 
 describe("listForOrg", () => {
   test("only returns requests matched to the caller's org, with their own latest response", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId: orgA, asSales: asSalesA } = await seedDealerOrg(t, { name: "Dealer A" });
     const { orgId: orgB } = await seedDealerOrg(t, { name: "Dealer B" });
     const requestForA = await seedRequest(t);
@@ -439,7 +439,7 @@ describe("listForOrg", () => {
 
 describe("getStatusForBuyer respondedCount", () => {
   test("counts distinct responding orgs excluding NOT_AVAILABLE", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId: orgA, asSales: asSalesA } = await seedDealerOrg(t, { name: "Dealer A" });
     const { orgId: orgB, asSales: asSalesB } = await seedDealerOrg(t, { name: "Dealer B" });
     const requestId = await seedRequest(t);
@@ -459,7 +459,7 @@ describe("getStatusForBuyer respondedCount", () => {
 
 describe("marketplaceResponses.respond — non-finite numeric inputs", () => {
   test("a NaN finance term cannot produce a NaN quote for the buyer", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asSales } = await seedDealerOrg(t);
     const requestId = await seedRequest(t);
     await seedMatch(t, requestId, orgId);
@@ -491,7 +491,7 @@ describe("marketplaceResponses.respond — non-finite numeric inputs", () => {
   });
 
   test("a NaN offer price is rejected", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asSales } = await seedDealerOrg(t);
     const requestId = await seedRequest(t);
     await seedMatch(t, requestId, orgId);

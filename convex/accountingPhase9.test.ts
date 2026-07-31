@@ -8,7 +8,7 @@
  *  - reversals write a REVERSE_EVENT financial audit entry
  *  - manual journals require a finance-authorized reviewer
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -35,7 +35,7 @@ const FINANCE_PERMS = [
 ];
 
 async function seedDealer(tag = "p9", openPeriod = true) {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: `Phase9 ${tag}`, createdAt: Date.now() })
   );

@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, it } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -79,7 +79,7 @@ const WEBSITE_PERMISSIONS = [
 ];
 
 async function seedPublishedDealer(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   opts: {
     name: string;
     subdomainSlug: string;
@@ -199,7 +199,7 @@ async function seedPublishedDealer(
 
 describe("marketplaceBrowse.search", () => {
   test("unions vehicles from multiple opted-in dealers and excludes non-opted-in ones", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedPublishedDealer(t, { name: "Amman Motors", subdomainSlug: "ammanmotors", city: "Amman" });
     await seedPublishedDealer(t, { name: "Zarqa Autos", subdomainSlug: "zarqaautos", city: "Zarqa" });
     await seedPublishedDealer(t, { name: "Hidden Dealer", subdomainSlug: "hiddendealer", city: "Amman", isOptedIn: false });
@@ -211,7 +211,7 @@ describe("marketplaceBrowse.search", () => {
   });
 
   test("filters by city using the dealer's declared areas", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedPublishedDealer(t, { name: "Amman Motors", subdomainSlug: "ammanmotors2", city: "Amman" });
     await seedPublishedDealer(t, { name: "Zarqa Autos", subdomainSlug: "zarqaautos2", city: "Zarqa" });
 
@@ -221,7 +221,7 @@ describe("marketplaceBrowse.search", () => {
   });
 
   test("filters by price range and payment type", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedPublishedDealer(t, { name: "Cash Only Dealer", subdomainSlug: "cashonly", city: "Amman", withFinance: false });
     await seedPublishedDealer(t, { name: "Finance Dealer", subdomainSlug: "financedealer", city: "Amman", withFinance: true });
 
@@ -235,7 +235,7 @@ describe("marketplaceBrowse.search", () => {
   });
 
   test("sorts by the requested order (price asc default, price desc, year desc)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedPublishedDealer(t, { name: "Cheap 2020", subdomainSlug: "cheap2020", city: "Amman", sellingPrice: 8000 });
     await seedPublishedDealer(t, { name: "Pricey 2024", subdomainSlug: "pricey2024", city: "Amman", sellingPrice: 25000 });
     await seedPublishedDealer(t, { name: "Mid 2022", subdomainSlug: "mid2022", city: "Amman", sellingPrice: 15000 });
@@ -251,7 +251,7 @@ describe("marketplaceBrowse.search", () => {
   });
 
   test("paginates via cursor", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedPublishedDealer(t, { name: "Dealer A", subdomainSlug: "dealera", city: "Amman" });
     await seedPublishedDealer(t, { name: "Dealer B", subdomainSlug: "dealerb", city: "Amman" });
 
@@ -267,7 +267,7 @@ describe("marketplaceBrowse.search", () => {
   });
 
   test("exposes dealer phone and WhatsApp for direct contact, falling back WhatsApp to the phone", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     // Dealer with both a phone and a distinct WhatsApp number.
     await seedPublishedDealer(t, {
       name: "Both Contacts",
@@ -297,7 +297,7 @@ describe("marketplaceBrowse.search", () => {
   });
 
   test("passes through spec fields (transmission/fuel/color) only when the dealer enables those sections", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedPublishedDealer(t, { name: "Specs Dealer", subdomainSlug: "specsdealer", city: "Amman", withSpecs: true });
     await seedPublishedDealer(t, { name: "No Specs Dealer", subdomainSlug: "nospecsdealer", city: "Amman" });
 
@@ -310,7 +310,7 @@ describe("marketplaceBrowse.search", () => {
   });
 
   test("exposes a listedAt timestamp for freshness", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const before = Date.now();
     await seedPublishedDealer(t, { name: "Fresh Dealer", subdomainSlug: "freshdealer", city: "Amman" });
 
@@ -323,7 +323,7 @@ describe("marketplaceBrowse.search", () => {
   });
 
   test("filters by transmission and fuel type (case-insensitive), only matching dealers who disclosed them", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     // Both seeded cars are Automatic/Petrol, but only this dealer publishes specs.
     await seedPublishedDealer(t, { name: "Specs Dealer", subdomainSlug: "specsfilter", city: "Amman", withSpecs: true });
     await seedPublishedDealer(t, { name: "No Specs Dealer", subdomainSlug: "nospecsfilter", city: "Amman" });
@@ -340,7 +340,7 @@ describe("marketplaceBrowse.search", () => {
   });
 
   test("passes through trust-passport fields when disclosed, and safe defaults when not (Phase 61)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedPublishedDealer(t, {
       name: "Disclosed Dealer",
       subdomainSlug: "discloseddealer",
@@ -368,7 +368,7 @@ describe("marketplaceBrowse.search", () => {
   });
 
   test("estimates the monthly payment using the same math as lib/financing.ts, and filters by it (Phase 62)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedPublishedDealer(t, {
       name: "Finance Dealer",
       subdomainSlug: "financedealer2",
@@ -392,7 +392,7 @@ describe("marketplaceBrowse.search", () => {
   });
 
   test("excludes cash-only dealers when a max monthly payment filter is applied (no estimate possible)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedPublishedDealer(t, { name: "Cash Only", subdomainSlug: "cashonly2", city: "Amman", withFinance: false });
 
     const result = await t.query(api.marketplaceBrowse.search, { maxMonthlyPayment: 1000 });
@@ -400,7 +400,7 @@ describe("marketplaceBrowse.search", () => {
   });
 
   test("shows SOLD vehicles only when the dealer enabled the inventory.soldVehicles section", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     // Sold car + section enabled -> appears in the marketplace.
     await seedPublishedDealer(t, {
       name: "Shows Sold",
@@ -427,7 +427,7 @@ describe("marketplaceBrowse.search", () => {
   });
 
   test("exposes AVAILABLE status for a normal in-stock vehicle", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedPublishedDealer(t, { name: "In Stock", subdomainSlug: "instock", city: "Amman" });
 
     const result = await t.query(api.marketplaceBrowse.search, {});
@@ -435,7 +435,7 @@ describe("marketplaceBrowse.search", () => {
   });
 
   test("carries each org's real currency through, instead of assuming JOD (Finding 2)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedPublishedDealer(t, { name: "Default JOD Dealer", subdomainSlug: "defaultjoddealer", city: "Amman" });
     await seedPublishedDealer(t, {
       name: "USD Dealer",
@@ -453,7 +453,7 @@ describe("marketplaceBrowse.search", () => {
   });
 
   test("still estimates the monthly payment from financePrice when the dealer hides public prices", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedPublishedDealer(t, {
       name: "Hidden Price Dealer",
       subdomainSlug: "hiddenpricedealer",
@@ -480,7 +480,7 @@ describe("marketplaceBrowse.search", () => {
  */
 describe("marketplaceBrowse.search — direct listings", () => {
   const seedListing = async (
-    t: ReturnType<typeof convexTest>,
+    t: ReturnType<typeof convexTestWithComponents>,
     overrides: Partial<{
       make: string;
       model: string;
@@ -525,7 +525,7 @@ describe("marketplaceBrowse.search — direct listings", () => {
     });
 
   test("a LIVE direct listing appears in public browse, flagged as a private seller", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedListing(t);
 
     const result = await t.query(api.marketplaceBrowse.search, {});
@@ -544,7 +544,7 @@ describe("marketplaceBrowse.search — direct listings", () => {
   });
 
   test("falls back to the listed phone for WhatsApp when the seller gave no separate number", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedListing(t);
 
     const result = await t.query(api.marketplaceBrowse.search, {});
@@ -558,7 +558,7 @@ describe("marketplaceBrowse.search — direct listings", () => {
     ["SOLD" as const],
     ["REMOVED" as const],
   ])("never exposes a %s listing to public browse", async (status) => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedListing(t, { status });
 
     const result = await t.query(api.marketplaceBrowse.search, {});
@@ -567,7 +567,7 @@ describe("marketplaceBrowse.search — direct listings", () => {
   });
 
   test("never exposes a soft-deleted listing", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedListing(t, { isDeleted: true });
 
     const result = await t.query(api.marketplaceBrowse.search, {});
@@ -576,7 +576,7 @@ describe("marketplaceBrowse.search — direct listings", () => {
   });
 
   test("applies the same make/city/price filters as dealer rows", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedListing(t, { make: "Toyota", city: "Amman", price: 12000 });
     await seedListing(t, { make: "Honda", city: "Irbid", price: 30000 });
 
@@ -588,7 +588,7 @@ describe("marketplaceBrowse.search — direct listings", () => {
   });
 
   test("shows direct listings alongside dealer inventory in one result set", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedPublishedDealer(t, { name: "Amman Motors", subdomainSlug: "ammanmotors", city: "Amman" });
     await seedListing(t, { make: "Kia", price: 9000 });
 
@@ -601,7 +601,7 @@ describe("marketplaceBrowse.search — direct listings", () => {
   });
 
   test("sorts direct and dealer rows together rather than appending one after the other", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedPublishedDealer(t, { name: "Amman Motors", subdomainSlug: "ammanmotors", city: "Amman" });
     await seedListing(t, { make: "Kia", price: 1 });
 
@@ -612,7 +612,7 @@ describe("marketplaceBrowse.search — direct listings", () => {
   });
 
   test("excludes direct listings from finance-filtered searches", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedListing(t);
 
     // A private seller has no finance company, so a buyer filtering for finance

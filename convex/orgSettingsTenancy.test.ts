@@ -11,7 +11,7 @@
  * Shape of each case: an OWNER of org A names org A (passing every auth guard)
  * and supplies an id belonging to org B.
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -55,7 +55,7 @@ async function setupTwoOrgs(t: any, seed: string) {
 
 describe("orgPipelineStages cross-tenant guards", () => {
   test("update refuses a stage id belonging to another org", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { attacker, victim, asAttacker } = await setupTwoOrgs(t, "ps1");
 
     const victimStageId = await t.run((ctx: any) =>
@@ -84,7 +84,7 @@ describe("orgPipelineStages cross-tenant guards", () => {
   });
 
   test("reorder refuses a stage id belonging to another org", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { attacker, victim, asAttacker } = await setupTwoOrgs(t, "ps2");
 
     const victimStageId = await t.run((ctx: any) =>
@@ -110,7 +110,7 @@ describe("orgPipelineStages cross-tenant guards", () => {
   });
 
   test("reorder still renumbers the caller's own stages", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { attacker, asAttacker } = await setupTwoOrgs(t, "ps3");
 
     await asAttacker.mutation(api.orgPipelineStages.seed, { orgId: attacker.orgId });
@@ -155,7 +155,7 @@ describe("orgCustomFields cross-tenant guards", () => {
   }
 
   test("update refuses a field id belonging to another org", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { attacker, victim, asAttacker } = await setupTwoOrgs(t, "cf1");
     const { fieldId } = await seedFieldWithValue(t, victim.orgId, "veh_victim");
 
@@ -174,7 +174,7 @@ describe("orgCustomFields cross-tenant guards", () => {
   });
 
   test("remove refuses a field id belonging to another org and leaves no orphans", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { attacker, victim, asAttacker } = await setupTwoOrgs(t, "cf2");
     const { fieldId, valueId } = await seedFieldWithValue(t, victim.orgId, "veh_victim");
 
@@ -190,7 +190,7 @@ describe("orgCustomFields cross-tenant guards", () => {
   });
 
   test("getValues never returns another org's values", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { attacker, victim, asAttacker } = await setupTwoOrgs(t, "cf3");
     await seedFieldWithValue(t, victim.orgId, "veh_shared_id");
 
@@ -204,7 +204,7 @@ describe("orgCustomFields cross-tenant guards", () => {
   });
 
   test("setValues cannot patch or delete another org's values", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { attacker, victim, asAttacker } = await setupTwoOrgs(t, "cf4");
     const { fieldId, valueId } = await seedFieldWithValue(t, victim.orgId, "veh_shared_id");
 
@@ -223,7 +223,7 @@ describe("orgCustomFields cross-tenant guards", () => {
   });
 
   test("setValues cannot blank out another org's value", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { attacker, victim, asAttacker } = await setupTwoOrgs(t, "cf5");
     const { fieldId, valueId } = await seedFieldWithValue(t, victim.orgId, "veh_shared_id");
 
@@ -240,7 +240,7 @@ describe("orgCustomFields cross-tenant guards", () => {
   });
 
   test("owner can still read and write their own custom field values", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { attacker, asAttacker } = await setupTwoOrgs(t, "cf6");
 
     const fieldId = await asAttacker.mutation(api.orgCustomFields.create, {
@@ -304,7 +304,7 @@ describe("orgCustomFields cross-tenant guards", () => {
 
 describe("orgLeadSources cross-tenant guards", () => {
   test("update and remove refuse a source id belonging to another org", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { attacker, victim, asAttacker } = await setupTwoOrgs(t, "ls1");
 
     const sourceId = await t.run((ctx: any) =>
@@ -342,7 +342,7 @@ describe("orgLeadSources cross-tenant guards", () => {
 
 describe("orgCustomerStatuses cross-tenant guards", () => {
   test("update, remove and reorder refuse a status id belonging to another org", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { attacker, victim, asAttacker } = await setupTwoOrgs(t, "cs1");
 
     const statusId = await t.run((ctx: any) =>
@@ -382,7 +382,7 @@ describe("orgCustomerStatuses cross-tenant guards", () => {
 // in a module nobody thought to check alongside the org* family.
 describe("feedback cross-tenant guards", () => {
   test("setStatus refuses a feedback id belonging to another org", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { attacker, victim, asAttacker } = await setupTwoOrgs(t, "fb1");
 
     const feedbackId = await t.run((ctx: any) =>
@@ -410,7 +410,7 @@ describe("feedback cross-tenant guards", () => {
   });
 
   test("an owner can still close their own org's feedback", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { attacker, asAttacker } = await setupTwoOrgs(t, "fb2");
 
     const feedbackId = await t.run((ctx: any) =>
@@ -438,7 +438,7 @@ describe("feedback cross-tenant guards", () => {
 
 describe("orgValuationCompanies cross-tenant guards", () => {
   test("update and remove refuse a company id belonging to another org", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { attacker, victim, asAttacker } = await setupTwoOrgs(t, "vc1");
 
     const companyId = await t.run((ctx: any) =>

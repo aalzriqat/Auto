@@ -7,7 +7,7 @@
  * parallel-reporting comparison surfaces legacy vs GL totals and any
  * still-unmigrated rows.
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -16,7 +16,7 @@ import { Id } from "./_generated/dataModel";
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 async function seedCutoverDealer() {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Phase17 Dealer", createdAt: Date.now() })
   );

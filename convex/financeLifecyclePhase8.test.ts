@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -7,7 +7,7 @@ import { Id } from "./_generated/dataModel";
 const MODULES = import.meta.glob("./**/*.*s");
 
 async function seedFinanceLifecycleDealer(tag = "fl8") {
-  const t = convexTest(schema, MODULES);
+  const t = convexTestWithComponents(schema, MODULES);
 
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: `FL-8 Dealer ${tag}`, createdAt: Date.now() })
@@ -34,7 +34,7 @@ async function seedFinanceLifecycleDealer(tag = "fl8") {
 }
 
 async function seedVehicle(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   orgId: Id<"organizations">,
   vin: string
 ) {
@@ -57,7 +57,7 @@ async function seedVehicle(
 }
 
 async function seedQuote(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   args: {
     orgId: Id<"organizations">;
     customerId: Id<"customers">;

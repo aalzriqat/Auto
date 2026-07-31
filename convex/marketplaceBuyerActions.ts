@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
-import { mutation, MutationCtx } from "./_generated/server";
+import { MutationCtx } from "./_generated/server";
+import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { getOrCreateMarketplaceBuyerCustomer, resolveGeneratedLeadAssignee } from "./utils/leadAssignment";
 import { recordLeadCreated } from "./utils/leadActivity";

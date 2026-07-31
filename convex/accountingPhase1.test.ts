@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -6,7 +6,7 @@ import { toMinorUnits, fromMinorUnits, scaleForCurrency, isValidMinorAmount, ass
 import { SYSTEM_KEYS, REQUIRED_SYSTEM_KEYS } from "./utils/defaultChart";
 
 async function seedPhase1Dealer() {
-  const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Phase 1 Dealer", createdAt: Date.now() })
   );

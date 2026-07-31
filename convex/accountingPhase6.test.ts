@@ -2,7 +2,7 @@
  * Phase 6 tests: migration audit tooling — gap analysis, duplicate detection,
  * dry-run migration, and legacy transaction classification.
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -18,7 +18,7 @@ vi.mock("./rateLimit", () => ({
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 async function seedMigrationDealer() {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Migration Dealer", createdAt: Date.now() })
   );

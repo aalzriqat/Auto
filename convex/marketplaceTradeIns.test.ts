@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, beforeEach, afterEach, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -39,7 +39,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function seedDealer(t: ReturnType<typeof convexTest>, opts?: { isOptedIn?: boolean; suspended?: boolean }) {
+async function seedDealer(t: ReturnType<typeof convexTestWithComponents>, opts?: { isOptedIn?: boolean; suspended?: boolean }) {
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Dealer Org", createdAt: Date.now(), suspended: opts?.suspended })
   );
@@ -83,7 +83,7 @@ const baseTradeInArgs = { ...baseTradeInMutationArgs, turnstileToken: "valid-tok
 
 describe("submitTradeInRequest", () => {
   test("creates a PENDING request and notifies dealers with marketplace:respond", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId } = await seedDealer(t);
 
     const result = await t.action(api.marketplaceTradeIns.submitTradeInRequest, { ...baseTradeInArgs, orgId });
@@ -99,7 +99,7 @@ describe("submitTradeInRequest", () => {
   });
 
   test("rejects a request to an org that isn't opted in", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId } = await seedDealer(t, { isOptedIn: false });
 
     await expect(
@@ -108,7 +108,7 @@ describe("submitTradeInRequest", () => {
   });
 
   test("rejects a request to a suspended org", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId } = await seedDealer(t, { suspended: true });
 
     await expect(
@@ -119,7 +119,7 @@ describe("submitTradeInRequest", () => {
 
 describe("listForOrg / makeOffer", () => {
   test("listForOrg rejects a caller without marketplace:respond and scopes to the org", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealer(t);
     const other = await seedDealer(t);
 
@@ -134,7 +134,7 @@ describe("listForOrg / makeOffer", () => {
   });
 
   test("makeOffer moves status to OFFERED and rejects re-offering or a negative amount", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealer(t);
     const { tradeInRequestId } = await t.mutation(internal.marketplaceTradeIns.createTradeInRequest, {
       ...baseTradeInMutationArgs,
@@ -157,7 +157,7 @@ describe("listForOrg / makeOffer", () => {
 
 describe("getStatusForBuyer / acceptOffer / declineOffer", () => {
   test("getStatusForBuyer is phone-gated and returns null for a wrong number", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId } = await seedDealer(t);
     const { tradeInRequestId } = await t.mutation(internal.marketplaceTradeIns.createTradeInRequest, {
       ...baseTradeInMutationArgs,
@@ -178,7 +178,7 @@ describe("getStatusForBuyer / acceptOffer / declineOffer", () => {
   });
 
   test("getStatusForBuyerByPublicId accepts a raw id string and returns null for a malformed id", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId } = await seedDealer(t);
     const { tradeInRequestId } = await t.mutation(internal.marketplaceTradeIns.createTradeInRequest, {
       ...baseTradeInMutationArgs,
@@ -199,7 +199,7 @@ describe("getStatusForBuyer / acceptOffer / declineOffer", () => {
   });
 
   test("acceptOffer creates an attributed lead and rejects when there's no active offer", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealer(t);
     const { tradeInRequestId } = await t.mutation(internal.marketplaceTradeIns.createTradeInRequest, {
       ...baseTradeInMutationArgs,
@@ -230,7 +230,7 @@ describe("getStatusForBuyer / acceptOffer / declineOffer", () => {
   // The mobile Offers tab calls these two by a raw pasted id. Neither existed on
   // the backend until now, so buyer accept/decline was dead in the shipped app.
   test("acceptOfferByPublicId accepts a raw id string and returns the created lead", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealer(t);
     const { tradeInRequestId } = await t.mutation(internal.marketplaceTradeIns.createTradeInRequest, {
       ...baseTradeInMutationArgs,
@@ -250,7 +250,7 @@ describe("getStatusForBuyer / acceptOffer / declineOffer", () => {
   });
 
   test("declineOfferByPublicId accepts a raw id string", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealer(t);
     const { tradeInRequestId } = await t.mutation(internal.marketplaceTradeIns.createTradeInRequest, {
       ...baseTradeInMutationArgs,
@@ -276,7 +276,7 @@ describe("getStatusForBuyer / acceptOffer / declineOffer", () => {
     ["a malformed id", { tradeInRequestId: "not-a-real-id", useRealId: false, phone: baseTradeInArgs.buyerPhone }],
     ["a wrong phone", { tradeInRequestId: "", useRealId: true, phone: "+962700000000" }],
   ])("acceptOfferByPublicId returns success:false for %s without throwing", async (_label, spec) => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealer(t);
     const { tradeInRequestId } = await t.mutation(internal.marketplaceTradeIns.createTradeInRequest, {
       ...baseTradeInMutationArgs,
@@ -295,7 +295,7 @@ describe("getStatusForBuyer / acceptOffer / declineOffer", () => {
   });
 
   test("acceptOfferByPublicId returns success:false for a malformed phone without throwing", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealer(t);
     const { tradeInRequestId } = await t.mutation(internal.marketplaceTradeIns.createTradeInRequest, {
       ...baseTradeInMutationArgs,
@@ -316,7 +316,7 @@ describe("getStatusForBuyer / acceptOffer / declineOffer", () => {
   });
 
   test("declineOfferByPublicId returns success:false for a malformed phone without throwing", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealer(t);
     const { tradeInRequestId } = await t.mutation(internal.marketplaceTradeIns.createTradeInRequest, {
       ...baseTradeInMutationArgs,
@@ -335,7 +335,7 @@ describe("getStatusForBuyer / acceptOffer / declineOffer", () => {
   });
 
   test("declineOfferByPublicId returns success:false when the offer is no longer live", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId } = await seedDealer(t);
     const { tradeInRequestId } = await t.mutation(internal.marketplaceTradeIns.createTradeInRequest, {
       ...baseTradeInMutationArgs,
@@ -354,7 +354,7 @@ describe("getStatusForBuyer / acceptOffer / declineOffer", () => {
   });
 
   test("declineOffer sets status to DECLINED", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealer(t);
     const { tradeInRequestId } = await t.mutation(internal.marketplaceTradeIns.createTradeInRequest, {
       ...baseTradeInMutationArgs,

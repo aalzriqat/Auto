@@ -1,9 +1,9 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 
-async function seedOrgWithEditor(t: ReturnType<typeof convexTest>) {
+async function seedOrgWithEditor(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() })
   );
@@ -28,7 +28,7 @@ async function seedOrgWithEditor(t: ReturnType<typeof convexTest>) {
 
 describe("socialInbox.listConversations", () => {
   test("merges Instagram and Facebook events for the same org into separate, platform-tagged conversations", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
 
     const igCustomerId = await t.run((ctx) =>
@@ -80,7 +80,7 @@ describe("socialInbox.listConversations", () => {
   });
 
   test("splits same-customer events into separate comment and DM conversation threads", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
 
     const customerId = await t.run((ctx) =>
@@ -130,7 +130,7 @@ describe("socialInbox.listConversations", () => {
   });
 
   test("groups multiple comments on the same post into one thread", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
 
     const customerId = await t.run((ctx) =>
@@ -162,7 +162,7 @@ describe("socialInbox.listConversations", () => {
   });
 
   test("splits same-customer comments on different posts into separate threads", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
 
     const customerId = await t.run((ctx) =>
@@ -196,7 +196,7 @@ describe("socialInbox.listConversations", () => {
 
 describe("socialInbox.listEventsForCustomer", () => {
   test("returns merged Instagram + Facebook events for the customer, oldest first", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
 
     const customerId = await t.run((ctx) =>
@@ -233,7 +233,7 @@ describe("socialInbox.listEventsForCustomer", () => {
 
 describe("socialInbox.listEventsForConversation", () => {
   test("returns only events matching the conversation (platform + kind + postId)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
 
     const customerId = await t.run((ctx) =>
@@ -279,7 +279,7 @@ describe("socialInbox.listEventsForConversation", () => {
   });
 
   test("returns vehicle suggestions from stored partial match hints", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
 
     const vehicleId = await t.run((ctx) =>
@@ -331,7 +331,7 @@ describe("socialInbox.listEventsForConversation", () => {
 
 describe("socialInbox.setConversationVehicle tenant isolation", () => {
   test("refuses a vehicle that belongs to another organization", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId } = await seedOrgWithEditor(t);
 
     // setConversationVehicle needs approve:requests, which the shared fixture

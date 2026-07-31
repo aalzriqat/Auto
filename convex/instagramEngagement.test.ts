@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -14,7 +14,7 @@ vi.mock("./utils/instagramApi", () => ({
   INSTAGRAM_GRAPH_VERSION: "v21.0",
 }));
 
-async function seedOrgWithManager(t: ReturnType<typeof convexTest>) {
+async function seedOrgWithManager(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() })
   );
@@ -38,7 +38,7 @@ async function seedOrgWithManager(t: ReturnType<typeof convexTest>) {
 }
 
 /** A user with view:leads + edit:leads, for the public listing/reply actions. */
-async function seedOrgWithEditor(t: ReturnType<typeof convexTest>) {
+async function seedOrgWithEditor(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() })
   );
@@ -61,7 +61,7 @@ async function seedOrgWithEditor(t: ReturnType<typeof convexTest>) {
   return { orgId, userId, asEditor: t.withIdentity({ subject: "editor_001" }) };
 }
 
-async function seedSalesTeam(t: ReturnType<typeof convexTest>, orgId: any) {
+async function seedSalesTeam(t: ReturnType<typeof convexTestWithComponents>, orgId: any) {
   const roleId = await t.run((ctx) =>
     ctx.db.insert("roles", { orgId, name: "SALES", permissions: ["view:leads", "edit:leads"] })
   );
@@ -77,7 +77,7 @@ async function seedSalesTeam(t: ReturnType<typeof convexTest>, orgId: any) {
 }
 
 async function seedSettings(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   orgId: any,
   overrides: Record<string, unknown> = {}
 ) {
@@ -96,7 +96,7 @@ async function seedSettings(
 }
 
 async function seedVehicle(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   orgId: any,
   overrides: Record<string, unknown> = {}
 ) {
@@ -119,7 +119,7 @@ async function seedVehicle(
 }
 
 async function seedFinanceCompany(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   orgId: any,
   overrides: Record<string, unknown> = {}
 ) {
@@ -141,7 +141,7 @@ async function seedFinanceCompany(
 
 describe("instagramEngagement.handleIncomingInstagramEvent", () => {
   test("creates a customer, an open lead, and notifies managers on a new comment", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId } = await seedOrgWithManager(t);
 
     const result = await t.run((ctx) =>
@@ -177,7 +177,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
   });
 
   test("auto-assigns generated leads to sales reps and notifies the assigned user", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     const { firstSalesId, secondSalesId } = await seedSalesTeam(t, orgId);
     await seedSettings(t, orgId, { generatedLeadAutoAssignmentEnabled: true });
@@ -218,7 +218,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
   });
 
   test("flags needsProfileEnrichment for a DM with no username, not for a comment with one", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
 
     const dmResult = await t.run((ctx) =>
@@ -247,7 +247,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
   });
 
   test("links the new lead to the vehicle via the comment's media id", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId } = await seedOrgWithManager(t);
 
     const vehicleId = await t.run((ctx) =>
@@ -303,7 +303,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
   });
 
   test("dedupes redelivered webhook events (same externalId processed once)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
 
     const args = {
@@ -324,7 +324,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
   });
 
   test("reuses an existing open lead instead of creating a duplicate", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
 
     await t.run((ctx) =>
@@ -354,7 +354,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
   });
 
   test("lead creation toggle off for comments: still captures the event, no lead, no notification", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, {
       instagramLeadFromCommentsEnabled: false,
@@ -388,7 +388,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
   });
 
   test("lead creation toggle off for DMs only: comments still create leads, DMs don't", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, { instagramLeadFromDmsEnabled: false });
 
@@ -416,7 +416,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
   });
 
   test("DM mobile requirement creates a lead only after the customer shares a valid phone number", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, {
       instagramLeadFromDmsEnabled: true,
@@ -463,7 +463,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
   });
 
   test("DMs with mobile numbers use the mobile-received reply without advancing round-robin replies", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     const settingsId = await seedSettings(t, orgId, {
       instagramAutoReplyEnabled: true,
@@ -496,7 +496,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
   });
 
   test("rotates round-robin through active auto-reply messages and skips when disabled", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
 
     await seedSettings(t, orgId, {
@@ -537,7 +537,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
   });
 
   test("suppresses a repeat auto-reply to the same sender within the cooldown window", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
 
     await seedSettings(t, orgId, {
@@ -575,7 +575,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
   });
 
   test("keeps DM and comment canned auto-reply cooldowns separate", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
 
     await seedSettings(t, orgId, {
@@ -609,7 +609,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
   });
 
   test("does not auto-reply when disabled even with messages configured", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
 
     await seedSettings(t, orgId, {
@@ -631,7 +631,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
   });
 });
 
-async function seedSocialPost(t: ReturnType<typeof convexTest>, orgId: any, vehicleId: any, externalPostId: string) {
+async function seedSocialPost(t: ReturnType<typeof convexTestWithComponents>, orgId: any, vehicleId: any, externalPostId: string) {
   const requestedBy = await t.run((ctx) =>
     ctx.db.insert("users", { clerkId: `poster_${externalPostId}`, email: `${externalPostId}@test.com`, name: "Poster" })
   );
@@ -651,7 +651,7 @@ async function seedSocialPost(t: ReturnType<typeof convexTest>, orgId: any, vehi
 }
 
 async function postCommentAboutVehicle(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   orgId: any,
   vehicleId: any,
   externalId: string,
@@ -673,7 +673,7 @@ async function postCommentAboutVehicle(
 
 describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () => {
   test("price match on an available vehicle returns the price template", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, { instagramSmartReplyEnabled: true });
     const vehicleId = await seedVehicle(t, orgId, { sellingPrice: 25000 });
@@ -696,7 +696,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
   });
 
   test("price match on a sold vehicle falls back to the unavailable template instead of a price", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, { instagramSmartReplyEnabled: true });
     const vehicleId = await seedVehicle(t, orgId, { status: "SOLD" });
@@ -708,7 +708,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
   });
 
   test("financing match in calculated mode computes a monthly figure from the default finance company", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     const financeCompanyId = await seedFinanceCompany(t, orgId);
     await seedSettings(t, orgId, {
@@ -726,7 +726,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
   });
 
   test("financing match in generic mode (default) has no computed number", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, { instagramSmartReplyEnabled: true });
     const vehicleId = await seedVehicle(t, orgId);
@@ -738,7 +738,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
   });
 
   test("financing calculated mode without a configured finance company falls back to generic, does not throw", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, {
       instagramSmartReplyEnabled: true,
@@ -753,7 +753,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
   });
 
   test("availability match reflects each vehicle status", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, { instagramSmartReplyEnabled: true });
 
@@ -773,7 +773,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
   });
 
   test("vehicleInfo match returns vehicle spec details", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, { instagramSmartReplyEnabled: true });
     const vehicleId = await seedVehicle(t, orgId, { mileage: 4500 });
@@ -785,7 +785,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
   });
 
   test("location match uses dealershipAddress when set, falls back to a generic message otherwise", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId: orgWithAddress } = await seedOrgWithManager(t);
     await seedSettings(t, orgWithAddress, {
       instagramSmartReplyEnabled: true,
@@ -804,7 +804,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
     );
     expect(withAddress?.replyText).toContain("Amman, Jordan");
 
-    const t2 = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t2 = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId: orgNoAddress } = await seedOrgWithManager(t2);
     await seedSettings(t2, orgNoAddress, { instagramSmartReplyEnabled: true });
 
@@ -822,7 +822,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
   });
 
   test("greeting only fires when no higher-priority intent also matches", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, { instagramSmartReplyEnabled: true });
 
@@ -843,7 +843,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
   });
 
   test("a complaint suppresses both smart reply and canned reply and escalates to managers", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, {
       instagramSmartReplyEnabled: true,
@@ -874,7 +874,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
   });
 
   test("Smart Reply enabled but no vehicle linked falls back to the canned reply for vehicle-dependent intents", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, {
       instagramSmartReplyEnabled: true,
@@ -897,7 +897,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
   });
 
   test("Smart Reply enabled but no intent matched falls back to the canned reply", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, {
       instagramSmartReplyEnabled: true,
@@ -930,7 +930,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
   });
 
   test("Smart Reply disabled leaves the canned reply path fully unaffected (regression guard)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, {
       instagramSmartReplyEnabled: false,
@@ -946,7 +946,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
   });
 
   test("visibility defaults to public, can be overridden to dm, for comment-kind matches", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, { instagramSmartReplyEnabled: true });
     const vehicleId = await seedVehicle(t, orgId);
@@ -954,7 +954,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
     const defaultResult = await postCommentAboutVehicle(t, orgId, vehicleId, "sr_vis_default", "is it available?");
     expect(defaultResult?.smartReplyVisibility).toBe("public");
 
-    const t2 = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t2 = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId: orgId2 } = await seedOrgWithManager(t2);
     await seedSettings(t2, orgId2, { instagramSmartReplyEnabled: true, smartReplyVisibility: "dm" });
     const vehicleId2 = await seedVehicle(t2, orgId2);
@@ -973,7 +973,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
   });
 
   test("DM-kind events always resolve to dm visibility, regardless of the visibility setting", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, { instagramSmartReplyEnabled: true, smartReplyVisibility: "public" });
     const vehicleId = await seedVehicle(t, orgId);
@@ -995,7 +995,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
   });
 
   test("Smart Reply is not subject to the 24h canned-reply cooldown — two distinct questions both get answered", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, { instagramSmartReplyEnabled: true });
     const vehicleId = await seedVehicle(t, orgId);
@@ -1010,7 +1010,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
 
 describe("instagramEngagement.getSettingsByInstagramAccountId", () => {
   test("reverse-looks-up orgSettings by the webhook account id (not the OAuth business account id)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId);
 
@@ -1032,7 +1032,7 @@ describe("instagramEngagement.getSettingsByInstagramAccountId", () => {
 
 describe("instagramEngagement.listEvents", () => {
   test("returns a paginated, org-wide list with hydrated vehicle/lead info", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
 
     const vehicleId = await t.run((ctx) =>
@@ -1081,7 +1081,7 @@ describe("instagramEngagement.listEvents", () => {
 
 describe("instagramEngagement.listConversations", () => {
   test("collapses multiple events on one lead into a single conversation row", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
 
     const vehicleId = await t.run((ctx) =>
@@ -1147,7 +1147,7 @@ describe("instagramEngagement.listConversations", () => {
   });
 
   test("keeps separate leads as separate conversations, most recent first", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
 
     const customerAId = await t.run((ctx) =>
@@ -1204,7 +1204,7 @@ describe("instagramEngagement.listConversations", () => {
 
 describe("instagramEngagement.listEventsForLead", () => {
   test("returns only events for the given lead, oldest first", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
 
     const customerId = await t.run((ctx) =>
@@ -1235,7 +1235,7 @@ describe("instagramEngagement.listEventsForLead", () => {
 
 describe("instagramEngagement.replyToInstagramComment", () => {
   test("posts the reply and records it on the event", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
     await seedSettings(t, orgId);
 
@@ -1268,7 +1268,7 @@ describe("instagramEngagement.replyToInstagramComment", () => {
   });
 
   test("rejects replying to a DM event as if it were a comment", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
     await seedSettings(t, orgId);
 
@@ -1301,7 +1301,7 @@ describe("instagramEngagement.replyToInstagramComment", () => {
 
 describe("instagramEngagement.sendInstagramDirectMessage", () => {
   test("sends to the most recent DM event's sender and records the reply there", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
     await seedSettings(t, orgId);
 
@@ -1331,7 +1331,7 @@ describe("instagramEngagement.sendInstagramDirectMessage", () => {
   });
 
   test("rejects sending a DM when the lead has no DM history", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
     await seedSettings(t, orgId);
 
@@ -1351,7 +1351,7 @@ describe("instagramEngagement.sendInstagramDirectMessage", () => {
 
 describe("instagramEngagement.enrichCustomerProfile", () => {
   test("fetches the sender's real name and applies it to the placeholder customer", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId);
 
@@ -1382,7 +1382,7 @@ describe("instagramEngagement.enrichCustomerProfile", () => {
   });
 
   test("does not overwrite a name that's already been resolved", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId);
 
@@ -1415,7 +1415,7 @@ describe("instagramEngagement.enrichCustomerProfile", () => {
 
 describe("instagramEngagement.listEvents / listEventsForLead — senderDisplayName", () => {
   test("prefers the event's username, falls back to the customer's resolved name, then the raw id", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
 
     const namedCustomerId = await t.run((ctx) =>

@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe as vitestDescribe, vi, beforeEach, afterEach } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -25,11 +25,11 @@ afterEach(() => {
 });
 
 /** Flushes only immediately-due (delay-0) scheduled functions, without advancing real wall time past any longer-delay timers like the 30s offer-expiry. */
-async function flushImmediate(t: ReturnType<typeof convexTest>) {
+async function flushImmediate(t: ReturnType<typeof convexTestWithComponents>) {
   await t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0));
 }
 
-async function seedOrgAndDealer(t: ReturnType<typeof convexTest>, suffix: string) {
+async function seedOrgAndDealer(t: ReturnType<typeof convexTestWithComponents>, suffix: string) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: `Org ${suffix}`, createdAt: Date.now() })
   );
@@ -49,7 +49,7 @@ async function seedOrgAndDealer(t: ReturnType<typeof convexTest>, suffix: string
 }
 
 async function seedAgent(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   suffix: string,
   opts: { isActive?: boolean; isOnline?: boolean } = {}
 ) {
@@ -71,7 +71,7 @@ async function seedAgent(
 
 describe("liveChat routing", () => {
   test("starting a chat offers it to the only online agent", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asDealer } = await seedOrgAndDealer(t, "1");
     const agentA = await seedAgent(t, "A1");
 
@@ -87,7 +87,7 @@ describe("liveChat routing", () => {
   });
 
   test("a thread cannot be accepted or rejected by an agent it wasn't offered to", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asDealer } = await seedOrgAndDealer(t, "2");
     const agentA = await seedAgent(t, "A2");
     const agentB = await seedAgent(t, "B2");
@@ -105,7 +105,7 @@ describe("liveChat routing", () => {
   });
 
   test("rejecting reassigns to the other online agent and excludes the rejecter", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asDealer } = await seedOrgAndDealer(t, "3");
     const agentA = await seedAgent(t, "A3");
     const agentB = await seedAgent(t, "B3");
@@ -126,7 +126,7 @@ describe("liveChat routing", () => {
   });
 
   test("an expired offer reassigns automatically, falling back to WAITING once every agent has passed", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asDealer } = await seedOrgAndDealer(t, "4");
     const agentA = await seedAgent(t, "A4");
     const agentB = await seedAgent(t, "B4");
@@ -141,7 +141,7 @@ describe("liveChat routing", () => {
   });
 
   test("with zero online agents a new thread lands in WAITING and is manually claimable", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asDealer } = await seedOrgAndDealer(t, "5");
     const offlineAgent = await seedAgent(t, "A5", { isOnline: false });
 
@@ -160,7 +160,7 @@ describe("liveChat routing", () => {
 
 describe("liveChat agent status (break/offline deferral)", () => {
   test("requesting BREAK while handling an active chat is deferred, not applied immediately", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asDealer } = await seedOrgAndDealer(t, "9");
     const agent = await seedAgent(t, "A9");
 
@@ -181,7 +181,7 @@ describe("liveChat agent status (break/offline deferral)", () => {
   });
 
   test("a pending-break agent is excluded from new offers", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId: org1, asDealer: dealer1 } = await seedOrgAndDealer(t, "10a");
     const { orgId: org2, asDealer: dealer2 } = await seedOrgAndDealer(t, "10b");
     const agent = await seedAgent(t, "A10");
@@ -199,7 +199,7 @@ describe("liveChat agent status (break/offline deferral)", () => {
   });
 
   test("closing the last active chat applies the deferred break", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asDealer } = await seedOrgAndDealer(t, "11");
     const agent = await seedAgent(t, "A11");
 
@@ -217,7 +217,7 @@ describe("liveChat agent status (break/offline deferral)", () => {
   });
 
   test("setAgentStatus applies immediately when the agent has no active chats", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const agent = await seedAgent(t, "A12");
 
     const result = await agent.asAgent.mutation(api.liveChat.setAgentStatus, { status: "OFFLINE" });
@@ -231,7 +231,7 @@ describe("liveChat agent status (break/offline deferral)", () => {
 
 describe("liveChat agent-joined notice", () => {
   test("accepting an offer posts a system notice that the agent joined", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asDealer } = await seedOrgAndDealer(t, "16");
     const agent = await seedAgent(t, "A16");
 
@@ -249,7 +249,7 @@ describe("liveChat agent-joined notice", () => {
   });
 
   test("manually claiming a waiting thread also posts the joined notice", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asDealer } = await seedOrgAndDealer(t, "17");
     const offlineAgent = await seedAgent(t, "A17", { isOnline: false });
 
@@ -268,7 +268,7 @@ describe("liveChat agent-joined notice", () => {
 
 describe("liveChat dealer-initiated end", () => {
   test("a dealer can end their own active chat, posting a system notice", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asDealer } = await seedOrgAndDealer(t, "13");
     const agent = await seedAgent(t, "A13");
 
@@ -289,7 +289,7 @@ describe("liveChat dealer-initiated end", () => {
   });
 
   test("ending a chat from the dealer side also revokes any active org-access grant", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asDealer } = await seedOrgAndDealer(t, "14");
     const agent = await seedAgent(t, "A14");
 
@@ -310,7 +310,7 @@ describe("liveChat dealer-initiated end", () => {
   });
 
   test("a dealer cannot end another dealer's thread", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asDealer } = await seedOrgAndDealer(t, "15a");
     const { asDealer: otherDealer } = await seedOrgAndDealer(t, "15b");
 
@@ -323,7 +323,7 @@ describe("liveChat dealer-initiated end", () => {
 
 describe("liveChat org access grant", () => {
   test("requestOrgAccess fails if the thread isn't ACTIVE and claimed by the caller", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asDealer } = await seedOrgAndDealer(t, "6");
     const agent = await seedAgent(t, "A6");
 
@@ -334,7 +334,7 @@ describe("liveChat org access grant", () => {
   });
 
   test("closing a thread revokes its org-access grant and deletes the synthetic membership", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asDealer } = await seedOrgAndDealer(t, "7");
     const agent = await seedAgent(t, "A7");
 
@@ -373,7 +373,7 @@ describe("liveChat org access grant", () => {
   });
 
   test("an agent who already has a real membership in the org is rejected by requestOrgAccess", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, ownerRoleId, asDealer } = await seedOrgAndDealer(t, "8");
     const agent = await seedAgent(t, "A8");
     // Agent is coincidentally already a real member of this same org.
@@ -391,7 +391,7 @@ describe("liveChat org access grant", () => {
 
 describe("liveChat lead (anonymous marketing-site) threads", () => {
   test("starting a lead thread offers it to the only online agent, same as a dealer chat", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const agentA = await seedAgent(t, "LA1");
 
     const threadId = await t.mutation(api.liveChat.startOrGetLeadThread, {
@@ -411,7 +411,7 @@ describe("liveChat lead (anonymous marketing-site) threads", () => {
   });
 
   test("starting a lead thread twice with the same leadId reuses the existing thread", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const threadId1 = await t.mutation(api.liveChat.startOrGetLeadThread, { leadId: "lead-2" });
     const threadId2 = await t.mutation(api.liveChat.startOrGetLeadThread, { leadId: "lead-2", name: "Later Name" });
 
@@ -421,7 +421,7 @@ describe("liveChat lead (anonymous marketing-site) threads", () => {
   });
 
   test("sendLeadMessage rejects a leadId that doesn't match the thread's capability token", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const threadId = await t.mutation(api.liveChat.startOrGetLeadThread, { leadId: "lead-3" });
 
     await expect(
@@ -430,7 +430,7 @@ describe("liveChat lead (anonymous marketing-site) threads", () => {
   });
 
   test("requestOrgAccess is rejected for a LEAD thread (no organization to access)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const agent = await seedAgent(t, "LA4");
     const threadId = await t.mutation(api.liveChat.startOrGetLeadThread, { leadId: "lead-4" });
     await flushImmediate(t);
@@ -440,7 +440,7 @@ describe("liveChat lead (anonymous marketing-site) threads", () => {
   });
 
   test("an agent's reply is visible to the lead via getLeadThreadMessages", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const agent = await seedAgent(t, "LA5");
     const threadId = await t.mutation(api.liveChat.startOrGetLeadThread, { leadId: "lead-5" });
     await flushImmediate(t);

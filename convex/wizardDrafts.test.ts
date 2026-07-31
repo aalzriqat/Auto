@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -16,7 +16,7 @@ const DRAFT_DATA = {
   termMonths: 48,
 };
 
-async function seedMember(t: ReturnType<typeof convexTest>, clerkId: string) {
+async function seedMember(t: ReturnType<typeof convexTestWithComponents>, clerkId: string) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() })
   );
@@ -34,14 +34,14 @@ async function seedMember(t: ReturnType<typeof convexTest>, clerkId: string) {
 
 describe("wizardDrafts", () => {
   test("getMyDraft returns null when no draft exists", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asUser } = await seedMember(t, "sales_wd_001");
     const draft = await asUser.query(api.wizardDrafts.getMyDraft, { orgId });
     expect(draft).toBeNull();
   });
 
   test("saveDraft creates a draft", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asUser } = await seedMember(t, "sales_wd_002");
     await asUser.mutation(api.wizardDrafts.saveDraft, {
       orgId,
@@ -56,7 +56,7 @@ describe("wizardDrafts", () => {
   });
 
   test("saveDraft upserts — calling twice updates the existing draft", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asUser } = await seedMember(t, "sales_wd_003");
     await asUser.mutation(api.wizardDrafts.saveDraft, {
       orgId,
@@ -81,7 +81,7 @@ describe("wizardDrafts", () => {
   });
 
   test("clearDraft removes the draft", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asUser } = await seedMember(t, "sales_wd_004");
     await asUser.mutation(api.wizardDrafts.saveDraft, {
       orgId,
@@ -95,7 +95,7 @@ describe("wizardDrafts", () => {
   });
 
   test("clearDraft is safe to call when no draft exists", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asUser } = await seedMember(t, "sales_wd_005");
     // Should not throw
     await expect(
@@ -104,7 +104,7 @@ describe("wizardDrafts", () => {
   });
 
   test("drafts are scoped per user — two users have independent drafts", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
 
     const orgId = await t.run(async (ctx) =>
       ctx.db.insert("organizations", { name: "Shared Org", createdAt: Date.now() })

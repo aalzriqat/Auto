@@ -1,5 +1,7 @@
 import { v, ConvexError } from "convex/values";
-import { MutationCtx, QueryCtx, internalMutation, mutation, query } from "./_generated/server";
+import { MutationCtx, QueryCtx, query } from "./_generated/server";
+import { internalMutation, mutation } from "./functions";
+import { vehiclesByOrg, LIVE } from "./aggregates";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
@@ -57,6 +59,23 @@ function getAgeBucket(days: number): "0-30" | "31-60" | "61-90" | "90+" {
   if (days <= 60) return "31-60";
   if (days <= 90) return "61-90";
   return "90+";
+}
+
+/**
+ * The same four buckets `getAgeBucket` produces, expressed as inclusive age
+ * ranges in days so they can be turned into createdAt bounds on the aggregate.
+ * `maxAgeDays: null` is the open-ended oldest bucket.
+ */
+const AGE_BUCKETS = [
+  { bucket: "0-30" as const, minAgeDays: 0, maxAgeDays: 30 },
+  { bucket: "31-60" as const, minAgeDays: 31, maxAgeDays: 60 },
+  { bucket: "61-90" as const, minAgeDays: 61, maxAgeDays: 90 },
+  { bucket: "90+" as const, minAgeDays: 91, maxAgeDays: null },
+];
+
+/** Aggregate sort key for a live AVAILABLE vehicle created at `createdAt`. */
+function agingKey(createdAt: number): [number, string, number] {
+  return [LIVE, "AVAILABLE", createdAt];
 }
 
 function randomHex(bytesLength: number): string {
@@ -461,31 +480,49 @@ export const getAgingBuckets = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
 
-    const buckets: Record<"0-30" | "31-60" | "61-90" | "90+", { count: number; totalDays: number }> = {
-      "0-30": { count: 0, totalDays: 0 },
-      "31-60": { count: 0, totalDays: 0 },
-      "61-90": { count: 0, totalDays: 0 },
-      "90+": { count: 0, totalDays: 0 },
-    };
-
     const now = Date.now();
-    const vehicles = ctx.db
-      .query("vehicles")
-      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "AVAILABLE"));
 
-    for await (const vehicle of vehicles) {
-      if (vehicle.isDeleted) continue;
-      const ageDays = Math.max(0, Math.floor((now - (vehicle.createdAt ?? vehicle._creationTime)) / DAY_MS));
-      const bucket = getAgeBucket(ageDays);
-      buckets[bucket].count += 1;
-      buckets[bucket].totalDays += ageDays;
-    }
+    // Each bucket is a contiguous createdAt range, so it is a bounded count and
+    // a bounded sum against the B-tree — eight O(log n) reads in total, no
+    // vehicle documents touched. Iterating every AVAILABLE vehicle to build
+    // this histogram was 1.19 GB of database I/O.
+    //
+    // Boundaries are derived from the row-scan's `ageDays <= 30 | 60 | 90`,
+    // where ageDays = floor((now - createdAt) / DAY_MS):
+    //   ageDays <= N  <=>  createdAt > now - (N + 1) * DAY_MS
+    const results = await Promise.all(
+      AGE_BUCKETS.map(async ({ bucket, maxAgeDays, minAgeDays }) => {
+        const bounds = {
+          // An older vehicle has a *smaller* createdAt, so maxAgeDays is the
+          // lower bound of the range and minAgeDays the upper one.
+          lower:
+            maxAgeDays === null
+              ? { key: agingKey(Number.MIN_SAFE_INTEGER), inclusive: true as const }
+              : { key: agingKey(now - (maxAgeDays + 1) * DAY_MS), inclusive: false as const },
+          upper:
+            minAgeDays === 0
+              ? { key: agingKey(Number.MAX_SAFE_INTEGER), inclusive: true as const }
+              : { key: agingKey(now - minAgeDays * DAY_MS), inclusive: true as const },
+        };
 
-    return (["0-30", "31-60", "61-90", "90+"] as const).map((bucket) => ({
-      bucket,
-      count: buckets[bucket].count,
-      avgDays: buckets[bucket].count > 0 ? Math.round(buckets[bucket].totalDays / buckets[bucket].count) : 0,
-    }));
+        const [count, sumCreatedAt] = await Promise.all([
+          vehiclesByOrg.count(ctx, { namespace: args.orgId, bounds }),
+          vehiclesByOrg.sum(ctx, { namespace: args.orgId, bounds }),
+        ]);
+
+        // Mean age from the mean createdAt. The row scan averaged already-floored
+        // ages; this floors once at the end, so the two can differ by at most a
+        // day on a mixed bucket. That is within the precision an "average days
+        // in stock" tile conveys, and it is the only way to get an average
+        // without reading the rows.
+        const avgDays =
+          count > 0 ? Math.max(0, Math.round((now - sumCreatedAt / count) / DAY_MS)) : 0;
+
+        return { bucket, count, avgDays };
+      })
+    );
+
+    return results;
   },
 });
 

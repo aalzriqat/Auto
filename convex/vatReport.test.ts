@@ -7,7 +7,7 @@
  * the sale/expense flows that normally produce them (those are covered by
  * their own posting-rule tests).
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -15,7 +15,7 @@ import { api } from "./_generated/api";
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 async function seedDealer() {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Phase41 VAT Dealer", createdAt: Date.now() })
   );

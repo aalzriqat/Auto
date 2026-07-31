@@ -1,5 +1,6 @@
 import type { MutationCtx } from "./_generated/server";
-import { mutation, query } from "./_generated/server";
+import { query } from "./_generated/server";
+import { mutation } from "./functions";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth, requireAuth } from "./utils/tenancy";

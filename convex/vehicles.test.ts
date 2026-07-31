@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -17,7 +17,7 @@ const PERMISSIONS = [
 ];
 
 async function setup() {
-  const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Test Dealer", createdAt: Date.now() })
   );
@@ -165,7 +165,7 @@ describe("vehicles.createSourced", () => {
   };
 
   test("a sales role with only create:vehicles:request (no create:vehicles) can source a vehicle", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Sales Sourcing Dealer", createdAt: Date.now() })
     );
@@ -209,7 +209,7 @@ describe("vehicles.createSourced", () => {
   });
 
   test("rejects a role with neither create:vehicles nor create:vehicles:request", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "No Sourcing Dealer", createdAt: Date.now() })
     );
@@ -242,7 +242,7 @@ describe("vehicles.createSourced", () => {
   // yet"), which is why these cases use negatives rather than zero.
   describe("numeric bounds match CreateVehicleSchema", () => {
     async function asSourcer() {
-      const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
       const orgId = await t.run((ctx) =>
         ctx.db.insert("organizations", { name: "Bounds Dealer", createdAt: Date.now() })
       );

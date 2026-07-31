@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
-import { mutation, internalQuery, internalMutation } from "./_generated/server";
+import { internalQuery } from "./_generated/server";
+import { mutation, internalMutation } from "./functions";
 import { requireAuth } from "./utils/tenancy";
 
 const platformValidator = v.union(v.literal("IOS"), v.literal("ANDROID"));

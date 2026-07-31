@@ -6,7 +6,7 @@
  * disposal gain/loss balances correctly in both directions, and re-running the
  * depreciation cron for the same month never double-posts.
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -19,7 +19,7 @@ const MODULE_GLOB = import.meta.glob("./**/*.ts");
 const PAST_PURCHASE_DATE = Date.UTC(2025, 11, 1);
 
 async function seedAssetDealer() {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Phase11 Dealer", createdAt: Date.now() })
   );

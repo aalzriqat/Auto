@@ -1,6 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { internalMutation, internalAction, mutation, query, MutationCtx } from "./_generated/server";
+import { internalAction, query, MutationCtx } from "./_generated/server";
+import { internalMutation, mutation } from "./functions";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth, requireSuperAdmin } from "./utils/tenancy";

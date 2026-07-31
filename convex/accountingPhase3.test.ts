@@ -1,10 +1,10 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 
 async function seedPhase3Dealer() {
-  const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Phase 3 Dealer", createdAt: Date.now() })
   );

@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -10,7 +10,7 @@ vi.mock("./rateLimit", () => ({
 }));
 
 async function seedPhase0Dealer() {
-  const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Phase 0 Dealer", createdAt: Date.now() })
   );
@@ -96,7 +96,7 @@ async function seedPhase0Dealer() {
 }
 
 async function seedVehicle(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   orgId: Id<"organizations">,
   vin: string
 ) {

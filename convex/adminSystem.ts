@@ -1,7 +1,8 @@
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
-import { query, mutation, internalMutation, internalQuery, internalAction, ActionCtx, QueryCtx } from "./_generated/server";
+import { query, internalQuery, internalAction, ActionCtx, QueryCtx } from "./_generated/server";
+import { mutation, internalMutation } from "./functions";
 import { requireSuperAdmin } from "./utils/tenancy";
 import { internal } from "./_generated/api";
 import { CRON_HEARTBEAT_JOBS } from "./constants";

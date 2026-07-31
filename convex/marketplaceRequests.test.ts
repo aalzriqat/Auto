@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, beforeEach, afterEach, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -52,7 +52,7 @@ const baseRequestArgs = {
 };
 
 async function seedDealer(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   opts: { name: string; areas: string[]; brandsCarried: string[]; whatsappNumber?: string; suspended?: boolean; avgResponseMinutes?: number }
 ) {
   const orgId = await t.run((ctx) =>
@@ -89,7 +89,7 @@ const WEBSITE_PERMS = ["website.view", "website.manage", "website.publish", "vie
 
 /** Seeds a dealer with a real published site snapshot (enterprise plan → websiteBuilder), one AVAILABLE vehicle, and an opted-in profile — so createRequest's Tier A inventory scan has something to score. */
 async function seedPublishedDealer(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   opts: {
     name: string;
     subdomainSlug: string;
@@ -147,7 +147,7 @@ async function seedPublishedDealer(
 
 describe("two-tier inventory matching", () => {
   test("scores a dealer's published inventory into an INVENTORY-tier match with reasons + monthly estimate", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId } = await seedPublishedDealer(t, { name: "Amman Motors", subdomainSlug: "amanm1", city: "Amman", model: "Corolla", sellingPrice: 18000 });
 
     const result = await t.action(api.marketplaceRequests.submitRequest, {
@@ -165,7 +165,7 @@ describe("two-tier inventory matching", () => {
   });
 
   test("an inventory match outranks an eligible-only dealer", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId: inventoryOrg } = await seedPublishedDealer(t, { name: "Stocked", subdomainSlug: "stocked1", city: "Amman", model: "Corolla" });
     // Eligible-only dealer: city/brand match but no published inventory.
     const { orgId: eligibleOrg } = await seedDealer(t, { name: "Sourcer", areas: ["Amman"], brandsCarried: ["Toyota"] });
@@ -180,7 +180,7 @@ describe("two-tier inventory matching", () => {
   });
 
   test("a quota-exhausted dealer is excluded before consuming a match slot", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId } = await seedPublishedDealer(t, { name: "Maxed Out", subdomainSlug: "maxed1", city: "Amman", model: "Corolla", tier: "LEAD_PACKAGE", quotaExhausted: true });
 
     const result = await t.action(api.marketplaceRequests.submitRequest, { ...baseRequestArgs, make: "Toyota", model: "Corolla" });
@@ -229,7 +229,7 @@ describe("dealerMatchesRequest", () => {
 
 describe("submitRequest", () => {
   test("matches, caps at 5, ranks by response time, and notifies each matched org", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
 
     for (let i = 0; i < 6; i++) {
       await seedDealer(t, {
@@ -259,7 +259,7 @@ describe("submitRequest", () => {
   });
 
   test("a FEATURED dealer wins fan-out priority over faster-but-unfeatured dealers, capped at 5 (Phase 63)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
 
     for (let i = 0; i < 5; i++) {
       await seedDealer(t, {
@@ -291,14 +291,14 @@ describe("submitRequest", () => {
   });
 
   test("rejects submission without consent", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await expect(
       t.action(api.marketplaceRequests.submitRequest, { ...baseRequestArgs, consentAccepted: false })
     ).rejects.toThrow();
   });
 
   test("excludes suspended orgs even if opted in and matching", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedDealer(t, { name: "Suspended Dealer", areas: ["Amman"], brandsCarried: [], suspended: true });
 
     const result = await t.action(api.marketplaceRequests.submitRequest, baseRequestArgs);
@@ -311,7 +311,7 @@ describe("submitRequest", () => {
 
 describe("publicId", () => {
   test("every request gets a distinct unguessable publicId, returned to the buyer and stored on the row", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedDealer(t, { name: "Dealer", areas: ["Amman"], brandsCarried: [] });
 
     const first = await t.action(api.marketplaceRequests.submitRequest, baseRequestArgs);
@@ -330,7 +330,7 @@ describe("publicId", () => {
   });
 
   test("backfill assigns publicIds to legacy rows and leaves existing ones untouched", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const legacyRow = {
       status: "OPEN" as const,
       buyerFirstName: "Legacy",
@@ -360,7 +360,7 @@ describe("publicId", () => {
 
 describe("getStatusForBuyer", () => {
   test("returns status/count for the correct phone, null otherwise", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedDealer(t, { name: "Dealer", areas: ["Amman"], brandsCarried: [] });
     const result = await t.action(api.marketplaceRequests.submitRequest, baseRequestArgs);
 
@@ -378,7 +378,7 @@ describe("getStatusForBuyer", () => {
   });
 
   test("getStatusForBuyerByPublicId accepts a raw id string and returns null for a malformed id", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedDealer(t, { name: "Dealer", areas: ["Amman"], brandsCarried: [] });
     const result = await t.action(api.marketplaceRequests.submitRequest, baseRequestArgs);
 
@@ -397,7 +397,7 @@ describe("getStatusForBuyer", () => {
 });
 
 describe("getBuyerOffers", () => {
-  async function seedRequestWithPublicId(t: ReturnType<typeof convexTest>, publicId: string) {
+  async function seedRequestWithPublicId(t: ReturnType<typeof convexTestWithComponents>, publicId: string) {
     return await t.run((ctx) =>
       ctx.db.insert("marketplaceRequests", {
         status: "OFFERS_RECEIVED",
@@ -419,7 +419,7 @@ describe("getBuyerOffers", () => {
   }
 
   test("returns sanitized offers for a valid publicId and omits NOT_AVAILABLE replies", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Bloom Cars", createdAt: Date.now() }));
     const otherOrgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Other Motors", createdAt: Date.now() }));
     const userId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "u1", email: "u1@test.com", name: "Rep" }));
@@ -459,7 +459,7 @@ describe("getBuyerOffers", () => {
   });
 
   test("marks an offer expired once its finance-offer expiry has passed", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Bloom Cars", createdAt: Date.now() }));
     const userId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "u2", email: "u2@test.com", name: "Rep" }));
     const requestId = await seedRequestWithPublicId(t, "room-token-2");
@@ -481,13 +481,13 @@ describe("getBuyerOffers", () => {
   });
 
   test("returns null for an unknown publicId", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const result = await t.query(api.marketplaceRequests.getBuyerOffers, { publicId: "does-not-exist" });
     expect(result).toBeNull();
   });
 
   test("reports matchedCount and respondedCount for the Request Room timeline", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Bloom Cars", createdAt: Date.now() }));
     const otherOrgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Other Motors", createdAt: Date.now() }));
     const silentOrgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Quiet Autos", createdAt: Date.now() }));
@@ -524,7 +524,7 @@ describe("getBuyerOffers", () => {
 
 describe("expireStaleRequests", () => {
   test("expires OPEN/MATCHED requests past expiresAt, leaves fresh ones alone", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const staleId = await t.run((ctx) =>
       ctx.db.insert("marketplaceRequests", {
         status: "OPEN",

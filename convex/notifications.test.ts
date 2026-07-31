@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -9,7 +9,7 @@ vi.mock("./rateLimit", () => ({
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
-async function seedOrgWithMember(t: ReturnType<typeof convexTest>) {
+async function seedOrgWithMember(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() }));
   await t.run((ctx) =>
     ctx.db.insert("subscriptions", {
@@ -27,7 +27,7 @@ async function seedOrgWithMember(t: ReturnType<typeof convexTest>) {
 }
 
 async function insertNotification(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   orgId: Id<"organizations">,
   userId: Id<"users">,
   overrides: Partial<{ type: string; category: string; isRead: boolean; isArchived: boolean }> = {}
@@ -48,7 +48,7 @@ async function insertNotification(
 
 describe("notifications", () => {
   test("list returns only the caller's notifications, newest first, excluding archived", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId, asMember } = await seedOrgWithMember(t);
 
     await insertNotification(t, orgId, userId);
@@ -66,7 +66,7 @@ describe("notifications", () => {
   });
 
   test("unreadCount only counts unread, non-archived notifications", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId, asMember } = await seedOrgWithMember(t);
 
     await insertNotification(t, orgId, userId, { isRead: false });
@@ -78,7 +78,7 @@ describe("notifications", () => {
   });
 
   test("listPage filters by category", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId, asMember } = await seedOrgWithMember(t);
 
     await insertNotification(t, orgId, userId, { category: "sales" });
@@ -95,7 +95,7 @@ describe("notifications", () => {
   });
 
   test("listPage filters by category and shows only archived when requested", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId, asMember } = await seedOrgWithMember(t);
 
     await insertNotification(t, orgId, userId, { category: "finance" });
@@ -112,7 +112,7 @@ describe("notifications", () => {
   });
 
   test("listPage shows only archived when requested, with no category filter", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId, asMember } = await seedOrgWithMember(t);
 
     await insertNotification(t, orgId, userId);
@@ -128,7 +128,7 @@ describe("notifications", () => {
   });
 
   test("markAsRead only succeeds for the caller's own notification", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId, asMember } = await seedOrgWithMember(t);
 
     const notifId = await insertNotification(t, orgId, userId);
@@ -139,7 +139,7 @@ describe("notifications", () => {
   });
 
   test("markAsRead throws for a notification belonging to another user", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asMember } = await seedOrgWithMember(t);
 
     const otherUserId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "other_002", email: "other2@test.com" }));
@@ -151,7 +151,7 @@ describe("notifications", () => {
   });
 
   test("markAllAsRead marks every unread notification as read", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId, asMember } = await seedOrgWithMember(t);
 
     await insertNotification(t, orgId, userId);
@@ -164,7 +164,7 @@ describe("notifications", () => {
   });
 
   test("archive sets isArchived and archivedAt, and removes it from the default feed", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId, asMember } = await seedOrgWithMember(t);
 
     const notifId = await insertNotification(t, orgId, userId);
@@ -179,7 +179,7 @@ describe("notifications", () => {
   });
 
   test("archive throws for a notification belonging to another user", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asMember } = await seedOrgWithMember(t);
 
     const otherUserId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "other_003", email: "other3@test.com" }));
@@ -195,7 +195,7 @@ describe("notifications", () => {
 
 describe("notificationPreferences", () => {
   test("getMyPreferences returns computed defaults when no rows exist", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asMember } = await seedOrgWithMember(t);
 
     const prefs = await asMember.query(api.notificationPreferences.getMyPreferences, { orgId });
@@ -208,7 +208,7 @@ describe("notificationPreferences", () => {
   });
 
   test("setPreference upserts and is reflected by getMyPreferences", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asMember } = await seedOrgWithMember(t);
 
     await asMember.mutation(api.notificationPreferences.setPreference, {
@@ -238,7 +238,7 @@ describe("notificationPreferences", () => {
   });
 
   test("setPreference skips the whatsapp feature check when whatsappEnabled is false", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asMember } = await seedOrgWithMember(t);
 
     await expect(
@@ -253,7 +253,7 @@ describe("notificationPreferences", () => {
   });
 
   test("getMyPreferences defaults pushEnabled to false for a legacy row that predates the field", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId, asMember } = await seedOrgWithMember(t);
 
     await t.run((ctx) =>

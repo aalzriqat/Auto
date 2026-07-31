@@ -1,9 +1,10 @@
-import { convexTest, TestConvex as ConvexTestInstance } from "convex-test";
+import { TestConvex as ConvexTestInstance } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, beforeEach, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 
-// Bare `ReturnType<typeof convexTest>` loses the concrete schema's table/index
+// Bare `ReturnType<typeof convexTestWithComponents>` loses the concrete schema's table/index
 // types once passed through a helper function parameter (the generic Schema
 // parameter falls back to its unconstrained default), which breaks
 // `.withIndex(...)` type-checking inside storeRawImage/seedImage below. This
@@ -22,7 +23,7 @@ beforeEach(() => {
   process.env.SUPER_ADMIN_EMAILS = "admin@autoflow.dev";
 });
 
-async function seedUser(t: ReturnType<typeof convexTest>, clerkId: string, email: string) {
+async function seedUser(t: ReturnType<typeof convexTestWithComponents>, clerkId: string, email: string) {
   await t.run(async (ctx) => ctx.db.insert("users", { clerkId, email }));
   return t.withIdentity({ subject: clerkId });
 }
@@ -103,7 +104,7 @@ describe("brand-new account whose users row hasn't synced yet", () => {
   const UNSYNCED = "clerk_user_unsynced_seller";
 
   test("generateListingImageUploadUrl creates the missing users row instead of failing", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asNew = t.withIdentity({ subject: UNSYNCED, email: "brand-new@example.com" });
 
     await expect(
@@ -120,7 +121,7 @@ describe("brand-new account whose users row hasn't synced yet", () => {
   });
 
   test("createListing succeeds end-to-end for an account with no pre-existing users row", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asNew = t.withIdentity({ subject: UNSYNCED, email: "brand-new@example.com" });
 
     // Claim an image the same way the real client does, via the mutation
@@ -145,7 +146,7 @@ describe("brand-new account whose users row hasn't synced yet", () => {
 
 describe("createListing", () => {
   test("rejects a listing with zero images", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_1", "seller1@test.com");
 
     await expect(
@@ -154,7 +155,7 @@ describe("createListing", () => {
   });
 
   test("rejects an unauthenticated caller", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const imageId = await storeRawImage(t);
 
     // Use a valid seeded image (and otherwise-valid args) so this can only
@@ -165,7 +166,7 @@ describe("createListing", () => {
   });
 
   test("succeeds with >=1 image and starts PENDING_VERIFICATION", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_2", "seller2@test.com");
     const imageId = await seedImage(t, "seller_2");
 
@@ -181,7 +182,7 @@ describe("createListing", () => {
   });
 
   test("rejects a non-image storage id", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_3", "seller3@test.com");
     // Use seedImage (which patches contentType directly) so this actually
     // exercises the allowlist-rejection branch, not the "no content type"
@@ -195,7 +196,7 @@ describe("createListing", () => {
   });
 
   test("rejects more than MAX_LISTING_IMAGES images", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_21", "seller21@test.com");
     const imageIds = await Promise.all(Array.from({ length: 21 }, () => seedImage(t, "seller_21")));
 
@@ -205,7 +206,7 @@ describe("createListing", () => {
   });
 
   test("rejects a non-positive price", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_4", "seller4@test.com");
     const imageId = await seedImage(t, "seller_4");
 
@@ -219,7 +220,7 @@ describe("createListing", () => {
   });
 
   test("rejects a NaN price", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_22", "seller22@test.com");
     const imageId = await seedImage(t, "seller_22");
 
@@ -233,7 +234,7 @@ describe("createListing", () => {
   });
 
   test("rejects an Infinity price", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_23", "seller23@test.com");
     const imageId = await seedImage(t, "seller_23");
 
@@ -247,7 +248,7 @@ describe("createListing", () => {
   });
 
   test("rejects a NaN mileage", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_24", "seller24@test.com");
     const imageId = await seedImage(t, "seller_24");
 
@@ -261,7 +262,7 @@ describe("createListing", () => {
   });
 
   test("rejects an out-of-range year", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_25", "seller25@test.com");
     const imageId = await seedImage(t, "seller_25");
 
@@ -283,7 +284,7 @@ describe("createListing", () => {
   });
 
   test("rejects an empty (or whitespace-only) sellerPhone", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_39", "seller39@test.com");
     const imageId = await seedImage(t, "seller_39");
 
@@ -297,7 +298,7 @@ describe("createListing", () => {
   });
 
   test("rejects an empty (or whitespace-only) sellerDisplayName", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_40", "seller40@test.com");
     const imageId = await seedImage(t, "seller_40");
 
@@ -311,7 +312,7 @@ describe("createListing", () => {
   });
 
   test("rejects an oversized description", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_41", "seller41@test.com");
     const imageId = await seedImage(t, "seller_41");
 
@@ -325,7 +326,7 @@ describe("createListing", () => {
   });
 
   test("stores free-text fields trimmed, not raw", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_42", "seller42@test.com");
     const imageId = await seedImage(t, "seller_42");
 
@@ -348,7 +349,7 @@ describe("createListing", () => {
   });
 
   test("treats a whitespace-only sellerWhatsapp as not provided rather than rejecting it", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_43", "seller43@test.com");
     const imageId = await seedImage(t, "seller_43");
 
@@ -363,7 +364,7 @@ describe("createListing", () => {
   });
 
   test("rejects an empty (or whitespace-only) make, model, transmission, or fuelType", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_46", "seller46@test.com");
     const imageId = await seedImage(t, "seller_46");
 
@@ -393,7 +394,7 @@ describe("createListing", () => {
   });
 
   test("rejects an oversized model", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_47", "seller47@test.com");
     const imageId = await seedImage(t, "seller_47");
 
@@ -407,7 +408,7 @@ describe("createListing", () => {
   });
 
   test("rejects an invalid currency code and accepts a valid one", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_48", "seller48@test.com");
     const imageId = await seedImage(t, "seller_48");
 
@@ -429,7 +430,7 @@ describe("createListing", () => {
   });
 
   test("accepts additional regional currency codes beyond JOD/USD (SAR, AED)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_59", "seller59@test.com");
     const imageId = await seedImage(t, "seller_59");
 
@@ -451,7 +452,7 @@ describe("createListing", () => {
   });
 
   test("stores make, model, transmission, and fuelType trimmed, not raw", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_49", "seller49@test.com");
     const imageId = await seedImage(t, "seller_49");
 
@@ -474,7 +475,7 @@ describe("createListing", () => {
 
 describe("listing image upload ownership", () => {
   test("full flow: generateListingImageUploadUrl, confirmListingImageUpload, then createListing succeeds", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_72", "seller72@test.com");
 
     const uploadUrl = await asSeller.mutation(api.marketplaceListings.generateListingImageUploadUrl, {
@@ -501,7 +502,7 @@ describe("listing image upload ownership", () => {
   });
 
   test("generateListingImageUploadUrl rejects a disallowed mime type and an oversized file before issuing a URL", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_73", "seller73@test.com");
 
     await expect(
@@ -520,7 +521,7 @@ describe("listing image upload ownership", () => {
   });
 
   test("generateListingImageUploadUrl requires authentication (an orgless caller is not blocked by a tenant check)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
 
     await expect(
       t.mutation(api.marketplaceListings.generateListingImageUploadUrl, {
@@ -531,7 +532,7 @@ describe("listing image upload ownership", () => {
   });
 
   test("createListing rejects an image id nobody confirmed", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_74", "seller74@test.com");
     const unclaimedImageId = await storeRawImage(t);
 
@@ -541,7 +542,7 @@ describe("listing image upload ownership", () => {
   });
 
   test("createListing rejects an image id confirmed by a different user, but the rightful owner can still use it", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asOwner = await seedUser(t, "seller_75", "seller75@test.com");
     const asOther = await seedUser(t, "seller_76", "seller76@test.com");
     const imageId = await seedImage(t, "seller_75");
@@ -559,7 +560,7 @@ describe("listing image upload ownership", () => {
   });
 
   test("updateListing rejects an image id nobody confirmed", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_77", "seller77@test.com");
     const imageId = await seedImage(t, "seller_77");
     const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
@@ -574,7 +575,7 @@ describe("listing image upload ownership", () => {
   });
 
   test("updateListing rejects an image id confirmed by a different user, but the owner's own confirmed image still works", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asOwner = await seedUser(t, "seller_79", "seller79@test.com");
     const asOther = await seedUser(t, "seller_80", "seller80@test.com");
     const originalImageId = await seedImage(t, "seller_79");
@@ -595,7 +596,7 @@ describe("listing image upload ownership", () => {
   });
 
   test("confirmListingImageUpload rejects a non-image storage id", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_78", "seller78@test.com");
     const pdfId = await storeRawImage(t, "application/pdf");
 
@@ -605,7 +606,7 @@ describe("listing image upload ownership", () => {
   });
 
   test("confirming the same storage id twice by the same user does not error", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_79", "seller79@test.com");
     const imageId = await storeRawImage(t);
 
@@ -622,7 +623,7 @@ describe("listing image upload ownership", () => {
   });
 
   test("confirmListingImageUpload returns the stored image URL for the client preview", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_81", "seller81@test.com");
     const imageId = await storeRawImage(t);
 
@@ -633,7 +634,7 @@ describe("listing image upload ownership", () => {
   });
 
   test("confirming a storage id already claimed by someone else throws", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asFirst = await seedUser(t, "seller_80", "seller80@test.com");
     const asSecond = await seedUser(t, "seller_81", "seller81@test.com");
     const imageId = await storeRawImage(t);
@@ -648,7 +649,7 @@ describe("listing image upload ownership", () => {
 
 describe("ownership: update / soft-delete", () => {
   test("owner can update their own listing", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_5", "seller5@test.com");
     const imageId = await seedImage(t, "seller_5");
     const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
@@ -666,7 +667,7 @@ describe("ownership: update / soft-delete", () => {
   });
 
   test("a different user cannot update someone else's listing", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_6", "seller6@test.com");
     const asOther = await seedUser(t, "seller_7", "seller7@test.com");
     const imageId = await seedImage(t, "seller_6");
@@ -681,7 +682,7 @@ describe("ownership: update / soft-delete", () => {
   });
 
   test("a different user cannot soft-delete someone else's listing", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_8", "seller8@test.com");
     const asOther = await seedUser(t, "seller_9", "seller9@test.com");
     const imageId = await seedImage(t, "seller_8");
@@ -699,7 +700,7 @@ describe("ownership: update / soft-delete", () => {
   });
 
   test("updateListing gives the same error for a nonexistent listing as for someone else's listing", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_26", "seller26@test.com");
     const asOther = await seedUser(t, "seller_27", "seller27@test.com");
     const imageId = await seedImage(t, "seller_26");
@@ -734,7 +735,7 @@ describe("ownership: update / soft-delete", () => {
   });
 
   test("owner can soft-delete their own listing, and it drops out of getMyListings", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_10", "seller10@test.com");
     const imageId = await seedImage(t, "seller_10");
     const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
@@ -753,7 +754,7 @@ describe("ownership: update / soft-delete", () => {
   });
 
   test("updateListing rejects clearing all images down to zero", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_11", "seller11@test.com");
     const imageId = await seedImage(t, "seller_11");
     const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
@@ -767,7 +768,7 @@ describe("ownership: update / soft-delete", () => {
   });
 
   test("updateListing rejects more than MAX_LISTING_IMAGES images", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_28", "seller28@test.com");
     const imageId = await seedImage(t, "seller_28");
     const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
@@ -782,7 +783,7 @@ describe("ownership: update / soft-delete", () => {
   });
 
   test("updateListing rejects a NaN price and an out-of-range year", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_29", "seller29@test.com");
     const imageId = await seedImage(t, "seller_29");
     const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
@@ -799,7 +800,7 @@ describe("ownership: update / soft-delete", () => {
   });
 
   test("updateListing rejects an empty sellerPhone, an empty sellerDisplayName, and an oversized description", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_44", "seller44@test.com");
     const imageId = await seedImage(t, "seller_44");
     const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
@@ -821,7 +822,7 @@ describe("ownership: update / soft-delete", () => {
   });
 
   test("updateListing stores free-text fields trimmed, not raw", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_45", "seller45@test.com");
     const imageId = await seedImage(t, "seller_45");
     const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
@@ -841,7 +842,7 @@ describe("ownership: update / soft-delete", () => {
   });
 
   test("updateListing rejects an empty make/model/transmission/fuelType, an oversized model, and an invalid currency", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_50", "seller50@test.com");
     const imageId = await seedImage(t, "seller_50");
     const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
@@ -875,7 +876,7 @@ describe("ownership: update / soft-delete", () => {
   });
 
   test("updateListing stores make/model/transmission/fuelType trimmed, not raw", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_51", "seller51@test.com");
     const imageId = await seedImage(t, "seller_51");
     const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
@@ -899,7 +900,7 @@ describe("ownership: update / soft-delete", () => {
   });
 
   test("updateListing keeps the cached seller profile in sync when phone/city change", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_52", "seller52@test.com");
     const imageId = await seedImage(t, "seller_52");
     const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
@@ -930,7 +931,7 @@ describe("ownership: update / soft-delete", () => {
   });
 
   test("updateListing rejects edits once a listing is SOLD", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_30", "seller30@test.com");
     const imageId = await seedImage(t, "seller_30");
     const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
@@ -945,7 +946,7 @@ describe("ownership: update / soft-delete", () => {
   });
 
   test("updateListing rejects edits once a listing is REMOVED", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_31", "seller31@test.com");
     const asAdmin = await seedUser(t, "admin_10", "admin@autoflow.dev");
     const imageId = await seedImage(t, "seller_31");
@@ -966,7 +967,7 @@ describe("ownership: update / soft-delete", () => {
   });
 
   test("editing a REJECTED listing resubmits it to PENDING_VERIFICATION and clears the rejection reason", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_32", "seller32@test.com");
     const asAdmin = await seedUser(t, "admin_11", "admin@autoflow.dev");
     const imageId = await seedImage(t, "seller_32");
@@ -995,7 +996,7 @@ describe("ownership: update / soft-delete", () => {
 
 describe("markListingSold", () => {
   test("owner can mark their own LIVE listing SOLD", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_55", "seller55@test.com");
     const asAdmin = await seedUser(t, "admin_19", "admin@autoflow.dev");
     const imageId = await seedImage(t, "seller_55");
@@ -1012,7 +1013,7 @@ describe("markListingSold", () => {
   });
 
   test("a non-owner cannot mark someone else's listing SOLD", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_56", "seller56@test.com");
     const asOther = await seedUser(t, "seller_57", "seller57@test.com");
     const asAdmin = await seedUser(t, "admin_20", "admin@autoflow.dev");
@@ -1032,7 +1033,7 @@ describe("markListingSold", () => {
   });
 
   test("marking a non-LIVE listing (PENDING_VERIFICATION or already SOLD) SOLD is rejected", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_58", "seller58@test.com");
     const asAdmin = await seedUser(t, "admin_21", "admin@autoflow.dev");
     const imageId = await seedImage(t, "seller_58");
@@ -1063,7 +1064,7 @@ describe("markListingSold", () => {
 
 describe("visibility + admin verification lifecycle", () => {
   test("a PENDING listing is not publicly reachable via getListingById", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_12", "seller12@test.com");
     const imageId = await seedImage(t, "seller_12");
     const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
@@ -1085,7 +1086,7 @@ describe("visibility + admin verification lifecycle", () => {
   });
 
   test("a non-admin cannot call adminSetListingStatus", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_14", "seller14@test.com");
     const imageId = await seedImage(t, "seller_14");
     const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
@@ -1099,7 +1100,7 @@ describe("visibility + admin verification lifecycle", () => {
   });
 
   test("a LIVE listing is only reachable once a super admin approves it, then becomes publicly visible", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_15", "seller15@test.com");
     const asAdmin = await seedUser(t, "admin_1", "admin@autoflow.dev");
     const imageId = await seedImage(t, "seller_15");
@@ -1123,7 +1124,7 @@ describe("visibility + admin verification lifecycle", () => {
   });
 
   test("rejecting requires a reason and records it", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_16", "seller16@test.com");
     const asAdmin = await seedUser(t, "admin_2", "admin@autoflow.dev");
     const imageId = await seedImage(t, "seller_16");
@@ -1148,7 +1149,7 @@ describe("visibility + admin verification lifecycle", () => {
   });
 
   test("rejecting with a whitespace-only reason is treated as no reason", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_33", "seller33@test.com");
     const asAdmin = await seedUser(t, "admin_12", "admin@autoflow.dev");
     const imageId = await seedImage(t, "seller_33");
@@ -1167,7 +1168,7 @@ describe("visibility + admin verification lifecycle", () => {
   });
 
   test("a super admin can take a LIVE listing down to REMOVED, but cannot remove a non-LIVE listing", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_34", "seller34@test.com");
     const asAdmin = await seedUser(t, "admin_13", "admin@autoflow.dev");
     const imageId = await seedImage(t, "seller_34");
@@ -1200,7 +1201,7 @@ describe("visibility + admin verification lifecycle", () => {
   });
 
   test("removing a LIVE listing preserves the original approval's verifiedBy/verifiedAt and records removedBy/removedAt/removalReason distinctly", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_53", "seller53@test.com");
     const asApprover = await seedUser(t, "admin_16", "admin@autoflow.dev");
     const asRemover = await seedUser(t, "admin_17", "admin@autoflow.dev");
@@ -1237,7 +1238,7 @@ describe("visibility + admin verification lifecycle", () => {
   });
 
   test("removing a listing requires a reason, and a whitespace-only reason is treated as no reason", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_54", "seller54@test.com");
     const asAdmin = await seedUser(t, "admin_18", "admin@autoflow.dev");
     const imageId = await seedImage(t, "seller_54");
@@ -1264,7 +1265,7 @@ describe("visibility + admin verification lifecycle", () => {
   });
 
   test("editing a material field on a LIVE listing sends it back to PENDING_VERIFICATION", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_17", "seller17@test.com");
     const asAdmin = await seedUser(t, "admin_3", "admin@autoflow.dev");
     const imageId = await seedImage(t, "seller_17");
@@ -1285,7 +1286,7 @@ describe("visibility + admin verification lifecycle", () => {
   test.each(["transmission", "fuelType", "city"] as const)(
     "editing %s on a LIVE listing sends it back to PENDING_VERIFICATION",
     async (field) => {
-      const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
       const asSeller = await seedUser(t, `seller_${field}`, `seller_${field}@test.com`);
       const asAdmin = await seedUser(t, `admin_${field}`, "admin@autoflow.dev");
       const imageId = await seedImage(t, `seller_${field}`);
@@ -1313,7 +1314,7 @@ describe("visibility + admin verification lifecycle", () => {
   );
 
   test("editing only contact info on a LIVE listing does not reset it to PENDING_VERIFICATION", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_18", "seller18@test.com");
     const asAdmin = await seedUser(t, "admin_4", "admin@autoflow.dev");
     const imageId = await seedImage(t, "seller_18");
@@ -1334,7 +1335,7 @@ describe("visibility + admin verification lifecycle", () => {
   });
 
   test("a LIVE listing hides sellerPhone/sellerWhatsapp from unauthenticated and non-owner callers, but keeps the rest", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_35", "seller35@test.com");
     const asOther = await seedUser(t, "seller_36", "seller36@test.com");
     const asAdmin = await seedUser(t, "admin_14", "admin@autoflow.dev");
@@ -1398,7 +1399,7 @@ describe("visibility + admin verification lifecycle", () => {
   });
 
   test("a disabled super admin is treated as a regular caller (isSuperAdminUser enforces the disabled check)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_37", "seller37@test.com");
     const asAdmin = await seedUser(t, "admin_15", "admin@autoflow.dev");
     const imageId = await seedImage(t, "seller_37");
@@ -1421,7 +1422,7 @@ describe("visibility + admin verification lifecycle", () => {
   });
 
   test("a disabled seller cannot read their own PENDING listing via getListingById (owner-entitlement requires !disabled)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_71", "seller71@test.com");
     const imageId = await seedImage(t, "seller_71");
     const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
@@ -1446,7 +1447,7 @@ describe("visibility + admin verification lifecycle", () => {
 
 describe("getMyListings", () => {
   test("only returns the caller's own listings", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_19", "seller19@test.com");
     const asOther = await seedUser(t, "seller_20", "seller20@test.com");
     const imageId = await seedImage(t, "seller_19");
@@ -1467,7 +1468,7 @@ describe("getMyListings", () => {
   });
 
   test("live listings survive even when 200+ more-recent deleted listings would otherwise fill the take(200) budget", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_38", "seller38@test.com");
     const imageId = await seedImage(t, "seller_38");
 
@@ -1530,7 +1531,7 @@ describe("getMyListings", () => {
     // getMyListings resolves the caller inline rather than through requireAuth
     // (so an unsynced account can get an empty list instead of an error), so
     // the disabled-account guard has to be re-asserted here explicitly.
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_82", "seller82@test.com");
     const imageId = await seedImage(t, "seller_82");
     await asSeller.mutation(api.marketplaceListings.createListing, {
@@ -1553,7 +1554,7 @@ describe("getMyListings", () => {
   });
 
   test("returns an empty list (not USER_NOT_FOUND) for a signed-in account whose users row hasn't synced yet", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     // No seedUser: mimics a brand-new Clerk signup arriving before the
     // Clerk -> Convex webhook has written the users row.
     const asUnsynced = t.withIdentity({ subject: "clerk_user_never_synced" });
@@ -1561,7 +1562,7 @@ describe("getMyListings", () => {
   });
 
   test("resolves the first image to a thumbnailUrl, and returns null for a listing with no images stored", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_39", "seller39@test.com");
     const imageId = await seedImage(t, "seller_39");
 
@@ -1584,7 +1585,7 @@ describe("getMyListings", () => {
 
 describe("adminListPendingListings", () => {
   test("rejects a non-super-admin caller", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_82", "seller82@test.com");
     const imageId = await seedImage(t, "seller_82");
     await asSeller.mutation(api.marketplaceListings.createListing, {
@@ -1600,7 +1601,7 @@ describe("adminListPendingListings", () => {
   });
 
   test("only returns non-deleted PENDING_VERIFICATION listings", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_83", "seller83@test.com");
     const asAdmin = await seedUser(t, "admin_22", "admin@autoflow.dev");
     const imageId = await seedImage(t, "seller_83");
@@ -1670,7 +1671,7 @@ describe("adminListPendingListings", () => {
   });
 
   test("resolves image URLs and joins the seller's profile row", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_84", "seller84@test.com");
     const asAdmin = await seedUser(t, "admin_23", "admin@autoflow.dev");
     const imageId = await seedImage(t, "seller_84");
@@ -1694,7 +1695,7 @@ describe("adminListPendingListings", () => {
   });
 
   test("returns null sellerProfile when no profile row exists for the seller", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_85", "seller85@test.com");
     const asAdmin = await seedUser(t, "admin_24", "admin@autoflow.dev");
     const imageId = await seedImage(t, "seller_85");
@@ -1728,7 +1729,7 @@ describe("adminListPendingListings", () => {
   });
 
   test("orders results oldest submission first", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_86", "seller86@test.com");
     const asAdmin = await seedUser(t, "admin_25", "admin@autoflow.dev");
     const imageId = await seedImage(t, "seller_86");

@@ -1,4 +1,5 @@
-import { convexTest, TestConvex } from "convex-test";
+import { TestConvex } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -12,7 +13,7 @@ vi.mock("./rateLimit", () => ({
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 async function seedFinanceLifecycleDealer() {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
   const now = Date.now();
 
   const orgId = await t.run((ctx) =>

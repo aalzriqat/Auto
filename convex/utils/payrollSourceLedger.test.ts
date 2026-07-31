@@ -8,7 +8,7 @@
  * an unverifiable payslip reference is exactly the case where the prerequisite
  * cannot be checked at all.
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../../test-utils/convexTest";
 import { expect, test, describe } from "vitest";
 import schema from "../schema";
 import { payrollPostingBlockedReason } from "./payrollSourceLedger";
@@ -72,7 +72,7 @@ function paidEntry(orgId: any, payload: Record<string, unknown>) {
 
 describe("payrollPaidBlockedReason fails closed", () => {
   test("blocks a commission settlement whose payslip reference does not resolve", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId } = await seed(t, "unresolvable");
 
     const reason = await t.run((ctx: any) =>
@@ -86,7 +86,7 @@ describe("payrollPaidBlockedReason fails closed", () => {
   });
 
   test("blocks a commission settlement whose payslip belongs to another org", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, foreignItemId } = await seed(t, "crossorg");
 
     const reason = await t.run((ctx: any) =>
@@ -100,7 +100,7 @@ describe("payrollPaidBlockedReason fails closed", () => {
   });
 
   test("blocks an advance recovery whose payslip reference does not resolve", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId } = await seed(t, "advunres");
 
     const reason = await t.run((ctx: any) =>
@@ -114,7 +114,7 @@ describe("payrollPaidBlockedReason fails closed", () => {
   });
 
   test("blocks an advance recovery whose payslip belongs to another org", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, foreignItemId } = await seed(t, "advcross");
 
     const reason = await t.run((ctx: any) =>
@@ -128,7 +128,7 @@ describe("payrollPaidBlockedReason fails closed", () => {
   });
 
   test("blocks a salary settlement whose payslip reference does not resolve", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId } = await seed(t, "salunres");
 
     const reason = await t.run((ctx: any) =>
@@ -142,7 +142,7 @@ describe("payrollPaidBlockedReason fails closed", () => {
   });
 
   test("blocks a salary settlement whose payslip belongs to another org", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, foreignItemId } = await seed(t, "salcross");
 
     const reason = await t.run((ctx: any) =>
@@ -156,7 +156,7 @@ describe("payrollPaidBlockedReason fails closed", () => {
   });
 
   test("still blocks a salary settlement whose accrual has not posted", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, ownItemId } = await seed(t, "salunposted");
 
     const reason = await t.run((ctx: any) =>
@@ -167,7 +167,7 @@ describe("payrollPaidBlockedReason fails closed", () => {
   });
 
   test("allows a settlement whose payslip resolves in-org with no outstanding accruals", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, ownItemId } = await seed(t, "happy");
 
     const reason = await t.run((ctx: any) =>
@@ -181,7 +181,7 @@ describe("payrollPaidBlockedReason fails closed", () => {
   });
 
   test("still ignores events that are not payroll settlements", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId } = await seed(t, "other");
 
     const reason = await t.run((ctx: any) =>

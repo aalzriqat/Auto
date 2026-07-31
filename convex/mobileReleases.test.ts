@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, beforeEach, afterEach } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -12,7 +12,7 @@ afterEach(() => {
   else process.env.SUPER_ADMIN_EMAILS = ORIGINAL_ALLOWLIST;
 });
 
-async function asSuperAdmin(t: ReturnType<typeof convexTest>) {
+async function asSuperAdmin(t: ReturnType<typeof convexTestWithComponents>) {
   await t.run((ctx) => ctx.db.insert("users", { clerkId: "admin", email: "admin@autoflow.dev", name: "Admin" }));
   return t.withIdentity({ subject: "admin" });
 }
@@ -27,14 +27,14 @@ const baseRelease = {
 
 describe("mobileReleases", () => {
   test("publishRelease requires a super admin", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await t.run((ctx) => ctx.db.insert("users", { clerkId: "joe", email: "joe@x.com", name: "Joe" }));
     const asJoe = t.withIdentity({ subject: "joe" });
     await expect(asJoe.mutation(api.mobileReleases.publishRelease, baseRelease)).rejects.toThrow();
   });
 
   test("getLatestRelease reports updateAvailable against the caller's build number", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const admin = await asSuperAdmin(t);
     await admin.mutation(api.mobileReleases.publishRelease, baseRelease);
 
@@ -46,7 +46,7 @@ describe("mobileReleases", () => {
   });
 
   test("rejects a build number that isn't newer than the current latest", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const admin = await asSuperAdmin(t);
     await admin.mutation(api.mobileReleases.publishRelease, baseRelease);
     await expect(
@@ -55,7 +55,7 @@ describe("mobileReleases", () => {
   });
 
   test("rejects a non-https apk url", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const admin = await asSuperAdmin(t);
     await expect(
       admin.mutation(api.mobileReleases.publishRelease, { ...baseRelease, apkUrl: "http://insecure.example/app.apk" })
@@ -63,7 +63,7 @@ describe("mobileReleases", () => {
   });
 
   test("returns null when no release is published for the platform", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const result = await t.query(api.mobileReleases.getLatestRelease, { platform: "ANDROID" });
     expect(result).toBeNull();
   });

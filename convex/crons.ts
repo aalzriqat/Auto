@@ -1,6 +1,7 @@
 import { cronJobs } from "convex/server";
 import { v } from "convex/values";
-import { internalMutation, internalQuery, internalAction, MutationCtx, ActionCtx, QueryCtx } from "./_generated/server";
+import { internalQuery, internalAction, MutationCtx, ActionCtx, QueryCtx } from "./_generated/server";
+import { internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import { notifyManagers, notifyUser } from "./utils/notifications";
 import { PLANS, PlanId } from "./subscriptions";

@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -7,7 +7,7 @@ import { REQUIRED_SYSTEM_KEYS } from "./utils/defaultChart";
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 async function seedAccountingSetupDealer() {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Accounting Setup Dealer", createdAt: Date.now() })
   );

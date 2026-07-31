@@ -1,11 +1,11 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe } from "vitest";
 import schema from "./schema";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { vehicleSlug } from "./websiteProjection";
 
-async function seedDealerOrg(t: ReturnType<typeof convexTest>, opts?: { name?: string; isOptedIn?: boolean }) {
+async function seedDealerOrg(t: ReturnType<typeof convexTestWithComponents>, opts?: { name?: string; isOptedIn?: boolean }) {
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: opts?.name ?? "Dealer Org", createdAt: Date.now() })
   );
@@ -35,7 +35,7 @@ async function seedDealerOrg(t: ReturnType<typeof convexTest>, opts?: { name?: s
 }
 
 async function seedRequest(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   overrides?: Partial<{ status: "OPEN" | "MATCHED" | "FULFILLED" | "EXPIRED" | "SPAM"; expiresAt: number; buyerPhone: string }>
 ) {
   return await t.run((ctx) =>
@@ -58,7 +58,7 @@ async function seedRequest(
 }
 
 async function seedMatch(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   requestId: Id<"marketplaceRequests">,
   orgId: Id<"organizations">,
   overrides?: Partial<{ matchedAt: number; notifiedAt: number }>
@@ -74,7 +74,7 @@ async function seedMatch(
 }
 
 async function seedResponse(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   requestId: Id<"marketplaceRequests">,
   orgId: Id<"organizations">,
   userId: Id<"users">,
@@ -91,7 +91,7 @@ async function seedResponse(
   );
 }
 
-async function seedVehicle(t: ReturnType<typeof convexTest>, orgId: Id<"organizations">) {
+async function seedVehicle(t: ReturnType<typeof convexTestWithComponents>, orgId: Id<"organizations">) {
   return await t.run((ctx) =>
     ctx.db.insert("vehicles", {
       orgId,
@@ -110,7 +110,7 @@ async function seedVehicle(t: ReturnType<typeof convexTest>, orgId: Id<"organiza
 }
 
 async function seedPageView(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   orgId: Id<"organizations">,
   path: string,
   createdAt: number
@@ -133,7 +133,7 @@ const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 describe("buildWeeklyReportForOrg", () => {
   test("returns null when the org has no matches or responses in the window", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId } = await seedDealerOrg(t);
 
     const report = await t.query(internal.marketplaceReports.buildWeeklyReportForOrg, {
@@ -144,7 +144,7 @@ describe("buildWeeklyReportForOrg", () => {
   });
 
   test("aggregates matches, responses, response time, page views, and most-viewed vehicle", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId } = await seedDealerOrg(t);
     const since = Date.now() - ONE_WEEK_MS;
 
@@ -175,7 +175,7 @@ describe("buildWeeklyReportForOrg", () => {
   });
 
   test("counts a match as lost only once its request has expired unanswered inside the window", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId } = await seedDealerOrg(t);
     const since = Date.now() - ONE_WEEK_MS;
 
@@ -192,7 +192,7 @@ describe("buildWeeklyReportForOrg", () => {
 
 describe("listOptedInDealerOrgIds", () => {
   test("only returns opted-in, non-deleted dealer orgs", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId: optedInOrgId } = await seedDealerOrg(t, { name: "Opted In" });
     await seedDealerOrg(t, { name: "Opted Out", isOptedIn: false });
 
@@ -208,7 +208,7 @@ describe("sendWeeklyProofReports", () => {
   // (who has a report to send) is covered by buildWeeklyReportForOrg above;
   // this just checks the cron entrypoint runs cleanly with zero opted-in dealers.
   test("reports nothing sent when no dealers are opted in", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const summary = await t.action(internal.marketplaceReports.sendWeeklyProofReports, {});
     expect(summary).toBe("Sent 0 weekly proof report(s), skipped 0 dealer(s) with no activity.");
   });

@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, beforeEach, afterEach, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -144,7 +144,7 @@ describe("promptForStep", () => {
 
 // ─── End-to-end via the internalAction ─────────────────────────────────────
 
-async function seedOptedInDealer(t: ReturnType<typeof convexTest>, whatsappNumber: string) {
+async function seedOptedInDealer(t: ReturnType<typeof convexTestWithComponents>, whatsappNumber: string) {
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "WhatsApp Dealer", createdAt: Date.now() }));
   const userId = await t.run((ctx) =>
     ctx.db.insert("users", { clerkId: `owner_${orgId}`, email: `owner_${orgId}@test.com`, name: "Owner" })
@@ -202,7 +202,7 @@ describe("handleIntakeMessage", () => {
   test("no-ops without throwing when platform WhatsApp credentials are unset", async () => {
     delete process.env.MARKETPLACE_WHATSAPP_PHONE_NUMBER_ID;
     delete process.env.MARKETPLACE_WHATSAPP_API_TOKEN;
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
 
     await expect(
       t.action(internal.marketplaceWhatsAppIntake.handleIntakeMessage, {
@@ -217,7 +217,7 @@ describe("handleIntakeMessage", () => {
 
   test("an unregistered phone number gets a not-registered reply and no flow is created", async () => {
     stubFetchForIntake();
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
 
     await t.action(internal.marketplaceWhatsAppIntake.handleIntakeMessage, {
       phone: "962799999999",
@@ -231,7 +231,7 @@ describe("handleIntakeMessage", () => {
 
   test("the first message from an opted-in dealer starts a fresh flow without consuming it as data", async () => {
     stubFetchForIntake();
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedOptedInDealer(t, "+962 79 123 4567");
 
     await t.action(internal.marketplaceWhatsAppIntake.handleIntakeMessage, {
@@ -247,7 +247,7 @@ describe("handleIntakeMessage", () => {
 
   test("full happy path: collects every field + a photo, confirms, and creates a PENDING vehicleEdits CREATE — not a live vehicle", async () => {
     stubFetchForIntake();
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId } = await seedOptedInDealer(t, "962791234567");
     const phone = "962791234567";
     const run = (input: IntakeMessageInput) =>
@@ -282,7 +282,7 @@ describe("handleIntakeMessage", () => {
 
   test("cancelling mid-flow marks it CANCELLED and never creates a vehicleEdits request", async () => {
     stubFetchForIntake();
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId } = await seedOptedInDealer(t, "962791234567");
     const phone = "962791234567";
     const run = (input: IntakeMessageInput) =>
@@ -301,7 +301,7 @@ describe("handleIntakeMessage", () => {
 
   test("a message after a completed flow starts a brand new one rather than reusing the finished state", async () => {
     stubFetchForIntake();
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedOptedInDealer(t, "962791234567");
     const phone = "962791234567";
     const run = (input: IntakeMessageInput) =>
@@ -331,7 +331,7 @@ describe("handleIntakeMessage", () => {
         return new Response(JSON.stringify({ url: "https://fake-media-url.example.com/doc.pdf" }), { status: 200 });
       })
     );
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedOptedInDealer(t, "962791234567");
     const phone = "962791234567";
     const run = (input: IntakeMessageInput) =>
@@ -353,7 +353,7 @@ describe("handleIntakeMessage", () => {
 describe("vehicleEdits approval on a WhatsApp-sourced request", () => {
   test("approving the PENDING CREATE request produces a schema-valid vehicles row (color/fuelType/transmission placeholders included)", async () => {
     stubFetchForIntake();
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId } = await seedOptedInDealer(t, "962791234567");
     const phone = "962791234567";
     const run = (input: IntakeMessageInput) =>

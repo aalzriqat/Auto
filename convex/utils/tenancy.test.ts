@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../../test-utils/convexTest";
 import schema from "../schema";
 import { requireTenantAuth, requireAuth, requireSuperAdmin, requireSupportAgent } from "./tenancy";
 import * as envModule from "./env";
@@ -283,7 +283,7 @@ describe("Tenancy Utilities", () => {
       // callback it's handed, so that arrow function stays uncovered — use a
       // real convex-test backend here instead, with just ctx.auth swapped
       // out for a fixed identity.
-      const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+      const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
       const userId = await t.run((ctx) =>
         ctx.db.insert("users", { clerkId: "support_1", email: "support@test.com" })
       );

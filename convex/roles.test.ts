@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -35,7 +35,7 @@ async function setupOwnerOrg(t: any) {
 
 describe("roles", () => {
   test("rejects arbitrary permission strings", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await setupOwnerOrg(t);
     const asOwner = t.withIdentity({ subject: "roles_owner" });
 
@@ -49,7 +49,7 @@ describe("roles", () => {
   });
 
   test("rejects custom roles named OWNER", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await setupOwnerOrg(t);
     const asOwner = t.withIdentity({ subject: "roles_owner" });
 
@@ -63,7 +63,7 @@ describe("roles", () => {
   });
 
   test("rejects renaming a custom role to OWNER", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await setupOwnerOrg(t);
     const customRoleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", {
@@ -84,7 +84,7 @@ describe("roles", () => {
   });
 
   test("renaming the OWNER role keeps it recognisable as the system owner role", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const orgId = await t.run((ctx: any) =>
       ctx.db.insert("organizations", { name: "Legacy Dealer", createdAt: Date.now() })
     ) as Id<"organizations">;

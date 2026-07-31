@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, beforeEach, afterEach } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -15,7 +15,7 @@ afterEach(() => {
   process.env.SUPER_ADMIN_EMAILS = ORIGINAL_ALLOWLIST;
 });
 
-async function seedOrgWithVehicle(t: ReturnType<typeof convexTest>) {
+async function seedOrgWithVehicle(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run(async (ctx) => ctx.db.insert("organizations", { name: "Acme Motors", createdAt: Date.now() }));
   await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "dev_1", email: "admin@autoflow.dev" }));
   await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "member_1", email: "member@acme.com" }));
@@ -39,7 +39,7 @@ async function seedOrgWithVehicle(t: ReturnType<typeof convexTest>) {
 
 describe("adminData", () => {
   test("rejects a non-allowlisted caller", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asMember } = await seedOrgWithVehicle(t);
     await expect(
       asMember.query(api.adminData.adminListByOrg, { orgId, table: "vehicles", paginationOpts: { numItems: 10, cursor: null } })
@@ -47,7 +47,7 @@ describe("adminData", () => {
   });
 
   test("rejects a table not on the allowlist", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asAdmin } = await seedOrgWithVehicle(t);
     await expect(
       asAdmin.query(api.adminData.adminListByOrg, { orgId, table: "users", paginationOpts: { numItems: 10, cursor: null } })
@@ -55,7 +55,7 @@ describe("adminData", () => {
   });
 
   test("allowlisted admin can list, edit, and hard-delete a record across orgs", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, vehicleId, asAdmin } = await seedOrgWithVehicle(t);
 
     const page = await asAdmin.query(api.adminData.adminListByOrg, {
@@ -79,7 +79,7 @@ describe("adminData", () => {
   });
 
   test("allowlisted admin cannot directly edit or hard-delete financial records", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asAdmin } = await seedOrgWithVehicle(t);
     const transactionId = await t.run((ctx) =>
       ctx.db.insert("transactions", {
@@ -115,7 +115,7 @@ describe("adminData", () => {
   });
 
   test("admin can restore a soft-deleted record back to its dealer, one by one and in bulk", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, vehicleId, asAdmin } = await seedOrgWithVehicle(t);
 
     // Soft-delete two vehicles (the seeded one + a second).
@@ -191,7 +191,7 @@ describe("adminData", () => {
   });
 
   test("restore rejects records that are not soft-deleted and financial tables", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, vehicleId, asAdmin } = await seedOrgWithVehicle(t);
 
     // The seeded vehicle is live — nothing to restore.
@@ -225,7 +225,7 @@ describe("adminData", () => {
   });
 
   test("update and hard-delete reject a financial-table id passed under a non-financial table", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asAdmin } = await seedOrgWithVehicle(t);
 
     const transactionId = await t.run((ctx) =>
@@ -264,7 +264,7 @@ describe("adminData", () => {
   });
 
   test("update rejects a patch that would move a record to another org", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { vehicleId, asAdmin } = await seedOrgWithVehicle(t);
     const otherOrgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() })
@@ -280,7 +280,7 @@ describe("adminData", () => {
   });
 
   test("every admin mutation writes an adminAuditLog entry", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { vehicleId, asAdmin } = await seedOrgWithVehicle(t);
 
     await asAdmin.mutation(api.adminData.adminUpdateRecord, {

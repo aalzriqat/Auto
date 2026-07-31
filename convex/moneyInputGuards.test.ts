@@ -10,7 +10,7 @@
  *
  * Each case drives the real mutation and asserts nothing was written.
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -68,7 +68,7 @@ async function seed(t: any, suffix: string) {
 
 describe("money entry points reject NaN", () => {
   test("paymentIntents.create refuses a NaN amount", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seed(t, "pi");
 
     await expect(
@@ -86,7 +86,7 @@ describe("money entry points reject NaN", () => {
   });
 
   test("vehicles.createSourced refuses a NaN supplier cost", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seed(t, "veh");
 
     await expect(
@@ -113,7 +113,7 @@ describe("money entry points reject NaN", () => {
   });
 
   test("workOrders.create refuses a NaN task cost instead of silently dropping the GL posting", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seed(t, "wo");
 
     await expect(
@@ -136,7 +136,7 @@ describe("money entry points reject NaN", () => {
   });
 
   test("workOrders.update refuses a NaN task cost on an existing order", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seed(t, "woup");
 
     const workOrderId = await ids.asOwner.mutation(api.workOrders.create, {
@@ -169,7 +169,7 @@ describe("money entry points reject NaN", () => {
   // path runs no Zod schema at all. If `create` is ever refactored off Zod,
   // this test starts failing rather than the gap reopening silently.
   test("vehicles.create rejects a NaN supplier cost on the SOURCED branch", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seed(t, "vcs");
 
     await expect(
@@ -198,7 +198,7 @@ describe("money entry points reject NaN", () => {
   });
 
   test("vehicles.upsertLandedCosts refuses a NaN item amount", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seed(t, "lc");
 
     await expect(
@@ -221,7 +221,7 @@ describe("money entry points reject NaN", () => {
   });
 
   test("vehicles.importBulk validates every row before writing any of them", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seed(t, "imp");
 
     const row = (vin: string, sellingPrice: number) => ({
@@ -252,7 +252,7 @@ describe("money entry points reject NaN", () => {
   });
 
   test("sales.setCommissionAmount refuses a NaN amount that Math.max would pass through", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seed(t, "comm");
 
     const saleId = await t.run(async (ctx: any) =>

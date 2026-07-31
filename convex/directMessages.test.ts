@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -6,7 +6,7 @@ import { api } from "./_generated/api";
 const MODULES = import.meta.glob("./**/*.ts");
 
 async function setupDm() {
-  const t = convexTest(schema, MODULES);
+  const t = convexTestWithComponents(schema, MODULES);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Message Dealer", createdAt: Date.now() })
   );

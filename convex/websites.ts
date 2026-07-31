@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
-import { ActionCtx, MutationCtx, QueryCtx, action, internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import { ActionCtx, MutationCtx, QueryCtx, action, internalQuery, query } from "./_generated/server";
+import { internalMutation, mutation } from "./functions";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { domainRegistrarService } from "./domainRegistrar";

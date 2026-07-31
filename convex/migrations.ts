@@ -1,4 +1,6 @@
-import { internalMutation } from "./_generated/server";
+import { v } from "convex/values";
+import { internalMutation } from "./functions";
+import { vehiclesByOrg } from "./aggregates";
 import { ALL_PERMISSIONS, isSystemOwnerRole, normalizeRoleName, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
 
 export const backfillPermissions = internalMutation({
@@ -33,5 +35,49 @@ export const backfillPermissions = internalMutation({
     }
 
     return "Permissions backfilled successfully";
+  },
+});
+
+/**
+ * Seeds the `vehiclesByOrg` aggregate from the existing `vehicles` rows.
+ *
+ * The trigger in `convex/functions.ts` only sees writes that happen after it is
+ * deployed, so without this every vehicle already in the table is invisible to
+ * the B-tree and `getAgingBuckets` reports zeroes. Run this once per deployment
+ * after the component ships; a fresh deployment (preview/E2E) starts empty and
+ * needs nothing.
+ *
+ * Paginated because a full-table mutation would blow the write budget on any
+ * real org, and idempotent via `insertIfDoesNotExist` so a redrive or a partial
+ * run that overlaps a live insert cannot double-count.
+ */
+export const backfillVehicleAggregate = internalMutation({
+  args: {
+    cursor: v.optional(v.union(v.string(), v.null())),
+    batchSize: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const numItems = Math.min(Math.max(args.batchSize ?? 200, 1), 500);
+
+    const page = await ctx.db.query("vehicles").paginate({
+      cursor: args.cursor ?? null,
+      numItems,
+    });
+
+    for (const vehicle of page.page) {
+      // Soft-deleted rows are deliberately included: they live in the tree
+      // under the deletedFlag=1 prefix so a later restore is a key move rather
+      // than an insert the trigger would have to reason about.
+      await vehiclesByOrg.insertIfDoesNotExist(ctx, vehicle);
+    }
+
+    return {
+      migrated: page.page.length,
+      isDone: page.isDone,
+      // Hand back the cursor so the caller can drive the next batch. Returning
+      // it rather than self-scheduling keeps this a plain mutation: a throw
+      // rolls the batch back cleanly with nothing half-scheduled behind it.
+      continueCursor: page.isDone ? null : page.continueCursor,
+    };
   },
 });

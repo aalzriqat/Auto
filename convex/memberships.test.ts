@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -38,7 +38,7 @@ async function setupOrg(t: any, clerkId: string, ownerRoleName = "OWNER") {
 
 describe("memberships.add", () => {
   test("adds an existing user to an org", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, roleId } = await setupOrg(t, "user_m1");
     const asAdmin = t.withIdentity({ subject: "user_m1" });
 
@@ -65,7 +65,7 @@ describe("memberships.add", () => {
   });
 
   test("rejects adding an already-member user", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, roleId } = await setupOrg(t, "user_m3");
     const asAdmin = t.withIdentity({ subject: "user_m3" });
 
@@ -80,7 +80,7 @@ describe("memberships.add", () => {
   });
 
   test("creates an invitation when user does not exist yet", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, roleId } = await setupOrg(t, "user_m5");
     const asAdmin = t.withIdentity({ subject: "user_m5" });
 
@@ -107,7 +107,7 @@ describe("memberships.add", () => {
   });
 
   test("rejects adding users when the org has reached its plan member limit", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, roleId } = await setupOrg(t, "user_member_limit_owner");
     const asOwner = t.withIdentity({ subject: "user_member_limit_owner" });
 
@@ -131,7 +131,7 @@ describe("memberships.add", () => {
 
 describe("memberships.acceptInvitation", () => {
   test("Clerk user sync no longer auto-consumes a pending invite by email", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId: inviterId } = await setupOrg(t, "user_invite_owner");
     const roleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -181,7 +181,7 @@ describe("memberships.acceptInvitation", () => {
   });
 
   test("accepts a valid token for the matching authenticated email", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId: inviterId } = await setupOrg(t, "user_accept_owner");
     const roleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -223,7 +223,7 @@ describe("memberships.acceptInvitation", () => {
   });
 
   test("rejects and expires stale tokens without creating membership", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId: inviterId } = await setupOrg(t, "user_expired_owner");
     const roleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -263,7 +263,7 @@ describe("memberships.acceptInvitation", () => {
   });
 
   test("revalidates plan capacity before accepting an invite", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId: inviterId } = await setupOrg(t, "user_capacity_owner");
     const roleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -299,7 +299,7 @@ describe("memberships.acceptInvitation", () => {
   });
 
   test("direct account finalization marks the staging invite accepted", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId: inviterId } = await setupOrg(t, "user_direct_owner");
     const roleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -353,7 +353,7 @@ describe("memberships.createAccount", () => {
     delete process.env.CLERK_SECRET_KEY;
 
     try {
-      const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
       const { orgId } = await setupOrg(t, "user_create_account_owner");
       const roleId = await t.run((ctx: any) =>
         ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -401,7 +401,7 @@ describe("memberships.createAccount", () => {
     );
 
     try {
-      const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
       const { orgId } = await setupOrg(t, "user_existing_clerk_owner");
       const roleId = await t.run((ctx: any) =>
         ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -469,7 +469,7 @@ describe("memberships.createAccount", () => {
     );
 
     try {
-      const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
       const { orgId } = await setupOrg(t, "user_retry_clerk_owner");
       const roleId = await t.run((ctx: any) =>
         ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -533,7 +533,7 @@ describe("memberships.createAccount", () => {
     );
 
     try {
-      const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
       const { orgId } = await setupOrg(t, "user_clerk_validation_owner");
       const roleId = await t.run((ctx: any) =>
         ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -562,7 +562,7 @@ describe("memberships.createAccount", () => {
 
 describe("memberships direct-account utilities", () => {
   test("prepareDirectAccount rejects already-member users and existing pending direct invites", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, roleId, userId } = await setupOrg(t, "user_prepare_direct_owner");
     const asOwner = t.withIdentity({ subject: "user_prepare_direct_owner" });
 
@@ -603,7 +603,7 @@ describe("memberships direct-account utilities", () => {
   test("checkEmailExists requires auth, handles missing Clerk config, and maps Clerk names", async () => {
     const originalSecret = process.env.CLERK_SECRET_KEY;
     delete process.env.CLERK_SECRET_KEY;
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await setupOrg(t, "user_check_email_owner");
     const asOwner = t.withIdentity({ subject: "user_check_email_owner" });
 
@@ -632,7 +632,7 @@ describe("memberships direct-account utilities", () => {
   });
 
   test("syncRolePermissionsToTemplate updates standard roles and skips custom roles", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await setupOrg(t, "user_sync_roles_owner");
     const managerRoleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "MANAGER", permissions: [] })
@@ -654,7 +654,7 @@ describe("memberships direct-account utilities", () => {
   });
 
   test("finalizeDirectAccount rejects invalid invitations and preserves existing user profile fields", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId: inviterId } = await setupOrg(t, "user_finalize_direct_owner");
     const roleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -721,7 +721,7 @@ describe("memberships direct-account utilities", () => {
   });
 
   test("finalizeDirectAccount rejects stale or mismatched invites and fills blank user profiles", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId: inviterId, roleId: ownerRoleId } = await setupOrg(t, "user_finalize_more_owner");
     const roleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -856,7 +856,7 @@ describe("memberships direct-account utilities", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     try {
-      const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
       const { orgId, roleId } = await setupOrg(t, "user_plan_full_direct_owner");
       await t.run(async (ctx: any) => {
         const secondUserId = await ctx.db.insert("users", {
@@ -906,7 +906,7 @@ describe("memberships direct-account utilities", () => {
 
     try {
       {
-        const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
         const { orgId, roleId } = await setupOrg(t, "user_existing_no_token_owner");
         const asOwner = t.withIdentity({ subject: "user_existing_no_token_owner" });
         vi.stubGlobal(
@@ -934,7 +934,7 @@ describe("memberships direct-account utilities", () => {
       }
 
       {
-        const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
         const { orgId, roleId } = await setupOrg(t, "user_clerk_long_error_owner");
         const asOwner = t.withIdentity({ subject: "user_clerk_long_error_owner" });
         vi.stubGlobal(
@@ -960,7 +960,7 @@ describe("memberships direct-account utilities", () => {
       }
 
       {
-        const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
         const { orgId, roleId } = await setupOrg(t, "user_clerk_empty_error_owner");
         const asOwner = t.withIdentity({ subject: "user_clerk_empty_error_owner" });
         vi.stubGlobal(
@@ -983,7 +983,7 @@ describe("memberships direct-account utilities", () => {
       }
 
       {
-        const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
         const { orgId, roleId } = await setupOrg(t, "user_delete_reject_owner");
         const asOwner = t.withIdentity({ subject: "user_delete_reject_owner" });
         vi.stubGlobal(
@@ -1024,7 +1024,7 @@ describe("memberships direct-account utilities", () => {
 
 describe("memberships.leave", () => {
   test("removes the user's own membership", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await setupOrg(t, "user_m6");
 
     // Add a second member who will leave
@@ -1050,7 +1050,7 @@ describe("memberships.leave", () => {
   });
 
   test("prevents the last OWNER from leaving", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     await setupOrg(t, "user_m8", "OWNER");
     const asOwner = t.withIdentity({ subject: "user_m8" });
 
@@ -1070,7 +1070,7 @@ describe("memberships.leave", () => {
 
 describe("memberships list, invites, and profile metadata", () => {
   test("list filters offboarding rows and getMyMembership expands owner permissions", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, roleId } = await setupOrg(t, "user_list_owner");
     const offboardedUserId = await t.run((ctx: any) =>
       ctx.db.insert("users", { clerkId: "user_list_offboarded", email: "list-offboarded@test.com" })
@@ -1101,7 +1101,7 @@ describe("memberships list, invites, and profile metadata", () => {
   });
 
   test("add rejects invalid roles and reuses pending invite checks", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, roleId, userId } = await setupOrg(t, "user_invite_reuse_owner");
     const otherRoleId = await t.run(async (ctx: any) => {
       const otherOrgId = await ctx.db.insert("organizations", { name: "Other Invite Org", createdAt: Date.now() });
@@ -1157,7 +1157,7 @@ describe("memberships list, invites, and profile metadata", () => {
   });
 
   test("acceptInvitation rejects short, mismatched, unavailable-org, invalid-role, owner-unauthorized, and offboarding invites", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId: inviterId, roleId: ownerRoleId } = await setupOrg(t, "user_invite_validation_owner");
     const roleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -1300,7 +1300,7 @@ describe("memberships list, invites, and profile metadata", () => {
   });
 
   test("touchLastSeen throttles writes and commission rate updates validate membership state", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, membershipId } = await setupOrg(t, "user_profile_metadata_owner");
     const asOwner = t.withIdentity({ subject: "user_profile_metadata_owner" });
 
@@ -1372,7 +1372,7 @@ describe("memberships list, invites, and profile metadata", () => {
 
 describe("memberships.remove", () => {
   test("queues offboarding and immediately revokes tenant auth without deleting local identity", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await setupOrg(t, "user_remove_owner");
     const memberRoleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -1417,7 +1417,7 @@ describe("memberships.remove", () => {
     delete process.env.CLERK_SECRET_KEY;
 
     try {
-      const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
       const { orgId } = await setupOrg(t, "user_retry_owner");
       const memberRoleId = await t.run((ctx: any) =>
         ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -1465,7 +1465,7 @@ describe("memberships.remove", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 200 })));
 
     try {
-      const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
       const { orgId } = await setupOrg(t, "user_success_owner");
       const memberRoleId = await t.run((ctx: any) =>
         ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -1513,7 +1513,7 @@ describe("memberships.remove", () => {
   });
 
   test("reuses an existing offboarding job and drains due jobs", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await setupOrg(t, "user_reuse_job_owner");
     const memberRoleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -1570,7 +1570,7 @@ describe("memberships.remove", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("server unavailable", { status: 500 })));
 
     try {
-      const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
       const { orgId } = await setupOrg(t, "user_clerk_delete_failure_owner");
       const memberRoleId = await t.run((ctx: any) =>
         ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -1604,7 +1604,7 @@ describe("memberships.remove", () => {
   });
 
   test("finalizes orphaned offboarding jobs without Clerk deletion", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await setupOrg(t, "user_orphan_job_owner");
     const memberRoleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -1640,7 +1640,7 @@ describe("memberships.remove", () => {
   });
 
   test("remove handles missing memberships, last owners, missing users, and stale jobs", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, membershipId: ownerMembershipId } = await setupOrg(t, "user_remove_edges_owner");
     const salesRoleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -1734,7 +1734,7 @@ describe("memberships.remove", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     try {
-      const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
       const { orgId } = await setupOrg(t, "user_offboarding_edges_owner");
       const salesRoleId = await t.run((ctx: any) =>
         ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -1807,7 +1807,7 @@ describe("memberships.remove", () => {
 
 describe("memberships.updateRole", () => {
   test("changes a member's role", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, roleId } = await setupOrg(t, "user_m9");
     const asAdmin = t.withIdentity({ subject: "user_m9" });
 
@@ -1868,7 +1868,7 @@ describe("memberships.updateRole", () => {
   }
 
   test("prevents a manager from re-roling themselves", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, salesRoleId, managerMembershipId, managerRoleId, asManager } =
       await setupManagerAndMember(t, "self", ADMIN_PERMISSIONS);
 
@@ -1887,7 +1887,7 @@ describe("memberships.updateRole", () => {
   });
 
   test("prevents a manager from granting permissions they do not hold", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, memberMembershipId, salesRoleId, asManager } = await setupManagerAndMember(
       t,
       "escalate",
@@ -1917,7 +1917,7 @@ describe("memberships.updateRole", () => {
   });
 
   test("still lets a manager assign a role within their own permission set", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, memberMembershipId, asManager } = await setupManagerAndMember(
       t,
       "subset",
@@ -1941,7 +1941,7 @@ describe("memberships.updateRole", () => {
   });
 
   test("prevents a manager from demoting an owner", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, roleId: ownerRoleId } = await setupOrg(t, "user_owner_demote");
     const managerRoleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "MANAGER", permissions: ADMIN_PERMISSIONS })
@@ -1973,7 +1973,7 @@ describe("memberships.updateRole", () => {
   });
 
   test("prevents a manager from assigning the owner role", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, roleId: ownerRoleId } = await setupOrg(t, "user_owner_assign");
     const managerRoleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "MANAGER", permissions: ADMIN_PERMISSIONS })
@@ -2005,7 +2005,7 @@ describe("memberships.updateRole", () => {
   });
 
   test("prevents demoting the last owner", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, membershipId } = await setupOrg(t, "user_last_owner");
     const salesRoleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -2022,7 +2022,7 @@ describe("memberships.updateRole", () => {
   });
 
   test("allows an owner to demote another owner when another owner remains", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, roleId: ownerRoleId } = await setupOrg(t, "user_owner_demotes_peer");
     const salesRoleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -2048,7 +2048,7 @@ describe("memberships.updateRole", () => {
   });
 
   test("an impersonation grant does not count as an owner for the last-owner guard", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, roleId: ownerRoleId } = await setupOrg(t, "user_sole_owner");
 
     // A super admin impersonates the sole owner. adminImpersonation copies the
@@ -2084,7 +2084,7 @@ describe("memberships.updateRole", () => {
   });
 
   test("blocks impersonation sessions from changing owner memberships", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, roleId: ownerRoleId } = await setupOrg(t, "user_real_owner");
     const salesRoleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -2134,7 +2134,7 @@ describe("memberships.updateRole", () => {
   });
 
   test("transfers ownership atomically", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, roleId: ownerRoleId, membershipId: ownerMembershipId } = await setupOrg(t, "user_transfer_owner");
     const salesRoleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -2162,7 +2162,7 @@ describe("memberships.updateRole", () => {
   });
 
   test("updateRole rejects missing, offboarding, corrupted current-role, invalid new-role, and self owner demotion cases", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, roleId: ownerRoleId, membershipId: ownerMembershipId } = await setupOrg(t, "user_update_edges_owner");
     const salesRoleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
@@ -2240,7 +2240,7 @@ describe("memberships.updateRole", () => {
   });
 
   test("transferOwnership rejects invalid targets and replacement roles", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, roleId: ownerRoleId, membershipId: ownerMembershipId } = await setupOrg(t, "user_transfer_edges_owner");
     const salesRoleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })

@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -8,7 +8,7 @@ vi.mock("./rateLimit", () => ({
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
-async function seedOwner(t: ReturnType<typeof convexTest>) {
+async function seedOwner(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() })
   );
@@ -31,14 +31,14 @@ async function seedOwner(t: ReturnType<typeof convexTest>) {
 
 describe("orgValuationCompanies", () => {
   test("list returns empty before seeding", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     const companies = await asOwner.query(api.orgValuationCompanies.list, { orgId });
     expect(companies).toHaveLength(0);
   });
 
   test("seed inserts default companies", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     await asOwner.mutation(api.orgValuationCompanies.seed, { orgId });
     const companies = await asOwner.query(api.orgValuationCompanies.list, { orgId });
@@ -47,7 +47,7 @@ describe("orgValuationCompanies", () => {
   });
 
   test("seed is idempotent", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     await asOwner.mutation(api.orgValuationCompanies.seed, { orgId });
     const countBefore = (await asOwner.query(api.orgValuationCompanies.list, { orgId })).length;
@@ -57,7 +57,7 @@ describe("orgValuationCompanies", () => {
   });
 
   test("create appends a new company", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     const id = await asOwner.mutation(api.orgValuationCompanies.create, { orgId, name: "AcmeCars" });
     expect(id).toBeDefined();
@@ -66,7 +66,7 @@ describe("orgValuationCompanies", () => {
   });
 
   test("create appends after an existing company, incrementing order", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     await asOwner.mutation(api.orgValuationCompanies.create, { orgId, name: "First" });
     await asOwner.mutation(api.orgValuationCompanies.create, { orgId, name: "Second" });
@@ -76,7 +76,7 @@ describe("orgValuationCompanies", () => {
   });
 
   test("update only touches the fields provided (order alone)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     const companyId = await asOwner.mutation(api.orgValuationCompanies.create, { orgId, name: "Kept" });
     await asOwner.mutation(api.orgValuationCompanies.update, { orgId, companyId, order: 5 });
@@ -88,7 +88,7 @@ describe("orgValuationCompanies", () => {
   });
 
   test("update throws if the company no longer exists", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     const companyId = await asOwner.mutation(api.orgValuationCompanies.create, { orgId, name: "Gone" });
     await t.run((ctx) => ctx.db.delete(companyId));
@@ -99,7 +99,7 @@ describe("orgValuationCompanies", () => {
   });
 
   test("update changes name and isActive", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     const companyId = await asOwner.mutation(api.orgValuationCompanies.create, {
       orgId,
@@ -118,7 +118,7 @@ describe("orgValuationCompanies", () => {
   });
 
   test("remove deletes the company", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     const companyId = await asOwner.mutation(api.orgValuationCompanies.create, {
       orgId,
@@ -130,7 +130,7 @@ describe("orgValuationCompanies", () => {
   });
 
   test("remove throws for wrong orgId", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     const companyId = await asOwner.mutation(api.orgValuationCompanies.create, {
       orgId,

@@ -1,11 +1,11 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { computeBadges, MarketplaceBadge, checkMarketplaceQuota, effectiveFoundingWindowEndsAt, compareDealerRank, listOptedInDealerProfiles } from "./marketplaceDealers";
 
-async function seedDealer(t: ReturnType<typeof convexTest>, opts?: { name?: string; suspended?: boolean }) {
+async function seedDealer(t: ReturnType<typeof convexTestWithComponents>, opts?: { name?: string; suspended?: boolean }) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: opts?.name ?? "Test Dealer", createdAt: Date.now(), suspended: opts?.suspended })
   );
@@ -25,7 +25,7 @@ async function seedDealer(t: ReturnType<typeof convexTest>, opts?: { name?: stri
 }
 
 async function seedVehicle(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   orgId: Id<"organizations">,
   overrides?: Partial<{ status: "AVAILABLE" | "SOLD"; isDeleted: boolean }>
 ) {
@@ -48,20 +48,20 @@ async function seedVehicle(
 
 describe("marketplaceDealers", () => {
   test("getMyProfile returns null when never configured", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asOwner } = await seedDealer(t);
     const profile = await asOwner.query(api.marketplaceDealers.getMyProfile, { orgId });
     expect(profile).toBeNull();
   });
 
   test("getMyProfile throws when unauthenticated", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId } = await seedDealer(t);
     await expect(t.query(api.marketplaceDealers.getMyProfile, { orgId })).rejects.toThrow();
   });
 
   test("updateProfile inserts a new profile and normalizes areas/brands", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asOwner } = await seedDealer(t);
 
     await asOwner.mutation(api.marketplaceDealers.updateProfile, {
@@ -81,7 +81,7 @@ describe("marketplaceDealers", () => {
   });
 
   test("updateProfile upserts in place rather than duplicating", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asOwner } = await seedDealer(t);
 
     await asOwner.mutation(api.marketplaceDealers.updateProfile, {
@@ -104,7 +104,7 @@ describe("marketplaceDealers", () => {
   });
 
   test("updateProfile restores a soft-deleted profile", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asOwner } = await seedDealer(t);
 
     await asOwner.mutation(api.marketplaceDealers.updateProfile, {
@@ -134,7 +134,7 @@ describe("marketplaceDealers", () => {
   });
 
   test("listPublicDirectory only returns opted-in dealers with a live vehicle count", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const optedIn = await seedDealer(t, { name: "Opted In Dealer" });
     const optedOut = await seedDealer(t, { name: "Opted Out Dealer" });
 
@@ -163,7 +163,7 @@ describe("marketplaceDealers", () => {
   });
 
   test("listPublicDirectory excludes orgs suspended after opting in", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const dealer = await seedDealer(t, { name: "Later Suspended Dealer" });
 
     await dealer.asOwner.mutation(api.marketplaceDealers.updateProfile, {
@@ -179,7 +179,7 @@ describe("marketplaceDealers", () => {
   });
 
   test("listPublicDirectory ranks FAST_RESPONSE dealers above others, then by response time", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const slow = await seedDealer(t, { name: "Slow Dealer" });
     const fast = await seedDealer(t, { name: "Fast Dealer" });
 
@@ -211,7 +211,7 @@ describe("marketplaceDealers", () => {
   });
 
   test("listPublicDirectory ranks a FEATURED dealer above a FAST_RESPONSE one (Phase 63)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const fast = await seedDealer(t, { name: "Fast Dealer" });
     const featured = await seedDealer(t, { name: "Featured Dealer" });
 
@@ -328,7 +328,7 @@ describe("computeBadges", () => {
 
 describe("recomputeAllDealerBadges", () => {
   test("persists FINANCE_AVAILABLE for an opted-in dealer with an active finance company", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const dealer = await seedDealer(t);
 
     await dealer.asOwner.mutation(api.marketplaceDealers.updateProfile, {
@@ -364,7 +364,7 @@ describe("listOptedInDealerProfiles does not spend its limit on deleted rows", (
    * the read path's ordering, and the index is ascending by _creationTime — so
    * the deleted ones are exactly the rows a `.take()` reaches first.
    */
-  async function seedProfiles(t: ReturnType<typeof convexTest>, count: number, deletedPrefix: number) {
+  async function seedProfiles(t: ReturnType<typeof convexTestWithComponents>, count: number, deletedPrefix: number) {
     for (let i = 0; i < count; i++) {
       const orgId = await t.run((ctx) =>
         ctx.db.insert("organizations", { name: `Dealer ${i}`, createdAt: Date.now() })
@@ -389,7 +389,7 @@ describe("listOptedInDealerProfiles does not spend its limit on deleted rows", (
   }
 
   test("a limit of N returns N live dealers even when the oldest rows are deleted", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     // 4 deleted, then 3 live. Filtering after the take returned 1 of 3 live
     // dealers for a limit of 5; the other 2 were invisible to public browse,
     // affordability search and WhatsApp intake with nothing to indicate it.
@@ -402,7 +402,7 @@ describe("listOptedInDealerProfiles does not spend its limit on deleted rows", (
   });
 
   test("the limit still caps the result when there are more live dealers than it", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedProfiles(t, 6, 0);
 
     const profiles = await t.run((ctx) => listOptedInDealerProfiles(ctx, 4));
@@ -418,7 +418,7 @@ describe("recomputeAllDealerBadges pages across every dealer", () => {
     // assertion below would see page one only — passing for the wrong reason.
     // Same recipe as liveChat.test.ts.
     vi.useFakeTimers();
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
 
     // Note what this does and does not prove. The old unbounded `.collect()`
     // handled 105 rows fine — its failure mode only appears at a budget limit no

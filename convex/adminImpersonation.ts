@@ -1,5 +1,6 @@
 import { v } from "convex/values";
-import { mutation, query, internalMutation, QueryCtx, MutationCtx } from "./_generated/server";
+import { query, QueryCtx, MutationCtx } from "./_generated/server";
+import { mutation, internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { requireSuperAdmin } from "./utils/tenancy";

@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -14,7 +14,7 @@ const PERMISSIONS = [
 ];
 
 async function setup() {
-  const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Test Dealer", createdAt: Date.now() })
   );
@@ -405,7 +405,7 @@ describe("expenses.reverseExpense", () => {
   // No chart of accounts initialized — a "PAID" expense's posting is queued
   // in pendingAccountingEvents rather than actually landing in the ledger.
   async function setupPendingOnly() {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Pending Dealer", createdAt: Date.now() })
     );
@@ -554,7 +554,7 @@ describe("expenses.reverseExpense", () => {
 
 describe("expenses VAT split (Phase 41)", () => {
   async function setupFullyPosted() {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "VAT Dealer", createdAt: Date.now() })
     );

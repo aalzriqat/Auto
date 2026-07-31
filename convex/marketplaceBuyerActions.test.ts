@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -6,7 +6,7 @@ import { Id } from "./_generated/dataModel";
 
 const BUYER_PHONE = "+962791234567";
 
-async function seedOrg(t: ReturnType<typeof convexTest>, name = "Bloom Cars") {
+async function seedOrg(t: ReturnType<typeof convexTestWithComponents>, name = "Bloom Cars") {
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name, createdAt: Date.now() }));
   const userId = await t.run((ctx) =>
     ctx.db.insert("users", { clerkId: `u_${orgId}`, email: `u_${orgId}@test.com`, name: "Rep" })
@@ -17,7 +17,7 @@ async function seedOrg(t: ReturnType<typeof convexTest>, name = "Bloom Cars") {
 }
 
 async function seedRequestWithOffer(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   orgId: Id<"organizations">,
   userId: Id<"users">,
   publicId: string
@@ -58,7 +58,7 @@ async function seedRequestWithOffer(
 
 describe("shortlistOffer / declineOffer", () => {
   test("shortlist stamps buyerAction without creating a lead or unlocking contact", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId } = await seedOrg(t);
     const { responseId } = await seedRequestWithOffer(t, orgId, userId, "tok-shortlist");
 
@@ -72,7 +72,7 @@ describe("shortlistOffer / declineOffer", () => {
   });
 
   test("decline stamps buyerAction DECLINED", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId } = await seedOrg(t);
     const { responseId } = await seedRequestWithOffer(t, orgId, userId, "tok-decline");
 
@@ -82,7 +82,7 @@ describe("shortlistOffer / declineOffer", () => {
   });
 
   test("rejects a shortlist whose responseId belongs to a different request", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId } = await seedOrg(t);
     await seedRequestWithOffer(t, orgId, userId, "tok-a");
     const { responseId: foreignResponseId } = await seedRequestWithOffer(t, orgId, userId, "tok-b");
@@ -95,7 +95,7 @@ describe("shortlistOffer / declineOffer", () => {
 
 describe("allowContact", () => {
   test("creates the customer + lead and unlocks contact for that one dealer, phone-gated", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId } = await seedOrg(t);
     const { requestId, matchId, responseId } = await seedRequestWithOffer(t, orgId, userId, "tok-allow");
 
@@ -118,7 +118,7 @@ describe("allowContact", () => {
   });
 
   test("rejects a wrong phone and creates nothing", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId } = await seedOrg(t);
     const { responseId } = await seedRequestWithOffer(t, orgId, userId, "tok-wrong");
 
@@ -135,7 +135,7 @@ describe("allowContact", () => {
   });
 
   test("is idempotent — a second allowContact does not create a duplicate lead", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId } = await seedOrg(t);
     const { responseId } = await seedRequestWithOffer(t, orgId, userId, "tok-twice");
 
@@ -149,7 +149,7 @@ describe("allowContact", () => {
 
 describe("acceptOffer", () => {
   test("accepts the offer, marks the request ACCEPTED, and creates the lead", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId } = await seedOrg(t);
     const { requestId, responseId } = await seedRequestWithOffer(t, orgId, userId, "tok-accept");
 
@@ -166,7 +166,7 @@ describe("acceptOffer", () => {
   });
 
   test("writes offer.accepted and contact.unlocked events", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId } = await seedOrg(t);
     const { requestId, responseId } = await seedRequestWithOffer(t, orgId, userId, "tok-events");
 

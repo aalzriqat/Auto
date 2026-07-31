@@ -1,4 +1,4 @@
-import { internalMutation } from "./_generated/server";
+import { internalMutation } from "./functions";
 
 export const seedMutakhasisa = internalMutation({
   args: {},

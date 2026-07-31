@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, afterEach, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -8,7 +8,7 @@ const DEAD = "ExponentPushToken[dead-device]";
 
 describe("registerBuyerPushToken", () => {
   test("stores a valid Expo token keyed by publicId", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await t.mutation(api.marketplaceBuyerPush.registerBuyerPushToken, {
       publicId: "room-1",
       token: GOOD,
@@ -21,14 +21,14 @@ describe("registerBuyerPushToken", () => {
   });
 
   test("rejects a token that isn't an Expo push token", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await expect(
       t.mutation(api.marketplaceBuyerPush.registerBuyerPushToken, { publicId: "room-1", token: "not-a-token", platform: "IOS" })
     ).rejects.toThrow(/token/i);
   });
 
   test("de-duplicates by token — a device that re-registers or moves rooms keeps one row", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await t.mutation(api.marketplaceBuyerPush.registerBuyerPushToken, { publicId: "room-1", token: GOOD, platform: "ANDROID" });
     await t.mutation(api.marketplaceBuyerPush.registerBuyerPushToken, { publicId: "room-2", token: GOOD, platform: "ANDROID" });
 
@@ -44,7 +44,7 @@ describe("sendBuyerOfferPush", () => {
   });
 
   test("no-ops cleanly when the room has no registered devices", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const result = await t.action(internal.marketplaceBuyerPush.sendBuyerOfferPush, { publicId: "empty-room" });
@@ -53,7 +53,7 @@ describe("sendBuyerOfferPush", () => {
   });
 
   test("pushes to the room's devices and prunes the ones Expo says are dead", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await t.mutation(api.marketplaceBuyerPush.registerBuyerPushToken, { publicId: "room-1", token: GOOD, platform: "ANDROID" });
     await t.mutation(api.marketplaceBuyerPush.registerBuyerPushToken, { publicId: "room-1", token: DEAD, platform: "IOS" });
 
@@ -81,7 +81,7 @@ describe("sendBuyerOfferPush", () => {
   });
 
   test("reports an Expo HTTP failure without throwing", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await t.mutation(api.marketplaceBuyerPush.registerBuyerPushToken, { publicId: "room-1", token: GOOD, platform: "ANDROID" });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("nope", { status: 500 })));
     const result = await t.action(internal.marketplaceBuyerPush.sendBuyerOfferPush, { publicId: "room-1" });

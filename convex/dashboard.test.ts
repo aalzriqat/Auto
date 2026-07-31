@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi, afterEach } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -26,7 +26,7 @@ function startOfDayInTimeZone(timeZone: string, at: number): number {
 const PERMISSIONS = ["view:customers", "view:vehicles", "view:users", "view:sales"];
 
 async function setup(permissions = PERMISSIONS) {
-  const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Test Dealer", createdAt: Date.now() })
   );
@@ -322,7 +322,7 @@ describe("dashboard.stats", () => {
 describe("dashboard.todayForRole", () => {
   const FINANCE_PERMISSIONS = ["view:finance"];
 
-  async function seedCustomerAndVehicle(t: Awaited<ReturnType<typeof convexTest>>, orgId: string) {
+  async function seedCustomerAndVehicle(t: Awaited<ReturnType<typeof convexTestWithComponents>>, orgId: string) {
     const customerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Sara", lastName: "Haddad" })
     );

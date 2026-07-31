@@ -7,7 +7,7 @@
  * VAT portion is supplied, it's reclassified out of COST_OF_VEHICLES_SOLD
  * into VAT_RECEIVABLE as a separate, self-balancing pair.
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -15,7 +15,7 @@ import { api } from "./_generated/api";
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 async function seedDealerWithPayable(amountDue = 5000) {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Phase41 Sourcing Dealer", createdAt: Date.now() })
   );

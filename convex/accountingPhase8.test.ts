@@ -2,7 +2,7 @@
  * Phase 8 tests: sale cancellation reversals, finance disbursement lifecycle,
  * and payment intent/webhook settlement.
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -15,7 +15,7 @@ vi.mock("./rateLimit", () => ({
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 async function seedDealer(tag = "p8") {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: `Phase8 Dealer ${tag}`, createdAt: Date.now() })
   );

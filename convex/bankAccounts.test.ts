@@ -6,7 +6,7 @@
  * so these tests assert CRUD, single-reconciliation-target enforcement, and
  * the book-balance math against seeded ledger activity.
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -14,7 +14,7 @@ import { api } from "./_generated/api";
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 async function seedDealer() {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Phase41 Dealer", createdAt: Date.now() })
   );

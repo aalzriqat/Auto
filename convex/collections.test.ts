@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -7,7 +7,7 @@ import { SYSTEM_KEYS } from "./utils/defaultChart";
 
 const paginationOpts = { numItems: 20, cursor: null };
 
-async function seedFinanceMember(t: ReturnType<typeof convexTest>) {
+async function seedFinanceMember(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Collections Dealer", createdAt: Date.now() })
   );
@@ -54,7 +54,7 @@ async function seedFinanceMember(t: ReturnType<typeof convexTest>) {
 }
 
 async function seedVehicleQuoteSaleAndApplication(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   args: {
     orgId: any;
     customerId: any;
@@ -119,7 +119,7 @@ async function seedVehicleQuoteSaleAndApplication(
 }
 
 async function insertReceivable(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   args: {
     orgId: any;
     customerId: any;
@@ -165,7 +165,7 @@ async function insertReceivable(
 
 describe("Collections", () => {
   test("partial_payment_reduces_outstanding_and_records_ledger_entry", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
@@ -224,7 +224,7 @@ describe("Collections", () => {
   });
 
   test("cleared_cheque_pays_receivable_and_posts_cheque_payment", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
@@ -305,7 +305,7 @@ describe("Collections", () => {
   });
 
   test("return_cleared_cheque_rejects_invalid_bank_fee_minor_units", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
@@ -339,7 +339,7 @@ describe("Collections", () => {
   });
 
   test("approved_refund_posts_outbound_payment_and_reopens_balance", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
@@ -423,7 +423,7 @@ describe("Collections", () => {
   });
 
   test("approved_cancel_marks_canonical_receivable_cancelled", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
@@ -474,7 +474,7 @@ describe("Collections", () => {
   });
 
   test("approved_cancel_reverses_a_posted_receivable_created_event", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     // Unlike the other tests in this file, this one needs an actual posted
@@ -559,7 +559,7 @@ describe("Collections", () => {
   });
 
   test("approved_cancel_of_a_sale_linked_receivable_is_a_no_op_for_the_gl", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, asFinance, asApprover, userId } = await seedFinanceMember(t);
 
     // A sale-linked receivable never posts its own RECEIVABLE_CREATED (the
@@ -617,7 +617,7 @@ describe("Collections", () => {
   });
 
   test("bank_refund_posts_gl_entry_to_bank_account_not_cash_on_hand", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
@@ -679,7 +679,7 @@ describe("Collections", () => {
   });
 
   test("cancel_of_partially_paid_receivable_is_blocked", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
@@ -715,7 +715,7 @@ describe("Collections", () => {
   });
 
   test("card_refund_routes_to_bank_account_not_cash_on_hand", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
@@ -790,7 +790,7 @@ describe("Collections", () => {
   });
 
   test("cheque_refund_approval_posts_cheque_method_to_event_outbox", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
@@ -845,7 +845,7 @@ describe("Collections", () => {
   });
 
   test("cancel_of_receivable_with_held_cheque_is_blocked", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
@@ -883,7 +883,7 @@ describe("Collections", () => {
   });
 
   test("approved_reschedule_moves_overdue_receivable_to_new_due_date", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
     const tomorrow = Date.now() + 24 * 60 * 60 * 1000;
 
@@ -924,7 +924,7 @@ describe("Collections", () => {
   });
 
   test("collection_queries_hydrate_reports_and_filter_settled_rows", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
     const { vehicleId } = await seedVehicleQuoteSaleAndApplication(t, { orgId, customerId, userId, vin: "QUERYHYDRATE0001" });
     const now = Date.now();
@@ -1114,7 +1114,7 @@ describe("Collections", () => {
   });
 
   test("create_receivable_and_installment_plan_validate_links_and_round_schedule", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
     const related = await seedVehicleQuoteSaleAndApplication(t, { orgId, customerId, userId, vin: "LINKVALID000001" });
     const otherOrgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Other dealer", createdAt: Date.now() }));
@@ -1249,7 +1249,7 @@ describe("Collections", () => {
   });
 
   test("payment_and_cheque_mutations_cover_guardrails_and_state_transitions", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
     const { vehicleId, saleId, quoteId, applicationId } = await seedVehicleQuoteSaleAndApplication(t, {
       orgId,
@@ -1586,7 +1586,7 @@ describe("Collections", () => {
   });
 
   test("approval_requests_cover_rejections_listing_and_legacy_guardrails", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       orgId,
@@ -1743,7 +1743,7 @@ describe("Collections", () => {
   });
 
   test("refund_approval_handles_multiple_allocations_and_rejects_missing_canonical_allocations", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, asFinance, asApprover, userId } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
@@ -1827,7 +1827,7 @@ describe("Collections", () => {
   });
 
   test("return_cleared_cheque_defers_reversal_when_no_open_period_exists", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
 
     await t.run((ctx) =>
@@ -1894,7 +1894,7 @@ describe("Collections", () => {
   });
 
   test("cashier_reconciliation_computes_differences_and_enforces_review_controls", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
     const now = Date.now();
     const receivableId = await insertReceivable(t, { orgId, customerId, createdBy: userId, amount: 100 });
@@ -1992,7 +1992,7 @@ describe("Collections", () => {
   });
 
   test("daily_collection_reminders_queue_channels_dedupe_and_mark_results", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, userId } = await seedFinanceMember(t);
     const now = Date.now();
     const whatsappCustomerId = await t.run((ctx) =>
@@ -2121,7 +2121,7 @@ describe("Collections", () => {
 
 describe("refund eligibility", () => {
   test("a cancelled, never-paid receivable cannot be refunded", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     // Nothing was ever collected against this receivable.
@@ -2167,7 +2167,7 @@ describe("refund eligibility", () => {
 
 
   test("a receivable cancelled while a refund request is pending cannot be approved", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     // 4,000 of 10,000 genuinely collected, so the refund request is valid now.

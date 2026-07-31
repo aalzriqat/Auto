@@ -6,7 +6,7 @@
  * base); direct balance edits are gone from the mutation surface; the Phase 6
  * migration PARTNER_DRAW/CAPITAL_INJECTION skip gap is closed.
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -15,7 +15,7 @@ import { Id } from "./_generated/dataModel";
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 async function seedEquityDealer() {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Phase12 Dealer", createdAt: Date.now() })
   );

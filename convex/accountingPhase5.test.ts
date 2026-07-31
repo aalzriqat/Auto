@@ -3,7 +3,7 @@
  * AR aging, subledger reconciliation).  All reports are computed from posted
  * journalLines — the GL — not from the legacy transactions table.
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -11,7 +11,7 @@ import { api, internal } from "./_generated/api";
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 async function seedReportingDealer() {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Reporting Dealer", createdAt: Date.now() })
   );

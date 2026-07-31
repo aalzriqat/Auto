@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -29,14 +29,14 @@ afterEach(() => {
   restoreEnv("NEXT_PUBLIC_APP_URL", ORIGINAL_NEXT_PUBLIC_APP_URL);
 });
 
-async function seedUser(t: ReturnType<typeof convexTest>, clerkId: string, email: string) {
+async function seedUser(t: ReturnType<typeof convexTestWithComponents>, clerkId: string, email: string) {
   await t.run((ctx) => ctx.db.insert("users", { clerkId, email, name: email }));
   return t.withIdentity({ subject: clerkId });
 }
 
 describe("changelog historical seed", () => {
   test("backfills the full customer-facing history without duplicating entries", async () => {
-    const t = convexTest(schema, modules);
+    const t = convexTestWithComponents(schema, modules);
     const asAdmin = await seedUser(t, "admin_changelog", "admin@autoflow.dev");
 
     const firstRun = await asAdmin.mutation(api.changelog.seedHistoricalEntries, {});
@@ -64,7 +64,7 @@ describe("changelog historical seed", () => {
   });
 
   test("requires super-admin access", async () => {
-    const t = convexTest(schema, modules);
+    const t = convexTestWithComponents(schema, modules);
     const asMember = await seedUser(t, "member_changelog", "member@autoflow.dev");
 
     await expect(asMember.mutation(api.changelog.seedHistoricalEntries, {})).rejects.toThrow();
@@ -73,7 +73,7 @@ describe("changelog historical seed", () => {
 
 describe("changelog createInternal (CLI automation, no live session)", () => {
   test("attributes the entry to the resolved SUPER_ADMIN_EMAILS user", async () => {
-    const t = convexTest(schema, modules);
+    const t = convexTestWithComponents(schema, modules);
     await t.run((ctx) =>
       ctx.db.insert("users", { clerkId: "admin_cli", email: "admin@autoflow.dev", name: "Admin" })
     );
@@ -96,7 +96,7 @@ describe("changelog createInternal (CLI automation, no live session)", () => {
   });
 
   test("throws when SUPER_ADMIN_EMAILS is not set", async () => {
-    const t = convexTest(schema, modules);
+    const t = convexTestWithComponents(schema, modules);
     delete process.env.SUPER_ADMIN_EMAILS;
 
     await expect(
@@ -111,7 +111,7 @@ describe("changelog createInternal (CLI automation, no live session)", () => {
   });
 
   test("throws when no user matches the configured super-admin email", async () => {
-    const t = convexTest(schema, modules);
+    const t = convexTestWithComponents(schema, modules);
 
     await expect(
       t.mutation(internal.changelog.createInternal, {
@@ -126,7 +126,7 @@ describe("changelog createInternal (CLI automation, no live session)", () => {
 });
 
 describe("changelog updateInternal (CLI automation, no live session)", () => {
-  async function seedEntry(t: ReturnType<typeof convexTest>) {
+  async function seedEntry(t: ReturnType<typeof convexTestWithComponents>) {
     await t.run((ctx) =>
       ctx.db.insert("users", { clerkId: "admin_cli", email: "admin@autoflow.dev", name: "Admin" })
     );
@@ -140,7 +140,7 @@ describe("changelog updateInternal (CLI automation, no live session)", () => {
   }
 
   test("patches only the fields provided and leaves publishedAt untouched", async () => {
-    const t = convexTest(schema, modules);
+    const t = convexTestWithComponents(schema, modules);
     const entryId = await seedEntry(t);
     const before = await t.run((ctx) => ctx.db.get(entryId));
 
@@ -162,7 +162,7 @@ describe("changelog updateInternal (CLI automation, no live session)", () => {
   });
 
   test("throws on an unknown entry", async () => {
-    const t = convexTest(schema, modules);
+    const t = convexTestWithComponents(schema, modules);
     await t.run((ctx) =>
       ctx.db.insert("users", { clerkId: "admin_cli", email: "admin@autoflow.dev", name: "Admin" })
     );
@@ -181,7 +181,7 @@ describe("changelog updateInternal (CLI automation, no live session)", () => {
   });
 
   test("throws when no updatable field is provided", async () => {
-    const t = convexTest(schema, modules);
+    const t = convexTestWithComponents(schema, modules);
     const entryId = await seedEntry(t);
     await expect(
       t.mutation(internal.changelog.updateInternal, { entryId })

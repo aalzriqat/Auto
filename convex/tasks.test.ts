@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
@@ -8,7 +8,7 @@ const MODULES = import.meta.glob("./**/*.*s");
 const TASK_PERMISSIONS = ["view:tasks", "create:tasks", "edit:tasks"];
 
 async function seedTaskTenants() {
-  const t = convexTest(schema, MODULES);
+  const t = convexTestWithComponents(schema, MODULES);
   const orgA = await t.run((ctx) => ctx.db.insert("organizations", { name: "Org A", createdAt: Date.now() }));
   const orgB = await t.run((ctx) => ctx.db.insert("organizations", { name: "Org B", createdAt: Date.now() }));
   const userA = await t.run((ctx) => ctx.db.insert("users", { clerkId: "task_user_a", email: "a@example.com", name: "A" }));
@@ -50,7 +50,7 @@ async function seedTaskTenants() {
   };
 }
 
-async function seedVehicle(t: ReturnType<typeof convexTest>, orgId: Id<"organizations">, suffix: string) {
+async function seedVehicle(t: ReturnType<typeof convexTestWithComponents>, orgId: Id<"organizations">, suffix: string) {
   return await t.run((ctx) =>
     ctx.db.insert("vehicles", {
       orgId,

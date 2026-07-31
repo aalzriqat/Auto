@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -9,7 +9,7 @@ vi.mock("./rateLimit", () => ({
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
-async function seedOwner(t: ReturnType<typeof convexTest>) {
+async function seedOwner(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() })
   );
@@ -38,21 +38,21 @@ describe("orgSettings", () => {
   });
 
   test("get returns null when no settings row exists", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     const settings = await asOwner.query(api.orgSettings.get, { orgId });
     expect(settings).toBeNull();
   });
 
   test("get returns null when unauthenticated", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOwner(t);
     const settings = await t.query(api.orgSettings.get, { orgId });
     expect(settings).toBeNull();
   });
 
   test("get returns null when the caller isn't a member of the org", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOwner(t);
     await t.run((ctx) =>
       ctx.db.insert("users", { clerkId: "outsider_001", email: "outsider@test.com", name: "Outsider" })
@@ -63,7 +63,7 @@ describe("orgSettings", () => {
   });
 
   test("upsert creates settings with defaults", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     await asOwner.mutation(api.orgSettings.upsert, { orgId, currency: "AED", currencySymbol: "د.إ" });
     const settings = await asOwner.query(api.orgSettings.get, { orgId });
@@ -72,7 +72,7 @@ describe("orgSettings", () => {
   });
 
   test("upsert patches existing settings without overwriting untouched fields", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     await asOwner.mutation(api.orgSettings.upsert, { orgId, currency: "SAR", vatRate: 15 });
     await asOwner.mutation(api.orgSettings.upsert, { orgId, currency: "USD", vatRate: undefined });
@@ -82,7 +82,7 @@ describe("orgSettings", () => {
   });
 
   test("upsert trims dealership phone list and drops blank values", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     await asOwner.mutation(api.orgSettings.upsert, {
@@ -95,7 +95,7 @@ describe("orgSettings", () => {
   });
 
   test("setGeneratedLeadAutoAssignmentEnabled creates and patches the toggle", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     await asOwner.mutation(api.orgSettings.setGeneratedLeadAutoAssignmentEnabled, { orgId, enabled: true });
@@ -108,7 +108,7 @@ describe("orgSettings", () => {
   });
 
   test("upsert stores and rejects invalid reservationHoldDays", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     await asOwner.mutation(api.orgSettings.upsert, { orgId, reservationHoldDays: 7 });
@@ -121,7 +121,7 @@ describe("orgSettings", () => {
   });
 
   test("upsert is owner-only", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOwner(t);
 
     // Seed a non-owner member
@@ -142,7 +142,7 @@ describe("orgSettings", () => {
   });
 
   test("upsert requires the whatsapp feature when touching WhatsApp fields", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     // No subscription row seeded, so the org has no plan features enabled.
@@ -152,7 +152,7 @@ describe("orgSettings", () => {
   });
 
   test("getLogoUrl returns null when no logo is set, and a URL once one is uploaded", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     await asOwner.mutation(api.orgSettings.upsert, { orgId, currency: "JOD" });
 
@@ -167,7 +167,7 @@ describe("orgSettings", () => {
   });
 
   test("generateLogoUploadUrl returns an upload URL for the owner", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     const uploadUrl = await asOwner.mutation(api.orgSettings.generateLogoUploadUrl, { orgId });

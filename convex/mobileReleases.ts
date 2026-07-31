@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { query } from "./_generated/server";
+import { mutation } from "./functions";
 import { requireSuperAdmin } from "./utils/tenancy";
 
 const platformValidator = v.union(v.literal("ANDROID"), v.literal("IOS"));
