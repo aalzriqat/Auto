@@ -1,7 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { MutationCtx, QueryCtx, query } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
-import { vehiclesByOrg, LIVE, SUM_EPOCH } from "./aggregates";
+import { vehiclesByOrg, LIVE, OWN_STOCK, SOURCED, SUM_EPOCH } from "./aggregates";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
@@ -54,17 +54,14 @@ import { paginationOptsValidator } from "convex/server";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function getAgeBucket(days: number): "0-30" | "31-60" | "61-90" | "90+" {
-  if (days <= 30) return "0-30";
-  if (days <= 60) return "31-60";
-  if (days <= 90) return "61-90";
-  return "90+";
-}
-
 /**
- * The same four buckets `getAgeBucket` produces, expressed as inclusive age
- * ranges in days so they can be turned into createdAt bounds on the aggregate.
+ * The vehicle aging histogram's four buckets, as inclusive age ranges in days
+ * so they can be turned into createdAt bounds on the aggregate.
  * `maxAgeDays: null` is the open-ended oldest bucket.
+ *
+ * These boundaries are the ones the original row scan applied as
+ * `days <= 30 | 60 | 90`; `vehicleAggregate.test.ts` pins both edges of every
+ * bucket against that formula.
  */
 const AGE_BUCKETS = [
   { bucket: "0-30" as const, minAgeDays: 0, maxAgeDays: 30 },
@@ -73,10 +70,22 @@ const AGE_BUCKETS = [
   { bucket: "90+" as const, minAgeDays: 91, maxAgeDays: null },
 ];
 
-/** Aggregate sort key for a live AVAILABLE vehicle created at `createdAt`. */
-function agingKey(createdAt: number): [number, string, number] {
-  return [LIVE, "AVAILABLE", createdAt];
+/**
+ * Aggregate sort key for a live AVAILABLE vehicle of a given stock kind,
+ * created at `createdAt`.
+ *
+ * The histogram counts own stock *and* sourced vehicles — that is what the row
+ * scan it replaced did, since it never looked at `sourceType`. `sourcedFlag`
+ * sits above `status` in the key, so "both kinds" is not one contiguous range;
+ * each bucket therefore contributes one query per kind, and the pairs are
+ * summed back together below. Both still land in a single batched round-trip.
+ */
+function agingKey(sourcedFlag: number, createdAt: number): [number, number, string, number] {
+  return [LIVE, sourcedFlag, "AVAILABLE", createdAt];
 }
+
+/** The stock kinds `getAgingBuckets` sums over, in key order. */
+const STOCK_KINDS = [OWN_STOCK, SOURCED];
 
 function randomHex(bytesLength: number): string {
   const bytes = new Uint8Array(bytesLength);
@@ -490,21 +499,29 @@ export const getAgingBuckets = query({
     // Boundaries are derived from the row-scan's `ageDays <= 30 | 60 | 90`,
     // where ageDays = floor((now - createdAt) / DAY_MS):
     //   ageDays <= N  <=>  createdAt > now - (N + 1) * DAY_MS
-    const queries = AGE_BUCKETS.map(({ maxAgeDays, minAgeDays }) => ({
-      namespace: args.orgId,
-      bounds: {
-        // An older vehicle has a *smaller* createdAt, so maxAgeDays gives the
-        // lower bound of the range and minAgeDays the upper one.
-        lower:
-          maxAgeDays === null
-            ? { key: agingKey(Number.MIN_SAFE_INTEGER), inclusive: true as const }
-            : { key: agingKey(now - (maxAgeDays + 1) * DAY_MS), inclusive: false as const },
-        upper:
-          minAgeDays === 0
-            ? { key: agingKey(Number.MAX_SAFE_INTEGER), inclusive: true as const }
-            : { key: agingKey(now - minAgeDays * DAY_MS), inclusive: true as const },
-      },
-    }));
+    const queries = AGE_BUCKETS.flatMap(({ maxAgeDays, minAgeDays }) =>
+      STOCK_KINDS.map((sourcedFlag) => ({
+        namespace: args.orgId,
+        bounds: {
+          // An older vehicle has a *smaller* createdAt, so maxAgeDays gives the
+          // lower bound of the range and minAgeDays the upper one.
+          lower:
+            maxAgeDays === null
+              ? { key: agingKey(sourcedFlag, Number.MIN_SAFE_INTEGER), inclusive: true as const }
+              : {
+                key: agingKey(sourcedFlag, now - (maxAgeDays + 1) * DAY_MS),
+                inclusive: false as const,
+              },
+          upper:
+            minAgeDays === 0
+              ? { key: agingKey(sourcedFlag, Number.MAX_SAFE_INTEGER), inclusive: true as const }
+              : {
+                key: agingKey(sourcedFlag, now - minAgeDays * DAY_MS),
+                inclusive: true as const,
+              },
+        },
+      })),
+    );
 
     // Batched: `count` and `sum` each issue their own component round-trip, so
     // asking per bucket would be eight traversals of the same tree — enough to
@@ -516,7 +533,12 @@ export const getAgingBuckets = query({
     ]);
 
     return AGE_BUCKETS.map(({ bucket }, i) => {
-      const count = counts[i];
+      // Each bucket produced one query per stock kind, laid out contiguously by
+      // the flatMap above, so bucket i owns [i * STOCK_KINDS.length, +len).
+      const from = i * STOCK_KINDS.length;
+      const slice = STOCK_KINDS.map((_, k) => from + k);
+      const count = slice.reduce((acc, j) => acc + counts[j], 0);
+      const sum = slice.reduce((acc, j) => acc + sums[j], 0);
       // Mean age from the mean createdAt (sums are stored offset by SUM_EPOCH,
       // so add it back). The row scan averaged already-floored ages and this
       // floors once at the end, so on a mixed bucket the two can differ by at
@@ -530,7 +552,7 @@ export const getAgingBuckets = query({
       // result to keep a negative average from ever reaching the UI.
       const avgDays =
         count > 0
-          ? Math.max(0, Math.round((now - (sums[i] / count + SUM_EPOCH)) / DAY_MS))
+          ? Math.max(0, Math.round((now - (sum / count + SUM_EPOCH)) / DAY_MS))
           : 0;
 
       return { bucket, count, avgDays };
@@ -1623,7 +1645,9 @@ export const softDelete = mutation({
     vehicleId: v.id("vehicles"),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_VEHICLES]);
+    // The guard itself is the point of this call; the row it returns is unused
+    // because `deletedBy` below records the Clerk subject, not the users row.
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_VEHICLES]);
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("Unauthenticated");
 

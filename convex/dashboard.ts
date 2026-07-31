@@ -2,12 +2,78 @@ import { v } from "convex/values";
 import { query, QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
-import { validateVinChecksum } from "../lib/vinHelpers";
 import { isSystemOwnerRole, PERMISSIONS, type Permission } from "./utils/permissions";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
+import {
+  ABSENT,
+  customersByOrg,
+  leadsByOrg,
+  LIVE,
+  membershipsByOrg,
+  OWN_STOCK,
+  PRESENT,
+  vehicleQualityByOrg,
+  vehiclesByOrg,
+  VIN_INVALID,
+} from "./aggregates";
 
 function canRoleView(role: Doc<"roles">, permission: Permission): boolean {
   return isSystemOwnerRole(role) || role.permissions.includes(permission);
+}
+
+/**
+ * Passed where an aggregate key element should match every value rather than
+ * one — see `stringKeyRange`.
+ */
+const ANY_STATUS = null;
+const ANY_STAGE = null;
+
+/**
+ * Bounds for one string element of an aggregate sort key: either a single
+ * value, or every value.
+ *
+ * Every `status` and `stage` in the schema is uppercase ASCII, so `""` sorts
+ * below all of them and `"￿"` above. Using those as sentinels keeps both
+ * ends of the range a *full-length* key, which is what the aging-bucket reads
+ * already do with `Number.MIN/MAX_SAFE_INTEGER`. The alternative — a short key
+ * that relies on how the B-tree orders `[a, b]` against `[a, b, c]` — is a
+ * subtler contract to depend on for the same result.
+ */
+function stringKeyRange(value: string | null): { from: string; to: string } {
+  return { from: value ?? "", to: value ?? "￿" };
+}
+
+/** Live, own-stock vehicles in one status (or every status). */
+function ownStockBounds(status: string | null) {
+  const { from, to } = stringKeyRange(status);
+  return {
+    lower: {
+      key: [LIVE, OWN_STOCK, from, Number.MIN_SAFE_INTEGER] as [number, number, string, number],
+      inclusive: true as const,
+    },
+    upper: {
+      key: [LIVE, OWN_STOCK, to, Number.MAX_SAFE_INTEGER] as [number, number, string, number],
+      inclusive: true as const,
+    },
+  };
+}
+
+/** Live leads in one stage (or every stage). */
+function liveStageBounds(stage: string | null) {
+  const { from, to } = stringKeyRange(stage);
+  return {
+    lower: { key: [LIVE, from] as [number, string], inclusive: true as const },
+    upper: { key: [LIVE, to] as [number, string], inclusive: true as const },
+  };
+}
+
+/** One exact live-customer key: a specific phone/email presence combination. */
+function exactCustomerKey(hasPhone: number, hasEmail: number) {
+  const key = [LIVE, hasPhone, hasEmail] as [number, number, number];
+  return {
+    lower: { key, inclusive: true as const },
+    upper: { key, inclusive: true as const },
+  };
 }
 
 /**
@@ -48,33 +114,35 @@ export const stats = query({
     }
 
     // 2. Total Vehicles & Available Vehicles
-    const VEHICLE_CAP = 2000;
-    const vehicleRows = canViewVehicles
-      ? await ctx.db
-        .query("vehicles")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .filter(q => q.and(q.neq(q.field("isDeleted"), true), q.neq(q.field("sourceType"), "SOURCED")))
-        .take(VEHICLE_CAP)
-      : [];
-    const totalVehicles = vehicleRows.length;
-    const vehiclesTruncated = vehicleRows.length === VEHICLE_CAP;
-    const availableVehicles = canViewVehicles
-      ? vehicleRows.filter(v => v.status === "AVAILABLE").length
-      : 0;
+    //
+    // Two counts off the B-tree instead of reading up to 2,000 vehicle
+    // documents — the single largest read in this query, and vehicle rows are
+    // among the fattest in the schema (image arrays, spec fields, costing).
+    //
+    // "Total" is own stock only, matching the old `sourceType !== "SOURCED"`
+    // filter: a sourced car is located on demand from another dealer and was
+    // never in this dealer's inventory. `sourcedFlag` sits above `status` in
+    // the key precisely so this is one contiguous range.
+    const [totalVehicles, availableVehicles] = canViewVehicles
+      ? await vehiclesByOrg.countBatch(ctx, [
+        { namespace: args.orgId, bounds: ownStockBounds(ANY_STATUS) },
+        { namespace: args.orgId, bounds: ownStockBounds("AVAILABLE") },
+      ])
+      : [0, 0];
 
     // 3. Active Leads (not WON/LOST)
-    const activeLeads = canViewLeads
-      ? await ctx.db
-        .query("leads")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .filter(q => q.and(
-          q.neq(q.field("stage"), "WON"),
-          q.neq(q.field("stage"), "LOST"),
-          q.neq(q.field("isDeleted"), true)
-        ))
-        .take(1000)
-        .then(res => res.length)
-      : 0;
+    //
+    // The tree stores the raw stage, so "active" stays a subtraction here
+    // rather than a flag baked into the key — see `leadsByOrg`. Three counts
+    // in one batched round-trip, replacing a scan of up to 1,000 leads.
+    const [liveLeads, wonLeads, lostLeads] = canViewLeads
+      ? await leadsByOrg.countBatch(ctx, [
+        { namespace: args.orgId, bounds: liveStageBounds(ANY_STAGE) },
+        { namespace: args.orgId, bounds: liveStageBounds("WON") },
+        { namespace: args.orgId, bounds: liveStageBounds("LOST") },
+      ])
+      : [0, 0, 0];
+    const activeLeads = liveLeads - wonLeads - lostLeads;
 
     // 4. Sales this period
     let periodSales: Doc<"sales">[] = [];
@@ -269,14 +337,12 @@ export const stats = query({
     });
 
     // 5. Team Members
-    const MEMBERS_CAP = 500;
-    const members = canViewUsers
-      ? await ctx.db
-        .query("memberships")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .take(MEMBERS_CAP)
-      : [];
-    const membersTruncated = members.length === MEMBERS_CAP;
+    //
+    // `memberships` has no soft-delete column — removing a member deletes the
+    // row — so the org's whole namespace is the count, with no bounds.
+    const teamMembers = canViewUsers
+      ? await membershipsByOrg.count(ctx, { namespace: args.orgId })
+      : 0;
 
     // 6. Tasks and Team Activity
     // Limit to 1000 most recent to prevent dashboard timeouts on massive orgs
@@ -384,12 +450,16 @@ export const stats = query({
       activeLeads,
       salesThisMonth: salesCount,
       salesVolumeThisMonth: salesVolume,
-      teamMembers: members.length,
+      teamMembers,
       salesTrend,
       truncated: {
-        vehicles: vehiclesTruncated,
+        // Vehicles and members are exact counts off the B-tree now, so neither
+        // can be truncated. The flags stay in the response rather than being
+        // dropped: they are part of this query's shape, and a consumer reading
+        // `truncated.vehicles` should see "not truncated", not `undefined`.
+        vehicles: false,
         sales: salesTruncated,
-        members: membersTruncated,
+        members: false,
         profit: profitTruncated,
       },
       taskStats: {
@@ -557,30 +627,36 @@ export const dataQualityStats = query({
     const canViewCustomers = canRoleView(role, PERMISSIONS.VIEW_CUSTOMERS);
     const canViewVehicles = canRoleView(role, PERMISSIONS.VIEW_VEHICLES);
 
-    const customers = canViewCustomers
-      ? await ctx.db
-        .query("customers")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .filter((q) => q.neq(q.field("isDeleted"), true))
-        .take(2000)
-      : [];
+    // `customersByOrg`'s key is [deletedFlag, hasPhone, hasEmail]. With both
+    // flags binary, the four live combinations are four exact keys, so each
+    // count is a point lookup and the two answers are sums of two of them —
+    // no range reasoning, and no scan of up to 2,000 customer rows.
+    const [
+      noPhoneNoEmail,
+      noPhoneHasEmail,
+      hasPhoneNoEmail,
+    ] = canViewCustomers
+      ? await customersByOrg.countBatch(ctx, [
+        { namespace: args.orgId, bounds: exactCustomerKey(ABSENT, ABSENT) },
+        { namespace: args.orgId, bounds: exactCustomerKey(ABSENT, PRESENT) },
+        { namespace: args.orgId, bounds: exactCustomerKey(PRESENT, ABSENT) },
+      ])
+      : [0, 0, 0];
 
-    let customersMissingPhone = 0;
-    let customersMissingEmail = 0;
-    for (const c of customers) {
-      if (!c.phone) customersMissingPhone++;
-      if (!c.email) customersMissingEmail++;
-    }
+    const customersMissingPhone = noPhoneNoEmail + noPhoneHasEmail;
+    const customersMissingEmail = noPhoneNoEmail + hasPhoneNoEmail;
 
-    const vehicles = canViewVehicles
-      ? await ctx.db
-        .query("vehicles")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .filter((q) => q.neq(q.field("isDeleted"), true))
-        .take(2000)
-      : [];
-
-    const vehiclesWithVinWarning = vehicles.filter((v) => v.vin && !validateVinChecksum(v.vin)).length;
+    // Likewise one point lookup instead of reading every vehicle to re-run a
+    // checksum that `vehicleQualityByOrg` already stores the answer to.
+    const vehiclesWithVinWarning = canViewVehicles
+      ? await vehicleQualityByOrg.count(ctx, {
+        namespace: args.orgId,
+        bounds: {
+          lower: { key: [LIVE, VIN_INVALID] as [number, number], inclusive: true },
+          upper: { key: [LIVE, VIN_INVALID] as [number, number], inclusive: true },
+        },
+      })
+      : 0;
 
     return {
       customersMissingPhone,
