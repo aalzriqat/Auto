@@ -42,17 +42,28 @@ import { DataModel, Id } from "./_generated/dataModel";
  * `sumValue` is `createdAt` *offset by `SUM_EPOCH`*, so average age within a
  * bucket comes from `sum / count` instead of reading the rows.
  *
- * The offset is not cosmetic. The component keeps a running `sum` on every
- * B-tree node and, when a node splits, asserts that the incrementally
- * accumulated sum equals the re-associated `left + right + pivot` within 1e-5,
- * throwing a plain `Error("bad sum split")` — which rolls back the dealer's
- * whole mutation — when it doesn't. Raw epoch milliseconds are ~1.78e12, so a
- * node's sum crosses 2^53 (where float64 stops representing integers exactly)
- * at roughly 5,000 rows, and a full height-2 node holds up to 4,912. That is a
- * ~2% margin today which shrinks every year as `createdAt` grows, going
- * negative around Feb 2028 — at which point any org with a few thousand
- * lifetime vehicle rows starts failing *writes*. Offsetting to a recent epoch
- * drops the magnitude to ~1e10 and buys ~900,000 rows of headroom.
+ * Two things about that sum are load-bearing.
+ *
+ * **It must be an integer.** The component keeps a running sum per B-tree node
+ * and, before splitting one, asserts the incrementally accumulated sum equals
+ * the re-associated `left + right + pivot` within an *absolute* 1e-5 — throwing
+ * a plain `Error("bad sum split")`, which rolls back the dealer's whole
+ * mutation, when it doesn't. `createdAt` is absent on legacy rows and on
+ * everything `importBulk` and the approval-workflow create insert, so
+ * `vehicleCreatedAt` falls back to `_creationTime` — which Convex makes
+ * *fractional* to keep it unique per document. Summing fractional values at a
+ * magnitude of ~1e13 accumulates reassociation drift far past 1e-5, and an
+ * affected org can no longer create, edit, sell or delete any vehicle at all
+ * from around 250 rows, permanently, with no self-recovery. `Math.floor` makes
+ * every summand integral; day-granularity `avgDays` cannot notice, and the sort
+ * key keeps full precision.
+ *
+ * **It must stay well under 2^53**, past which float64 stops representing
+ * integers exactly and the same assertion fires. Raw epoch milliseconds are
+ * ~1.79e12, so a node's sum would cross 2^53 at roughly 5,000 rows while a full
+ * height-2 node holds up to 4,912 — no margin at all. Offsetting to a recent
+ * epoch leaves ~8.6e10 per row today, i.e. ~105,000 rows in one node, and that
+ * headroom shrinks each year as `createdAt` grows (~69,000 by 2028).
  *
  * Changing SUM_EPOCH later invalidates every stored sum and requires clearing
  * and rebuilding the tree, so it is fixed here deliberately.
@@ -78,7 +89,7 @@ export const vehiclesByOrg = new TableAggregate<{
     doc.status,
     vehicleCreatedAt(doc),
   ],
-  sumValue: (doc) => vehicleCreatedAt(doc) - SUM_EPOCH,
+  sumValue: (doc) => Math.floor(vehicleCreatedAt(doc)) - SUM_EPOCH,
 });
 
 /**

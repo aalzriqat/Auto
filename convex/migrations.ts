@@ -75,7 +75,11 @@ export const backfillVehicleAggregate = internalMutation({
     ctx,
     args
   ): Promise<{ migrated: number; isDone: boolean; continueCursor: string | null }> => {
-    const numItems = Math.min(Math.max(args.batchSize ?? 200, 1), 500);
+    // Each row costs several aggregate index reads and node patches on top of
+    // its own read, so the ceiling is well below what a plain paginate could
+    // take. 250 keeps a batch inside the per-transaction budget; exceeding it
+    // would throw and kill the self-scheduled chain.
+    const numItems = Math.min(Math.max(args.batchSize ?? 100, 1), 250);
 
     const page = await ctx.db.query("vehicles").paginate({
       cursor: args.cursor ?? null,

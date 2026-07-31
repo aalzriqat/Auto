@@ -1843,6 +1843,19 @@ export const getRelations = query({
   },
 });
 
+/**
+ * Ceiling on rows per `importBulk` call.
+ *
+ * Each vehicle insert now also walks and patches the aggregate B-tree, so a row
+ * costs several index reads and node writes on top of its own document write.
+ * An uncapped array put the whole spreadsheet in one transaction, which puts a
+ * large import within reach of Convex's per-transaction limits — and a
+ * transaction that trips them rolls the entire import back with an opaque
+ * error. The client chunks to this size; the cap is enforced here because the
+ * client is never the control.
+ */
+export const IMPORT_BULK_MAX_ROWS = 200;
+
 export const importBulk = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -1877,6 +1890,12 @@ export const importBulk = mutation({
     })),
   },
   handler: async (ctx, args) => {
+    if (args.vehicles.length > IMPORT_BULK_MAX_ROWS) {
+      throw new ConvexError(
+        `Import too large: ${args.vehicles.length} rows in one request (max ${IMPORT_BULK_MAX_ROWS}). Split the file and import again.`
+      );
+    }
+
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
 
     // Bulk import runs no Zod schema, and its two range filters (`sourceCost <= 0`

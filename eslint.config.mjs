@@ -24,15 +24,12 @@ export default defineConfig([
       "no-restricted-imports": [
         "error",
         {
-          paths: [
+          // Patterns, not exact paths: "./_generated/server.js" resolves and
+          // typechecks just as well as the extensionless form, and an exact
+          // path match stays silent on it.
+          patterns: [
             {
-              name: "./_generated/server",
-              importNames: ["mutation", "internalMutation"],
-              message:
-                "Import mutation/internalMutation from convex/functions.ts so aggregate triggers fire. See convex/aggregates.ts.",
-            },
-            {
-              name: "../_generated/server",
+              group: ["**/_generated/server", "**/_generated/server.js"],
               importNames: ["mutation", "internalMutation"],
               message:
                 "Import mutation/internalMutation from convex/functions.ts so aggregate triggers fire. See convex/aggregates.ts.",

@@ -365,3 +365,46 @@ test("bucket counts match the original row-scan formula across randomised ages",
   expect(await bucketCounts(asUser, orgId)).toEqual(reference);
   vi.useRealTimers();
 });
+
+test("rows without createdAt do not corrupt the tree's stored sums", async () => {
+  vi.useFakeTimers();
+  const t = setup();
+  const { orgId, asUser } = await seedDealer(t);
+
+  // `importBulk` and the approval-workflow create both omit `createdAt`, and
+  // every legacy row predates the field — so `vehicleCreatedAt` falls back to
+  // `_creationTime`, which Convex makes *fractional* to keep it unique per doc
+  // (e.g. 1785467022410.001). Summing fractional values accumulates
+  // reassociation drift, and the component asserts its incremental sum matches
+  // the re-associated one within an absolute 1e-5 before splitting a node,
+  // throwing a plain Error — which rolls back the dealer's whole mutation —
+  // when it doesn't. Enough rows to force several splits.
+  const COUNT = 300;
+  await t.run(async (ctx) => {
+    for (let i = 0; i < COUNT; i++) {
+      await ctx.db.insert("vehicles", {
+        orgId,
+        make: "Toyota",
+        model: `NoCreatedAt ${i}`,
+        year: 2020,
+        vin: `VINNC${String(i).padStart(11, "0")}`,
+        mileage: 1000,
+        color: "White",
+        fuelType: "PETROL",
+        transmission: "AUTOMATIC",
+        sellingPrice: 10000,
+        sourceType: "STOCK" as const,
+        status: "AVAILABLE" as const,
+        // createdAt deliberately omitted.
+      });
+    }
+  });
+
+  // The invariant is that the write path survives and every row is counted;
+  // which bucket they land in depends on the harness clock vs `_creationTime`,
+  // which is not what this test is about.
+  const counts = await bucketCounts(asUser, orgId);
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  expect(total).toBe(COUNT);
+  vi.useRealTimers();
+});
