@@ -415,4 +415,8 @@ export declare const internal: FilterApi<
 export declare const components: {
   rateLimiter: import("@convex-dev/rate-limiter/_generated/component.js").ComponentApi<"rateLimiter">;
   vehiclesByOrg: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"vehiclesByOrg">;
+  vehicleQualityByOrg: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"vehicleQualityByOrg">;
+  customersByOrg: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"customersByOrg">;
+  leadsByOrg: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"leadsByOrg">;
+  membershipsByOrg: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"membershipsByOrg">;
 };

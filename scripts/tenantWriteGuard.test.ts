@@ -171,11 +171,29 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // correct: it takes a pagination cursor and no orgId, walks every org's
   // vehicles by design, and writes only to the aggregate component — it never
   // patches a caller-supplied row, so there is no tenant boundary to cross.
+  //
+  // Then 422→426 by the customer/lead/membership backfills and
+  // `migrations.rebuildVehicleAggregates`, which extend that same pattern to
+  // the four aggregates the dashboard counts now come from. Every one of them
+  // is an internalMutation that takes no orgId, walks or clears every org by
+  // design, and writes only to aggregate components — none patches a
+  // caller-supplied row.
+  //
+  // `skippedNoArgsBlock` moved 5→9 in the same change, and that shift is worth
+  // reading carefully because it looks like coverage loss. The four backfills
+  // declare `args: BACKFILL_ARGS` — a shared const rather than an inline object
+  // literal — and the analyzer only recognises a literal. So they are skipped
+  // for *lack of a parsable args block* instead of for *having no orgId*. Both
+  // are skip categories, so no mutation moved out of `analysed`: that count is
+  // unchanged at 278, which is the number this pin exists to protect. The one
+  // pre-existing function affected is `backfillVehicleAggregate`, which moved
+  // between the two skip buckets when it adopted the shared args — hence
+  // `skippedNoOrgId` staying at 139 rather than rising.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 422,
+      totalMutations: 426,
       analysed: 278,
-      skippedNoArgsBlock: 5,
+      skippedNoArgsBlock: 9,
       skippedNoOrgId: 139,
     });
   });

@@ -45,6 +45,14 @@ export default defineConfig([
       "react/no-unescaped-entities": "warn",
       "react-hooks/set-state-in-effect": "warn",
       "react-hooks/purity": "warn",
+      // `const { orgId: _, ...rest } = args` is how TypeScript expresses "every
+      // field except this one". The discarded binding is required by the
+      // language to say that — there is no way to write the omission without
+      // naming what is omitted — so flagging it reports a false positive rather
+      // than a defect. `ignoreRestSiblings` is the base ESLint rule's own
+      // default; the TypeScript preset turns it off. Narrow by construction: it
+      // exempts only bindings that sit alongside a rest property.
+      "@typescript-eslint/no-unused-vars": ["warn", { ignoreRestSiblings: true }],
     },
   },
 ]);
