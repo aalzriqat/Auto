@@ -29,34 +29,32 @@ import { createVehicle, gotoOrgRoute, testDataSuffix } from "../utils";
 // redoes the Clerk handshake and OrgProvider's membership gate.
 test.describe.configure({ timeout: 120_000 });
 
-// KNOWN BROKEN — skipped, not deleted. All three fail at the same point against
-// the shared dev deployment (run 30627460528); every other spec in the suite
-// passes, so this is not an environment problem.
+// STILL SKIPPED — but with two hypotheses now eliminated rather than none.
 //
-// What the failure artifact shows at the moment of the timeout:
+// All three fail identically: after clicking "Request Profit Approval" the alert
+// keeps offering the button, so checkPendingApproval never reports a PENDING row
+// matching the entered profit. Every other spec in the suite passes.
 //
-//     - alert:
-//       - heading "Approval Required" [level=5]
-//       - button "Request Profit Approval"
-//     - button "Next" [disabled]
+// Ruled out by evidence, not reasoning:
 //
-// The gate renders correctly and the click on "Request Profit Approval" lands,
-// but the alert still shows the *button* rather than "Approval request is
-// currently pending" — so `approvals.checkPendingApproval` never returned a
-// PENDING row, i.e. `approvals.requestProfitApproval` threw on the server.
+//  1. NOT a bad argument shape. convex/requestProfitApprovalArgs.test.ts sends
+//     the wizard's exact payload — including the wizardSnapshot optionals that
+//     are undefined until the finance panel is touched — and the mutation
+//     accepts it and checkPendingApproval reports it back.
+//  2. NOT a thrown mutation. With the catch added to handleRequestApproval this
+//     run would have rendered a toast; the artifact's "Notifications" region is
+//     empty (run 30633770011). Nothing threw.
 //
-// It is invisible because `handleRequestApproval` in Step1QuoteSetup.tsx wraps
-// the mutation in try/finally with **no catch**: the rejection is swallowed,
-// the salesperson sees the button sit there, and nothing is logged. That
-// swallowed error is worth fixing on its own merits regardless of this spec —
-// a real salesperson hits exactly the same dead end.
+// So the mutation is most likely never invoked. The only silent path left is
+// handleRequestApproval's `if (!activeOrgId || !watchedVehicleId) return`, which
+// is hard to square with the alert rendering at all since that needs
+// watchedVehicleId truthy. Next step: instrument that guard, or reproduce
+// locally against dev (reference_local_browser_testing_autoflow) rather than by
+// CI round-trip.
 //
-// Next step for whoever picks this up: add a catch + toast to
-// handleRequestApproval, or drive the mutation directly from a Convex test with
-// the QA fixture's identity to surface the throw. Do not assume the selectors
-// are wrong — they are verified against the components and the gate itself
-// renders.
-
+// One confounder from the artifact that nobody has tested: the QA org has NO
+// customer statuses configured ("No customer statuses configured yet"), so the
+// finance panel never offers a company on this path.
 const MINIMUM_PROFIT = 5000;
 const REQUESTED_PROFIT = 100;
 
@@ -74,7 +72,7 @@ async function openBlockedInstallmentQuote(page: Page) {
   const installmentEntry = page.locator("#btn-new-installment-sale");
   await expect(
     installmentEntry,
-    "The QA org has no INSTALLMENT payment type enabled, so the financed wizard cannot be opened. Enable it in Settings → Finance for the fixture org."
+    "The QA org has no INSTALLMENT payment type enabled, so the financed wizard cannot be opened. Enable it in Settings > Finance for the fixture org."
   ).toBeVisible();
   await installmentEntry.click();
 
