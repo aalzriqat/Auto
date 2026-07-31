@@ -49,7 +49,7 @@ import { validateVinChecksum } from "../lib/vinHelpers";
  * - `createdAt` makes the age buckets pure range counts.
  *
  * Adding `sourcedFlag` changed the key, which invalidates every stored position
- * — see `migrations.rebuildVehicleAggregate`, which must run once per deployment
+ * — see `migrations.rebuildVehicleAggregates`, which must run once per deployment
  * that already had the old three-element key.
  *
  * `sumValue` is `createdAt` *offset by `SUM_EPOCH`*, so average age within a

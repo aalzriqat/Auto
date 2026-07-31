@@ -491,10 +491,15 @@ export const getAgingBuckets = query({
 
     const now = Date.now();
 
-    // Each bucket is a contiguous createdAt range, so it is a bounded count and
-    // a bounded sum against the B-tree — eight O(log n) reads in total, no
-    // vehicle documents touched. Iterating every AVAILABLE vehicle to build
-    // this histogram was 1.19 GB of database I/O.
+    // Each bucket is a contiguous createdAt range *per stock kind*, so it is a
+    // bounded count and a bounded sum against the B-tree — four buckets × two
+    // kinds × (count + sum) = sixteen O(log n) reads in total, no vehicle
+    // documents touched. Iterating every AVAILABLE vehicle to build this
+    // histogram was 1.19 GB of database I/O.
+    //
+    // The kinds double the range count but not the round-trips: `countBatch`
+    // and `sumBatch` each walk the tree once no matter how many bound pairs
+    // they are handed, which is why they are used instead of per-bucket calls.
     //
     // Boundaries are derived from the row-scan's `ageDays <= 30 | 60 | 90`,
     // where ageDays = floor((now - createdAt) / DAY_MS):

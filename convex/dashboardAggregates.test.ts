@@ -1,5 +1,5 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
@@ -40,6 +40,15 @@ const DASHBOARD_PERMISSIONS = [
 beforeEach(() => {
   process.env.CLERK_JWT_ISSUER_DOMAIN ??= "https://test.clerk.accounts.dev";
   process.env.NEXT_PUBLIC_APP_URL ??= "https://test.example.com";
+});
+
+// `vi.setSystemTime` does not reset itself between tests, so without this the
+// mocked clock set by `statsFor` leaks forward in file order. Nothing here is
+// wrong today only because NOW never varies — which means a future test that
+// picks a different instant would silently inherit this one's. Reset explicitly
+// rather than depend on that.
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 function setup() {
