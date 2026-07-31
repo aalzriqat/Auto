@@ -10,7 +10,7 @@ export default defineConfig([
   // apps/** and packages/** carry their own toolchains (Expo/React Native);
   // the root Next.js lint setup misfires on their patterns, same reason they
   // are excluded from the root vitest run.
-  globalIgnores(["convex/_generated", "scratch", "marketing/render-cover.js", "testsprite_tests/get_token.js", "apps/**", "packages/**"]),
+  globalIgnores(["convex/_generated", "scratch", "marketing/render-cover.js", "apps/**", "packages/**"]),
   {
     rules: {
       "@typescript-eslint/no-explicit-any": "warn",

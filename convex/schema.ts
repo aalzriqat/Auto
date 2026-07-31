@@ -3193,7 +3193,13 @@ export default defineSchema({
     ranAt: v.number(),
     success: v.boolean(),
     detail: v.optional(v.string()),
-  }).index("by_job", ["jobName"]),
+  })
+    // ranAt is part of the key so "newest heartbeat for this job" is a single
+    // indexed read rather than a scan-and-max over the whole table.
+    .index("by_job_ranAt", ["jobName", "ranAt"])
+    // Retention sweeps delete by age; without this they would scan the table
+    // they exist to keep small.
+    .index("by_ranAt", ["ranAt"]),
 
   webhookLogs: defineTable({
     source: v.union(

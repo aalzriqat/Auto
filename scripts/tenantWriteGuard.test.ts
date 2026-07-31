@@ -158,12 +158,19 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // for a write to escape from. It is an internalMutation reachable only from
   // `create`, which is requireSuperAdmin-gated, and its cross-org writes are
   // the entire point of a platform-wide broadcast.
+  //
+  // Then 420→421 by `adminSystem.pruneOperationalLogs`, which also lands in
+  // `skippedNoOrgId` rather than `analysed`. Correct, not a hole: it takes no
+  // args at all, and the two tables it deletes from (cronHeartbeats,
+  // webhookLogs) are deployment-global diagnostics with no orgId column — there
+  // is no tenant boundary for a write to cross. It is an internalMutation
+  // reachable only from the `prune-operational-logs` cron.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 420,
+      totalMutations: 421,
       analysed: 278,
       skippedNoArgsBlock: 5,
-      skippedNoOrgId: 137,
+      skippedNoOrgId: 138,
     });
   });
 });

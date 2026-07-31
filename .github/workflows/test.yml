@@ -69,15 +69,14 @@ jobs:
 
   # SonarCloud currently analyses this repo in Automatic Analysis mode, which
   # does NOT read sonar-project.properties — so every exclusion in that file is
-  # dead config. That is why `load-tests/**` and `testsprite_tests/**` are still
-  # analysed and still contribute vulnerabilities to the Security Rating gate,
+  # dead config. That is why `load-tests/**` is still analysed and still
+  # contributes vulnerabilities to the Security Rating gate,
   # and why `sonar.javascript.lcov.reportPaths` has never actually delivered a
   # coverage report.
   #
   # This job runs the scanner from CI, which makes that file authoritative. It
   # activates the moment a SONAR_TOKEN repo secret exists and is skipped
-  # otherwise — the same opt-in shape as CYPRESS_RECORD_KEY in cypress.yml — so
-  # merging it changes nothing until the token is added.
+  # otherwise, so merging it changes nothing until the token is added.
   #
   # ORDERING IS MANDATORY, not advisory: SonarCloud REJECTS a CI submission while
   # Automatic Analysis is enabled ("You are running CI analysis while Automatic

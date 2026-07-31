@@ -37,7 +37,7 @@ export default defineConfig({
       reporter: ["text", "lcov", "html", "json-summary"],
       // Track files that have dedicated unit/integration test suites.
       // Convex mutations with minimal tests and all UI components/pages
-      // are covered by TestSprite E2E tests instead.
+      // are covered by the Playwright E2E suite instead.
       include: [
         "lib/colorUtils.ts",
         "lib/commission.ts",

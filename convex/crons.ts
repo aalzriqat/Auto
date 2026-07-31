@@ -104,6 +104,17 @@ crons.interval(
   {}
 );
 
+// Delete cronHeartbeats/webhookLogs rows past their retention window. Both are
+// append-only diagnostics that nothing pruned, and the admin Cron Status panel
+// re-read every heartbeat on every insert — together the largest source of
+// database bandwidth on this deployment.
+crons.interval(
+  "prune-operational-logs",
+  { hours: 1 },
+  internal.adminSystem.pruneOperationalLogs,
+  {}
+);
+
 // GL Phase 11: post one month of straight-line depreciation for every ACTIVE
 // fixed asset, across every org. Runs once a month; depreciateAssetForMonth
 // is idempotent per (assetId, yearMonth) so a redrive/redeploy can't double-post.
