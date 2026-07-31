@@ -229,7 +229,7 @@ export async function expectVisibleTableCell(
  */
 export async function createVehicle(
   page: Page,
-  opts?: { model?: string },
+  opts?: { model?: string; minimumProfit?: number; requireImmediate?: boolean },
 ): Promise<{ make: string; model: string; vin: string }> {
   const model = opts?.model ?? `E2E-${testDataSuffix()}`;
   const make = "Playwright";
@@ -251,14 +251,34 @@ export async function createVehicle(
   await dialog.getByLabel("Mileage").fill("100");
   await dialog.getByLabel("Selling Price (JOD)").fill("15000");
 
+  // Only the profit-approval spec needs a floor; left at the form default (0)
+  // otherwise so no other spec accidentally trips the approval gate.
+  if (opts?.minimumProfit !== undefined) {
+    await dialog
+      .getByLabel("Minimum Profit (JOD)")
+      .fill(String(opts.minimumProfit));
+  }
+
   await dialog
     .getByRole("button", { name: /^(Add Vehicle|Submit for Approval)$/ })
     .click();
-  await expect(
-    page.getByText(
-      /Vehicle added successfully|Creation request submitted for approval/,
-    ),
-  ).toBeVisible();
+
+  // A caller holding only CREATE_VEHICLES_REQUEST gets "Submit for Approval":
+  // a pending vehicleEdits row is written and NO vehicles row exists. Callers
+  // that go on to select the vehicle must insist on the direct path, or they
+  // fail later with an unrelated-looking "element not found" on the picker.
+  if (opts?.requireImmediate) {
+    await expect(
+      page.getByText("Vehicle added successfully"),
+      "createVehicle({ requireImmediate: true }) needs a fixture with create:vehicles — this account only has create:vehicles:request, so the vehicle was queued for approval and never entered inventory.",
+    ).toBeVisible();
+  } else {
+    await expect(
+      page.getByText(
+        /Vehicle added successfully|Creation request submitted for approval/,
+      ),
+    ).toBeVisible();
+  }
   await expect(dialog).not.toBeVisible();
 
   return { make, model, vin };
