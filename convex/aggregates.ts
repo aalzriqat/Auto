@@ -8,11 +8,21 @@ import { DataModel, Id } from "./_generated/dataModel";
  * "how old" without reading the rows.
  *
  * `vehicles.getAgingBuckets` used to iterate every AVAILABLE vehicle's full
- * document to build a four-bucket histogram, and `dashboard.stats` /
- * `dashboard.dataQualityStats` read up to 2,000 more for counts. All three are
- * *live* queries on the dashboard landing page, so every vehicle write re-ran
- * them from scratch. Per Convex's own per-function breakdown those three were
- * 67% of this project's database bandwidth (9.6 GB of 14.27 GB).
+ * document to build a four-bucket histogram. Per Convex's own per-function
+ * breakdown it was 1.19 GB of database bandwidth.
+ *
+ * ## What this does and does not buy
+ *
+ * It cuts the *bytes read per execution*, not the number of executions. The
+ * B-tree's interior nodes are themselves documents, so a write that patches a
+ * node inside a range the query reads still invalidates the subscription — the
+ * dashboard re-runs about as often as it did against the index scan. What
+ * changes is that a re-run reads ~15-20 node documents instead of every
+ * matching vehicle row.
+ *
+ * Genuinely reducing the *rate* of re-execution is a different change
+ * (decoupling the tiles from a live query), and is deliberately not attempted
+ * here.
  *
  * ## Key layout
  *
@@ -29,8 +39,23 @@ import { DataModel, Id } from "./_generated/dataModel";
  * - `status` lets a bounded read count just AVAILABLE vehicles.
  * - `createdAt` makes the age buckets pure range counts.
  *
- * `sumValue` is `createdAt`, so average age within a bucket comes from
- * `sum / count` instead of reading the rows.
+ * `sumValue` is `createdAt` *offset by `SUM_EPOCH`*, so average age within a
+ * bucket comes from `sum / count` instead of reading the rows.
+ *
+ * The offset is not cosmetic. The component keeps a running `sum` on every
+ * B-tree node and, when a node splits, asserts that the incrementally
+ * accumulated sum equals the re-associated `left + right + pivot` within 1e-5,
+ * throwing a plain `Error("bad sum split")` — which rolls back the dealer's
+ * whole mutation — when it doesn't. Raw epoch milliseconds are ~1.78e12, so a
+ * node's sum crosses 2^53 (where float64 stops representing integers exactly)
+ * at roughly 5,000 rows, and a full height-2 node holds up to 4,912. That is a
+ * ~2% margin today which shrinks every year as `createdAt` grows, going
+ * negative around Feb 2028 — at which point any org with a few thousand
+ * lifetime vehicle rows starts failing *writes*. Offsetting to a recent epoch
+ * drops the magnitude to ~1e10 and buys ~900,000 rows of headroom.
+ *
+ * Changing SUM_EPOCH later invalidates every stored sum and requires clearing
+ * and rebuilding the tree, so it is fixed here deliberately.
  *
  * ## Invariant
  *
@@ -53,7 +78,7 @@ export const vehiclesByOrg = new TableAggregate<{
     doc.status,
     vehicleCreatedAt(doc),
   ],
-  sumValue: (doc) => vehicleCreatedAt(doc),
+  sumValue: (doc) => vehicleCreatedAt(doc) - SUM_EPOCH,
 });
 
 /**
@@ -68,6 +93,13 @@ export function vehicleCreatedAt(doc: {
 }): number {
   return doc.createdAt ?? doc._creationTime;
 }
+
+/**
+ * Origin the aggregate's stored sums are measured from. Keeps node sums far
+ * below 2^53 — see the note on `sumValue` above. 2023-11-14T22:13:20Z, chosen
+ * to predate every row in the system.
+ */
+export const SUM_EPOCH = 1_700_000_000_000;
 
 /** Sort-key prefix for live (non-soft-deleted) vehicles in a given status. */
 export const LIVE = 0;

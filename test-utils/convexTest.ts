@@ -40,7 +40,7 @@ export function convexTestWithComponents<
 >(
   schema: Schema,
   modules: Record<string, () => Promise<unknown>>,
-): TestConvex<Schema> {
+): TestConvex<Schema> & { runUnwrapped: TestConvex<Schema>["run"] } {
   // convexTest's own generic widens `Schema` here; re-pinning it keeps the
   // concrete table/index types that every caller's `t.run(ctx => ...)` needs.
   const t = convexTest(schema, modules) as unknown as TestConvex<Schema>;
@@ -54,9 +54,17 @@ export function convexTestWithComponents<
   // without pinning this helper to one schema. The cast is confined to this
   // line; everything either side of it stays fully typed.
   const rawRun = t.run.bind(t);
+
+  // Escape hatch: writes that deliberately skip the triggers, so a test can
+  // construct the one state the application cannot — a row present in the table
+  // but absent from the B-tree. That is exactly the pre-backfill state
+  // `idempotentTrigger` exists to survive, and without this it is unreachable
+  // from a harness where every write maintains the tree.
+  (t as unknown as { runUnwrapped: typeof t.run }).runUnwrapped = rawRun;
+
   t.run = ((fn: (ctx: never) => unknown) =>
     rawRun(((ctx: never) =>
       fn(aggregateTriggers.wrapDB(ctx as never) as never)) as never)) as typeof t.run;
 
-  return t;
+  return t as TestConvex<Schema> & { runUnwrapped: TestConvex<Schema>["run"] };
 }

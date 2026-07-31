@@ -3,6 +3,7 @@ import { paginationOptsValidator } from "convex/server";
 import { internal } from "./_generated/api";
 import { query, MutationCtx } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
+import { vehiclesByOrg } from "./aggregates";
 import { Doc, Id, TableNames } from "./_generated/dataModel";
 import { requireSuperAdmin } from "./utils/tenancy";
 import { throwAppError, AppErrorCode } from "./utils/errors";
@@ -202,6 +203,12 @@ async function deleteVehiclesWithStorageBatch(ctx: MutationCtx, orgId: Id<"organ
   }
   if (vehicles.length > 0) {
     counts.vehicles = vehicles.length;
+  } else {
+    // Last batch: the row deletes above already emptied this org's aggregate
+    // via the trigger, but the namespace's own btree/root-node docs survive an
+    // empty tree. Drop them too, or every hard-deleted org leaves a pair of
+    // orphaned component rows behind forever.
+    await vehiclesByOrg.clear(ctx, { namespace: orgId });
   }
   return counts;
 }

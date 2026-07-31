@@ -236,3 +236,132 @@ test("the backfill is idempotent and pages past a single batch", async () => {
   expect((await bucketCounts(asUser, orgId))["0-30"]).toBe(5);
   vi.useRealTimers();
 });
+
+// ─── The states only a real deployment can reach ─────────────────────────────
+//
+// These use `runUnwrapped` to write without firing the triggers, constructing
+// the row-in-table-but-not-in-tree state that exists between this component
+// deploying and the backfill finishing. Everything above deliberately cannot
+// produce it; without these, the entire reason for choosing `idempotentTrigger`
+// over `trigger` would be untested.
+
+/** Inserts a vehicle the aggregate has never seen — the pre-backfill state. */
+async function seedUntrackedVehicle(
+  t: ReturnType<typeof setup>,
+  orgId: Id<"organizations">,
+  ageDays: number,
+  status: string = "AVAILABLE",
+) {
+  return await t.runUnwrapped(async (ctx) =>
+    ctx.db.insert("vehicles", {
+      orgId,
+      make: "Toyota",
+      model: "Untracked",
+      year: 2020,
+      vin: "VINUNTRACKED0001",
+      mileage: 1000,
+      color: "White",
+      fuelType: "PETROL",
+      transmission: "AUTOMATIC",
+      sellingPrice: 10000,
+      sourceType: "STOCK" as const,
+      status: status as "AVAILABLE",
+      createdAt: NOW - ageDays * DAY_MS,
+    }),
+  );
+}
+
+test("editing a vehicle the tree has never seen adopts it instead of throwing", async () => {
+  vi.useFakeTimers();
+  const t = setup();
+  const { orgId, asUser } = await seedDealer(t);
+  const vehicleId = await seedUntrackedVehicle(t, orgId, 5);
+
+  // Invisible until something touches it — this is the backfill window.
+  expect((await bucketCounts(asUser, orgId))["0-30"]).toBe(0);
+
+  // The strict trigger would throw DELETE_MISSING_KEY here and roll the whole
+  // mutation back, i.e. the dealer could not edit their own vehicle until the
+  // backfill finished. The idempotent one adopts the row.
+  await asUser.mutation(api.vehicles.softDelete, { orgId, vehicleId });
+
+  // Adopted, and adopted as deleted — not counted.
+  expect((await bucketCounts(asUser, orgId))["0-30"]).toBe(0);
+  vi.useRealTimers();
+});
+
+test("the backfill seeds rows the tree has never seen, and re-running does not double-count", async () => {
+  vi.useFakeTimers();
+  const t = setup();
+  const { orgId, asUser } = await seedDealer(t);
+  await seedUntrackedVehicle(t, orgId, 5);
+
+  expect((await bucketCounts(asUser, orgId))["0-30"]).toBe(0);
+
+  await drainBackfill(t);
+  expect((await bucketCounts(asUser, orgId))["0-30"]).toBe(1);
+
+  await drainBackfill(t);
+  expect((await bucketCounts(asUser, orgId))["0-30"]).toBe(1);
+  vi.useRealTimers();
+});
+
+test("a hard delete removes the vehicle from the counts", async () => {
+  vi.useFakeTimers();
+  const t = setup();
+  const { orgId, asUser } = await seedDealer(t);
+  const [vehicleId] = await seedVehicles(t, [{ orgId, ageDays: 5 }]);
+
+  expect((await bucketCounts(asUser, orgId))["0-30"]).toBe(1);
+
+  // Through the wrapped db, the way adminData's hard delete does it.
+  await t.run(async (ctx) => ctx.db.delete(vehicleId));
+
+  expect((await bucketCounts(asUser, orgId))["0-30"]).toBe(0);
+  vi.useRealTimers();
+});
+
+test("a status change moves the vehicle between buckets", async () => {
+  vi.useFakeTimers();
+  const t = setup();
+  const { orgId, asUser } = await seedDealer(t);
+  const [vehicleId] = await seedVehicles(t, [{ orgId, ageDays: 5 }]);
+
+  expect((await bucketCounts(asUser, orgId))["0-30"]).toBe(1);
+
+  await t.run(async (ctx) => ctx.db.patch(vehicleId, { status: "SOLD" }));
+  expect((await bucketCounts(asUser, orgId))["0-30"]).toBe(0);
+
+  await t.run(async (ctx) => ctx.db.patch(vehicleId, { status: "AVAILABLE" }));
+  expect((await bucketCounts(asUser, orgId))["0-30"]).toBe(1);
+  vi.useRealTimers();
+});
+
+test("bucket counts match the original row-scan formula across randomised ages", async () => {
+  vi.useFakeTimers();
+  const t = setup();
+  const { orgId, asUser } = await seedDealer(t);
+
+  // Deterministic pseudo-random sweep, weighted towards the boundaries where a
+  // sign or off-by-one error in the bounds arithmetic would hide.
+  let seed = 12345;
+  const rand = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const ages = [
+    0, 1, 29, 30, 31, 59, 60, 61, 89, 90, 91, 92,
+    ...Array.from({ length: 60 }, () => Math.floor(rand() * 200)),
+  ];
+
+  await seedVehicles(t, ages.map((ageDays) => ({ orgId, ageDays })));
+
+  // The implementation this replaced, verbatim.
+  const reference: Record<string, number> = { "0-30": 0, "31-60": 0, "61-90": 0, "90+": 0 };
+  for (const ageDays of ages) {
+    const days = Math.max(0, Math.floor((NOW - (NOW - ageDays * DAY_MS)) / DAY_MS));
+    const bucket =
+      days <= 30 ? "0-30" : days <= 60 ? "31-60" : days <= 90 ? "61-90" : "90+";
+    reference[bucket]++;
+  }
+
+  expect(await bucketCounts(asUser, orgId)).toEqual(reference);
+  vi.useRealTimers();
+});

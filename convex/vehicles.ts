@@ -1,7 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { MutationCtx, QueryCtx, query } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
-import { vehiclesByOrg, LIVE } from "./aggregates";
+import { vehiclesByOrg, LIVE, SUM_EPOCH } from "./aggregates";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
@@ -490,39 +490,51 @@ export const getAgingBuckets = query({
     // Boundaries are derived from the row-scan's `ageDays <= 30 | 60 | 90`,
     // where ageDays = floor((now - createdAt) / DAY_MS):
     //   ageDays <= N  <=>  createdAt > now - (N + 1) * DAY_MS
-    const results = await Promise.all(
-      AGE_BUCKETS.map(async ({ bucket, maxAgeDays, minAgeDays }) => {
-        const bounds = {
-          // An older vehicle has a *smaller* createdAt, so maxAgeDays is the
-          // lower bound of the range and minAgeDays the upper one.
-          lower:
-            maxAgeDays === null
-              ? { key: agingKey(Number.MIN_SAFE_INTEGER), inclusive: true as const }
-              : { key: agingKey(now - (maxAgeDays + 1) * DAY_MS), inclusive: false as const },
-          upper:
-            minAgeDays === 0
-              ? { key: agingKey(Number.MAX_SAFE_INTEGER), inclusive: true as const }
-              : { key: agingKey(now - minAgeDays * DAY_MS), inclusive: true as const },
-        };
+    const queries = AGE_BUCKETS.map(({ maxAgeDays, minAgeDays }) => ({
+      namespace: args.orgId,
+      bounds: {
+        // An older vehicle has a *smaller* createdAt, so maxAgeDays gives the
+        // lower bound of the range and minAgeDays the upper one.
+        lower:
+          maxAgeDays === null
+            ? { key: agingKey(Number.MIN_SAFE_INTEGER), inclusive: true as const }
+            : { key: agingKey(now - (maxAgeDays + 1) * DAY_MS), inclusive: false as const },
+        upper:
+          minAgeDays === 0
+            ? { key: agingKey(Number.MAX_SAFE_INTEGER), inclusive: true as const }
+            : { key: agingKey(now - minAgeDays * DAY_MS), inclusive: true as const },
+      },
+    }));
 
-        const [count, sumCreatedAt] = await Promise.all([
-          vehiclesByOrg.count(ctx, { namespace: args.orgId, bounds }),
-          vehiclesByOrg.sum(ctx, { namespace: args.orgId, bounds }),
-        ]);
+    // Batched: `count` and `sum` each issue their own component round-trip, so
+    // asking per bucket would be eight traversals of the same tree — enough to
+    // read more than the row scan this replaces on a mid-sized org. Two batched
+    // calls walk it twice regardless of how many buckets there are.
+    const [counts, sums] = await Promise.all([
+      vehiclesByOrg.countBatch(ctx, queries),
+      vehiclesByOrg.sumBatch(ctx, queries),
+    ]);
 
-        // Mean age from the mean createdAt. The row scan averaged already-floored
-        // ages; this floors once at the end, so the two can differ by at most a
-        // day on a mixed bucket. That is within the precision an "average days
-        // in stock" tile conveys, and it is the only way to get an average
-        // without reading the rows.
-        const avgDays =
-          count > 0 ? Math.max(0, Math.round((now - sumCreatedAt / count) / DAY_MS)) : 0;
+    return AGE_BUCKETS.map(({ bucket }, i) => {
+      const count = counts[i];
+      // Mean age from the mean createdAt (sums are stored offset by SUM_EPOCH,
+      // so add it back). The row scan averaged already-floored ages and this
+      // floors once at the end, so on a mixed bucket the two can differ by at
+      // most a day — within what an "average days in stock" tile conveys, and
+      // the only way to get an average without reading the rows.
+      //
+      // The scan also clamped each row's age at 0 before averaging, which this
+      // cannot reproduce from a sum. Only a future-dated `createdAt` can tell
+      // the difference, and no mutation produces one — every write path stamps
+      // Date.now(). The admin raw-JSON editor can, so the clamp stays on the
+      // result to keep a negative average from ever reaching the UI.
+      const avgDays =
+        count > 0
+          ? Math.max(0, Math.round((now - (sums[i] / count + SUM_EPOCH)) / DAY_MS))
+          : 0;
 
-        return { bucket, count, avgDays };
-      })
-    );
-
-    return results;
+      return { bucket, count, avgDays };
+    });
   },
 });
 

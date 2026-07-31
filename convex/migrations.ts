@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation } from "./functions";
 import { vehiclesByOrg } from "./aggregates";
+import { internal } from "./_generated/api";
 import { ALL_PERMISSIONS, isSystemOwnerRole, normalizeRoleName, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
 
 export const backfillPermissions = internalMutation({
@@ -41,22 +42,39 @@ export const backfillPermissions = internalMutation({
 /**
  * Seeds the `vehiclesByOrg` aggregate from the existing `vehicles` rows.
  *
- * The trigger in `convex/functions.ts` only sees writes that happen after it is
- * deployed, so without this every vehicle already in the table is invisible to
- * the B-tree and `getAgingBuckets` reports zeroes. Run this once per deployment
- * after the component ships; a fresh deployment (preview/E2E) starts empty and
- * needs nothing.
+ * The trigger in `convex/aggregates.ts` only sees writes that happen after it
+ * is deployed, so without this every vehicle already in the table is invisible
+ * to the B-tree. Worse than showing zero: the idempotent trigger inserts rows
+ * as they happen to be edited, so an un-backfilled deployment shows a
+ * believable *partial* count rather than an obviously broken one. Run once per
+ * deployment after the component ships; a fresh deployment (preview/E2E) starts
+ * empty and converges on its own.
  *
  * Paginated because a full-table mutation would blow the write budget on any
  * real org, and idempotent via `insertIfDoesNotExist` so a redrive or a partial
- * run that overlaps a live insert cannot double-count.
+ * run that overlaps a live insert cannot double-count. Pagination is by
+ * `_creationTime`, which no pre-existing row can change, so no row is skipped
+ * by concurrent writes.
+ *
+ * Self-scheduling: the alternative was returning the cursor for a human to feed
+ * back in, which in practice means one hand-driven dashboard call per 200
+ * vehicles and a half-migrated tree whenever someone stops early. A throw rolls
+ * back the scheduled continuation along with the batch's writes, so a failure
+ * halts the chain cleanly rather than leaving an orphan.
  */
 export const backfillVehicleAggregate = internalMutation({
   args: {
     cursor: v.optional(v.union(v.string(), v.null())),
     batchSize: v.optional(v.number()),
+    /** Set false to run exactly one batch — used by tests to drive it by hand. */
+    continueAutomatically: v.optional(v.boolean()),
   },
-  handler: async (ctx, args) => {
+  // Explicit: a self-scheduling function that infers its own return type makes
+  // the inference cyclic, and the resulting errors surface in unrelated files.
+  handler: async (
+    ctx,
+    args
+  ): Promise<{ migrated: number; isDone: boolean; continueCursor: string | null }> => {
     const numItems = Math.min(Math.max(args.batchSize ?? 200, 1), 500);
 
     const page = await ctx.db.query("vehicles").paginate({
@@ -71,12 +89,16 @@ export const backfillVehicleAggregate = internalMutation({
       await vehiclesByOrg.insertIfDoesNotExist(ctx, vehicle);
     }
 
+    if (!page.isDone && args.continueAutomatically !== false) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillVehicleAggregate, {
+        cursor: page.continueCursor,
+        batchSize: args.batchSize,
+      });
+    }
+
     return {
       migrated: page.page.length,
       isDone: page.isDone,
-      // Hand back the cursor so the caller can drive the next batch. Returning
-      // it rather than self-scheduling keeps this a plain mutation: a throw
-      // rolls the batch back cleanly with nothing half-scheduled behind it.
       continueCursor: page.isDone ? null : page.continueCursor,
     };
   },
