@@ -404,7 +404,22 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
                     <FormLabel>{t("LeadSource" as any) || "Source"}</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
+                    {/*
+                      `|| undefined` is load-bearing. Radix shows the placeholder
+                      only when `value` is undefined; an empty string is treated
+                      as a set value with no matching item, so the trigger renders
+                      *neither* the value nor the placeholder — a blank box.
+
+                      Source is free text written by automations, not an FK, so a
+                      lead can carry "" (or no source at all) even though the form
+                      schema requires one. sourceOptions above already pins an
+                      unrecognised non-empty source; this covers the empty case.
+                    */}
+                    <Select
+                      onValueChange={field.onChange}
+                      defaultValue={field.value || undefined}
+                      value={field.value || undefined}
+                    >
                       <FormControl>
                         <SelectTrigger>
                           <SelectValue placeholder={t("SelectSource" as any) || "Select lead source"} />

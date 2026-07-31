@@ -151,6 +151,7 @@ import type * as utils_leadAssignment from "../utils/leadAssignment.js";
 import type * as utils_leadStageHelpers from "../utils/leadStageHelpers.js";
 import type * as utils_marketplaceMatching from "../utils/marketplaceMatching.js";
 import type * as utils_mergeHelpers from "../utils/mergeHelpers.js";
+import type * as utils_metaText from "../utils/metaText.js";
 import type * as utils_money from "../utils/money.js";
 import type * as utils_notifications from "../utils/notifications.js";
 import type * as utils_paymentMethods from "../utils/paymentMethods.js";
@@ -342,6 +343,7 @@ declare const fullApi: ApiFromModules<{
   "utils/leadStageHelpers": typeof utils_leadStageHelpers;
   "utils/marketplaceMatching": typeof utils_marketplaceMatching;
   "utils/mergeHelpers": typeof utils_mergeHelpers;
+  "utils/metaText": typeof utils_metaText;
   "utils/money": typeof utils_money;
   "utils/notifications": typeof utils_notifications;
   "utils/paymentMethods": typeof utils_paymentMethods;
