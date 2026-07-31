@@ -199,6 +199,11 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  "accounting/accountSnapshots": typeof accounting_accountSnapshots;
+  "accounting/postingEngine": typeof accounting_postingEngine;
+  "accounting/postingRules": typeof accounting_postingRules;
+  "accounting/reversals": typeof accounting_reversals;
+  "accounting/workflowHooks": typeof accounting_workflowHooks;
   accountingCutover: typeof accountingCutover;
   accountingLedger: typeof accountingLedger;
   accountingMigration: typeof accountingMigration;
@@ -206,11 +211,6 @@ declare const fullApi: ApiFromModules<{
   accountingPeriods: typeof accountingPeriods;
   accountingReports: typeof accountingReports;
   accountingSetup: typeof accountingSetup;
-  "accounting/accountSnapshots": typeof accounting_accountSnapshots;
-  "accounting/postingEngine": typeof accounting_postingEngine;
-  "accounting/postingRules": typeof accounting_postingRules;
-  "accounting/reversals": typeof accounting_reversals;
-  "accounting/workflowHooks": typeof accounting_workflowHooks;
   adminAnalytics: typeof adminAnalytics;
   adminAudit: typeof adminAudit;
   adminAuth: typeof adminAuth;
