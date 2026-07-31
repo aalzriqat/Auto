@@ -1,6 +1,36 @@
 [extend]
 useDefault = true
 
+# The default ruleset matches API-key *formats* (provider prefixes, key shapes).
+# It has no concept of a username/password pair, so plaintext login credentials
+# committed to this public repo pass `secret-scan` green. That is not
+# hypothetical: Clerk QA credentials sat in 27 tracked files under
+# testsprite_tests/ and were only removed when that directory was deleted for
+# unrelated reasons — the gate never saw them.
+#
+# Entropy, not a wordlist, does the filtering here. The repo's existing dummies
+# score below the threshold ("Password" = 2.75, "hunter2hunter2" = 2.81) while a
+# realistic credential clears it ("Autoflow2026!" = 3.39). Both dummies are also
+# allowlisted explicitly below, so a difference in entropy rounding cannot turn
+# this into a broken build for everyone.
+[[rules]]
+id = "hardcoded-password-literal"
+description = "Hardcoded password/passphrase literal (credential pair — not covered by the default API-key rules)"
+regex = '''(?i)\b(?:password|passwd|passphrase)\s*[:=]\s*["'`]([\x21-\x7E]{8,})["'`]'''
+secretGroup = 1
+entropy = 3.0
+tags = ["password", "credential-pair"]
+
+[rules.allowlist]
+description = "Documented test fixtures, never real credentials."
+regexTarget = "line"
+regexes = [
+  # Mobile sign-in test fixture (apps/mobile/src/features/auth/*.test.tsx).
+  '''["'`]hunter2hunter2["'`]''',
+  # i18n dictionary label, not a value: `Password: "Password"`.
+  '''\bPassword:\s*["'`]Password["'`]''',
+]
+
 [allowlist]
 description = "Deterministic dedupe tokens and hardcoded test-fixture secrets, not real credentials. Idempotency keys (e.g. \"mj_selfapprove_001\") are client-supplied dedupe tokens for safely-retriable Convex mutations. The whsec_test_secret_*/sk_test_secret_* literals are fixed dummy values used only to compute HMAC signatures in payment-webhook unit tests — never actual Stripe/Tap credentials. test_turnstile_secret_* is a fixed dummy TURNSTILE_SECRET_KEY used only so unit tests can stub the Cloudflare Turnstile siteverify call — never a real Turnstile secret."
 regexTarget = "line"
