@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi, afterEach } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -17,7 +17,7 @@ vi.mock("./utils/facebookApi", async (importOriginal) => {
   };
 });
 
-async function seedOrgWithManager(t: ReturnType<typeof convexTest>) {
+async function seedOrgWithManager(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() })
   );
@@ -40,7 +40,7 @@ async function seedOrgWithManager(t: ReturnType<typeof convexTest>) {
   return { orgId, userId };
 }
 
-async function seedOrgWithEditor(t: ReturnType<typeof convexTest>) {
+async function seedOrgWithEditor(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() })
   );
@@ -64,7 +64,7 @@ async function seedOrgWithEditor(t: ReturnType<typeof convexTest>) {
 }
 
 async function seedSettings(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   orgId: any,
   overrides: Record<string, unknown> = {}
 ) {
@@ -83,7 +83,7 @@ async function seedSettings(
 
 describe("facebookEngagement.handleIncomingFacebookEvent", () => {
   test("creates a customer, an open lead, and notifies managers on a new comment", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId } = await seedOrgWithManager(t);
 
     const result = await t.run((ctx) =>
@@ -119,7 +119,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
   });
 
   test("links the new lead to the vehicle via the comment's post id", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId } = await seedOrgWithManager(t);
 
     const vehicleId = await t.run((ctx) =>
@@ -167,7 +167,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
   });
 
   test("dedupes redelivered webhook events (same externalId processed once)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
 
     const args = {
@@ -188,7 +188,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
   });
 
   test("auto-replies round-robin and respect the 24h per-sender-per-channel cooldown", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, {
       facebookAutoReplyEnabled: true,
@@ -237,7 +237,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
   });
 
   test("lead creation toggle off for comments: still captures the event, no lead, no notification", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, {
       facebookLeadFromCommentsEnabled: false,
@@ -280,7 +280,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
   });
 
   test("lead creation toggle off for DMs only: comments still create leads, DMs don't", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, { facebookLeadFromDmsEnabled: false });
 
@@ -308,7 +308,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
   });
 
   test("DM mobile requirement creates a lead only after the customer shares a valid phone number", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, {
       facebookLeadFromDmsEnabled: true,
@@ -355,7 +355,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
   });
 
   test("mobile-received reply is sent after the default reply cooldown but is not repeated", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, {
       facebookAutoReplyEnabled: true,
@@ -408,7 +408,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
 });
 
 async function seedVehicle(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   orgId: any,
   overrides: Record<string, unknown> = {}
 ) {
@@ -431,7 +431,7 @@ async function seedVehicle(
 }
 
 async function seedFinanceCompany(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   orgId: any,
   overrides: Record<string, unknown> = {}
 ) {
@@ -451,7 +451,7 @@ async function seedFinanceCompany(
   );
 }
 
-async function seedSocialPost(t: ReturnType<typeof convexTest>, orgId: any, vehicleId: any, externalPostId: string) {
+async function seedSocialPost(t: ReturnType<typeof convexTestWithComponents>, orgId: any, vehicleId: any, externalPostId: string) {
   const requestedBy = await t.run((ctx) =>
     ctx.db.insert("users", { clerkId: `fb_poster_${externalPostId}`, email: `${externalPostId}@test.com`, name: "Poster" })
   );
@@ -471,7 +471,7 @@ async function seedSocialPost(t: ReturnType<typeof convexTest>, orgId: any, vehi
 }
 
 async function postCommentAboutVehicle(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   orgId: any,
   vehicleId: any,
   externalId: string,
@@ -493,7 +493,7 @@ async function postCommentAboutVehicle(
 
 describe("facebookEngagement.handleIncomingFacebookEvent — Smart Reply", () => {
   test("price match on an available vehicle returns the price template", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, { facebookSmartReplyEnabled: true });
     const vehicleId = await seedVehicle(t, orgId, { sellingPrice: 25000 });
@@ -516,7 +516,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent — Smart Reply", () =>
   });
 
   test("price match on a sold vehicle falls back to the unavailable template instead of a price", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, { facebookSmartReplyEnabled: true });
     const vehicleId = await seedVehicle(t, orgId, { status: "SOLD" });
@@ -528,7 +528,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent — Smart Reply", () =>
   });
 
   test("financing match in calculated mode computes a monthly figure from the default finance company", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     const financeCompanyId = await seedFinanceCompany(t, orgId);
     await seedSettings(t, orgId, {
@@ -546,7 +546,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent — Smart Reply", () =>
   });
 
   test("a complaint suppresses both smart reply and canned reply and escalates to managers", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, {
       facebookSmartReplyEnabled: true,
@@ -577,7 +577,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent — Smart Reply", () =>
   });
 
   test("falls back to the canned reply when no vehicle is linked or no intent matches", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, {
       facebookSmartReplyEnabled: true,
@@ -609,7 +609,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent — Smart Reply", () =>
   });
 
   test("Smart Reply disabled leaves the canned reply path fully unaffected (regression guard)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, {
       facebookSmartReplyEnabled: false,
@@ -625,7 +625,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent — Smart Reply", () =>
   });
 
   test("visibility defaults to public, can be overridden to dm", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, { facebookSmartReplyEnabled: true });
     const vehicleId = await seedVehicle(t, orgId);
@@ -633,7 +633,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent — Smart Reply", () =>
     const defaultResult = await postCommentAboutVehicle(t, orgId, vehicleId, "fb_sr_vis_default", "is it available?");
     expect(defaultResult?.smartReplyVisibility).toBe("public");
 
-    const t2 = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t2 = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId: orgId2 } = await seedOrgWithManager(t2);
     await seedSettings(t2, orgId2, { facebookSmartReplyEnabled: true, smartReplyVisibility: "dm" });
     const vehicleId2 = await seedVehicle(t2, orgId2);
@@ -653,7 +653,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent — Smart Reply", () =>
   });
 
   test("DM-kind events always resolve to dm visibility, regardless of the visibility setting", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, { facebookSmartReplyEnabled: true, smartReplyVisibility: "public" });
     const vehicleId = await seedVehicle(t, orgId);
@@ -675,7 +675,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent — Smart Reply", () =>
   });
 
   test("reel-origin comments are labeled and stored with their source surface", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
 
     const result = await t.run((ctx) =>
@@ -706,7 +706,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent — Smart Reply", () =>
 
 describe("facebookEngagement.replyToFacebookComment", () => {
   test("posts the reply and records it on the event", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
     await seedSettings(t, orgId);
 
@@ -736,7 +736,7 @@ describe("facebookEngagement.replyToFacebookComment", () => {
   });
 
   test("rejects replying to a DM event via the comment-reply action", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
     await seedSettings(t, orgId);
 
@@ -762,7 +762,7 @@ describe("facebookEngagement.replyToFacebookComment", () => {
 
 describe("facebookEngagement.sendFacebookDirectMessage", () => {
   test("sends to the most recent DM event's sender and records the reply there", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
     await seedSettings(t, orgId);
 
@@ -789,7 +789,7 @@ describe("facebookEngagement.sendFacebookDirectMessage", () => {
   });
 
   test("rejects sending a DM when the customer has no DM history", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
     await seedSettings(t, orgId);
 
@@ -813,7 +813,7 @@ describe("facebookEngagement.enrichEventVehicleFromPost", () => {
   });
 
   test("matches a vehicle from a Reel's caption using the Video-node field list", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId);
 

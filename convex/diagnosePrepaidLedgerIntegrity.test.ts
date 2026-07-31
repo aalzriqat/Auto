@@ -3,7 +3,7 @@
  * that silently returns [] is worse than none — it reads as "your books are
  * clean" right before an accountant takes over.
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { internal } from "./_generated/api";
@@ -22,7 +22,7 @@ const MODULE_GLOB = import.meta.glob("./**/*.ts");
 type Ctx = Awaited<ReturnType<typeof seed>>;
 
 async function seed(tag: string) {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `Org ${tag}`, createdAt: Date.now() }));
   const userId = await t.run((ctx) => ctx.db.insert("users", { clerkId: `${tag}_u`, email: `${tag}@example.com` }));
   return { t, orgId, userId };
@@ -273,7 +273,7 @@ describe("prepaid ledger integrity survey", () => {
 
 describe("running the survey to completion", () => {
   /** An org whose books are broken in the one way the survey exists to find. */
-  async function seedBrokenOrg(t: ReturnType<typeof convexTest>, name: string) {
+  async function seedBrokenOrg(t: ReturnType<typeof convexTestWithComponents>, name: string) {
     const orgId = await t.run((c) => c.db.insert("organizations", { name, createdAt: Date.now() }));
     const userId = await t.run((c) => c.db.insert("users", { clerkId: `${name}_u`, email: `${name}@example.com` }));
     const ctx = { t, orgId, userId } as Ctx;
@@ -293,7 +293,7 @@ describe("running the survey to completion", () => {
   test("one page does not see past its own batch — so a single query can't clear the books", async () => {
     // Pins the reason the runner below has to exist: this is exactly the false
     // all-clear an operator gets from running the query once.
-    const t = convexTest(schema, MODULE_GLOB);
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
     for (let i = 0; i < 6; i++) {
       await t.run((c) => c.db.insert("organizations", { name: `Clean ${i}`, createdAt: Date.now() }));
     }
@@ -306,7 +306,7 @@ describe("running the survey to completion", () => {
   });
 
   test("the runner pages to the end and finds what page one missed", async () => {
-    const t = convexTest(schema, MODULE_GLOB);
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
     for (let i = 0; i < 6; i++) {
       await t.run((c) => c.db.insert("organizations", { name: `Clean ${i}`, createdAt: Date.now() }));
     }
@@ -325,7 +325,7 @@ describe("running the survey to completion", () => {
   test("hitting the page budget reports incomplete rather than a clean bill of health", async () => {
     // The failure mode this guards is a survey that stops early and still reads
     // as "no findings" — the one answer nobody may take on trust.
-    const t = convexTest(schema, MODULE_GLOB);
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
     for (let i = 0; i < 6; i++) {
       await t.run((c) => c.db.insert("organizations", { name: `Clean ${i}`, createdAt: Date.now() }));
     }

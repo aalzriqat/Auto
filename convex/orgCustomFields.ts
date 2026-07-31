@@ -1,5 +1,6 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { query } from "./_generated/server";
+import { mutation } from "./functions";
 import { requireTenantAuth, requireOwner, requireOwnedRow } from "./utils/tenancy";
 
 const FIELD_NOT_FOUND = "Custom field not found in this organization.";

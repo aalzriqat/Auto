@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -61,7 +61,7 @@ describe("computeAffordabilityRange (pure)", () => {
 
 describe("getAffordabilityRange (query)", () => {
   async function seedFinanceDealer(
-    t: ReturnType<typeof convexTest>,
+    t: ReturnType<typeof convexTestWithComponents>,
     opts: { name: string; subdomainSlug: string; profitRate: number }
   ) {
     const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: opts.name, createdAt: Date.now() }));
@@ -106,7 +106,7 @@ describe("getAffordabilityRange (query)", () => {
   }
 
   test("returns a real range across two opted-in dealers with different finance rates", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedFinanceDealer(t, { name: "Amman Motors", subdomainSlug: "afford1", profitRate: 4 });
     await seedFinanceDealer(t, { name: "Petra Cars", subdomainSlug: "afford2", profitRate: 12 });
 
@@ -121,7 +121,7 @@ describe("getAffordabilityRange (query)", () => {
   });
 
   test("returns null when no opted-in dealers publish finance terms", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const range = await t.query(api.marketplaceAffordability.getAffordabilityRange, {
       maximumMonthlyPayment: 400,
     });
@@ -129,7 +129,7 @@ describe("getAffordabilityRange (query)", () => {
   });
 
   test("returns null for a non-positive monthly ceiling without scanning", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await seedFinanceDealer(t, { name: "Amman Motors", subdomainSlug: "afford3", profitRate: 5 });
     const range = await t.query(api.marketplaceAffordability.getAffordabilityRange, { maximumMonthlyPayment: 0 });
     expect(range).toBeNull();

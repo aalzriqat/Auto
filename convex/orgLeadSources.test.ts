@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -8,7 +8,7 @@ vi.mock("./rateLimit", () => ({
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
-async function seedOwner(t: ReturnType<typeof convexTest>) {
+async function seedOwner(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() })
   );
@@ -31,14 +31,14 @@ async function seedOwner(t: ReturnType<typeof convexTest>) {
 
 describe("orgLeadSources", () => {
   test("list returns empty array before seeding", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     const sources = await asOwner.query(api.orgLeadSources.list, { orgId });
     expect(sources).toHaveLength(0);
   });
 
   test("seed inserts default lead sources ordered by index", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     await asOwner.mutation(api.orgLeadSources.seed, { orgId });
     const sources = await asOwner.query(api.orgLeadSources.list, { orgId });
@@ -48,7 +48,7 @@ describe("orgLeadSources", () => {
   });
 
   test("seed is idempotent — calling twice does not duplicate", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     await asOwner.mutation(api.orgLeadSources.seed, { orgId });
     await asOwner.mutation(api.orgLeadSources.seed, { orgId });
@@ -58,7 +58,7 @@ describe("orgLeadSources", () => {
   });
 
   test("create appends a new lead source with incremented order", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     await asOwner.mutation(api.orgLeadSources.seed, { orgId });
     const beforeCount = (await asOwner.query(api.orgLeadSources.list, { orgId })).length;
@@ -69,7 +69,7 @@ describe("orgLeadSources", () => {
   });
 
   test("update changes label and isActive", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     const sourceId = await asOwner.mutation(api.orgLeadSources.create, { orgId, label: "Old" });
     await asOwner.mutation(api.orgLeadSources.update, {
@@ -85,7 +85,7 @@ describe("orgLeadSources", () => {
   });
 
   test("update only touches the fields provided (order alone)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     const sourceId = await asOwner.mutation(api.orgLeadSources.create, { orgId, label: "Kept" });
     await asOwner.mutation(api.orgLeadSources.update, { orgId, sourceId, order: 5 });
@@ -97,7 +97,7 @@ describe("orgLeadSources", () => {
   });
 
   test("update throws if the lead source no longer exists", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     const sourceId = await asOwner.mutation(api.orgLeadSources.create, { orgId, label: "Gone" });
     await t.run((ctx) => ctx.db.delete(sourceId));
@@ -108,7 +108,7 @@ describe("orgLeadSources", () => {
   });
 
   test("remove deletes the lead source", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     const sourceId = await asOwner.mutation(api.orgLeadSources.create, { orgId, label: "ToRemove" });
     await asOwner.mutation(api.orgLeadSources.remove, { orgId, sourceId });
@@ -117,7 +117,7 @@ describe("orgLeadSources", () => {
   });
 
   test("remove throws if the lead source no longer exists", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     const sourceId = await asOwner.mutation(api.orgLeadSources.create, { orgId, label: "Gone" });
     await t.run((ctx) => ctx.db.delete(sourceId));
@@ -128,7 +128,7 @@ describe("orgLeadSources", () => {
   });
 
   test("reorder reassigns order values", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     const id1 = await asOwner.mutation(api.orgLeadSources.create, { orgId, label: "First" });
     const id2 = await asOwner.mutation(api.orgLeadSources.create, { orgId, label: "Second" });
@@ -140,7 +140,7 @@ describe("orgLeadSources", () => {
   });
 
   test("reorder throws if one of the ids no longer exists", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     const id1 = await asOwner.mutation(api.orgLeadSources.create, { orgId, label: "First" });
     await t.run((ctx) => ctx.db.delete(id1));

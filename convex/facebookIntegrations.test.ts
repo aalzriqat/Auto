@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -17,7 +17,7 @@ vi.mock("./utils/env", () => ({
   })),
 }));
 
-async function seedOwner(t: ReturnType<typeof convexTest>) {
+async function seedOwner(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() })
   );
@@ -48,7 +48,7 @@ async function seedOwner(t: ReturnType<typeof convexTest>) {
 
 describe("facebookIntegrations.createConnectUrl", () => {
   test("returns a Meta OAuth dialog URL with a state param, owner-only", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     const url = await asOwner.mutation(api.facebookIntegrations.createConnectUrl, { orgId });
@@ -67,7 +67,7 @@ describe("facebookIntegrations.createConnectUrl", () => {
   });
 
   test("rejects non-owners", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOwner(t);
 
     const userId2 = await t.run((ctx) =>
@@ -87,7 +87,7 @@ describe("facebookIntegrations.createConnectUrl", () => {
 
 describe("facebookIntegrations.getConnectionStatus / disconnect", () => {
   test("reports not connected by default, then connected after credentials are saved", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     const before = await asOwner.query(api.facebookIntegrations.getConnectionStatus, { orgId });
@@ -108,7 +108,7 @@ describe("facebookIntegrations.getConnectionStatus / disconnect", () => {
   });
 
   test("disconnect clears stored credentials", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     await t.run((ctx) =>
@@ -128,7 +128,7 @@ describe("facebookIntegrations.getConnectionStatus / disconnect", () => {
 
 describe("facebookIntegrations.disconnectByFacebookConnectedUserId", () => {
   test("resolves the org via the connecting user's Facebook ID, not the Page ID", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOwner(t);
 
     await t.run((ctx) =>
@@ -156,7 +156,7 @@ describe("facebookIntegrations.disconnectByFacebookConnectedUserId", () => {
 
 describe("facebookIntegrations.setFacebookLeadCreationConfig", () => {
   test("requires a connection before configuring, then persists the toggles", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     await expect(
@@ -192,7 +192,7 @@ describe("facebookIntegrations.setFacebookLeadCreationConfig", () => {
 
 describe("facebookIntegrations.consumeOAuthState", () => {
   test("returns the orgId for a valid state and consumes it (one-time use)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     await asOwner.mutation(api.facebookIntegrations.createConnectUrl, { orgId });
@@ -213,7 +213,7 @@ describe("facebookIntegrations.consumeOAuthState", () => {
   });
 
   test("returns null for an unknown state", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const result = await t.run((ctx) =>
       ctx.runMutation(internal.facebookIntegrations.consumeOAuthState, { state: "does-not-exist" })
     );

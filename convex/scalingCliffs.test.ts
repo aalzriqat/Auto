@@ -6,7 +6,7 @@
  * throws and rolls back every write, so the feature does not degrade, it stops
  * working entirely and leaves nothing behind to show it was tried.
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -65,7 +65,7 @@ describe("adminBroadcasts.create fans out without one unbounded mutation", () =>
   test("reaches orgs past the first page and totals their recipients", async () => {
     vi.useFakeTimers();
     try {
-      const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
       const asAdmin = await seedSuperAdmin(t);
 
       // The fan-out pages 25 orgs at a time, so 30 orgs crosses the boundary.
@@ -103,7 +103,7 @@ describe("adminBroadcasts.create fans out without one unbounded mutation", () =>
   });
 
   test("a single-org broadcast still resolves its recipient count inline", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asAdmin = await seedSuperAdmin(t);
     const orgId = await seedOrg(t, "solo", 3);
 
@@ -134,7 +134,7 @@ describe("subscriptions.canAddMember counts seats exactly", () => {
   }
 
   test("does not hand out a free seat when non-seat rows fill the old prefix", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const cap = await starterCap(t);
 
     const orgId = await t.run(async (ctx: any) =>
@@ -190,7 +190,7 @@ describe("subscriptions.canAddMember counts seats exactly", () => {
   });
 
   test("still allows a seat below the cap", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const cap = await starterCap(t);
 
     const orgId = await seedOrg(t, "roomleft", cap - 1);
@@ -209,7 +209,7 @@ describe("subscriptions.canAddMember counts seats exactly", () => {
   });
 
   test("an offboarding membership frees its seat", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const cap = await starterCap(t);
 
     const orgId = await seedOrg(t, "leaving", cap);

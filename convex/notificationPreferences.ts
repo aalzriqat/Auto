@@ -1,5 +1,6 @@
 import { v } from "convex/values";
-import { query, mutation } from "./_generated/server";
+import { query } from "./_generated/server";
+import { mutation } from "./functions";
 import { requireTenantAuth } from "./utils/tenancy";
 import { NOTIFICATION_CATEGORIES, categoryDefaultEmail } from "../lib/notifications/types";
 import { requireFeature } from "./subscriptions";

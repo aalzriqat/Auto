@@ -9,7 +9,7 @@
  *  5. Manually created receivables originate a real DR AR / CR Other Income entry.
  * Plus the opening-balance backfill migration for pre-existing inventory.
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -34,7 +34,7 @@ const PERMISSIONS = [
 ];
 
 async function seedDealer(suffix: string) {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: `Inventory Dealer ${suffix}`, createdAt: Date.now() })
   );

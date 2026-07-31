@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, beforeEach, afterEach } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -16,7 +16,7 @@ afterEach(() => {
   process.env.SUPER_ADMIN_EMAILS = ORIGINAL_ALLOWLIST;
 });
 
-async function seedOrgWithOwner(t: ReturnType<typeof convexTest>) {
+async function seedOrgWithOwner(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run(async (ctx) => ctx.db.insert("organizations", { name: "Acme Motors", createdAt: Date.now() }));
   const ownerId = await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "owner_1", email: "owner@acme.com" }));
   const roleId = await t.run(async (ctx) =>
@@ -27,7 +27,7 @@ async function seedOrgWithOwner(t: ReturnType<typeof convexTest>) {
 }
 
 async function runDeletionToCompletion(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   requestId: Id<"organizationDeletionRequests">
 ) {
   for (let attempt = 0; attempt < 200; attempt += 1) {
@@ -42,7 +42,7 @@ async function runDeletionToCompletion(
 
 describe("adminOrgs", () => {
   test("rejects a non-allowlisted user even if they own the org", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithOwner(t);
     const asOwner = t.withIdentity({ subject: "owner_1" });
 
@@ -50,7 +50,7 @@ describe("adminOrgs", () => {
   });
 
   test("allowlisted admin can suspend and unsuspend an org they don't belong to", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithOwner(t);
     await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "dev_1", email: "admin@autoflow.dev" }));
     const asAdmin = t.withIdentity({ subject: "dev_1" });
@@ -66,7 +66,7 @@ describe("adminOrgs", () => {
   });
 
   test("suspended org blocks normal tenant access via requireTenantAuth", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithOwner(t);
     await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "dev_1", email: "admin@autoflow.dev" }));
     const asAdmin = t.withIdentity({ subject: "dev_1" });
@@ -77,7 +77,7 @@ describe("adminOrgs", () => {
   });
 
   test("owner delete opens a review request and keeps data until an admin decision", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithOwner(t);
     await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "dev_1", email: "admin@autoflow.dev" }));
     const asOwner = t.withIdentity({ subject: "owner_1" });
@@ -132,7 +132,7 @@ describe("adminOrgs", () => {
   });
 
   test("hardDeleteOrg requires the typed org name and cascades deletes", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, ownerId } = await seedOrgWithOwner(t);
     await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "dev_1", email: "admin@autoflow.dev" }));
     const asAdmin = t.withIdentity({ subject: "dev_1" });
@@ -240,7 +240,7 @@ describe("adminOrgs", () => {
   });
 
   test("hardDeleteOrg cascades site-visitor analytics but leaves platform-scoped rows untouched", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithOwner(t);
     await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "dev_2", email: "admin@autoflow.dev" }));
     const asAdmin = t.withIdentity({ subject: "dev_2" });

@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -8,7 +8,7 @@ import { voidCanonicalPayment } from "./subledger";
 const MODULES = import.meta.glob("./**/*.*s");
 
 async function setupSubledgerOrg() {
-  const t = convexTest(schema, MODULES);
+  const t = convexTestWithComponents(schema, MODULES);
   const now = Date.now();
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Subledger Dealer", createdAt: now })

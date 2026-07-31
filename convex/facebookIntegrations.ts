@@ -1,5 +1,6 @@
 import { v, ConvexError } from "convex/values";
-import { action, mutation, query, internalMutation, internalQuery, internalAction } from "./_generated/server";
+import { action, query, internalQuery, internalAction } from "./_generated/server";
+import { mutation, internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import { requireOwner, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";

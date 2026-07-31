@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { internal } from "./_generated/api";
@@ -7,7 +7,7 @@ const MODULES = import.meta.glob("./**/*.*s");
 
 describe("backfillAccountantExpensePermissions", () => {
   test("adds CREATE_EXPENSES/EDIT_EXPENSES to a role with manage:finance", async () => {
-    const t = convexTest(schema, MODULES);
+    const t = convexTestWithComponents(schema, MODULES);
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Backfill Dealer", createdAt: Date.now() })
     );
@@ -28,7 +28,7 @@ describe("backfillAccountantExpensePermissions", () => {
   });
 
   test("leaves a role without manage:finance untouched", async () => {
-    const t = convexTest(schema, MODULES);
+    const t = convexTestWithComponents(schema, MODULES);
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Backfill Dealer 2", createdAt: Date.now() })
     );
@@ -44,7 +44,7 @@ describe("backfillAccountantExpensePermissions", () => {
   });
 
   test("is idempotent — a second run updates nothing further", async () => {
-    const t = convexTest(schema, MODULES);
+    const t = convexTestWithComponents(schema, MODULES);
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Backfill Dealer 3", createdAt: Date.now() })
     );
@@ -62,7 +62,7 @@ describe("backfillAccountantExpensePermissions", () => {
   });
 
   test("an OWNER role gets the permissions even without manage:finance explicitly listed", async () => {
-    const t = convexTest(schema, MODULES);
+    const t = convexTestWithComponents(schema, MODULES);
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Backfill Dealer 4", createdAt: Date.now() })
     );
@@ -85,7 +85,7 @@ describe("backfillAccountantExpensePermissions", () => {
 
 describe("backfillReopenPeriodsPermission", () => {
   test("adds REOPEN_PERIODS to a stale OWNER-named role missing the explicit flag", async () => {
-    const t = convexTest(schema, MODULES);
+    const t = convexTestWithComponents(schema, MODULES);
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Reopen Backfill Dealer", createdAt: Date.now() })
     );
@@ -102,7 +102,7 @@ describe("backfillReopenPeriodsPermission", () => {
   });
 
   test("does NOT grant REOPEN_PERIODS to a MANAGE_FINANCE-holding non-owner role (ACCOUNTANT) — unlike the other capability-matched backfills, this one is owner-only by design", async () => {
-    const t = convexTest(schema, MODULES);
+    const t = convexTestWithComponents(schema, MODULES);
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Reopen Backfill Dealer 2", createdAt: Date.now() })
     );
@@ -118,7 +118,7 @@ describe("backfillReopenPeriodsPermission", () => {
   });
 
   test("is idempotent — a second run updates nothing further", async () => {
-    const t = convexTest(schema, MODULES);
+    const t = convexTestWithComponents(schema, MODULES);
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Reopen Backfill Dealer 3", createdAt: Date.now() })
     );
@@ -130,7 +130,7 @@ describe("backfillReopenPeriodsPermission", () => {
   });
 
   test("leaves an already-flagged OWNER role holding the permission untouched", async () => {
-    const t = convexTest(schema, MODULES);
+    const t = convexTestWithComponents(schema, MODULES);
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Reopen Backfill Dealer 4", createdAt: Date.now() })
     );
@@ -153,7 +153,7 @@ describe("backfillReopenPeriodsPermission", () => {
 
 describe("backfillSeniorAccountantRole", () => {
   test("creates a SENIOR_ACCOUNTANT role for an org with an ACCOUNTANT-capable role", async () => {
-    const t = convexTest(schema, MODULES);
+    const t = convexTestWithComponents(schema, MODULES);
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Senior Backfill Dealer", createdAt: Date.now() })
     );
@@ -175,7 +175,7 @@ describe("backfillSeniorAccountantRole", () => {
   });
 
   test("skips an org with no ACCOUNTANT-capable role", async () => {
-    const t = convexTest(schema, MODULES);
+    const t = convexTestWithComponents(schema, MODULES);
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "No Accountant Dealer", createdAt: Date.now() })
     );
@@ -188,7 +188,7 @@ describe("backfillSeniorAccountantRole", () => {
   });
 
   test("is idempotent — a second run creates nothing further", async () => {
-    const t = convexTest(schema, MODULES);
+    const t = convexTestWithComponents(schema, MODULES);
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Senior Backfill Dealer 2", createdAt: Date.now() })
     );
@@ -207,7 +207,7 @@ describe("backfillSeniorAccountantRole", () => {
   });
 
   test("does not duplicate a SENIOR_ACCOUNTANT role an org already created/customized itself", async () => {
-    const t = convexTest(schema, MODULES);
+    const t = convexTestWithComponents(schema, MODULES);
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Custom Senior Dealer", createdAt: Date.now() })
     );

@@ -9,7 +9,8 @@
  * explicit user click, never auto-applies.
  */
 import { v, ConvexError } from "convex/values";
-import { mutation, query, MutationCtx } from "./_generated/server";
+import { query, MutationCtx } from "./_generated/server";
+import { mutation } from "./functions";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";

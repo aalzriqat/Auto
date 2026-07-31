@@ -4,14 +4,14 @@ declare global {
   }
 }
 import { describe, it, expect, vi } from "vitest";
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { ConvexError } from "convex/values";
 
 describe("Approvals Permissions", () => {
   it("rejects unauthenticated requests", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const orgId = await t.run(async (ctx) => {
       return await ctx.db.insert("organizations", {
         name: "Test Org",
@@ -47,7 +47,7 @@ describe("Approvals Permissions", () => {
   });
 
   it("rejects user in Org A from approving requests in Org B", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     
     // Create Org A and Org B
     const orgAId = await t.run(async (ctx) => {
@@ -118,7 +118,7 @@ describe("Approvals Permissions", () => {
   });
 
   it("rejects users without APPROVE_REQUESTS from responding to approvals", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const orgId = await t.run(async (ctx) => {
       return await ctx.db.insert("organizations", {
         name: "Test Org",
@@ -196,7 +196,7 @@ describe("Approvals Permissions", () => {
 // correctly and then patched nothing would still have passed CI.
 describe("Approvals Outcomes", () => {
   async function setup() {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
 
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Outcome Org", createdAt: Date.now() })

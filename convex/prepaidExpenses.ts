@@ -26,7 +26,8 @@
  * the accountant-facing status.
  */
 import { v, ConvexError } from "convex/values";
-import { internalMutation, internalQuery, query, mutation, action, MutationCtx, QueryCtx } from "./_generated/server";
+import { internalQuery, query, action, MutationCtx, QueryCtx } from "./_generated/server";
+import { internalMutation, mutation } from "./functions";
 import { internal } from "./_generated/api";
 import { Id, Doc } from "./_generated/dataModel";
 import {

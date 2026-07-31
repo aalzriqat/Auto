@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { mutation, query } from "./_generated/server";
+import { query } from "./_generated/server";
+import { mutation } from "./functions";
 import { Id, TableNames } from "./_generated/dataModel";
 import { requireSuperAdmin } from "./utils/tenancy";
 import { throwAppError, AppErrorCode } from "./utils/errors";

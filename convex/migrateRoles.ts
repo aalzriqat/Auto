@@ -1,4 +1,5 @@
-import { internalMutation, MutationCtx } from "./_generated/server";
+import { MutationCtx } from "./_generated/server";
+import { internalMutation } from "./functions";
 import { Doc } from "./_generated/dataModel";
 import {
   DEFAULT_ROLE_TEMPLATES,

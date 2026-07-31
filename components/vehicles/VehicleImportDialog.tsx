@@ -297,6 +297,9 @@ interface Props {
   onOpenChange: (open: boolean) => void;
 }
 
+/** Must not exceed importBulk's IMPORT_BULK_MAX_ROWS. */
+const IMPORT_CHUNK_SIZE = 200;
+
 export function VehicleImportDialog({ open, onOpenChange }: Props) {
   const { t } = useLanguage();
   const { activeOrgId } = useOrg();
@@ -365,7 +368,20 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
           notes: v.notes,
           valuations: v.valuations,
         }));
-        return importBulk({ orgId: activeOrgId, vehicles: payload as any });
+        // Chunked to match importBulk's server-side row cap: one transaction
+        // per chunk, so a large spreadsheet cannot exceed Convex's
+        // per-transaction write budget now that each row also maintains the
+        // vehicle aggregate.
+        return (async () => {
+          const totals = { inserted: 0, skipped: 0 };
+          for (let i = 0; i < payload.length; i += IMPORT_CHUNK_SIZE) {
+            const chunk = payload.slice(i, i + IMPORT_CHUNK_SIZE);
+            const result = await importBulk({ orgId: activeOrgId, vehicles: chunk as any });
+            totals.inserted += result.inserted;
+            totals.skipped += result.skipped;
+          }
+          return totals;
+        })();
       }}
     />
   );

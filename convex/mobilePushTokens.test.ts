@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -6,14 +6,14 @@ import { api, internal } from "./_generated/api";
 const TOKEN_A = "ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]";
 const TOKEN_B = "ExponentPushToken[bbbbbbbbbbbbbbbbbbbbbb]";
 
-async function seedUser(t: ReturnType<typeof convexTest>, clerkId: string) {
+async function seedUser(t: ReturnType<typeof convexTestWithComponents>, clerkId: string) {
   await t.run((ctx) => ctx.db.insert("users", { clerkId, email: `${clerkId}@test.com`, name: clerkId }));
   return t.withIdentity({ subject: clerkId });
 }
 
 describe("mobilePushTokens", () => {
   test("register stores the caller's token; listForUser returns it", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const asUser = await seedUser(t, "user1");
 
     await asUser.mutation(api.mobilePushTokens.register, { token: TOKEN_A, platform: "ANDROID", deviceName: "Pixel" });
@@ -27,7 +27,7 @@ describe("mobilePushTokens", () => {
   });
 
   test("rejects a token that isn't an Expo push token", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const asUser = await seedUser(t, "user1");
     await expect(
       asUser.mutation(api.mobilePushTokens.register, { token: "not-a-real-token", platform: "ANDROID" })
@@ -35,7 +35,7 @@ describe("mobilePushTokens", () => {
   });
 
   test("re-registering the same device token moves it to the new user, no duplicate", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const asUser1 = await seedUser(t, "user1");
     const asUser2 = await seedUser(t, "user2");
 
@@ -51,7 +51,7 @@ describe("mobilePushTokens", () => {
   });
 
   test("remove deletes only the caller's own token", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const asUser1 = await seedUser(t, "user1");
     const asUser2 = await seedUser(t, "user2");
     await asUser1.mutation(api.mobilePushTokens.register, { token: TOKEN_A, platform: "ANDROID" });
@@ -69,7 +69,7 @@ describe("mobilePushTokens", () => {
   });
 
   test("register requires authentication", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     await expect(
       t.mutation(api.mobilePushTokens.register, { token: TOKEN_A, platform: "ANDROID" })
     ).rejects.toThrow();

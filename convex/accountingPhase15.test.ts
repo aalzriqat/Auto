@@ -5,7 +5,7 @@
  * variance recorded; variance approval cannot be performed by whoever
  * counted the drawer; the bank deposit on approval posts a balanced entry.
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -14,7 +14,7 @@ import { Id } from "./_generated/dataModel";
 const MODULE_GLOB = import.meta.glob("./**/*.ts");
 
 async function seedDrawerDealer() {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Phase15 Dealer", createdAt: Date.now() })
   );

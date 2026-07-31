@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -17,7 +17,7 @@ vi.mock("./utils/env", () => ({
   })),
 }));
 
-async function seedOwner(t: ReturnType<typeof convexTest>) {
+async function seedOwner(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() }),
   );
@@ -75,7 +75,7 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
 
 describe("socialIntegrations.createConnectUrl", () => {
   test("returns a Meta OAuth dialog URL with a state param, owner-only", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     const url = await asOwner.mutation(
@@ -97,7 +97,7 @@ describe("socialIntegrations.createConnectUrl", () => {
   });
 
   test("rejects non-owners", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOwner(t);
 
     const userId2 = await t.run((ctx) =>
@@ -127,7 +127,7 @@ describe("socialIntegrations.createConnectUrl", () => {
 
 describe("socialIntegrations.getConnectionStatus / disconnect", () => {
   test("reports not connected by default, then connected after credentials are saved", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     const before = await asOwner.query(
@@ -154,7 +154,7 @@ describe("socialIntegrations.getConnectionStatus / disconnect", () => {
   });
 
   test("disconnect clears stored credentials", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     await t.run((ctx) =>
@@ -177,7 +177,7 @@ describe("socialIntegrations.getConnectionStatus / disconnect", () => {
 
 describe("socialIntegrations.setAutoPostEnabled", () => {
   test("rejects enabling auto-post when Instagram isn't connected", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     await expect(
@@ -189,7 +189,7 @@ describe("socialIntegrations.setAutoPostEnabled", () => {
   });
 
   test("allows enabling once connected", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     await t.run((ctx) =>
@@ -213,7 +213,7 @@ describe("socialIntegrations.setAutoPostEnabled", () => {
   });
 
   test("allows enabling when only Facebook is connected (shared flag, not Instagram-specific)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     await t.run((ctx) =>
@@ -239,7 +239,7 @@ describe("socialIntegrations.setAutoPostEnabled", () => {
 
 describe("socialIntegrations.setInstagramLeadCreationConfig", () => {
   test("requires a connection before configuring, then persists the toggles", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     await expect(
@@ -281,7 +281,7 @@ describe("socialIntegrations.setInstagramLeadCreationConfig", () => {
 
 describe("socialIntegrations.consumeOAuthState", () => {
   test("returns the orgId for a valid state and consumes it (one-time use)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     await asOwner.mutation(api.socialIntegrations.createConnectUrl, { orgId });
@@ -302,7 +302,7 @@ describe("socialIntegrations.consumeOAuthState", () => {
   });
 
   test("returns null for an unknown state", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const result = await t.run((ctx) =>
       ctx.runMutation(internal.socialIntegrations.consumeOAuthState, {
         state: "does-not-exist",
@@ -314,7 +314,7 @@ describe("socialIntegrations.consumeOAuthState", () => {
 
 describe("socialIntegrations.exchangeCodeForToken", () => {
   test("retries long-lived token exchange with POST when Meta rejects GET", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", {
         name: "Instagram Org",

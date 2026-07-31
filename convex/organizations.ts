@@ -1,5 +1,6 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query, internalQuery, MutationCtx } from "./_generated/server";
+import { query, internalQuery, MutationCtx } from "./_generated/server";
+import { mutation } from "./functions";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth, requireOwner, requireOrCreateAuthenticatedUser } from "./utils/tenancy";
 import { PERMISSIONS, DEFAULT_ROLE_TEMPLATES, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";

@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../../test-utils/convexTest";
 import { expect, test, describe, vi, beforeEach, afterEach } from "vitest";
 import schema from "../schema";
 import { notifyUser, notifyManagers, notifyAllMembers, notifyOwner, notifyByPermission, notifyFinanceManagers, getActorName } from "./notifications";
@@ -34,7 +34,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function seedOrg(t: ReturnType<typeof convexTest>) {
+async function seedOrg(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() }));
 
   const ownerRoleId = await t.run((ctx) =>
@@ -55,7 +55,7 @@ async function seedOrg(t: ReturnType<typeof convexTest>) {
 }
 
 /** Owner + accountant (holds manage:finance) + sales (doesn't) — for notifyFinanceManagers tests. */
-async function seedFinanceOrg(t: ReturnType<typeof convexTest>) {
+async function seedFinanceOrg(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Finance Org", createdAt: Date.now() }));
 
   const ownerRoleId = await t.run((ctx) =>
@@ -79,7 +79,7 @@ async function seedFinanceOrg(t: ReturnType<typeof convexTest>) {
 
 describe("dispatch helpers", () => {
   test("notifyUser inserts an in-app row with the type's category/priority", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, salesId } = await seedOrg(t);
 
     await t.run((ctx) => notifyUser(ctx, orgId, salesId, "lead.assigned", { actorName: "Alice" }, { link: "/leads" }));
@@ -94,7 +94,7 @@ describe("dispatch helpers", () => {
   });
 
   test("notifyManagers fans out only to members holding MANAGE_USERS, honoring excludeUserId", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, ownerId, managerId, salesId } = await seedOrg(t);
 
     await t.run((ctx) => notifyManagers(ctx, orgId, "vehicle.created", { actorName: "Bob" }, { excludeUserId: ownerId }));
@@ -109,7 +109,7 @@ describe("dispatch helpers", () => {
   });
 
   test("notifyAllMembers fans out to every member of the org", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, ownerId, managerId, salesId } = await seedOrg(t);
 
     await t.run((ctx) => notifyAllMembers(ctx, orgId, "system.announcement", { title: "Heads up", message: "Maintenance tonight" }));
@@ -122,7 +122,7 @@ describe("dispatch helpers", () => {
   });
 
   test("notifyOwner notifies only the OWNER role", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, ownerId, managerId, salesId } = await seedOrg(t);
 
     await t.run((ctx) => notifyOwner(ctx, orgId, "role.changed", { actorName: "Carol", roleName: "SALES" }));
@@ -137,7 +137,7 @@ describe("dispatch helpers", () => {
   });
 
   test("notifyFinanceManagers fans out to every MANAGE_FINANCE holder (including the owner), not to a non-finance member", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, ownerId, accountantId, salesId } = await seedFinanceOrg(t);
 
     await t.run((ctx) =>
@@ -158,7 +158,7 @@ describe("dispatch helpers", () => {
   });
 
   test("notifyFinanceManagers honors excludeUserId — the maker isn't notified about their own request", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, ownerId, accountantId } = await seedFinanceOrg(t);
 
     await t.run((ctx) =>
@@ -179,7 +179,7 @@ describe("dispatch helpers", () => {
   });
 
   test("notifyFinanceManagers falls back to notifyOwner's no-op behavior when literally nobody in the org holds MANAGE_FINANCE or the owner role", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "No-Finance Org", createdAt: Date.now() }));
     const salesRoleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "SALES", permissions: ["view:vehicles"] }));
     const salesId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "nf_sales_001", email: "sales@nofinance.test" }));
@@ -202,7 +202,7 @@ describe("dispatch helpers", () => {
   });
 
   test("email defaults to the type's criticalDefault when no preference row exists", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, salesId } = await seedOrg(t);
     await t.run((ctx) => ctx.db.patch(salesId, { email: "sales@test.com" }));
 
@@ -213,7 +213,7 @@ describe("dispatch helpers", () => {
   });
 
   test("email is not scheduled when the user has explicitly opted out of a category", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, salesId } = await seedOrg(t);
     await t.run((ctx) => ctx.db.patch(salesId, { email: "sales@test.com" }));
     await t.run((ctx) =>
@@ -232,7 +232,7 @@ describe("dispatch helpers", () => {
   });
 
   test("push is not scheduled by default even when email is (opt-in only, unlike email)", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, salesId } = await seedOrg(t);
 
     // "approval.requested" has criticalDefault: true, so email schedules with no
@@ -244,7 +244,7 @@ describe("dispatch helpers", () => {
   });
 
   test("push is scheduled once the user opts a category into pushEnabled", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, salesId } = await seedOrg(t);
     await t.run((ctx) =>
       ctx.db.insert("notificationPreferences", {
@@ -263,7 +263,7 @@ describe("dispatch helpers", () => {
   });
 
   test("dispatch still inserts the in-app row but no-ops the rest if the user no longer exists", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, salesId } = await seedOrg(t);
     await t.run((ctx) => ctx.db.delete(salesId));
 
@@ -280,7 +280,7 @@ describe("dispatch helpers", () => {
   });
 
   test("schedules an email with no data argument at all (not just an empty object)", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, salesId } = await seedOrg(t);
     await t.run((ctx) => ctx.db.patch(salesId, { email: "sales@test.com" }));
 
@@ -292,7 +292,7 @@ describe("dispatch helpers", () => {
   });
 
   test("schedules a WhatsApp notification when enabled, the plan supports it, and the user has a phone", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, salesId } = await seedOrg(t);
     await t.run((ctx) =>
       ctx.db.insert("subscriptions", {
@@ -321,7 +321,7 @@ describe("dispatch helpers", () => {
   });
 
   test("does not schedule WhatsApp when enabled by preference but the org's plan doesn't include it", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, salesId } = await seedOrg(t);
     await t.run((ctx) => ctx.db.patch(salesId, { whatsappPhone: "+962700000000" }));
     await t.run((ctx) =>
@@ -341,7 +341,7 @@ describe("dispatch helpers", () => {
   });
 
   test("passes an empty object to the scheduled push action when no data is given", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, salesId } = await seedOrg(t);
     await t.run((ctx) =>
       ctx.db.insert("notificationPreferences", {
@@ -360,7 +360,7 @@ describe("dispatch helpers", () => {
   });
 
   test("notifyManagers skips a membership whose role has been deleted", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, managerId } = await seedOrg(t);
     const ghostUserId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "ghost_001", email: "ghost@test.com" }));
     const ghostRoleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "GHOST", permissions: ["manage:users"] }));
@@ -382,7 +382,7 @@ describe("dispatch helpers", () => {
   });
 
   test("notifyAllMembers honors excludeUserId", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, ownerId, managerId, salesId } = await seedOrg(t);
 
     await t.run((ctx) =>
@@ -404,7 +404,7 @@ describe("dispatch helpers", () => {
   });
 
   test("notifyByPermission skips excluded, missing-role, and unauthorized members", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, managerId, salesId } = await seedOrg(t);
     const viewerRoleId = await t.run((ctx) =>
       ctx.db.insert("roles", { orgId, name: "VIEWER", permissions: [PERMISSIONS.VIEW_VEHICLES] })
@@ -449,13 +449,13 @@ describe("dispatch helpers", () => {
 
 describe("getActorName", () => {
   test("returns 'Someone' when unauthenticated", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const name = await t.run((ctx) => getActorName(ctx));
     expect(name).toBe("Someone");
   });
 
   test("returns the user's own name when set", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     await t.run((ctx) => ctx.db.insert("users", { clerkId: "actor_1", email: "a@test.com", name: "Farah" }));
 
     const name = await t.run((ctx) =>
@@ -468,7 +468,7 @@ describe("getActorName", () => {
   });
 
   test("falls back to the identity's name when the user row has none", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     await t.run((ctx) => ctx.db.insert("users", { clerkId: "actor_2", email: "b@test.com" }));
 
     const name = await t.run((ctx) =>
@@ -481,7 +481,7 @@ describe("getActorName", () => {
   });
 
   test("falls back to 'A team member' when neither the user nor identity have a name", async () => {
-    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     await t.run((ctx) => ctx.db.insert("users", { clerkId: "actor_3", email: "c@test.com" }));
 
     const name = await t.run((ctx) =>

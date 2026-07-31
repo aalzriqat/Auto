@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, beforeEach, afterEach } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -15,7 +15,7 @@ afterEach(() => {
   process.env.SUPER_ADMIN_EMAILS = ORIGINAL_ALLOWLIST;
 });
 
-async function seedAdminAndMember(t: ReturnType<typeof convexTest>) {
+async function seedAdminAndMember(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run(async (ctx) => ctx.db.insert("organizations", { name: "Acme Motors", createdAt: Date.now() }));
   const memberId = await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "member_1", email: "member@acme.com" }));
   const roleId = await t.run(async (ctx) => ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] }));
@@ -26,13 +26,13 @@ async function seedAdminAndMember(t: ReturnType<typeof convexTest>) {
 
 describe("adminUsers", () => {
   test("rejects a non-allowlisted caller", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { memberId, asMember } = await seedAdminAndMember(t);
     await expect(asMember.mutation(api.adminUsers.disableUser, { userId: memberId })).rejects.toThrow();
   });
 
   test("allowlisted admin can disable and re-enable a user in any org", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { memberId, asAdmin } = await seedAdminAndMember(t);
 
     await asAdmin.mutation(api.adminUsers.disableUser, { userId: memberId });
@@ -45,7 +45,7 @@ describe("adminUsers", () => {
   });
 
   test("disabled user is rejected by requireAuth across the app", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, memberId, asAdmin, asMember } = await seedAdminAndMember(t);
 
     await asAdmin.mutation(api.adminUsers.disableUser, { userId: memberId });
@@ -53,7 +53,7 @@ describe("adminUsers", () => {
   });
 
   test("changeUserRole moves a member to a new role within their org", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, memberId, asAdmin } = await seedAdminAndMember(t);
     const newRoleId = await t.run(async (ctx) => ctx.db.insert("roles", { orgId, name: "MANAGER", permissions: [] }));
 

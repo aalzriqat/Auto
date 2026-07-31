@@ -5,7 +5,7 @@
  * proximity, never auto-confirming), confirming a match, the double-claim
  * guard on confirmMatch, and unmatch/ignore.
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -13,7 +13,7 @@ import { api } from "./_generated/api";
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 async function seedDealerWithBankAccount() {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Phase41 Recon Dealer", createdAt: Date.now() })
   );

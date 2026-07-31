@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -9,7 +9,7 @@ vi.mock("./rateLimit", () => ({
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
-async function seedOwner(t: ReturnType<typeof convexTest>) {
+async function seedOwner(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() })
   );
@@ -27,14 +27,14 @@ async function seedOwner(t: ReturnType<typeof convexTest>) {
 
 describe("orgPipelineStages", () => {
   test("list returns empty before seeding", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     const stages = await asOwner.query(api.orgPipelineStages.list, { orgId });
     expect(stages).toHaveLength(0);
   });
 
   test("seed inserts all default stages", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     await asOwner.mutation(api.orgPipelineStages.seed, { orgId });
     const stages = await asOwner.query(api.orgPipelineStages.list, { orgId });
@@ -44,7 +44,7 @@ describe("orgPipelineStages", () => {
   });
 
   test("seed is idempotent — running twice keeps the same count", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     await asOwner.mutation(api.orgPipelineStages.seed, { orgId });
     await asOwner.mutation(api.orgPipelineStages.seed, { orgId });
@@ -53,7 +53,7 @@ describe("orgPipelineStages", () => {
   });
 
   test("update changes label and color", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     await asOwner.mutation(api.orgPipelineStages.seed, { orgId });
     const stages = await asOwner.query(api.orgPipelineStages.list, { orgId });
@@ -70,7 +70,7 @@ describe("orgPipelineStages", () => {
   });
 
   test("reorder reassigns order values", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     await asOwner.mutation(api.orgPipelineStages.seed, { orgId });
     const stages = await asOwner.query(api.orgPipelineStages.list, { orgId });

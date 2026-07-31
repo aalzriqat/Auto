@@ -1,4 +1,5 @@
-import { convexTest, TestConvex as ConvexTestInstance } from "convex-test";
+import { TestConvex as ConvexTestInstance } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -20,7 +21,7 @@ interface SetupResult {
 }
 
 async function seedFinanceLifecycleDealer(): Promise<SetupResult> {
-  const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
 
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "FL-1 Dealer", createdAt: Date.now() })

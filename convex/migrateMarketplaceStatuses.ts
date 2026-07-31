@@ -1,4 +1,4 @@
-import { internalMutation } from "./_generated/server";
+import { internalMutation } from "./functions";
 
 /**
  * Maps legacy marketplace requests still holding the pre-R1b FULFILLED status

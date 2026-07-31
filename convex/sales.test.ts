@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -12,7 +12,7 @@ vi.mock("./rateLimit", () => ({
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
-async function seedSalesOrg(t: ReturnType<typeof convexTest>, suffix: string) {
+async function seedSalesOrg(t: ReturnType<typeof convexTestWithComponents>, suffix: string) {
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: `Test Dealer ${suffix}`, createdAt: Date.now() })
   );
@@ -74,7 +74,7 @@ async function seedSalesOrg(t: ReturnType<typeof convexTest>, suffix: string) {
 
 describe("Sales Mutations", () => {
   test("Creating a sale marks the vehicle as SOLD and creates a ledger transaction", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
 
     // Provide a mocked getValidatedEnv implementation or mocked ENV since auth/env hooks might run
     // convex-test handles auth simulation differently. Let's just run it as an admin.
@@ -188,7 +188,7 @@ describe("Sales Mutations", () => {
   });
 
   test("Creating a sale from a quote closes the quote's exact lead as WON", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
 
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Test Dealer", createdAt: Date.now() })
@@ -278,7 +278,7 @@ describe("Sales Mutations", () => {
   });
 
   test("creating a draft sale does not run completion side effects", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "draft_1");
 
     const saleId = await asAdmin.mutation(api.sales.createDraft, {
@@ -303,7 +303,7 @@ describe("Sales Mutations", () => {
   });
 
   test("sale completion must use the explicit completeDraft transition", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "draft_2");
 
     await expect(
@@ -349,7 +349,7 @@ describe("Sales Mutations", () => {
   });
 
   test("completed sale financial fields and commission amounts are locked", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "locked_1");
 
     const saleId = await asAdmin.mutation(api.sales.create, {
@@ -380,7 +380,7 @@ describe("Sales Mutations", () => {
 
 describe("C3: automatic commission requires a recorded purchase cost", () => {
   async function setAutoMemberMode(
-    t: ReturnType<typeof convexTest>,
+    t: ReturnType<typeof convexTestWithComponents>,
     orgId: any,
     userId: any,
     rate: number
@@ -400,7 +400,7 @@ describe("C3: automatic commission requires a recorded purchase cost", () => {
   }
 
   test("no purchase cost => auto commission is zero (not commissioned on full sale price)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "c3_nocost");
     // AUTO_MEMBER @ 10%, but the seeded vehicle has NO purchasePrice.
     await setAutoMemberMode(t, orgId, userId, 10);
@@ -423,7 +423,7 @@ describe("C3: automatic commission requires a recorded purchase cost", () => {
   });
 
   test("with purchase cost, auto commission still computes on profit", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "c3_cost");
     await setAutoMemberMode(t, orgId, userId, 10);
     await t.run((ctx) => ctx.db.patch(vehicleId, { purchasePrice: 10000 }));
@@ -445,7 +445,7 @@ describe("C3: automatic commission requires a recorded purchase cost", () => {
   });
 
   test("a ZERO purchase cost is treated as missing, not as a real cost", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "c3_zero");
     await setAutoMemberMode(t, orgId, userId, 10);
     // 0 passes a naive `!= null` check but would commission on ~the full sale
@@ -468,7 +468,7 @@ describe("C3: automatic commission requires a recorded purchase cost", () => {
   });
 
   test("a SOURCED vehicle with a sourceCost is commissioned normally (not flagged as missing cost)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "c3_sourced");
     await setAutoMemberMode(t, orgId, userId, 10);
     // SOURCED vehicles carry their cost in sourceCost, not purchasePrice.
@@ -492,7 +492,7 @@ describe("C3: automatic commission requires a recorded purchase cost", () => {
   });
 
   test("recalculateCommission books the commission after the missing cost is corrected", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "c3_recalc");
     await setAutoMemberMode(t, orgId, userId, 10);
 
@@ -540,7 +540,7 @@ describe("C3: automatic commission requires a recorded purchase cost", () => {
 });
 
 describe("C1/C2: MANUAL commission lifecycle", () => {
-  async function setManualMode(t: ReturnType<typeof convexTest>, orgId: any) {
+  async function setManualMode(t: ReturnType<typeof convexTestWithComponents>, orgId: any) {
     await t.run(async (ctx) => {
       await ctx.db.insert("orgSettings", {
         orgId,
@@ -553,7 +553,7 @@ describe("C1/C2: MANUAL commission lifecycle", () => {
   }
 
   test("a manually-set commission survives sale completion (not wiped)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "manual_preserve");
     await setManualMode(t, orgId);
 
@@ -578,7 +578,7 @@ describe("C1/C2: MANUAL commission lifecycle", () => {
   });
 
   test("a completed, unpaid MANUAL commission is still editable", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "manual_edit");
     await setManualMode(t, orgId);
 
@@ -600,7 +600,7 @@ describe("C1/C2: MANUAL commission lifecycle", () => {
   });
 
   test("paying a MANUAL commission recognizes the accrual, not just the payment", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "manual_pay");
     await setManualMode(t, orgId);
 
@@ -643,7 +643,7 @@ describe("C1/C2: MANUAL commission lifecycle", () => {
 
 describe("commission accrual lock respects reversals", () => {
   test("a REVERSED accrual no longer locks a MANUAL commission amount", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "rev_unlock");
     await t.run(async (ctx) => {
       await ctx.db.insert("orgSettings", {
@@ -698,7 +698,7 @@ describe("commission accrual lock respects reversals", () => {
   });
 
   test("cancelling a never-completed draft does not wipe the trade-in vehicle's acquisition cost", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, vehicleId, customerId, userId, asAdmin } = await seedSalesOrg(t, "draftcancel");
 
     // Cancellation needs approve:requests AND a different actor than the
@@ -760,7 +760,7 @@ describe("commission accrual lock respects reversals", () => {
 
 describe("cancelled sales must not stay on the P&L", () => {
   test("cancelling a completed sale removes its revenue from the profit and loss report", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, vehicleId, customerId, userId, asAdmin } = await seedSalesOrg(t, "plcancel");
 
     // Cancellation needs approve:requests AND an actor other than the

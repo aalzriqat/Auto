@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe } from "vitest";
 import schema from "./schema";
 import { internal } from "./_generated/api";
@@ -21,7 +21,7 @@ function legacyRow(status: "FULFILLED" | "MATCHED", phone: string) {
 
 describe("backfillMarketplaceStatuses", () => {
   test("maps FULFILLED to OFFERS_RECEIVED and leaves other statuses untouched", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const fulfilledId = await t.run((ctx) => ctx.db.insert("marketplaceRequests", legacyRow("FULFILLED", "+962790000001")));
     const matchedId = await t.run((ctx) => ctx.db.insert("marketplaceRequests", legacyRow("MATCHED", "+962790000002")));
 
@@ -32,7 +32,7 @@ describe("backfillMarketplaceStatuses", () => {
   });
 
   test("is idempotent — a second run changes nothing", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const fulfilledId = await t.run((ctx) => ctx.db.insert("marketplaceRequests", legacyRow("FULFILLED", "+962790000003")));
 
     const first = await t.mutation(internal.migrateMarketplaceStatuses.backfill, {});

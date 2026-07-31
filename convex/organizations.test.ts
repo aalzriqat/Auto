@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import { api } from "./_generated/api";
 import schema from "./schema";
@@ -7,7 +7,7 @@ const modules = import.meta.glob("./**/*.ts");
 
 describe("organizations.create", () => {
   test("bootstraps the Convex user row when the Clerk webhook has not synced yet", async () => {
-    const t = convexTest(schema, modules);
+    const t = convexTestWithComponents(schema, modules);
     const asWebhookLaggedUser = t.withIdentity({
       subject: "user_webhook_lagged",
       name: "Webhook Lagged User",

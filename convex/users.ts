@@ -1,4 +1,5 @@
-import { internalMutation, mutation, query } from "./_generated/server";
+import { query } from "./_generated/server";
+import { internalMutation, mutation } from "./functions";
 import { v, ConvexError } from "convex/values";
 import { requireAuth } from "./utils/tenancy";
 import { isSystemOwnerRole } from "./utils/permissions";

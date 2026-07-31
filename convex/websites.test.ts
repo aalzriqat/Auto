@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import schema from "./schema";
@@ -39,7 +39,7 @@ afterEach(() => {
 });
 
 async function seedDealer() {
-  const convex = convexTest(schema, import.meta.glob("./**/*.*s"));
+  const convex = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
   const orgId = await convex.run((ctx) =>
     ctx.db.insert("organizations", { name: "Premium Cars", createdAt: Date.now() })
   );
@@ -99,7 +99,7 @@ async function publishDealerWebsite() {
 }
 
 async function seedWebsiteSalesTeam(
-  convex: ReturnType<typeof convexTest>,
+  convex: ReturnType<typeof convexTestWithComponents>,
   orgId: any
 ) {
   const roleId = await convex.run((ctx) =>

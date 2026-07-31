@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi, beforeEach, afterEach } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -32,13 +32,13 @@ function baseEventArgs(overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function seedOrg(t: ReturnType<typeof convexTest>) {
+async function seedOrg(t: ReturnType<typeof convexTestWithComponents>) {
   return await t.run(async (ctx) => ctx.db.insert("organizations", { name: "Acme Motors", createdAt: Date.now() }));
 }
 
 describe("siteVisitors.recordEvent", () => {
   test("creates a new visitor profile and event on first contact", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
 
     const result = await t.mutation(internal.siteVisitors.recordEvent, baseEventArgs());
     expect(result.isNewVisitor).toBe(true);
@@ -55,7 +55,7 @@ describe("siteVisitors.recordEvent", () => {
   });
 
   test("a second event in the same session updates the profile without incrementing visitCount", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
 
     const first = await t.mutation(internal.siteVisitors.recordEvent, baseEventArgs());
     const second = await t.mutation(
@@ -76,7 +76,7 @@ describe("siteVisitors.recordEvent", () => {
   });
 
   test("a new session for a known visitor increments visitCount", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
 
     const first = await t.mutation(internal.siteVisitors.recordEvent, baseEventArgs());
     await t.mutation(internal.siteVisitors.recordEvent, baseEventArgs({ sessionId: "session-2" }));
@@ -86,7 +86,7 @@ describe("siteVisitors.recordEvent", () => {
   });
 
   test("the same visitorId is tracked independently per org (and platform)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const orgId = await seedOrg(t);
 
     const platform = await t.mutation(internal.siteVisitors.recordEvent, baseEventArgs());
@@ -98,7 +98,7 @@ describe("siteVisitors.recordEvent", () => {
   });
 
   test("fbclid on the first event wins the traffic-source classification", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const result = await t.mutation(
       internal.siteVisitors.recordEvent,
       baseEventArgs({ referrerHost: "example.com", clickIdType: "fbclid", clickIdValue: "abc" })
@@ -113,7 +113,7 @@ describe("siteVisitors.recordEvent", () => {
 
 describe("siteVisitors geo enrichment", () => {
   test("enrichVisitorGeo patches the visitor with the mocked lookup result", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { siteVisitorId } = await t.mutation(internal.siteVisitors.recordEvent, baseEventArgs());
 
     await t.action(internal.siteVisitors.enrichVisitorGeo, { siteVisitorId, ip: "8.8.8.8" });
@@ -127,7 +127,7 @@ describe("siteVisitors geo enrichment", () => {
 
 describe("siteVisitors.purgeEventsOlderThan", () => {
   test("rejects a non-superadmin caller", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "not_admin", email: "someone@example.com" }));
     const asUser = t.withIdentity({ subject: "not_admin" });
 
@@ -135,7 +135,7 @@ describe("siteVisitors.purgeEventsOlderThan", () => {
   });
 
   test("deletes events older than the cutoff and leaves recent events intact", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "dev_admin", email: "admin@autoflow.dev" }));
     const asAdmin = t.withIdentity({ subject: "dev_admin" });
 

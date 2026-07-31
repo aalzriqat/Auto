@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, beforeEach, afterEach } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -16,7 +16,7 @@ afterEach(() => {
   process.env.SUPER_ADMIN_EMAILS = ORIGINAL_ALLOWLIST;
 });
 
-async function seedRequestWithMatch(t: ReturnType<typeof convexTest>) {
+async function seedRequestWithMatch(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Dealer Org", createdAt: Date.now() }));
   await t.run((ctx) =>
     ctx.db.insert("marketplaceDealerProfiles", {
@@ -61,13 +61,13 @@ async function seedRequestWithMatch(t: ReturnType<typeof convexTest>) {
 
 describe("adminMarketplace", () => {
   test("listRequests rejects a non-super-admin caller", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { asMember } = await seedRequestWithMatch(t);
     await expect(asMember.query(api.adminMarketplace.listRequests, {})).rejects.toThrow();
   });
 
   test("listRequests enriches matches with dealer name and WhatsApp number", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { asAdmin } = await seedRequestWithMatch(t);
 
     const requests = await asAdmin.query(api.adminMarketplace.listRequests, {});
@@ -81,7 +81,7 @@ describe("adminMarketplace", () => {
   });
 
   test("markMatchNotified stamps notifiedAt/notifiedVia and writes an audit log", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { asAdmin, matchId, orgId } = await seedRequestWithMatch(t);
 
     await asAdmin.mutation(api.adminMarketplace.markMatchNotified, { matchId });
@@ -96,7 +96,7 @@ describe("adminMarketplace", () => {
   });
 
   test("markSpam sets status to SPAM and rejects a non-super-admin caller", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { asAdmin, asMember, requestId } = await seedRequestWithMatch(t);
 
     await expect(asMember.mutation(api.adminMarketplace.markSpam, { requestId })).rejects.toThrow();
@@ -107,7 +107,7 @@ describe("adminMarketplace", () => {
   });
 
   test("listWeeklyReports only includes opted-in dealers with activity, and rejects a non-super-admin caller", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { asAdmin, asMember, orgId, requestId } = await seedRequestWithMatch(t);
     const respondingUserId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "sales_1", email: "sales@dealer.com" }));
     await t.run((ctx) =>
@@ -134,7 +134,7 @@ describe("adminMarketplace", () => {
   });
 
   test("markWeeklyReportSentViaWhatsApp records the send and listWeeklyReports reflects it", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { asAdmin, orgId, requestId } = await seedRequestWithMatch(t);
     const respondingUserId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "sales_1", email: "sales@dealer.com" }));
     await t.run((ctx) =>
@@ -161,7 +161,7 @@ describe("adminMarketplace", () => {
   });
 
   test("listDealerProfiles rejects a non-super-admin caller and lists opted-in dealers", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { asAdmin, asMember, orgId } = await seedRequestWithMatch(t);
 
     await expect(asMember.query(api.adminMarketplace.listDealerProfiles, {})).rejects.toThrow();
@@ -172,7 +172,7 @@ describe("adminMarketplace", () => {
   });
 
   test("verifyDealerPhone stamps phoneVerifiedAt, refreshes badges, and writes an audit log", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { asAdmin, orgId } = await seedRequestWithMatch(t);
 
     await asAdmin.mutation(api.adminMarketplace.verifyDealerPhone, { orgId });
@@ -190,7 +190,7 @@ describe("adminMarketplace", () => {
 
 describe("updateMarketplaceTier (Phase 63)", () => {
   async function setPlan(
-    t: ReturnType<typeof convexTest>,
+    t: ReturnType<typeof convexTestWithComponents>,
     orgId: Id<"organizations">,
     plan: "free" | "starter" | "professional" | "enterprise"
   ) {
@@ -200,7 +200,7 @@ describe("updateMarketplaceTier (Phase 63)", () => {
   }
 
   test("rejects a non-super-admin caller", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { asMember, orgId } = await seedRequestWithMatch(t);
     await expect(
       asMember.mutation(api.adminMarketplace.updateMarketplaceTier, { orgId, tier: "LEAD_PACKAGE" })
@@ -208,7 +208,7 @@ describe("updateMarketplaceTier (Phase 63)", () => {
   });
 
   test("rejects LEAD_PACKAGE when the org's plan doesn't include marketplaceLeadPackage (default free plan)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { asAdmin, orgId } = await seedRequestWithMatch(t);
 
     await expect(
@@ -217,7 +217,7 @@ describe("updateMarketplaceTier (Phase 63)", () => {
   });
 
   test("allows LEAD_PACKAGE once the org is on a plan that includes it, and sets leadQuota", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { asAdmin, orgId } = await seedRequestWithMatch(t);
     await setPlan(t, orgId, "professional");
 
@@ -232,7 +232,7 @@ describe("updateMarketplaceTier (Phase 63)", () => {
   });
 
   test("rejects FEATURED on a plan that only includes marketplaceLeadPackage, not marketplaceFeatured", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { asAdmin, orgId } = await seedRequestWithMatch(t);
     await setPlan(t, orgId, "professional");
 
@@ -242,7 +242,7 @@ describe("updateMarketplaceTier (Phase 63)", () => {
   });
 
   test("allows FEATURED once the org is on enterprise", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { asAdmin, orgId } = await seedRequestWithMatch(t);
     await setPlan(t, orgId, "enterprise");
 
@@ -255,7 +255,7 @@ describe("updateMarketplaceTier (Phase 63)", () => {
   });
 
   test("resets leadsUsedThisPeriod when the tier actually changes, and writes an audit log", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { asAdmin, orgId } = await seedRequestWithMatch(t);
     await setPlan(t, orgId, "enterprise");
     await t.run((ctx) =>

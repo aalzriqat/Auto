@@ -165,12 +165,18 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // webhookLogs) are deployment-global diagnostics with no orgId column — there
   // is no tenant boundary for a write to cross. It is an internalMutation
   // reachable only from the `prune-operational-logs` cron.
+  //
+  // Then 421→422 by `migrations.backfillVehicleAggregate`, which seeds the
+  // vehicle aggregate from existing rows. Also `skippedNoOrgId`, and also
+  // correct: it takes a pagination cursor and no orgId, walks every org's
+  // vehicles by design, and writes only to the aggregate component — it never
+  // patches a caller-supplied row, so there is no tenant boundary to cross.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 421,
+      totalMutations: 422,
       analysed: 278,
       skippedNoArgsBlock: 5,
-      skippedNoOrgId: 138,
+      skippedNoOrgId: 139,
     });
   });
 });

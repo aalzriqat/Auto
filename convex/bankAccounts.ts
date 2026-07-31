@@ -9,7 +9,8 @@
  * journal entry, so this file never touches the posting engine.
  */
 import { v, ConvexError } from "convex/values";
-import { mutation, query, MutationCtx } from "./_generated/server";
+import { query, MutationCtx } from "./_generated/server";
+import { mutation } from "./functions";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";

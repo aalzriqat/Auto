@@ -9,7 +9,8 @@
  * recognizeDeferredCommissionForMonth, same idempotent-per-yearMonth shape).
  */
 import { v } from "convex/values";
-import { internalMutation, internalQuery } from "./_generated/server";
+import { internalQuery } from "./_generated/server";
+import { internalMutation } from "./functions";
 import { hookFiCommissionRecognized } from "./accounting/workflowHooks";
 
 /** Not org-scoped: the monthly cron runs across every tenant, same reasoning as listActiveAssetsForDepreciation. */

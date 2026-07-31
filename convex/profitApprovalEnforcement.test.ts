@@ -10,7 +10,7 @@
  *
  * Every case here drives the raw Convex mutations, never the UI.
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -100,7 +100,7 @@ function financedQuote(ids: any, desiredProfit: number | undefined) {
 
 describe("quotes.saveQuote enforces the minimum-profit approval", () => {
   test("rejects a financed quote below the vehicle's minimum profit", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "below", 1000);
 
     await expect(
@@ -109,7 +109,7 @@ describe("quotes.saveQuote enforces the minimum-profit approval", () => {
   });
 
   test("rejects a financed quote that omits the margin entirely", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "omitted", 1000);
 
     // An older client, or an attacker, simply not sending the field must not be
@@ -120,7 +120,7 @@ describe("quotes.saveQuote enforces the minimum-profit approval", () => {
   });
 
   test("rejects a financed quote whose margin is NaN", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "nan", 1000);
 
     // NaN fails every comparison, so a `desiredProfit < minimumProfit` guard
@@ -131,7 +131,7 @@ describe("quotes.saveQuote enforces the minimum-profit approval", () => {
   });
 
   test("accepts a financed quote at or above the minimum profit", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "atmin", 1000);
 
     const quoteId = await ids.asOwner.mutation(api.quotes.saveQuote, financedQuote(ids, 1000));
@@ -140,7 +140,7 @@ describe("quotes.saveQuote enforces the minimum-profit approval", () => {
   });
 
   test("accepts a below-minimum quote once a manager has approved it", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "approved", 1000);
 
     await ids.asOwner.mutation(api.approvals.requestProfitApproval, {
@@ -164,7 +164,7 @@ describe("quotes.saveQuote enforces the minimum-profit approval", () => {
   });
 
   test("an approval does not authorise a deeper discount than the one approved", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "deeper", 1000);
 
     await ids.asOwner.mutation(api.approvals.requestProfitApproval, {
@@ -190,7 +190,7 @@ describe("quotes.saveQuote enforces the minimum-profit approval", () => {
   });
 
   test("a REJECTED request does not unblock the quote", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "rejected", 1000);
 
     await ids.asOwner.mutation(api.approvals.requestProfitApproval, {
@@ -215,7 +215,7 @@ describe("quotes.saveQuote enforces the minimum-profit approval", () => {
   });
 
   test("another org's approval for the same vehicle id does not unblock the quote", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "foreign", 1000);
 
     // A stray APPROVED row carrying a different orgId must be ignored — the
@@ -242,7 +242,7 @@ describe("quotes.saveQuote enforces the minimum-profit approval", () => {
   });
 
   test("a cash quote is exempt — the minimum applies to financed deals only", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "cash", 1000);
 
     const quoteId = await ids.asOwner.mutation(api.quotes.saveQuote, {
@@ -259,7 +259,7 @@ describe("quotes.saveQuote enforces the minimum-profit approval", () => {
   });
 
   test("a vehicle with no minimum profit set is unaffected", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "nomin", undefined);
 
     const quoteId = await ids.asOwner.mutation(api.quotes.saveQuote, financedQuote(ids, 0));
@@ -299,7 +299,7 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
   }
 
   test("blocks finalization when the minimum was raised after the quote was written", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "raised", 1000);
     const { applicationId } = await readyToFinalize(t, ids, 1000);
 
@@ -318,7 +318,7 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
   });
 
   test("finalizes normally when the margin still clears the minimum", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "clears", 1000);
     const { applicationId } = await readyToFinalize(t, ids, 1500);
 
@@ -330,7 +330,7 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
   });
 
   test("lets a quote written before the margin field existed finalize", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "legacy", 1000);
     const { quoteId, applicationId } = await readyToFinalize(t, ids, 1000);
 

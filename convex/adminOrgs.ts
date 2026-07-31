@@ -1,7 +1,8 @@
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { internal } from "./_generated/api";
-import { internalMutation, mutation, query, MutationCtx } from "./_generated/server";
+import { query, MutationCtx } from "./_generated/server";
+import { internalMutation, mutation } from "./functions";
 import { Doc, Id, TableNames } from "./_generated/dataModel";
 import { requireSuperAdmin } from "./utils/tenancy";
 import { throwAppError, AppErrorCode } from "./utils/errors";
@@ -202,6 +203,13 @@ async function deleteVehiclesWithStorageBatch(ctx: MutationCtx, orgId: Id<"organ
   if (vehicles.length > 0) {
     counts.vehicles = vehicles.length;
   }
+  // The row deletes above already emptied this org's aggregate via the trigger.
+  // Deliberately NOT calling `vehiclesByOrg.clear(namespace)` to reclaim the
+  // namespace's own btree/root docs: the component's clear deletes the tree and
+  // immediately recreates it, so it frees nothing, and for an org that never
+  // held a vehicle it *creates* the very pair it would be there to remove.
+  // Two rows per deleted org is a cost worth paying over a call that does the
+  // opposite of what it reads as.
   return counts;
 }
 

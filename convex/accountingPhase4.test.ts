@@ -5,7 +5,7 @@
  *
  * All hooks are no-ops when no chart/period exists, so existing tests are unaffected.
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -13,7 +13,7 @@ import { api } from "./_generated/api";
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 async function seedPhase4Dealer() {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
 
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Phase 4 Dealer", createdAt: Date.now() })
@@ -86,7 +86,7 @@ async function seedPhase4Dealer() {
 }
 
 async function seedWithoutPeriod() {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "NoPeriod Dealer", createdAt: Date.now() })
   );

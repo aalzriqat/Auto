@@ -1,5 +1,6 @@
 import { v } from "convex/values";
-import { internalMutation, mutation, query } from "./_generated/server";
+import { query } from "./_generated/server";
+import { internalMutation, mutation } from "./functions";
 import { paginationOptsValidator } from "convex/server";
 import { internal } from "./_generated/api";
 import { requireSuperAdmin } from "./utils/tenancy";

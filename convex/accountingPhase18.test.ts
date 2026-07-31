@@ -8,7 +8,7 @@
  * at a date that falls strictly inside the current period (only entries
  * up to that date count) and after a reversal (snapshot nets back out).
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -18,7 +18,7 @@ import { reverseAccountingEvent } from "./accounting/reversals";
 const MODULE_GLOB = import.meta.glob("./**/*.ts");
 
 async function seedSnapshotDealer() {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Phase18 Dealer", createdAt: Date.now() })
   );

@@ -21,7 +21,8 @@
  *    nothing was lost or double-counted for a given period.
  */
 import { v, ConvexError } from "convex/values";
-import { mutation, query, QueryCtx } from "./_generated/server";
+import { query, QueryCtx } from "./_generated/server";
+import { mutation } from "./functions";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { getOpenPeriodForDate } from "./accountingPeriods";

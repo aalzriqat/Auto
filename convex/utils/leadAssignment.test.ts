@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import { Id } from "../_generated/dataModel";
 import schema from "../schema";
@@ -6,7 +6,7 @@ import { nextGeneratedLeadAssignee, resolveGeneratedLeadAssignee } from "./leadA
 import { PERMISSIONS } from "./permissions";
 
 async function seedOrg(autoAssignEnabled: boolean) {
-  const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+  const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Assignment Dealer", createdAt: Date.now() })
   );
@@ -30,7 +30,7 @@ async function seedOrg(autoAssignEnabled: boolean) {
 }
 
 async function addMember(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   orgId: Id<"organizations">,
   roleId: Id<"roles">,
   name: string,

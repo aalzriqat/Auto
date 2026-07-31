@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -137,7 +137,7 @@ describe("payroll posting rules", () => {
 
 // ─── Integration ───────────────────────────────────────────────────────────────
 
-async function seedPayrollOrg(t: ReturnType<typeof convexTest>, suffix: string) {
+async function seedPayrollOrg(t: ReturnType<typeof convexTestWithComponents>, suffix: string) {
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: `Payroll ${suffix}`, createdAt: Date.now() })
   );
@@ -169,7 +169,7 @@ async function seedPayrollOrg(t: ReturnType<typeof convexTest>, suffix: string) 
 
 describe("payroll: employee advances (سلفة)", () => {
   test("recording an advance creates an OUTSTANDING row and a GL asset event (not an expense)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "adv");
 
     const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, {
@@ -214,7 +214,7 @@ describe("payroll: employee advances (سلفة)", () => {
   });
 
   test("recovering an advance marks it RECOVERED", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "rec");
     const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 50 });
     await asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId, method: "CASH" });
@@ -226,7 +226,7 @@ describe("payroll: employee advances (سلفة)", () => {
 
 describe("payroll: monthly run (Option A — commissions paid through payroll)", () => {
   test("create → approve → pay settles salary, commission, and recovers an advance", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "run");
 
     // Salary 500, an outstanding advance 50, and a completed unpaid commission 100.
@@ -302,7 +302,7 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
   });
 
   test("a second run for the same period is rejected", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "dup");
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 300 });
     await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
@@ -312,7 +312,7 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
   });
 
   test("the same unpaid commission captured by two different-period runs is only paid once", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "twoperiod");
 
     // No salary — just one completed, unpaid commission of 100.
@@ -367,7 +367,7 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
   });
 
   test("a run rejects an empty period instead of creating a blocking zero-item draft", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "empty");
     // No salaries, no commissions → nothing to pay.
     await expect(
@@ -381,7 +381,7 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
   });
 
   test("cancelling a draft frees its period; approved runs cannot be cancelled", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "cancel");
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 300 });
 
@@ -403,7 +403,7 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
   });
 
   test("a sale cancelled after drafting is NOT paid by the run", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "cxl");
 
     // Commission-only payslip.
@@ -459,7 +459,7 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
   });
 
   test("a commission paid directly from the Commissions page is not paid again by payroll", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "direct");
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 200 });
 
@@ -495,7 +495,7 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
   });
 
   test("a retroactive run pays the salary that applied in that period, not today's", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "retro");
 
     // Salary was 600 from June 1st, raised to 800 later (today).
@@ -513,7 +513,7 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
   });
 
   test("an advance recovered between create and pay is not double-recovered", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "advstale");
 
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 200 });
@@ -540,7 +540,7 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
 
 describe("payroll: employee compensation", () => {
   test("setting a salary supersedes the previous active row", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "comp");
 
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
@@ -566,7 +566,7 @@ describe("payroll: employee compensation", () => {
 describe("payroll: production-hardening controls", () => {
   // A second, NON-owner member (manage:payroll but not owner) to exercise the
   // separation-of-duties guards.
-  async function seedWithNonOwner(t: ReturnType<typeof convexTest>, suffix: string) {
+  async function seedWithNonOwner(t: ReturnType<typeof convexTestWithComponents>, suffix: string) {
     const base = await seedPayrollOrg(t, suffix);
     const mgrUserId = await t.run((ctx) =>
       ctx.db.insert("users", { clerkId: `mgr_${suffix}`, email: `mgr_${suffix}@example.com`, name: "Mgr" })
@@ -580,7 +580,7 @@ describe("payroll: production-hardening controls", () => {
   }
 
   test("a former employee (membership removed) is NOT included in a new run", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, mgrUserId, asAdmin } = await seedWithNonOwner(t, "exemp");
     // The employee (not the acting owner) has the salary.
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId: mgrUserId, monthlySalary: 500 });
@@ -600,7 +600,7 @@ describe("payroll: production-hardening controls", () => {
   });
 
   test("an offboarding member is excluded from the run", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, mgrUserId, asAdmin } = await seedWithNonOwner(t, "offb");
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId: mgrUserId, monthlySalary: 500 });
     await t.run(async (ctx) => {
@@ -616,7 +616,7 @@ describe("payroll: production-hardening controls", () => {
   });
 
   test("no silent salary fallback: a period before the salary existed is not paid", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "nofall");
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
     await expect(
@@ -625,7 +625,7 @@ describe("payroll: production-hardening controls", () => {
   });
 
   test("changing org currency is blocked once financial records exist", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "curlock");
     await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 50 });
     await expect(
@@ -634,7 +634,7 @@ describe("payroll: production-hardening controls", () => {
   });
 
   test("a mismatched-currency salary is rejected at run time", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "curmix");
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
     await t.run(async (ctx) => {
@@ -647,7 +647,7 @@ describe("payroll: production-hardening controls", () => {
   });
 
   test("a non-owner cannot set their own salary, advance themselves, or approve a run paying them", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, mgrUserId, asMgr, asAdmin } = await seedWithNonOwner(t, "sod");
 
     await expect(
@@ -665,7 +665,7 @@ describe("payroll: production-hardening controls", () => {
   });
 
   test("salary cannot be double-booked through Expenses once payroll is used", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "dblbook");
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
     await expect(
@@ -676,7 +676,7 @@ describe("payroll: production-hardening controls", () => {
   });
 
   test("a partial advance repayment leaves the advance outstanding", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "partial");
     const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 100 });
     await asAdmin.mutation(api.payroll.recoverAdvance, { orgId, advanceId, method: "CASH", amount: 40 });
@@ -689,7 +689,7 @@ describe("payroll: production-hardening controls", () => {
   });
 
   test("the run stores the period accounting date, approved snapshot, and paid method", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "acctdate");
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
     const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
@@ -704,7 +704,7 @@ describe("payroll: production-hardening controls", () => {
   });
 
   test("createRun rejects a non-integer month", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "badmonth");
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
     await expect(
@@ -714,7 +714,7 @@ describe("payroll: production-hardening controls", () => {
 });
 
 describe("payroll: ledger-integrity (third audit)", () => {
-  async function countRecoveryEvents(t: ReturnType<typeof convexTest>, orgId: any) {
+  async function countRecoveryEvents(t: ReturnType<typeof convexTestWithComponents>, orgId: any) {
     return await t.run(async (ctx) => {
       const posted = await ctx.db.query("accountingEvents").collect();
       const pending = await ctx.db.query("pendingAccountingEvents").collect();
@@ -725,7 +725,7 @@ describe("payroll: ledger-integrity (third audit)", () => {
   }
 
   test("two partial recoveries each post their own GL entry (not silently deduped)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "partgl");
     const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 100 });
 
@@ -749,7 +749,7 @@ describe("payroll: ledger-integrity (third audit)", () => {
   });
 
   test("a retroactive run does not sweep a commission earned after the period", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "cutoff");
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
     // Salary in force from the start of 2026.
@@ -779,7 +779,7 @@ describe("payroll: ledger-integrity (third audit)", () => {
   });
 
   test("approval re-derives and freezes a commission edited after drafting", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "freeze");
 
     const saleId = await t.run(async (ctx) => {
@@ -810,7 +810,7 @@ describe("payroll: ledger-integrity (third audit)", () => {
   });
 
   test("recordAdvance is idempotent under a repeated key", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "advidem");
     const a1 = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 50, idempotencyKey: "k-1" });
     const a2 = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 50, idempotencyKey: "k-1" });
@@ -824,7 +824,7 @@ describe("payroll: ledger-integrity (third audit)", () => {
 
 describe("payroll: fourth audit (cross-flow integrity)", () => {
   // ── Seed with a non-owner payroll clerk who has their OWN advance ──
-  async function seedClerkWithOwnAdvance(t: ReturnType<typeof convexTest>, suffix: string) {
+  async function seedClerkWithOwnAdvance(t: ReturnType<typeof convexTestWithComponents>, suffix: string) {
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: `Payroll4 ${suffix}`, createdAt: Date.now() })
     );
@@ -851,7 +851,7 @@ describe("payroll: fourth audit (cross-flow integrity)", () => {
   }
 
   test("#7 a non-owner payroll clerk cannot mark their OWN advance repaid", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, clerkId, asOwner, asClerk } = await seedClerkWithOwnAdvance(t, "selfrec");
     // Owner (an independent actor) issues the clerk an advance.
     const advanceId = await asOwner.mutation(api.payroll.recordAdvance, { orgId, userId: clerkId, amount: 100 });
@@ -862,7 +862,7 @@ describe("payroll: fourth audit (cross-flow integrity)", () => {
   });
 
   test("#4 a duplicate partial repayment with the same key recovers only once", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "partidem");
     const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 100 });
 
@@ -880,7 +880,7 @@ describe("payroll: fourth audit (cross-flow integrity)", () => {
   });
 
   test("#5 approval re-derives salary raised between draft and approval", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "salreapp");
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
     const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
@@ -897,7 +897,7 @@ describe("payroll: fourth audit (cross-flow integrity)", () => {
   });
 
   test("#6 an employee offboarded after drafting cannot be approved", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, clerkId, asOwner } = await seedClerkWithOwnAdvance(t, "offbappr");
     await asOwner.mutation(api.payroll.setCompensation, { orgId, userId: clerkId, monthlySalary: 500 });
     const runId = await asOwner.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
@@ -916,7 +916,7 @@ describe("payroll: fourth audit (cross-flow integrity)", () => {
   });
 
   test("#9 a PENDING expense cannot be flipped to SALARIES+PAID for a payroll org", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "salbypass");
     // Org uses payroll (active compensation) and grant the actor expense perms.
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
@@ -936,7 +936,7 @@ describe("payroll: fourth audit (cross-flow integrity)", () => {
   });
 
   test("#11 currency cannot change once a PENDING expense exists", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId } = await seedPayrollOrg(t, "curexp");
     // A PENDING expense posts no accounting event/transaction yet, but its
     // stored amount is denominated in the org currency.
@@ -952,7 +952,7 @@ describe("payroll: fourth audit (cross-flow integrity)", () => {
   });
 
   test("a future payroll period is rejected", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "futper");
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
     // December 2026 begins after "now" (2026-07); it has not been earned yet.
@@ -962,7 +962,7 @@ describe("payroll: fourth audit (cross-flow integrity)", () => {
   });
 
   // ── Chart + open-period tests for the ledger-ordering fixes ──
-  async function seedPayrollOrgWithChart(t: ReturnType<typeof convexTest>, suffix: string) {
+  async function seedPayrollOrgWithChart(t: ReturnType<typeof convexTestWithComponents>, suffix: string) {
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: `PayChart ${suffix}`, createdAt: Date.now() })
     );
@@ -999,7 +999,7 @@ describe("payroll: fourth audit (cross-flow integrity)", () => {
   }
 
   test("#1 payment cannot recover an advance whose issuance is still queued", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrgWithChart(t, "advorder");
     // Only July is open. An advance dated in June (no open period) queues its
     // issuance; a July salary run will try to recover it while July can post.
@@ -1017,7 +1017,7 @@ describe("payroll: fourth audit (cross-flow integrity)", () => {
   });
 
   test("#2 re-accruing a queued commission does not recognize it in a later period", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrgWithChart(t, "commperiod");
     await openMonth(asAdmin, orgId, 2026, 6, 7); // only July is open
 
@@ -1060,7 +1060,7 @@ describe("payroll: fourth audit (cross-flow integrity)", () => {
 
 describe("payroll: fifth audit (approval immutability + idempotency)", () => {
   test("#2 a new advance issued after approval blocks payment and needs re-approval", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "drift");
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 1000 });
     const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
@@ -1089,7 +1089,7 @@ describe("payroll: fifth audit (approval immutability + idempotency)", () => {
   });
 
   test("#4 a full-repayment retry with the same key returns the original recovery", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "fullidem");
     const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, { orgId, userId, amount: 100 });
 
@@ -1108,7 +1108,7 @@ describe("payroll: fifth audit (approval immutability + idempotency)", () => {
   });
 
   test("#7 a zero-value first approval is rejected (cancel and rebuild)", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "zeroappr");
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 500 });
     const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });

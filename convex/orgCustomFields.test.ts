@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -8,7 +8,7 @@ vi.mock("./rateLimit", () => ({
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
-async function seedOwner(t: ReturnType<typeof convexTest>) {
+async function seedOwner(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() })
   );
@@ -26,14 +26,14 @@ async function seedOwner(t: ReturnType<typeof convexTest>) {
 
 describe("orgCustomFields", () => {
   test("list returns empty when no fields", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     const fields = await asOwner.query(api.orgCustomFields.list, { orgId });
     expect(fields).toHaveLength(0);
   });
 
   test("list can filter by entityType", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     await asOwner.mutation(api.orgCustomFields.create, {
       orgId,
@@ -59,7 +59,7 @@ describe("orgCustomFields", () => {
   });
 
   test("list sorts multiple fields by order", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     await asOwner.mutation(api.orgCustomFields.create, {
       orgId,
@@ -80,7 +80,7 @@ describe("orgCustomFields", () => {
   });
 
   test("create inserts a field with correct defaults", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     const fieldId = await asOwner.mutation(api.orgCustomFields.create, {
       orgId,
@@ -96,7 +96,7 @@ describe("orgCustomFields", () => {
   });
 
   test("update changes fieldName and isRequired", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     const fieldId = await asOwner.mutation(api.orgCustomFields.create, {
       orgId,
@@ -117,7 +117,7 @@ describe("orgCustomFields", () => {
   });
 
   test("remove deletes the field and cascades its values", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     // Create a vehicle to attach a value to
@@ -169,7 +169,7 @@ describe("orgCustomFields", () => {
   });
 
   test("setValues upserts and deletes blank values", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     const vehicleId = await t.run(async (ctx) =>
@@ -240,7 +240,7 @@ describe("orgCustomFields", () => {
   });
 
   test("setValues is a no-op when setting a field with no existing row to an empty string", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
 
     const vehicleId = await t.run(async (ctx) =>

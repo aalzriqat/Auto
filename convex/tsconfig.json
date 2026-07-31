@@ -21,6 +21,9 @@
     "isolatedModules": true,
     "noEmit": true
   },
-  "include": ["./**/*"],
+  /* ../test-utils is excluded from the root tsconfig (the Next build cannot
+   * compile its Vite `import.meta.glob`), so without this line the test harness
+   * — casts and all — would be typechecked by no config at all. */
+  "include": ["./**/*", "../test-utils/**/*"],
   "exclude": ["./_generated"]
 }

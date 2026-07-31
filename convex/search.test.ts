@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import type { FunctionReference } from "convex/server";
 import { api } from "./_generated/api";
@@ -43,7 +43,7 @@ const globalSearchQuery = (api as unknown as {
 }).search.globalSearch;
 
 async function setup(permissions = ["view:vehicles", "view:customers", "view:leads"]) {
-  const t = convexTest(schema, modules);
+  const t = convexTestWithComponents(schema, modules);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Test Dealer", createdAt: Date.now() })
   );
@@ -71,7 +71,7 @@ const baseVehicle = {
   status: "AVAILABLE" as const,
 };
 
-async function seedSearchCorpus(t: ReturnType<typeof convexTest>, orgId: Id<"organizations">) {
+async function seedSearchCorpus(t: ReturnType<typeof convexTestWithComponents>, orgId: Id<"organizations">) {
   await t.run((ctx) =>
     ctx.db.insert("vehicles", {
       orgId,

@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import { internal } from "./_generated/api";
 import schema from "./schema";
@@ -6,7 +6,7 @@ import schema from "./schema";
 const modules = import.meta.glob("./**/*.ts");
 
 async function seedOwnerUser() {
-  const t = convexTest(schema, modules);
+  const t = convexTestWithComponents(schema, modules);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Owner Org", createdAt: Date.now() })
   );

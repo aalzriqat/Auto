@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { afterEach, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -11,7 +11,7 @@ afterEach(() => {
 });
 
 test("webhook inbox keeps one row per event across claim, duplicate, and completion", async () => {
-  const t = convexTest(schema, MODULES);
+  const t = convexTestWithComponents(schema, MODULES);
 
   const first = await t.mutation(internal.adminSystem.webhookInboxIntake, {
     source: "clerk",
@@ -64,7 +64,7 @@ test("webhook inbox keeps one row per event across claim, duplicate, and complet
 });
 
 test("failed webhook deliveries are reclaimed and can complete on redelivery", async () => {
-  const t = convexTest(schema, MODULES);
+  const t = convexTestWithComponents(schema, MODULES);
 
   const first = await t.mutation(internal.adminSystem.webhookInboxIntake, {
     source: "whatsapp",
@@ -113,7 +113,7 @@ test("stale in-flight claims are reclaimed after the lease expires", async () =>
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-07-01T10:00:00Z"));
 
-  const t = convexTest(schema, MODULES);
+  const t = convexTestWithComponents(schema, MODULES);
 
   const first = await t.mutation(internal.adminSystem.webhookInboxIntake, {
     source: "facebook",
@@ -147,7 +147,7 @@ test("stale webhook completion cannot overwrite a reclaimed attempt", async () =
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-07-01T10:00:00Z"));
 
-  const t = convexTest(schema, MODULES);
+  const t = convexTestWithComponents(schema, MODULES);
 
   const first = await t.mutation(internal.adminSystem.webhookInboxIntake, {
     source: "instagram",
@@ -205,7 +205,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const ORIGINAL_ALLOWLIST = process.env.SUPER_ADMIN_EMAILS;
 
 /** Seeds an allowlisted super-admin and returns an identity-bound client. */
-async function asSuperAdmin(t: ReturnType<typeof convexTest>) {
+async function asSuperAdmin(t: ReturnType<typeof convexTestWithComponents>) {
   process.env.SUPER_ADMIN_EMAILS = "admin@autoflow.dev";
   await t.run(async (ctx) =>
     ctx.db.insert("users", { clerkId: "admin_clerk", email: "admin@autoflow.dev" }),
@@ -219,7 +219,7 @@ afterEach(() => {
 
 /** Inserts a heartbeat directly so tests can place rows at arbitrary ages. */
 async function seedHeartbeat(
-  t: ReturnType<typeof convexTest>,
+  t: ReturnType<typeof convexTestWithComponents>,
   jobName: string,
   ranAt: number,
 ) {
@@ -258,7 +258,7 @@ test("every cron that writes a heartbeat is listed in CRON_HEARTBEAT_JOBS", asyn
 });
 
 test("getCronStatus returns the newest heartbeat per job without scanning the table", async () => {
-  const t = convexTest(schema, MODULES);
+  const t = convexTestWithComponents(schema, MODULES);
   const now = Date.now();
 
   await seedHeartbeat(t, "check-upcoming-tasks", now - 3 * DAY_MS);
@@ -274,7 +274,7 @@ test("getCronStatus returns the newest heartbeat per job without scanning the ta
 });
 
 test("pruneOperationalLogs deletes aged rows, keeps recent ones and the newest heartbeat per job", async () => {
-  const t = convexTest(schema, MODULES);
+  const t = convexTestWithComponents(schema, MODULES);
   const now = Date.now();
 
   // Two rows past the 7-day heartbeat window and one inside it.
@@ -314,7 +314,7 @@ test("pruneOperationalLogs deletes aged rows, keeps recent ones and the newest h
 });
 
 test("getOverview returns a capped count and a truncation flag per table", async () => {
-  const t = convexTest(schema, MODULES);
+  const t = convexTestWithComponents(schema, MODULES);
 
   const admin = await asSuperAdmin(t);
   const overview = await admin.query(api.adminSystem.getOverview, {});

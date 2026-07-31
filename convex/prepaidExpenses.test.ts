@@ -13,7 +13,7 @@
  *  - current-state reconciliations are close *warnings*, not blockers (Fix #1)
  *  - inactive accounts rejected for manual posting (Fix #3)
  */
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -39,7 +39,7 @@ const OWNER_PERMS = [
 ];
 
 async function seedDealer(tag = "prepaid") {
-  const t = convexTest(schema, MODULE_GLOB);
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: `Prepaid ${tag}`, createdAt: Date.now() })
   );

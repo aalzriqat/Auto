@@ -1,4 +1,4 @@
-import { internalMutation } from "./_generated/server";
+import { internalMutation } from "./functions";
 
 /**
  * Assigns a Request Room token to marketplace requests created before

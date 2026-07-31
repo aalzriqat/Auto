@@ -6,7 +6,8 @@
  * The audit log itself is append-only: no update or delete mutations are exposed.
  */
 import { v, ConvexError } from "convex/values";
-import { query, mutation } from "./_generated/server";
+import { query } from "./_generated/server";
+import { mutation } from "./functions";
 import { Id } from "./_generated/dataModel";
 import { MutationCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
