@@ -140,13 +140,16 @@ export default function AdminOverviewPage() {
       {/* KPI tiles */}
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         {overview
-          ? Object.entries(overview).map(([key, count]) => {
+          ? Object.entries(overview).map(([key, stat]) => {
               const meta = STAT_META[key] ?? { label: key, icon: Building2, tone: "default" as const };
+              // Counts are capped server-side so an always-open admin tab can't
+              // re-read whole tables on every write; past the cap we show "N+".
+              const value = `${stat.count.toLocaleString()}${stat.truncated ? "+" : ""}`;
               return (
                 <StatCard
                   key={key}
                   label={meta.label}
-                  value={(count as number).toLocaleString()}
+                  value={value}
                   icon={meta.icon}
                   tone={meta.tone}
                 />
