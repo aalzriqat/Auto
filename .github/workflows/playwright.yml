@@ -1,8 +1,7 @@
 name: E2E Tests (Playwright)
 
-# Uses the same QA fixture and no-real-email guarantee documented in
-# e2e.yml (TestSprite) — a dedicated Clerk test-mode account, so signing in
-# during these runs never sends a real email.
+# The repo's only E2E suite. Signs in with a dedicated Clerk test-mode
+# account (the E2E_LOGIN_* secrets), so these runs never send a real email.
 on:
   push:
     branches: ["main"]

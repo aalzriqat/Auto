@@ -134,10 +134,9 @@ async function completeOnboardingIfNeeded(page: Page): Promise<void> {
 }
 
 /**
- * Signs in against Clerk's hosted <SignIn/> using the same QA fixture and
- * field ids proven to work by the existing TestSprite-generated scripts
- * (testsprite_tests/TC001_*.py, TC009_*.py): #identifier-field,
- * #password-field, then a "Continue" button. Forces English locale before
+ * Signs in against Clerk's hosted <SignIn/> using the QA fixture and the
+ * field ids Clerk renders: #identifier-field, #password-field, then a
+ * "Continue" button. Forces English locale before
  * the app boots — LanguageProvider defaults to Arabic/RTL on an empty
  * localStorage, and that default persists into the saved storageState for
  * every dependent test otherwise.

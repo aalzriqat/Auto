@@ -1,9 +1,10 @@
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
-import { query, mutation, internalMutation, internalQuery, internalAction, ActionCtx } from "./_generated/server";
+import { query, mutation, internalMutation, internalQuery, internalAction, ActionCtx, QueryCtx } from "./_generated/server";
 import { requireSuperAdmin } from "./utils/tenancy";
 import { internal } from "./_generated/api";
+import { CRON_HEARTBEAT_JOBS } from "./constants";
 
 const OVERVIEW_TABLES = [
   "organizations",
@@ -16,31 +17,112 @@ const OVERVIEW_TABLES = [
   "tasks",
 ] as const;
 
+/**
+ * Ceiling on the rows any one KPI tile will read. This is a *live* query on an
+ * always-open admin page, so it re-runs on every write to any of the eight
+ * tables — an uncapped `.collect()` per table meant one dashboard write
+ * re-read the whole database. Past the cap the tile reads "10,000+", which is
+ * all a system-wide KPI tile was ever conveying.
+ */
+const OVERVIEW_COUNT_CAP = 10_000;
+
 export const getOverview = query({
   args: {},
   handler: async (ctx) => {
     await requireSuperAdmin(ctx);
-    const counts: Record<string, number> = {};
+    const counts: Record<string, { count: number; truncated: boolean }> = {};
     for (const table of OVERVIEW_TABLES) {
-      counts[table] = (await ctx.db.query(table).collect()).length;
+      // Read one past the cap so `truncated` distinguishes "exactly at the cap"
+      // from "more than the cap".
+      const rows = await ctx.db.query(table).take(OVERVIEW_COUNT_CAP + 1);
+      counts[table] = {
+        count: Math.min(rows.length, OVERVIEW_COUNT_CAP),
+        truncated: rows.length > OVERVIEW_COUNT_CAP,
+      };
     }
     return counts;
   },
 });
 
+/** Newest heartbeat for one job — a single indexed read, ordered by `ranAt`. */
+async function newestHeartbeatForJob(ctx: QueryCtx, jobName: string) {
+  return await ctx.db
+    .query("cronHeartbeats")
+    .withIndex("by_job_ranAt", (q) => q.eq("jobName", jobName))
+    .order("desc")
+    .first();
+}
+
 export const getCronStatus = query({
   args: {},
   handler: async (ctx) => {
     await requireSuperAdmin(ctx);
-    const all = await ctx.db.query("cronHeartbeats").collect();
-    const latestByJob = new Map<string, (typeof all)[number]>();
-    for (const row of all) {
-      const existing = latestByJob.get(row.jobName);
-      if (!existing || row.ranAt > existing.ranAt) {
-        latestByJob.set(row.jobName, row);
-      }
+    // One indexed row per known job, rather than scanning a table that grows
+    // ~288 rows/day forever. The heartbeat insert invalidates this query every
+    // 5 minutes, so its read set has to stay O(jobs), not O(table).
+    const latest = await Promise.all(
+      CRON_HEARTBEAT_JOBS.map((jobName) => newestHeartbeatForJob(ctx, jobName))
+    );
+    return latest.filter((row): row is NonNullable<typeof row> => row !== null);
+  },
+});
+
+// ─── Operational-log retention ───────────────────────────────────────────────
+//
+// `cronHeartbeats` and `webhookLogs` are append-only diagnostics that nothing
+// ever deleted: heartbeats grew ~288 rows/day and webhook logs ~100/day, on
+// every deployment, forever. Both are only ever read as "what happened
+// recently", so anything past the window is pure carrying cost.
+
+const CRON_HEARTBEAT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const WEBHOOK_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+/** Per-table, per-run delete ceiling — keeps one sweep well inside a mutation's
+ *  write budget. Hourly runs clear a backlog of tens of thousands within a day. */
+const RETENTION_DELETE_BATCH = 1000;
+
+export const pruneOperationalLogs = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+
+    const staleHeartbeats = await ctx.db
+      .query("cronHeartbeats")
+      .withIndex("by_ranAt", (q) => q.lt("ranAt", now - CRON_HEARTBEAT_RETENTION_MS))
+      .take(RETENTION_DELETE_BATCH);
+
+    // The newest heartbeat per job survives regardless of age, so the admin
+    // Cron Status panel never goes blank for a job whose interval is longer
+    // than the retention window (the depreciation cron runs monthly). Names are
+    // taken from the batch rather than from CRON_HEARTBEAT_JOBS so a job that
+    // was never registered there still keeps its last row instead of being
+    // erased — deleting the only evidence a cron ever ran is unrecoverable.
+    const jobNames = Array.from(new Set(staleHeartbeats.map((row) => row.jobName)));
+    const newestPerJob = await Promise.all(
+      jobNames.map((jobName) => newestHeartbeatForJob(ctx, jobName))
+    );
+    const keep = new Set(
+      newestPerJob.filter((row) => row !== null).map((row) => row!._id)
+    );
+
+    let heartbeatsDeleted = 0;
+    for (const row of staleHeartbeats) {
+      if (keep.has(row._id)) continue;
+      await ctx.db.delete(row._id);
+      heartbeatsDeleted++;
     }
-    return Array.from(latestByJob.values());
+
+    const staleWebhookLogs = await ctx.db
+      .query("webhookLogs")
+      .withIndex("by_createdAt", (q) => q.lt("createdAt", now - WEBHOOK_LOG_RETENTION_MS))
+      .take(RETENTION_DELETE_BATCH);
+
+    let webhookLogsDeleted = 0;
+    for (const row of staleWebhookLogs) {
+      await ctx.db.delete(row._id);
+      webhookLogsDeleted++;
+    }
+
+    return { heartbeatsDeleted, webhookLogsDeleted };
   },
 });
 

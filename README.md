@@ -90,14 +90,13 @@ pnpm mobile:android   # run the mobile app on Android
 Quality is enforced at multiple levels:
 
 - **Unit & backend tests** — `vitest` with `convex-test` exercises Convex functions in isolation, plus library-level tests for pure logic (financing math, date handling, i18n).
-- **End-to-end** — two parallel suites, **Playwright** and **Cypress**, cover the critical flows (sign-in, dashboard, inventory, customers, leads, expenses, an end-to-end cash sale, and language switching) against a real production build.
+- **End-to-end** — **Playwright** covers the critical flows (sign-in, dashboard, inventory, customers, leads, expenses, an end-to-end cash sale, marketplace listings, and language switching) against a real production build.
 - **Load testing** — `k6` smoke and 1,000-user scenarios under `load-tests/`.
 - **Coverage** — tracked in CI with per-module thresholds on the accounting core.
 
 ```bash
 pnpm test                 # unit + backend
 pnpm e2e:playwright       # Playwright E2E
-pnpm e2e:cypress          # Cypress E2E
 pnpm test:coverage        # coverage report
 ```
 

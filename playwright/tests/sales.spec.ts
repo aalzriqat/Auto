@@ -41,10 +41,9 @@ test.describe("sales", () => {
       .click();
     await expect(page.getByText("Quote generated and saved!")).toBeVisible();
 
-    // Step 4 — complete the sale. "Done & Close" alone (as the old
-    // TestSprite-generated TC009 script did) only closes the wizard after a
-    // quote — it never calls sales.completeFromQuote, so no sale is actually
-    // recorded unless "Submit Sale" is clicked.
+    // Step 4 — complete the sale. "Done & Close" alone only closes the wizard
+    // after a quote — it never calls sales.completeFromQuote, so no sale is
+    // actually recorded unless "Submit Sale" is clicked.
     await expect(page.getByText("Quote Generated Successfully!")).toBeVisible();
     await page
       .getByRole("button", { name: "Submit Sale", exact: true })
