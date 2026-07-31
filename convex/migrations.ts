@@ -207,6 +207,27 @@ export const rebuildVehicleAggregates = internalMutation({
   },
 });
 
+/**
+ * Drops and re-seeds `customersByOrg`.
+ *
+ * Required once on any deployment seeded before `socialFlag` entered the key.
+ * Same reasoning as `rebuildVehicleAggregates`: the stored positions encode a
+ * three-element key while the reader supplies four-element bounds, and
+ * `insertIfDoesNotExist` will not touch a row the tree already holds.
+ */
+export const rebuildCustomerAggregate = internalMutation({
+  args: { batchSize: v.optional(v.number()) },
+  handler: async (ctx, args): Promise<{ cleared: true }> => {
+    await customersByOrg.clearAll(ctx);
+
+    await ctx.scheduler.runAfter(0, internal.migrations.backfillCustomerAggregate, {
+      batchSize: args.batchSize,
+    });
+
+    return { cleared: true };
+  },
+});
+
 /** Seeds `customersByOrg`. See `backfillVehicleAggregate` for the mechanics. */
 export const backfillCustomerAggregate = internalMutation({
   args: BACKFILL_ARGS,

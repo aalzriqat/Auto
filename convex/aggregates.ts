@@ -155,6 +155,14 @@ export const VIN_OK = 0;
 export const VIN_INVALID = 1;
 
 /**
+ * How a customer row came to exist, as encoded in `customersByOrg`'s key.
+ * DIRECT means the dealership created it; SOCIAL means Instagram/Facebook
+ * ingestion did.
+ */
+export const DIRECT = 0;
+export const SOCIAL = 1;
+
+/**
  * Counts of vehicles whose stored VIN fails its ISO 3779 check digit, for the
  * dashboard's data-quality nudge card. `dataQualityStats` used to read up to
  * 2,000 vehicle documents to produce this single number.
@@ -204,26 +212,65 @@ export function hasVinWarning(doc: { vin?: string }): boolean {
  * Counts of customers missing a phone number or an email address, for the same
  * nudge card. Replaces a scan of up to 2,000 customer documents.
  *
- * `sortKey` is `[deletedFlag, hasPhone, hasEmail]`. "Missing phone" is then one
- * contiguous range; "missing email" is two, because `hasPhone` varies across
- * it. Both are answered in a single batched round-trip.
+ * `sortKey` is `[deletedFlag, socialFlag, hasPhone, hasEmail]`.
+ *
+ * ## Why `socialFlag` is in the key
+ *
+ * The Instagram and Facebook ingestion paths materialise a customer row per
+ * inbound interaction, named after the sender's handle with no phone and no
+ * email — on production that is roughly one every five minutes. Counting them
+ * made the nudge card structurally unactionable: it reported ~450 of 470
+ * customers "missing a phone number", when the dealer has no phone number to
+ * enter and never did. A card that cannot reach zero is not a nudge, it is
+ * furniture. Excluding them lets the number mean "records you can actually go
+ * and fix".
+ *
+ * The flag sits directly under `deletedFlag` so "live, not social" is a prefix
+ * every one of the card's reads shares.
  *
  * Empty strings count as missing, matching the falsy check the row scan used —
  * a customer saved with `phone: ""` was never a customer with a phone number.
+ *
+ * Adding `socialFlag` changed the key, so any deployment that already seeded
+ * this tree needs `migrations.rebuildCustomerAggregate`.
  */
 export const customersByOrg = new TableAggregate<{
   Namespace: Id<"organizations">;
-  Key: [number, number, number];
+  Key: [number, number, number, number];
   DataModel: DataModel;
   TableName: "customers";
 }>(components.customersByOrg, {
   namespace: (doc) => doc.orgId,
   sortKey: (doc) => [
     doc.isDeleted === true ? 1 : 0,
+    isSocialOriginated(doc) ? SOCIAL : DIRECT,
     doc.phone ? PRESENT : ABSENT,
     doc.email ? PRESENT : ABSENT,
   ],
 });
+
+/**
+ * Whether a customer row was created by social ingestion rather than entered by
+ * the dealership.
+ *
+ * Keys off the linked account id, not `source`. Both are stamped at creation by
+ * `instagramEngagement.ts` and `facebookEngagement.ts`, but `source` is a free
+ * `v.string()` that any other code path — or a future import — could set to
+ * "Instagram" without the row being a social contact at all. The id fields are
+ * written in exactly two places in the whole repo, both of them the ingestion
+ * paths themselves, which makes this predicate mean what it says.
+ *
+ * A social contact who later shares a phone number keeps the flag. That is
+ * deliberate and costs nothing: having a phone already takes them out of the
+ * "missing phone" count, and re-classifying a row as the dealer fills it in
+ * would move it between key prefixes on every edit for no benefit.
+ */
+export function isSocialOriginated(doc: {
+  instagramUserId?: string;
+  facebookUserId?: string;
+}): boolean {
+  return !!doc.instagramUserId || !!doc.facebookUserId;
+}
 
 /**
  * Counts of leads by pipeline stage, for `dashboard.stats`' "active leads"
