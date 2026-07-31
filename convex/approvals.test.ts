@@ -196,7 +196,7 @@ describe("Approvals Permissions", () => {
 // correctly and then patched nothing would still have passed CI.
 describe("Approvals Outcomes", () => {
   async function setup() {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
 
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Outcome Org", createdAt: Date.now() })

@@ -3,7 +3,7 @@ declare global {
     glob: any;
   }
 }
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, it } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -16,7 +16,7 @@ import { api } from "./_generated/api";
 // silently dropped every approved edit.
 
 async function setup() {
-  const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
 
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Edits Org", createdAt: Date.now() })
