@@ -40,7 +40,6 @@
     "apps",
     "packages",
     "convex",
-    "dealer-worker",
-    "cypress"
+    "dealer-worker"
   ]
 }
