@@ -81,6 +81,132 @@ async function seedSettings(
   );
 }
 
+describe("facebookEngagement profile enrichment", () => {
+  test("flags needsProfileEnrichment for a DM with no sender name, not for a comment carrying one", async () => {
+    // Messenger webhooks identify the sender by PSID only, so a DM can never
+    // supply a name inline — this flag is the only route to a real one.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+
+    const dmResult = await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "fb_dm_no_name",
+        senderFacebookId: "fb_psid_dm",
+        text: "hi",
+      })
+    );
+    expect(dmResult?.needsProfileEnrichment).toBe(true);
+    expect(dmResult?.customerId).toBeDefined();
+
+    const commentResult = await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId,
+        kind: "comment",
+        externalId: "fb_comment_with_name",
+        senderFacebookId: "fb_psid_comment",
+        senderName: "Jane Doe",
+        text: "hi",
+      })
+    );
+    expect(commentResult?.needsProfileEnrichment).toBe(false);
+  });
+
+  test("a sender whose first lookup failed is retried on their next message", async () => {
+    // The flag is recomputed per event rather than only at creation, so an
+    // expired token or a transient Graph error does not strand the row as
+    // "Facebook Contact" forever.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+
+    await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "fb_dm_first",
+        senderFacebookId: "fb_psid_retry",
+        text: "hello",
+      })
+    );
+
+    const second = await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "fb_dm_second",
+        senderFacebookId: "fb_psid_retry",
+        text: "anyone there?",
+      })
+    );
+    expect(second?.needsProfileEnrichment).toBe(true);
+  });
+
+  test("saveCustomerDisplayName replaces the placeholder but never a staff-edited name", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+
+    const placeholder = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "Facebook",
+        lastName: "Contact",
+        facebookUserId: "fb_psid_named",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.saveCustomerDisplayName, {
+        customerId: placeholder,
+        displayName: "Layla Al Nimri",
+      })
+    );
+    const enriched = await t.run((ctx) => ctx.db.get(placeholder));
+    expect(enriched?.firstName).toBe("Layla");
+    expect(enriched?.lastName).toBe("Al Nimri");
+
+    const edited = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "Corrected",
+        lastName: "ByStaff",
+        facebookUserId: "fb_psid_edited",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.saveCustomerDisplayName, {
+        customerId: edited,
+        displayName: "Graph Name",
+      })
+    );
+    const untouched = await t.run((ctx) => ctx.db.get(edited));
+    expect(untouched?.firstName).toBe("Corrected");
+    expect(untouched?.lastName).toBe("ByStaff");
+  });
+
+  test("a single-word display name fills both halves rather than leaving lastName empty", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+
+    const placeholder = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "Facebook",
+        lastName: "Contact",
+        facebookUserId: "fb_psid_single",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.saveCustomerDisplayName, {
+        customerId: placeholder,
+        displayName: "Cher",
+      })
+    );
+    const enriched = await t.run((ctx) => ctx.db.get(placeholder));
+    expect(enriched?.firstName).toBe("Cher");
+    expect(enriched?.lastName).toBe("Cher");
+  });
+});
+
 describe("facebookEngagement.handleIncomingFacebookEvent", () => {
   test("creates a customer, an open lead, and notifies managers on a new comment", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));

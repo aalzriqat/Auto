@@ -189,12 +189,22 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // pre-existing function affected is `backfillVehicleAggregate`, which moved
   // between the two skip buckets when it adopted the shared args — hence
   // `skippedNoOrgId` staying at 139 rather than rising.
+  //
+  // Then 426→428 by `migrations.rebuildCustomerAggregate` and
+  // `facebookEngagement.saveCustomerDisplayName`, both `skippedNoOrgId`.
+  // The rebuild takes only a batch size and clears every org's tree by design.
+  // `saveCustomerDisplayName` does take a caller-supplied `customerId` with no
+  // orgId beside it, which is the shape this analyzer exists to catch — but it
+  // is an internalMutation whose only caller is the enrichment action, handing
+  // back a customerId the webhook handler just resolved for that org, and it
+  // is the exact mirror of `instagramEngagement.saveCustomerDisplayName` that
+  // this pin already covers. `analysed` is unchanged at 278.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 426,
+      totalMutations: 428,
       analysed: 278,
       skippedNoArgsBlock: 9,
-      skippedNoOrgId: 139,
+      skippedNoOrgId: 141,
     });
   });
 });
