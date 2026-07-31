@@ -234,10 +234,22 @@ test("every cron that writes a heartbeat is listed in CRON_HEARTBEAT_JOBS", asyn
   // Guard the constant against the actual insert sites, not against a comment.
   const fs = await import("node:fs/promises");
   const path = await import("node:path");
-  const source = await fs.readFile(path.join(process.cwd(), "convex", "crons.ts"), "utf8");
-  const inserted = Array.from(
-    source.matchAll(/insert\(\s*"cronHeartbeats"\s*,\s*\{[\s\S]*?jobName:\s*"([^"]+)"/g),
-  ).map((m) => m[1]);
+  const convexDir = path.join(process.cwd(), "convex");
+  const entries = await fs.readdir(convexDir, { recursive: true });
+
+  // Whole directory, not just crons.ts — a heartbeat inserted from any other
+  // Convex module has exactly the same failure mode.
+  const inserted: string[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".ts") || entry.endsWith(".test.ts")) continue;
+    if (entry.split(path.sep).includes("_generated")) continue;
+    const source = await fs.readFile(path.join(convexDir, entry), "utf8");
+    inserted.push(
+      ...Array.from(
+        source.matchAll(/insert\(\s*"cronHeartbeats"\s*,\s*\{[\s\S]*?jobName:\s*"([^"]+)"/g),
+      ).map((m) => m[1]),
+    );
+  }
 
   expect(inserted.length).toBeGreaterThan(0);
   for (const jobName of inserted) {
