@@ -46,6 +46,47 @@ export const META_NESTED_TEXT_KEYS = [
  */
 const ATTACHMENT_URL_KEYS = new Set<string>(["url", "payload"]);
 
+/**
+ * Harvests the directly-addressable text fields on one record.
+ *
+ * A media DM carries no text of its own, so without the `inAttachment` skip the
+ * signed CDN URL from `attachments[].payload.url` became the message body: a
+ * 200-character blob rendered verbatim in the customer message trail and copied
+ * into the lead's opening note. Those URLs also carry an access `signature`, so
+ * it persisted a credential into the database and onto the screen. A link the
+ * customer actually typed arrives in `text` and is unaffected.
+ */
+function collectOwnTextFields(
+  record: Record<string, unknown>,
+  parts: string[],
+  inAttachment: boolean
+): void {
+  for (const key of META_TEXT_KEYS) {
+    if (inAttachment && ATTACHMENT_URL_KEYS.has(key)) continue;
+    const text = optionalString(record[key]);
+    if (text) parts.push(text);
+  }
+}
+
+/** Descends into the nested containers Meta nests real text inside. */
+function collectNestedText(
+  record: Record<string, unknown>,
+  parts: string[],
+  inAttachment: boolean
+): void {
+  for (const key of META_NESTED_TEXT_KEYS) {
+    const nested = record[key];
+    if (!nested || typeof nested !== "object") continue;
+    // Everything below an `attachments` node stays marked, however deep.
+    collectTextParts(nested, parts, inAttachment || key === "attachments");
+  }
+
+  const payload = record.payload;
+  if (payload && typeof payload === "object") {
+    collectTextParts(payload, parts, inAttachment);
+  }
+}
+
 export function collectTextParts(
   value: unknown,
   parts: string[] = [],
@@ -57,32 +98,9 @@ export function collectTextParts(
     return parts;
   }
   if (!value || typeof value !== "object") return parts;
+
   const record = value as Record<string, unknown>;
-
-  for (const key of META_TEXT_KEYS) {
-    // A media DM carries no text of its own, so without this the signed CDN
-    // URL from `attachments[].payload.url` became the message body: a
-    // 200-character blob rendered verbatim in the customer message trail and
-    // copied into the lead's opening note. Those URLs also carry an access
-    // `signature`, so it persisted a credential into the database and onto the
-    // screen. A link the customer actually typed arrives in `text` and is
-    // unaffected.
-    if (inAttachment && ATTACHMENT_URL_KEYS.has(key)) continue;
-    const text = optionalString(record[key]);
-    if (text) parts.push(text);
-  }
-
-  for (const key of META_NESTED_TEXT_KEYS) {
-    const nested = record[key];
-    const nestedInAttachment = inAttachment || key === "attachments";
-    if (Array.isArray(nested)) {
-      for (const item of nested) collectTextParts(item, parts, nestedInAttachment);
-    } else if (nested && typeof nested === "object") {
-      collectTextParts(nested, parts, nestedInAttachment);
-    }
-  }
-
-  const payload = record.payload;
-  if (payload && typeof payload === "object") collectTextParts(payload, parts, inAttachment);
+  collectOwnTextFields(record, parts, inAttachment);
+  collectNestedText(record, parts, inAttachment);
   return parts;
 }
