@@ -1,7 +1,15 @@
 import { v } from "convex/values";
 import { internalMutation } from "./functions";
-import { vehiclesByOrg } from "./aggregates";
+import {
+  customersByOrg,
+  leadsByOrg,
+  membershipsByOrg,
+  vehicleQualityByOrg,
+  vehiclesByOrg,
+} from "./aggregates";
 import { internal } from "./_generated/api";
+import type { Doc } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
 import { ALL_PERMISSIONS, isSystemOwnerRole, normalizeRoleName, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
 
 export const backfillPermissions = internalMutation({
@@ -62,48 +70,196 @@ export const backfillPermissions = internalMutation({
  * back the scheduled continuation along with the batch's writes, so a failure
  * halts the chain cleanly rather than leaving an orphan.
  */
+/** Argument shape shared by every aggregate backfill below. */
+const BACKFILL_ARGS = {
+  cursor: v.optional(v.union(v.string(), v.null())),
+  batchSize: v.optional(v.number()),
+  /** Set false to run exactly one batch — used by tests to drive it by hand. */
+  continueAutomatically: v.optional(v.boolean()),
+} as const;
+
+type BackfillArgs = {
+  cursor?: string | null;
+  batchSize?: number;
+  continueAutomatically?: boolean;
+};
+
+type BackfillResult = { migrated: number; isDone: boolean; continueCursor: string | null };
+
+/** Tables that have an aggregate to seed. */
+type BackfilledTable = "vehicles" | "customers" | "leads" | "memberships";
+
+/**
+ * One page of a backfill: read a bounded slice of `table` and hand each row to
+ * `seed`.
+ *
+ * Deliberately does *not* schedule the continuation. Each caller owns that,
+ * because the scheduler needs the concrete `internal.migrations.<name>`
+ * reference for its own function, and threading a `FunctionReference` through
+ * here costs more in type noise than the four lines it would save.
+ */
+async function seedAggregatePage<T extends BackfilledTable>(
+  ctx: MutationCtx,
+  table: T,
+  args: BackfillArgs,
+  seed: (doc: Doc<T>) => Promise<void>,
+): Promise<BackfillResult> {
+  // Each row costs several aggregate index reads and node patches on top of
+  // its own read, so the ceiling is well below what a plain paginate could
+  // take. 250 keeps a batch inside the per-transaction budget; exceeding it
+  // would throw and kill the self-scheduled chain.
+  const numItems = Math.min(Math.max(args.batchSize ?? 100, 1), 250);
+
+  const page = await ctx.db.query(table).paginate({
+    cursor: args.cursor ?? null,
+    numItems,
+  });
+
+  for (const doc of page.page) {
+    // Soft-deleted rows are deliberately included: they live in the tree under
+    // the deletedFlag=1 prefix so a later restore is a key move rather than an
+    // insert the trigger would have to reason about.
+    await seed(doc as Doc<T>);
+  }
+
+  return {
+    migrated: page.page.length,
+    isDone: page.isDone,
+    continueCursor: page.isDone ? null : page.continueCursor,
+  };
+}
+
+/**
+ * Seeds the two `vehicles` aggregates from the existing rows.
+ *
+ * The triggers in `convex/aggregates.ts` only see writes that happen after they
+ * are deployed, so without this every vehicle already in the table is invisible
+ * to the B-trees. Worse than showing zero: the idempotent trigger inserts rows
+ * as they happen to be edited, so an un-backfilled deployment shows a
+ * believable *partial* count rather than an obviously broken one. Run once per
+ * deployment after the components ship; a fresh deployment (preview/E2E) starts
+ * empty and converges on its own.
+ *
+ * Paginated because a full-table mutation would blow the write budget on any
+ * real org, and idempotent via `insertIfDoesNotExist` so a redrive or a partial
+ * run that overlaps a live insert cannot double-count. Pagination is by
+ * `_creationTime`, which no pre-existing row can change, so no row is skipped
+ * by concurrent writes.
+ *
+ * Self-scheduling: the alternative was returning the cursor for a human to feed
+ * back in, which in practice means one hand-driven dashboard call per 200
+ * vehicles and a half-migrated tree whenever someone stops early. A throw rolls
+ * back the scheduled continuation along with the batch's writes, so a failure
+ * halts the chain cleanly rather than leaving an orphan.
+ *
+ * NOTE: on a deployment that already ran this against the *old* three-element
+ * vehicle key, `insertIfDoesNotExist` is a no-op for every row — the position
+ * is already occupied, under a key that is now wrong. Such a deployment needs
+ * `rebuildVehicleAggregates`, not this.
+ */
 export const backfillVehicleAggregate = internalMutation({
-  args: {
-    cursor: v.optional(v.union(v.string(), v.null())),
-    batchSize: v.optional(v.number()),
-    /** Set false to run exactly one batch — used by tests to drive it by hand. */
-    continueAutomatically: v.optional(v.boolean()),
-  },
+  args: BACKFILL_ARGS,
   // Explicit: a self-scheduling function that infers its own return type makes
   // the inference cyclic, and the resulting errors surface in unrelated files.
-  handler: async (
-    ctx,
-    args
-  ): Promise<{ migrated: number; isDone: boolean; continueCursor: string | null }> => {
-    // Each row costs several aggregate index reads and node patches on top of
-    // its own read, so the ceiling is well below what a plain paginate could
-    // take. 250 keeps a batch inside the per-transaction budget; exceeding it
-    // would throw and kill the self-scheduled chain.
-    const numItems = Math.min(Math.max(args.batchSize ?? 100, 1), 250);
-
-    const page = await ctx.db.query("vehicles").paginate({
-      cursor: args.cursor ?? null,
-      numItems,
+  handler: async (ctx, args): Promise<BackfillResult> => {
+    const result = await seedAggregatePage(ctx, "vehicles", args, async (vehicle) => {
+      await vehiclesByOrg.insertIfDoesNotExist(ctx, vehicle);
+      await vehicleQualityByOrg.insertIfDoesNotExist(ctx, vehicle);
     });
 
-    for (const vehicle of page.page) {
-      // Soft-deleted rows are deliberately included: they live in the tree
-      // under the deletedFlag=1 prefix so a later restore is a key move rather
-      // than an insert the trigger would have to reason about.
-      await vehiclesByOrg.insertIfDoesNotExist(ctx, vehicle);
-    }
-
-    if (!page.isDone && args.continueAutomatically !== false) {
+    if (!result.isDone && args.continueAutomatically !== false) {
       await ctx.scheduler.runAfter(0, internal.migrations.backfillVehicleAggregate, {
-        cursor: page.continueCursor,
+        cursor: result.continueCursor,
         batchSize: args.batchSize,
       });
     }
 
-    return {
-      migrated: page.page.length,
-      isDone: page.isDone,
-      continueCursor: page.isDone ? null : page.continueCursor,
-    };
+    return result;
+  },
+});
+
+/**
+ * Drops and re-seeds both vehicle trees.
+ *
+ * Required exactly once on any deployment that ran `backfillVehicleAggregate`
+ * before `sourcedFlag` was added to `vehiclesByOrg`'s sort key. Those rows are
+ * stored under a three-element key; the running code reads four-element bounds,
+ * so every count would be answered from positions that no longer mean what the
+ * reader thinks. `insertIfDoesNotExist` cannot repair that — the row is already
+ * in the tree — which is why this clears first.
+ *
+ * Safe to run on a deployment that never had the old key; it just costs one
+ * rebuild. Counts read zero between the clear and the backfill catching up,
+ * which for a dashboard tile is the right way round: obviously empty beats
+ * confidently wrong.
+ */
+export const rebuildVehicleAggregates = internalMutation({
+  args: { batchSize: v.optional(v.number()) },
+  handler: async (ctx, args): Promise<{ cleared: true }> => {
+    await vehiclesByOrg.clearAll(ctx);
+    await vehicleQualityByOrg.clearAll(ctx);
+
+    await ctx.scheduler.runAfter(0, internal.migrations.backfillVehicleAggregate, {
+      batchSize: args.batchSize,
+    });
+
+    return { cleared: true };
+  },
+});
+
+/** Seeds `customersByOrg`. See `backfillVehicleAggregate` for the mechanics. */
+export const backfillCustomerAggregate = internalMutation({
+  args: BACKFILL_ARGS,
+  handler: async (ctx, args): Promise<BackfillResult> => {
+    const result = await seedAggregatePage(ctx, "customers", args, async (customer) => {
+      await customersByOrg.insertIfDoesNotExist(ctx, customer);
+    });
+
+    if (!result.isDone && args.continueAutomatically !== false) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillCustomerAggregate, {
+        cursor: result.continueCursor,
+        batchSize: args.batchSize,
+      });
+    }
+
+    return result;
+  },
+});
+
+/** Seeds `leadsByOrg`. See `backfillVehicleAggregate` for the mechanics. */
+export const backfillLeadAggregate = internalMutation({
+  args: BACKFILL_ARGS,
+  handler: async (ctx, args): Promise<BackfillResult> => {
+    const result = await seedAggregatePage(ctx, "leads", args, async (lead) => {
+      await leadsByOrg.insertIfDoesNotExist(ctx, lead);
+    });
+
+    if (!result.isDone && args.continueAutomatically !== false) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillLeadAggregate, {
+        cursor: result.continueCursor,
+        batchSize: args.batchSize,
+      });
+    }
+
+    return result;
+  },
+});
+
+/** Seeds `membershipsByOrg`. See `backfillVehicleAggregate` for the mechanics. */
+export const backfillMembershipAggregate = internalMutation({
+  args: BACKFILL_ARGS,
+  handler: async (ctx, args): Promise<BackfillResult> => {
+    const result = await seedAggregatePage(ctx, "memberships", args, async (membership) => {
+      await membershipsByOrg.insertIfDoesNotExist(ctx, membership);
+    });
+
+    if (!result.isDone && args.continueAutomatically !== false) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillMembershipAggregate, {
+        cursor: result.continueCursor,
+        batchSize: args.batchSize,
+      });
+    }
+
+    return result;
   },
 });

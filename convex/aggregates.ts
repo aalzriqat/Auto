@@ -2,6 +2,7 @@ import { TableAggregate } from "@convex-dev/aggregate";
 import { Triggers } from "convex-helpers/server/triggers";
 import { components } from "./_generated/api";
 import { DataModel, Id } from "./_generated/dataModel";
+import { validateVinChecksum } from "../lib/vinHelpers";
 
 /**
  * Maintained counts for vehicles, so the dashboard can answer "how many" and
@@ -29,15 +30,27 @@ import { DataModel, Id } from "./_generated/dataModel";
  * `namespace` is the orgId, so one org's counts are never read or invalidated
  * by another org's writes — the same tenant boundary the tables have.
  *
- * `sortKey` is `[deletedFlag, status, createdAt]`, a prefix-ordered tuple:
+ * `sortKey` is `[deletedFlag, sourcedFlag, status, createdAt]`, a prefix-ordered
+ * tuple:
  *
  * - `deletedFlag` (0 = live, 1 = soft-deleted) keeps soft-deleted rows *in* the
  *   tree rather than removing them. That matters: a soft delete is a `patch`,
  *   so the trigger sees an update and moves the key, which is exactly one
  *   B-tree operation. Removing-on-delete would need the trigger to reason about
  *   whether the row was previously counted, which is where drift creeps in.
+ * - `sourcedFlag` (0 = own stock, 1 = sourced/drop-ship) exists because
+ *   `dashboard.stats` counts inventory as `sourceType !== "SOURCED"` — it is
+ *   reporting cars the dealer actually holds. `sourceType` is optional, and
+ *   both `undefined` and `"STOCK"` mean own stock, so the flag is
+ *   `=== "SOURCED" ? 1 : 0` to match the filter exactly rather than
+ *   three-valued. It sits *above* `status` so "every status, own stock only" is
+ *   one contiguous range; below it, that read would need one range per status.
  * - `status` lets a bounded read count just AVAILABLE vehicles.
  * - `createdAt` makes the age buckets pure range counts.
+ *
+ * Adding `sourcedFlag` changed the key, which invalidates every stored position
+ * — see `migrations.rebuildVehicleAggregate`, which must run once per deployment
+ * that already had the old three-element key.
  *
  * `sumValue` is `createdAt` *offset by `SUM_EPOCH`*, so average age within a
  * bucket comes from `sum / count` instead of reading the rows.
@@ -79,18 +92,31 @@ import { DataModel, Id } from "./_generated/dataModel";
  */
 export const vehiclesByOrg = new TableAggregate<{
   Namespace: Id<"organizations">;
-  Key: [number, string, number];
+  Key: [number, number, string, number];
   DataModel: DataModel;
   TableName: "vehicles";
 }>(components.vehiclesByOrg, {
   namespace: (doc) => doc.orgId,
   sortKey: (doc) => [
     doc.isDeleted === true ? 1 : 0,
+    isSourced(doc) ? 1 : 0,
     doc.status,
     vehicleCreatedAt(doc),
   ],
   sumValue: (doc) => Math.floor(vehicleCreatedAt(doc)) - SUM_EPOCH,
 });
+
+/**
+ * Whether a vehicle is sourced on demand from another dealer rather than held
+ * as the dealer's own stock. `sourceType` is optional; `undefined` predates the
+ * field and means own stock, which is why this is not `!== "STOCK"`.
+ *
+ * Exported so the aggregate key and `dashboard.stats` cannot drift apart on
+ * what "inventory" means.
+ */
+export function isSourced(doc: { sourceType?: "STOCK" | "SOURCED" }): boolean {
+  return doc.sourceType === "SOURCED";
+}
 
 /**
  * `createdAt` is optional on older vehicle rows; `getAgingBuckets` has always
@@ -112,9 +138,132 @@ export function vehicleCreatedAt(doc: {
  */
 export const SUM_EPOCH = 1_700_000_000_000;
 
-/** Sort-key prefix for live (non-soft-deleted) vehicles in a given status. */
+/** Sort-key prefix for live (non-soft-deleted) rows. */
 export const LIVE = 0;
 export const SOFT_DELETED = 1;
+
+/** Own stock vs. sourced-on-demand, as encoded in `vehiclesByOrg`'s key. */
+export const OWN_STOCK = 0;
+export const SOURCED = 1;
+
+/** Present/absent flags, as encoded in the data-quality keys below. */
+export const ABSENT = 0;
+export const PRESENT = 1;
+
+/** VIN check-digit outcome, as encoded in `vehicleQualityByOrg`'s key. */
+export const VIN_OK = 0;
+export const VIN_INVALID = 1;
+
+/**
+ * Counts of vehicles whose stored VIN fails its ISO 3779 check digit, for the
+ * dashboard's data-quality nudge card. `dataQualityStats` used to read up to
+ * 2,000 vehicle documents to produce this single number.
+ *
+ * ## Why this is a separate tree from `vehiclesByOrg`
+ *
+ * Every other key element in this file is a *stored field*, so the tree can
+ * only be wrong if a write skips the trigger — which `aggregateWiring.test.ts`
+ * makes impossible. This one is a *computed predicate*: it calls
+ * `validateVinChecksum`. If that function's behaviour ever changes, every
+ * stored key silently becomes wrong, with no failing write and no signal.
+ *
+ * Isolating it means such a change invalidates one small tree used by one
+ * nudge card, rather than the inventory tree that the dashboard's headline
+ * counts and the aging histogram both depend on. `vinChecksumPinned.test.ts`
+ * turns that silent hazard into a build failure.
+ *
+ * Folding it into `vehiclesByOrg` as a fifth key element was the alternative.
+ * It would need to sit above `createdAt` to be countable, which doubles the
+ * ranges every aging-bucket and inventory read has to scan — 16 instead of 8 —
+ * to marginalise a dimension none of them care about.
+ *
+ * `sortKey` is `[deletedFlag, vinInvalidFlag]`. Vehicles with no VIN at all
+ * count as valid: the card nudges about VINs that look wrong, not missing ones.
+ */
+export const vehicleQualityByOrg = new TableAggregate<{
+  Namespace: Id<"organizations">;
+  Key: [number, number];
+  DataModel: DataModel;
+  TableName: "vehicles";
+}>(components.vehicleQualityByOrg, {
+  namespace: (doc) => doc.orgId,
+  sortKey: (doc) => [doc.isDeleted === true ? 1 : 0, hasVinWarning(doc) ? 1 : 0],
+});
+
+/**
+ * Whether a vehicle's VIN is present but fails its check digit — the exact
+ * predicate `dataQualityStats` reported by scanning rows.
+ *
+ * Exported so the aggregate key and the pinning test share one definition.
+ */
+export function hasVinWarning(doc: { vin?: string }): boolean {
+  return !!doc.vin && !validateVinChecksum(doc.vin);
+}
+
+/**
+ * Counts of customers missing a phone number or an email address, for the same
+ * nudge card. Replaces a scan of up to 2,000 customer documents.
+ *
+ * `sortKey` is `[deletedFlag, hasPhone, hasEmail]`. "Missing phone" is then one
+ * contiguous range; "missing email" is two, because `hasPhone` varies across
+ * it. Both are answered in a single batched round-trip.
+ *
+ * Empty strings count as missing, matching the falsy check the row scan used —
+ * a customer saved with `phone: ""` was never a customer with a phone number.
+ */
+export const customersByOrg = new TableAggregate<{
+  Namespace: Id<"organizations">;
+  Key: [number, number, number];
+  DataModel: DataModel;
+  TableName: "customers";
+}>(components.customersByOrg, {
+  namespace: (doc) => doc.orgId,
+  sortKey: (doc) => [
+    doc.isDeleted === true ? 1 : 0,
+    doc.phone ? PRESENT : ABSENT,
+    doc.email ? PRESENT : ABSENT,
+  ],
+});
+
+/**
+ * Counts of leads by pipeline stage, for `dashboard.stats`' "active leads"
+ * tile. Replaces a scan of up to 1,000 lead documents.
+ *
+ * `sortKey` is `[deletedFlag, stage]` — the raw stage, deliberately, rather
+ * than a precomputed "is open" flag. "Active" means *not* WON and *not* LOST,
+ * and baking that rule into the key would mean any change to the pipeline (a
+ * new terminal stage, a renamed one) silently mis-sorts every stored row with
+ * nothing to catch it. Keeping the stage verbatim leaves the business rule in
+ * the query, where changing it is just a different subtraction.
+ */
+export const leadsByOrg = new TableAggregate<{
+  Namespace: Id<"organizations">;
+  Key: [number, string];
+  DataModel: DataModel;
+  TableName: "leads";
+}>(components.leadsByOrg, {
+  namespace: (doc) => doc.orgId,
+  sortKey: (doc) => [doc.isDeleted === true ? 1 : 0, doc.stage],
+});
+
+/**
+ * Membership count per org, for `dashboard.stats`' "team members" tile.
+ *
+ * `memberships` has no soft-delete column — a removed member's row is deleted
+ * outright — so the whole namespace is the count and the key carries no flags.
+ * `_creationTime` is used as the key rather than a constant so the tree stays
+ * ordered by something meaningful and a future "members joined this month"
+ * read is a range rather than a rebuild.
+ */
+export const membershipsByOrg = new TableAggregate<{
+  Namespace: Id<"organizations">;
+  Key: number;
+  DataModel: DataModel;
+  TableName: "memberships";
+}>(components.membershipsByOrg, {
+  namespace: (doc) => doc.orgId,
+  sortKey: (doc) => doc._creationTime,
+});
 
 /**
  * The trigger registrations that keep every aggregate above in step with its
@@ -141,3 +290,7 @@ export const SOFT_DELETED = 1;
 export const aggregateTriggers = new Triggers<DataModel>();
 
 aggregateTriggers.register("vehicles", vehiclesByOrg.idempotentTrigger());
+aggregateTriggers.register("vehicles", vehicleQualityByOrg.idempotentTrigger());
+aggregateTriggers.register("customers", customersByOrg.idempotentTrigger());
+aggregateTriggers.register("leads", leadsByOrg.idempotentTrigger());
+aggregateTriggers.register("memberships", membershipsByOrg.idempotentTrigger());

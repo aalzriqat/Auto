@@ -33,7 +33,13 @@ const COMPONENT_MODULES = import.meta.glob(
 );
 
 /** Every aggregate mounted in `convex/convex.config.ts`. Keep in step with it. */
-const AGGREGATE_COMPONENTS = ["vehiclesByOrg"] as const;
+const AGGREGATE_COMPONENTS = [
+  "vehiclesByOrg",
+  "vehicleQualityByOrg",
+  "customersByOrg",
+  "leadsByOrg",
+  "membershipsByOrg",
+] as const;
 
 export function convexTestWithComponents<
   Schema extends SchemaDefinition<GenericSchema, boolean>,
