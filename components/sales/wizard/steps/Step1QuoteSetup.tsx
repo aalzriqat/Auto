@@ -5,6 +5,8 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useQuery, useMutation } from "convex/react";
+import { ConvexError } from "convex/values";
+import { toast } from "@/components/ui/sonner";
 import { api } from "@/convex/_generated/api";
 import { Id, Doc } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -200,6 +202,17 @@ export default function Step1QuoteSetup({
           manualIncludesCommissionInDebt,
         },
       });
+    } catch (error) {
+      // Previously try/finally with no catch: if the mutation rejected, the
+      // salesperson saw the button sit there with no toast, no error, and no
+      // indication the request had not been sent. Three E2E specs failed on
+      // exactly that and could not report why.
+      console.error("requestProfitApproval failed", error);
+      toast.error(
+        error instanceof ConvexError && typeof error.data === "string"
+          ? error.data
+          : "Could not send the approval request. Please try again."
+      );
     } finally {
       setIsRequesting(false);
     }

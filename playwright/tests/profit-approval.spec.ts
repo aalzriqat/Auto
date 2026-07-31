@@ -29,34 +29,11 @@ import { createVehicle, gotoOrgRoute, testDataSuffix } from "../utils";
 // redoes the Clerk handshake and OrgProvider's membership gate.
 test.describe.configure({ timeout: 120_000 });
 
-// KNOWN BROKEN — skipped, not deleted. All three fail at the same point against
-// the shared dev deployment (run 30627460528); every other spec in the suite
-// passes, so this is not an environment problem.
-//
-// What the failure artifact shows at the moment of the timeout:
-//
-//     - alert:
-//       - heading "Approval Required" [level=5]
-//       - button "Request Profit Approval"
-//     - button "Next" [disabled]
-//
-// The gate renders correctly and the click on "Request Profit Approval" lands,
-// but the alert still shows the *button* rather than "Approval request is
-// currently pending" — so `approvals.checkPendingApproval` never returned a
-// PENDING row, i.e. `approvals.requestProfitApproval` threw on the server.
-//
-// It is invisible because `handleRequestApproval` in Step1QuoteSetup.tsx wraps
-// the mutation in try/finally with **no catch**: the rejection is swallowed,
-// the salesperson sees the button sit there, and nothing is logged. That
-// swallowed error is worth fixing on its own merits regardless of this spec —
-// a real salesperson hits exactly the same dead end.
-//
-// Next step for whoever picks this up: add a catch + toast to
-// handleRequestApproval, or drive the mutation directly from a Convex test with
-// the QA fixture's identity to surface the throw. Do not assume the selectors
-// are wrong — they are verified against the components and the gate itself
-// renders.
-
+// These three previously failed with the wizard still offering the "Request
+// Profit Approval" button after it was clicked — approvals.requestProfitApproval
+// was throwing and handleRequestApproval swallowed it in a catch-less
+// try/finally. That catch now exists, so a failure here reports the real reason
+// in a toast instead of timing out silently.
 const MINIMUM_PROFIT = 5000;
 const REQUESTED_PROFIT = 100;
 
@@ -74,7 +51,7 @@ async function openBlockedInstallmentQuote(page: Page) {
   const installmentEntry = page.locator("#btn-new-installment-sale");
   await expect(
     installmentEntry,
-    "The QA org has no INSTALLMENT payment type enabled, so the financed wizard cannot be opened. Enable it in Settings → Finance for the fixture org."
+    "The QA org has no INSTALLMENT payment type enabled, so the financed wizard cannot be opened. Enable it in Settings â†’ Finance for the fixture org."
   ).toBeVisible();
   await installmentEntry.click();
 
@@ -114,7 +91,7 @@ async function respondOnApprovalsPage(page: Page, model: string, action: "Approv
   await expect(card).not.toBeVisible();
 }
 
-test.describe.fixme("profit approval gate", () => {
+test.describe("profit approval gate", () => {
   test("a rejected below-minimum deal stays blocked in the wizard", async ({ page, context }) => {
     const { model } = await openBlockedInstallmentQuote(page);
 
