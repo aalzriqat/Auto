@@ -343,17 +343,43 @@ export const enrichCustomerProfile = internalAction({
   args: { orgId: v.id("organizations"), customerId: v.id("customers"), senderInstagramId: v.string() },
   handler: async (ctx, args): Promise<void> => {
     const token = await ctx.runQuery(internal.instagramEngagement.getTokenForOrg, { orgId: args.orgId });
-    if (!token) return;
+    if (!token) {
+      // Every branch below logs before giving up. Enrichment is best-effort by
+      // design, but silence made a failure indistinguishable from "this sender
+      // genuinely has no name" — and the rows just sat there as "Instagram
+      // Contact" with nothing to diagnose from.
+      console.error(
+        `instagram.enrichCustomerProfile: no access token for org ${args.orgId}; customer ${args.customerId} keeps its placeholder name`,
+      );
+      return;
+    }
 
     const url = new URL(`https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}/${args.senderInstagramId}`);
     url.searchParams.set("fields", "name,username");
     url.searchParams.set("access_token", token.instagramAccessToken);
-    const res = await fetch(url.toString());
-    if (!res.ok) return; // best-effort enrichment — not worth failing the webhook over
 
-    const json = await res.json();
+    let json: { username?: string; name?: string };
+    try {
+      const res = await fetch(url.toString());
+      if (!res.ok) {
+        console.error(
+          `instagram.enrichCustomerProfile: graph lookup failed (${res.status}) for customer ${args.customerId}`,
+        );
+        return; // best-effort enrichment — not worth failing the webhook over
+      }
+      json = await res.json();
+    } catch (error) {
+      console.error("instagram.enrichCustomerProfile: graph lookup threw", error);
+      return;
+    }
+
     const displayName: string | undefined = json.username ?? json.name;
-    if (!displayName) return;
+    if (!displayName) {
+      console.error(
+        `instagram.enrichCustomerProfile: graph returned no name for customer ${args.customerId}`,
+      );
+      return;
+    }
 
     await ctx.runMutation(internal.instagramEngagement.saveCustomerDisplayName, {
       customerId: args.customerId,
