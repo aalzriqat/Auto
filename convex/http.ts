@@ -2,6 +2,7 @@ import { ConvexError } from "convex/values";
 import { httpRouter } from "convex/server";
 import { httpAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { collectTextParts } from "./utils/metaText";
 import { Webhook } from "svix";
 import { Id } from "./_generated/dataModel";
 import { getValidatedEnv } from "./utils/env";
@@ -194,34 +195,6 @@ function hasMatchingSecret(
 
 type FacebookSourceSurface = "post" | "reel" | "story" | "ad" | "unknown";
 
-const META_TEXT_KEYS = [
-  "text",
-  "title",
-  "description",
-  "name",
-  "caption",
-  "url",
-  "payload",
-  "ref",
-  "source",
-  "type",
-  "phone",
-  "phone_number",
-  "mobile",
-  "number",
-  "value",
-  "label",
-] as const;
-
-const META_NESTED_TEXT_KEYS = [
-  "attachments",
-  "data",
-  "quick_reply",
-  "reply_to",
-  "referral",
-  "postback",
-] as const;
-
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
@@ -246,30 +219,6 @@ function optionalMetaId(value: unknown): string | undefined {
   if (typeof value === "string" && value.trim()) return value;
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   return undefined;
-}
-
-function collectTextParts(value: unknown, parts: string[] = []): string[] {
-  if (Array.isArray(value)) {
-    for (const item of value) collectTextParts(item, parts);
-    return parts;
-  }
-  if (!value || typeof value !== "object") return parts;
-  const record = value as Record<string, unknown>;
-  for (const key of META_TEXT_KEYS) {
-    const text = optionalString(record[key]);
-    if (text) parts.push(text);
-  }
-  for (const key of META_NESTED_TEXT_KEYS) {
-    const nested = record[key];
-    if (Array.isArray(nested)) {
-      for (const item of nested) collectTextParts(item, parts);
-    } else if (nested && typeof nested === "object") {
-      collectTextParts(nested, parts);
-    }
-  }
-  const payload = record.payload;
-  if (payload && typeof payload === "object") collectTextParts(payload, parts);
-  return parts;
 }
 
 function facebookSurfaceFromPayload(value: unknown): FacebookSourceSurface {
