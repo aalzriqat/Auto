@@ -2338,9 +2338,14 @@ export const api = {
       OrgScopedArgs & { notificationId: string },
       null
     >("notifications:markAsRead"),
-    markAllAsRead: makeFunctionReference<"mutation", OrgScopedArgs, null>(
-      "notifications:markAllAsRead",
-    ),
+    // Batched server-side; `hasMore` is true when a backlog larger than one
+    // batch remains. The bell ignores the result today and simply re-renders
+    // from the badge subscription.
+    markAllAsRead: makeFunctionReference<
+      "mutation",
+      OrgScopedArgs,
+      { markedRead: number; hasMore: boolean }
+    >("notifications:markAllAsRead"),
     archive: makeFunctionReference<
       "mutation",
       OrgScopedArgs & { notificationId: string },
@@ -3030,7 +3035,7 @@ export const api = {
     listPage: FunctionReference<"query", "public", NotificationListArgs, MobilePageResult<MobileNotification>>;
     unreadCount: FunctionReference<"query", "public", OrgScopedArgs, number>;
     markAsRead: FunctionReference<"mutation", "public", OrgScopedArgs & { notificationId: string }, null>;
-    markAllAsRead: FunctionReference<"mutation", "public", OrgScopedArgs, null>;
+    markAllAsRead: FunctionReference<"mutation", "public", OrgScopedArgs, { markedRead: number; hasMore: boolean }>;
     archive: FunctionReference<"mutation", "public", OrgScopedArgs & { notificationId: string }, null>;
   };
   directMessages: {
