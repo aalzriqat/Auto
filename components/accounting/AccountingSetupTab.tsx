@@ -16,6 +16,7 @@ import { CreateAccountingPeriodDialog } from "./setup/CreateAccountingPeriodDial
 import { ClosePeriodReviewDialog } from "./setup/ClosePeriodReviewDialog";
 import { PendingAccountingEventsTable } from "./setup/PendingAccountingEventsTable";
 import { SetupStatusCards } from "./setup/SetupStatusCards";
+import { OpeningBalanceCard } from "./setup/OpeningBalanceCard";
 import { SystemAccountConflictsPanel } from "./setup/SystemAccountConflictsPanel";
 import {
   dateInputToEndOfDayMs,
@@ -152,6 +153,10 @@ export function AccountingSetupTab() {
           />
         }
       />
+
+      {/* After the chart and periods, because an opening balance needs both:
+          accounts to post into, and an open period covering its date. */}
+      <OpeningBalanceCard />
 
       {!canManageFinance && (
         <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
