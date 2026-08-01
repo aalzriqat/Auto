@@ -490,6 +490,7 @@ export const openingBalanceStatus = query({
     pendingDraftId: string | null;
     canPostDirectly: boolean;
     canManageFinance: boolean;
+    currency: string;
   }> => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
@@ -513,6 +514,11 @@ export const openingBalanceStatus = query({
       pendingDraftId: pending?._id.toString() ?? null,
       canPostDirectly: isOwner && canManageFinance,
       canManageFinance,
+      // The form converts entered amounts to minor units, and the scale is
+      // per-currency (3 for JOD/KWD/BHD/OMR, 2 otherwise). Returned here so the
+      // client uses the org's real currency rather than assuming one — getting
+      // this wrong posts amounts off by a factor of ten.
+      currency: await getOrgCurrency(ctx, args.orgId),
     };
   },
 });

@@ -27,6 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "@/convex/utils/money";
 import { errorMessage } from "../AccountingTabShared";
 
 /**
@@ -44,12 +45,18 @@ import { errorMessage } from "../AccountingTabShared";
  */
 
 type DraftLine = {
+  /** Stable across reorders and removals, unlike an array index. */
+  id: string;
   accountId: string;
   debit: string;
   credit: string;
 };
 
-const EMPTY_LINE: DraftLine = { accountId: "", debit: "", credit: "" };
+let lineSeq = 0;
+function emptyLine(): DraftLine {
+  lineSeq += 1;
+  return { id: `line-${lineSeq}`, accountId: "", debit: "", credit: "" };
+}
 
 /** `YYYY-MM-DD` for a date input, from a timestamp. */
 function toDateInputValue(ms: number): string {
@@ -61,10 +68,16 @@ function toDateInputValue(ms: number): string {
  * calendar date IS its UTC midnight (see lib/dateInput.ts). Parsing with
  * `new Date(value)` would land on the browser's local midnight and shift the
  * accounting date across a period boundary for anyone west of UTC.
+ *
+ * Returns null on an empty or malformed value. A date input can be cleared,
+ * and `Date.UTC(NaN, …)` is NaN, which would sail through as an `asOfDate` and
+ * fail deep in period lookup with something unrelated to the real cause.
  */
-function dateInputToUtcMs(value: string): number {
-  const [y, m, d] = value.split("-").map(Number);
-  return Date.UTC(y, (m ?? 1) - 1, d ?? 1);
+function dateInputToUtcMs(value: string): number | null {
+  const parts = value.split("-").map(Number);
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
+  const [y, m, d] = parts;
+  return Date.UTC(y, m - 1, d);
 }
 
 export function OpeningBalanceCard() {
@@ -75,7 +88,7 @@ export function OpeningBalanceCard() {
   const [submitting, setSubmitting] = useState(false);
   const [asOfDate, setAsOfDate] = useState(() => toDateInputValue(Date.now()));
   const [memo, setMemo] = useState("");
-  const [lines, setLines] = useState<DraftLine[]>([{ ...EMPTY_LINE }, { ...EMPTY_LINE }]);
+  const [lines, setLines] = useState<DraftLine[]>(() => [emptyLine(), emptyLine()]);
 
   const status = useQuery(
     api.accountingCutover.openingBalanceStatus,
@@ -89,45 +102,59 @@ export function OpeningBalanceCard() {
   const postDirect = useMutation(api.accountingCutover.postOpeningBalanceDirect);
   const draftForApproval = useMutation(api.accountingCutover.draftOpeningBalance);
 
-  // Minor units, so the totals compare exactly the way the server validates
-  // them rather than accumulating float error across lines.
+  // The org's own currency, from the server. The minor-unit scale is 3 for
+  // JOD/KWD/BHD/OMR and 2 for everything else, so a hardcoded factor posts
+  // amounts off by a factor of ten on any org that is not on a 3-decimal
+  // currency.
+  const currency = status?.currency ?? "JOD";
+
+  // Summed in minor units, so the balance check matches exactly what the
+  // server validates rather than accumulating float error across lines.
   const totals = useMemo(() => {
     let debitMinor = 0;
     let creditMinor = 0;
     for (const line of lines) {
-      debitMinor += Math.round((Number(line.debit) || 0) * 1000);
-      creditMinor += Math.round((Number(line.credit) || 0) * 1000);
+      debitMinor += toMinorUnits(Number(line.debit) || 0, currency);
+      creditMinor += toMinorUnits(Number(line.credit) || 0, currency);
     }
     return { debitMinor, creditMinor, balanced: debitMinor === creditMinor && debitMinor > 0 };
-  }, [lines]);
+  }, [lines, currency]);
 
   const filledLines = lines.filter(
     (line) => line.accountId && (Number(line.debit) > 0 || Number(line.credit) > 0)
   );
-  const canSubmit = Boolean(activeOrgId) && totals.balanced && filledLines.length >= 2 && !submitting;
+  const canSubmit =
+    Boolean(activeOrgId) &&
+    totals.balanced &&
+    filledLines.length >= 2 &&
+    dateInputToUtcMs(asOfDate) !== null &&
+    !submitting;
 
   function updateLine(index: number, patch: Partial<DraftLine>) {
     setLines((current) => current.map((line, i) => (i === index ? { ...line, ...patch } : line)));
   }
 
   function resetForm() {
-    setLines([{ ...EMPTY_LINE }, { ...EMPTY_LINE }]);
+    setLines([emptyLine(), emptyLine()]);
     setMemo("");
     setAsOfDate(toDateInputValue(Date.now()));
   }
 
   async function submit() {
     if (!activeOrgId || !canSubmit) return;
+    const asOfMs = dateInputToUtcMs(asOfDate);
+    if (asOfMs === null) return;
+
     setSubmitting(true);
     try {
       const payload = {
         orgId: activeOrgId as Id<"organizations">,
-        asOfDate: dateInputToUtcMs(asOfDate),
+        asOfDate: asOfMs,
         memo: memo.trim() || undefined,
         lines: filledLines.map((line) => ({
           accountId: line.accountId as Id<"chartOfAccounts">,
-          debitMinor: Math.round((Number(line.debit) || 0) * 1000),
-          creditMinor: Math.round((Number(line.credit) || 0) * 1000),
+          debitMinor: toMinorUnits(Number(line.debit) || 0, currency),
+          creditMinor: toMinorUnits(Number(line.credit) || 0, currency),
         })),
       };
 
@@ -218,7 +245,7 @@ export function OpeningBalanceCard() {
 
                 <div className="space-y-2">
                   {lines.map((line, index) => (
-                    <div key={index} className="grid gap-2 sm:grid-cols-[1fr_130px_130px_40px]">
+                    <div key={line.id} className="grid gap-2 sm:grid-cols-[1fr_130px_130px_40px]">
                       <Select
                         value={line.accountId}
                         onValueChange={(value) => updateLine(index, { accountId: value })}
@@ -271,7 +298,7 @@ export function OpeningBalanceCard() {
                     type="button"
                     variant="outline"
                     size="sm"
-                    onClick={() => setLines((c) => [...c, { ...EMPTY_LINE }])}
+                    onClick={() => setLines((c) => [...c, emptyLine()])}
                   >
                     <Plus className="h-4 w-4" />
                     {t("OpeningBalanceAddLine")}
@@ -282,7 +309,8 @@ export function OpeningBalanceCard() {
                   <span className="text-slate-600">{t("OpeningBalanceTotals")}</span>
                   <span className="flex items-center gap-3">
                     <span className="tabular-nums text-slate-900">
-                      {(totals.debitMinor / 1000).toFixed(3)} / {(totals.creditMinor / 1000).toFixed(3)}
+                      {fromMinorUnits(totals.debitMinor, currency).toFixed(scaleForCurrency(currency))}{" / "}
+                      {fromMinorUnits(totals.creditMinor, currency).toFixed(scaleForCurrency(currency))}
                     </span>
                     <span className={totals.balanced ? "text-emerald-700" : "text-amber-700"}>
                       {totals.balanced ? t("OpeningBalanceBalanced") : t("OpeningBalanceUnbalanced")}

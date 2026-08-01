@@ -472,6 +472,12 @@ describe("Phase 17 — owner-only direct opening balance", () => {
     const lines = await ctx.t.run((c) => c.db.query("journalLines").collect());
     const cashLine = lines.find((l) => l.accountId === cash._id);
     expect(cashLine?.debitMinor).toBe(2_500_000);
+    expect(cashLine?.creditMinor).toBe(0);
+    // Assert the other side too — checking only the debit would pass against a
+    // posting that dropped or mis-signed the credit entirely.
+    const capitalLine = lines.find((l) => l.accountId === capital._id);
+    expect(capitalLine?.creditMinor).toBe(2_500_000);
+    expect(capitalLine?.debitMinor).toBe(0);
   });
 
   test("a finance user who is not an owner cannot skip the second approver", async () => {
