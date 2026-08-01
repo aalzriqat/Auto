@@ -216,10 +216,16 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // caller-supplied document id. Of everything pinned here this is the one
   // where that guarantee matters most, so it is also covered directly by a
   // cross-tenant test in `orgFinancialReset.test.ts`.
+  //
+  // Then 430→431 by `accountingCutover.postOpeningBalanceDirect`, raising
+  // `analysed` 280→281. It takes an `orgId` and writes, so the analyzer
+  // inspects it, and it clears: the only caller-supplied ids it touches are
+  // `accountId`s, each re-fetched and checked against the org inside the
+  // shared poster before anything is written.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 430,
-      analysed: 280,
+      totalMutations: 431,
+      analysed: 281,
       skippedNoArgsBlock: 9,
       skippedNoOrgId: 141,
     });

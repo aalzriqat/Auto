@@ -21,15 +21,15 @@
  *    nothing was lost or double-counted for a given period.
  */
 import { v, ConvexError } from "convex/values";
-import { query, QueryCtx } from "./_generated/server";
+import { query, QueryCtx, MutationCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { requireTenantAuth } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
+import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { validateManualJournalLines, auditLog, type ManualJournalLine } from "./financialAudit";
 import { toMinorUnits, scaleForCurrency } from "./utils/money";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 
 /**
@@ -182,97 +182,219 @@ export const approveOpeningBalance = mutation({
     }
     // Segregation of duties, same as approveManualJournal: seeding an org's
     // entire starting GL position is at least as high-risk as an ordinary
-    // manual journal, so it gets the same unbypassable two-person check.
+    // manual journal, so the two-person check holds on *this* path.
+    //
+    // Owners have a separate, explicitly named route that does not go through
+    // here — `postOpeningBalanceDirect`. That is deliberate: a single-owner
+    // dealership has nobody to be the second person, which is why this
+    // capability had no UI at all. Keeping the bypass as its own owner-gated
+    // mutation means the control is still enforced wherever it can be, and the
+    // exception is visible in the API surface rather than hidden behind a flag.
     if (draft.createdBy === user._id) {
       throw new ConvexError("Opening balance approver cannot be the same as the preparer.");
     }
 
-    const totalDebits = validateManualJournalLines(draft.lines as ManualJournalLine[]);
-
-    // Re-validate at approval time — an account may have been deactivated
-    // between draft and approval (mirrors resolveManualJournalCurrency).
-    for (const line of draft.lines) {
-      const account = await ctx.db.get(line.accountId);
-      if (!account || account.orgId !== args.orgId) {
-        throw new ConvexError(`Account ${line.accountId} not found in this organization.`);
-      }
-      if (!account.active) {
-        throw new ConvexError(`Account "${account.name}" is inactive and cannot carry an opening balance. Reactivate it first or use a different account.`);
-      }
-    }
-
-    const period = await getOpenPeriodForDate(ctx, args.orgId, draft.asOfDate);
-    if (!period) {
-      throw new ConvexError("No open accounting period covers the opening-balance date. Create and open a period first.");
-    }
-
-    const currency = await getOrgCurrency(ctx, args.orgId);
-    const now = Date.now();
-
-    const journalId = await ctx.db.insert("journalEntries", {
+    const journalId = await postOpeningBalanceDraft(ctx, {
       orgId: args.orgId,
-      periodId: period._id,
-      journalNumber: "OB-pending",
-      accountingDate: draft.asOfDate,
-      sourceType: "cutover",
-      sourceId: args.orgId.toString(),
-      category: "OPENING_BALANCE",
-      memo: draft.memo ?? "Opening balance",
-      status: "POSTED",
-      currency,
-      postedBy: user._id,
-      postedAt: now,
-      createdAt: now,
-    });
-    const journalNumber = `OB-${journalId.toString().replace(/[^a-z0-9]/gi, "").slice(-10).toUpperCase()}`;
-    await ctx.db.patch(journalId, { journalNumber });
-
-    const scale = scaleForCurrency(currency);
-    for (let i = 0; i < draft.lines.length; i++) {
-      const line = draft.lines[i];
-      await ctx.db.insert("journalLines", {
-        orgId: args.orgId,
-        journalEntryId: journalId,
-        lineNumber: i + 1,
-        accountId: line.accountId,
-        debitMinor: line.debitMinor,
-        creditMinor: line.creditMinor,
-        currency,
-        scale,
-        accountingDate: draft.asOfDate,
-        description: line.description,
-      });
-      // GL Phase 18: this is a direct journalLines insert (not routed through
-      // postAccountingEvent), so it must keep the running snapshot in sync
-      // itself, exactly like postingEngine.ts and reversals.ts do.
-      await incrementAccountSnapshot(ctx, {
-        orgId: args.orgId,
-        accountId: line.accountId,
-        currency,
-        periodId: period._id,
-        debitMinor: line.debitMinor,
-        creditMinor: line.creditMinor,
-      });
-    }
-
-    await ctx.db.patch(draft._id, {
-      status: "POSTED",
-      reviewedBy: user._id,
-      decidedAt: now,
-      journalEntryId: journalId,
-    });
-
-    await auditLog(ctx, {
-      orgId: args.orgId,
-      actorId: user._id,
-      actionType: "POST_MANUAL_JOURNAL",
-      resourceType: "journalEntries",
-      resourceId: journalId.toString(),
-      description: `Opening balance posted: ${draft.lines.length} lines, ${totalDebits} total.`,
-      after: { lines: draft.lines.length, totalDebits, preparedBy: draft.createdBy },
+      draft,
+      approverId: user._id,
+      autoApproved: false,
     });
 
     return { journalId: journalId.toString() };
+  },
+});
+
+/**
+ * Turns an opening-balance draft into a posted journal entry.
+ *
+ * Shared by the two-person `approveOpeningBalance` path and the owner-only
+ * `postOpeningBalanceDirect` one, so both produce byte-identical ledger
+ * effects. Everything that differs between them — who may call it, and whether
+ * a second person was involved — is decided by the caller before this runs;
+ * this function makes no authorization decisions of its own.
+ */
+async function postOpeningBalanceDraft(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    draft: Doc<"openingBalanceDrafts">;
+    approverId: Id<"users">;
+    autoApproved: boolean;
+  },
+): Promise<Id<"journalEntries">> {
+  const { orgId, draft, approverId, autoApproved } = args;
+
+  const totalDebits = validateManualJournalLines(draft.lines as ManualJournalLine[]);
+
+  // Re-validate at approval time — an account may have been deactivated
+  // between draft and approval (mirrors resolveManualJournalCurrency).
+  for (const line of draft.lines) {
+    const account = await ctx.db.get(line.accountId);
+    if (!account || account.orgId !== orgId) {
+      throw new ConvexError(`Account ${line.accountId} not found in this organization.`);
+    }
+    if (!account.active) {
+      throw new ConvexError(`Account "${account.name}" is inactive and cannot carry an opening balance. Reactivate it first or use a different account.`);
+    }
+  }
+
+  const period = await getOpenPeriodForDate(ctx, orgId, draft.asOfDate);
+  if (!period) {
+    throw new ConvexError("No open accounting period covers the opening-balance date. Create and open a period first.");
+  }
+
+  const currency = await getOrgCurrency(ctx, orgId);
+  const now = Date.now();
+
+  const journalId = await ctx.db.insert("journalEntries", {
+    orgId,
+    periodId: period._id,
+    journalNumber: "OB-pending",
+    accountingDate: draft.asOfDate,
+    sourceType: "cutover",
+    sourceId: orgId.toString(),
+    category: "OPENING_BALANCE",
+    memo: draft.memo ?? "Opening balance",
+    status: "POSTED",
+    currency,
+    postedBy: approverId,
+    postedAt: now,
+    createdAt: now,
+  });
+  const journalNumber = `OB-${journalId.toString().replace(/[^a-z0-9]/gi, "").slice(-10).toUpperCase()}`;
+  await ctx.db.patch(journalId, { journalNumber });
+
+  const scale = scaleForCurrency(currency);
+  for (let i = 0; i < draft.lines.length; i++) {
+    const line = draft.lines[i];
+    await ctx.db.insert("journalLines", {
+      orgId,
+      journalEntryId: journalId,
+      lineNumber: i + 1,
+      accountId: line.accountId,
+      debitMinor: line.debitMinor,
+      creditMinor: line.creditMinor,
+      currency,
+      scale,
+      accountingDate: draft.asOfDate,
+      description: line.description,
+    });
+    // GL Phase 18: this is a direct journalLines insert (not routed through
+    // postAccountingEvent), so it must keep the running snapshot in sync
+    // itself, exactly like postingEngine.ts and reversals.ts do.
+    await incrementAccountSnapshot(ctx, {
+      orgId,
+      accountId: line.accountId,
+      currency,
+      periodId: period._id,
+      debitMinor: line.debitMinor,
+      creditMinor: line.creditMinor,
+    });
+  }
+
+  await ctx.db.patch(draft._id, {
+    status: "POSTED",
+    reviewedBy: approverId,
+    decidedAt: now,
+    journalEntryId: journalId,
+    autoApproved,
+  });
+
+  await auditLog(ctx, {
+    orgId,
+    actorId: approverId,
+    actionType: "POST_MANUAL_JOURNAL",
+    resourceType: "journalEntries",
+    resourceId: journalId.toString(),
+    // The audit line says which route was taken. An owner self-posting is a
+    // legitimate operation here, but it is not the same event as a
+    // two-person approval and the log should never conflate them.
+    description: autoApproved
+      ? `Opening balance posted by owner without second approval: ${draft.lines.length} lines, ${totalDebits} total.`
+      : `Opening balance posted: ${draft.lines.length} lines, ${totalDebits} total.`,
+    after: {
+      lines: draft.lines.length,
+      totalDebits,
+      preparedBy: draft.createdBy,
+      autoApproved,
+    },
+  });
+
+  return journalId;
+}
+
+/**
+ * Drafts and immediately posts an opening balance, for owners only.
+ *
+ * The two-person check on `approveOpeningBalance` assumes there is a second
+ * MANAGE_FINANCE person to be the approver. In a single-owner dealership there
+ * is not, which is why this capability shipped with no UI and no way to use it.
+ *
+ * This is that exception, deliberately built as its own mutation rather than a
+ * flag on the existing pair:
+ *
+ * - It is gated on the OWNER role itself, not on MANAGE_FINANCE, so granting
+ *   someone finance permissions does not also hand them the bypass.
+ * - It still writes a full `openingBalanceDrafts` row, so a posted opening
+ *   balance looks the same to every reader whichever route created it, and
+ *   `autoApproved` records which one did.
+ * - The audit entry names the bypass explicitly.
+ *
+ * Every other guard is unchanged: one opening balance per org, balanced lines,
+ * accounts in this org and active, and an open period covering the date.
+ */
+export const postOpeningBalanceDirect = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    lines: v.array(v.object({
+      accountId: v.id("chartOfAccounts"),
+      debitMinor: v.number(),
+      creditMinor: v.number(),
+      description: v.optional(v.string()),
+    })),
+    asOfDate: v.number(),
+    memo: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<{ journalId: string; draftId: string }> => {
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    if (!isSystemOwnerRole(role)) {
+      throw new ConvexError(
+        "Only an owner can post an opening balance without a second approver. Save it for approval instead."
+      );
+    }
+
+    if (await hasOpeningBalanceCommitment(ctx, args.orgId)) {
+      throw new ConvexError("An opening balance has already been posted or is awaiting approval for this organization.");
+    }
+
+    validateManualJournalLines(args.lines as ManualJournalLine[]);
+
+    const now = Date.now();
+    const draftId = await ctx.db.insert("openingBalanceDrafts", {
+      orgId: args.orgId,
+      status: "PENDING_APPROVAL",
+      lines: args.lines,
+      asOfDate: args.asOfDate,
+      memo: args.memo,
+      createdBy: user._id,
+      createdAt: now,
+    });
+
+    const draft = await ctx.db.get(draftId);
+    if (!draft) throw new ConvexError("Opening balance draft could not be created.");
+
+    // Account and period validation live in the shared poster, so this path
+    // cannot drift from the reviewed one. A throw there rolls back the draft
+    // insert above with it, leaving nothing half-created.
+    const journalId = await postOpeningBalanceDraft(ctx, {
+      orgId: args.orgId,
+      draft,
+      approverId: user._id,
+      autoApproved: true,
+    });
+
+    return { journalId: journalId.toString(), draftId: draftId.toString() };
   },
 });
 
@@ -342,6 +464,56 @@ export const hasOpeningBalance = query({
       .filter((q) => q.and(q.eq(q.field("category"), "OPENING_BALANCE"), q.eq(q.field("status"), "POSTED")))
       .first();
     return existing !== null;
+  },
+});
+
+/**
+ * Everything the opening-balance UI needs, in one subscription.
+ *
+ * `canPostDirectly` is computed here rather than in the client on purpose.
+ * `usePermissions` derives ownership from `roleName === "OWNER"`, while the
+ * server gate is `isSystemOwnerRole`, which honours an explicit
+ * `isSystemOwnerRole` flag first and only then falls back to the name — *and*
+ * requires the role to hold every defined permission. Those two rules can
+ * disagree: a role flagged as the system owner but named something else passes
+ * the server and fails the client, and a role named "OWNER" with the flag off
+ * does the reverse. Re-deriving an authorization rule in the browser is how a
+ * UI ends up offering a button the server refuses, so the server answers it.
+ */
+export const openingBalanceStatus = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    posted: boolean;
+    pendingDraftId: string | null;
+    canPostDirectly: boolean;
+    canManageFinance: boolean;
+  }> => {
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+
+    const postedEntry = await ctx.db
+      .query("journalEntries")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.and(q.eq(q.field("category"), "OPENING_BALANCE"), q.eq(q.field("status"), "POSTED")))
+      .first();
+
+    const pending = await ctx.db
+      .query("openingBalanceDrafts")
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING_APPROVAL"))
+      .first();
+
+    const isOwner = isSystemOwnerRole(role);
+    const canManageFinance =
+      isOwner || role.permissions.includes(PERMISSIONS.MANAGE_FINANCE);
+
+    return {
+      posted: postedEntry !== null,
+      pendingDraftId: pending?._id.toString() ?? null,
+      canPostDirectly: isOwner && canManageFinance,
+      canManageFinance,
+    };
   },
 });
 
