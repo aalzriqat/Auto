@@ -1722,6 +1722,13 @@ http.route({
               },
             );
           }
+          if (result?.needsProfileEnrichment && result.customerId) {
+            await ctx.runAction(internal.facebookEngagement.enrichCustomerProfile, {
+              orgId,
+              customerId: result.customerId,
+              senderFacebookId: fromId,
+            });
+          }
           await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
             source: "facebook",
             status: "success",
@@ -1793,6 +1800,16 @@ http.route({
                 sourceSurface,
               },
             );
+          }
+          // Messenger DM payloads carry no sender name at all — unlike comments,
+          // which include `from.name` — so this is the only path by which a DM
+          // sender ever gets a real name instead of "Facebook Contact".
+          if (result?.needsProfileEnrichment && result.customerId) {
+            await ctx.runAction(internal.facebookEngagement.enrichCustomerProfile, {
+              orgId,
+              customerId: result.customerId,
+              senderFacebookId: senderId,
+            });
           }
           await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
             source: "facebook",

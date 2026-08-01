@@ -24,6 +24,26 @@ import { nextGeneratedLeadAssignee } from "./utils/leadAssignment";
 import { recordLeadCreated, recordLeadActivity, describeLeadFieldValue } from "./utils/leadActivity";
 import { mobileReceivedAutoReplyText } from "./utils/socialMobileReply";
 
+/**
+ * Stand-in name for a Messenger sender whose profile has not been resolved yet.
+ * Matched exactly when deciding whether to enrich or overwrite, so both halves
+ * have to stay in step — hence constants rather than inline literals.
+ */
+export const PLACEHOLDER_FIRST_NAME = "Facebook";
+export const PLACEHOLDER_LAST_NAME = "Contact";
+
+/**
+ * Ceiling on a profile lookup.
+ *
+ * `http.ts` *awaits* the enrichment action while processing a webhook entry, so
+ * a hung Graph response does not just delay a name — it holds the webhook open,
+ * burns the action's time budget, and can push Meta into redelivering the event.
+ * Enrichment is the least important thing happening on that request, so it gets
+ * a short leash: the abort surfaces as a thrown fetch, which the caller already
+ * treats as a failed best-effort lookup and retries on the sender's next message.
+ */
+const GRAPH_LOOKUP_TIMEOUT_MS = 5_000;
+
 const AUTO_REPLY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 reply per sender per 24h
 const MAX_AUTO_REPLY_RETRIES = 3;
 
@@ -79,6 +99,7 @@ export const handleIncomingFacebookEvent = internalMutation({
     vehicleId?: Id<"vehicles">;
     eventId: Id<"facebookEvents">;
     replySource?: "smart" | "canned";
+    needsProfileEnrichment: boolean;
   } | null> => {
     const { orgId, kind, externalId, senderFacebookId, senderName, text, mediaId, sourceSurface } = args;
     const sharedMobileNumber = kind === "dm" ? extractSharedMobileNumber(text) : null;
@@ -99,11 +120,11 @@ export const handleIncomingFacebookEvent = internalMutation({
       customers.find((c) => c.facebookUserId === senderFacebookId) ?? null;
 
     if (!customer) {
-      const nameParts = (senderName ?? "Facebook Contact").split(" ");
+      const nameParts = (senderName ?? `${PLACEHOLDER_FIRST_NAME} ${PLACEHOLDER_LAST_NAME}`).split(" ");
       const customerId = await ctx.db.insert("customers", {
         orgId,
-        firstName: nameParts[0] ?? "Facebook",
-        lastName: nameParts.slice(1).join(" ") || "Contact",
+        firstName: nameParts[0] ?? PLACEHOLDER_FIRST_NAME,
+        lastName: nameParts.slice(1).join(" ") || PLACEHOLDER_LAST_NAME,
         facebookUserId: senderFacebookId,
         createdAt: Date.now(),
         source: "Facebook",
@@ -111,6 +132,15 @@ export const handleIncomingFacebookEvent = internalMutation({
       customer = await ctx.db.get(customerId);
     }
     if (!customer) return null;
+
+    // Messenger webhook payloads identify the sender by PSID only — they never
+    // carry a name, so without this every DM sender was stored as "Facebook
+    // Contact" permanently. Every Facebook account has a name; it just has to
+    // be fetched. Recomputed on each event rather than only at creation, so a
+    // sender whose earlier lookup failed (expired token, transient API error)
+    // is retried the next time they write in.
+    const needsProfileEnrichment =
+      customer.firstName === PLACEHOLDER_FIRST_NAME && customer.lastName === PLACEHOLDER_LAST_NAME;
 
     if (kind === "dm") {
       await attachSharedMobileNumberToCustomer(ctx, orgId, customer, sharedMobileNumber);
@@ -343,7 +373,98 @@ export const handleIncomingFacebookEvent = internalMutation({
       vehicleId,
       eventId,
       replySource: shouldAutoReply ? autoReplySource : undefined,
+      needsProfileEnrichment,
     };
+  },
+});
+
+/**
+ * Fetches a sender's real name from Facebook and applies it to their customer
+ * record.
+ *
+ * Mirrors `instagramEngagement.enrichCustomerProfile`. Messenger's webhook
+ * gives a PSID and nothing else, so the name has to come from a Graph lookup
+ * against the Page token that received the message — a PSID is only resolvable
+ * by the page it was issued for.
+ */
+export const enrichCustomerProfile = internalAction({
+  args: {
+    orgId: v.id("organizations"),
+    customerId: v.id("customers"),
+    senderFacebookId: v.string(),
+  },
+  handler: async (ctx, args): Promise<void> => {
+    const token = await ctx.runQuery(internal.facebookEngagement.getTokenForOrg, {
+      orgId: args.orgId,
+    });
+    if (!token) {
+      // Logged rather than swallowed: a silent return here is why placeholder
+      // names persisted with nothing to diagnose from.
+      console.error(
+        `facebook.enrichCustomerProfile: no page token for org ${args.orgId}; customer ${args.customerId} keeps its placeholder name`,
+      );
+      return;
+    }
+
+    const url = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${args.senderFacebookId}`);
+    url.searchParams.set("fields", "first_name,last_name,name");
+
+    let json: { first_name?: string; last_name?: string; name?: string };
+    try {
+      // Token in the Authorization header rather than a query parameter: URLs
+      // end up in proxy access logs and observability traces, and a Page access
+      // token is a durable credential. Graph documents the Bearer form.
+      const res = await fetch(url.toString(), {
+        headers: { Authorization: `Bearer ${token.facebookPageAccessToken}` },
+        signal: AbortSignal.timeout(GRAPH_LOOKUP_TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        console.error(
+          `facebook.enrichCustomerProfile: graph lookup failed (${res.status}) for customer ${args.customerId}`,
+        );
+        return; // best-effort enrichment — not worth failing the webhook over
+      }
+      json = await res.json();
+    } catch (error) {
+      console.error("facebook.enrichCustomerProfile: graph lookup threw", error);
+      return;
+    }
+
+    const first = json.first_name?.trim();
+    const last = json.last_name?.trim();
+    const displayName = first || last ? [first, last].filter(Boolean).join(" ") : json.name?.trim();
+    if (!displayName) {
+      console.error(
+        `facebook.enrichCustomerProfile: graph returned no name for customer ${args.customerId}`,
+      );
+      return;
+    }
+
+    await ctx.runMutation(internal.facebookEngagement.saveCustomerDisplayName, {
+      customerId: args.customerId,
+      displayName,
+    });
+  },
+});
+
+export const saveCustomerDisplayName = internalMutation({
+  args: { customerId: v.id("customers"), displayName: v.string() },
+  handler: async (ctx, args) => {
+    const customer = await ctx.db.get(args.customerId);
+    // Only overwrite the placeholder — never clobber a name a staff member may
+    // have since edited.
+    if (
+      !customer ||
+      customer.firstName !== PLACEHOLDER_FIRST_NAME ||
+      customer.lastName !== PLACEHOLDER_LAST_NAME
+    ) {
+      return;
+    }
+    const nameParts = args.displayName.trim().split(" ");
+    await ctx.db.patch(args.customerId, {
+      firstName: nameParts[0],
+      lastName: nameParts.slice(1).join(" ") || nameParts[0],
+    });
   },
 });
 

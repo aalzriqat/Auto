@@ -7,6 +7,7 @@ import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import {
   ABSENT,
   customersByOrg,
+  DIRECT,
   leadsByOrg,
   LIVE,
   membershipsByOrg,
@@ -67,9 +68,15 @@ function liveStageBounds(stage: string | null) {
   };
 }
 
-/** One exact live-customer key: a specific phone/email presence combination. */
+/**
+ * One exact key for a live, dealership-entered customer with a specific
+ * phone/email presence combination.
+ *
+ * Pinned to `DIRECT`: social-ingested contacts are deliberately outside every
+ * count this card reports — see `customersByOrg`.
+ */
 function exactCustomerKey(hasPhone: number, hasEmail: number) {
-  const key = [LIVE, hasPhone, hasEmail] as [number, number, number];
+  const key = [LIVE, DIRECT, hasPhone, hasEmail] as [number, number, number, number];
   return {
     lower: { key, inclusive: true as const },
     upper: { key, inclusive: true as const },
@@ -627,10 +634,15 @@ export const dataQualityStats = query({
     const canViewCustomers = canRoleView(role, PERMISSIONS.VIEW_CUSTOMERS);
     const canViewVehicles = canRoleView(role, PERMISSIONS.VIEW_VEHICLES);
 
-    // `customersByOrg`'s key is [deletedFlag, hasPhone, hasEmail]. With both
-    // flags binary, the four live combinations are four exact keys, so each
-    // count is a point lookup and the two answers are sums of two of them —
-    // no range reasoning, and no scan of up to 2,000 customer rows.
+    // `customersByOrg`'s key is [deletedFlag, socialFlag, hasPhone, hasEmail].
+    // With the presence flags binary, the live dealership-entered combinations
+    // are four exact keys, so each count is a point lookup and the two answers
+    // are sums of two of them — no range reasoning, and no scan of up to 2,000
+    // customer rows.
+    //
+    // Instagram/Facebook contacts are excluded: ingestion creates one per
+    // inbound message with no phone and no email, which drowned the real
+    // signal. See `customersByOrg`.
     const [
       noPhoneNoEmail,
       noPhoneHasEmail,

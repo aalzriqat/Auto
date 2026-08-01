@@ -250,6 +250,106 @@ test("data-quality counts ignore soft-deleted customers and vehicles", async () 
   expect(quality.vehiclesWithVinWarning).toBe(1);
 });
 
+test("social-ingested contacts are excluded from the data-quality counts", async () => {
+  // Instagram/Facebook ingestion creates a customer per inbound interaction
+  // with no phone and no email. Counting them made the nudge card report
+  // hundreds of "missing phone" rows the dealer had no way to fix.
+  const t = setup();
+  const { orgId, asUser } = await seedDealer(t);
+
+  await t.run((ctx) =>
+    ctx.db.insert("customers", { orgId, firstName: "Real", lastName: "Walkin" }),
+  );
+  await t.run((ctx) =>
+    ctx.db.insert("customers", {
+      orgId,
+      firstName: "Instagram",
+      lastName: "Contact",
+      instagramUserId: "ig_17841400000000000",
+      source: "Instagram",
+    }),
+  );
+  await t.run((ctx) =>
+    ctx.db.insert("customers", {
+      orgId,
+      firstName: "Facebook",
+      lastName: "Contact",
+      facebookUserId: "fb_psid_000000",
+      source: "Facebook",
+    }),
+  );
+
+  const quality = await asUser.query(api.dashboard.dataQualityStats, { orgId });
+  // Only the walk-in counts, not the two social contacts.
+  expect(quality.customersMissingPhone).toBe(1);
+  expect(quality.customersMissingEmail).toBe(1);
+});
+
+test("a social contact who later shares a phone still stays out of the counts", async () => {
+  // The flag keys off the linked account id, not the missing field, so filling
+  // in contact details does not pull the row back into the card.
+  const t = setup();
+  const { orgId, asUser } = await seedDealer(t);
+
+  await t.run((ctx) =>
+    ctx.db.insert("customers", {
+      orgId,
+      firstName: "Ahmad",
+      lastName: "Yousef",
+      instagramUserId: "ig_resolved",
+      phone: "+962790000000",
+    }),
+  );
+
+  const quality = await asUser.query(api.dashboard.dataQualityStats, { orgId });
+  expect(quality.customersMissingPhone).toBe(0);
+  expect(quality.customersMissingEmail).toBe(0);
+});
+
+test("a customer whose `source` says Instagram but has no linked account still counts", async () => {
+  // `source` is a free string any import could set; the predicate deliberately
+  // keys off the account id, which only the two ingestion paths ever write.
+  const t = setup();
+  const { orgId, asUser } = await seedDealer(t);
+
+  await t.run((ctx) =>
+    ctx.db.insert("customers", {
+      orgId,
+      firstName: "Imported",
+      lastName: "Record",
+      source: "Instagram",
+    }),
+  );
+
+  const quality = await asUser.query(api.dashboard.dataQualityStats, { orgId });
+  expect(quality.customersMissingPhone).toBe(1);
+});
+
+test("rebuildCustomerAggregate clears and re-seeds the customer tree", async () => {
+  vi.useFakeTimers();
+  const t = setup();
+  const { orgId, asUser } = await seedDealer(t);
+
+  await t.run((ctx) =>
+    ctx.db.insert("customers", { orgId, firstName: "Real", lastName: "Walkin" }),
+  );
+  await t.run((ctx) =>
+    ctx.db.insert("customers", {
+      orgId,
+      firstName: "Instagram",
+      lastName: "Contact",
+      instagramUserId: "ig_rebuild",
+    }),
+  );
+
+  await t.mutation(internal.migrations.rebuildCustomerAggregate, {});
+  await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+  const quality = await asUser.query(api.dashboard.dataQualityStats, { orgId });
+  expect(quality.customersMissingPhone).toBe(1);
+  vi.useRealTimers();
+});
+
 test("an empty string counts as a missing phone or email, matching the old falsy check", async () => {
   const t = setup();
   const { orgId, asUser } = await seedDealer(t);

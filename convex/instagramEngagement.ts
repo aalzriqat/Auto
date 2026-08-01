@@ -23,8 +23,11 @@ const MAX_AUTO_REPLY_RETRIES = 3;
 // DM webhook payloads never include one (only comments do). Checked against
 // later to know whether a profile-enrichment fetch is still needed, and to
 // avoid clobbering a name a staff member may have since edited manually.
-const PLACEHOLDER_FIRST_NAME = "Instagram";
-const PLACEHOLDER_LAST_NAME = "Contact";
+export const PLACEHOLDER_FIRST_NAME = "Instagram";
+export const PLACEHOLDER_LAST_NAME = "Contact";
+
+/** See the note on the Facebook constant of the same name. */
+const GRAPH_LOOKUP_TIMEOUT_MS = 5_000;
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -343,17 +346,55 @@ export const enrichCustomerProfile = internalAction({
   args: { orgId: v.id("organizations"), customerId: v.id("customers"), senderInstagramId: v.string() },
   handler: async (ctx, args): Promise<void> => {
     const token = await ctx.runQuery(internal.instagramEngagement.getTokenForOrg, { orgId: args.orgId });
-    if (!token) return;
+    if (!token) {
+      // Every branch below logs before giving up. Enrichment is best-effort by
+      // design, but silence made a failure indistinguishable from "this sender
+      // genuinely has no name" — and the rows just sat there as "Instagram
+      // Contact" with nothing to diagnose from.
+      console.error(
+        `instagram.enrichCustomerProfile: no access token for org ${args.orgId}; customer ${args.customerId} keeps its placeholder name`,
+      );
+      return;
+    }
 
     const url = new URL(`https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}/${args.senderInstagramId}`);
     url.searchParams.set("fields", "name,username");
     url.searchParams.set("access_token", token.instagramAccessToken);
-    const res = await fetch(url.toString());
-    if (!res.ok) return; // best-effort enrichment — not worth failing the webhook over
 
-    const json = await res.json();
+    let json: { username?: string; name?: string };
+    try {
+      // Bounded for the same reason as the Facebook lookup: `http.ts` awaits
+      // this action inside webhook processing, so a hung response holds the
+      // webhook open and risks Meta redelivering the event. The abort throws
+      // and is handled below as a failed best-effort lookup.
+      //
+      // The token stays a query parameter here, unlike the Facebook call.
+      // graph.instagram.com is a different host from graph.facebook.com and I
+      // have not verified it accepts `Authorization: Bearer`; silently breaking
+      // a lookup that currently works is worse than the log-exposure it would
+      // avoid. Worth revisiting deliberately, with a real request to confirm.
+      const res = await fetch(url.toString(), {
+        signal: AbortSignal.timeout(GRAPH_LOOKUP_TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        console.error(
+          `instagram.enrichCustomerProfile: graph lookup failed (${res.status}) for customer ${args.customerId}`,
+        );
+        return; // best-effort enrichment — not worth failing the webhook over
+      }
+      json = await res.json();
+    } catch (error) {
+      console.error("instagram.enrichCustomerProfile: graph lookup threw", error);
+      return;
+    }
+
     const displayName: string | undefined = json.username ?? json.name;
-    if (!displayName) return;
+    if (!displayName) {
+      console.error(
+        `instagram.enrichCustomerProfile: graph returned no name for customer ${args.customerId}`,
+      );
+      return;
+    }
 
     await ctx.runMutation(internal.instagramEngagement.saveCustomerDisplayName, {
       customerId: args.customerId,

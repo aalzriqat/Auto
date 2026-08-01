@@ -1,7 +1,9 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { expect, test, describe, vi, afterEach } from "vitest";
+import { expect, test, describe, vi, afterEach, beforeEach } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
+import { PLACEHOLDER_FIRST_NAME, PLACEHOLDER_LAST_NAME } from "./facebookEngagement";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -80,6 +82,288 @@ async function seedSettings(
     })
   );
 }
+
+describe("facebookEngagement profile enrichment", () => {
+  test("flags needsProfileEnrichment for a DM with no sender name, not for a comment carrying one", async () => {
+    // Messenger webhooks identify the sender by PSID only, so a DM can never
+    // supply a name inline — this flag is the only route to a real one.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+
+    const dmResult = await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "fb_dm_no_name",
+        senderFacebookId: "fb_psid_dm",
+        text: "hi",
+      })
+    );
+    expect(dmResult?.needsProfileEnrichment).toBe(true);
+    expect(dmResult?.customerId).toBeDefined();
+
+    const commentResult = await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId,
+        kind: "comment",
+        externalId: "fb_comment_with_name",
+        senderFacebookId: "fb_psid_comment",
+        senderName: "Jane Doe",
+        text: "hi",
+      })
+    );
+    expect(commentResult?.needsProfileEnrichment).toBe(false);
+  });
+
+  test("a sender whose first lookup failed is retried on their next message", async () => {
+    // The flag is recomputed per event rather than only at creation, so an
+    // expired token or a transient Graph error does not strand the row as
+    // "Facebook Contact" forever.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+
+    await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "fb_dm_first",
+        senderFacebookId: "fb_psid_retry",
+        text: "hello",
+      })
+    );
+
+    const second = await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "fb_dm_second",
+        senderFacebookId: "fb_psid_retry",
+        text: "anyone there?",
+      })
+    );
+    expect(second?.needsProfileEnrichment).toBe(true);
+  });
+
+  test("saveCustomerDisplayName replaces the placeholder but never a staff-edited name", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+
+    const placeholder = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: PLACEHOLDER_FIRST_NAME,
+        lastName: PLACEHOLDER_LAST_NAME,
+        facebookUserId: "fb_psid_named",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.saveCustomerDisplayName, {
+        customerId: placeholder,
+        displayName: "Layla Al Nimri",
+      })
+    );
+    const enriched = await t.run((ctx) => ctx.db.get(placeholder));
+    expect(enriched?.firstName).toBe("Layla");
+    expect(enriched?.lastName).toBe("Al Nimri");
+
+    const edited = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "Corrected",
+        lastName: "ByStaff",
+        facebookUserId: "fb_psid_edited",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.saveCustomerDisplayName, {
+        customerId: edited,
+        displayName: "Graph Name",
+      })
+    );
+    const untouched = await t.run((ctx) => ctx.db.get(edited));
+    expect(untouched?.firstName).toBe("Corrected");
+    expect(untouched?.lastName).toBe("ByStaff");
+  });
+
+  describe("enrichCustomerProfile Graph lookup", () => {
+    // Every failure branch only logs and returns, so without these a swallowed
+    // exception or a dropped console.error would look identical to a sender who
+    // genuinely has no name — which is exactly the condition that let the
+    // placeholder rows pile up unnoticed in the first place.
+    const realFetch = globalThis.fetch;
+    let consoleError: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      globalThis.fetch = realFetch;
+      consoleError.mockRestore();
+    });
+
+    /** A Response with a string body — see the Node 22 Blob marshaling note. */
+    function jsonResponse(body: unknown, init?: { status?: number }) {
+      return new Response(JSON.stringify(body), {
+        status: init?.status ?? 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+
+    async function seedPlaceholder(
+      t: ReturnType<typeof convexTestWithComponents>,
+      orgId: Id<"organizations">,
+      facebookUserId: string,
+    ) {
+      return await t.run((ctx) =>
+        ctx.db.insert("customers", {
+          orgId,
+          firstName: PLACEHOLDER_FIRST_NAME,
+          lastName: PLACEHOLDER_LAST_NAME,
+          facebookUserId,
+        })
+      );
+    }
+
+    test("applies the resolved name and sends the token as a Bearer header, not a query param", async () => {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const { orgId } = await seedOrgWithManager(t);
+      await seedSettings(t, orgId, {
+        facebookPageAccessToken: "page_token_123",
+        facebookPageId: "page_1",
+      });
+      const customerId = await seedPlaceholder(t, orgId, "fb_psid_ok");
+
+      let seenUrl = "";
+      let seenAuth: string | null = null;
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        seenUrl = String(input);
+        seenAuth = new Headers(init?.headers).get("authorization");
+        return jsonResponse({ first_name: "Layla", last_name: "Al Nimri" });
+      }) as unknown as typeof fetch;
+
+      await t.action(internal.facebookEngagement.enrichCustomerProfile, {
+        orgId,
+        customerId,
+        senderFacebookId: "fb_psid_ok",
+      });
+
+      expect(seenAuth).toBe("Bearer page_token_123");
+      expect(seenUrl).not.toContain("page_token_123");
+
+      const enriched = await t.run((ctx) => ctx.db.get(customerId));
+      expect(enriched?.firstName).toBe("Layla");
+      expect(enriched?.lastName).toBe("Al Nimri");
+    });
+
+    test("falls back to `name` when first/last are absent", async () => {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const { orgId } = await seedOrgWithManager(t);
+      await seedSettings(t, orgId, {
+        facebookPageAccessToken: "tok",
+        facebookPageId: "page_1",
+      });
+      const customerId = await seedPlaceholder(t, orgId, "fb_psid_nameonly");
+
+      globalThis.fetch = vi.fn(async () =>
+        jsonResponse({ name: "Omar Khalil" })
+      ) as unknown as typeof fetch;
+
+      await t.action(internal.facebookEngagement.enrichCustomerProfile, {
+        orgId,
+        customerId,
+        senderFacebookId: "fb_psid_nameonly",
+      });
+
+      const enriched = await t.run((ctx) => ctx.db.get(customerId));
+      expect(enriched?.firstName).toBe("Omar");
+    });
+
+    test("logs and leaves the placeholder alone when the org has no page token", async () => {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const { orgId } = await seedOrgWithManager(t);
+      const customerId = await seedPlaceholder(t, orgId, "fb_psid_notoken");
+
+      const fetchSpy = vi.fn();
+      globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+      await t.action(internal.facebookEngagement.enrichCustomerProfile, {
+        orgId,
+        customerId,
+        senderFacebookId: "fb_psid_notoken",
+      });
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(consoleError).toHaveBeenCalled();
+      const still = await t.run((ctx) => ctx.db.get(customerId));
+      expect(still?.firstName).toBe(PLACEHOLDER_FIRST_NAME);
+    });
+
+    test.each([
+      {
+        label: "a non-OK response",
+        stub: async () => jsonResponse({ error: "bad token" }, { status: 401 }),
+      },
+      {
+        label: "a thrown fetch (network error or abort)",
+        stub: async () => {
+          throw new Error("timed out");
+        },
+      },
+      {
+        label: "a response carrying no resolvable name",
+        stub: async () => jsonResponse({ id: "fb_psid_x" }),
+      },
+    ])("logs and keeps the placeholder on $label", async ({ stub }) => {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const { orgId } = await seedOrgWithManager(t);
+      await seedSettings(t, orgId, {
+        facebookPageAccessToken: "tok",
+        facebookPageId: "page_1",
+      });
+      const customerId = await seedPlaceholder(t, orgId, "fb_psid_fail");
+
+      globalThis.fetch = vi.fn(stub) as unknown as typeof fetch;
+
+      // Must not throw: a failed lookup cannot be allowed to fail the webhook.
+      await expect(
+        t.action(internal.facebookEngagement.enrichCustomerProfile, {
+          orgId,
+          customerId,
+          senderFacebookId: "fb_psid_fail",
+        })
+      ).resolves.toBeNull();
+
+      expect(consoleError).toHaveBeenCalled();
+      const still = await t.run((ctx) => ctx.db.get(customerId));
+      expect(still?.firstName).toBe(PLACEHOLDER_FIRST_NAME);
+      expect(still?.lastName).toBe(PLACEHOLDER_LAST_NAME);
+    });
+  });
+
+  test("a single-word display name fills both halves rather than leaving lastName empty", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+
+    const placeholder = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: PLACEHOLDER_FIRST_NAME,
+        lastName: PLACEHOLDER_LAST_NAME,
+        facebookUserId: "fb_psid_single",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.saveCustomerDisplayName, {
+        customerId: placeholder,
+        displayName: "Cher",
+      })
+    );
+    const enriched = await t.run((ctx) => ctx.db.get(placeholder));
+    expect(enriched?.firstName).toBe("Cher");
+    expect(enriched?.lastName).toBe("Cher");
+  });
+});
 
 describe("facebookEngagement.handleIncomingFacebookEvent", () => {
   test("creates a customer, an open lead, and notifies managers on a new comment", async () => {
