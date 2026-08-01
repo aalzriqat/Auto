@@ -1,6 +1,9 @@
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
-import { mutation } from "./functions";
+import type { MutationCtx } from "./_generated/server";
+import { mutation, internalMutation } from "./functions";
+import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 
@@ -52,12 +55,13 @@ const UNREAD_BADGE_CAP = 100;
  * The `isArchived` filter has to stay outside the index — `archive` sets
  * `isArchived` without setting `isRead`, so an archived row can still be
  * unread, and no index covers that combination. With the cap in place that
- * means an account whose most recent 100 unread notifications are *all*
- * archived would report 0 while an older unarchived one exists. The badge
- * saturates at 9+, so the only visible consequence is a badge that reads 0
- * instead of 9+ in a case that requires 100 consecutive archived-but-unread
- * rows. Reading thousands of documents on every page to close that gap is the
- * worse trade.
+ * means an account whose 100 *newest* unread notifications are all archived
+ * would report 0 while an older unarchived one exists. Reading newest-first
+ * makes that about as unlikely as it can be without a new index, since
+ * archiving is something people do to old notifications. The badge saturates
+ * at 9+, so the visible cost of the remaining gap is a badge reading 0 instead
+ * of 9+ for someone who archived their last hundred without reading them —
+ * against reading thousands of documents on every page for everyone else.
  */
 export const unreadCount = query({
   args: {
@@ -71,6 +75,11 @@ export const unreadCount = query({
       .withIndex("by_org_user_read", (q) =>
         q.eq("orgId", args.orgId).eq("userId", user._id).eq("isRead", false)
       )
+      // Newest first. Without this the cap keeps the *oldest* hundred, which is
+      // the wrong hundred twice over: the badge is about what just arrived, and
+      // archiving happens to old notifications — so an ascending cap loads the
+      // rows most likely to be filtered out as archived.
+      .order("desc")
       .take(UNREAD_BADGE_CAP);
 
     return unread.filter((n) => !n.isArchived).length;
@@ -154,19 +163,21 @@ const MARK_ALL_BATCH = 500;
  * Marks the caller's unread notifications read, up to `MARK_ALL_BATCH` per
  * call.
  *
- * Returns `{ markedRead, hasMore }` so a caller with a large backlog can call
- * again. `hasMore` is a boolean rather than a remaining *count* on purpose:
- * reading one row past the batch is enough to know more exists, and reporting
- * a number there would mean either scanning the whole backlog again — the
- * thing this change exists to stop — or returning a figure that is only ever
- * 0 or 1 while pretending to be a total.
+ * Returns `{ markedRead, hasMore }`, and **drains the rest itself** when a
+ * backlog exceeds one batch.
  *
- * It deliberately does not self-schedule. Unlike the aggregate backfills this
- * is a foreground action someone is watching, so finishing what fits and
- * saying so beats appearing complete while work continues invisibly.
+ * The continuation is server-side rather than a loop in the callers. Three
+ * places call this — the web bell, the web notifications page, and the mobile
+ * bell — and mobile ships on its own OTA cadence, so a client-side loop would
+ * have to be written three times and would leave any client that had not
+ * shipped it silently clearing only the first 500. The badge is a live
+ * subscription, so the user watches the count fall to zero either way; nothing
+ * about this is hidden from them.
  *
- * Existing callers ignore the return value and keep working — the badge they
- * watch just drops by a batch at a time on a very large backlog.
+ * `hasMore` is a boolean rather than a remaining count: reading one row past
+ * the batch is enough to know more exists, whereas a number there would mean
+ * rescanning the backlog — the thing this change removes — or returning a
+ * figure only ever 0 or 1 while pretending to be a total.
  */
 export const markAllAsRead = mutation({
   args: {
@@ -174,24 +185,64 @@ export const markAllAsRead = mutation({
   },
   handler: async (ctx, args): Promise<{ markedRead: number; hasMore: boolean }> => {
     const { user } = await requireTenantAuth(ctx, args.orgId);
-
-    // One row beyond the batch, purely to answer "is there more?" without a
-    // second query.
-    const unread = await ctx.db
-      .query("notifications")
-      .withIndex("by_org_user_read", (q) =>
-        q.eq("orgId", args.orgId).eq("userId", user._id).eq("isRead", false)
-      )
-      .take(MARK_ALL_BATCH + 1);
-
-    const batch = unread.slice(0, MARK_ALL_BATCH);
-    for (const notif of batch) {
-      await ctx.db.patch(notif._id, { isRead: true });
-    }
-
-    return { markedRead: batch.length, hasMore: unread.length > MARK_ALL_BATCH };
+    return await markUnreadBatch(ctx, args.orgId, user._id);
   },
 });
+
+/**
+ * Continuation for `markAllAsRead`.
+ *
+ * Internal, and takes `userId` explicitly, because a scheduled call carries no
+ * identity — `requireTenantAuth` cannot run here. That makes the caller
+ * responsible for the tenancy decision, which is why the only caller is
+ * `markUnreadBatch` passing the id it just authenticated.
+ */
+export const continueMarkAllAsRead = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args): Promise<{ markedRead: number; hasMore: boolean }> => {
+    return await markUnreadBatch(ctx, args.orgId, args.userId);
+  },
+});
+
+/**
+ * Clears one bounded batch of a user's unread notifications and schedules
+ * itself again if more remain.
+ *
+ * A throw rolls back both the patches and the scheduled continuation, so a
+ * failure stops the chain cleanly instead of leaving an orphaned drain.
+ */
+async function markUnreadBatch(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  userId: Id<"users">,
+): Promise<{ markedRead: number; hasMore: boolean }> {
+  // One row beyond the batch, purely to answer "is there more?" without a
+  // second query.
+  const unread = await ctx.db
+    .query("notifications")
+    .withIndex("by_org_user_read", (q) =>
+      q.eq("orgId", orgId).eq("userId", userId).eq("isRead", false)
+    )
+    .take(MARK_ALL_BATCH + 1);
+
+  const batch = unread.slice(0, MARK_ALL_BATCH);
+  for (const notif of batch) {
+    await ctx.db.patch(notif._id, { isRead: true });
+  }
+
+  const hasMore = unread.length > MARK_ALL_BATCH;
+  if (hasMore) {
+    await ctx.scheduler.runAfter(0, internal.notifications.continueMarkAllAsRead, {
+      orgId,
+      userId,
+    });
+  }
+
+  return { markedRead: batch.length, hasMore };
+}
 
 export const archive = mutation({
   args: {

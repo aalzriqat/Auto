@@ -98,6 +98,7 @@ describe("notifications", () => {
     // stops working past the mutation's write budget — failing for exactly the
     // users with the largest backlogs, and rolling back entirely so they make
     // no progress at all.
+    vi.useFakeTimers();
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId, asMember } = await seedOrgWithMember(t);
 
@@ -109,9 +110,10 @@ describe("notifications", () => {
     expect(first.markedRead).toBe(500); // MARK_ALL_BATCH
     expect(first.hasMore).toBe(true);
 
-    const second = await asMember.mutation(api.notifications.markAllAsRead, { orgId });
-    expect(second.markedRead).toBe(5);
-    expect(second.hasMore).toBe(false);
+    // The remainder drains server-side, so no caller has to loop. Without the
+    // fake-timer drain the scheduled continuation stays pending and this would
+    // pass for the wrong reason.
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
 
     const remaining = await t.run((ctx) =>
       ctx.db
@@ -122,6 +124,28 @@ describe("notifications", () => {
         .collect()
     );
     expect(remaining).toHaveLength(0);
+    vi.useRealTimers();
+  });
+
+  test("unreadCount caps the NEWEST unread, not the oldest", async () => {
+    // Index order is ascending, so a bare .take() keeps the oldest rows. That
+    // is the wrong end twice over: the badge is about what just arrived, and
+    // archiving happens to old notifications — so an ascending cap loads
+    // precisely the rows most likely to be filtered out as archived.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, userId, asMember } = await seedOrgWithMember(t);
+
+    // 100 old archived-unread rows, then 3 fresh unarchived unread ones.
+    for (let i = 0; i < 100; i++) {
+      await insertNotification(t, orgId, userId, { isRead: false, isArchived: true });
+    }
+    for (let i = 0; i < 3; i++) {
+      await insertNotification(t, orgId, userId, { isRead: false });
+    }
+
+    // Ascending would load the 100 archived rows and report 0.
+    const count = await asMember.query(api.notifications.unreadCount, { orgId });
+    expect(count).toBe(3);
   });
 
   test("markAllAsRead reports no more work when the backlog fits in one batch", async () => {

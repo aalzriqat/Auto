@@ -199,10 +199,19 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // back a customerId the webhook handler just resolved for that org, and it
   // is the exact mirror of `instagramEngagement.saveCustomerDisplayName` that
   // this pin already covers. `analysed` is unchanged at 278.
+  //
+  // Then 428→429 by `notifications.continueMarkAllAsRead`, and this one moves
+  // `analysed` 278→279 rather than a skip bucket — the first addition in a
+  // while that the analyzer actually inspects. It takes an `orgId` and a
+  // `userId`, so it has the shape the guard cares about, and it clears: the
+  // rows it patches come from its own `by_org_user_read` index lookup scoped to
+  // that org, never from a caller-supplied document id. Coverage going up is
+  // the good direction; if a later edit made it write a caller-supplied id, the
+  // guard would fail rather than this pin.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 428,
-      analysed: 278,
+      totalMutations: 429,
+      analysed: 279,
       skippedNoArgsBlock: 9,
       skippedNoOrgId: 141,
     });
