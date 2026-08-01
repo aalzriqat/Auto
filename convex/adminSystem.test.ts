@@ -302,7 +302,7 @@ test("pruneOperationalLogs deletes aged rows, keeps recent ones and the newest h
   });
 
   const result = await t.mutation(internal.adminSystem.pruneOperationalLogs, {});
-  expect(result).toEqual({ heartbeatsDeleted: 2, webhookLogsDeleted: 1 });
+  expect(result).toEqual({ heartbeatsDeleted: 2, webhookLogsDeleted: 1, notificationsDeleted: 0 });
 
   const remaining = await t.run((ctx) => ctx.db.query("cronHeartbeats").collect());
   expect(remaining.map((r) => r.ranAt).sort((a, b) => a - b)).toEqual(
@@ -311,6 +311,58 @@ test("pruneOperationalLogs deletes aged rows, keeps recent ones and the newest h
 
   const remainingLogs = await t.run((ctx) => ctx.db.query("webhookLogs").collect());
   expect(remainingLogs.map((r) => r.summary)).toEqual(["still in window"]);
+});
+
+test("pruneOperationalLogs ages out old notifications regardless of read state", async () => {
+  // Notifications are aged by `_creationTime`, which convex-test stamps from
+  // the real clock — `vi.setSystemTime` does not reach it, so an already-old
+  // row cannot be seeded. The retention override is the seam: rows are written
+  // now, and the window is narrowed until they fall outside it.
+  //
+  // Age is the whole eligibility rule, deliberately. Pruning "only if read"
+  // would let a user who never reads anything pin the oldest rows in place
+  // forever, and every hourly sweep would rescan that same block and delete
+  // nothing.
+  const t = convexTestWithComponents(schema, MODULES);
+
+  const orgId = await t.run((ctx) =>
+    ctx.db.insert("organizations", { name: "Prune Motors", createdAt: Date.now() })
+  );
+  const userId = await t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: "prune_user", email: "p@test.com", name: "Prune" })
+  );
+
+  async function seedNotification(isRead: boolean, title: string) {
+    return await t.run((ctx) =>
+      ctx.db.insert("notifications", { orgId, userId, isRead, title, message: title })
+    );
+  }
+
+  await seedNotification(true, "read");
+  await seedNotification(false, "never opened");
+
+  // A *negative* window puts the cutoff a second into the future, which is what
+  // it takes to make a just-written row eligible: convex-test stamps
+  // `_creationTime` with sub-millisecond precision (…462.002) while `Date.now()`
+  // truncates, so a row created in the same millisecond compares as *newer*
+  // than "now" and a window of 0 matches nothing.
+  //
+  // Both rows go, the unread one included — that is the behaviour under test.
+  const swept = await t.mutation(internal.adminSystem.pruneOperationalLogs, {
+    notificationRetentionMsOverride: -1000,
+  });
+  expect(swept.notificationsDeleted).toBe(2);
+  expect(await t.run((ctx) => ctx.db.query("notifications").collect())).toHaveLength(0);
+
+  // And with the real 90-day window, freshly written rows are untouched.
+  await seedNotification(false, "recent unread");
+  await seedNotification(true, "recent read");
+
+  const kept = await t.mutation(internal.adminSystem.pruneOperationalLogs, {});
+  expect(kept.notificationsDeleted).toBe(0);
+
+  const remaining = await t.run((ctx) => ctx.db.query("notifications").collect());
+  expect(remaining.map((r) => r.title).sort()).toEqual(["recent read", "recent unread"]);
 });
 
 test("getOverview returns a capped count and a truncation flag per table", async () => {
