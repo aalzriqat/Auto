@@ -77,6 +77,65 @@ describe("notifications", () => {
     expect(count).toBe(1);
   });
 
+  test("unreadCount saturates instead of reading an unbounded backlog", async () => {
+    // The badge renders "9+" past single digits, so the exact figure above the
+    // cap is never displayed. What matters is that a large backlog costs a
+    // bounded read: one dev account had 4,201 unread, and this query used to
+    // .collect() all of them on every page load as a live subscription.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, userId, asMember } = await seedOrgWithMember(t);
+
+    for (let i = 0; i < 150; i++) {
+      await insertNotification(t, orgId, userId, { isRead: false });
+    }
+
+    const count = await asMember.query(api.notifications.unreadCount, { orgId });
+    expect(count).toBe(100); // UNREAD_BADGE_CAP, not 150
+  });
+
+  test("markAllAsRead clears a batch and reports that more remain", async () => {
+    // It used to read and patch every unread row in one transaction, which
+    // stops working past the mutation's write budget — failing for exactly the
+    // users with the largest backlogs, and rolling back entirely so they make
+    // no progress at all.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, userId, asMember } = await seedOrgWithMember(t);
+
+    for (let i = 0; i < 505; i++) {
+      await insertNotification(t, orgId, userId, { isRead: false });
+    }
+
+    const first = await asMember.mutation(api.notifications.markAllAsRead, { orgId });
+    expect(first.markedRead).toBe(500); // MARK_ALL_BATCH
+    expect(first.hasMore).toBe(true);
+
+    const second = await asMember.mutation(api.notifications.markAllAsRead, { orgId });
+    expect(second.markedRead).toBe(5);
+    expect(second.hasMore).toBe(false);
+
+    const remaining = await t.run((ctx) =>
+      ctx.db
+        .query("notifications")
+        .withIndex("by_org_user_read", (q) =>
+          q.eq("orgId", orgId).eq("userId", userId).eq("isRead", false)
+        )
+        .collect()
+    );
+    expect(remaining).toHaveLength(0);
+  });
+
+  test("markAllAsRead reports no more work when the backlog fits in one batch", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, userId, asMember } = await seedOrgWithMember(t);
+
+    await insertNotification(t, orgId, userId, { isRead: false });
+    await insertNotification(t, orgId, userId, { isRead: false });
+
+    const result = await asMember.mutation(api.notifications.markAllAsRead, { orgId });
+    expect(result.markedRead).toBe(2);
+    expect(result.hasMore).toBe(false);
+  });
+
   test("listPage filters by category", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId, asMember } = await seedOrgWithMember(t);

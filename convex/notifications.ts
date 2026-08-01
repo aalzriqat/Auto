@@ -23,7 +23,42 @@ export const list = query({
   },
 });
 
-/** Unread count for the bell badge, via the indexed (orgId, userId, isRead) lookup. */
+/**
+ * Ceiling on the rows the bell badge will read.
+ *
+ * The badge saturates — mobile renders `> 9 ? "9+" : count` — so an exact
+ * figure above single digits is never displayed. This used to `.collect()` the
+ * whole unread index to produce that one number: on the shared dev deployment
+ * one account had **4,201** unread notifications, every one of them read on
+ * every page load, as a live subscription that re-runs on each new
+ * notification. Production's worst account is 76 today, which is only a
+ * statement about how young the data is — nothing prunes notifications and
+ * nothing caps this, so it grows forever.
+ *
+ * 100 is far above the display threshold and far below anything expensive.
+ */
+const UNREAD_BADGE_CAP = 100;
+
+/**
+ * Unread count for the bell badge, via the indexed (orgId, userId, isRead)
+ * lookup, bounded to `UNREAD_BADGE_CAP` rows.
+ *
+ * Still returns a bare number. Returning `{ count, atLeast }` would say more,
+ * but `unreadCount` is a published contract the mobile app consumes as a
+ * number and mobile ships on its own OTA cadence — a breaking change here to
+ * express "100+" in a badge that already saturates at "9+" buys nothing and
+ * risks a version skew where the badge renders `[object Object]`.
+ *
+ * The `isArchived` filter has to stay outside the index — `archive` sets
+ * `isArchived` without setting `isRead`, so an archived row can still be
+ * unread, and no index covers that combination. With the cap in place that
+ * means an account whose most recent 100 unread notifications are *all*
+ * archived would report 0 while an older unarchived one exists. The badge
+ * saturates at 9+, so the only visible consequence is a badge that reads 0
+ * instead of 9+ in a case that requires 100 consecutive archived-but-unread
+ * rows. Reading thousands of documents on every page to close that gap is the
+ * worse trade.
+ */
 export const unreadCount = query({
   args: {
     orgId: v.id("organizations"),
@@ -36,7 +71,7 @@ export const unreadCount = query({
       .withIndex("by_org_user_read", (q) =>
         q.eq("orgId", args.orgId).eq("userId", user._id).eq("isRead", false)
       )
-      .collect();
+      .take(UNREAD_BADGE_CAP);
 
     return unread.filter((n) => !n.isArchived).length;
   },
@@ -101,23 +136,60 @@ export const markAsRead = mutation({
   },
 });
 
+/**
+ * Rows `markAllAsRead` will clear per invocation.
+ *
+ * This used to read *and patch* every unread row in one transaction. That is
+ * fine at 76 rows and not fine at the 4,201 one dev account reached: a Convex
+ * mutation has a bounded write budget, so past some backlog "mark all as read"
+ * stops working entirely — and it fails for exactly the users who need it most,
+ * with no partial progress, because a throw rolls the whole transaction back.
+ *
+ * 500 keeps a call well inside the budget while clearing any realistic backlog
+ * in a couple of rounds.
+ */
+const MARK_ALL_BATCH = 500;
+
+/**
+ * Marks the caller's unread notifications read, up to `MARK_ALL_BATCH` per
+ * call.
+ *
+ * Returns `{ markedRead, hasMore }` so a caller with a large backlog can call
+ * again. `hasMore` is a boolean rather than a remaining *count* on purpose:
+ * reading one row past the batch is enough to know more exists, and reporting
+ * a number there would mean either scanning the whole backlog again — the
+ * thing this change exists to stop — or returning a figure that is only ever
+ * 0 or 1 while pretending to be a total.
+ *
+ * It deliberately does not self-schedule. Unlike the aggregate backfills this
+ * is a foreground action someone is watching, so finishing what fits and
+ * saying so beats appearing complete while work continues invisibly.
+ *
+ * Existing callers ignore the return value and keep working — the badge they
+ * watch just drops by a batch at a time on a very large backlog.
+ */
 export const markAllAsRead = mutation({
   args: {
     orgId: v.id("organizations"),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{ markedRead: number; hasMore: boolean }> => {
     const { user } = await requireTenantAuth(ctx, args.orgId);
 
+    // One row beyond the batch, purely to answer "is there more?" without a
+    // second query.
     const unread = await ctx.db
       .query("notifications")
       .withIndex("by_org_user_read", (q) =>
         q.eq("orgId", args.orgId).eq("userId", user._id).eq("isRead", false)
       )
-      .collect();
+      .take(MARK_ALL_BATCH + 1);
 
-    for (const notif of unread) {
+    const batch = unread.slice(0, MARK_ALL_BATCH);
+    for (const notif of batch) {
       await ctx.db.patch(notif._id, { isRead: true });
     }
+
+    return { markedRead: batch.length, hasMore: unread.length > MARK_ALL_BATCH };
   },
 });
 
