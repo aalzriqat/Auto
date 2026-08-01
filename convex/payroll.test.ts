@@ -1,5 +1,5 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { expect, test, describe, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import {
@@ -15,6 +15,36 @@ vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
+
+/**
+ * The instant every test in this file runs at.
+ *
+ * These tests name their periods explicitly — `periodMonth: 7` and friends —
+ * but seed compensation through `payroll.setCompensation`, which stamps
+ * `effectiveFrom: Date.now()`. A run only picks up compensation effective on or
+ * before the period end, so the suite was silently depending on the wall clock
+ * still being inside July 2026. On 2026-08-01 it stopped being, every seeded
+ * salary became effective *after* the period it was meant to fund, and sixteen
+ * tests began failing with "Nothing to pay for this period".
+ *
+ * Nothing was wrong with payroll: refusing to pay a July run from an August
+ * salary is exactly right. The tests were just reading a clock they never
+ * declared. Pinning it here restores the conditions they were written under and
+ * makes the dependency explicit, so the suite cannot rot again on a date
+ * rollover.
+ *
+ * Mid-month rather than a boundary, so a timezone shift cannot move it out of
+ * July.
+ */
+const PAYROLL_CLOCK = new Date("2026-07-15T12:00:00.000Z");
+
+beforeEach(() => {
+  vi.setSystemTime(PAYROLL_CLOCK);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 // ─── Posting-rule unit tests (pure) ────────────────────────────────────────────
 
@@ -888,6 +918,14 @@ describe("payroll: fourth audit (cross-flow integrity)", () => {
     expect(items[0].baseSalaryMinor).toBe(500000);
 
     // Salary corrected upward before approval; approval must accrue/approve 600.
+    //
+    // The clock has to move for this one. Compensation is selected by latest
+    // `effectiveFrom`, so with the suite's frozen clock both rows would be
+    // stamped the same millisecond and the winner would come down to sort
+    // stability rather than to which raise came second — the same tie the "zero
+    // approval" test sidesteps by patching in place. A raise that happens
+    // "between draft and approval" is later in time by definition, so say so.
+    vi.setSystemTime(new Date(PAYROLL_CLOCK.getTime() + 1_000));
     await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 600 });
     await asAdmin.mutation(api.payroll.approveRun, { orgId, runId });
     items = await asAdmin.query(api.payroll.listRunItems, { orgId, runId });
