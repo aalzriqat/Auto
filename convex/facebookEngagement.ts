@@ -29,8 +29,20 @@ import { mobileReceivedAutoReplyText } from "./utils/socialMobileReply";
  * Matched exactly when deciding whether to enrich or overwrite, so both halves
  * have to stay in step — hence constants rather than inline literals.
  */
-const PLACEHOLDER_FIRST_NAME = "Facebook";
-const PLACEHOLDER_LAST_NAME = "Contact";
+export const PLACEHOLDER_FIRST_NAME = "Facebook";
+export const PLACEHOLDER_LAST_NAME = "Contact";
+
+/**
+ * Ceiling on a profile lookup.
+ *
+ * `http.ts` *awaits* the enrichment action while processing a webhook entry, so
+ * a hung Graph response does not just delay a name — it holds the webhook open,
+ * burns the action's time budget, and can push Meta into redelivering the event.
+ * Enrichment is the least important thing happening on that request, so it gets
+ * a short leash: the abort surfaces as a thrown fetch, which the caller already
+ * treats as a failed best-effort lookup and retries on the sender's next message.
+ */
+const GRAPH_LOOKUP_TIMEOUT_MS = 5_000;
 
 const AUTO_REPLY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 reply per sender per 24h
 const MAX_AUTO_REPLY_RETRIES = 3;
@@ -396,11 +408,16 @@ export const enrichCustomerProfile = internalAction({
 
     const url = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${args.senderFacebookId}`);
     url.searchParams.set("fields", "first_name,last_name,name");
-    url.searchParams.set("access_token", token.facebookPageAccessToken);
 
     let json: { first_name?: string; last_name?: string; name?: string };
     try {
-      const res = await fetch(url.toString());
+      // Token in the Authorization header rather than a query parameter: URLs
+      // end up in proxy access logs and observability traces, and a Page access
+      // token is a durable credential. Graph documents the Bearer form.
+      const res = await fetch(url.toString(), {
+        headers: { Authorization: `Bearer ${token.facebookPageAccessToken}` },
+        signal: AbortSignal.timeout(GRAPH_LOOKUP_TIMEOUT_MS),
+      });
       if (!res.ok) {
         console.error(
           `facebook.enrichCustomerProfile: graph lookup failed (${res.status}) for customer ${args.customerId}`,

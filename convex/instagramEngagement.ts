@@ -23,8 +23,11 @@ const MAX_AUTO_REPLY_RETRIES = 3;
 // DM webhook payloads never include one (only comments do). Checked against
 // later to know whether a profile-enrichment fetch is still needed, and to
 // avoid clobbering a name a staff member may have since edited manually.
-const PLACEHOLDER_FIRST_NAME = "Instagram";
-const PLACEHOLDER_LAST_NAME = "Contact";
+export const PLACEHOLDER_FIRST_NAME = "Instagram";
+export const PLACEHOLDER_LAST_NAME = "Contact";
+
+/** See the note on the Facebook constant of the same name. */
+const GRAPH_LOOKUP_TIMEOUT_MS = 5_000;
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -360,7 +363,19 @@ export const enrichCustomerProfile = internalAction({
 
     let json: { username?: string; name?: string };
     try {
-      const res = await fetch(url.toString());
+      // Bounded for the same reason as the Facebook lookup: `http.ts` awaits
+      // this action inside webhook processing, so a hung response holds the
+      // webhook open and risks Meta redelivering the event. The abort throws
+      // and is handled below as a failed best-effort lookup.
+      //
+      // The token stays a query parameter here, unlike the Facebook call.
+      // graph.instagram.com is a different host from graph.facebook.com and I
+      // have not verified it accepts `Authorization: Bearer`; silently breaking
+      // a lookup that currently works is worse than the log-exposure it would
+      // avoid. Worth revisiting deliberately, with a real request to confirm.
+      const res = await fetch(url.toString(), {
+        signal: AbortSignal.timeout(GRAPH_LOOKUP_TIMEOUT_MS),
+      });
       if (!res.ok) {
         console.error(
           `instagram.enrichCustomerProfile: graph lookup failed (${res.status}) for customer ${args.customerId}`,
