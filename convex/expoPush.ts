@@ -35,6 +35,48 @@ type SendResult =
   | { success: false; error: string; sent?: number; failed?: number };
 
 /**
+ * POSTs to Expo and hands back the parsed body, collapsing all three ways the
+ * call can fail — the request threw, a non-OK status, an unparseable body —
+ * into a single logged-and-returned error. Returning rather than throwing is
+ * deliberate: callers run as scheduled actions, and a throw would roll back the
+ * writes of the mutation that scheduled them.
+ *
+ * `context` is interpolated into every log line and must never contain a push
+ * token or a notification body.
+ */
+async function postToExpo<T>(
+  endpoint: string,
+  payload: unknown,
+  context: string
+): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    console.error(`[expoPush] request to ${endpoint} failed: ${context}`, error);
+    return { ok: false, error: String(error) };
+  }
+
+  if (!response.ok) {
+    console.error(
+      `[expoPush] ${endpoint} returned HTTP ${response.status} ${response.statusText}: ${context}`
+    );
+    return { ok: false, error: `expo_http_${response.status}` };
+  }
+
+  try {
+    return { ok: true, data: (await response.json()) as T };
+  } catch (error) {
+    console.error(`[expoPush] could not parse the response from ${endpoint}: ${context}`, error);
+    return { ok: false, error: "expo_bad_response" };
+  }
+}
+
+/**
  * Counts how often each Expo error code came back, so a failure can be logged
  * as `{ MismatchSenderId: 3 }` rather than as three separate lines — and
  * without ever putting a push token or a notification body in the log.
@@ -99,40 +141,10 @@ export const sendMobilePush = internalAction({
       data: { link: args.link ?? "/", type: args.type },
     }));
 
-    let response: Response;
-    try {
-      response = await fetch(EXPO_PUSH_ENDPOINT, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(messages),
-      });
-    } catch (error) {
-      console.error(
-        `[expoPush] Expo send request failed: user=${args.userId} type=${args.type} tokens=${tokens.length}`,
-        error
-      );
-      return { success: false, error: String(error) };
-    }
-
-    if (!response.ok) {
-      console.error(
-        `[expoPush] Expo send returned HTTP ${response.status} ${response.statusText}: ` +
-          `user=${args.userId} type=${args.type} tokens=${tokens.length}`
-      );
-      return { success: false, error: `expo_http_${response.status}` };
-    }
-
-    let tickets: ExpoTicket[];
-    try {
-      const payload = (await response.json()) as { data?: ExpoTicket[] };
-      tickets = payload.data ?? [];
-    } catch (error) {
-      console.error(
-        `[expoPush] could not parse Expo send response: user=${args.userId} type=${args.type} tokens=${tokens.length}`,
-        error
-      );
-      return { success: false, error: "expo_bad_response" };
-    }
+    const context = `user=${args.userId} type=${args.type} tokens=${tokens.length}`;
+    const result = await postToExpo<{ data?: ExpoTicket[] }>(EXPO_PUSH_ENDPOINT, messages, context);
+    if (!result.ok) return { success: false, error: result.error };
+    const tickets = result.data.data ?? [];
 
     const accepted: Array<{ id: string; token: string }> = [];
     const rejected: ExpoTicket[] = [];
@@ -231,40 +243,14 @@ export const checkPushReceipts = internalAction({
     for (let offset = 0; offset < ids.length; offset += RECEIPT_BATCH_SIZE) {
       const batch = ids.slice(offset, offset + RECEIPT_BATCH_SIZE);
 
-      let response: Response;
-      try {
-        response = await fetch(EXPO_RECEIPTS_ENDPOINT, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ ids: batch }),
-        });
-      } catch (error) {
-        console.error(
-          `[expoPush] receipt request failed: user=${args.userId} type=${args.type} ids=${batch.length}`,
-          error
-        );
-        return { success: false, error: String(error) };
-      }
-
-      if (!response.ok) {
-        console.error(
-          `[expoPush] receipt request returned HTTP ${response.status} ${response.statusText}: ` +
-            `user=${args.userId} type=${args.type} ids=${batch.length}`
-        );
-        return { success: false, error: `expo_http_${response.status}` };
-      }
-
-      let data: Record<string, ExpoReceipt>;
-      try {
-        const payload = (await response.json()) as { data?: Record<string, ExpoReceipt> };
-        data = payload.data ?? {};
-      } catch (error) {
-        console.error(
-          `[expoPush] could not parse Expo receipt response: user=${args.userId} type=${args.type}`,
-          error
-        );
-        return { success: false, error: "expo_bad_response" };
-      }
+      const context = `user=${args.userId} type=${args.type} ids=${batch.length}`;
+      const result = await postToExpo<{ data?: Record<string, ExpoReceipt> }>(
+        EXPO_RECEIPTS_ENDPOINT,
+        { ids: batch },
+        context
+      );
+      if (!result.ok) return { success: false, error: result.error };
+      const data = result.data.data ?? {};
 
       for (const id of batch) {
         const receipt = data[id];

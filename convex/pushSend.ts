@@ -1,6 +1,6 @@
 "use node";
 
-import { internalAction } from "./_generated/server";
+import { internalAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import webpush from "web-push";
@@ -20,6 +20,53 @@ const PUSH_BODY_OVERRIDE: Partial<Record<string, Record<"en" | "ar", string>>> =
     ar: "افتح AutoFlow للاطلاع عليها.",
   },
 };
+
+type PushSubscription = {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+};
+
+/**
+ * Pushes one payload to every subscription the user has enabled, tallying the
+ * outcome instead of throwing on the first failure — one dead browser
+ * subscription must not stop delivery to the user's other devices.
+ *
+ * A 404/410 from a push service means the subscription is permanently gone
+ * (browser uninstalled, permission revoked), so it is pruned. Any other status
+ * is transient or a server-side fault and the subscription is kept.
+ *
+ * Returned statuses are HTTP codes, never endpoints — an endpoint is a
+ * per-device credential.
+ */
+async function deliverToSubscriptions(
+  ctx: { runMutation: ActionCtx["runMutation"] },
+  subscriptions: PushSubscription[],
+  payload: string
+): Promise<{ sent: number; failed: number; errors: string[] }> {
+  let sent = 0;
+  let failed = 0;
+  const errors: string[] = [];
+
+  for (const sub of subscriptions) {
+    try {
+      await webpush.sendNotification(
+        { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+        payload
+      );
+      sent++;
+    } catch (error) {
+      failed++;
+      const statusCode = (error as { statusCode?: number }).statusCode;
+      errors.push(statusCode ? `HTTP ${statusCode}` : String(error));
+      if (statusCode === 404 || statusCode === 410) {
+        await ctx.runMutation(internal.pushSubscriptions.removeByEndpoint, { endpoint: sub.endpoint });
+      }
+    }
+  }
+
+  return { sent, failed, errors };
+}
 
 /**
  * Web Push delivery for the typed in-app notification system. Fans out to
@@ -78,26 +125,7 @@ export const sendNotificationPush = internalAction({
       tag: args.type,
     });
 
-    let sent = 0;
-    let failed = 0;
-    const errors: string[] = [];
-    for (const sub of subscriptions) {
-      try {
-        await webpush.sendNotification(
-          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          payload
-        );
-        sent++;
-      } catch (error) {
-        failed++;
-        const statusCode = (error as { statusCode?: number }).statusCode;
-        errors.push(statusCode ? `HTTP ${statusCode}` : String(error));
-        if (statusCode === 404 || statusCode === 410) {
-          await ctx.runMutation(internal.pushSubscriptions.removeByEndpoint, { endpoint: sub.endpoint });
-        }
-      }
-    }
-
+    const { sent, failed, errors } = await deliverToSubscriptions(ctx, subscriptions, payload);
     const result = { success: failed === 0, sent, failed };
 
     if (failed > 0) {
