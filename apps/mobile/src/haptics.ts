@@ -47,13 +47,20 @@ function run(invoke: (haptics: HapticsModule) => Promise<void>) {
   const haptics = loadHaptics();
   if (!haptics) return;
 
+  let pending: Promise<void>;
   try {
-    // Fire and forget. A rejected haptic must never surface to the user or
-    // block the action that triggered it.
-    void invoke(haptics).catch(() => undefined);
+    // Guards a SYNCHRONOUS throw only: a native-module proxy whose backing
+    // module is gone throws on access, before any promise exists. The try
+    // deliberately stops here so it cannot be mistaken for rejection handling.
+    pending = invoke(haptics);
   } catch (error) {
     console.error("Haptic feedback failed", error);
+    return;
   }
+
+  // Fire and forget. A rejected haptic must never surface to the user or block
+  // the action that triggered it.
+  void pending.catch(() => undefined);
 }
 
 /** A confirmation landed — a record saved, an item added. */
