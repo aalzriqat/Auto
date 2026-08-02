@@ -2,6 +2,8 @@ import { useMutation, usePaginatedQuery } from "convex/react";
 import * as ImagePicker from "expo-image-picker";
 import { useEffect, useRef, useState } from "react";
 import { Alert, Image, Pressable, ScrollView, Text, View } from "react-native";
+import { AppImage } from "../../../components/AppImage";
+import { hapticSuccess } from "../../../haptics";
 import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepFlow";
 import { ensurePhotoLibraryPermission } from "../../../permissions/mediaPermissions";
 import { api, type MobileVehicle, type MobileVehicleStatus } from "../../../convexApi";
@@ -350,6 +352,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
           onPress: async () => {
             try {
               await archiveVehicle({ orgId, vehicleId: vehicle._id });
+              hapticSuccess();
               onSuccess?.();
             } catch (error) {
               reportError("Mobile vehicle archive failed", error);
@@ -426,7 +429,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
             >
               <View style={styles.vehiclePhoto}>
                 {imageUrl ? (
-                  <Image source={{ uri: imageUrl }} style={styles.vehiclePhotoImage} resizeMode="cover" />
+                  <AppImage uri={imageUrl} style={styles.vehiclePhotoImage} />
                 ) : (
                   <>
                     <GradientFill colors={theme.gradients.hero} direction="diagonal" />

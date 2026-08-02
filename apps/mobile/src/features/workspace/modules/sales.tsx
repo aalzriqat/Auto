@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Text, View } from "react-native";
 import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepFlow";
 import { api, type MobileFinancingType, type MobileMyMembership, type MobileSale } from "../../../convexApi";
+import { hapticSuccess } from "../../../haptics";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, type MobileSaleStatusFilter, compactNumber, money, dateLabel, parseOptionalNumber, parseRequiredNumber, idempotencyKey, invalidNumberMessage, requiredSelectionMessage, useFormErrors, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, saleMatchesView, averageSalePrice, saleRemainingBalance, vehicleListPriceLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
@@ -151,6 +152,7 @@ export function SalesModule({
         downPayment: parseOptionalNumber(form.downPayment),
         idempotencyKey: idempotencyKey("sales.createDraft"),
       });
+      hapticSuccess();
       closeDraft();
       setForm({ customerId: "", vehicleId: "", salespersonId: myMembership.userId, salePrice: "", downPayment: "", financingType: "CASH" });
     } catch (error) {

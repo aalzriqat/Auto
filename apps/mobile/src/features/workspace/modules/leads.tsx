@@ -8,12 +8,14 @@ import { LeadStagePicker } from "./LeadStagePicker";
 import {
   LEAD_STAGES,
   commitLeadStageChange,
+  isTerminalLeadStage,
   leadStageErrorMessage,
   leadStageLabel,
   setPendingLeadStage,
   type PendingLeadStages,
 } from "./leadStage";
 import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, compactNumber, money, maybeText, useFieldFocusChain, useFormErrors, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
+import { hapticImpact, hapticSuccess, hapticWarning } from "../../../haptics";
 import { useStyles } from "./moduleStyles";
 
 
@@ -163,11 +165,20 @@ export function LeadsModule({ highlightId, orgId }: { highlightId?: string; orgI
 
   async function changeStage(lead: MobileLead, nextStage: MobileLeadStage) {
     await commitLeadStageChange(lead.stage, nextStage, {
-      applyStage: (stage) => updateLead({ orgId, leadId: lead._id, stage }),
+      applyStage: async (stage) => {
+        await updateLead({ orgId, leadId: lead._id, stage });
+        // Only for WON/LOST. A lead crossing into a terminal stage is the one
+        // pipeline move that cannot be shrugged off, so it gets a physical
+        // acknowledgement; ordinary stage moves stay silent.
+        if (isTerminalLeadStage(stage)) {
+          hapticImpact();
+        }
+      },
       setOptimisticStage: (stage) =>
         setPendingStages((current) => setPendingLeadStage(current, lead._id, stage)),
       onError: (error) => {
         console.error("Mobile lead stage update failed", error);
+        hapticWarning();
         Alert.alert(
           locale === "ar" ? "تعذر تغيير المرحلة" : "Could not change stage",
           leadStageErrorMessage(
@@ -184,6 +195,7 @@ export function LeadsModule({ highlightId, orgId }: { highlightId?: string; orgI
   async function runArchive(lead: MobileLead) {
     try {
       await deleteLead({ orgId, leadId: lead._id });
+      hapticSuccess();
       setDetailLeadId((current) => (current === lead._id ? null : current));
     } catch (error) {
       reportError("Mobile lead archive failed", error);

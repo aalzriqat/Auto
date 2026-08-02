@@ -11,6 +11,7 @@ import { ThemeToggle } from "../../../components/ThemeToggle";
 import { SearchableSelectField, type SearchableSelectOption } from "../../../components/SearchableSelectField";
 import { SkeletonRow } from "../../../components/SkeletonRow";
 import { api, type MobileDirectConversation, type MobileFinanceCompany, type MobileOrgSummary, type MobileSale, type MobileSaleStatus, type MobileVehicle } from "../../../convexApi";
+import { hapticWarning } from "../../../haptics";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { useAppTheme } from "../../../providers/ThemeProvider";
 import { getFirstNhtsaResult, getFirstNhtsaWmiName, mapNhtsaVinPayload, type MobileVinDecodedFields, type MobileVinReadiness } from "../mobileVinDecode";
@@ -362,7 +363,14 @@ export function useFormErrors<Field extends string>() {
           Object.entries(candidate).filter(([, message]) => Boolean(message)),
         ) as FieldErrors<Field>;
         setErrors(failed);
-        return Object.keys(failed).length === 0;
+        const valid = Object.keys(failed).length === 0;
+        if (!valid) {
+          // Inline errors are quieter than the modal alert they replaced, so a
+          // rejected submit needs SOME signal that the tap did something. This
+          // is the one place a warning buzz is worth it.
+          hapticWarning();
+        }
+        return valid;
       },
     }),
     [errors],
@@ -390,6 +398,7 @@ export function useGenericError() {
   const { locale } = useLocale();
   return (context: string, error: unknown) => {
     console.error(context, error);
+    hapticWarning();
     Alert.alert(
       locale === "ar" ? "تعذر الحفظ" : "Could not save",
       locale === "ar" ? "حدث خطأ غير متوقع. حاول مرة أخرى." : "An unexpected error occurred. Please try again.",
