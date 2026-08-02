@@ -27,8 +27,10 @@ export const makeStyles = (theme: AppTheme) =>
     paddingVertical: theme.spacing.md,
   },
   backButton: {
-    width: 40,
-    height: 40,
+    // 44pt: the platform minimum touch target. Anything smaller makes the most
+    // used control on every pushed screen the hardest one to hit.
+    width: 44,
+    height: 44,
     alignItems: "center",
     justifyContent: "center",
     borderRadius: theme.radius.full,
@@ -154,7 +156,10 @@ export const makeStyles = (theme: AppTheme) =>
     gap: theme.spacing.sm,
   },
   chip: {
-    minHeight: 36,
+    // Filter chips are the primary way every module is narrowed down; at 36pt
+    // they sat under the 44pt minimum in a horizontally packed row, which is
+    // exactly where mis-taps are most likely.
+    minHeight: 44,
     justifyContent: "center",
     borderRadius: theme.radius.full,
     backgroundColor: theme.colors.surfaceAlt,

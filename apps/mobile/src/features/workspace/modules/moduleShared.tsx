@@ -6,6 +6,7 @@ import { Icon } from "../../../components/Icon";
 import { LocaleToggle } from "../../../components/LocaleToggle";
 import { ThemeToggle } from "../../../components/ThemeToggle";
 import { SearchableSelectField, type SearchableSelectOption } from "../../../components/SearchableSelectField";
+import { SkeletonRow } from "../../../components/SkeletonRow";
 import { api, type MobileDirectConversation, type MobileFinanceCompany, type MobileOrgSummary, type MobileSale, type MobileSaleStatus, type MobileVehicle } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { useAppTheme } from "../../../providers/ThemeProvider";
@@ -1096,6 +1097,17 @@ export function ModuleList<T>({
   const styles = useStyles();
   const handleEndReached =
     loadMore && status && canLoadMore(status) ? () => loadMore(PAGE_SIZE) : undefined;
+  // `data` is empty during the first page load as well as when there genuinely
+  // is nothing, so keying the empty state off length alone made every list in
+  // the app flash "No results" before its rows arrived — which reads as an
+  // error, not as loading. Skeleton rows hold the space instead.
+  const loadingFirstPage = status === "LoadingFirstPage";
+  let listEmptyComponent: React.ReactElement | null = null;
+  if (loadingFirstPage) {
+    listEmptyComponent = <SkeletonRow count={4} />;
+  } else if (emptyLabel) {
+    listEmptyComponent = <EmptyList label={emptyLabel} />;
+  }
 
   return (
     <FadeSlideIn style={styles.scroll}>
@@ -1110,7 +1122,7 @@ export function ModuleList<T>({
           )
         }
         ListHeaderComponent={header ? <View style={styles.listHeader}>{header}</View> : null}
-        ListEmptyComponent={emptyLabel ? <EmptyList label={emptyLabel} /> : null}
+        ListEmptyComponent={listEmptyComponent}
         ListFooterComponent={
           loadMore && status ? <LoadMoreFooter loadMore={loadMore} status={status} /> : null
         }
