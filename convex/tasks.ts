@@ -3,7 +3,7 @@ import { MutationCtx, query } from "./_generated/server";
 import { mutation } from "./functions";
 import { paginationOptsValidator } from "convex/server";
 import { Doc, Id } from "./_generated/dataModel";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireTenantAuth, requireOwnedRow } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyUser, getActorName } from "./utils/notifications";
 
@@ -301,6 +301,55 @@ export const update = mutation({
           { link: `/${args.orgId}/tasks`, relatedTaskId: args.taskId }
         );
       }
+    }
+  },
+});
+
+/**
+ * Soft deletes a task.
+ *
+ * Mirrors `leads.softDelete`: the row stays, `list`/`update`/`getHistory`
+ * already filter it out, and an admin can restore it. The taskHistory entry is
+ * appended rather than cleared so the deletion is itself answerable for.
+ */
+export const softDelete = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    taskId: v.id("tasks"),
+  },
+  handler: async (ctx, args) => {
+    try {
+      const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_TASKS]);
+      const identity = await ctx.auth.getUserIdentity();
+      if (!identity) throw new ConvexError("Unauthenticated");
+
+      // requireTenantAuth only proves the caller may act inside the org they
+      // named — never that this row belongs to it. Without this line a member
+      // of org B can delete org A's task by naming org B honestly.
+      const task = await requireOwnedRow(ctx, args.orgId, "tasks", args.taskId, "Task not found.");
+      if (task.isDeleted) {
+        throw new ConvexError("Task not found.");
+      }
+
+      await ctx.db.patch(args.taskId, {
+        isDeleted: true,
+        deletedAt: Date.now(),
+        deletedBy: identity.subject,
+      });
+
+      await ctx.db.insert("taskHistory", {
+        orgId: args.orgId,
+        taskId: args.taskId,
+        userId: user._id,
+        action: "DELETE",
+        details: "Deleted the task.",
+      });
+
+      return null;
+    } catch (error) {
+      if (error instanceof ConvexError) throw error;
+      console.error("tasks.softDelete failed", error);
+      throw new ConvexError("An unexpected error occurred. Please try again later.");
     }
   },
 });

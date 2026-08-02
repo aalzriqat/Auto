@@ -5,7 +5,10 @@ import { Id } from "./_generated/dataModel";
 import schema from "./schema";
 
 const MODULES = import.meta.glob("./**/*.*s");
-const TASK_PERMISSIONS = ["view:tasks", "create:tasks", "edit:tasks"];
+// `delete:tasks` is granted in BOTH orgs on purpose. The cross-tenant test
+// below has to fail on row ownership, not on a missing permission — otherwise
+// it would pass for the wrong reason and keep passing if the guard were removed.
+const TASK_PERMISSIONS = ["view:tasks", "create:tasks", "edit:tasks", "delete:tasks"];
 
 async function seedTaskTenants() {
   const t = convexTestWithComponents(schema, MODULES);
@@ -133,5 +136,110 @@ describe("tasks tenant isolation", () => {
 
     const history = await seed.asOrgB.query(api.tasks.getHistory, { orgId: seed.orgB, taskId: taskB });
     expect(history).toHaveLength(1);
+  });
+});
+
+describe("tasks soft delete", () => {
+  const PAGE = { cursor: null, numItems: 50 };
+
+  test("marks the row deleted instead of removing it, and records who did it", async () => {
+    const seed = await seedTaskTenants();
+    const taskId = await seed.asOrgA.mutation(api.tasks.create, createTaskArgs(seed));
+
+    await seed.asOrgA.mutation(api.tasks.softDelete, { orgId: seed.orgA, taskId });
+
+    const row = await seed.t.run((ctx) => ctx.db.get(taskId));
+    expect(row).not.toBeNull();
+    expect(row?.isDeleted).toBe(true);
+    expect(typeof row?.deletedAt).toBe("number");
+    // Matches the string column the schema declares, and the identity every
+    // other soft-delete writer in this codebase stores.
+    expect(row?.deletedBy).toBe("task_user_a");
+  });
+
+  test("a deleted task disappears from list", async () => {
+    const seed = await seedTaskTenants();
+    const taskId = await seed.asOrgA.mutation(api.tasks.create, createTaskArgs(seed));
+
+    const before = await seed.asOrgA.query(api.tasks.list, { orgId: seed.orgA, paginationOpts: PAGE });
+    expect(before.page.map((task) => task._id)).toContain(taskId);
+
+    await seed.asOrgA.mutation(api.tasks.softDelete, { orgId: seed.orgA, taskId });
+
+    const after = await seed.asOrgA.query(api.tasks.list, { orgId: seed.orgA, paginationOpts: PAGE });
+    expect(after.page.map((task) => task._id)).not.toContain(taskId);
+  });
+
+  test("a deleted task can no longer be updated, deleted again, or read back", async () => {
+    const seed = await seedTaskTenants();
+    const taskId = await seed.asOrgA.mutation(api.tasks.create, createTaskArgs(seed));
+    await seed.asOrgA.mutation(api.tasks.softDelete, { orgId: seed.orgA, taskId });
+
+    await expect(
+      seed.asOrgA.mutation(api.tasks.update, { orgId: seed.orgA, taskId, title: "Resurrected" })
+    ).rejects.toThrow(/Task not found/);
+    await expect(
+      seed.asOrgA.mutation(api.tasks.softDelete, { orgId: seed.orgA, taskId })
+    ).rejects.toThrow(/Task not found/);
+    await expect(
+      seed.asOrgA.query(api.tasks.getHistory, { orgId: seed.orgA, taskId })
+    ).rejects.toThrow(/Task not found/);
+  });
+
+  test("appends a DELETE history entry rather than clearing the trail", async () => {
+    const seed = await seedTaskTenants();
+    const taskId = await seed.asOrgA.mutation(api.tasks.create, createTaskArgs(seed));
+    await seed.asOrgA.mutation(api.tasks.softDelete, { orgId: seed.orgA, taskId });
+
+    // getHistory deliberately refuses a deleted task, so read the table directly.
+    const history = await seed.t.run((ctx) =>
+      ctx.db.query("taskHistory").collect()
+    );
+    const forTask = history.filter((entry) => entry.taskId === taskId);
+    expect(forTask.map((entry) => entry.action).sort()).toEqual(["CREATE", "DELETE"]);
+    expect(forTask.find((entry) => entry.action === "DELETE")?.userId).toBe(seed.userA);
+  });
+
+  test("a caller from another org cannot delete a task, even naming their own org honestly", async () => {
+    const seed = await seedTaskTenants();
+    const taskA = await seed.asOrgA.mutation(api.tasks.create, createTaskArgs(seed));
+
+    // Org B's member names org B — which they really are a member of, with
+    // delete:tasks — and passes org A's task id. requireTenantAuth alone waves
+    // this through; only the row-ownership check stops it.
+    await expect(
+      seed.asOrgB.mutation(api.tasks.softDelete, { orgId: seed.orgB, taskId: taskA })
+    ).rejects.toThrow(/not found/i);
+
+    const row = await seed.t.run((ctx) => ctx.db.get(taskA));
+    expect(row?.isDeleted).toBeUndefined();
+
+    // And it is still visible to the org that actually owns it.
+    const list = await seed.asOrgA.query(api.tasks.list, { orgId: seed.orgA, paginationOpts: PAGE });
+    expect(list.page.map((task) => task._id)).toContain(taskA);
+  });
+
+  test("a member without delete:tasks cannot delete", async () => {
+    const seed = await seedTaskTenants();
+    const taskId = await seed.asOrgA.mutation(api.tasks.create, createTaskArgs(seed));
+
+    const viewerRole = await seed.t.run((ctx) =>
+      ctx.db.insert("roles", { orgId: seed.orgA, name: "Task Viewer", permissions: ["view:tasks"] })
+    );
+    const viewer = await seed.t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "task_viewer_a", email: "v@example.com", name: "V" })
+    );
+    await seed.t.run((ctx) =>
+      ctx.db.insert("memberships", { orgId: seed.orgA, userId: viewer, roleId: viewerRole })
+    );
+
+    await expect(
+      seed.t
+        .withIdentity({ subject: "task_viewer_a" })
+        .mutation(api.tasks.softDelete, { orgId: seed.orgA, taskId })
+    ).rejects.toThrow();
+
+    const row = await seed.t.run((ctx) => ctx.db.get(taskId));
+    expect(row?.isDeleted).toBeUndefined();
   });
 });

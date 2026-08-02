@@ -12,6 +12,7 @@ export function TasksModule({ orgId }: { orgId: string }) {
   const reportError = useGenericError();
   const createTask = useMutation(api.tasks.create);
   const updateTask = useMutation(api.tasks.update);
+  const softDeleteTask = useMutation(api.tasks.softDelete);
   const [filter, setFilter] = useState<"ALL" | "PENDING" | "COMPLETED">("PENDING");
   const { loadMore, results, status } = usePaginatedQuery(
     api.tasks.list,
@@ -73,6 +74,36 @@ export function TasksModule({ orgId }: { orgId: string }) {
     }
   }
 
+  async function runDelete(task: MobileTask) {
+    try {
+      await softDeleteTask({ orgId, taskId: task._id });
+    } catch (error) {
+      reportError("Mobile task delete failed", error);
+    }
+  }
+
+  // Deleting drops the task out of every list. A single stray tap in a
+  // scrolling list should not be able to do that silently — same reasoning as
+  // the lead archive confirm.
+  function confirmDelete(task: MobileTask) {
+    Alert.alert(
+      locale === "ar" ? "حذف هذه المهمة؟" : "Delete this task?",
+      locale === "ar"
+        ? "ستختفي المهمة من القوائم. يمكن للمسؤول استعادتها لاحقاً. وللاحتفاظ بها في السجل، استخدم الإلغاء بدلاً من الحذف."
+        : "The task will disappear from your lists. An admin can restore it later. To keep it on record, cancel it instead.",
+      [
+        { style: "cancel", text: locale === "ar" ? "إلغاء" : "Cancel" },
+        {
+          style: "destructive",
+          text: locale === "ar" ? "حذف" : "Delete",
+          onPress: () => {
+            void runDelete(task);
+          },
+        },
+      ],
+    );
+  }
+
   return (
     <>
       <ModuleList
@@ -99,6 +130,7 @@ export function TasksModule({ orgId }: { orgId: string }) {
             <View style={styles.cardActions}>
               {task.status !== "COMPLETED" ? <PrimaryButton label={locale === "ar" ? "إنهاء" : "Complete"} tone="muted" onPress={() => setTaskStatus(task, "COMPLETED")} /> : null}
               {task.status !== "CANCELLED" ? <PrimaryButton label={locale === "ar" ? "إلغاء" : "Cancel"} tone="danger" onPress={() => setTaskStatus(task, "CANCELLED")} /> : null}
+              <PrimaryButton label={locale === "ar" ? "حذف" : "Delete"} tone="danger" onPress={() => confirmDelete(task)} />
             </View>
           </RecordCard>
         )}

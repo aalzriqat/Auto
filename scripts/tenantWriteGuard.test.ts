@@ -252,10 +252,26 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // before the delete. `websites.test.ts` covers that directly with a member of
   // org A naming org A honestly and passing org B's entry id — the case
   // `requireTenantAuth` alone waves through.
+  //
+  // Then 435→436 by `tasks.softDelete`, the delete path the tasks table's
+  // soft-delete columns were declared for but never given. It lands in
+  // `analysed` (284→285) and both skip buckets are unchanged at 9 and 142, so
+  // this is coverage going up rather than anything dropping out of inspection.
+  //
+  // It is squarely the shape this analyzer exists for: it takes an `orgId` and
+  // a caller-supplied `taskId` and patches by that id, exactly how the two
+  // shipped Criticals were written. So it goes through
+  // `requireOwnedRow(ctx, args.orgId, "tasks", args.taskId)` before the patch.
+  // That guard is not decorative here — it was verified by writing the handler
+  // with only `requireTenantAuth` plus an `isDeleted` check first and watching
+  // `tasks.test.ts`'s cross-tenant case fail with the delete *succeeding*
+  // (org B's member removed org A's task). Adding the line is what turns it
+  // green, so the test discriminates between the real fix and the plausible
+  // near-miss rather than merely passing.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 435,
-      analysed: 284,
+      totalMutations: 436,
+      analysed: 285,
       skippedNoArgsBlock: 9,
       skippedNoOrgId: 142,
     });
