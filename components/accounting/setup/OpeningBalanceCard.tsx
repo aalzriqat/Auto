@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/select";
 import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "@/convex/utils/money";
 import { errorMessage } from "../AccountingTabShared";
+import { accountDisplayName } from "../reports/FinancialReportShared";
 
 /**
  * Opening-balance entry for the accounting Setup tab.
@@ -81,7 +82,7 @@ function dateInputToUtcMs(value: string): number | null {
 }
 
 export function OpeningBalanceCard() {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const { activeOrgId } = useOrg();
 
   const [open, setOpen] = useState(false);
@@ -256,7 +257,22 @@ export function OpeningBalanceCard() {
                         <SelectContent>
                           {(accounts ?? []).map((acc) => (
                             <SelectItem key={acc._id} value={acc._id}>
-                              {acc.code} — {acc.name}
+                              {/* Arabic name when the UI is Arabic — the chart
+                                  carries nameAr for every seeded account, and
+                                  the reports already localize the same way. */}
+                              {acc.code} — {accountDisplayName(acc, locale)}
+                              {" · "}
+                              {/* Which side this account normally takes.
+                                  Assets and expenses are debit-normal; the
+                                  equity, liability and revenue accounts that
+                                  balance them are credit-normal. Surfacing it
+                                  here means nobody has to know the convention
+                                  to fill the form in correctly. */}
+                              <span className="text-xs text-slate-500">
+                                {acc.normalBalance === "DEBIT"
+                                  ? t("OpeningBalanceDebit")
+                                  : t("OpeningBalanceCredit")}
+                              </span>
                             </SelectItem>
                           ))}
                         </SelectContent>
