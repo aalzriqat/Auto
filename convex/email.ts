@@ -3,10 +3,130 @@
 import { ActionCtx, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v, ConvexError } from "convex/values";
+import { createHash } from "node:crypto";
 import { Resend } from "resend";
 import { rateLimiter } from "./rateLimit";
 import { getValidatedEnv } from "./utils/env";
 import { renderNotification } from "../lib/notifications/render";
+
+// ─── Rate limiting ───────────────────────────────────────────────────────────
+
+/**
+ * Which budget a send draws from. See convex/rateLimit.ts for how each tier is
+ * sized and why transactional mail is deliberately kept out of the bulk bucket.
+ */
+type EmailTier = "emailTransactional" | "emailBulk" | "emailStaffNotice";
+
+/**
+ * A rate-limit key plus a log-safe rendering of it.
+ *
+ * Keys are namespaced by what they identify. The same address can be a
+ * recipient in one flow and the external sender that triggered another, and
+ * those must not draw on one budget — an org id and an address can't collide,
+ * but two different *roles* for the same address can.
+ */
+type EmailLimitKey = { key: string; label: string };
+
+/**
+ * Short one-way digest of an address, for logs only.
+ *
+ * Recipient addresses must never reach the function logs, but a drop with no
+ * identity at all can't be diagnosed either. This is enough to tell "one
+ * mailbox stuck in a loop" from "drops spread across a hundred different ones"
+ * without putting a customer's address in a log line. It is a correlation
+ * token, not an identifier: nothing reads it back.
+ */
+function addressToken(normalized: string): string {
+  return createHash("sha256").update(normalized).digest("hex").slice(0, 10);
+}
+
+/**
+ * Addresses are trimmed and lowercased before keying, so "A@x.com " and
+ * "a@x.com" share one bucket instead of each getting a full budget.
+ */
+function recipientKey(email: string): EmailLimitKey {
+  const normalized = email.trim().toLowerCase();
+  return { key: `to:${normalized}`, label: `to:${addressToken(normalized)}` };
+}
+
+function senderKey(email: string): EmailLimitKey {
+  const normalized = email.trim().toLowerCase();
+  return { key: `from:${normalized}`, label: `from:${addressToken(normalized)}` };
+}
+
+/** Org ids are internal identifiers, not personal data — logged verbatim. */
+function orgKey(orgId: string): EmailLimitKey {
+  return { key: `org:${orgId}`, label: `org:${orgId}` };
+}
+
+/**
+ * Two-tier email rate limit: the keyed bucket (fairness between recipients and
+ * tenants) plus the deployment-wide emailGlobal bucket (protects the single
+ * Resend account every tenant sends through). Same shape as
+ * `checkTenantWriteLimit` in convex/rateLimit.ts.
+ *
+ * Global first, keyed second: a send blocked by its own key still spends a
+ * global token, over-counting platform volume by exactly the number of blocked
+ * sends. That is the trade `checkTenantWriteLimit` already makes, and it errs
+ * toward throttling rather than toward sending.
+ *
+ * Never silent. Every refusal is logged with the action that was dropped, which
+ * budget refused it, and how long it would have had to wait. The unkeyed bucket
+ * this replaces was invisible for precisely that reason: five emails a minute
+ * for the whole deployment, and nothing said a word when the sixth disappeared.
+ * A keyed drop is expected behaviour under load (warn); exhausting the platform
+ * ceiling is not (error).
+ *
+ * Lives here rather than in convex/rateLimit.ts on purpose: ~20 suites stub
+ * that module with `vi.mock("./rateLimit", () => ({ rateLimiter: ... }))`, and
+ * importing a new symbol from it would leave every one of them calling
+ * `undefined` inside a scheduled sender.
+ */
+async function checkEmailLimit(
+  ctx: ActionCtx,
+  action: string,
+  tier: EmailTier,
+  key: EmailLimitKey
+): Promise<{ ok: boolean; retryAfter: number }> {
+  const platform = await rateLimiter.limit(ctx, "emailGlobal");
+  if (!platform.ok) {
+    console.error(
+      `[email] ${action} dropped by the deployment-wide email ceiling: ` +
+        `key=${key.label} retryAfterMs=${Math.ceil(platform.retryAfter)}`
+    );
+    return { ok: false, retryAfter: platform.retryAfter };
+  }
+
+  const keyed = await rateLimiter.limit(ctx, tier, { key: key.key });
+  if (!keyed.ok) {
+    console.warn(
+      `[email] ${action} dropped by rate limit: bucket=${tier} key=${key.label} ` +
+        `retryAfterMs=${Math.ceil(keyed.retryAfter)}`
+    );
+    return { ok: false, retryAfter: keyed.retryAfter };
+  }
+
+  return { ok: true, retryAfter: 0 };
+}
+
+/**
+ * `checkEmailLimit` for the sends that surface a refusal to their caller rather
+ * than dropping it: same two-tier check, but throws instead of returning a
+ * flag. The message carries no address, id or body.
+ *
+ * Same shape as `enforceMarketplaceSubmissionRateLimit` in convex/rateLimit.ts.
+ */
+async function enforceEmailLimit(
+  ctx: ActionCtx,
+  action: string,
+  tier: EmailTier,
+  key: EmailLimitKey
+): Promise<void> {
+  const limit = await checkEmailLimit(ctx, action, tier, key);
+  if (!limit.ok) {
+    throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(limit.retryAfter / 1000)}s`);
+  }
+}
 
 /** Escape user input before interpolating into HTML to prevent XSS/injection. */
 function escapeHtml(s: string): string {
@@ -100,10 +220,11 @@ export const sendTaskAlarm = internalAction({
     dueDate: v.number(),
   },
   handler: async (ctx, args) => {
-    const status = await rateLimiter.limit(ctx, "email");
-    if (!status.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(status.retryAfter / 1000)}s`);
-    }
+    // Bulk: a cron-driven reminder, keyed by the mailbox it lands in. The
+    // assignee's userId isn't passed here and adding it would buy nothing —
+    // the resource being protected is the inbox, and a user has one address.
+    await enforceEmailLimit(ctx, "sendTaskAlarm", "emailBulk", recipientKey(args.toEmail));
+
     const env = getValidatedEnv();
     const resendApiKey = env.RESEND_API_KEY;
 
@@ -183,10 +304,12 @@ export const sendAccountSetupLink = internalAction({
     setupToken: v.string(),
   },
   handler: async (ctx, args) => {
-    const status = await rateLimiter.limit(ctx, "email");
-    if (!status.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(status.retryAfter / 1000)}s`);
-    }
+    // Transactional: this is the only way the recipient can activate the
+    // account that was just created for them. Keyed by address because that is
+    // all that exists — the person has no userId in this system yet, and being
+    // throttled behind another org's cron traffic would strand them.
+    await enforceEmailLimit(ctx, "sendAccountSetupLink", "emailTransactional", recipientKey(args.toEmail));
+
     const env = getValidatedEnv();
     const resendApiKey = env.RESEND_API_KEY;
     const appUrl = env.NEXT_PUBLIC_APP_URL;
@@ -246,10 +369,11 @@ export const sendSupportReply = internalAction({
     inbox: v.union(v.literal("support"), v.literal("info"), v.literal("subscriptions")),
   },
   handler: async (ctx, args): Promise<{ success: boolean; resendEmailId?: string; error?: string }> => {
-    const status = await rateLimiter.limit(ctx, "email");
-    if (!status.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(status.retryAfter / 1000)}s`);
-    }
+    // Transactional: a support agent typed this and is watching it send
+    // (support.sendReply surfaces the failure). Keyed by the subscriber's
+    // address; they may be a prospect with no org or account at all.
+    await enforceEmailLimit(ctx, "sendSupportReply", "emailTransactional", recipientKey(args.toEmail));
+
     const env = getValidatedEnv();
     const resendApiKey = env.RESEND_API_KEY;
 
@@ -289,10 +413,12 @@ export const sendAutoReplyEmail = internalAction({
     inbox: v.union(v.literal("support"), v.literal("info"), v.literal("subscriptions")),
   },
   handler: async (ctx, args): Promise<{ success: boolean; resendEmailId?: string; error?: string }> => {
-    const status = await rateLimiter.limit(ctx, "email");
-    if (!status.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(status.retryAfter / 1000)}s`);
-    }
+    // Bulk, not transactional: nobody typed this, and it is triggered by
+    // whoever emailed us — an inbound address AutoFlow does not control. Keyed
+    // by that address so one sender can't drain the budget for everyone else's
+    // acknowledgments.
+    await enforceEmailLimit(ctx, "sendAutoReplyEmail", "emailBulk", recipientKey(args.toEmail));
+
     const env = getValidatedEnv();
     const resendApiKey = env.RESEND_API_KEY;
 
@@ -377,6 +503,7 @@ async function sendTransactionalEmail(
 
 export const sendSubscriptionReminderEmail = internalAction({
   args: {
+    orgId: v.id("organizations"),
     toEmail: v.string(),
     orgName: v.string(),
     kind: v.literal("renewal_due"),
@@ -385,8 +512,18 @@ export const sendSubscriptionReminderEmail = internalAction({
     priceJod: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<{ success: boolean; error?: string }> => {
-    const status = await rateLimiter.limit(ctx, "email");
-    if (!status.ok) {
+    // Bulk and keyed by org, not by recipient: this is billing correspondence
+    // about a tenant, addressed to whichever owner happens to be on file today.
+    // The org is the durable identity, and an org-keyed budget still bounds the
+    // tenant correctly if a future change sends the reminder to several owners
+    // — a per-address one would silently multiply by the number of them.
+    const limit = await checkEmailLimit(
+      ctx,
+      "sendSubscriptionReminderEmail",
+      "emailBulk",
+      orgKey(args.orgId)
+    );
+    if (!limit.ok) {
       return { success: false, error: "rate_limited" };
     }
     const env = getValidatedEnv();
@@ -426,6 +563,7 @@ export const sendSubscriptionReminderEmail = internalAction({
 
 export const sendMarketplaceWeeklyReportEmail = internalAction({
   args: {
+    orgId: v.id("organizations"),
     toEmail: v.string(),
     orgName: v.string(),
     pageViews: v.number(),
@@ -440,8 +578,17 @@ export const sendMarketplaceWeeklyReportEmail = internalAction({
     requestsLost: v.number(),
   },
   handler: async (ctx, args): Promise<{ success: boolean; error?: string }> => {
-    const status = await rateLimiter.limit(ctx, "email");
-    if (!status.ok) {
+    // Bulk and keyed by org for the same reason as the renewal reminder: the
+    // report is *about* a dealership, and the owner address is just where this
+    // week's copy is delivered. Once a week per org, so this bucket should
+    // never fire — if it does, the weekly cron is looping.
+    const limit = await checkEmailLimit(
+      ctx,
+      "sendMarketplaceWeeklyReportEmail",
+      "emailBulk",
+      orgKey(args.orgId)
+    );
+    if (!limit.ok) {
       return { success: false, error: "rate_limited" };
     }
     const env = getValidatedEnv();
@@ -499,10 +646,12 @@ export const sendTeamInvite = internalAction({
     inviteToken: v.string(),
   },
   handler: async (ctx, args) => {
-    const status = await rateLimiter.limit(ctx, "email");
-    if (!status.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(status.retryAfter / 1000)}s`);
-    }
+    // Transactional, and the clearest case for keeping these out of the bulk
+    // bucket: an invite that never arrives means a colleague cannot join the
+    // dealership at all. Keyed by address — the invitee has no userId, and the
+    // inviting org shouldn't be able to spend its way out of sending one.
+    await enforceEmailLimit(ctx, "sendTeamInvite", "emailTransactional", recipientKey(args.toEmail));
+
     const env = getValidatedEnv();
     const resendApiKey = env.RESEND_API_KEY;
 
@@ -554,11 +703,20 @@ export const sendNotificationEmail = internalAction({
     data: v.any(),
   },
   handler: async (ctx, args) => {
-    const status = await rateLimiter.limit(ctx, "email");
-    if (!status.ok) {
-      // Silently drop rather than throw — this runs from a scheduled action
-      // with no caller to surface the error to; the in-app notification
-      // (already inserted by dispatch()) is the source of truth regardless.
+    // Bulk, keyed by recipient — the email counterpart of the per-user push
+    // bucket in convex/pushSend.ts, deliberately the same size so "one
+    // recipient's budget" means the same thing on both channels.
+    const limit = await checkEmailLimit(
+      ctx,
+      "sendNotificationEmail",
+      "emailBulk",
+      recipientKey(args.toEmail)
+    );
+    if (!limit.ok) {
+      // Dropped rather than thrown — this runs from a scheduled action with no
+      // caller to surface the error to; the in-app notification (already
+      // inserted by dispatch()) is the source of truth regardless. Not silent
+      // though: checkEmailLimit has already logged which budget refused it.
       return { success: false, error: "rate_limited" };
     }
 
@@ -618,6 +776,27 @@ export const sendUpgradeRequestEmail = internalAction({
     message: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // Previously unlimited: any signed-in member could drive AutoFlow's own
+    // sales inbox by resubmitting the upgrade form. Keyed by the requesting
+    // org — the recipient is a fixed internal address, so keying by recipient
+    // would be the global bucket by another name.
+    //
+    // Thrown rather than returned, unlike the scheduled senders: `requestUpgrade`
+    // is a user-facing action that ignores this action's return value, so a
+    // returned failure would show the dealer a success toast for an email that
+    // was never sent. This is an action, so the throw rolls nothing back.
+    const limit = await checkEmailLimit(
+      ctx,
+      "sendUpgradeRequestEmail",
+      "emailStaffNotice",
+      orgKey(args.orgId)
+    );
+    if (!limit.ok) {
+      throw new ConvexError(
+        "Too many upgrade requests from this organization. Please try again in a few minutes."
+      );
+    }
+
     const env = getValidatedEnv();
     const resendApiKey = env.RESEND_API_KEY;
 
@@ -686,6 +865,26 @@ export const sendSupportInboxNotification = internalAction({
     bodyPreview: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // Previously unlimited, and reachable by anyone on the internet: it fires
+    // from the inbound-email webhook, once per message sent to support@. Keyed
+    // by the external sender, since the recipients are a fixed staff list —
+    // keying by them would be a single global bucket, and keying by nothing at
+    // all (the old behaviour) let one sender's loop bury every other tenant's
+    // support traffic. A distributed flood is what emailGlobal is for.
+    //
+    // Returned rather than thrown: this is scheduled fire-and-forget from a
+    // mutation, nobody is listening, and the message itself is already stored
+    // and visible in the admin support inbox — the notification is a courtesy.
+    const limit = await checkEmailLimit(
+      ctx,
+      "sendSupportInboxNotification",
+      "emailStaffNotice",
+      senderKey(args.fromEmail)
+    );
+    if (!limit.ok) {
+      return { success: false, error: "rate_limited" };
+    }
+
     const env = getValidatedEnv();
     const resendApiKey = env.RESEND_API_KEY;
     if (!resendApiKey || args.toEmails.length === 0) return { success: true };
