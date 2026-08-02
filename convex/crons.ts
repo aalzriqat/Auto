@@ -305,6 +305,7 @@ async function runSubscriptionReminders(ctx: ActionCtx): Promise<string> {
 
     if (ownerEmail && org) {
       await ctx.runAction(internal.email.sendSubscriptionReminderEmail, {
+        orgId: sub.orgId,
         toEmail: ownerEmail,
         orgName: org.name,
         kind: "renewal_due",

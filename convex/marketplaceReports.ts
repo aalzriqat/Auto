@@ -223,6 +223,7 @@ async function runWeeklyProofReports(ctx: ActionCtx): Promise<string> {
     }
 
     await ctx.runAction(internal.email.sendMarketplaceWeeklyReportEmail, {
+      orgId,
       toEmail: ownerEmail,
       orgName: org.name,
       ...report,

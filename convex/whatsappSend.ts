@@ -55,8 +55,21 @@ export const sendNotificationWhatsapp = internalAction({
     data: v.any(),
   },
   handler: async (ctx, args) => {
-    const status = await rateLimiter.limit(ctx, "notificationWhatsapp");
+    const status = await rateLimiter.limit(ctx, "notificationWhatsapp", { key: args.orgId });
     if (!status.ok) {
+      // Dropped, not failed: this runs from a scheduled action with no caller
+      // to surface the error to, and the in-app notification (already inserted
+      // by dispatch()) remains the source of truth. Logged all the same — the
+      // unkeyed version of this bucket capped the ENTIRE deployment at ten
+      // WhatsApp messages a minute, across every org, and said nothing at all
+      // when it dropped the eleventh.
+      //
+      // The org id is an internal identifier and safe to log; the recipient's
+      // phone number is not, and never appears here.
+      console.warn(
+        `[whatsappSend] notification dropped by rate limit: org=${args.orgId} ` +
+          `type=${args.type} retryAfterMs=${Math.ceil(status.retryAfter)}`
+      );
       return { success: false, error: "rate_limited" };
     }
 
