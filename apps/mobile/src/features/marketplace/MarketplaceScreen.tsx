@@ -2237,7 +2237,9 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   priceBadge: {
     position: "absolute",
     bottom: theme.spacing.md,
-    left: theme.spacing.md,
+    // Leading corner of the card image, mirroring with the layout. The card
+    // root sets `direction`, so Yoga resolves this per locale.
+    start: theme.spacing.md,
     borderRadius: theme.radius.full,
     backgroundColor: theme.colors.hero,
     paddingHorizontal: theme.spacing.md,

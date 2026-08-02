@@ -9,6 +9,7 @@ import {
   FormField,
   requiredText,
   useFieldFocusChain,
+  SummaryRow,
   useFormErrors,
 } from "./moduleShared";
 
@@ -205,5 +206,24 @@ describe("module form fields", () => {
     await render(<ChainProbe />);
 
     expect(() => chain?.fieldProps(0).onSubmitEditing?.()).not.toThrow();
+  });
+});
+
+describe("RTL summary rows", () => {
+  test("aligns the value to the row's trailing edge under Arabic", async () => {
+    const { getByText } = await render(
+      <LocaleProvider>
+        <SummaryRow label="Total" value="12,000" />
+      </LocaleProvider>,
+    );
+
+    const style = getByText("12,000").props.style as Array<{ textAlign?: string } | false>;
+    // Arabic is the default locale, so the trailing edge is the LEFT one.
+    expect(
+      style
+        .filter(Boolean)
+        .map((entry) => (entry as { textAlign?: string })?.textAlign)
+        .find(Boolean),
+    ).toBe("left");
   });
 });

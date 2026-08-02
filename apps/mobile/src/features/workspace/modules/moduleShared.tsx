@@ -1089,11 +1089,18 @@ export function SummaryRow({
   label: string;
   value: string;
 }) {
+  const { isRtl } = useLocale();
   const styles = useStyles();
   return (
     <View style={styles.summaryRow}>
       <Text style={styles.summaryLabel}>{label}</Text>
-      <Text numberOfLines={2} style={styles.summaryValue}>
+      <Text
+        numberOfLines={2}
+        // The value hugs the row's trailing edge. textAlign takes no logical
+        // keyword in React Native, so the flip is explicit; a hardcoded "right"
+        // pushed the value toward the middle of an RTL row.
+        style={[styles.summaryValue, { textAlign: isRtl ? "left" : "right" }]}
+      >
         {value}
       </Text>
     </View>

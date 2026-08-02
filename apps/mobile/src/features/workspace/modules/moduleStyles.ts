@@ -456,7 +456,9 @@ export const makeStyles = (theme: AppTheme) =>
     color: theme.colors.text,
     fontSize: 13,
     fontWeight: "700",
-    textAlign: "right",
+    // textAlign is applied by SummaryRow, which knows the locale: React Native
+    // has no logical "end" keyword for textAlign, and a hardcoded "right" here
+    // pushed the value into the middle of an RTL row.
   },
   wizardActions: {
     flexDirection: "row",
@@ -638,7 +640,10 @@ export const makeStyles = (theme: AppTheme) =>
   unreadDot: {
     position: "absolute",
     top: 1,
-    right: 1,
+    // Trailing corner of the avatar, so it mirrors with the layout. Both
+    // consumers (messages, socialInbox) render inside a `direction`-carrying
+    // subtree, which is what lets Yoga resolve `end` per locale.
+    end: 1,
     width: 10,
     height: 10,
     borderRadius: 5,
@@ -758,7 +763,9 @@ export const makeStyles = (theme: AppTheme) =>
     width: 14,
     height: 14,
     borderRadius: 7,
-    marginLeft: -4,
+    // Overlaps the previous avatar in the stack. The stack is a flex row, so
+    // it reverses under RTL and the overlap has to reverse with it.
+    marginStart: -4,
     borderWidth: 1,
     borderColor: theme.colors.surface,
   },
@@ -1114,7 +1121,9 @@ export const makeStyles = (theme: AppTheme) =>
   photoThumbRemove: {
     position: "absolute",
     top: 4,
-    right: 4,
+    // Trailing corner of the thumbnail. Rendered inside FormModal's sheet,
+    // which sets `direction`.
+    end: 4,
     width: 26,
     height: 26,
     borderRadius: 13,
