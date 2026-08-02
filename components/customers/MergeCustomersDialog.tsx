@@ -18,6 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Loader2, Users, ArrowRight } from "lucide-react";
+import { getErrorMessage } from "@/lib/errors";
 
 interface MergeCustomersDialogProps {
   open: boolean;
@@ -92,8 +93,8 @@ export function MergeCustomersDialog({ open, onOpenChange }: MergeCustomersDialo
       });
       toast.success(t("CustomersMergedSuccess" as any) || "Customers merged successfully.");
       handleOpenChange(false);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsMerging(false);
     }

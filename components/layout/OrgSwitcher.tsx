@@ -28,6 +28,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useState } from "react";
 import { toast } from "@/components/ui/sonner";
+import { getErrorMessage } from "@/lib/errors";
 
 export function OrgSwitcher() {
   const { t } = useLanguage();
@@ -51,8 +52,8 @@ export function OrgSwitcher() {
       setNewOrgName("");
       setDialogType(null);
       toast.success(t("OrganizationCreated" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -65,8 +66,8 @@ export function OrgSwitcher() {
       setNewOrgName("");
       setDialogType(null);
       toast.success(t("OrganizationRenamed" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 

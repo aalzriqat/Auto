@@ -12,6 +12,7 @@ import { toast } from "@/components/ui/sonner";
 import { calculateDBR } from "@/lib/financing";
 import { GuarantorDialog } from "./GuarantorDialog";
 import { Trash2, Edit } from "lucide-react";
+import { getErrorMessage } from "@/lib/errors";
 
 export function CustomerFinancialsTab({ customer }: { customer: any }) {
   const { activeOrgId } = useOrg();
@@ -54,8 +55,8 @@ export function CustomerFinancialsTab({ customer }: { customer: any }) {
       });
       toast.success(t("FinancialsUpdatedSuccess" as any));
       setIsEditing(false);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSubmitting(false);
     }

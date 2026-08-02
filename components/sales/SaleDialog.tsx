@@ -39,6 +39,7 @@ import {
 import { SearchableSelect } from "@/components/ui/searchable-select";
 
 import { saleSchema, SaleFormValues, SaleDialogProps } from "./sale.schema";
+import { getErrorMessage } from "@/lib/errors";
 
 
 export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
@@ -277,8 +278,8 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
         toast.success(t("SaleRecordedSuccess" as any));
       }
       onOpenChange(false);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSubmitting(false);
     }

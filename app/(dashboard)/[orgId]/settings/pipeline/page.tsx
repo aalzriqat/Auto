@@ -14,6 +14,7 @@ import { toast } from "@/components/ui/sonner";
 import { ChevronUp, ChevronDown, Loader2 } from "lucide-react";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { translatePipelineStageLabel } from "@/lib/i18n/defaultLabels";
+import { getErrorMessage } from "@/lib/errors";
 
 export default function PipelineSettingsPage() {
   const { activeOrgId } = useOrg();
@@ -34,8 +35,8 @@ export default function PipelineSettingsPage() {
     try {
       await seedStages({ orgId: activeOrgId });
       toast.success(t("DefaultStagesLoaded" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -43,8 +44,8 @@ export default function PipelineSettingsPage() {
     if (!activeOrgId) return;
     try {
       await updateStage({ orgId: activeOrgId, stageId, isActive });
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -52,8 +53,8 @@ export default function PipelineSettingsPage() {
     if (!activeOrgId) return;
     try {
       await updateStage({ orgId: activeOrgId, stageId, color });
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -69,8 +70,8 @@ export default function PipelineSettingsPage() {
         return next;
       });
       toast.success(t("PipelineLabelUpdated" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -80,8 +81,8 @@ export default function PipelineSettingsPage() {
     [orderedIds[index - 1], orderedIds[index]] = [orderedIds[index], orderedIds[index - 1]];
     try {
       await reorderStages({ orgId: activeOrgId, orderedIds });
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -91,8 +92,8 @@ export default function PipelineSettingsPage() {
     [orderedIds[index], orderedIds[index + 1]] = [orderedIds[index + 1], orderedIds[index]];
     try {
       await reorderStages({ orgId: activeOrgId, orderedIds });
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 

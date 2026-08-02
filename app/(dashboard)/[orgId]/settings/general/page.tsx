@@ -24,6 +24,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/sonner";
 import { Settings, Palette, CreditCard, Upload, ShieldCheck, MessageCircle, Sparkles, MessageSquareText, UserPlus, Send } from "lucide-react";
+import { getErrorMessage } from "@/lib/errors";
 
 const CURRENCIES = [
   { code: "JOD", symbol: "د.أ", label: "Jordanian Dinar (JOD)" },
@@ -127,8 +128,8 @@ export default function GeneralSettingsPage() {
         dealershipPhones: parsePhoneLines(dealershipPhones),
       });
       toast.success(t("GeneralSettingsSaved"));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSaving(false);
     }
@@ -143,8 +144,8 @@ export default function GeneralSettingsPage() {
       if (installmentEnabled) enabledPaymentTypes.push("INSTALLMENT");
       await upsert({ orgId: activeOrgId, enabledPaymentTypes });
       toast.success(t("PaymentTypesSaved"));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSaving(false);
     }
@@ -163,8 +164,8 @@ export default function GeneralSettingsPage() {
         reservationHoldDays: reservationHoldDays ? parseFloat(reservationHoldDays) : undefined,
       });
       toast.success(t("ApprovalSettingsSaved"));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSaving(false);
     }
@@ -176,8 +177,8 @@ export default function GeneralSettingsPage() {
     try {
       await upsert({ orgId: activeOrgId, primaryColor });
       toast.success(t("AppearanceSaved"));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSaving(false);
     }
@@ -198,8 +199,8 @@ export default function GeneralSettingsPage() {
       const { storageId } = await result.json();
       await upsert({ orgId: activeOrgId, logoStorageId: storageId });
       toast.success(t("LogoUploadedSuccess"));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsUploadingLogo(false);
     }

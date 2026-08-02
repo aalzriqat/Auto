@@ -22,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/sonner";
 import { Plus, Trash2, Loader2 } from "lucide-react";
 import { Doc, Id } from "@/convex/_generated/dataModel";
+import { getErrorMessage } from "@/lib/errors";
 
 type EntityType = "vehicle" | "customer" | "lead";
 type FieldType = "text" | "number" | "select" | "date";
@@ -66,8 +67,8 @@ function FieldForm({ orgId, entityType, onDone }: {
       });
       toast.success(t("FieldCreated" as any));
       onDone();
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSaving(false);
     }
@@ -139,8 +140,8 @@ function EntityFieldList({ orgId, entityType, descKey }: { orgId: string; entity
   const handleToggle = async (fieldId: Id<"orgCustomFields">, isActive: boolean) => {
     try {
       await updateField({ orgId: orgId as Id<"organizations">, fieldId, isActive });
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -149,8 +150,8 @@ function EntityFieldList({ orgId, entityType, descKey }: { orgId: string; entity
     try {
       await removeField({ orgId: orgId as Id<"organizations">, fieldId });
       toast.success(t("FieldDeleted" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 

@@ -25,6 +25,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Send, Loader2, MessageCircle, Car, ExternalLink, RefreshCw } from "lucide-react";
+import { getErrorMessage } from "@/lib/errors";
 
 /** Identifies a specific conversation thread in the Social Inbox. */
 export type ConversationKey = {
@@ -187,8 +188,8 @@ export function SocialConversationDialog({
       }
       setReplyDrafts((prev) => ({ ...prev, [event._id]: "" }));
       toast.success(t("ReplySentSuccess" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setBusyEventId(null);
     }
@@ -209,8 +210,8 @@ export function SocialConversationDialog({
       }
       setDmDraft("");
       toast.success(t("MessageSentSuccess" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setSendingDm(false);
     }
@@ -234,8 +235,8 @@ export function SocialConversationDialog({
           : {}),
       });
       toast.success(t("VehicleLinked" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setLinkingVehicle(false);
     }
@@ -247,8 +248,8 @@ export function SocialConversationDialog({
     try {
       const result = await fetchFbHistory({ orgId: activeOrgId, customerId: effectiveCustomerId });
       toast.success(`Synced ${result.synced} messages`);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setSyncing(false);
     }

@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/sonner";
+import { getErrorMessage } from "@/lib/errors";
 
 const copy = {
   en: {
@@ -79,8 +80,8 @@ export default function ContactPage() {
       await submitContactMessage(values);
       setSubmitted(true);
       form.reset();
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   }
 

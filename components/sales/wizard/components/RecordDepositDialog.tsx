@@ -28,6 +28,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { getErrorMessage } from "@/lib/errors";
 
 const depositSchema = z.object({
   amount: z.coerce.number().positive("Amount must be greater than 0"),
@@ -71,8 +72,8 @@ export function RecordDepositDialog({ open, onOpenChange, quoteId, onRecorded }:
       idempotencyKeyRef.current = null;
       onOpenChange(false);
       onRecorded(depositId);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSubmitting(false);
     }

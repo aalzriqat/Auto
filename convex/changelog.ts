@@ -1248,6 +1248,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "كان بإمكان موظف المبيعات رؤية تقييم كل شركة تمويل للمركبة دون أن يستطيع تعديله، وكان الحفظ يفشل لأن التقييمات كانت مرتبطة بصلاحية تعديل المركبة نفسها. التقييم رقم تحدده شركة التمويل وليس بياناً يملكه المعرض مثل السعر أو التكلفة، ولذلك أصبحت له صلاحية مستقلة يملكها دور المبيعات. أما بقية بيانات المركبة فما زالت تمر بطلب الموافقة على التعديل كالمعتاد.",
     publishedAt: releaseAt(2026, 8, 2, 1),
   },
+  {
+    type: "FIX",
+    titleEn: "Failed actions now tell you why instead of doing nothing",
+    titleAr: "أصبحت الإجراءات الفاشلة تُوضّح سببها بدلاً من ألا تفعل شيئاً",
+    descriptionEn: "When an action failed — saving a vehicle, adding a customer, recording an expense, sending a sale for approval — the screen often showed nothing at all. The error notice was being passed to the notification system in a form it could not display, so it silently rendered nothing and the action simply looked ignored, with no way to tell a failure from a slow save. This affected every such message in the app. Failures now explain the reason in plain wording, with technical detail kept out of the message and in the system log where it belongs.",
+    descriptionAr: "عند فشل أي إجراء — حفظ مركبة، أو إضافة عميل، أو تسجيل مصروف، أو إرسال عملية بيع للموافقة — كانت الشاشة لا تعرض شيئاً في أغلب الأحيان. فقد كان إشعار الخطأ يُمرَّر إلى نظام الإشعارات بصيغة يتعذّر عليه عرضها، فلا يظهر شيء ويبدو الإجراء وكأنه أُهمل، دون وسيلة للتمييز بين الفشل وبين بطء الحفظ. وقد شمل ذلك كل رسائل الخطأ في النظام. أصبحت الإجراءات الفاشلة الآن توضّح السبب بصياغة مفهومة، مع إبقاء التفاصيل التقنية خارج الرسالة وداخل سجل النظام حيث موضعها.",
+    publishedAt: releaseAt(2026, 8, 2, 2),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

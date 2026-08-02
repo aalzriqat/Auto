@@ -41,6 +41,7 @@ import {
 } from "@/components/ui/dialog";
 import { useTableControls } from "@/hooks/useTableControls";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
+import { getErrorMessage } from "@/lib/errors";
 
 const PRIORITY_RANK: Record<string, number> = { HIGH: 3, MEDIUM: 2, LOW: 1 };
 
@@ -107,8 +108,8 @@ export default function TasksPage() {
       toast.success(t("TaskCancelledSuccess" as any) || "Task cancelled successfully");
       setTaskToCancel(null);
       setStatusNote("");
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -134,8 +135,8 @@ export default function TasksPage() {
       setTaskToReschedule(null);
       setStatusNote("");
       setNewDueDate(undefined);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -149,8 +150,8 @@ export default function TasksPage() {
         status: newStatus,
       });
       toast.success(t("TaskMarkedStatus" as any) || `Task status updated`);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
