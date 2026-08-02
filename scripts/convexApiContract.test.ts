@@ -26,7 +26,10 @@ const CONTRACT = path.join(REPO_ROOT, "apps", "mobile", "src", "convexApi.ts");
  * checked. The previous regex silently covered only 123 of these. If a real
  * change moves this number, update it in the same commit — deliberately.
  */
-const EXPECTED_REFERENCE_COUNT = 193;
+// Moved 193→194 by `tasks:softDelete`, the mobile binding for the new task
+// delete path. Coverage going up: one more real reference is now checked
+// against the backend, and nothing moved out of the extraction.
+const EXPECTED_REFERENCE_COUNT = 194;
 
 describe("mobile convexApi contract extraction", () => {
   test("reads the reference out of a multi-line declaration with nested generics", () => {

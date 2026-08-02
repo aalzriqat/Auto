@@ -20,7 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Search, Pencil, Calendar, CheckSquare, XCircle, Clock, History, Phone, Mail, Printer } from "lucide-react";
+import { Plus, Search, Pencil, Calendar, CheckSquare, XCircle, Clock, History, Phone, Mail, Printer, Trash2 } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -42,6 +42,7 @@ import {
 import { useTableControls } from "@/hooks/useTableControls";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 import { getErrorMessage } from "@/lib/errors";
+import { usePermissions } from "@/hooks/use-permissions";
 
 const PRIORITY_RANK: Record<string, number> = { HIGH: 3, MEDIUM: 2, LOW: 1 };
 
@@ -50,12 +51,17 @@ export default function TasksPage() {
   const { t } = useLanguage();
   const { results: tasks, status: tasksStatus, loadMore: loadMoreTasks } = usePaginatedQuery(api.tasks.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
   const updateTask = useMutation(api.tasks.update);
+  const softDeleteTask = useMutation(api.tasks.softDelete);
+  const { hasPermission } = usePermissions();
+  const canDeleteTasks = hasPermission("delete:tasks");
 
   const [priorityFilter, setPriorityFilter] = useState<"all" | "HIGH" | "MEDIUM" | "LOW">("all");
   const [isTaskDialogOpen, setIsTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<any>(null);
   const [taskToCancel, setTaskToCancel] = useState<any>(null);
   const [taskToReschedule, setTaskToReschedule] = useState<any>(null);
+  const [taskToDelete, setTaskToDelete] = useState<any>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [historyTask, setHistoryTask] = useState<any>(null);
   const [statusNote, setStatusNote] = useState("");
   const [newDueDate, setNewDueDate] = useState<Date | undefined>(undefined);
@@ -137,6 +143,20 @@ export default function TasksPage() {
       setNewDueDate(undefined);
     } catch (error) {
       toast.error(getErrorMessage(error));
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!activeOrgId || !taskToDelete || isDeleting) return;
+    setIsDeleting(true);
+    try {
+      await softDeleteTask({ orgId: activeOrgId, taskId: taskToDelete._id });
+      toast.success(t("TaskDeletedSuccess" as any) || "Task deleted successfully");
+      setTaskToDelete(null);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -318,6 +338,16 @@ export default function TasksPage() {
                     }} title="Cancel">
                       <XCircle className="h-4 w-4 text-red-500" />
                     </Button>
+                    {canDeleteTasks && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setTaskToDelete(task)}
+                        title={t("DeleteTask" as any) || "Delete Task"}
+                      >
+                        <Trash2 className="h-4 w-4 text-red-600" />
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ))
@@ -350,6 +380,29 @@ export default function TasksPage() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setTaskToCancel(null)}>{t("KeepTask" as any) || "Keep Task"}</Button>
             <Button variant="destructive" onClick={handleCancel}>{t("CancelTask" as any) || "Cancel Task"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!taskToDelete} onOpenChange={(open) => !open && setTaskToDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("DeleteTask" as any) || "Delete Task"}</DialogTitle>
+            <DialogDescription>
+              {t("DeleteTaskDesc" as any) ||
+                "This task will be removed from your lists. An admin can restore it later. To keep it on record with a reason instead, cancel it."}
+            </DialogDescription>
+          </DialogHeader>
+          {taskToDelete?.title && (
+            <div className="py-2 font-medium">{taskToDelete.title}</div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTaskToDelete(null)} disabled={isDeleting}>
+              {t("Cancel" as any) || "Cancel"}
+            </Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={isDeleting}>
+              {t("DeleteTaskConfirm" as any) || "Delete"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
