@@ -501,6 +501,11 @@ export default defineSchema({
     decidedAt: v.optional(v.number()),
     rejectionReason: v.optional(v.string()),
     journalEntryId: v.optional(v.id("journalEntries")),
+    // True when an owner posted this without a second approver, via
+    // accountingCutover.postOpeningBalanceDirect. Absent on rows that went
+    // through the two-person review, and on every row predating that route —
+    // so read it as "known to have skipped review", never as "reviewed".
+    autoApproved: v.optional(v.boolean()),
   })
     .index("by_org_status", ["orgId", "status"]),
 

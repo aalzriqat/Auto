@@ -208,10 +208,24 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // that org, never from a caller-supplied document id. Coverage going up is
   // the good direction; if a later edit made it write a caller-supplied id, the
   // guard would fail rather than this pin.
+  //
+  // Then 429→430 by `orgFinancialReset.resetOrgFinancialData`, also raising
+  // `analysed` 279→280. It takes an `orgId` and deletes rows, which is exactly
+  // the shape this analyzer exists for — and it clears, because every row it
+  // deletes comes from its own `q.eq("orgId", args.orgId)` filter rather than a
+  // caller-supplied document id. Of everything pinned here this is the one
+  // where that guarantee matters most, so it is also covered directly by a
+  // cross-tenant test in `orgFinancialReset.test.ts`.
+  //
+  // Then 430→431 by `accountingCutover.postOpeningBalanceDirect`, raising
+  // `analysed` 280→281. It takes an `orgId` and writes, so the analyzer
+  // inspects it, and it clears: the only caller-supplied ids it touches are
+  // `accountId`s, each re-fetched and checked against the org inside the
+  // shared poster before anything is written.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 429,
-      analysed: 279,
+      totalMutations: 431,
+      analysed: 281,
       skippedNoArgsBlock: 9,
       skippedNoOrgId: 141,
     });

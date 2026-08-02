@@ -430,3 +430,141 @@ describe("Phase 17 — settling a legacy claim backfilled by the minor-unit migr
     expect(allocations[0].amountMinor).toBe(500_000);
   });
 });
+
+describe("Phase 17 — owner-only direct opening balance", () => {
+  // The two-person check on approveOpeningBalance assumes a second
+  // MANAGE_FINANCE person exists to be the approver. A single-owner dealership
+  // has nobody, which is why this capability shipped unusable. These tests pin
+  // both halves of the exception: owners get through, and nobody else does.
+
+  test("an owner posts an opening balance in one step and it is marked auto-approved", async () => {
+    const ctx = await seedCutoverDealer();
+    const cash = account(ctx, "CASH_ON_HAND");
+    const capital = account(ctx, "PARTNER_CAPITAL");
+
+    const result = await ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+      orgId: ctx.orgId,
+      asOfDate: Date.now(),
+      memo: "Opening cash",
+      lines: [
+        { accountId: cash._id, debitMinor: 2_500_000, creditMinor: 0 },
+        { accountId: capital._id, debitMinor: 0, creditMinor: 2_500_000 },
+      ],
+    });
+    expect(result.journalId).toBeTruthy();
+
+    // Posted for real, not merely drafted.
+    expect(
+      await ctx.asOwner.query(api.accountingCutover.hasOpeningBalance, { orgId: ctx.orgId })
+    ).toBe(true);
+    expect(
+      await ctx.asOwner.query(api.accountingCutover.listPendingOpeningBalanceDrafts, {
+        orgId: ctx.orgId,
+      })
+    ).toHaveLength(0);
+
+    // The bypass is recorded rather than indistinguishable from a review.
+    const drafts = await ctx.t.run((c) => c.db.query("openingBalanceDrafts").collect());
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].status).toBe("POSTED");
+    expect(drafts[0].autoApproved).toBe(true);
+
+    const lines = await ctx.t.run((c) => c.db.query("journalLines").collect());
+    const cashLine = lines.find((l) => l.accountId === cash._id);
+    expect(cashLine?.debitMinor).toBe(2_500_000);
+    expect(cashLine?.creditMinor).toBe(0);
+    // Assert the other side too — checking only the debit would pass against a
+    // posting that dropped or mis-signed the credit entirely.
+    const capitalLine = lines.find((l) => l.accountId === capital._id);
+    expect(capitalLine?.creditMinor).toBe(2_500_000);
+    expect(capitalLine?.debitMinor).toBe(0);
+  });
+
+  test("a finance user who is not an owner cannot skip the second approver", async () => {
+    // The gate is the OWNER role itself, not manage:finance — granting someone
+    // finance permissions must not also hand them the bypass.
+    const ctx = await seedCutoverDealer();
+    const cash = account(ctx, "CASH_ON_HAND");
+    const capital = account(ctx, "PARTNER_CAPITAL");
+
+    const accountantRoleId = await ctx.t.run((c) =>
+      c.db.insert("roles", {
+        orgId: ctx.orgId,
+        name: "ACCOUNTANT",
+        permissions: ["view:finance", "manage:finance"],
+      })
+    );
+    const accountantId = await ctx.t.run((c) =>
+      c.db.insert("users", {
+        clerkId: "p17_accountant",
+        email: "p17accountant@example.com",
+        name: "Accountant",
+      })
+    );
+    await ctx.t.run((c) =>
+      c.db.insert("memberships", { orgId: ctx.orgId, userId: accountantId, roleId: accountantRoleId })
+    );
+    const asAccountant = ctx.t.withIdentity({
+      subject: "p17_accountant",
+      clerkId: "p17_accountant",
+    });
+
+    await expect(
+      asAccountant.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+        orgId: ctx.orgId,
+        asOfDate: Date.now(),
+        lines: [
+          { accountId: cash._id, debitMinor: 1_000, creditMinor: 0 },
+          { accountId: capital._id, debitMinor: 0, creditMinor: 1_000 },
+        ],
+      })
+    ).rejects.toThrow(/only an owner/i);
+
+    // And nothing was left behind by the rejected attempt.
+    expect(await ctx.t.run((c) => c.db.query("openingBalanceDrafts").collect())).toHaveLength(0);
+  });
+
+  test("the owner route still enforces one opening balance per org", async () => {
+    const ctx = await seedCutoverDealer();
+    const cash = account(ctx, "CASH_ON_HAND");
+    const capital = account(ctx, "PARTNER_CAPITAL");
+    const lines = [
+      { accountId: cash._id, debitMinor: 500_000, creditMinor: 0 },
+      { accountId: capital._id, debitMinor: 0, creditMinor: 500_000 },
+    ];
+
+    await ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+      orgId: ctx.orgId,
+      asOfDate: Date.now(),
+      lines,
+    });
+
+    await expect(
+      ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+        orgId: ctx.orgId,
+        asOfDate: Date.now(),
+        lines,
+      })
+    ).rejects.toThrow(/already been posted/i);
+  });
+
+  test("the owner route still refuses unbalanced lines", async () => {
+    // Skipping the approver must not mean skipping the accounting.
+    const ctx = await seedCutoverDealer();
+    const cash = account(ctx, "CASH_ON_HAND");
+    const capital = account(ctx, "PARTNER_CAPITAL");
+
+    await expect(
+      ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+        orgId: ctx.orgId,
+        asOfDate: Date.now(),
+        lines: [
+          { accountId: cash._id, debitMinor: 900_000, creditMinor: 0 },
+          { accountId: capital._id, debitMinor: 0, creditMinor: 100_000 },
+        ],
+      })
+    ).rejects.toThrow();
+
+    expect(await ctx.t.run((c) => c.db.query("journalEntries").collect())).toHaveLength(0);
+  });
+});

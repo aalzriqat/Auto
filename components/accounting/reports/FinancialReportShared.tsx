@@ -45,7 +45,16 @@ export function formatMinorAmount(amountMinor: number, currency: string, locale:
   }
 }
 
-export function accountDisplayName(row: ReportRow, locale: string): string {
+/**
+ * Takes the two fields it actually reads rather than a whole `ReportRow`, so
+ * anything carrying an account's names can localize it the same way — the
+ * opening-balance picker passes raw `chartOfAccounts` docs, which have no
+ * `netMinor` or `currency` to offer.
+ */
+export function accountDisplayName(
+  row: { name: string; nameAr?: string },
+  locale: string,
+): string {
   if (locale === "ar" && row.nameAr) return row.nameAr;
   return row.name;
 }
