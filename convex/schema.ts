@@ -1252,6 +1252,12 @@ export default defineSchema({
       v.literal("UPDATE"),
       v.literal("RESCHEDULE"),
       v.literal("CANCEL"),
+      // Additive, mirroring leadActivity's own DELETED literal. CANCEL already
+      // means something different and user-visible (the task stayed, its status
+      // changed), so reusing it would make the trail lie about what happened.
+      // The row outlives the task deliberately: getHistory hides a deleted
+      // task, but the entry is what makes the deletion answerable for later.
+      v.literal("DELETE"),
       v.literal("STATUS_CHANGE")
     ),
     details: v.string(),
