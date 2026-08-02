@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { SaleTrailDialog } from "@/components/sales/SaleTrailDialog";
+import { buildInitialDraftFromApproval } from "@/components/sales/wizard/approvalResume";
 
 export default function SalesHomePage() {
     const { activeOrgId } = useOrg();
@@ -127,14 +128,7 @@ export default function SalesHomePage() {
     function resumeFromApproval(approval: NonNullable<typeof myPendingApprovals>[0]) {
         if (!approval.wizardSnapshot) return;
         const snap = approval.wizardSnapshot;
-        setWizardInitialDraft({
-            vehicleId: approval.vehicleId,
-            vehiclePrice: snap.vehiclePrice,
-            desiredProfit: snap.desiredProfit,
-            downPayment: snap.downPayment,
-            termMonths: snap.termMonths,
-            selectedCompanyId: snap.selectedCompanyId,
-        });
+        setWizardInitialDraft(buildInitialDraftFromApproval(approval.vehicleId, snap));
         setWizardResumeDraft(undefined);
         setActiveWizard(snap.paymentType as PaymentType);
     }
