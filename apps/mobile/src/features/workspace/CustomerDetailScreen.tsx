@@ -17,6 +17,8 @@ import {
   dateLabel,
   money,
   parseOptionalNumber,
+  requiredText,
+  useFormErrors,
   useGenericError,
 } from "./modules/moduleShared";
 import { useStyles } from "./modules/moduleStyles";
@@ -88,6 +90,8 @@ export function CustomerDetailScreen({
   const [guarantorFormOpen, setGuarantorFormOpen] = useState(false);
   const [editingGuarantorId, setEditingGuarantorId] = useState<string | null>(null);
   const [savingGuarantor, setSavingGuarantor] = useState(false);
+  const overviewErrors = useFormErrors<"firstName" | "lastName">();
+  const guarantorErrors = useFormErrors<"firstName" | "lastName" | "nationalId" | "phone">();
   const [guarantorForm, setGuarantorForm] = useState({
     firstName: "",
     lastName: "",
@@ -188,10 +192,11 @@ export function CustomerDetailScreen({
 
   async function saveOverview() {
     if (!orgId || !customerId) return;
-    if (!overviewForm.firstName.trim() || !overviewForm.lastName.trim()) {
-      Alert.alert(locale === "ar" ? "حقول مطلوبة" : "Required fields");
-      return;
-    }
+    const valid = overviewErrors.validate({
+      firstName: requiredText(overviewForm.firstName, locale),
+      lastName: requiredText(overviewForm.lastName, locale),
+    });
+    if (!valid) return;
     setSavingOverview(true);
     try {
       await updateCustomer({
@@ -243,6 +248,7 @@ export function CustomerDetailScreen({
   function openAddGuarantor() {
     setEditingGuarantorId(null);
     setGuarantorForm({ firstName: "", lastName: "", nationalId: "", phone: "", relationship: "", income: "" });
+    guarantorErrors.reset();
     setGuarantorFormOpen(true);
   }
 
@@ -258,15 +264,21 @@ export function CustomerDetailScreen({
       relationship: guarantor.relationship ?? "",
       income: guarantor.income !== undefined ? String(guarantor.income) : "",
     });
+    guarantorErrors.reset();
     setGuarantorFormOpen(true);
   }
 
   async function saveGuarantor() {
     if (!orgId || !customerId) return;
-    if (!guarantorForm.firstName.trim() || !guarantorForm.lastName.trim() || !guarantorForm.nationalId.trim() || !guarantorForm.phone.trim()) {
-      Alert.alert(locale === "ar" ? "حقول مطلوبة" : "Required fields");
-      return;
-    }
+    // All four at once. The old single alert named none of them, so a
+    // guarantor missing two fields took two rounds to discover that.
+    const valid = guarantorErrors.validate({
+      firstName: requiredText(guarantorForm.firstName, locale),
+      lastName: requiredText(guarantorForm.lastName, locale),
+      nationalId: requiredText(guarantorForm.nationalId, locale),
+      phone: requiredText(guarantorForm.phone, locale),
+    });
+    if (!valid) return;
     setSavingGuarantor(true);
     try {
       const payload = {
@@ -334,8 +346,8 @@ export function CustomerDetailScreen({
         {activeTab === "overview" ? (
           editingOverview ? (
             <View style={styles.detailSection}>
-              <FormField label={locale === "ar" ? "الاسم الأول" : "First name"} value={overviewForm.firstName} onChangeText={(firstName) => setOverviewForm((prev) => ({ ...prev, firstName }))} />
-              <FormField label={locale === "ar" ? "اسم العائلة" : "Last name"} value={overviewForm.lastName} onChangeText={(lastName) => setOverviewForm((prev) => ({ ...prev, lastName }))} />
+              <FormField error={overviewErrors.errors.firstName} label={locale === "ar" ? "الاسم الأول" : "First name"} value={overviewForm.firstName} onChangeText={(firstName) => setOverviewForm((prev) => ({ ...prev, firstName }))} />
+              <FormField error={overviewErrors.errors.lastName} label={locale === "ar" ? "اسم العائلة" : "Last name"} value={overviewForm.lastName} onChangeText={(lastName) => setOverviewForm((prev) => ({ ...prev, lastName }))} />
               <FormField keyboardType="phone-pad" label={locale === "ar" ? "الهاتف" : "Phone"} value={overviewForm.phone} onChangeText={(phone) => setOverviewForm((prev) => ({ ...prev, phone }))} />
               <FormField keyboardType="phone-pad" label="WhatsApp" value={overviewForm.whatsapp} onChangeText={(whatsapp) => setOverviewForm((prev) => ({ ...prev, whatsapp }))} />
               <FormField keyboardType="email-address" label={locale === "ar" ? "البريد" : "Email"} value={overviewForm.email} onChangeText={(email) => setOverviewForm((prev) => ({ ...prev, email }))} />
@@ -361,7 +373,7 @@ export function CustomerDetailScreen({
                 {customer.source ? <SummaryRow label={locale === "ar" ? "المصدر" : "Source"} value={customer.source} /> : null}
               </SummaryPanel>
               {canEdit ? (
-                <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => setEditingOverview(true)} />
+                <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => { overviewErrors.reset(); setEditingOverview(true); }} />
               ) : null}
             </>
           )
@@ -529,10 +541,10 @@ export function CustomerDetailScreen({
                 <Text style={styles.sectionTitle}>
                   {editingGuarantorId ? (locale === "ar" ? "تعديل ضامن" : "Edit guarantor") : (locale === "ar" ? "ضامن جديد" : "New guarantor")}
                 </Text>
-                <FormField label={locale === "ar" ? "الاسم الأول" : "First name"} value={guarantorForm.firstName} onChangeText={(firstName) => setGuarantorForm((prev) => ({ ...prev, firstName }))} />
-                <FormField label={locale === "ar" ? "اسم العائلة" : "Last name"} value={guarantorForm.lastName} onChangeText={(lastName) => setGuarantorForm((prev) => ({ ...prev, lastName }))} />
-                <FormField label={locale === "ar" ? "الرقم الوطني" : "National ID"} value={guarantorForm.nationalId} onChangeText={(nationalId) => setGuarantorForm((prev) => ({ ...prev, nationalId }))} />
-                <FormField keyboardType="phone-pad" label={locale === "ar" ? "الهاتف" : "Phone"} value={guarantorForm.phone} onChangeText={(phone) => setGuarantorForm((prev) => ({ ...prev, phone }))} />
+                <FormField error={guarantorErrors.errors.firstName} label={locale === "ar" ? "الاسم الأول" : "First name"} value={guarantorForm.firstName} onChangeText={(firstName) => setGuarantorForm((prev) => ({ ...prev, firstName }))} />
+                <FormField error={guarantorErrors.errors.lastName} label={locale === "ar" ? "اسم العائلة" : "Last name"} value={guarantorForm.lastName} onChangeText={(lastName) => setGuarantorForm((prev) => ({ ...prev, lastName }))} />
+                <FormField error={guarantorErrors.errors.nationalId} label={locale === "ar" ? "الرقم الوطني" : "National ID"} value={guarantorForm.nationalId} onChangeText={(nationalId) => setGuarantorForm((prev) => ({ ...prev, nationalId }))} />
+                <FormField error={guarantorErrors.errors.phone} keyboardType="phone-pad" label={locale === "ar" ? "الهاتف" : "Phone"} value={guarantorForm.phone} onChangeText={(phone) => setGuarantorForm((prev) => ({ ...prev, phone }))} />
                 <FormField label={locale === "ar" ? "صلة القرابة" : "Relationship"} value={guarantorForm.relationship} onChangeText={(relationship) => setGuarantorForm((prev) => ({ ...prev, relationship }))} />
                 <FormField keyboardType="numeric" label={locale === "ar" ? "الدخل" : "Income"} value={guarantorForm.income} onChangeText={(income) => setGuarantorForm((prev) => ({ ...prev, income }))} />
                 <View style={styles.cardActions}>
