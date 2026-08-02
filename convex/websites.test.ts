@@ -2,6 +2,8 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import schema from "./schema";
+import type { Id } from "./_generated/dataModel";
+import { websiteLeadBlocklistValueHash } from "./websites";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -503,5 +505,285 @@ describe("public lead abuse logging survives rejection", () => {
       const leads = await ctx.db.query("leads").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect();
       expect(leads).toHaveLength(0);
     });
+  });
+});
+
+/**
+ * The public-lead blocklist shipped as a table plus a single read and nothing
+ * else: no mutation, query or script anywhere wrote a row, and the read
+ * compared the *raw* candidate value against a column named `valueHash`. So
+ * the control could not have blocked anything even if something had populated
+ * it. These cover both halves of that — that a blocked value is now actually
+ * refused, and that the digest is what gets stored and compared.
+ */
+describe("public lead blocklist", () => {
+  beforeEach(() => {
+    process.env.CLERK_JWT_ISSUER_DOMAIN = "https://test.clerk.accounts.dev";
+    process.env.NEXT_PUBLIC_APP_URL = "https://test.example.com";
+    process.env.TURNSTILE_SECRET_KEY = "test_turnstile_secret_123456";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ success: true, action: "turnstile-spin-v1" }), {
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+  });
+
+  afterEach(() => {
+    restoreEnv("CLERK_JWT_ISSUER_DOMAIN", ORIGINAL_CLERK_ISSUER);
+    restoreEnv("NEXT_PUBLIC_APP_URL", ORIGINAL_APP_URL);
+    restoreEnv("TURNSTILE_SECRET_KEY", ORIGINAL_TURNSTILE_SECRET);
+    vi.unstubAllGlobals();
+  });
+
+  const submission = {
+    host: "premiumcars.autoflowdealer.com",
+    formType: "contact",
+    firstName: "Lina",
+    turnstileToken: "valid-token",
+    clientFingerprint: "visitor-1",
+  } as const;
+
+  async function leadCount(
+    convex: ReturnType<typeof convexTestWithComponents>,
+    orgId: Id<"organizations">,
+  ) {
+    return (
+      await convex.run((ctx) =>
+        ctx.db.query("leads").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+      )
+    ).length;
+  }
+
+  test("a blocklisted email is refused and a non-blocklisted one is accepted", async () => {
+    const { convex, orgId, asOwner } = await publishDealerWebsite();
+
+    await asOwner.mutation(api.websites.addLeadBlocklistEntry, {
+      orgId,
+      kind: "email",
+      value: "spam@example.com",
+      reason: "Repeat form abuse",
+    });
+
+    await expect(
+      convex.action(api.websites.submitPublicLead, { ...submission, email: "spam@example.com" }),
+    ).rejects.toThrow(/cannot be accepted/i);
+
+    expect(await leadCount(convex, orgId)).toBe(0);
+    await convex.run(async (ctx) => {
+      const abuseEvents = await ctx.db
+        .query("websiteLeadAbuseEvents")
+        .withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId))
+        .collect();
+      expect(abuseEvents.some((e) => e.reason === "blocked" && e.detail === "email")).toBe(true);
+    });
+
+    // The control has to let everyone else through, or "it blocks" is
+    // indistinguishable from "it is broken in the other direction".
+    await convex.action(api.websites.submitPublicLead, { ...submission, email: "lina@example.com" });
+    expect(await leadCount(convex, orgId)).toBe(1);
+  });
+
+  test("the stored value is a digest of the normalised value, not the value itself", async () => {
+    const { convex, orgId, asOwner } = await publishDealerWebsite();
+
+    await asOwner.mutation(api.websites.addLeadBlocklistEntry, {
+      orgId,
+      kind: "email",
+      value: "  Spam@Example.COM  ",
+    });
+
+    const rows = await convex.run((ctx) =>
+      ctx.db.query("websiteLeadBlocklist").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].valueHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(rows[0].valueHash).not.toContain("example.com");
+    expect(rows[0].valueHash).toBe(await websiteLeadBlocklistValueHash("email", "spam@example.com"));
+
+    // ...and the casing/whitespace the operator typed still matches the
+    // normalised address the lead path derives from the submission.
+    await expect(
+      convex.action(api.websites.submitPublicLead, { ...submission, email: "SPAM@example.com" }),
+    ).rejects.toThrow(/cannot be accepted/i);
+  });
+
+  test("phone and email-domain blocks match the lead path's own normalisation", async () => {
+    const { convex, orgId, asOwner } = await publishDealerWebsite();
+
+    await asOwner.mutation(api.websites.addLeadBlocklistEntry, {
+      orgId,
+      kind: "phone",
+      value: "+962 79-999 9999",
+    });
+    await asOwner.mutation(api.websites.addLeadBlocklistEntry, {
+      orgId,
+      kind: "emailDomain",
+      value: "@throwaway.test",
+    });
+
+    await expect(
+      convex.action(api.websites.submitPublicLead, { ...submission, phone: "+962799999999" }),
+    ).rejects.toThrow(/cannot be accepted/i);
+    await expect(
+      convex.action(api.websites.submitPublicLead, { ...submission, email: "someone@throwaway.test" }),
+    ).rejects.toThrow(/cannot be accepted/i);
+
+    expect(await leadCount(convex, orgId)).toBe(0);
+  });
+
+  test("an expired entry stops blocking", async () => {
+    const { convex, orgId, asOwner } = await publishDealerWebsite();
+
+    await asOwner.mutation(api.websites.addLeadBlocklistEntry, {
+      orgId,
+      kind: "email",
+      value: "spam@example.com",
+      expiresAt: Date.now() - 1,
+    });
+
+    await convex.action(api.websites.submitPublicLead, { ...submission, email: "spam@example.com" });
+    expect(await leadCount(convex, orgId)).toBe(1);
+  });
+
+  test("removing an entry lifts the block", async () => {
+    const { convex, orgId, asOwner } = await publishDealerWebsite();
+
+    const entryId = await asOwner.mutation(api.websites.addLeadBlocklistEntry, {
+      orgId,
+      kind: "email",
+      value: "spam@example.com",
+    });
+    await expect(
+      convex.action(api.websites.submitPublicLead, { ...submission, email: "spam@example.com" }),
+    ).rejects.toThrow(/cannot be accepted/i);
+
+    await asOwner.mutation(api.websites.removeLeadBlocklistEntry, { orgId, entryId });
+
+    await convex.action(api.websites.submitPublicLead, { ...submission, email: "spam@example.com" });
+    expect(await leadCount(convex, orgId)).toBe(1);
+  });
+
+  test("another organization's entry does not block this org's leads", async () => {
+    const { convex, orgId } = await publishDealerWebsite();
+
+    const otherOrgId = await convex.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Rival Motors", createdAt: Date.now() }),
+    );
+    const valueHash = await websiteLeadBlocklistValueHash("email", "lina@example.com");
+    await convex.run((ctx) =>
+      ctx.db.insert("websiteLeadBlocklist", {
+        orgId: otherOrgId,
+        kind: "email",
+        valueHash,
+        createdAt: Date.now(),
+      }),
+    );
+
+    await convex.action(api.websites.submitPublicLead, { ...submission, email: "lina@example.com" });
+    expect(await leadCount(convex, orgId)).toBe(1);
+  });
+
+  test("a widely-blocked value still blocks for this org past any read bound", async () => {
+    const { convex, orgId, asOwner } = await publishDealerWebsite();
+
+    await asOwner.mutation(api.websites.addLeadBlocklistEntry, {
+      orgId,
+      kind: "email",
+      value: "spam@example.com",
+    });
+
+    // The lookup used to run on a global ["kind","valueHash"] index with a
+    // bounded `.take(10)`, so once enough other tenants had blocked the same
+    // address this org's own entry could fall outside the window and the
+    // submission would be allowed — a fail-open. The org is part of the index
+    // key now, so the count of other tenants is irrelevant.
+    const valueHash = await websiteLeadBlocklistValueHash("email", "spam@example.com");
+    for (let i = 0; i < 20; i++) {
+      const foreignOrgId = await convex.run((ctx) =>
+        ctx.db.insert("organizations", { name: `Other ${i}`, createdAt: Date.now() }),
+      );
+      await convex.run((ctx) =>
+        ctx.db.insert("websiteLeadBlocklist", {
+          orgId: foreignOrgId,
+          kind: "email",
+          valueHash,
+          createdAt: Date.now(),
+        }),
+      );
+    }
+
+    await expect(
+      convex.action(api.websites.submitPublicLead, { ...submission, email: "spam@example.com" }),
+    ).rejects.toThrow(/cannot be accepted/i);
+    expect(await leadCount(convex, orgId)).toBe(0);
+  });
+
+  test("an entry cannot be removed through another organization", async () => {
+    const { convex, orgId, asOwner } = await publishDealerWebsite();
+
+    const otherOrgId = await convex.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Rival Motors", createdAt: Date.now() }),
+    );
+    const foreignEntryId = await convex.run(async (ctx) =>
+      ctx.db.insert("websiteLeadBlocklist", {
+        orgId: otherOrgId,
+        kind: "email",
+        valueHash: await websiteLeadBlocklistValueHash("email", "rival@example.com"),
+        createdAt: Date.now(),
+      }),
+    );
+
+    // The caller is a real member of `orgId` and names it honestly — only the
+    // row id is foreign. requireTenantAuth alone would wave this through.
+    await expect(
+      asOwner.mutation(api.websites.removeLeadBlocklistEntry, { orgId, entryId: foreignEntryId }),
+    ).rejects.toThrow(/not found in this organization/i);
+
+    expect(await convex.run((ctx) => ctx.db.get(foreignEntryId))).not.toBeNull();
+  });
+
+  test("managing the blocklist requires the website.leads.manage permission", async () => {
+    const { convex, orgId } = await publishDealerWebsite();
+
+    const viewerRoleId = await convex.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "VIEWER", permissions: ["website.view"] }),
+    );
+    const viewerId = await convex.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "viewer_clerk", email: "viewer@example.com", name: "Viewer" }),
+    );
+    await convex.run((ctx) => ctx.db.insert("memberships", { orgId, userId: viewerId, roleId: viewerRoleId }));
+
+    await expect(
+      convex
+        .withIdentity({ subject: "viewer_clerk" })
+        .mutation(api.websites.addLeadBlocklistEntry, { orgId, kind: "email", value: "spam@example.com" }),
+    ).rejects.toThrow(/website.leads.manage/);
+  });
+
+  test("re-blocking the same value refreshes the entry instead of duplicating it", async () => {
+    const { convex, orgId, asOwner } = await publishDealerWebsite();
+
+    const first = await asOwner.mutation(api.websites.addLeadBlocklistEntry, {
+      orgId,
+      kind: "email",
+      value: "spam@example.com",
+      reason: "First strike",
+    });
+    const second = await asOwner.mutation(api.websites.addLeadBlocklistEntry, {
+      orgId,
+      kind: "email",
+      value: "SPAM@example.com",
+      reason: "Second strike",
+    });
+
+    expect(second).toBe(first);
+    const rows = await convex.run((ctx) =>
+      ctx.db.query("websiteLeadBlocklist").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].reason).toBe("Second strike");
   });
 });

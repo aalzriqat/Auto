@@ -232,10 +232,30 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // 281→282. It takes an `orgId` and patches vehicles, so the analyzer
   // inspects it, and it clears: every vehicle it touches comes from its own
   // `by_org` index read, never from a caller-supplied id.
+  //
+  // Then 433→435 by `websites.addLeadBlocklistEntry` and
+  // `websites.removeLeadBlocklistEntry` — the write path the public-lead
+  // blocklist never had. Both land in `analysed` (282→284), and both skip
+  // buckets are unchanged at 9 and 142, so this is coverage going up rather
+  // than anything moving out of inspection.
+  //
+  // `addLeadBlocklistEntry` takes an `orgId` and writes, so the analyzer looks
+  // at it, and it clears: the only row it patches is one its own
+  // `by_org_kind_valueHash` lookup returned — that index pins `orgId` as an
+  // equality term, so the row cannot be another tenant's. It takes no
+  // caller-supplied document id at all.
+  //
+  // `removeLeadBlocklistEntry` is the one that matters here. It takes an
+  // `orgId` *and* a caller-supplied `entryId` and deletes by it, which is
+  // exactly the shape the two shipped Criticals had, so it goes through
+  // `requireOwnedRow(ctx, args.orgId, "websiteLeadBlocklist", args.entryId)`
+  // before the delete. `websites.test.ts` covers that directly with a member of
+  // org A naming org A honestly and passing org B's entry id — the case
+  // `requireTenantAuth` alone waves through.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 433,
-      analysed: 282,
+      totalMutations: 435,
+      analysed: 284,
       skippedNoArgsBlock: 9,
       skippedNoOrgId: 142,
     });

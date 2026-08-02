@@ -18,7 +18,7 @@ import {
 } from "./websiteConfig";
 import { websitePublicProjection, websiteSectionMap } from "./websiteProjection";
 import { PERMISSIONS } from "./utils/permissions";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { writeAuditLog } from "./utils/auditLog";
 import { resolveGeneratedLeadAssignee } from "./utils/leadAssignment";
 import { notifyUser } from "./utils/notifications";
@@ -156,6 +156,68 @@ async function sha256Hex(value: string): Promise<string> {
     .join("");
 }
 
+/**
+ * Reduces a value to the exact form `websiteLeadBlocklistValueHash` hashes.
+ *
+ * Each branch mirrors, character for character, what `createPublicLead` has
+ * already applied to the candidate it will look up — that correspondence is
+ * the whole contract. A blocklist entry saved as "0799 999 999" has to match a
+ * submission the lead path normalised to "0799999999", and an entry saved as
+ * "Spam@Example.COM" has to match "spam@example.com".
+ */
+function normalizeBlocklistValue(kind: BlocklistKind, value: string): string {
+  switch (kind) {
+    // Opaque client tokens. `createPublicLead` runs these through
+    // `normalizeLimitKey`, which only trims — so trimming is all that may
+    // happen here, or the two sides would disagree on any value with inner
+    // whitespace.
+    case "fingerprint":
+      return value.trim();
+    // Already a hex digest computed before it reached us; case is the only
+    // free variable left.
+    case "ipHash":
+      return value.trim().toLowerCase();
+    // Mirrors `normalizeEmail` (normalizeText + toLowerCase).
+    case "email":
+      return value.trim().replace(/\s+/g, " ").toLowerCase();
+    // The read side supplies `email.split("@")[1]`, so accept an operator
+    // typing either "example.com" or "@example.com".
+    case "emailDomain":
+      return value.trim().replace(/\s+/g, " ").toLowerCase().replace(/^@+/, "");
+    // Mirrors `normalizePhone`.
+    case "phone":
+      return value.trim().replace(/\s+/g, " ").replace(/[^\d+]/g, "");
+  }
+}
+
+/**
+ * The single definition of what `websiteLeadBlocklist.valueHash` holds.
+ *
+ * The read side used to compare a *raw* candidate (`args.email`, the client
+ * fingerprint, …) against a column named `valueHash`. Nothing wrote the table,
+ * so nothing ever surfaced it, but the comparison could not have matched even
+ * if something had: the public-lead blocklist has never blocked anything.
+ * Routing both sides through this one function is what makes "like against
+ * like" a property of the code rather than a convention two call sites have to
+ * remember independently.
+ *
+ * SHA-256 is genuinely available in this context. Convex's runtime exposes Web
+ * Crypto's async `crypto.subtle.digest` to queries and mutations, not only to
+ * actions — handlers are `async`, so awaiting a digest is ordinary control
+ * flow. `recordWebsiteLeadAbuseEvent`, a few lines below and reached from the
+ * same `createPublicLead` mutation, has been awaiting `sha256Hex` from a
+ * `MutationCtx` in production all along, which is the proof. So there is no
+ * need to fall back to a plain normalised-string comparison here, and the
+ * table keeps the property its column name promises: a stolen database dump
+ * yields no email addresses or phone numbers.
+ */
+export async function websiteLeadBlocklistValueHash(
+  kind: BlocklistKind,
+  value: string,
+): Promise<string> {
+  return await sha256Hex(`${kind}:${normalizeBlocklistValue(kind, value)}`);
+}
+
 export async function verifyTurnstileToken(token: string): Promise<void> {
   const env = getValidatedEnv();
   if (!env.TURNSTILE_SECRET_KEY) {
@@ -258,15 +320,24 @@ async function findWebsiteLeadBlock(
 
   const now = Date.now();
   for (const candidate of candidates) {
+    // Hash the candidate before looking it up. The old code compared the raw
+    // value against `valueHash` directly, which could never match.
+    const valueHash = await websiteLeadBlocklistValueHash(candidate.kind, candidate.value);
     const rows = await ctx.db
       .query("websiteLeadBlocklist")
-      .withIndex("by_kind_and_valueHash", (q) =>
-        q.eq("kind", candidate.kind).eq("valueHash", candidate.value),
+      .withIndex("by_org_kind_valueHash", (q) =>
+        q.eq("orgId", args.orgId).eq("kind", candidate.kind).eq("valueHash", valueHash),
       )
-      .take(10);
+      // `.collect()`, not a bounded `.take()`: the org is now part of the index
+      // prefix, so this returns only this org's entries for this one value —
+      // at most one org-wide row plus one per host it was scoped to. On the old
+      // global index a bounded read was a fail-open, since other tenants
+      // blocking the same email could crowd out this org's own entry.
+      .collect();
     const active = rows.find((row) => {
       if (row.expiresAt !== undefined && row.expiresAt <= now) return false;
-      if (row.orgId !== undefined && row.orgId !== args.orgId) return false;
+      // orgId needs no re-check: it is an equality term of the index above, so
+      // a foreign row cannot be in `rows` at all.
       if (row.host !== undefined && row.host !== args.host) return false;
       return true;
     });
@@ -1197,5 +1268,205 @@ export const createPublicLead = internalMutation({
     }
 
     return { success: true, leadId };
+  },
+});
+
+// ─── Public-lead blocklist management ────────────────────────────────────────
+//
+// The blocklist existed as a table and a read and nothing else: no mutation,
+// query, or script anywhere wrote a row, so the abuse control the public lead
+// path consults had no way to ever be populated. These are that missing write
+// path. Values are hashed through `websiteLeadBlocklistValueHash` — the same
+// function `findWebsiteLeadBlock` hashes its candidates with — so an entry
+// saved here is one the read side can actually match.
+
+const blocklistKindValidator = v.union(
+  v.literal("fingerprint"),
+  v.literal("ipHash"),
+  v.literal("email"),
+  v.literal("emailDomain"),
+  v.literal("phone")
+);
+
+const PUBLIC_LEAD_MAX_BLOCKLIST_VALUE_CHARS = 256;
+const PUBLIC_LEAD_MAX_BLOCKLIST_REASON_CHARS = 300;
+
+/**
+ * Blocks a value from submitting public website leads for this org.
+ *
+ * `value` is the value **as the visitor's browser would send it** for that
+ * kind, not a digest: a raw email/phone/domain, the client fingerprint, or the
+ * `clientIpHash` string (which arrives pre-hashed from the edge and is what
+ * `websiteLeadAbuseEvents.clientIpHash` displays). Normalisation and hashing
+ * happen server-side, so an operator never has to reproduce either by hand.
+ *
+ * Re-blocking a value already on the list refreshes the existing row rather
+ * than inserting a second one, so repeated blocks cannot grow the table
+ * without bound or leave stale duplicates with conflicting expiry.
+ */
+export const addLeadBlocklistEntry = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    kind: blocklistKindValidator,
+    value: v.string(),
+    /** Restrict the block to a single one of the org's hosts. Omit for org-wide. */
+    host: v.optional(v.string()),
+    reason: v.optional(v.string()),
+    expiresAt: v.optional(v.number()),
+  },
+  handler: async (ctx, args): Promise<Id<"websiteLeadBlocklist">> => {
+    try {
+      const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.WEBSITE_LEADS_MANAGE]);
+      await requireFeature(ctx, args.orgId, "websiteBuilder");
+
+      const rawValue = normalizeLimitKey(args.value, "Value", PUBLIC_LEAD_MAX_BLOCKLIST_VALUE_CHARS);
+      if (!rawValue) throw new ConvexError("A value to block is required.");
+      // Normalisation can empty a value that was only punctuation ("---" as a
+      // phone, say). Storing the digest of "" would block every submission
+      // whose corresponding field normalised away, so refuse it here.
+      if (!normalizeBlocklistValue(args.kind, rawValue)) {
+        throw new ConvexError("That value is not valid for this block type.");
+      }
+      const reason = normalizeText(args.reason, "Reason", PUBLIC_LEAD_MAX_BLOCKLIST_REASON_CHARS);
+      if (args.expiresAt !== undefined && !Number.isFinite(args.expiresAt)) {
+        throw new ConvexError("Expiry is invalid.");
+      }
+
+      // A host-scoped entry may only name a host this org actually owns —
+      // otherwise one org could seed rows keyed to another org's domain.
+      let host: string | undefined;
+      if (args.host !== undefined) {
+        const normalizedHost = normalizedWebsiteHost(args.host);
+        const domain = await ctx.db
+          .query("websiteDomains")
+          .withIndex("by_domain", (q) => q.eq("domain", normalizedHost))
+          .unique();
+        if (!domain || domain.orgId !== args.orgId) {
+          throw new ConvexError("That website address does not belong to this organization.");
+        }
+        host = normalizedHost;
+      }
+
+      const valueHash = await websiteLeadBlocklistValueHash(args.kind, rawValue);
+
+      const existing = (
+        await ctx.db
+          .query("websiteLeadBlocklist")
+          .withIndex("by_org_kind_valueHash", (q) =>
+            q.eq("orgId", args.orgId).eq("kind", args.kind).eq("valueHash", valueHash),
+          )
+          .collect()
+      ).find((row) => row.host === host);
+
+      if (existing) {
+        await ctx.db.patch(existing._id, {
+          reason,
+          expiresAt: args.expiresAt,
+          createdAt: Date.now(),
+          createdBy: user._id,
+        });
+        await writeAuditLog(ctx, user, {
+          action: "website lead blocklist entry updated",
+          targetTable: "websiteLeadBlocklist",
+          targetId: existing._id,
+          orgId: args.orgId,
+          before: { reason: existing.reason, expiresAt: existing.expiresAt },
+          after: { kind: args.kind, host, reason, expiresAt: args.expiresAt },
+        });
+        return existing._id;
+      }
+
+      const entryId = await ctx.db.insert("websiteLeadBlocklist", {
+        orgId: args.orgId,
+        host,
+        kind: args.kind,
+        valueHash,
+        reason,
+        expiresAt: args.expiresAt,
+        createdAt: Date.now(),
+        createdBy: user._id,
+      });
+
+      await writeAuditLog(ctx, user, {
+        action: "website lead blocklist entry added",
+        targetTable: "websiteLeadBlocklist",
+        targetId: entryId,
+        orgId: args.orgId,
+        after: { kind: args.kind, host, reason, expiresAt: args.expiresAt },
+      });
+
+      return entryId;
+    } catch (error) {
+      if (error instanceof ConvexError) throw error;
+      console.error("websites.addLeadBlocklistEntry failed", error);
+      throw new ConvexError("An unexpected error occurred. Please try again later.");
+    }
+  },
+});
+
+/** Lifts a block. The entry is addressed by id, so it must be proven to belong to `orgId` first. */
+export const removeLeadBlocklistEntry = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    entryId: v.id("websiteLeadBlocklist"),
+  },
+  handler: async (ctx, args) => {
+    try {
+      const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.WEBSITE_LEADS_MANAGE]);
+      await requireFeature(ctx, args.orgId, "websiteBuilder");
+
+      // Caller-supplied id alongside an orgId: requireTenantAuth only proves
+      // the caller may act inside the org they named, never that this row is
+      // in it.
+      const entry = await requireOwnedRow(
+        ctx,
+        args.orgId,
+        "websiteLeadBlocklist",
+        args.entryId,
+        "Blocklist entry not found in this organization.",
+      );
+
+      await ctx.db.delete(args.entryId);
+
+      await writeAuditLog(ctx, user, {
+        action: "website lead blocklist entry removed",
+        targetTable: "websiteLeadBlocklist",
+        targetId: args.entryId,
+        orgId: args.orgId,
+        before: { kind: entry.kind, host: entry.host, reason: entry.reason, expiresAt: entry.expiresAt },
+      });
+    } catch (error) {
+      if (error instanceof ConvexError) throw error;
+      console.error("websites.removeLeadBlocklistEntry failed", error);
+      throw new ConvexError("An unexpected error occurred. Please try again later.");
+    }
+  },
+});
+
+/**
+ * The org's current blocklist. `valueHash` is deliberately not returned: it is
+ * a digest of a visitor's email or phone number, and nothing in the product
+ * needs it — an entry is identified by its `_id`, described by kind/host/reason
+ * and removed by id.
+ */
+export const listLeadBlocklist = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.WEBSITE_LEADS_MANAGE]);
+    const rows = await ctx.db
+      .query("websiteLeadBlocklist")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .take(200);
+    const now = Date.now();
+    return rows.map((row) => ({
+      _id: row._id,
+      kind: row.kind,
+      host: row.host ?? null,
+      reason: row.reason ?? null,
+      expiresAt: row.expiresAt ?? null,
+      expired: row.expiresAt !== undefined && row.expiresAt <= now,
+      createdAt: row.createdAt,
+      createdBy: row.createdBy ?? null,
+    }));
   },
 });
