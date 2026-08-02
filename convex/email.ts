@@ -109,9 +109,23 @@ async function checkEmailLimit(
   return { ok: true, retryAfter: 0 };
 }
 
-/** Uniform caller-facing message for the sends that surface a refusal instead of dropping it. Carries no address, id or body. */
-function rateLimitError(retryAfter: number): ConvexError<string> {
-  return new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(retryAfter / 1000)}s`);
+/**
+ * `checkEmailLimit` for the sends that surface a refusal to their caller rather
+ * than dropping it: same two-tier check, but throws instead of returning a
+ * flag. The message carries no address, id or body.
+ *
+ * Same shape as `enforceMarketplaceSubmissionRateLimit` in convex/rateLimit.ts.
+ */
+async function enforceEmailLimit(
+  ctx: ActionCtx,
+  action: string,
+  tier: EmailTier,
+  key: EmailLimitKey
+): Promise<void> {
+  const limit = await checkEmailLimit(ctx, action, tier, key);
+  if (!limit.ok) {
+    throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(limit.retryAfter / 1000)}s`);
+  }
 }
 
 /** Escape user input before interpolating into HTML to prevent XSS/injection. */
@@ -209,10 +223,8 @@ export const sendTaskAlarm = internalAction({
     // Bulk: a cron-driven reminder, keyed by the mailbox it lands in. The
     // assignee's userId isn't passed here and adding it would buy nothing —
     // the resource being protected is the inbox, and a user has one address.
-    const limit = await checkEmailLimit(ctx, "sendTaskAlarm", "emailBulk", recipientKey(args.toEmail));
-    if (!limit.ok) {
-      throw rateLimitError(limit.retryAfter);
-    }
+    await enforceEmailLimit(ctx, "sendTaskAlarm", "emailBulk", recipientKey(args.toEmail));
+
     const env = getValidatedEnv();
     const resendApiKey = env.RESEND_API_KEY;
 
@@ -296,15 +308,8 @@ export const sendAccountSetupLink = internalAction({
     // account that was just created for them. Keyed by address because that is
     // all that exists — the person has no userId in this system yet, and being
     // throttled behind another org's cron traffic would strand them.
-    const limit = await checkEmailLimit(
-      ctx,
-      "sendAccountSetupLink",
-      "emailTransactional",
-      recipientKey(args.toEmail)
-    );
-    if (!limit.ok) {
-      throw rateLimitError(limit.retryAfter);
-    }
+    await enforceEmailLimit(ctx, "sendAccountSetupLink", "emailTransactional", recipientKey(args.toEmail));
+
     const env = getValidatedEnv();
     const resendApiKey = env.RESEND_API_KEY;
     const appUrl = env.NEXT_PUBLIC_APP_URL;
@@ -367,15 +372,8 @@ export const sendSupportReply = internalAction({
     // Transactional: a support agent typed this and is watching it send
     // (support.sendReply surfaces the failure). Keyed by the subscriber's
     // address; they may be a prospect with no org or account at all.
-    const limit = await checkEmailLimit(
-      ctx,
-      "sendSupportReply",
-      "emailTransactional",
-      recipientKey(args.toEmail)
-    );
-    if (!limit.ok) {
-      throw rateLimitError(limit.retryAfter);
-    }
+    await enforceEmailLimit(ctx, "sendSupportReply", "emailTransactional", recipientKey(args.toEmail));
+
     const env = getValidatedEnv();
     const resendApiKey = env.RESEND_API_KEY;
 
@@ -419,15 +417,8 @@ export const sendAutoReplyEmail = internalAction({
     // whoever emailed us — an inbound address AutoFlow does not control. Keyed
     // by that address so one sender can't drain the budget for everyone else's
     // acknowledgments.
-    const limit = await checkEmailLimit(
-      ctx,
-      "sendAutoReplyEmail",
-      "emailBulk",
-      recipientKey(args.toEmail)
-    );
-    if (!limit.ok) {
-      throw rateLimitError(limit.retryAfter);
-    }
+    await enforceEmailLimit(ctx, "sendAutoReplyEmail", "emailBulk", recipientKey(args.toEmail));
+
     const env = getValidatedEnv();
     const resendApiKey = env.RESEND_API_KEY;
 
@@ -659,15 +650,8 @@ export const sendTeamInvite = internalAction({
     // bucket: an invite that never arrives means a colleague cannot join the
     // dealership at all. Keyed by address — the invitee has no userId, and the
     // inviting org shouldn't be able to spend its way out of sending one.
-    const limit = await checkEmailLimit(
-      ctx,
-      "sendTeamInvite",
-      "emailTransactional",
-      recipientKey(args.toEmail)
-    );
-    if (!limit.ok) {
-      throw rateLimitError(limit.retryAfter);
-    }
+    await enforceEmailLimit(ctx, "sendTeamInvite", "emailTransactional", recipientKey(args.toEmail));
+
     const env = getValidatedEnv();
     const resendApiKey = env.RESEND_API_KEY;
 
