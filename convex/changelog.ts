@@ -1240,6 +1240,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "كان حساب المرابحة موجوداً في ثلاث نسخ منفصلة — الموقع، ومعالج المبيعات في التطبيق، ومعاينة مساحة العمل في التطبيق — وكانت النسخة الثالثة قد انحرفت عن الأخريين، فكان يمكن أن يظهر للصفقة نفسها إجمالي مختلف. أصبحت هناك نسخة واحدة يشترك فيها الجميع، مع اختبار يفشل إن تباعدت مرة أخرى.",
     publishedAt: releaseAt(2026, 7, 30, 9),
   },
+  {
+    type: "IMPROVEMENT",
+    titleEn: "Sales can now update finance company valuations directly",
+    titleAr: "أصبح بإمكان المبيعات تحديث تقييمات شركات التمويل مباشرة",
+    descriptionEn: "A salesperson could see each finance company's valuation for a vehicle but could not change it — saving failed outright, because valuations were locked behind the same permission as editing the vehicle itself. A valuation is a figure the finance company quotes, not dealership-owned data like price or cost, so it now has its own permission that the Sales role holds. Everything else about a vehicle still goes through the usual edit-approval request.",
+    descriptionAr: "كان بإمكان موظف المبيعات رؤية تقييم كل شركة تمويل للمركبة دون أن يستطيع تعديله، وكان الحفظ يفشل لأن التقييمات كانت مرتبطة بصلاحية تعديل المركبة نفسها. التقييم رقم تحدده شركة التمويل وليس بياناً يملكه المعرض مثل السعر أو التكلفة، ولذلك أصبحت له صلاحية مستقلة يملكها دور المبيعات. أما بقية بيانات المركبة فما زالت تمر بطلب الموافقة على التعديل كالمعتاد.",
+    publishedAt: releaseAt(2026, 8, 2, 1),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

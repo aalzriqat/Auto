@@ -4,6 +4,8 @@ import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import { toast } from "@/components/ui/sonner";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -17,6 +19,12 @@ interface VehicleValuationsTabProps {
 export function VehicleValuationsTab({ vehicleId }: VehicleValuationsTabProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const { hasPermission, isLoading: permissionsLoading } = usePermissions();
+  // The tab itself only needs VIEW_VEHICLE_VALUATIONS, so a view-only role can
+  // reach this screen. Without this the Save button would render for them and
+  // fail server-side; the backend check in finance.saveValuation is the actual
+  // control, this just avoids offering an action that cannot succeed.
+  const canEditValuations = !permissionsLoading && hasPermission(PERMISSIONS.EDIT_VEHICLE_VALUATIONS);
 
   const financeCompanies = useQuery(api.finance.listCompanies, activeOrgId ? { orgId: activeOrgId } : "skip");
   const valuations = useQuery(api.finance.listValuations, activeOrgId ? { orgId: activeOrgId, vehicleId } : "skip");
@@ -88,10 +96,11 @@ export function VehicleValuationsTab({ vehicleId }: VehicleValuationsTabProps) {
                       className="ps-10"
                       placeholder="0.00"
                       value={val}
+                      disabled={!canEditValuations}
                       onChange={(e) => setLocalValuations(prev => ({...prev, [company._id]: e.target.value}))}
                     />
                   </div>
-                  {isChanged && (
+                  {isChanged && canEditValuations && (
                     <Button 
                       size="sm" 
                       onClick={() => handleSave(company._id, val)}

@@ -304,6 +304,52 @@ export const backfillPayrollPermissions = internalMutation({
   },
 });
 
+/**
+ * One-time backfill for `edit:vehicle_valuations`, which replaced
+ * `edit:vehicles` as the gate on `finance.saveValuation`.
+ *
+ * This backfill is not optional: without it the change is a REGRESSION for
+ * every existing org. A MANAGER-shaped role could save valuations before (it
+ * holds `edit:vehicles`) and would silently lose that ability, since the
+ * mutation no longer accepts `edit:vehicles`.
+ *
+ * Capability-matched rather than name-matched, since orgs rename roles. The
+ * `VIEW_VEHICLE_VALUATIONS` conjunct is deliberate: it keeps the backfill from
+ * handing write access to a custom role that was never allowed to even see
+ * valuations.
+ */
+export const backfillVehicleValuationPermissions = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const roles = await ctx.db.query("roles").collect();
+    let updatedCount = 0;
+    const updates: string[] = [];
+
+    for (const role of roles) {
+      if (role.isDeleted) continue;
+      const has = (p: string) => role.permissions.includes(p);
+      const toAdd = new Set<string>();
+
+      // MANAGER-shaped (edit:vehicles) keeps the access it already had;
+      // SALES-shaped (edit:vehicles:request) gains it — the point of the change.
+      const canChangeVehicleData =
+        has(PERMISSIONS.EDIT_VEHICLES) || has(PERMISSIONS.EDIT_VEHICLES_REQUEST);
+      if (canChangeVehicleData && has(PERMISSIONS.VIEW_VEHICLE_VALUATIONS)) {
+        toAdd.add(PERMISSIONS.EDIT_VEHICLE_VALUATIONS);
+      }
+
+      // Owners always retain full authority, same reasoning as the backfills above.
+      if (isSystemOwnerRole(role) || normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME) {
+        toAdd.add(PERMISSIONS.EDIT_VEHICLE_VALUATIONS);
+      }
+
+      if (await patchRoleIfNeeded(ctx, role, toAdd, updates)) updatedCount++;
+    }
+
+    return { updatedCount, updates };
+  },
+});
+
 export const backfillSeniorAccountantRole = internalMutation({
   args: {},
   handler: async (ctx) => {

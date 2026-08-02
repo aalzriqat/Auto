@@ -3,7 +3,7 @@ import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
-import { ALL_PERMISSIONS } from "./utils/permissions";
+import { ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 
 const MODULES = import.meta.glob("./**/*.*s");
 
@@ -31,6 +31,34 @@ async function setupFinanceOrg() {
   const asOwner = t.withIdentity({ subject: "finance_owner" });
 
   return { t, orgId, userId, asOwner };
+}
+
+/**
+ * Adds a member whose role carries exactly the permissions of a default role
+ * template, so these tests track the real templates rather than a hand-picked
+ * permission list that could drift away from them.
+ */
+async function addMemberWithTemplateRole(
+  t: ReturnType<typeof convexTestWithComponents>,
+  orgId: Id<"organizations">,
+  templateName: string,
+  clerkId: string
+) {
+  const template = DEFAULT_ROLE_TEMPLATES.find((r) => r.name === templateName);
+  if (!template) throw new Error(`No default role template named ${templateName}`);
+
+  const userId = await t.run((ctx) =>
+    ctx.db.insert("users", {
+      clerkId,
+      email: `${clerkId}@example.com`,
+      name: templateName,
+    })
+  );
+  const roleId = await t.run((ctx) =>
+    ctx.db.insert("roles", { orgId, name: templateName, permissions: [...template.permissions] })
+  );
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+  return t.withIdentity({ subject: clerkId });
 }
 
 async function seedVehicle(t: ReturnType<typeof convexTestWithComponents>, orgId: Id<"organizations">) {
@@ -223,5 +251,89 @@ describe("vehicle valuations", () => {
         valuationAmount: 18_500,
       })
     ).rejects.toThrow(/finance company not found/i);
+  });
+
+  test("sales_updates_a_valuation_directly_without_an_approval_request", async () => {
+    const { t, orgId, asOwner } = await setupFinanceOrg();
+    const vehicleId = await seedVehicle(t, orgId);
+    const companyId = await asOwner.mutation(api.finance.createCompany, {
+      orgId,
+      name: "Sales-Facing Finance",
+      profitRate: 6,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      isActive: true,
+    });
+
+    const asSales = await addMemberWithTemplateRole(t, orgId, "SALES", "finance_sales");
+
+    const valuationId = await asSales.mutation(api.finance.saveValuation, {
+      orgId,
+      vehicleId,
+      companyId,
+      valuationAmount: 19_750,
+    });
+
+    // The valuation is live immediately...
+    const valuations = await asSales.query(api.finance.listValuations, { orgId, vehicleId });
+    expect(valuations).toHaveLength(1);
+    expect(valuations[0]).toMatchObject({ _id: valuationId, valuationAmount: 19_750 });
+
+    // ...and crucially, no vehicle-edit approval request was created for it.
+    const pendingEdits = await t.run((ctx) => ctx.db.query("vehicleEdits").collect());
+    expect(pendingEdits).toHaveLength(0);
+  });
+
+  test("saveValuation_rejects_a_role_without_edit_vehicle_valuations", async () => {
+    const { t, orgId, asOwner } = await setupFinanceOrg();
+    const vehicleId = await seedVehicle(t, orgId);
+    const companyId = await asOwner.mutation(api.finance.createCompany, {
+      orgId,
+      name: "Reception Blocked Finance",
+      profitRate: 6,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      isActive: true,
+    });
+
+    // RECEPTION holds neither the view nor the edit valuation permission.
+    const asReception = await addMemberWithTemplateRole(t, orgId, "RECEPTION", "finance_reception");
+
+    await expect(
+      asReception.mutation(api.finance.saveValuation, {
+        orgId,
+        vehicleId,
+        companyId,
+        valuationAmount: 19_750,
+      })
+    ).rejects.toThrow(/edit:vehicle_valuations/);
+  });
+
+  test("saveValuation_rejects_non_finite_amounts", async () => {
+    const { t, orgId, asOwner } = await setupFinanceOrg();
+    const vehicleId = await seedVehicle(t, orgId);
+    const companyId = await asOwner.mutation(api.finance.createCompany, {
+      orgId,
+      name: "NaN Finance",
+      profitRate: 6,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      isActive: true,
+    });
+
+    // v.number() lets NaN/Infinity through, and NaN defeats `< 0` checks.
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      await expect(
+        asOwner.mutation(api.finance.saveValuation, {
+          orgId,
+          vehicleId,
+          companyId,
+          valuationAmount: bad,
+        })
+      ).rejects.toThrow(/non-negative number/i);
+    }
+
+    const valuations = await asOwner.query(api.finance.listValuations, { orgId, vehicleId });
+    expect(valuations).toHaveLength(0);
   });
 });
