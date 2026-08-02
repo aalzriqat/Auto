@@ -80,6 +80,29 @@ export function leadStageDirection(
   return toIndex > fromIndex ? "forward" : "backward";
 }
 
+const LEAD_STAGE_DIRECTION_HINTS: Record<LeadStageDirection, Record<AppLocale, string>> = {
+  backward: {
+    en: "Moves this lead back to an earlier stage.",
+    ar: "يعيد الفرصة إلى مرحلة سابقة.",
+  },
+  forward: {
+    en: "Moves this lead forward to a later stage.",
+    ar: "ينقل الفرصة إلى مرحلة لاحقة.",
+  },
+  same: {
+    en: "This is the current stage.",
+    ar: "المرحلة الحالية.",
+  },
+};
+
+/** Screen-reader hint for one row of the picker. */
+export function leadStageDirectionHint(
+  direction: LeadStageDirection,
+  locale: AppLocale,
+): string {
+  return LEAD_STAGE_DIRECTION_HINTS[direction][locale];
+}
+
 export interface LeadStageConfirmation {
   body: string;
   cancelLabel: string;
@@ -94,6 +117,17 @@ export interface LeadStageConfirmation {
  * explicitly: the backend puts no forward-only restriction on `leads.update`,
  * so a mistaken close really can be undone from the same picker.
  */
+const TERMINAL_CONFIRMATION_BODY: Record<"WON" | "LOST", Record<AppLocale, string>> = {
+  LOST: {
+    en: "This lead will leave the active pipeline. You can move it back later from the same picker.",
+    ar: "ستخرج الفرصة من خط المبيعات النشط. يمكنك إعادتها لاحقاً من نفس القائمة.",
+  },
+  WON: {
+    en: "This lead will leave the active pipeline and can be linked to a sale. You can move it back later from the same picker.",
+    ar: "ستخرج الفرصة من خط المبيعات النشط ويمكن ربطها ببيع. يمكنك إعادتها لاحقاً من نفس القائمة.",
+  },
+};
+
 export function leadStageConfirmation(
   nextStage: MobileLeadStage,
   locale: AppLocale,
@@ -107,13 +141,7 @@ export function leadStageConfirmation(
   return {
     destructive: lost,
     title: isArabic ? `نقل الفرصة إلى "${stageName}"؟` : `Move this lead to "${stageName}"?`,
-    body: lost
-      ? isArabic
-        ? "ستخرج الفرصة من خط المبيعات النشط. يمكنك إعادتها لاحقاً من نفس القائمة."
-        : "This lead will leave the active pipeline. You can move it back later from the same picker."
-      : isArabic
-        ? "ستخرج الفرصة من خط المبيعات النشط ويمكن ربطها ببيع. يمكنك إعادتها لاحقاً من نفس القائمة."
-        : "This lead will leave the active pipeline and can be linked to a sale. You can move it back later from the same picker.",
+    body: TERMINAL_CONFIRMATION_BODY[lost ? "LOST" : "WON"][locale],
     cancelLabel: isArabic ? "إلغاء" : "Cancel",
     confirmLabel: isArabic ? `نقل إلى "${stageName}"` : `Move to "${stageName}"`,
   };
@@ -141,6 +169,33 @@ export function leadStageErrorMessage(error: unknown, fallback: string): string 
   }
 
   return fallback;
+}
+
+/** Optimistic stages held per lead while their writes are in flight. */
+export type PendingLeadStages = Readonly<Record<string, MobileLeadStage>>;
+
+/**
+ * Sets or clears one lead's optimistic stage, leaving every other lead's
+ * entry untouched.
+ *
+ * Keying by lead id is load-bearing, not tidiness. Two rows are visible at
+ * once, so two writes can overlap; with a single shared slot the second write
+ * would evict the first, and whichever settled first would clear the *other*
+ * lead's entry mid-flight — dropping its busy state and re-enabling a picker
+ * whose mutation was still running.
+ */
+export function setPendingLeadStage(
+  current: PendingLeadStages,
+  leadId: string,
+  stage: MobileLeadStage | null,
+): PendingLeadStages {
+  if (stage) {
+    return { ...current, [leadId]: stage };
+  }
+
+  if (current[leadId] === undefined) return current;
+  const { [leadId]: _cleared, ...rest } = current;
+  return rest;
 }
 
 export interface CommitLeadStageDeps {

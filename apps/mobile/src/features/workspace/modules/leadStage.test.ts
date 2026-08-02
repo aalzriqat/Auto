@@ -9,9 +9,12 @@ import {
   isTerminalLeadStage,
   leadStageConfirmation,
   leadStageDirection,
+  leadStageDirectionHint,
   leadStageErrorMessage,
   leadStageIndex,
   leadStageLabel,
+  setPendingLeadStage,
+  type PendingLeadStages,
 } from "./leadStage";
 
 function makeDeps(applyStage: (stage: MobileLeadStage) => Promise<unknown>) {
@@ -88,6 +91,54 @@ describe("leadStageDirection", () => {
     const unknown = "ESCALATED" as MobileLeadStage;
     expect(leadStageDirection(unknown, "NEW")).toBe("same");
     expect(leadStageDirection("NEW", unknown)).toBe("same");
+  });
+
+  test("has a distinct hint per direction in both locales", () => {
+    for (const locale of ["en", "ar"] as const) {
+      const hints = (["forward", "backward", "same"] as const).map((direction) =>
+        leadStageDirectionHint(direction, locale),
+      );
+      expect(new Set(hints).size).toBe(3);
+      for (const hint of hints) {
+        expect(hint.trim().length).toBeGreaterThan(0);
+      }
+    }
+  });
+});
+
+describe("setPendingLeadStage", () => {
+  test("keeps each lead's optimistic stage independent", () => {
+    let pending: PendingLeadStages = {};
+
+    pending = setPendingLeadStage(pending, "leadA", "NEGOTIATION");
+    pending = setPendingLeadStage(pending, "leadB", "RESERVED");
+
+    expect(pending).toEqual({ leadA: "NEGOTIATION", leadB: "RESERVED" });
+  });
+
+  test("settling one lead does not clear another lead still in flight", () => {
+    // The concurrency bug a single shared slot produced: A settles, B is still
+    // writing, and B loses its busy state and accepts a duplicate tap.
+    let pending: PendingLeadStages = {};
+    pending = setPendingLeadStage(pending, "leadA", "WON");
+    pending = setPendingLeadStage(pending, "leadB", "CONTACTED");
+
+    pending = setPendingLeadStage(pending, "leadA", null);
+
+    expect(pending.leadA).toBeUndefined();
+    expect(pending.leadB).toBe("CONTACTED");
+  });
+
+  test("clearing an absent lead returns the same object rather than a new one", () => {
+    const pending: PendingLeadStages = { leadA: "WON" };
+    expect(setPendingLeadStage(pending, "leadB", null)).toBe(pending);
+  });
+
+  test("does not mutate the object it is given", () => {
+    const pending: PendingLeadStages = { leadA: "WON" };
+    setPendingLeadStage(pending, "leadB", "NEW");
+    setPendingLeadStage(pending, "leadA", null);
+    expect(pending).toEqual({ leadA: "WON" });
   });
 });
 

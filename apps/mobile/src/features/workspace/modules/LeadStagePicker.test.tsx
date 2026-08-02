@@ -1,17 +1,11 @@
 /// <reference types="jest" />
 
 import { fireEvent, render } from "@testing-library/react-native";
-import { Alert } from "react-native";
+import { Alert, type AlertButton } from "react-native";
 
 import { LocaleProvider } from "../../../providers/LocaleProvider";
 import { ThemeProvider } from "../../../providers/ThemeProvider";
 import { LeadStagePicker } from "./LeadStagePicker";
-
-type AlertButton = Readonly<{
-  onPress?: () => void;
-  style?: string;
-  text?: string;
-}>;
 
 async function renderPicker(props: Partial<React.ComponentProps<typeof LeadStagePicker>> = {}) {
   const onSelect = props.onSelect ?? jest.fn();
@@ -77,8 +71,13 @@ describe("LeadStagePicker", () => {
     await fireEvent.press(getByTestId("lead-stage-trigger"));
     await fireEvent.press(getByTestId("lead-stage-option-WON"));
 
+    // Assert the cancel button's shape rather than invoking an optional
+    // handler: calling `buttons[0]?.onPress?.()` on a button that has no
+    // handler passes no matter what the implementation does.
     const buttons = (alertSpy.mock.calls[0]?.[2] ?? []) as AlertButton[];
-    buttons[0]?.onPress?.();
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0]?.style).toBe("cancel");
+    expect(buttons[0]?.onPress).toBeUndefined();
     expect(onSelect).not.toHaveBeenCalled();
   });
 
@@ -118,8 +117,20 @@ describe("LeadStagePicker", () => {
     expect(queryByTestId("lead-stage-option-CONTACTED")).toBeNull();
 
     await fireEvent.press(getByTestId("lead-stage-trigger"));
-    await fireEvent.press(getByLabelText("إغلاق"));
+    await fireEvent.press(getByTestId("lead-stage-scrim"));
+    expect(queryByTestId("lead-stage-option-CONTACTED")).toBeNull();
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  test("gives the scrim and the close button distinct screen-reader labels", async () => {
+    const { getByTestId, getByLabelText } = await renderPicker({ stage: "NEW" });
+
+    await fireEvent.press(getByTestId("lead-stage-trigger"));
+
+    // Two controls both announced as "Close" is an ambiguity for a screen
+    // reader user; these queries would throw on a duplicate match.
+    expect(getByLabelText("إغلاق قائمة المراحل")).toBeTruthy();
+    expect(getByLabelText("إغلاق")).toBeTruthy();
   });
 
   test("is inert when disabled", async () => {

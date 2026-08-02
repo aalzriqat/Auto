@@ -5,11 +5,17 @@ import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepF
 import { api, type MobileLead, type MobileLeadStage } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { LeadStagePicker } from "./LeadStagePicker";
-import { LEAD_STAGES, commitLeadStageChange, leadStageErrorMessage, leadStageLabel } from "./leadStage";
+import {
+  LEAD_STAGES,
+  commitLeadStageChange,
+  leadStageErrorMessage,
+  leadStageLabel,
+  setPendingLeadStage,
+  type PendingLeadStages,
+} from "./leadStage";
 import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, compactNumber, money, maybeText, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
-type PendingLeadStage = Readonly<{ leadId: string; stage: MobileLeadStage }>;
 
 export function LeadsModule({ highlightId, orgId }: { highlightId?: string; orgId: string }) {
   const styles = useStyles();
@@ -41,10 +47,9 @@ export function LeadsModule({ highlightId, orgId }: { highlightId?: string; orgI
   // roll the picker back to the value the row had when it was opened.
   const [detailLeadId, setDetailLeadId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  // Optimistic stage for the one lead currently being written. Cleared when the
-  // mutation settles either way, so a rejected write can never leave the UI
-  // showing a stage the server refused.
-  const [pendingStage, setPendingStage] = useState<PendingLeadStage | null>(null);
+  // A lead's entry is removed when its mutation settles either way, so a
+  // rejected write can never leave the UI showing a stage the server refused.
+  const [pendingStages, setPendingStages] = useState<PendingLeadStages>({});
   const [form, setForm] = useState({
     customerId: "",
     vehicleId: "",
@@ -144,18 +149,18 @@ export function LeadsModule({ highlightId, orgId }: { highlightId?: string; orgI
   }
 
   function stageOf(lead: MobileLead): MobileLeadStage {
-    return pendingStage?.leadId === lead._id ? pendingStage.stage : lead.stage;
+    return pendingStages[lead._id] ?? lead.stage;
   }
 
   function isStageBusy(lead: MobileLead): boolean {
-    return pendingStage?.leadId === lead._id;
+    return pendingStages[lead._id] !== undefined;
   }
 
   async function changeStage(lead: MobileLead, nextStage: MobileLeadStage) {
     await commitLeadStageChange(lead.stage, nextStage, {
       applyStage: (stage) => updateLead({ orgId, leadId: lead._id, stage }),
       setOptimisticStage: (stage) =>
-        setPendingStage(stage ? { leadId: lead._id, stage } : null),
+        setPendingStages((current) => setPendingLeadStage(current, lead._id, stage)),
       onError: (error) => {
         console.error("Mobile lead stage update failed", error);
         Alert.alert(
@@ -216,7 +221,18 @@ export function LeadsModule({ highlightId, orgId }: { highlightId?: string; orgI
               <SearchInput placeholder={locale === "ar" ? "بحث العملاء المحتملين" : "Search leads"} value={search} onChangeText={setSearch} />
               <PrimaryButton label={locale === "ar" ? "إضافة" : "Add"} onPress={openLeadForm} />
             </View>
-            <SegmentedControl options={stageOptions} value={stageFilter} onChange={setStageFilter} />
+            <SegmentedControl
+              options={stageOptions}
+              value={stageFilter}
+              onChange={(nextFilter) => {
+                // The detail sheet is keyed off an id resolved against the
+                // current page. Without this, a lead that left the filtered
+                // query (say, by being moved to WON) would silently re-open its
+                // sheet as soon as the filter widened enough to return it.
+                setDetailLeadId(null);
+                setStageFilter(nextFilter);
+              }}
+            />
             <View style={styles.metricGrid}>
               <MetricCard title={locale === "ar" ? "النتائج" : "Results"} value={compactNumber(filtered.length, locale)} caption={locale === "ar" ? "فرص ظاهرة" : "visible leads"} />
               <MetricCard title={locale === "ar" ? "نشطة" : "Active"} value={compactNumber(activeLeadCount, locale)} caption={locale === "ar" ? "قبل الفوز/الخسارة" : "before won/lost"} />

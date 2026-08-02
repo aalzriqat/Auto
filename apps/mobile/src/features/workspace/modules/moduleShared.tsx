@@ -1102,6 +1102,12 @@ export function ModuleList<T>({
   // the app flash "No results" before its rows arrived — which reads as an
   // error, not as loading. Skeleton rows hold the space instead.
   const loadingFirstPage = status === "LoadingFirstPage";
+  let listEmptyComponent: React.ReactElement | null = null;
+  if (loadingFirstPage) {
+    listEmptyComponent = <SkeletonRow count={4} />;
+  } else if (emptyLabel) {
+    listEmptyComponent = <EmptyList label={emptyLabel} />;
+  }
 
   return (
     <FadeSlideIn style={styles.scroll}>
@@ -1116,9 +1122,7 @@ export function ModuleList<T>({
           )
         }
         ListHeaderComponent={header ? <View style={styles.listHeader}>{header}</View> : null}
-        ListEmptyComponent={
-          loadingFirstPage ? <SkeletonRow count={4} /> : emptyLabel ? <EmptyList label={emptyLabel} /> : null
-        }
+        ListEmptyComponent={listEmptyComponent}
         ListFooterComponent={
           loadMore && status ? <LoadMoreFooter loadMore={loadMore} status={status} /> : null
         }

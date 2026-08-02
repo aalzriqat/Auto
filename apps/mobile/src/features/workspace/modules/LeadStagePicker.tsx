@@ -11,6 +11,7 @@ import {
   TERMINAL_LEAD_STAGES,
   leadStageConfirmation,
   leadStageDirection,
+  leadStageDirectionHint,
   leadStageLabel,
 } from "./leadStage";
 
@@ -81,19 +82,7 @@ export function LeadStagePicker({
   function renderRow(rowStage: MobileLeadStage) {
     const selected = rowStage === stage;
     const rowLabel = leadStageLabel(rowStage, locale);
-    const direction = leadStageDirection(stage, rowStage);
-    const hint =
-      direction === "backward"
-        ? isArabic
-          ? "يعيد الفرصة إلى مرحلة سابقة."
-          : "Moves this lead back to an earlier stage."
-        : direction === "forward"
-          ? isArabic
-            ? "ينقل الفرصة إلى مرحلة لاحقة."
-            : "Moves this lead forward to a later stage."
-          : isArabic
-            ? "المرحلة الحالية."
-            : "This is the current stage.";
+    const hint = leadStageDirectionHint(leadStageDirection(stage, rowStage), locale);
 
     return (
       <Pressable
@@ -157,9 +146,12 @@ export function LeadStagePicker({
 
       <Modal animationType="slide" transparent visible={open} onRequestClose={() => setOpen(false)}>
         <View style={styles.modalRoot}>
+          {/* Distinct from the Close button's label: two controls both
+              announced as "Close" is a screen-reader ambiguity. */}
           <Pressable
-            accessibilityLabel={isArabic ? "إغلاق" : "Close"}
+            accessibilityLabel={isArabic ? "إغلاق قائمة المراحل" : "Dismiss stage list"}
             accessibilityRole="button"
+            testID={`${testID}-scrim`}
             style={styles.scrim}
             onPress={() => setOpen(false)}
           />
@@ -170,6 +162,7 @@ export function LeadStagePicker({
                 <Text style={styles.sheetSubtitle}>{currentLabel}</Text>
               </View>
               <Pressable
+                accessibilityLabel={isArabic ? "إغلاق" : "Close"}
                 accessibilityRole="button"
                 testID={`${testID}-close`}
                 style={({ pressed }) => [styles.closeButton, pressed && styles.pressed]}
