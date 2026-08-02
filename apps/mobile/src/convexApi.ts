@@ -2112,6 +2112,9 @@ export const api = {
     list: makeFunctionReference<"query", TaskListArgs, MobilePageResult<MobileTask>>("tasks:list"),
     create: makeFunctionReference<"mutation", TaskCreateArgs, string>("tasks:create"),
     update: makeFunctionReference<"mutation", TaskUpdateArgs, null>("tasks:update"),
+    softDelete: makeFunctionReference<"mutation", OrgScopedArgs & { taskId: string }, null>(
+      "tasks:softDelete",
+    ),
   },
   sales: {
     list: makeFunctionReference<"query", SaleListArgs, MobilePageResult<MobileSale>>("sales:list"),
@@ -2886,6 +2889,7 @@ export const api = {
     list: FunctionReference<"query", "public", TaskListArgs, MobilePageResult<MobileTask>>;
     create: FunctionReference<"mutation", "public", TaskCreateArgs, string>;
     update: FunctionReference<"mutation", "public", TaskUpdateArgs, null>;
+    softDelete: FunctionReference<"mutation", "public", OrgScopedArgs & { taskId: string }, null>;
   };
   sales: {
     list: FunctionReference<"query", "public", SaleListArgs, MobilePageResult<MobileSale>>;
