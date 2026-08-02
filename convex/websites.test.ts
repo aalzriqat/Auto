@@ -550,11 +550,14 @@ describe("public lead blocklist", () => {
     convex: ReturnType<typeof convexTestWithComponents>,
     orgId: Id<"organizations">,
   ) {
-    return (
-      await convex.run((ctx) =>
-        ctx.db.query("leads").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
-      )
-    ).length;
+    // Full scan + filter rather than `.withIndex("by_org", …)`: passing the
+    // harness as `ReturnType<typeof convexTestWithComponents>` widens `ctx.db`
+    // to a generic data model, so index names resolve against `SystemIndexes`
+    // and `by_org` fails Convex's own typecheck (which `tsc --noEmit` does not
+    // run). Every other helper taking that parameter type uses `.collect()` for
+    // the same reason. A test org holds a handful of leads, so this is cheap.
+    const leads = await convex.run((ctx) => ctx.db.query("leads").collect());
+    return leads.filter((lead) => lead.orgId === orgId).length;
   }
 
   test("a blocklisted email is refused and a non-blocklisted one is accepted", async () => {
