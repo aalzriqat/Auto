@@ -129,7 +129,10 @@ export const saveValuation = mutation({
     expiresAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    // Gated on EDIT_VEHICLE_VALUATIONS rather than EDIT_VEHICLES so SALES can
+    // keep finance-company valuations current directly. Everything else about a
+    // vehicle still goes through the vehicleEdits approval flow for that role.
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLE_VALUATIONS]);
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found in this organization.");
@@ -138,7 +141,17 @@ export const saveValuation = mutation({
     if (!company || company.orgId !== args.orgId) {
       throw new ConvexError("Finance company not found in this organization.");
     }
-    
+
+    // v.number() accepts NaN and Infinity, and NaN defeats every comparison
+    // guard downstream (NaN < 0 is false), so reject them explicitly before
+    // the value reaches the financing-limit maths.
+    if (!Number.isFinite(args.valuationAmount) || args.valuationAmount < 0) {
+      throw new ConvexError("Valuation amount must be a non-negative number.");
+    }
+    if (args.expiresAt !== undefined && !Number.isFinite(args.expiresAt)) {
+      throw new ConvexError("Valuation expiry must be a valid timestamp.");
+    }
+
     // Check if one already exists for this company
     const existing = await ctx.db
       .query("vehicleValuations")
