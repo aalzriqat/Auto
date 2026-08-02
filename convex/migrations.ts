@@ -11,6 +11,11 @@ import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { ALL_PERMISSIONS, isSystemOwnerRole, normalizeRoleName, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
+import {
+  hasActiveDepositHold,
+  hasActiveReservationHold,
+  syncVehicleHoldStatus,
+} from "./utils/depositHelpers";
 
 export const backfillPermissions = internalMutation({
   args: {},
@@ -282,5 +287,81 @@ export const backfillMembershipAggregate = internalMutation({
     }
 
     return result;
+  },
+});
+
+/**
+ * Re-derives every vehicle's hold status for one org from the holds that
+ * actually exist.
+ *
+ * A vehicle sits at RESERVED because something holds it — an active deposit or
+ * an active `vehicleReservations` row. Delete those without touching the
+ * vehicle and the status becomes a claim nothing backs: the car reads as
+ * unavailable, cannot be sold again, and no release path exists, because
+ * `releaseReservation` needs the reservation row that is already gone. That is
+ * exactly the state the Bloom Cars financial reset left behind, by design — the
+ * decision then was to leave inventory untouched.
+ *
+ * This calls the application's own `syncVehicleHoldStatus` rather than writing
+ * "AVAILABLE" over anything that looks stuck. That helper is what every deposit
+ * and reservation path already uses, so a vehicle ends up in the state the app
+ * would have put it in, and the two cannot drift. It also means the reconcile
+ * is safe in both directions: a vehicle wrongly left AVAILABLE while a hold is
+ * live gets moved back to RESERVED.
+ *
+ * SOLD and ARCHIVED vehicles are skipped by that helper and stay as they are —
+ * a sold car is not "unheld", and re-listing one because its sale row was
+ * deleted would be worse than the inconsistency it fixes.
+ *
+ * `dryRun` defaults to **true**: the safe call is the one you get by forgetting
+ * the flag.
+ */
+export const reconcileVehicleHolds = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    dryRun: v.optional(v.boolean()),
+    batchSize: v.optional(v.number()),
+  },
+  handler: async (
+    ctx,
+    args
+  ): Promise<{
+    dryRun: boolean;
+    scanned: number;
+    released: Array<{ vehicleId: string; from: string; to: string }>;
+  }> => {
+    const dryRun = args.dryRun ?? true;
+    const limit = Math.min(Math.max(args.batchSize ?? 500, 1), 1000);
+
+    const vehicles = await ctx.db
+      .query("vehicles")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .take(limit);
+
+    const released: Array<{ vehicleId: string; from: string; to: string }> = [];
+
+    for (const vehicle of vehicles) {
+      if (vehicle.isDeleted) continue;
+
+      const hasHold =
+        (await hasActiveDepositHold(ctx, vehicle._id)) ||
+        (await hasActiveReservationHold(ctx, { orgId: args.orgId, vehicleId: vehicle._id }));
+
+      const target = hasHold ? "RESERVED" : "AVAILABLE";
+      if (vehicle.status === target) continue;
+      // Only the two states syncVehicleHoldStatus itself moves between. This
+      // is what keeps SOLD and ARCHIVED out — a sold car is not "unheld", and
+      // re-listing one because its sale row was deleted would be worse than
+      // the inconsistency being fixed — and equally keeps SOURCING and
+      // IN_INSPECTION out, which are mid-workflow rather than mis-held.
+      if (vehicle.status !== "RESERVED" && vehicle.status !== "AVAILABLE") continue;
+
+      released.push({ vehicleId: vehicle._id.toString(), from: vehicle.status, to: target });
+      if (!dryRun) {
+        await syncVehicleHoldStatus(ctx, vehicle._id);
+      }
+    }
+
+    return { dryRun, scanned: vehicles.length, released };
   },
 });

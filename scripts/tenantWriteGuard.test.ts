@@ -227,10 +227,15 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // `internalMutation` with an empty args block, so it takes no `orgId` for the
   // analyzer to check — it is a one-time backfill that sweeps every org's roles
   // deliberately, and being internal it is unreachable from a client.
+  //
+  // Then 432→433 by `migrations.reconcileVehicleHolds`, raising `analysed`
+  // 281→282. It takes an `orgId` and patches vehicles, so the analyzer
+  // inspects it, and it clears: every vehicle it touches comes from its own
+  // `by_org` index read, never from a caller-supplied id.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 432,
-      analysed: 281,
+      totalMutations: 433,
+      analysed: 282,
       skippedNoArgsBlock: 9,
       skippedNoOrgId: 142,
     });
