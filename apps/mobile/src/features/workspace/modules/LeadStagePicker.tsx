@@ -251,8 +251,14 @@ const makeStyles = (theme: AppTheme) =>
       flex: 1,
       justifyContent: "flex-end",
     },
+    // All four edges, so this is a full-bleed cover rather than a directional
+    // offset — nothing here needs to flip under RTL.
     scrim: {
-      ...StyleSheet.absoluteFillObject,
+      position: "absolute",
+      top: 0,
+      bottom: 0,
+      left: 0,
+      right: 0,
       backgroundColor: theme.colors.overlayScrim,
     },
     sheet: {
