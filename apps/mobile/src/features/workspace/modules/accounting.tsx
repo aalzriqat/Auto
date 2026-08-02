@@ -1,9 +1,9 @@
 import { useMutation, usePaginatedQuery } from "convex/react";
 import { useState } from "react";
-import { Alert, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { api, type MobileLedgerCategory, type MobileLedgerTransaction, type MobileLedgerType } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { PAGE_SIZE, type Option, money, dateLabel, parseRequiredPositiveNumber, idempotencyKey, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
+import { PAGE_SIZE, type Option, money, dateLabel, parseRequiredPositiveNumber, idempotencyKey, requiredText, useFieldFocusChain, useFormErrors, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function AccountingModule({ orgId }: { orgId: string }) {
@@ -39,10 +39,13 @@ export function AccountingModule({ orgId }: { orgId: string }) {
     "CLAIM_PAYMENT",
     "OTHER",
   ].map((value) => ({ label: value, value: value as MobileLedgerCategory }));
+  const { errors, reset, validate } = useFormErrors<"amount" | "description">();
+  const chain = useFieldFocusChain(2);
 
   function openCreate() {
     setEditing(null);
     setForm({ type: "IN", amount: "", category: "OTHER", description: "" });
+    reset();
     setOpen(true);
   }
 
@@ -54,15 +57,20 @@ export function AccountingModule({ orgId }: { orgId: string }) {
       category: transaction.category,
       description: transaction.description,
     });
+    reset();
     setOpen(true);
   }
 
   async function save() {
     const amount = parseRequiredPositiveNumber(form.amount);
-    if (amount === null || !form.description.trim()) {
-      Alert.alert(locale === "ar" ? "حقول مطلوبة" : "Required fields");
-      return;
-    }
+    const valid = validate({
+      // A ledger line of zero or a negative amount is not a typo to shrug at.
+      amount: amount === null
+        ? (locale === "ar" ? "أدخل مبلغاً أكبر من صفر" : "Enter an amount greater than zero")
+        : undefined,
+      description: requiredText(form.description, locale),
+    });
+    if (!valid || amount === null) return;
     setSaving(true);
     try {
       if (editing) {
@@ -141,8 +149,8 @@ export function AccountingModule({ orgId }: { orgId: string }) {
       >
         <SegmentedControl options={typeOptions} value={form.type} onChange={(type) => setForm((prev) => ({ ...prev, type }))} />
         <SelectField label={locale === "ar" ? "التصنيف" : "Category"} value={form.category} options={categoryOptions} onChange={(category) => setForm((prev) => ({ ...prev, category: category as MobileLedgerCategory }))} />
-        <FormField keyboardType="numeric" label={locale === "ar" ? "المبلغ" : "Amount"} value={form.amount} onChangeText={(amount) => setForm((prev) => ({ ...prev, amount }))} />
-        <FormField multiline label={locale === "ar" ? "البيان" : "Description"} value={form.description} onChangeText={(description) => setForm((prev) => ({ ...prev, description }))} />
+        <FormField error={errors.amount} keyboardType="numeric" label={locale === "ar" ? "المبلغ" : "Amount"} value={form.amount} onChangeText={(amount) => setForm((prev) => ({ ...prev, amount }))} {...chain.fieldProps(0)} />
+        <FormField multiline error={errors.description} label={locale === "ar" ? "البيان" : "Description"} value={form.description} onChangeText={(description) => setForm((prev) => ({ ...prev, description }))} {...chain.fieldProps(1)} />
         <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={save} />
       </FormModal>
     </>

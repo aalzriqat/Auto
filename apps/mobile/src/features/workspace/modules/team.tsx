@@ -1,11 +1,11 @@
 import { useAction, useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { useState } from "react";
-import { Alert, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { api, type MobileMembership } from "../../../convexApi";
 import { MemberAvatar } from "../../../components/Avatar";
 import { PresencePill } from "../../../components/Presence";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { PAGE_SIZE, parseRequiredNumber, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
+import { PAGE_SIZE, parseRequiredNumber, requiredSelectionMessage, requiredText, useFieldFocusChain, useFormErrors, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function TeamModule({ orgId }: { orgId: string }) {
@@ -33,6 +33,9 @@ export function TeamModule({ orgId }: { orgId: string }) {
     roleId: "",
     commissionRate: "0",
   });
+  const inviteErrors = useFormErrors<"email" | "roleId" | "firstName" | "lastName">();
+  const memberErrors = useFormErrors<"commissionRate">();
+  const inviteChain = useFieldFocusChain(3);
 
   function openInvite() {
     setInviteForm({
@@ -42,6 +45,7 @@ export function TeamModule({ orgId }: { orgId: string }) {
       roleId: roleOptions[0]?.value ?? "",
       createDirectAccount: "false",
     });
+    inviteErrors.reset();
     setInviteOpen(true);
   }
 
@@ -51,20 +55,24 @@ export function TeamModule({ orgId }: { orgId: string }) {
       roleId: member.roleId,
       commissionRate: String(member.commissionRate ?? 0),
     });
+    memberErrors.reset();
   }
 
   async function saveInvite() {
-    if (!inviteForm.email.trim() || !inviteForm.roleId) {
-      Alert.alert(locale === "ar" ? "حقول مطلوبة" : "Required fields");
-      return;
-    }
+    const creatingAccount = inviteForm.createDirectAccount === "true";
+    // Both stages of the old check run together now: previously the name fields
+    // were only checked AFTER the first alert was dismissed and save re-run, so
+    // an invite with three empty fields cost the user three round trips.
+    const valid = inviteErrors.validate({
+      email: requiredText(inviteForm.email, locale),
+      roleId: inviteForm.roleId ? undefined : requiredSelectionMessage(locale),
+      firstName: creatingAccount ? requiredText(inviteForm.firstName, locale) : undefined,
+      lastName: creatingAccount ? requiredText(inviteForm.lastName, locale) : undefined,
+    });
+    if (!valid) return;
     setSaving(true);
     try {
-      if (inviteForm.createDirectAccount === "true") {
-        if (!inviteForm.firstName.trim() || !inviteForm.lastName.trim()) {
-          Alert.alert(locale === "ar" ? "الاسم مطلوب" : "Name required");
-          return;
-        }
+      if (creatingAccount) {
         await createAccount({
           orgId,
           email: inviteForm.email,
@@ -86,10 +94,13 @@ export function TeamModule({ orgId }: { orgId: string }) {
   async function saveMember() {
     if (!editing || !memberForm.roleId) return;
     const commissionRate = parseRequiredNumber(memberForm.commissionRate);
-    if (commissionRate === null || commissionRate < 0 || commissionRate > 100) {
-      Alert.alert(locale === "ar" ? "نسبة غير صالحة" : "Invalid commission");
-      return;
-    }
+    const outOfRange = commissionRate === null || commissionRate < 0 || commissionRate > 100;
+    const valid = memberErrors.validate({
+      commissionRate: outOfRange
+        ? (locale === "ar" ? "أدخل نسبة بين 0 و 100" : "Enter a rate between 0 and 100")
+        : undefined,
+    });
+    if (!valid || commissionRate === null) return;
     setSaving(true);
     try {
       if (memberForm.roleId !== editing.roleId) {
@@ -139,8 +150,8 @@ export function TeamModule({ orgId }: { orgId: string }) {
         visible={inviteOpen}
         onClose={() => setInviteOpen(false)}
       >
-        <FormField keyboardType="email-address" label={locale === "ar" ? "البريد" : "Email"} value={inviteForm.email} onChangeText={(email) => setInviteForm((prev) => ({ ...prev, email }))} />
-        <SelectField label={locale === "ar" ? "الدور" : "Role"} value={inviteForm.roleId} options={roleOptions} onChange={(roleId) => setInviteForm((prev) => ({ ...prev, roleId }))} />
+        <FormField autoCapitalize="none" error={inviteErrors.errors.email} keyboardType="email-address" label={locale === "ar" ? "البريد" : "Email"} value={inviteForm.email} onChangeText={(email) => setInviteForm((prev) => ({ ...prev, email }))} {...inviteChain.fieldProps(0)} />
+        <SelectField error={inviteErrors.errors.roleId} label={locale === "ar" ? "الدور" : "Role"} value={inviteForm.roleId} options={roleOptions} onChange={(roleId) => setInviteForm((prev) => ({ ...prev, roleId }))} />
         <SelectField
           label={locale === "ar" ? "الطريقة" : "Mode"}
           value={inviteForm.createDirectAccount}
@@ -152,8 +163,8 @@ export function TeamModule({ orgId }: { orgId: string }) {
         />
         {inviteForm.createDirectAccount === "true" ? (
           <>
-            <FormField label={locale === "ar" ? "الاسم الأول" : "First name"} value={inviteForm.firstName} onChangeText={(firstName) => setInviteForm((prev) => ({ ...prev, firstName }))} />
-            <FormField label={locale === "ar" ? "اسم العائلة" : "Last name"} value={inviteForm.lastName} onChangeText={(lastName) => setInviteForm((prev) => ({ ...prev, lastName }))} />
+            <FormField error={inviteErrors.errors.firstName} label={locale === "ar" ? "الاسم الأول" : "First name"} value={inviteForm.firstName} onChangeText={(firstName) => setInviteForm((prev) => ({ ...prev, firstName }))} {...inviteChain.fieldProps(1)} />
+            <FormField error={inviteErrors.errors.lastName} label={locale === "ar" ? "اسم العائلة" : "Last name"} value={inviteForm.lastName} onChangeText={(lastName) => setInviteForm((prev) => ({ ...prev, lastName }))} {...inviteChain.fieldProps(2)} />
           </>
         ) : null}
         <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={saveInvite} />
@@ -164,7 +175,7 @@ export function TeamModule({ orgId }: { orgId: string }) {
         onClose={() => setEditing(null)}
       >
         <SelectField label={locale === "ar" ? "الدور" : "Role"} value={memberForm.roleId} options={roleOptions} onChange={(roleId) => setMemberForm((prev) => ({ ...prev, roleId }))} />
-        <FormField keyboardType="numeric" label={locale === "ar" ? "نسبة العمولة" : "Commission rate"} value={memberForm.commissionRate} onChangeText={(commissionRate) => setMemberForm((prev) => ({ ...prev, commissionRate }))} />
+        <FormField error={memberErrors.errors.commissionRate} keyboardType="numeric" label={locale === "ar" ? "نسبة العمولة" : "Commission rate"} value={memberForm.commissionRate} onChangeText={(commissionRate) => setMemberForm((prev) => ({ ...prev, commissionRate }))} />
         <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={saveMember} />
       </FormModal>
     </>

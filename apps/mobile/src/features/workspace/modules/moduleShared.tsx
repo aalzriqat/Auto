@@ -1,6 +1,6 @@
 import { calculateUnifiedMurabaha } from "@autoflow/shared/financing";
 import { useRouter } from "expo-router";
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { EmptyState } from "../../../components/EmptyState";
 import { FormField as SharedFormField, type FormFieldProps as SharedFormFieldProps } from "../../../components/FormField";
@@ -335,6 +335,55 @@ export function isPaginationLoading(status: string): boolean {
 
 export function canLoadMore(status: string): boolean {
   return status === "CanLoadMore";
+}
+
+export type FieldErrors<Field extends string> = Partial<Record<Field, string>>;
+
+/**
+ * Per-field validation state for a module form.
+ *
+ * Validation used to be a blocking `Alert.alert("Required fields")`: it
+ * interrupted modally, named no field, and left the user to guess which of a
+ * dozen inputs was wrong. `validate` records a message per field instead and
+ * returns whether the form may proceed, so the message can be rendered against
+ * the field it belongs to.
+ */
+export function useFormErrors<Field extends string>() {
+  const [errors, setErrors] = useState<FieldErrors<Field>>({});
+
+  return useMemo(
+    () => ({
+      errors,
+      /** Drop every message — call when (re)opening a form. */
+      reset: () => setErrors({}),
+      /** Records the failing fields. Returns true when none failed. */
+      validate: (candidate: FieldErrors<Field>) => {
+        const failed = Object.fromEntries(
+          Object.entries(candidate).filter(([, message]) => Boolean(message)),
+        ) as FieldErrors<Field>;
+        setErrors(failed);
+        return Object.keys(failed).length === 0;
+      },
+    }),
+    [errors],
+  );
+}
+
+export function requiredFieldMessage(locale: AppLocale): string {
+  return locale === "ar" ? "هذا الحقل مطلوب" : "This field is required";
+}
+
+export function requiredSelectionMessage(locale: AppLocale): string {
+  return locale === "ar" ? "اختر خياراً" : "Choose an option";
+}
+
+export function invalidNumberMessage(locale: AppLocale): string {
+  return locale === "ar" ? "أدخل رقماً صالحاً" : "Enter a valid number";
+}
+
+/** `undefined` when the text is present, the required message when it is not. */
+export function requiredText(value: string, locale: AppLocale): string | undefined {
+  return value.trim() ? undefined : requiredFieldMessage(locale);
 }
 
 export function useGenericError() {
@@ -702,16 +751,20 @@ export function useFieldFocusChain(count: number) {
 export function SelectField({
   allowCustomValue,
   customValueLabel,
+  error,
   label,
   onChange,
   options,
+  testID,
   value,
 }: {
   allowCustomValue?: boolean;
   customValueLabel?: string;
+  error?: string;
   label: string;
   onChange: (value: string) => void;
   options: SelectableOption[];
+  testID?: string;
   value: string;
 }) {
   const { locale } = useLocale();
@@ -722,10 +775,12 @@ export function SelectField({
       closeLabel={locale === "ar" ? "إغلاق" : "Close"}
       customValueLabel={customValueLabel}
       emptyLabel={locale === "ar" ? "لا توجد نتائج." : "No results found."}
+      error={error}
       label={label}
       options={options}
       placeholder={locale === "ar" ? "اختر" : "Select"}
       searchPlaceholder={locale === "ar" ? "بحث" : "Search"}
+      testID={testID}
       value={value}
       onChange={onChange}
     />

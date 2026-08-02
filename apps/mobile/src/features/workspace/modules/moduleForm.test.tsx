@@ -1,11 +1,16 @@
 /// <reference types="jest" />
 
-import { render } from "@testing-library/react-native";
+import { act, fireEvent, render } from "@testing-library/react-native";
 import { useState } from "react";
-import { View, type TextInput } from "react-native";
+import { Alert, Pressable, Text, View, type TextInput } from "react-native";
 
 import { LocaleProvider } from "../../../providers/LocaleProvider";
-import { FormField, useFieldFocusChain } from "./moduleShared";
+import {
+  FormField,
+  requiredText,
+  useFieldFocusChain,
+  useFormErrors,
+} from "./moduleShared";
 
 /** Three chained fields, wired the way a module form wires them. */
 function ChainedForm() {
@@ -108,6 +113,87 @@ describe("module form fields", () => {
     expect(secondInput.focus).toHaveBeenCalledTimes(1);
     // Nothing to hand off to after the last field.
     expect(second?.onSubmitEditing).toBeUndefined();
+  });
+
+  test("names every failing field in one pass instead of one alert at a time", async () => {
+    const alert = jest.spyOn(Alert, "alert");
+    let form: ReturnType<typeof useFormErrors<"name" | "phone">> | undefined;
+
+    function ValidatedForm() {
+      form = useFormErrors<"name" | "phone">();
+      const [values, setValues] = useState({ name: "", phone: "" });
+      return (
+        <View>
+          <FormField
+            error={form.errors.name}
+            label="Name"
+            testID="name"
+            value={values.name}
+            onChangeText={(name) => setValues((current) => ({ ...current, name }))}
+          />
+          <FormField
+            error={form.errors.phone}
+            label="Phone"
+            testID="phone"
+            value={values.phone}
+            onChangeText={(phone) => setValues((current) => ({ ...current, phone }))}
+          />
+          <Pressable
+            accessibilityRole="button"
+            testID="save"
+            onPress={() =>
+              form?.validate({
+                name: requiredText(values.name, "en"),
+                phone: requiredText(values.phone, "en"),
+              })
+            }
+          >
+            <Text>Save</Text>
+          </Pressable>
+        </View>
+      );
+    }
+
+    const { getByTestId, queryByTestId } = await render(
+      <LocaleProvider>
+        <ValidatedForm />
+      </LocaleProvider>,
+    );
+
+    expect(queryByTestId("name-error")).toBeNull();
+    await fireEvent.press(getByTestId("save"));
+
+    // Both problems are on screen at once, attached to their own field.
+    expect(getByTestId("name-error").props.children).toBe("This field is required");
+    expect(getByTestId("phone-error").props.children).toBe("This field is required");
+    // And nothing blocked the user with a modal to dismiss.
+    expect(alert).not.toHaveBeenCalled();
+
+    await fireEvent.changeText(getByTestId("name"), "Sara");
+    await fireEvent.changeText(getByTestId("phone"), "0790000000");
+    await fireEvent.press(getByTestId("save"));
+
+    expect(queryByTestId("name-error")).toBeNull();
+    expect(queryByTestId("phone-error")).toBeNull();
+  });
+
+  test("reset clears the messages so a reopened form does not start in error", async () => {
+    let form: ReturnType<typeof useFormErrors<"name">> | undefined;
+    function Probe() {
+      form = useFormErrors<"name">();
+      return null;
+    }
+    await render(<Probe />);
+
+    await act(async () => {
+      form?.validate({ name: "This field is required" });
+    });
+    expect(form?.errors.name).toBe("This field is required");
+
+    await act(async () => {
+      form?.reset();
+    });
+    expect(form?.errors.name).toBeUndefined();
   });
 
   test("survives a return press whose next field has not mounted", async () => {

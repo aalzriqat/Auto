@@ -13,7 +13,7 @@ import {
   setPendingLeadStage,
   type PendingLeadStages,
 } from "./leadStage";
-import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, compactNumber, money, maybeText, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
+import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, compactNumber, money, maybeText, useFieldFocusChain, useFormErrors, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 
@@ -97,6 +97,8 @@ export function LeadsModule({ highlightId, orgId }: { highlightId?: string; orgI
   const selectedLeadCustomerLabel = getOptionLabel(customerOptions, form.customerId, locale === "ar" ? "لم يتم الاختيار" : "Not selected");
   const selectedLeadVehicleLabel = getOptionLabel(vehicleOptions, form.vehicleId, locale === "ar" ? "بدون سيارة" : "No vehicle");
   const selectedLeadOwnerLabel = getOptionLabel(memberOptions, form.assignedUserId, locale === "ar" ? "بدون تعيين" : "Unassigned");
+  const { errors, reset, validate } = useFormErrors<"customerId">();
+  const chain = useFieldFocusChain(2);
   const leadSteps: GuidedStep[] = [
     {
       title: locale === "ar" ? "العميل والسيارة" : "Customer and vehicle",
@@ -115,6 +117,7 @@ export function LeadsModule({ highlightId, orgId }: { highlightId?: string; orgI
   function openLeadForm() {
     setLeadStep(0);
     setForm({ customerId: "", vehicleId: "", assignedUserId: "", source: "Manual", stage: "NEW", notes: "" });
+    reset();
     setOpen(true);
   }
 
@@ -124,10 +127,12 @@ export function LeadsModule({ highlightId, orgId }: { highlightId?: string; orgI
   }
 
   async function save() {
-    if (!form.customerId) {
-      Alert.alert(locale === "ar" ? "اختر عميلاً" : "Choose a customer");
-      return;
-    }
+    const valid = validate({
+      customerId: form.customerId
+        ? undefined
+        : (locale === "ar" ? "اختر عميلاً" : "Choose a customer"),
+    });
+    if (!valid) return;
     setSaving(true);
     try {
       await createLead({
@@ -274,7 +279,7 @@ export function LeadsModule({ highlightId, orgId }: { highlightId?: string; orgI
         <GuidedStepFlow activeIndex={leadStep} steps={leadSteps}>
           {leadStep === 0 ? (
             <>
-              <SelectField label={locale === "ar" ? "العميل" : "Customer"} value={form.customerId} options={customerOptions} onChange={(customerId) => setForm((prev) => ({ ...prev, customerId }))} />
+              <SelectField error={errors.customerId} label={locale === "ar" ? "العميل" : "Customer"} value={form.customerId} options={customerOptions} onChange={(customerId) => setForm((prev) => ({ ...prev, customerId }))} />
               <SelectField label={locale === "ar" ? "السيارة" : "Vehicle"} value={form.vehicleId} options={vehicleOptions} onChange={(vehicleId) => setForm((prev) => ({ ...prev, vehicleId }))} />
               <SummaryPanel title={locale === "ar" ? "ربط الفرصة" : "Lead link"}>
                 <SummaryRow label={locale === "ar" ? "العميل" : "Customer"} value={selectedLeadCustomerLabel} />
@@ -285,9 +290,9 @@ export function LeadsModule({ highlightId, orgId }: { highlightId?: string; orgI
           {leadStep === 1 ? (
             <>
               <SelectField label={locale === "ar" ? "المسؤول" : "Assigned to"} value={form.assignedUserId} options={memberOptions} onChange={(assignedUserId) => setForm((prev) => ({ ...prev, assignedUserId }))} />
-              <FormField label={locale === "ar" ? "المصدر" : "Source"} value={form.source} onChangeText={(source) => setForm((prev) => ({ ...prev, source }))} />
+              <FormField label={locale === "ar" ? "المصدر" : "Source"} value={form.source} onChangeText={(source) => setForm((prev) => ({ ...prev, source }))} {...chain.fieldProps(0)} />
               <SelectField label={locale === "ar" ? "المرحلة" : "Stage"} value={form.stage} options={stageSelectOptions} onChange={(stage) => setForm((prev) => ({ ...prev, stage: stage as MobileLeadStage }))} />
-              <FormField multiline label={locale === "ar" ? "ملاحظات" : "Notes"} value={form.notes} onChangeText={(notes) => setForm((prev) => ({ ...prev, notes }))} />
+              <FormField multiline label={locale === "ar" ? "ملاحظات" : "Notes"} value={form.notes} onChangeText={(notes) => setForm((prev) => ({ ...prev, notes }))} {...chain.fieldProps(1)} />
             </>
           ) : null}
           {leadStep === 2 ? (

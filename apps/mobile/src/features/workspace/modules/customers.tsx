@@ -6,7 +6,7 @@ import { api, type MobileCustomer } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { Icon } from "../../../components/Icon";
 import { compactInitials } from "../nativeModules";
-import { PAGE_SIZE, compactNumber, maybeText, useGenericError, SearchInput, PrimaryButton, FormField, FormModal, RecordCard, MetricCard, ModuleList, DetailPill } from "./moduleShared";
+import { PAGE_SIZE, compactNumber, maybeText, requiredText, useFieldFocusChain, useFormErrors, useGenericError, SearchInput, PrimaryButton, FormField, FormModal, RecordCard, MetricCard, ModuleList, DetailPill } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function CustomersModule({
@@ -48,9 +48,12 @@ export function CustomersModule({
   });
   const customersWithPhone = filtered.filter((customer) => Boolean(customer.phone || customer.whatsapp)).length;
   const customersWithEmail = filtered.filter((customer) => Boolean(customer.email)).length;
+  const { errors, reset, validate } = useFormErrors<"firstName" | "lastName">();
+  const chain = useFieldFocusChain(7);
 
   function openCreate() {
     setForm({ firstName: "", lastName: "", phone: "", whatsapp: "", email: "", nationalId: "", address: "" });
+    reset();
     setOpen(true);
   }
 
@@ -67,10 +70,11 @@ export function CustomersModule({
   }
 
   async function save() {
-    if (!form.firstName.trim() || !form.lastName.trim()) {
-      Alert.alert(locale === "ar" ? "حقول مطلوبة" : "Required fields");
-      return;
-    }
+    const valid = validate({
+      firstName: requiredText(form.firstName, locale),
+      lastName: requiredText(form.lastName, locale),
+    });
+    if (!valid) return;
     setSaving(true);
     try {
       await createCustomer({
@@ -191,13 +195,13 @@ export function CustomersModule({
         visible={open}
         onClose={closeCustomerForm}
       >
-        <FormField label={locale === "ar" ? "الاسم الأول" : "First name"} value={form.firstName} onChangeText={(firstName) => setForm((prev) => ({ ...prev, firstName }))} />
-        <FormField label={locale === "ar" ? "اسم العائلة" : "Last name"} value={form.lastName} onChangeText={(lastName) => setForm((prev) => ({ ...prev, lastName }))} />
-        <FormField keyboardType="phone-pad" label={locale === "ar" ? "الهاتف" : "Phone"} value={form.phone} onChangeText={(phone) => setForm((prev) => ({ ...prev, phone }))} />
-        <FormField keyboardType="phone-pad" label={locale === "ar" ? "واتساب" : "WhatsApp"} value={form.whatsapp} onChangeText={(whatsapp) => setForm((prev) => ({ ...prev, whatsapp }))} />
-        <FormField keyboardType="email-address" label={locale === "ar" ? "البريد" : "Email"} value={form.email} onChangeText={(email) => setForm((prev) => ({ ...prev, email }))} />
-        <FormField label={locale === "ar" ? "الرقم الوطني" : "National ID"} value={form.nationalId} onChangeText={(nationalId) => setForm((prev) => ({ ...prev, nationalId }))} />
-        <FormField multiline label={locale === "ar" ? "العنوان" : "Address"} value={form.address} onChangeText={(address) => setForm((prev) => ({ ...prev, address }))} />
+        <FormField error={errors.firstName} label={locale === "ar" ? "الاسم الأول" : "First name"} value={form.firstName} onChangeText={(firstName) => setForm((prev) => ({ ...prev, firstName }))} {...chain.fieldProps(0)} />
+        <FormField error={errors.lastName} label={locale === "ar" ? "اسم العائلة" : "Last name"} value={form.lastName} onChangeText={(lastName) => setForm((prev) => ({ ...prev, lastName }))} {...chain.fieldProps(1)} />
+        <FormField keyboardType="phone-pad" label={locale === "ar" ? "الهاتف" : "Phone"} value={form.phone} onChangeText={(phone) => setForm((prev) => ({ ...prev, phone }))} {...chain.fieldProps(2)} />
+        <FormField keyboardType="phone-pad" label={locale === "ar" ? "واتساب" : "WhatsApp"} value={form.whatsapp} onChangeText={(whatsapp) => setForm((prev) => ({ ...prev, whatsapp }))} {...chain.fieldProps(3)} />
+        <FormField autoCapitalize="none" keyboardType="email-address" label={locale === "ar" ? "البريد" : "Email"} value={form.email} onChangeText={(email) => setForm((prev) => ({ ...prev, email }))} {...chain.fieldProps(4)} />
+        <FormField label={locale === "ar" ? "الرقم الوطني" : "National ID"} value={form.nationalId} onChangeText={(nationalId) => setForm((prev) => ({ ...prev, nationalId }))} {...chain.fieldProps(5)} />
+        <FormField multiline label={locale === "ar" ? "العنوان" : "Address"} value={form.address} onChangeText={(address) => setForm((prev) => ({ ...prev, address }))} {...chain.fieldProps(6)} />
         <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={save} />
       </FormModal>
     </>

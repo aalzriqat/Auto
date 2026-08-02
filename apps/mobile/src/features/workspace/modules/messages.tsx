@@ -1,13 +1,13 @@
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { useEffect, useRef, useState } from "react";
-import { Alert, Animated, Easing, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Animated, Easing, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { MemberAvatar } from "../../../components/Avatar";
 import { Icon } from "../../../components/Icon";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileDirectConversation, type MobileDirectMember, type MobileDirectMessage } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { useAppTheme } from "../../../providers/ThemeProvider";
-import { relativeTimeLabel, directConversationTitle, isPaginationLoading, canLoadMore, useGenericError, SearchInput, PrimaryButton, FormField, FormModal, EmptyList } from "./moduleShared";
+import { relativeTimeLabel, directConversationTitle, isPaginationLoading, canLoadMore, requiredText, useFormErrors, useGenericError, SearchInput, PrimaryButton, FormField, FormModal, EmptyList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 function directConversationAvatarUrl(
@@ -80,6 +80,7 @@ export function MessagesModule({ orgId }: { orgId: string }) {
   const [groupName, setGroupName] = useState("");
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const { errors, reset, validate } = useFormErrors<"groupName" | "members">();
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedConversation = useQuery(
     api.directMessages.getConversation,
@@ -153,6 +154,7 @@ export function MessagesModule({ orgId }: { orgId: string }) {
     setMemberSearch("");
     setGroupName("");
     setSelectedMemberIds([]);
+    reset();
   }
 
   function updateDraft(nextDraft: string) {
@@ -188,13 +190,13 @@ export function MessagesModule({ orgId }: { orgId: string }) {
   }
 
   async function startGroup() {
-    if (!groupName.trim() || selectedMemberIds.length < 2) {
-      Alert.alert(
-        locale === "ar" ? "حقول مطلوبة" : "Required fields",
-        locale === "ar" ? "أدخل اسم المجموعة واختر عضوين على الأقل." : "Enter a group name and choose at least two members.",
-      );
-      return;
-    }
+    const valid = validate({
+      groupName: requiredText(groupName, locale),
+      members: selectedMemberIds.length < 2
+        ? (locale === "ar" ? "اختر عضوين على الأقل." : "Choose at least two members.")
+        : undefined,
+    });
+    if (!valid) return;
 
     setSaving(true);
     try {
@@ -433,11 +435,17 @@ export function MessagesModule({ orgId }: { orgId: string }) {
         onClose={resetComposer}
       >
         {composerMode === "group" ? (
-          <FormField
-            label={locale === "ar" ? "اسم المجموعة" : "Group name"}
-            value={groupName}
-            onChangeText={setGroupName}
-          />
+          <>
+            <FormField
+              error={errors.groupName}
+              label={locale === "ar" ? "اسم المجموعة" : "Group name"}
+              value={groupName}
+              onChangeText={setGroupName}
+            />
+            {errors.members ? (
+              <Text style={styles.inlineFieldError}>{errors.members}</Text>
+            ) : null}
+          </>
         ) : null}
         <SearchInput
           placeholder={locale === "ar" ? "بحث أعضاء الفريق" : "Search team members"}

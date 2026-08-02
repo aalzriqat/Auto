@@ -457,6 +457,25 @@ describe("mobile shell components", () => {
     await waitFor(() => expect(picker.queryByTestId("vehicle-search")).toBeNull());
   });
 
+  test("shows an inline error on the select trigger and announces it with the control", async () => {
+    const invalid = await render(
+      <LocaleProvider>
+        <SearchableSelectField
+          error="Choose an option"
+          label="Finance company"
+          options={[{ label: "Bank", value: "bank" }]}
+          testID="company"
+          value=""
+          onChange={jest.fn()}
+        />
+      </LocaleProvider>,
+    );
+
+    expect(invalid.getByTestId("company-error").props.children).toBe("Choose an option");
+    // A screen reader user has to hear which selection is missing.
+    expect(invalid.getByLabelText("Finance company, Choose an option")).toBeTruthy();
+  });
+
   test.each(["ios", "android"] as const)(
     "keeps the select sheet's search field above the keyboard on %s",
     async (os) => {

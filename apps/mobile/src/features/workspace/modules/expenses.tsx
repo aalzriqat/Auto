@@ -1,9 +1,9 @@
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { useState } from "react";
-import { Alert, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { api, type MobileExpense, type MobileExpenseCategory } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { PAGE_SIZE, money, dateLabel, maybeText, parseOptionalNumber, parseRequiredNumber, idempotencyKey, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
+import { PAGE_SIZE, money, dateLabel, maybeText, parseOptionalNumber, parseRequiredNumber, idempotencyKey, invalidNumberMessage, requiredText, useFieldFocusChain, useFormErrors, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function ExpensesModule({ highlightId, orgId }: { highlightId?: string; orgId: string }) {
@@ -25,17 +25,25 @@ export function ExpensesModule({ highlightId, orgId }: { highlightId?: string; o
     vehicleId: "",
     notes: "",
   });
+  const { errors, reset, validate } = useFormErrors<"title" | "amount">();
+  const chain = useFieldFocusChain(5);
   const vehicleOptions = [
     { label: locale === "ar" ? "عام" : "General", value: "" },
     ...(vehicles ?? []).map((vehicle) => ({ label: `${vehicle.year} ${vehicle.make} ${vehicle.model}`, value: vehicle._id })),
   ];
 
+  function openForm() {
+    reset();
+    setOpen(true);
+  }
+
   async function save() {
     const amount = parseRequiredNumber(form.amount);
-    if (!form.title.trim() || amount === null) {
-      Alert.alert(locale === "ar" ? "حقول مطلوبة" : "Required fields");
-      return;
-    }
+    const valid = validate({
+      title: requiredText(form.title, locale),
+      amount: amount === null ? invalidNumberMessage(locale) : undefined,
+    });
+    if (!valid || amount === null) return;
     setSaving(true);
     try {
       await createExpense({
@@ -77,7 +85,7 @@ export function ExpensesModule({ highlightId, orgId }: { highlightId?: string; o
         keyExtractor={(expense) => expense._id}
         loadMore={loadMore}
         status={status}
-        header={<PrimaryButton label={locale === "ar" ? "إضافة مصروف" : "Add expense"} onPress={() => setOpen(true)} />}
+        header={<PrimaryButton label={locale === "ar" ? "إضافة مصروف" : "Add expense"} onPress={openForm} />}
         renderItem={(expense) => (
           <RecordCard>
             <View style={styles.recordHeader}>
@@ -93,13 +101,13 @@ export function ExpensesModule({ highlightId, orgId }: { highlightId?: string; o
         )}
       />
       <FormModal title={locale === "ar" ? "مصروف جديد" : "New expense"} visible={open} onClose={() => setOpen(false)}>
-        <FormField label={locale === "ar" ? "العنوان" : "Title"} value={form.title} onChangeText={(title) => setForm((prev) => ({ ...prev, title }))} />
-        <FormField keyboardType="numeric" label={locale === "ar" ? "المبلغ" : "Amount"} value={form.amount} onChangeText={(amount) => setForm((prev) => ({ ...prev, amount }))} />
-        <FormField keyboardType="numeric" label={locale === "ar" ? "الضريبة" : "Tax"} value={form.taxAmount} onChangeText={(taxAmount) => setForm((prev) => ({ ...prev, taxAmount }))} />
+        <FormField error={errors.title} label={locale === "ar" ? "العنوان" : "Title"} value={form.title} onChangeText={(title) => setForm((prev) => ({ ...prev, title }))} {...chain.fieldProps(0)} />
+        <FormField error={errors.amount} keyboardType="numeric" label={locale === "ar" ? "المبلغ" : "Amount"} value={form.amount} onChangeText={(amount) => setForm((prev) => ({ ...prev, amount }))} {...chain.fieldProps(1)} />
+        <FormField keyboardType="numeric" label={locale === "ar" ? "الضريبة" : "Tax"} value={form.taxAmount} onChangeText={(taxAmount) => setForm((prev) => ({ ...prev, taxAmount }))} {...chain.fieldProps(2)} />
         <SelectField label={locale === "ar" ? "السيارة" : "Vehicle"} value={form.vehicleId} options={vehicleOptions} onChange={(vehicleId) => setForm((prev) => ({ ...prev, vehicleId }))} />
         <SelectField label={locale === "ar" ? "الفئة" : "Category"} value={form.category} options={["REPAIR", "MAINTENANCE", "INSPECTION", "REGISTRATION", "CLEANING", "MARKETING", "OFFICE", "RENT", "SALARIES", "UTILITIES", "INSURANCE", "OTHER"].map((value) => ({ label: value, value }))} onChange={(category) => setForm((prev) => ({ ...prev, category: category as MobileExpenseCategory }))} />
-        <FormField label={locale === "ar" ? "المورد" : "Vendor"} value={form.vendor} onChangeText={(vendor) => setForm((prev) => ({ ...prev, vendor }))} />
-        <FormField multiline label={locale === "ar" ? "ملاحظات" : "Notes"} value={form.notes} onChangeText={(notes) => setForm((prev) => ({ ...prev, notes }))} />
+        <FormField label={locale === "ar" ? "المورد" : "Vendor"} value={form.vendor} onChangeText={(vendor) => setForm((prev) => ({ ...prev, vendor }))} {...chain.fieldProps(3)} />
+        <FormField multiline label={locale === "ar" ? "ملاحظات" : "Notes"} value={form.notes} onChangeText={(notes) => setForm((prev) => ({ ...prev, notes }))} {...chain.fieldProps(4)} />
         <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={save} />
       </FormModal>
     </>

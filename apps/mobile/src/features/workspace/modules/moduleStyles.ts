@@ -400,6 +400,12 @@ export const makeStyles = (theme: AppTheme) =>
     alignItems: "center",
     paddingVertical: theme.spacing.md,
   },
+  // For a validation message that belongs to a group of controls rather than to
+  // a single input (e.g. "choose at least two members").
+  inlineFieldError: {
+    color: theme.colors.danger,
+    fontSize: 13,
+  },
   emptyText: {
     color: theme.colors.mutedText,
     fontSize: 14,

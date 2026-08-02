@@ -1,10 +1,10 @@
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { useState } from "react";
-import { Alert, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileBranch } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { SELECTOR_PAGE_SIZE, maybeText, splitLinesOrCommas, joinList, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
+import { SELECTOR_PAGE_SIZE, maybeText, splitLinesOrCommas, joinList, requiredText, useFieldFocusChain, useFormErrors, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function BranchesModule({ orgId }: { orgId: string }) {
@@ -19,6 +19,8 @@ export function BranchesModule({ orgId }: { orgId: string }) {
   const [editing, setEditing] = useState<MobileBranch | null>(null);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ name: "", address: "", phone: "", additionalPhones: "", managerId: "", isActive: "true" });
+  const { errors, reset, validate } = useFormErrors<"name">();
+  const chain = useFieldFocusChain(4);
   const managerOptions = [
     { label: locale === "ar" ? "بدون مدير" : "Unassigned", value: "" },
     ...members.results.map((member) => ({ label: member.userName, value: member.userId })),
@@ -34,14 +36,12 @@ export function BranchesModule({ orgId }: { orgId: string }) {
       managerId: branch?.managerId ?? "",
       isActive: branch?.isActive === false ? "false" : "true",
     });
+    reset();
     setOpen(true);
   }
 
   async function save() {
-    if (!form.name.trim()) {
-      Alert.alert(locale === "ar" ? "الاسم مطلوب" : "Name required");
-      return;
-    }
+    if (!validate({ name: requiredText(form.name, locale) })) return;
     const payload = {
       orgId,
       name: form.name,
@@ -93,10 +93,10 @@ export function BranchesModule({ orgId }: { orgId: string }) {
         )}
       />
       <FormModal title={editing ? (locale === "ar" ? "تعديل فرع" : "Edit branch") : (locale === "ar" ? "فرع جديد" : "New branch")} visible={open} onClose={() => setOpen(false)}>
-        <FormField label={locale === "ar" ? "الاسم" : "Name"} value={form.name} onChangeText={(name) => setForm((prev) => ({ ...prev, name }))} />
-        <FormField multiline label={locale === "ar" ? "العنوان" : "Address"} value={form.address} onChangeText={(address) => setForm((prev) => ({ ...prev, address }))} />
-        <FormField keyboardType="phone-pad" label={locale === "ar" ? "الهاتف" : "Phone"} value={form.phone} onChangeText={(phone) => setForm((prev) => ({ ...prev, phone }))} />
-        <FormField multiline label={locale === "ar" ? "هواتف إضافية" : "Additional phones"} value={form.additionalPhones} onChangeText={(additionalPhones) => setForm((prev) => ({ ...prev, additionalPhones }))} />
+        <FormField error={errors.name} label={locale === "ar" ? "الاسم" : "Name"} value={form.name} onChangeText={(name) => setForm((prev) => ({ ...prev, name }))} {...chain.fieldProps(0)} />
+        <FormField multiline label={locale === "ar" ? "العنوان" : "Address"} value={form.address} onChangeText={(address) => setForm((prev) => ({ ...prev, address }))} {...chain.fieldProps(1)} />
+        <FormField keyboardType="phone-pad" label={locale === "ar" ? "الهاتف" : "Phone"} value={form.phone} onChangeText={(phone) => setForm((prev) => ({ ...prev, phone }))} {...chain.fieldProps(2)} />
+        <FormField multiline label={locale === "ar" ? "هواتف إضافية" : "Additional phones"} value={form.additionalPhones} onChangeText={(additionalPhones) => setForm((prev) => ({ ...prev, additionalPhones }))} {...chain.fieldProps(3)} />
         <SelectField label={locale === "ar" ? "المدير" : "Manager"} value={form.managerId} options={managerOptions} onChange={(managerId) => setForm((prev) => ({ ...prev, managerId }))} />
         <SelectField label={locale === "ar" ? "فعال" : "Active"} value={form.isActive} options={[{ label: locale === "ar" ? "نعم" : "Yes", value: "true" }, { label: locale === "ar" ? "لا" : "No", value: "false" }]} onChange={(isActive) => setForm((prev) => ({ ...prev, isActive }))} />
         <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={save} />

@@ -1,11 +1,11 @@
 import { useMutation, useQuery } from "convex/react";
 import { useState } from "react";
-import { Alert, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepFlow";
 import { api, type MobileFinanceCompany } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { type Option, type MobileFinanceCompanyFilter, type FinancePreviewInput, TERM_MONTH_PRESETS, FINANCE_SCENARIO_PRESETS, compactNumber, money, parseOptionalNumber, parseRequiredNumber, parseRequiredPositiveNumber, useGenericError, SearchInput, PrimaryButton, Chip, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, EmptyList, calculateFinancePreview, financeCompanyMatchesView, averageFinanceRate, DetailPill, SummaryRow, SummaryPanel, WizardActions, ModuleScroll } from "./moduleShared";
+import { type Option, type MobileFinanceCompanyFilter, type FinancePreviewInput, TERM_MONTH_PRESETS, FINANCE_SCENARIO_PRESETS, compactNumber, money, parseOptionalNumber, parseRequiredNumber, parseRequiredPositiveNumber, invalidNumberMessage, requiredText, useFormErrors, useGenericError, SearchInput, PrimaryButton, Chip, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, EmptyList, calculateFinancePreview, financeCompanyMatchesView, averageFinanceRate, DetailPill, SummaryRow, SummaryPanel, WizardActions, ModuleScroll } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function FinanceCompaniesModule({ orgId }: { orgId: string }) {
@@ -59,6 +59,9 @@ export function FinanceCompaniesModule({ orgId }: { orgId: string }) {
     vehiclePrice: parseOptionalNumber(samplePrice) ?? 0,
   };
   const preview = calculateFinancePreview(previewInput);
+  const { errors, reset, validate } = useFormErrors<
+    "name" | "profitRate" | "maxTermMonths" | "gracePeriodMonths"
+  >();
   const financeSteps: GuidedStep[] = [
     {
       title: locale === "ar" ? "هوية الشركة" : "Company profile",
@@ -89,6 +92,7 @@ export function FinanceCompaniesModule({ orgId }: { orgId: string }) {
       isActive: company?.isActive === false ? "false" : "true",
       includesCommissionInDebt: company?.includesCommissionInDebt ? "true" : "false",
     });
+    reset();
     setOpen(true);
   }
 
@@ -105,8 +109,15 @@ export function FinanceCompaniesModule({ orgId }: { orgId: string }) {
     const profitRate = parseRequiredNumber(form.profitRate);
     const maxTermMonths = parseRequiredPositiveNumber(form.maxTermMonths);
     const gracePeriodMonths = parseRequiredNumber(form.gracePeriodMonths);
-    if (!form.name.trim() || profitRate === null || maxTermMonths === null || gracePeriodMonths === null) {
-      Alert.alert(locale === "ar" ? "حقول مطلوبة" : "Required fields");
+    const valid = validate({
+      name: requiredText(form.name, locale),
+      profitRate: profitRate === null ? invalidNumberMessage(locale) : undefined,
+      maxTermMonths: maxTermMonths === null
+        ? (locale === "ar" ? "أدخل عدد أشهر أكبر من صفر" : "Enter a term greater than zero")
+        : undefined,
+      gracePeriodMonths: gracePeriodMonths === null ? invalidNumberMessage(locale) : undefined,
+    });
+    if (!valid || profitRate === null || maxTermMonths === null || gracePeriodMonths === null) {
       return;
     }
     setSaving(true);
@@ -195,7 +206,7 @@ export function FinanceCompaniesModule({ orgId }: { orgId: string }) {
         <GuidedStepFlow activeIndex={financeStep} steps={financeSteps}>
           {financeStep === 0 ? (
             <>
-              <FormField label={locale === "ar" ? "اسم الشركة" : "Company name"} value={form.name} onChangeText={(name) => setForm((prev) => ({ ...prev, name }))} />
+              <FormField error={errors.name} label={locale === "ar" ? "اسم الشركة" : "Company name"} value={form.name} onChangeText={(name) => setForm((prev) => ({ ...prev, name }))} />
               <SelectField label={locale === "ar" ? "فعالة" : "Active"} value={form.isActive} options={[{ label: locale === "ar" ? "نعم" : "Yes", value: "true" }, { label: locale === "ar" ? "لا" : "No", value: "false" }]} onChange={(isActive) => setForm((prev) => ({ ...prev, isActive }))} />
               <SelectField
                 label={locale === "ar" ? "احتساب العمولة" : "Commission treatment"}
@@ -214,8 +225,8 @@ export function FinanceCompaniesModule({ orgId }: { orgId: string }) {
           ) : null}
           {financeStep === 1 ? (
             <>
-              <FormField keyboardType="numeric" label={locale === "ar" ? "نسبة الربح" : "Profit rate"} value={form.profitRate} onChangeText={(profitRate) => setForm((prev) => ({ ...prev, profitRate }))} />
-              <FormField keyboardType="numeric" label={locale === "ar" ? "أقصى مدة" : "Max term months"} value={form.maxTermMonths} onChangeText={(maxTermMonths) => setForm((prev) => ({ ...prev, maxTermMonths }))} />
+              <FormField error={errors.profitRate} keyboardType="numeric" label={locale === "ar" ? "نسبة الربح" : "Profit rate"} value={form.profitRate} onChangeText={(profitRate) => setForm((prev) => ({ ...prev, profitRate }))} />
+              <FormField error={errors.maxTermMonths} keyboardType="numeric" label={locale === "ar" ? "أقصى مدة" : "Max term months"} value={form.maxTermMonths} onChangeText={(maxTermMonths) => setForm((prev) => ({ ...prev, maxTermMonths }))} />
               <View style={styles.chipRow}>
                 {TERM_MONTH_PRESETS.map((term) => (
                   <Chip
@@ -227,7 +238,7 @@ export function FinanceCompaniesModule({ orgId }: { orgId: string }) {
                   />
                 ))}
               </View>
-              <FormField keyboardType="numeric" label={locale === "ar" ? "فترة السماح" : "Grace months"} value={form.gracePeriodMonths} onChangeText={(gracePeriodMonths) => setForm((prev) => ({ ...prev, gracePeriodMonths }))} />
+              <FormField error={errors.gracePeriodMonths} keyboardType="numeric" label={locale === "ar" ? "فترة السماح" : "Grace months"} value={form.gracePeriodMonths} onChangeText={(gracePeriodMonths) => setForm((prev) => ({ ...prev, gracePeriodMonths }))} />
               <View style={styles.metricGrid}>
                 <MetricCard title={locale === "ar" ? "نسبة" : "Rate"} value={`${previewInput.profitRate.toFixed(2)}%`} caption={locale === "ar" ? "سنوية" : "annual"} />
                 <MetricCard title={locale === "ar" ? "مدة" : "Term"} value={`${previewInput.termMonths}m`} caption={locale === "ar" ? "أقصى مدة" : "max months"} />

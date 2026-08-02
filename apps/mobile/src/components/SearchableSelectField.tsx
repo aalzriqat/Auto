@@ -32,6 +32,8 @@ type SearchableSelectFieldProps = Readonly<{
   customValueLabel?: string;
   disabled?: boolean;
   emptyLabel?: string;
+  /** Inline validation message, rendered under the trigger and announced with it. */
+  error?: string;
   label: string;
   noneLabel?: string;
   noneValue?: string;
@@ -74,6 +76,7 @@ export function SearchableSelectField({
   customValueLabel,
   disabled = false,
   emptyLabel = "No results found.",
+  error,
   label,
   noneLabel,
   noneValue = "",
@@ -165,6 +168,10 @@ export function SearchableSelectField({
     <View style={[styles.field, containerStyle]}>
       <Text style={[styles.label, getTypographyStyle("label", locale, fontsLoaded)]}>{label}</Text>
       <Pressable
+        // The visible label is not announced with the control, and the error
+        // has to travel with it or a screen reader user never hears which
+        // selection is missing.
+        accessibilityLabel={error ? `${label}, ${error}` : label}
         accessibilityRole="button"
         accessibilityState={{ disabled, expanded: open }}
         disabled={disabled}
@@ -173,6 +180,7 @@ export function SearchableSelectField({
           styles.trigger,
           disabled && styles.triggerDisabled,
           open && styles.triggerOpen,
+          Boolean(error) && styles.triggerInvalid,
         ]}
         onPress={openSheet}
       >
@@ -188,6 +196,14 @@ export function SearchableSelectField({
         </Text>
         <Icon color="mutedText" name={open ? "chevronUp" : "chevronDown"} size={18} />
       </Pressable>
+      {error ? (
+        <Text
+          style={[styles.errorText, getTypographyStyle("caption", locale, fontsLoaded)]}
+          testID={`${testID}-error`}
+        >
+          {error}
+        </Text>
+      ) : null}
 
       <Modal animationType="slide" transparent visible={open} onRequestClose={closeSheet}>
         {open ? (
@@ -305,6 +321,12 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   },
   triggerDisabled: {
     opacity: 0.55,
+  },
+  triggerInvalid: {
+    borderColor: theme.colors.danger,
+  },
+  errorText: {
+    color: theme.colors.danger,
   },
   triggerText: {
     flex: 1,
