@@ -24,7 +24,25 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
   marketplaceTradeInFingerprint: { kind: "token bucket", rate: 5, period: 600000, capacity: 5 }, // Public trade-in intake, keyed by browser fingerprint/IP hash
   marketplaceTradeInContact: { kind: "token bucket", rate: 3, period: 600000, capacity: 3 }, // Normalized buyer phone
   notificationWhatsapp: { kind: "token bucket", rate: 10, period: 60000, capacity: 10 }, // Outbound WhatsApp notification sends
-  notificationPush: { kind: "token bucket", rate: 20, period: 60000, capacity: 20 }, // Outbound Web Push dispatch calls (each may fan out to several devices)
+  // Outbound push, keyed by recipient userId — one bucket per channel.
+  //
+  // These were a single unkeyed bucket ("notificationPush", 20/min), which made
+  // 20 pushes per minute the ceiling for the ENTIRE deployment, shared across
+  // every org, every user and both channels. Past that everything was dropped
+  // silently, which is what made push look broken rather than throttled.
+  //
+  // Sized per-user instead: the limit is now "how many device alerts should one
+  // human get", not "how much push can the platform emit". The capacity is the
+  // burst a bulk action can legitimately produce for a single recipient (e.g.
+  // being assigned 20 leads in one batch); the rate is the sustained ceiling,
+  // above which a runaway loop is throttled rather than spamming a lock screen.
+  // Dropping the excess is the intended behaviour, not a failure: the in-app
+  // notification is inserted by dispatch() regardless and stays the source of
+  // truth. Mobile is sized higher than web because it fires for every
+  // notification a user receives (registering a device token IS the consent),
+  // whereas web push only fires when the user opted in via pushEnabled.
+  notificationWebPush: { kind: "token bucket", rate: 10, period: 60000, capacity: 20 },
+  notificationMobilePush: { kind: "token bucket", rate: 15, period: 60000, capacity: 30 },
   marketplaceListingImageUpload: { kind: "token bucket", rate: 10, period: 60000, capacity: 10 }, // Direct-listing image upload URLs, keyed by userId (orgless)
   marketplaceListingWrite: { kind: "token bucket", rate: 30, period: 60000, capacity: 30 }, // Direct-listing create/update/delete/mark-sold, keyed by userId (orgless)
   // System-wide circuit breaker for create/standardApi/upload, checked in addition to

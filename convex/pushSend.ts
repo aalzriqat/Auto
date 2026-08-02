@@ -1,6 +1,6 @@
 "use node";
 
-import { internalAction } from "./_generated/server";
+import { internalAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import webpush from "web-push";
@@ -21,6 +21,53 @@ const PUSH_BODY_OVERRIDE: Partial<Record<string, Record<"en" | "ar", string>>> =
   },
 };
 
+type PushSubscription = {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+};
+
+/**
+ * Pushes one payload to every subscription the user has enabled, tallying the
+ * outcome instead of throwing on the first failure — one dead browser
+ * subscription must not stop delivery to the user's other devices.
+ *
+ * A 404/410 from a push service means the subscription is permanently gone
+ * (browser uninstalled, permission revoked), so it is pruned. Any other status
+ * is transient or a server-side fault and the subscription is kept.
+ *
+ * Returned statuses are HTTP codes, never endpoints — an endpoint is a
+ * per-device credential.
+ */
+async function deliverToSubscriptions(
+  ctx: { runMutation: ActionCtx["runMutation"] },
+  subscriptions: PushSubscription[],
+  payload: string
+): Promise<{ sent: number; failed: number; errors: string[] }> {
+  let sent = 0;
+  let failed = 0;
+  const errors: string[] = [];
+
+  for (const sub of subscriptions) {
+    try {
+      await webpush.sendNotification(
+        { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+        payload
+      );
+      sent++;
+    } catch (error) {
+      failed++;
+      const statusCode = (error as { statusCode?: number }).statusCode;
+      errors.push(statusCode ? `HTTP ${statusCode}` : String(error));
+      if (statusCode === 404 || statusCode === 410) {
+        await ctx.runMutation(internal.pushSubscriptions.removeByEndpoint, { endpoint: sub.endpoint });
+      }
+    }
+  }
+
+  return { sent, failed, errors };
+}
+
 /**
  * Web Push delivery for the typed in-app notification system. Fans out to
  * every device the user has enabled (desktop, phone, installed PWA can all
@@ -38,17 +85,26 @@ export const sendNotificationPush = internalAction({
     link: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const status = await rateLimiter.limit(ctx, "notificationPush");
+    const status = await rateLimiter.limit(ctx, "notificationWebPush", { key: args.userId });
     if (!status.ok) {
-      // Silently drop, same rationale as sendNotificationEmail: this runs
-      // from a scheduled action with no caller to surface the error to, and
-      // the in-app notification (already inserted by dispatch()) remains
-      // the source of truth regardless.
+      // Dropped, not failed: this runs from a scheduled action with no caller
+      // to surface the error to, and the in-app notification (already inserted
+      // by dispatch()) remains the source of truth. Logged all the same — an
+      // unkeyed version of this bucket once throttled the whole deployment to
+      // 20 pushes a minute and nothing said so.
+      console.warn(
+        `[pushSend] web push dropped by rate limit: user=${args.userId} type=${args.type} retryAfterMs=${status.retryAfter}`
+      );
       return { success: false, error: "rate_limited" };
     }
 
     const env = getValidatedEnv();
     if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY || !env.VAPID_SUBJECT) {
+      // A deployment-wide misconfiguration: every web push silently no-ops
+      // until the VAPID keypair is set.
+      console.error(
+        `[pushSend] VAPID keypair not configured — web push disabled: user=${args.userId} type=${args.type}`
+      );
       return { success: false, error: "vapid_not_configured" };
     }
 
@@ -69,27 +125,22 @@ export const sendNotificationPush = internalAction({
       tag: args.type,
     });
 
-    let sent = 0;
-    let failed = 0;
-    const errors: string[] = [];
-    for (const sub of subscriptions) {
-      try {
-        await webpush.sendNotification(
-          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          payload
-        );
-        sent++;
-      } catch (error) {
-        failed++;
-        const statusCode = (error as { statusCode?: number }).statusCode;
-        errors.push(statusCode ? `HTTP ${statusCode}` : String(error));
-        if (statusCode === 404 || statusCode === 410) {
-          await ctx.runMutation(internal.pushSubscriptions.removeByEndpoint, { endpoint: sub.endpoint });
-        }
-      }
+    const { sent, failed, errors } = await deliverToSubscriptions(ctx, subscriptions, payload);
+    const result = { success: failed === 0, sent, failed };
+
+    if (failed > 0) {
+      // The webhook log below is an admin-UI surface; this is the one that
+      // reaches the Convex function logs, where an outage is actually
+      // diagnosed. An all-failed send is greppable separately from a partial
+      // one — it means this user received nothing at all. Endpoints are not
+      // logged (they are per-device credentials), only counts and statuses.
+      const kind = sent === 0 ? "every subscription failed" : "some subscriptions failed";
+      console.error(
+        `[pushSend] ${kind}: user=${args.userId} type=${args.type} ` +
+          `subscriptions=${subscriptions.length} sent=${sent} failed=${failed} statuses=${errors.join(", ")}`
+      );
     }
 
-    const result = { success: failed === 0, sent, failed };
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
       source: "notification-push",
       status: result.success ? "success" : "error",
