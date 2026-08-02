@@ -3,6 +3,7 @@ import { query, action, internalQuery } from "./_generated/server";
 import { mutation, internalMutation } from "./functions";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireTenantAuth, requireSuperAdmin } from "./utils/tenancy";
+import { logAdminAction } from "./adminAudit";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
@@ -526,7 +527,7 @@ export const adminUpdateSubscription = mutation({
     currentPeriodEnd: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireSuperAdmin(ctx);
+    const admin = await requireSuperAdmin(ctx);
 
     const existing = await ctx.db
       .query("subscriptions")
@@ -535,6 +536,25 @@ export const adminUpdateSubscription = mutation({
 
     const now = Date.now();
     const { orgId, ...rest } = args;
+
+    // A plan/status change is a billing change, and it used to leave no trace
+    // of who made it. Written before the return so both branches are covered.
+    await logAdminAction(ctx, admin, {
+      action: "adminUpdateSubscription",
+      targetTable: "subscriptions",
+      targetId: existing?._id,
+      orgId,
+      before: existing
+        ? {
+            plan: existing.plan,
+            status: existing.status,
+            billingInterval: existing.billingInterval,
+            currentPeriodStart: existing.currentPeriodStart,
+            currentPeriodEnd: existing.currentPeriodEnd,
+          }
+        : undefined,
+      after: { ...rest },
+    });
 
     if (existing) {
       await ctx.db.patch(existing._id, { ...rest, renewalReminderSentAt: undefined, updatedAt: now });
