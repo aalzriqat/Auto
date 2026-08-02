@@ -1,9 +1,38 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { ruleCollectionRefund } from "./accounting/postingRules";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+
+/**
+ * Two tests here queue collection reminders, which schedule
+ * `collectionReminderActions.sendCollectionReminder`. That work used to escape
+ * the test file and fire after Vitest tore the environment down, failing the
+ * whole run with an unhandled `EnvironmentTeardownError` while every test still
+ * reported green — the CI failure that hit PRs #168 and #174 on unrelated
+ * changes.
+ *
+ * The cause was the drain, which this file called as
+ * `finishAllScheduledFunctions(() => undefined)`. That helper advances timers
+ * via the callback and returns the moment `anyFunctionsRunning()` is false, so
+ * a no-op callback means time never moves and the drain can return before the
+ * scheduler has even picked the work up.
+ *
+ * The non-obvious half: passing `vi.runAllTimers` is not enough on its own.
+ * Vitest's fake timers only control timers created *after* `useFakeTimers()`,
+ * so installing them at drain time leaves the scheduler on the real clock with
+ * nothing for `runAllTimers` to fire. They have to be installed before anything
+ * schedules — hence the call at the top of each affected test rather than here.
+ */
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+/** Runs the scheduled work this suite queues, instead of leaking it. */
+async function drainScheduled(t: ReturnType<typeof convexTestWithComponents>) {
+  await t.finishAllScheduledFunctions(vi.runAllTimers);
+}
 
 const paginationOpts = { numItems: 20, cursor: null };
 
@@ -1249,6 +1278,10 @@ describe("Collections", () => {
   });
 
   test("payment_and_cheque_mutations_cover_guardrails_and_state_transitions", async () => {
+    // Installed before anything schedules: vitest fake timers only control
+    // timers created after this call, so installing them at drain time leaves
+    // the scheduler on the real clock and runAllTimers with nothing to fire.
+    vi.useFakeTimers();
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
     const { vehicleId, saleId, quoteId, applicationId } = await seedVehicleQuoteSaleAndApplication(t, {
@@ -1421,7 +1454,7 @@ describe("Collections", () => {
         .first();
       expect(reminder?.messageType).toBe("CHEQUE_RETURNED");
     });
-    await t.finishAllScheduledFunctions(() => undefined);
+    await drainScheduled(t);
 
     const appChequeId = await t.run((ctx) =>
       ctx.db.insert("postDatedCheques", {
@@ -1992,6 +2025,10 @@ describe("Collections", () => {
   });
 
   test("daily_collection_reminders_queue_channels_dedupe_and_mark_results", async () => {
+    // Installed before anything schedules: vitest fake timers only control
+    // timers created after this call, so installing them at drain time leaves
+    // the scheduler on the real clock and runAllTimers with nothing to fire.
+    vi.useFakeTimers();
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, userId } = await seedFinanceMember(t);
     const now = Date.now();
@@ -2115,7 +2152,14 @@ describe("Collections", () => {
       expect(reminder?.status).toBe("SENT");
       expect(reminder?.sentAt).toBeTypeOf("number");
     });
-    await t.finishAllScheduledFunctions(() => undefined);
+    await drainScheduled(t);
+    // Reminders are deliberately not asserted to leave PENDING here. The
+    // scheduled send now *runs* — which is the fix — but errors inside the
+    // harness with "Component rateLimiter is not registered", so it never
+    // reaches markReminderResult. That is a pre-existing gap in
+    // convexTestWithComponents, logged and non-fatal, and unrelated to whether
+    // the drain worked. What the drain buys is that the failure happens here,
+    // during the test, instead of after teardown.
   });
 });
 

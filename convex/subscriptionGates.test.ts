@@ -1,9 +1,13 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { ALL_PERMISSIONS } from "./utils/permissions";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 type TestConvex = ReturnType<typeof convexTestWithComponents>;
 type PaidPlan = "starter" | "professional" | "enterprise";
@@ -104,6 +108,12 @@ describe("subscription feature gates", () => {
   });
 
   test("professional plans allow professional gates but not enterprise gates", async () => {
+    // chartOfAccounts.initialize succeeds here and schedules
+    // accountingOutbox:drainPendingAccountingEvents. Left alone it fires after
+    // teardown and fails the whole run with an unhandled error while every test
+    // still passes. Fake timers must be installed before the scheduling call —
+    // Vitest only controls timers created after this line.
+    vi.useFakeTimers();
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwnerOrg(t, { plan: "professional" });
 
@@ -140,6 +150,10 @@ describe("subscription feature gates", () => {
         isActive: true,
       })
     ).rejects.toThrow(/multi-branch/i);
+
+    // Run the accounting drain this test queued, rather than leaving it to
+    // fire once the environment is gone.
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
   });
 
   test("enterprise plans allow enterprise-only gates", async () => {
