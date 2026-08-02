@@ -1,7 +1,9 @@
 import { calculateUnifiedMurabaha } from "@autoflow/shared/financing";
 import { useRouter } from "expo-router";
+import { useMemo, useRef } from "react";
 import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { EmptyState } from "../../../components/EmptyState";
+import { FormField as SharedFormField, type FormFieldProps as SharedFormFieldProps } from "../../../components/FormField";
 import { FadeSlideIn } from "../../../components/Motion";
 import { Icon, type SemanticIconName } from "../../../components/Icon";
 import { LocaleToggle } from "../../../components/LocaleToggle";
@@ -54,14 +56,7 @@ export type WebsiteColorPreset = {
   secondaryColor: string;
 };
 
-export type FormFieldProps = {
-  keyboardType?: "default" | "email-address" | "numeric" | "phone-pad";
-  label: string;
-  multiline?: boolean;
-  onChangeText: (value: string) => void;
-  placeholder?: string;
-  value: string;
-};
+export type FormFieldProps = Omit<SharedFormFieldProps, "variant">;
 
 export const TERM_MONTH_PRESETS = ["36", "48", "60", "72"] as const;
 
@@ -665,30 +660,42 @@ export function UnderlineTabBar<T extends string>({
   );
 }
 
-export function FormField({
-  keyboardType = "default",
-  label,
-  multiline,
-  onChangeText,
-  placeholder,
-  value,
-}: FormFieldProps) {
-  const styles = useStyles();
-  const theme = useAppTheme();
-  return (
-    <View style={styles.formField}>
-      <Text style={styles.formLabel}>{label}</Text>
-      <TextInput
-        keyboardType={keyboardType}
-        multiline={multiline}
-        placeholder={placeholder}
-        placeholderTextColor={theme.colors.mutedText}
-        style={[styles.formInput, multiline && styles.formInputMultiline]}
-        textAlignVertical={multiline ? "top" : "center"}
-        value={value}
-        onChangeText={onChangeText}
-      />
-    </View>
+/**
+ * The module forms' text field. This used to be a second, divergent copy of
+ * components/FormField that had lost its accessibilityLabel (so every field in
+ * every module form announced as an unlabelled box — React Native has no
+ * htmlFor, the visible label is not connected to the input) and its RTL
+ * textAlign. It is now the same component in its `filled` skin.
+ */
+export function FormField(props: FormFieldProps) {
+  return <SharedFormField {...props} variant="filled" />;
+}
+
+/**
+ * Refs + wiring for return-key focus chaining across a form's text fields.
+ *
+ * `fieldProps(index)` gives each field its ref and, for every field but the
+ * last, an onSubmitEditing that focuses the next one — so the keyboard's return
+ * key walks the form instead of the user tapping every input by hand.
+ */
+export function useFieldFocusChain(count: number) {
+  const refs = useRef<Array<TextInput | null>>([]);
+
+  return useMemo(
+    () => ({
+      fieldProps: (index: number) => ({
+        inputRef: (instance: TextInput | null) => {
+          refs.current[index] = instance;
+        },
+        onSubmitEditing:
+          index < count - 1
+            ? () => {
+              refs.current[index + 1]?.focus();
+            }
+            : undefined,
+      }),
+    }),
+    [count],
   );
 }
 

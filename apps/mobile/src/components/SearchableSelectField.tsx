@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
 import {
   FlatList,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -189,7 +191,13 @@ export function SearchableSelectField({
 
       <Modal animationType="slide" transparent visible={open} onRequestClose={closeSheet}>
         {open ? (
-          <View style={styles.modalRoot}>
+          // The sheet is bottom-anchored and contains a search TextInput, so
+          // without this the keyboard opens directly over the field the user is
+          // typing into. FormModal already had it; this sheet did not.
+          <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : undefined}
+            style={styles.modalRoot}
+          >
             <View style={[styles.sheet, { direction: textDirection }]}>
               <View style={styles.sheetHeader}>
                 <View style={styles.sheetTitleBlock}>
@@ -266,7 +274,7 @@ export function SearchableSelectField({
                 }}
               />
             </View>
-          </View>
+          </KeyboardAvoidingView>
         ) : null}
       </Modal>
     </View>

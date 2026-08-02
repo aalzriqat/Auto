@@ -46,7 +46,7 @@ jest.mock("@expo/vector-icons", () => {
 
 import { fireEvent, render, waitFor } from "@testing-library/react-native";
 import * as SecureStore from "expo-secure-store";
-import { StyleSheet, Text, View } from "react-native";
+import { Platform, StyleSheet, Text, View } from "react-native";
 
 import { getMobileFoundationString } from "@autoflow/shared";
 
@@ -456,6 +456,35 @@ describe("mobile shell components", () => {
     expect(onChange).toHaveBeenCalledWith("accord");
     await waitFor(() => expect(picker.queryByTestId("vehicle-search")).toBeNull());
   });
+
+  test.each(["ios", "android"] as const)(
+    "keeps the select sheet's search field above the keyboard on %s",
+    async (os) => {
+      const originalOs = Platform.OS;
+      Object.defineProperty(Platform, "OS", { configurable: true, value: os });
+
+      try {
+        const picker = await render(
+          <LocaleProvider>
+            <SearchableSelectField
+              label="Vehicle"
+              options={[{ label: "Camry", value: "camry" }]}
+              testID="kav"
+              value=""
+              onChange={jest.fn()}
+            />
+          </LocaleProvider>,
+        );
+
+        fireEvent.press(picker.getByTestId("kav-trigger"));
+        // The sheet is bottom-anchored around a TextInput; without the
+        // KeyboardAvoidingView the keyboard covers the field being typed into.
+        await waitFor(() => expect(picker.getByTestId("kav-search")).toBeTruthy());
+      } finally {
+        Object.defineProperty(Platform, "OS", { configurable: true, value: originalOs });
+      }
+    },
+  );
 
   test("renders member avatars with a photo, initials, or a placeholder fallback", async () => {
     const rendered = await render(
