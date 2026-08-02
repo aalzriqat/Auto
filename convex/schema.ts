@@ -3122,7 +3122,12 @@ export default defineSchema({
     approvedBy: v.optional(v.id("users")),
     notes: v.optional(v.string()),
     createdAt: v.number(),
-    // Full wizard state snapshot so salesperson can resume after approval
+    // Full wizard state snapshot so salesperson can resume after approval.
+    // Must stay in step with `wizardSnapshotValidator` in convex/approvals.ts:
+    // a field the args validator accepts but this object omits is an "extra
+    // field" schema mismatch that throws inside the mutation and rolls the whole
+    // request back. The same three execution-commission fields were already
+    // missed once on `wizardDrafts.wizardData` above (fixed in c906211c).
     wizardSnapshot: v.optional(v.object({
       paymentType: v.string(),
       vehiclePrice: v.number(),
@@ -3132,6 +3137,9 @@ export default defineSchema({
       selectedCompanyId: v.optional(v.string()),
       manualProfitRate: v.optional(v.number()),
       manualInsuranceRate: v.optional(v.number()),
+      manualExecutionCommission: v.optional(v.number()),
+      manualExecutionFees: v.optional(v.number()),
+      manualIncludesCommissionInDebt: v.optional(v.boolean()),
     })),
   })
     .index("by_org", ["orgId"])
