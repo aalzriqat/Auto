@@ -212,7 +212,11 @@ export function OpeningBalanceCard() {
             <DialogTrigger asChild>
               <Button size="sm">{t("OpeningBalanceSet")}</Button>
             </DialogTrigger>
-            <DialogContent className="max-w-3xl">
+            {/* Height cap + scroll matches every other accounting dialog
+                (ManualJournalTab, FixedAssetsTab, PartnerEquityTab). Without
+                it the form grows past a short viewport and the footer button
+                becomes unreachable once a few lines are added. */}
+            <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>{t("OpeningBalance")}</DialogTitle>
                 <DialogDescription>
@@ -254,7 +258,14 @@ export function OpeningBalanceCard() {
                         <SelectTrigger aria-label={t("OpeningBalanceAccount")}>
                           <SelectValue placeholder={t("OpeningBalanceSelectAccount")} />
                         </SelectTrigger>
-                        <SelectContent>
+                        {/* An explicit cap rather than relying on
+                            `--radix-select-content-available-height`, which the
+                            shared SelectContent uses: the default chart is ~40
+                            accounts, and inside a dialog that computed height
+                            does not reliably bound the list, so it ran off the
+                            screen with nothing to scroll. A fixed max height
+                            makes the existing `overflow-y-auto` engage. */}
+                        <SelectContent className="max-h-72">
                           {(accounts ?? []).map((acc) => (
                             <SelectItem key={acc._id} value={acc._id}>
                               {/* Arabic name when the UI is Arabic — the chart
