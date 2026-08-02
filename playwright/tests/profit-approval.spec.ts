@@ -29,32 +29,18 @@ import { createVehicle, gotoOrgRoute, testDataSuffix } from "../utils";
 // redoes the Clerk handshake and OrgProvider's membership gate.
 test.describe.configure({ timeout: 120_000 });
 
-// STILL SKIPPED — but with two hypotheses now eliminated rather than none.
-//
-// All three fail identically: after clicking "Request Profit Approval" the alert
-// keeps offering the button, so checkPendingApproval never reports a PENDING row
-// matching the entered profit. Every other spec in the suite passes.
-//
-// Ruled out by evidence, not reasoning:
-//
-//  1. NOT a bad argument shape. convex/requestProfitApprovalArgs.test.ts sends
-//     the wizard's exact payload — including the wizardSnapshot optionals that
-//     are undefined until the finance panel is touched — and the mutation
-//     accepts it and checkPendingApproval reports it back.
-//  2. NOT a thrown mutation. With the catch added to handleRequestApproval this
-//     run would have rendered a toast; the artifact's "Notifications" region is
-//     empty (run 30633770011). Nothing threw.
-//
-// So the mutation is most likely never invoked. The only silent path left is
-// handleRequestApproval's `if (!activeOrgId || !watchedVehicleId) return`, which
-// is hard to square with the alert rendering at all since that needs
-// watchedVehicleId truthy. Next step: instrument that guard, or reproduce
-// locally against dev (reference_local_browser_testing_autoflow) rather than by
-// CI round-trip.
-//
-// One confounder from the artifact that nobody has tested: the QA org has NO
-// customer statuses configured ("No customer statuses configured yet"), so the
-// finance panel never offers a company on this path.
+// Previously skipped. The cause was a product bug, now fixed: the
+// `wizardSnapshot` object in `profitApprovalRequests` (convex/schema.ts) was
+// missing the three execution-commission fields that `wizardSnapshotValidator`
+// in convex/approvals.ts accepts and that Step1QuoteSetup always sends
+// (`manualExecutionCommission`, `manualExecutionFees`,
+// `manualIncludesCommissionInDebt` — held in useState with `|| 0` / `?? true`
+// initialisers, so never undefined). The args validator let them through and
+// `ctx.db.insert` then rejected them as extra fields, which threw inside the
+// mutation and — Convex mutations being atomic — rolled the PENDING row back.
+// checkPendingApproval had nothing to report, so the alert kept offering the
+// button. Guarded now by the validator/schema equality assertion in
+// convex/requestProfitApprovalArgs.test.ts.
 const MINIMUM_PROFIT = 5000;
 const REQUESTED_PROFIT = 100;
 
@@ -112,7 +98,7 @@ async function respondOnApprovalsPage(page: Page, model: string, action: "Approv
   await expect(card).not.toBeVisible();
 }
 
-test.describe.fixme("profit approval gate", () => {
+test.describe("profit approval gate", () => {
   test("a rejected below-minimum deal stays blocked in the wizard", async ({ page, context }) => {
     const { model } = await openBlockedInstallmentQuote(page);
 

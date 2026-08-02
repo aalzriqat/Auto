@@ -6,7 +6,12 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, notifyUser, getActorName } from "./utils/notifications";
 
-const wizardSnapshotValidator = v.optional(v.object({
+// Exported so requestProfitApprovalArgs.test.ts can assert it still matches
+// `profitApprovalRequests.wizardSnapshot` in convex/schema.ts. Accepting a field
+// here that the table schema does not declare throws an "extra field" mismatch
+// at ctx.db.insert, which rolls the whole mutation back — the salesperson's
+// approval request silently never persists.
+export const wizardSnapshotValidator = v.optional(v.object({
   paymentType: v.string(),
   vehiclePrice: v.number(),
   desiredProfit: v.number(),
