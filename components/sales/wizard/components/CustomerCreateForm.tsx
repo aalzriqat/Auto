@@ -26,6 +26,7 @@ import {
 import { UserPlus } from "lucide-react";
 import { PaymentType } from "../types";
 import { cn } from "@/lib/utils";
+import { getErrorMessage } from "@/lib/errors";
 
 
 const newCustomerSchema = z.object({
@@ -107,8 +108,8 @@ export function CustomerCreateForm({
       toast.success("Customer created successfully");
 
       onCreated(newCustomer);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsCreating(false);
     }

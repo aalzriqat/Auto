@@ -41,6 +41,7 @@ import { ChangeMemberRoleDialog } from "@/components/team/ChangeMemberRoleDialog
 import { RoleGuard } from "@/components/auth/RoleGuard";
 import { useTableControls } from "@/hooks/useTableControls";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
+import { getErrorMessage } from "@/lib/errors";
 
 // lastSeenAt is throttled to a write at most every few minutes (see
 // memberships.touchLastSeen), so "active now" below lines up with that
@@ -158,8 +159,8 @@ export default function TeamPage() {
       await removeMember({ orgId: activeOrgId, membershipId: memberToDelete._id });
       toast.success(t("MemberRemovedSuccess" as any));
       setMemberToDelete(null);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 

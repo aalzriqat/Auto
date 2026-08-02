@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/sonner";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { getErrorMessage } from "@/lib/errors";
 
 export function ChangeMemberRoleDialog({
   member,
@@ -46,8 +47,8 @@ export function ChangeMemberRoleDialog({
       });
       toast.success(t("RoleUpdatedSuccess"));
       onOpenChange(false);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSubmitting(false);
     }

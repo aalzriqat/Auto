@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/sonner";
+import { getErrorMessage } from "@/lib/errors";
 
 interface GuarantorDialogProps {
   open: boolean;
@@ -93,8 +94,8 @@ export function GuarantorDialog({ open, onOpenChange, customerId, guarantor }: G
         toast.success(t("GuarantorAddedSuccess" as any));
       }
       onOpenChange(false);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSubmitting(false);
     }

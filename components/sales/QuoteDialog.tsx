@@ -32,6 +32,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CheckCircle2 } from "lucide-react";
 
 import { quoteSchema, QuoteFormValues, QuoteDialogProps } from "./quote.schema";
+import { getErrorMessage } from "@/lib/errors";
 
 
 export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCustomerId }: QuoteDialogProps) {
@@ -186,8 +187,8 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
       });
       toast.success(t("QuoteSavedSuccess" as any));
       onOpenChange(false);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSubmitting(false);
     }

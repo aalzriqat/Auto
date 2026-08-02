@@ -29,6 +29,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Textarea } from "@/components/ui/textarea";
+import { getErrorMessage } from "@/lib/errors";
 
 const testDriveSchema = z.object({
   customerId: z.string().min(1, "Customer is required"),
@@ -120,8 +121,8 @@ export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: Te
         toast.success(t("TestDriveStartedSuccess" as any));
       }
       onOpenChange(false);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSubmitting(false);
     }

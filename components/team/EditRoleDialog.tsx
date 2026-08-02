@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { getErrorMessage } from "@/lib/errors";
 
 export function EditRoleDialog({
   role,
@@ -57,8 +58,8 @@ export function EditRoleDialog({
       });
       toast.success(t("RoleUpdated" as any));
       onOpenChange(false);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSubmitting(false);
     }

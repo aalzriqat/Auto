@@ -13,6 +13,7 @@ import { Loader2, CheckCircle2, XCircle, AlertCircle, Search } from "lucide-reac
 import { toast } from "@/components/ui/sonner";
 import { Id, Doc } from "@/convex/_generated/dataModel";
 import { useTableControls } from "@/hooks/useTableControls";
+import { getErrorMessage } from "@/lib/errors";
 
 type ApprovalRequest = Doc<"profitApprovalRequests"> & {
   salespersonName: string;
@@ -45,8 +46,8 @@ export default function ApprovalsPage() {
         status,
       });
       toast.success(status === "APPROVED" ? t("ApprovalApprovedMsg") : t("ApprovalRejectedMsg"));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 

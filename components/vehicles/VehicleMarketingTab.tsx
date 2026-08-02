@@ -26,6 +26,7 @@ import {
   Send,
 } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
+import { getErrorMessage } from "@/lib/errors";
 
 interface VehicleMarketingTabProps {
   vehicleId: Id<"vehicles">;
@@ -89,8 +90,8 @@ export function VehicleMarketingTab({ vehicleId }: VehicleMarketingTabProps) {
         imageStorageIds: selectedImageIds as Id<"_storage">[],
       });
       toast.success(t("InstagramPostQueued" as any) || "Queued — you'll be notified when it's posted.");
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsPosting(false);
     }
@@ -108,8 +109,8 @@ export function VehicleMarketingTab({ vehicleId }: VehicleMarketingTabProps) {
         imageStorageIds: selectedImageIds as Id<"_storage">[],
       });
       toast.success(t("InstagramPostQueued" as any) || "Queued — you'll be notified when it's posted.");
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsPostingFacebook(false);
     }
@@ -230,8 +231,8 @@ function PostHistoryItem({ post }: { post: Doc<"socialPosts"> }) {
     setIsRefreshing(true);
     try {
       await refreshEngagement({ socialPostId: post._id });
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsRefreshing(false);
     }
@@ -245,8 +246,8 @@ function PostHistoryItem({ post }: { post: Doc<"socialPosts"> }) {
       try {
         const result = await listComments({ socialPostId: post._id });
         setComments(result);
-      } catch (error: any) {
-        toast.error(error);
+      } catch (error) {
+        toast.error(getErrorMessage(error));
         setCommentsOpen(false);
       } finally {
         setIsLoadingComments(false);
@@ -262,8 +263,8 @@ function PostHistoryItem({ post }: { post: Doc<"socialPosts"> }) {
       await replyToComment({ socialPostId: post._id, commentId, message });
       setReplyDrafts((prev) => ({ ...prev, [commentId]: "" }));
       toast.success(t("ReplySent" as any) || "Reply sent.");
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setBusyCommentId(null);
     }
@@ -276,8 +277,8 @@ function PostHistoryItem({ post }: { post: Doc<"socialPosts"> }) {
       setComments((prev) =>
         prev ? prev.map((c) => (c.id === comment.id ? { ...c, hidden: !comment.hidden } : c)) : prev
       );
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setBusyCommentId(null);
     }

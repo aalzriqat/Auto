@@ -40,6 +40,7 @@ import {
 } from "@/components/ui/select";
 import { useTableControls } from "@/hooks/useTableControls";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
+import { getErrorMessage } from "@/lib/errors";
 
 export default function ExpensesPage() {
   const { activeOrgId } = useOrg();
@@ -105,7 +106,7 @@ export default function ExpensesPage() {
         setNeedsReversal(true);
         return;
       }
-      toast.error(error);
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -120,8 +121,8 @@ export default function ExpensesPage() {
       });
       toast.success(t("ExpenseReversedSuccess" as any));
       closeDeleteDialog();
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsReversing(false);
     }

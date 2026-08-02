@@ -38,6 +38,7 @@ import {
 import { SearchableSelect } from "@/components/ui/searchable-select";
 
 import { taskSchema, TaskFormValues, TaskDialogProps } from "./task.schema";
+import { getErrorMessage } from "@/lib/errors";
 
 
 export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
@@ -147,8 +148,8 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
         toast.success(t("TaskCreatedSuccess" as any) || "Task created successfully!");
       }
       onOpenChange(false);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSubmitting(false);
     }
