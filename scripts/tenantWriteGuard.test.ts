@@ -222,12 +222,17 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // inspects it, and it clears: the only caller-supplied ids it touches are
   // `accountId`s, each re-fetched and checked against the org inside the
   // shared poster before anything is written.
+  // Then 431→432 by `migrateRoles.backfillVehicleValuationPermissions`, raising
+  // `skippedNoOrgId` 141→142 while leaving `analysed` at 281. It is an
+  // `internalMutation` with an empty args block, so it takes no `orgId` for the
+  // analyzer to check — it is a one-time backfill that sweeps every org's roles
+  // deliberately, and being internal it is unreachable from a client.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 431,
+      totalMutations: 432,
       analysed: 281,
       skippedNoArgsBlock: 9,
-      skippedNoOrgId: 141,
+      skippedNoOrgId: 142,
     });
   });
 });

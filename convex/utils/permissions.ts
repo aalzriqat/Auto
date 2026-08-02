@@ -32,6 +32,11 @@ export const PERMISSIONS = {
   VIEW_VEHICLE_TEST_DRIVES: "view:vehicle_test_drives",
   VIEW_VEHICLE_WORK_ORDERS: "view:vehicle_work_orders",
   VIEW_VEHICLE_VALUATIONS: "view:vehicle_valuations",
+  // Writing a finance-company valuation is deliberately separate from
+  // `edit:vehicles`. A valuation is an external figure the finance company
+  // quotes, not dealership-owned data like price or cost, so SALES is trusted
+  // to keep it current without going through the vehicle-edit approval flow.
+  EDIT_VEHICLE_VALUATIONS: "edit:vehicle_valuations",
 
   // Customers
   VIEW_CUSTOMERS: "view:customers",
@@ -195,6 +200,7 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.VIEW_VEHICLE_TEST_DRIVES,
       PERMISSIONS.VIEW_VEHICLE_WORK_ORDERS,
       PERMISSIONS.VIEW_VEHICLE_VALUATIONS,
+      PERMISSIONS.EDIT_VEHICLE_VALUATIONS,
       PERMISSIONS.VIEW_CUSTOMERS,
       PERMISSIONS.CREATE_CUSTOMERS,
       PERMISSIONS.EDIT_CUSTOMERS,
@@ -253,6 +259,7 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.VIEW_VEHICLE_LEADS,
       PERMISSIONS.VIEW_VEHICLE_TEST_DRIVES,
       PERMISSIONS.VIEW_VEHICLE_VALUATIONS,
+      PERMISSIONS.EDIT_VEHICLE_VALUATIONS, // Valuations only — writes directly, no approval request
       PERMISSIONS.CREATE_VEHICLES_REQUEST, // Can request creation
       PERMISSIONS.EDIT_VEHICLES_REQUEST, // Can only request edits
       PERMISSIONS.VIEW_CUSTOMERS,
