@@ -1,7 +1,7 @@
 import { calculateUnifiedMurabaha } from "@autoflow/shared/financing";
 import { useRouter } from "expo-router";
-import { useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View, type StyleProp, type ViewStyle } from "react-native";
 import { EmptyState } from "../../../components/EmptyState";
 import { FormField as SharedFormField, type FormFieldProps as SharedFormFieldProps } from "../../../components/FormField";
 import { FadeSlideIn } from "../../../components/Motion";
@@ -1170,6 +1170,32 @@ export function ModuleScroll({ children }: { children: React.ReactNode }) {
   );
 }
 
+/**
+ * One row. Memoised so scrolling a long list re-renders only the cells that
+ * actually changed, instead of every mounted row on every parent render.
+ * `render` is a compared prop rather than a ref, so a row still updates when
+ * the closure behind it changes (theme, locale, pending state).
+ */
+const ModuleListRow = memo(function ModuleListRow<T>({
+  highlighted,
+  item,
+  render,
+  rowStyle,
+}: {
+  highlighted: boolean;
+  item: T;
+  render: (item: T) => React.ReactElement;
+  rowStyle: StyleProp<ViewStyle>;
+}) {
+  const content = render(item);
+  return highlighted ? <View style={rowStyle}>{content}</View> : content;
+}) as <T>(props: {
+  highlighted: boolean;
+  item: T;
+  render: (item: T) => React.ReactElement;
+  rowStyle: StyleProp<ViewStyle>;
+}) => React.ReactElement;
+
 export function ModuleList<T>({
   data,
   emptyLabel,
@@ -1192,6 +1218,19 @@ export function ModuleList<T>({
   const styles = useStyles();
   const handleEndReached =
     loadMore && status && canLoadMore(status) ? () => loadMore(PAGE_SIZE) : undefined;
+  // Hoisted out of the JSX: an inline arrow here is a new prop on every render,
+  // which makes FlatList discard its cell cache and re-render every row.
+  const renderRow = useCallback(
+    ({ item }: { item: T }) => (
+      <ModuleListRow
+        highlighted={Boolean(highlightId) && keyExtractor(item) === highlightId}
+        item={item}
+        render={renderItem}
+        rowStyle={styles.highlightedRow}
+      />
+    ),
+    [highlightId, keyExtractor, renderItem, styles.highlightedRow],
+  );
   // `data` is empty during the first page load as well as when there genuinely
   // is nothing, so keying the empty state off length alone made every list in
   // the app flash "No results" before its rows arrived — which reads as an
@@ -1209,13 +1248,7 @@ export function ModuleList<T>({
       <FlatList
         data={data as T[]}
         keyExtractor={keyExtractor}
-        renderItem={({ item }) =>
-          highlightId && keyExtractor(item) === highlightId ? (
-            <View style={styles.highlightedRow}>{renderItem(item)}</View>
-          ) : (
-            renderItem(item)
-          )
-        }
+        renderItem={renderRow}
         ListHeaderComponent={header ? <View style={styles.listHeader}>{header}</View> : null}
         ListEmptyComponent={listEmptyComponent}
         ListFooterComponent={

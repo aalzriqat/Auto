@@ -5,7 +5,7 @@ import { RouteLoadingState } from "../../../components/RouteState";
 import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepFlow";
 import { api, type MobileFinanceCompany } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { type Option, type MobileFinanceCompanyFilter, type FinancePreviewInput, TERM_MONTH_PRESETS, FINANCE_SCENARIO_PRESETS, compactNumber, money, parseOptionalNumber, parseRequiredNumber, parseRequiredPositiveNumber, invalidNumberMessage, requiredText, useFormErrors, useGenericError, SearchInput, PrimaryButton, Chip, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, EmptyList, calculateFinancePreview, financeCompanyMatchesView, averageFinanceRate, DetailPill, SummaryRow, SummaryPanel, WizardActions, ModuleScroll } from "./moduleShared";
+import { type Option, type MobileFinanceCompanyFilter, type FinancePreviewInput, TERM_MONTH_PRESETS, FINANCE_SCENARIO_PRESETS, compactNumber, money, parseOptionalNumber, parseRequiredNumber, parseRequiredPositiveNumber, invalidNumberMessage, requiredText, useFormErrors, useGenericError, SearchInput, PrimaryButton, Chip, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, calculateFinancePreview, financeCompanyMatchesView, averageFinanceRate, DetailPill, SummaryRow, SummaryPanel, WizardActions, ModuleList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function FinanceCompaniesModule({ orgId }: { orgId: string }) {
@@ -160,44 +160,53 @@ export function FinanceCompaniesModule({ orgId }: { orgId: string }) {
   if (companies === undefined) return <RouteLoadingState label={locale === "ar" ? "جاري التحميل" : "Loading"} />;
 
   return (
-    <ModuleScroll>
-      <View style={styles.metricGrid}>
-        <MetricCard title={locale === "ar" ? "الشركات" : "Companies"} value={compactNumber(companies.length, locale)} caption={locale === "ar" ? "إجمالي" : "total"} />
-        <MetricCard title={locale === "ar" ? "نشطة" : "Active"} value={compactNumber(activeCompanies.length, locale)} caption={locale === "ar" ? "جاهزة للعروض" : "ready for quotes"} />
-        <MetricCard title={locale === "ar" ? "متوسط الربح" : "Avg rate"} value={`${averageFinanceRate(activeCompanies).toFixed(1)}%`} caption={locale === "ar" ? "للشركات النشطة" : "active companies"} />
-        <MetricCard title={locale === "ar" ? "متوقفة" : "Inactive"} value={compactNumber(inactiveCompanies.length, locale)} caption={locale === "ar" ? "غير مستخدمة" : "not in use"} />
-      </View>
-      <View style={styles.actionRow}>
-        <SearchInput
-          placeholder={locale === "ar" ? "ابحث باسم الشركة أو النسبة" : "Search company or rate"}
-          value={search}
-          onChangeText={setSearch}
-        />
-        <PrimaryButton label={locale === "ar" ? "إضافة شركة" : "Add"} onPress={() => fill(null)} />
-      </View>
-      <SegmentedControl options={financeStatusOptions} value={statusFilter} onChange={setStatusFilter} />
-      {visibleCompanies.length ? visibleCompanies.map((company) => (
-        <RecordCard key={company._id}>
-          <View style={styles.recordHeader}>
-            <Text style={styles.recordTitle}>{company.name}</Text>
-            <Text style={styles.statusPill}>{company.isActive ? "ACTIVE" : "INACTIVE"}</Text>
-          </View>
-          <View style={styles.detailPillRow}>
-            <DetailPill label={`${company.profitRate}%`} tone="info" />
-            <DetailPill label={`${company.maxTermMonths}m`} />
-            <DetailPill label={`LTV ${company.maxFinancingLTV ?? "-"}`} tone="warning" />
-            {company.includesCommissionInDebt ? <DetailPill label={locale === "ar" ? "عمولة خارج الأصل" : "flat commission"} tone="success" /> : null}
-          </View>
-          <Text style={styles.recordMeta}>
-            {locale === "ar" ? "رسوم" : "Fees"} {money(company.adminFees, locale)} · {locale === "ar" ? "عمولة" : "Commission"} {money(company.commission, locale)}
-          </Text>
-          <View style={styles.cardActions}>
-            <PrimaryButton label={locale === "ar" ? "تفاصيل" : "Details"} tone="muted" onPress={() => setDetailCompany(company)} />
-            <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => fill(company)} />
-            {company.isActive ? <PrimaryButton label={locale === "ar" ? "تعطيل" : "Deactivate"} tone="danger" onPress={() => deactivate(company)} /> : null}
-          </View>
-        </RecordCard>
-      )) : <EmptyList label={locale === "ar" ? "لا توجد شركات مطابقة." : "No matching finance companies."} />}
+    <>
+      <ModuleList
+        data={visibleCompanies}
+        emptyLabel={locale === "ar" ? "لا توجد شركات مطابقة." : "No matching finance companies."}
+        keyExtractor={(company) => company._id}
+        header={
+          <>
+            <View style={styles.metricGrid}>
+              <MetricCard title={locale === "ar" ? "الشركات" : "Companies"} value={compactNumber(companies.length, locale)} caption={locale === "ar" ? "إجمالي" : "total"} />
+              <MetricCard title={locale === "ar" ? "نشطة" : "Active"} value={compactNumber(activeCompanies.length, locale)} caption={locale === "ar" ? "جاهزة للعروض" : "ready for quotes"} />
+              <MetricCard title={locale === "ar" ? "متوسط الربح" : "Avg rate"} value={`${averageFinanceRate(activeCompanies).toFixed(1)}%`} caption={locale === "ar" ? "للشركات النشطة" : "active companies"} />
+              <MetricCard title={locale === "ar" ? "متوقفة" : "Inactive"} value={compactNumber(inactiveCompanies.length, locale)} caption={locale === "ar" ? "غير مستخدمة" : "not in use"} />
+            </View>
+            <View style={styles.actionRow}>
+              <SearchInput
+                placeholder={locale === "ar" ? "ابحث باسم الشركة أو النسبة" : "Search company or rate"}
+                value={search}
+                onChangeText={setSearch}
+              />
+              <PrimaryButton label={locale === "ar" ? "إضافة شركة" : "Add"} onPress={() => fill(null)} />
+            </View>
+            <SegmentedControl options={financeStatusOptions} value={statusFilter} onChange={setStatusFilter} />
+          </>
+        }
+        renderItem={(company) => (
+          <RecordCard>
+            <View style={styles.recordHeader}>
+              <Text style={styles.recordTitle}>{company.name}</Text>
+              <Text style={styles.statusPill}>{company.isActive ? "ACTIVE" : "INACTIVE"}</Text>
+            </View>
+            <View style={styles.detailPillRow}>
+              <DetailPill label={`${company.profitRate}%`} tone="info" />
+              <DetailPill label={`${company.maxTermMonths}m`} />
+              <DetailPill label={`LTV ${company.maxFinancingLTV ?? "-"}`} tone="warning" />
+              {company.includesCommissionInDebt ? <DetailPill label={locale === "ar" ? "عمولة خارج الأصل" : "flat commission"} tone="success" /> : null}
+            </View>
+            <Text style={styles.recordMeta}>
+              {locale === "ar" ? "رسوم" : "Fees"} {money(company.adminFees, locale)} · {locale === "ar" ? "عمولة" : "Commission"} {money(company.commission, locale)}
+            </Text>
+            <View style={styles.cardActions}>
+              <PrimaryButton label={locale === "ar" ? "تفاصيل" : "Details"} tone="muted" onPress={() => setDetailCompany(company)} />
+              <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => fill(company)} />
+              {company.isActive ? <PrimaryButton label={locale === "ar" ? "تعطيل" : "Deactivate"} tone="danger" onPress={() => deactivate(company)} /> : null}
+            </View>
+          </RecordCard>
+        )}
+      />
       <FormModal
         title={editing ? (locale === "ar" ? "تعديل شركة" : "Edit company") : (locale === "ar" ? "شركة جديدة" : "New company")}
         visible={open}
@@ -318,7 +327,7 @@ export function FinanceCompaniesModule({ orgId }: { orgId: string }) {
           </>
         ) : null}
       </FormModal>
-    </ModuleScroll>
+    </>
   );
 }
 

@@ -4,7 +4,7 @@ import { Text, View } from "react-native";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobilePipelineStage } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, EmptyList, ModuleScroll } from "./moduleShared";
+import { useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function PipelineSettingsModule({ orgId }: { orgId: string }) {
@@ -75,24 +75,31 @@ export function PipelineSettingsModule({ orgId }: { orgId: string }) {
   }
 
   return (
-    <ModuleScroll>
-      <PrimaryButton label={locale === "ar" ? "تهيئة المراحل الافتراضية" : "Seed default stages"} onPress={seed} />
-      {stages.length ? stages.map((stage) => (
-        <RecordCard key={stage._id}>
-          <View style={styles.recordHeader}>
-            <Text style={styles.recordTitle}>{stage.label}</Text>
-            <Text style={[styles.statusPill, { backgroundColor: stage.color }]}>{stage.stageKey}</Text>
-          </View>
-          <Text style={styles.recordMeta}>
-            {locale === "ar" ? "الترتيب" : "Order"} {stage.order + 1} · {stage.isActive ? (locale === "ar" ? "نشط" : "Active") : (locale === "ar" ? "متوقف" : "Inactive")}
-          </Text>
-          <View style={styles.cardActions}>
-            <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openEdit(stage)} />
-            <PrimaryButton label={locale === "ar" ? "أعلى" : "Up"} tone="muted" onPress={() => move(stage, -1)} />
-            <PrimaryButton label={locale === "ar" ? "أسفل" : "Down"} tone="muted" onPress={() => move(stage, 1)} />
-          </View>
-        </RecordCard>
-      )) : <EmptyList label={locale === "ar" ? "لم تتم تهيئة المراحل بعد." : "No stages configured yet."} />}
+    <>
+      <ModuleList
+        data={stages}
+        emptyLabel={locale === "ar" ? "لم تتم تهيئة المراحل بعد." : "No stages configured yet."}
+        keyExtractor={(stage) => stage._id}
+        header={
+          <PrimaryButton label={locale === "ar" ? "تهيئة المراحل الافتراضية" : "Seed default stages"} onPress={seed} />
+        }
+        renderItem={(stage) => (
+          <RecordCard>
+            <View style={styles.recordHeader}>
+              <Text style={styles.recordTitle}>{stage.label}</Text>
+              <Text style={[styles.statusPill, { backgroundColor: stage.color }]}>{stage.stageKey}</Text>
+            </View>
+            <Text style={styles.recordMeta}>
+              {locale === "ar" ? "الترتيب" : "Order"} {stage.order + 1} · {stage.isActive ? (locale === "ar" ? "نشط" : "Active") : (locale === "ar" ? "متوقف" : "Inactive")}
+            </Text>
+            <View style={styles.cardActions}>
+              <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openEdit(stage)} />
+              <PrimaryButton label={locale === "ar" ? "أعلى" : "Up"} tone="muted" onPress={() => move(stage, -1)} />
+              <PrimaryButton label={locale === "ar" ? "أسفل" : "Down"} tone="muted" onPress={() => move(stage, 1)} />
+            </View>
+          </RecordCard>
+        )}
+      />
       <FormModal title={locale === "ar" ? "تعديل المرحلة" : "Edit stage"} visible={Boolean(editing)} onClose={() => setEditing(null)}>
         <FormField label={locale === "ar" ? "الاسم" : "Label"} value={form.label} onChangeText={(label) => setForm((prev) => ({ ...prev, label }))} />
         <FormField label={locale === "ar" ? "اللون" : "Color"} value={form.color} onChangeText={(color) => setForm((prev) => ({ ...prev, color }))} />
@@ -104,7 +111,7 @@ export function PipelineSettingsModule({ orgId }: { orgId: string }) {
         />
         <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={save} />
       </FormModal>
-    </ModuleScroll>
+    </>
   );
 }
 

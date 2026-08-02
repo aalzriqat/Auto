@@ -4,7 +4,7 @@ import { Text, View } from "react-native";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileLeadSource } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, EmptyList, ModuleScroll } from "./moduleShared";
+import { useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function LeadSourcesModule({ orgId }: { orgId: string }) {
@@ -77,26 +77,33 @@ export function LeadSourcesModule({ orgId }: { orgId: string }) {
   }
 
   return (
-    <ModuleScroll>
-      <View style={styles.actionRow}>
-        <PrimaryButton label={locale === "ar" ? "إضافة مصدر" : "Add source"} onPress={openCreate} />
-        <PrimaryButton label={locale === "ar" ? "تهيئة" : "Seed"} tone="muted" onPress={() => seedSources({ orgId }).catch((error: unknown) => reportError("Mobile lead source seed failed", error))} />
-      </View>
-      {sources.length ? sources.map((source) => (
-        <RecordCard key={source._id}>
-          <View style={styles.recordHeader}>
-            <Text style={styles.recordTitle}>{source.label}</Text>
-            <Text style={styles.statusPill}>{source.isActive ? "ACTIVE" : "INACTIVE"}</Text>
+    <>
+      <ModuleList
+        data={sources}
+        emptyLabel={locale === "ar" ? "لا توجد مصادر." : "No lead sources found."}
+        keyExtractor={(source) => source._id}
+        header={
+          <View style={styles.actionRow}>
+            <PrimaryButton label={locale === "ar" ? "إضافة مصدر" : "Add source"} onPress={openCreate} />
+            <PrimaryButton label={locale === "ar" ? "تهيئة" : "Seed"} tone="muted" onPress={() => seedSources({ orgId }).catch((error: unknown) => reportError("Mobile lead source seed failed", error))} />
           </View>
-          <Text style={styles.recordMeta}>{locale === "ar" ? "الترتيب" : "Order"} {source.order + 1}</Text>
-          <View style={styles.cardActions}>
-            <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openEdit(source)} />
-            <PrimaryButton label={locale === "ar" ? "أعلى" : "Up"} tone="muted" onPress={() => move(source, -1)} />
-            <PrimaryButton label={locale === "ar" ? "أسفل" : "Down"} tone="muted" onPress={() => move(source, 1)} />
-            <PrimaryButton label={locale === "ar" ? "حذف" : "Delete"} tone="danger" onPress={() => removeSource({ orgId, sourceId: source._id }).catch((error: unknown) => reportError("Mobile lead source delete failed", error))} />
-          </View>
-        </RecordCard>
-      )) : <EmptyList label={locale === "ar" ? "لا توجد مصادر." : "No lead sources found."} />}
+        }
+        renderItem={(source) => (
+          <RecordCard>
+            <View style={styles.recordHeader}>
+              <Text style={styles.recordTitle}>{source.label}</Text>
+              <Text style={styles.statusPill}>{source.isActive ? "ACTIVE" : "INACTIVE"}</Text>
+            </View>
+            <Text style={styles.recordMeta}>{locale === "ar" ? "الترتيب" : "Order"} {source.order + 1}</Text>
+            <View style={styles.cardActions}>
+              <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openEdit(source)} />
+              <PrimaryButton label={locale === "ar" ? "أعلى" : "Up"} tone="muted" onPress={() => move(source, -1)} />
+              <PrimaryButton label={locale === "ar" ? "أسفل" : "Down"} tone="muted" onPress={() => move(source, 1)} />
+              <PrimaryButton label={locale === "ar" ? "حذف" : "Delete"} tone="danger" onPress={() => removeSource({ orgId, sourceId: source._id }).catch((error: unknown) => reportError("Mobile lead source delete failed", error))} />
+            </View>
+          </RecordCard>
+        )}
+      />
       <FormModal title={editing ? (locale === "ar" ? "تعديل مصدر" : "Edit source") : (locale === "ar" ? "مصدر جديد" : "New source")} visible={open} onClose={() => setOpen(false)}>
         <FormField label={locale === "ar" ? "المصدر" : "Source"} value={form.label} onChangeText={(label) => setForm((prev) => ({ ...prev, label }))} />
         <SelectField
@@ -107,7 +114,7 @@ export function LeadSourcesModule({ orgId }: { orgId: string }) {
         />
         <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={save} />
       </FormModal>
-    </ModuleScroll>
+    </>
   );
 }
 
