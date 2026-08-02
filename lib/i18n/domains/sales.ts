@@ -157,6 +157,11 @@ export const salesEn = {
   TaskRescheduleFail: "Failed to reschedule task",
   TaskMarkedStatus: "Task status updated",
   KeepTask: "Keep Task",
+  DeleteTask: "Delete Task",
+  DeleteTaskDesc:
+    "This task will be removed from your lists. An admin can restore it later. To keep it on record with a reason instead, cancel it.",
+  DeleteTaskConfirm: "Delete",
+  TaskDeletedSuccess: "Task deleted successfully",
 
   // Task Dialog
   CreateTask: "Create Task",
@@ -627,6 +632,11 @@ export const salesAr = {
   TaskRescheduleFail: "فشل في إعادة جدولة المهمة",
   TaskMarkedStatus: "تم تحديث حالة المهمة",
   KeepTask: "الاحتفاظ بالمهمة",
+  DeleteTask: "حذف المهمة",
+  DeleteTaskDesc:
+    "ستتم إزالة هذه المهمة من قوائمك. يمكن للمسؤول استعادتها لاحقاً. وإذا أردت الاحتفاظ بها في السجل مع بيان السبب، قم بإلغائها بدلاً من حذفها.",
+  DeleteTaskConfirm: "حذف",
+  TaskDeletedSuccess: "تم حذف المهمة بنجاح",
 
   // Task Dialog
   CreateTask: "إنشاء مهمة",
