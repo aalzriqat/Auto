@@ -4,6 +4,7 @@ import { query, action, internalQuery, internalAction } from "./_generated/serve
 import { mutation, internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import { requireSuperAdmin } from "./utils/tenancy";
+import { logAdminAction } from "./adminAudit";
 import { rateLimiter } from "./rateLimit";
 import type { MutationCtx } from "./_generated/server";
 
@@ -225,10 +226,18 @@ export const setThreadStatus = mutation({
     status: v.union(v.literal("OPEN"), v.literal("CLOSED")),
   },
   handler: async (ctx, args) => {
-    await requireSuperAdmin(ctx);
+    const admin = await requireSuperAdmin(ctx);
     const thread = await ctx.db.get(args.threadId);
     if (!thread) throw new ConvexError("Thread not found.");
     await ctx.db.patch(args.threadId, { status: args.status });
+
+    await logAdminAction(ctx, admin, {
+      action: "supportSetThreadStatus",
+      targetTable: "supportThreads",
+      targetId: args.threadId,
+      before: { status: thread.status },
+      after: { status: args.status },
+    });
   },
 });
 
@@ -248,7 +257,11 @@ export const recordOutboundMessage = internalMutation({
     toEmail: v.string(),
     bodyText: v.string(),
     resendEmailId: v.optional(v.string()),
+    // Set only for a human super-admin reply. `sendAutoReply` leaves both unset,
+    // which is what distinguishes an automated acknowledgment (not an admin
+    // action, so not auditable) from a reply a person sent.
     sentByUserId: v.optional(v.id("users")),
+    sentByEmail: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await ctx.db.insert("supportMessages", {
@@ -262,6 +275,27 @@ export const recordOutboundMessage = internalMutation({
       createdAt: Date.now(),
     });
     await ctx.db.patch(args.threadId, { lastMessageAt: Date.now() });
+
+    // `sendReply` is an action, so it cannot write the audit row itself. It
+    // passes the actor down and the row is inserted here, in the same
+    // transaction as the message it describes — the same shape
+    // `adminUsers.deleteUser` uses for its own action-to-mutation hop. Missing
+    // actor email with an actor id present is a wiring bug, not a live case:
+    // fail rather than record an admin reply with no attribution.
+    if (args.sentByUserId) {
+      if (!args.sentByEmail) {
+        throw new Error("recordOutboundMessage: sentByEmail is required whenever sentByUserId is set.");
+      }
+      await ctx.db.insert("adminAuditLog", {
+        actorUserId: args.sentByUserId,
+        actorEmail: args.sentByEmail,
+        action: "supportSendReply",
+        targetTable: "supportThreads",
+        targetId: args.threadId,
+        after: { toEmail: args.toEmail, resendEmailId: args.resendEmailId },
+        createdAt: Date.now(),
+      });
+    }
   },
 });
 
@@ -296,6 +330,7 @@ export const sendReply = action({
       bodyText: args.bodyText,
       resendEmailId: result.resendEmailId,
       sentByUserId: admin._id,
+      sentByEmail: admin.email,
     });
 
     return { success: true };

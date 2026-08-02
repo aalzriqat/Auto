@@ -19,6 +19,7 @@ import {
 import { toast } from "@/components/ui/sonner";
 import { PageHeader, EmptyState } from "@/components/admin/ui";
 import { ShieldCheck, CheckCircle2, XCircle } from "lucide-react";
+import { getErrorMessage } from "@/lib/errors";
 
 type PendingListingRow = {
   _id: Id<"marketplaceListings">;
@@ -52,7 +53,7 @@ function ListingCard({ listing, onReject }: { readonly listing: PendingListingRo
       await setStatus({ listingId: listing._id, status: "LIVE" });
       toast.success("Listing approved and now live.");
     } catch (error) {
-      toast.error(error);
+      toast.error(getErrorMessage(error));
     } finally {
       setApproving(false);
     }
@@ -147,7 +148,7 @@ export default function AdminMarketplaceListingsPage() {
       setRejectTarget(null);
       setReason("");
     } catch (error) {
-      toast.error(error);
+      toast.error(getErrorMessage(error));
     } finally {
       setRejecting(false);
     }

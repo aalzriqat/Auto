@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { translatePipelineStageLabel } from "@/lib/i18n/defaultLabels";
 import { cn } from "@/lib/utils";
+import { getErrorMessage } from "@/lib/errors";
 
 interface LeadActivityTrailProps {
   orgId: Id<"organizations">;
@@ -85,8 +86,8 @@ export function LeadActivityTrail({ orgId, leadId, canAddUpdates = true }: LeadA
       await addNote({ orgId, leadId, note });
       setDraft("");
       toast.success(t("UpdateAdded" as any) || "Update added");
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setSaving(false);
     }

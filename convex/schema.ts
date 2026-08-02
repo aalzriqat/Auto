@@ -2883,13 +2883,23 @@ export default defineSchema({
       v.literal("emailDomain"),
       v.literal("phone")
     ),
+    // The SHA-256 hex digest of the normalised value, never the value itself —
+    // see `websiteLeadBlocklistValueHash` in convex/websites.ts, which is the
+    // only thing allowed to produce this column so the read and write sides
+    // cannot drift into comparing a raw value against a digest.
     valueHash: v.string(),
     reason: v.optional(v.string()),
     expiresAt: v.optional(v.number()),
     createdAt: v.number(),
     createdBy: v.optional(v.id("users")),
   })
-    .index("by_kind_and_valueHash", ["kind", "valueHash"])
+    // orgId leads the key on purpose. The previous `["kind", "valueHash"]`
+    // index was global, so the lookup had to over-read every org's rows for a
+    // value and filter afterwards — with a bounded `.take()`, an org's own
+    // block could be pushed out of the window by other orgs blocking the same
+    // email and the submission would be allowed. Scoping the index to the org
+    // makes the tenant boundary part of the read rather than a post-filter.
+    .index("by_org_kind_valueHash", ["orgId", "kind", "valueHash"])
     .index("by_org", ["orgId"])
     .index("by_host", ["host"]),
 

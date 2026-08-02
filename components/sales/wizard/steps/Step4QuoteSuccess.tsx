@@ -16,6 +16,7 @@ import { api } from "@/convex/_generated/api";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { toast } from "@/components/ui/sonner";
 import { downloadElementAsPdf } from "@/lib/htmlToPdf";
+import { getErrorMessage } from "@/lib/errors";
 
 interface Step4QuoteSuccessProps {
   paymentType: PaymentType;
@@ -77,8 +78,8 @@ export function Step4QuoteSuccess({
       const id = await createApplication({ orgId: activeOrgId, quoteId });
       setApplicationId(id);
       toast.success(t("ApplicationStartedSuccess" as any) ?? "Finance application started");
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsStartingApplication(false);
     }
@@ -100,8 +101,8 @@ export function Step4QuoteSuccess({
       setSaleId(ids[0]);
       completeSaleIdempotencyKeyRef.current = null;
       toast.success(t("SaleCompletedSuccess" as any) ?? "Cash sale completed");
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsCompletingSale(false);
     }

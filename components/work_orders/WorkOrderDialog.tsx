@@ -37,6 +37,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 
 import { workOrderSchema, WorkOrderFormValues, WorkOrderDialogProps } from "./work_order.schema";
+import { getErrorMessage } from "@/lib/errors";
 
 
 export function WorkOrderDialog({ open, onOpenChange, vehicleId, workOrder }: WorkOrderDialogProps) {
@@ -108,8 +109,8 @@ export function WorkOrderDialog({ open, onOpenChange, vehicleId, workOrder }: Wo
         toast.success("Work order created successfully!");
       }
       onOpenChange(false);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSubmitting(false);
     }

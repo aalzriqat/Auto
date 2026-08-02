@@ -41,6 +41,7 @@ import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/P
 import { vehicleSchema, VehicleFormValues, VehicleDialogProps } from "./vehicle.schema";
 import { CustomFieldsSection, useSaveCustomFieldValues } from "@/components/custom-fields/CustomFieldsSection";
 import { decodeVinYear, toCarBrand, cleanMfrName, validateVinChecksum } from "@/lib/vinHelpers";
+import { getErrorMessage } from "@/lib/errors";
 
 export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, canEdit = false }: VehicleDialogProps) {
   const { activeOrgId } = useOrg();
@@ -340,8 +341,8 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         }
       }
       onOpenChange(false);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSubmitting(false);
     }

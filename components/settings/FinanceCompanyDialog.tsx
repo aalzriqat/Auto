@@ -25,6 +25,7 @@ import {
 import { toast } from "@/components/ui/sonner";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
+import { getErrorMessage } from "@/lib/errors";
 
 export function FinanceCompanyDialog({
   open,
@@ -125,8 +126,8 @@ export function FinanceCompanyDialog({
         toast.success(t("CompanyCreatedSuccess" as any));
       }
       onOpenChange(false);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsLoading(false);
     }

@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { toast } from "@/components/ui/sonner";
+import { getErrorMessage } from "@/lib/errors";
 
 interface DocumentRuleDialogProps {
   open: boolean;
@@ -62,8 +63,8 @@ export function DocumentRuleDialog({ open, onOpenChange }: DocumentRuleDialogPro
       });
       toast.success(t("RuleAddedSuccess" as any));
       onOpenChange(false);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSubmitting(false);
     }

@@ -42,6 +42,7 @@ import {
 import { useTableControls } from "@/hooks/useTableControls";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 import { SaleTrailDialog } from "@/components/sales/SaleTrailDialog";
+import { getErrorMessage } from "@/lib/errors";
 
 export default function SalesPage() {
   const { activeOrgId } = useOrg();
@@ -96,8 +97,8 @@ export default function SalesPage() {
       await removeSale({ orgId: activeOrgId, saleId: saleToDelete._id });
       toast.success(t("SaleRemovedSuccess" as any));
       setSaleToDelete(null);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 

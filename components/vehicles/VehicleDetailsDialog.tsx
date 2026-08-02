@@ -57,6 +57,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import { getErrorMessage } from "@/lib/errors";
 
 interface VehicleDetailsDialogProps {
   vehicle: Doc<"vehicles"> | null;
@@ -175,8 +176,8 @@ export function VehicleDetailsDialog({
         items: landedCostItems.map(({ id: _id, ...item }) => item),
       });
       toast.success(t("LandedCostSaved" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setSavingLandedCosts(false);
     }
@@ -197,8 +198,8 @@ export function VehicleDetailsDialog({
       setReservationDeposit("");
       setReservationExpiresAt("");
       toast.success(t("ReservationCreated" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setSavingReservation(false);
     }
@@ -210,8 +211,8 @@ export function VehicleDetailsDialog({
     try {
       await releaseReservation({ orgId: activeOrgId, reservationId });
       toast.success(t("ReservationReleased" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setSavingReservation(false);
     }
@@ -232,8 +233,8 @@ export function VehicleDetailsDialog({
           ? (t("DepositRefundedSuccess" as any) ?? "Deposit refunded")
           : (t("DepositForfeitedSuccess" as any) ?? "Deposit forfeited")
       );
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setReleasingDepositId(null);
     }

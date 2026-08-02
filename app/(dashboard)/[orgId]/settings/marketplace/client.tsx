@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Handshake, Crown, Package, Clock } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
+import { getErrorMessage } from "@/lib/errors";
 
 // Mirrors convex/marketplaceDealers.ts's FOUNDING_WINDOW_MS — used only as a
 // display fallback for profiles created before Phase 63 stamped
@@ -147,9 +148,9 @@ export function MarketplaceSettingsClient() {
         whatsappNumber: whatsappNumber.trim() || undefined,
       });
       toast.success(t("MarketplaceSaved" as any));
-    } catch (error: any) {
+    } catch (error) {
       if (overrides?.isOptedIn !== undefined) setIsOptedIn(previousIsOptedIn);
-      toast.error(error);
+      toast.error(getErrorMessage(error));
     } finally {
       setSaving(false);
     }

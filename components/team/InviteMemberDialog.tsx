@@ -29,6 +29,7 @@ import { Button } from "@/components/ui/button";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Info, UserCheck, Loader2 } from "lucide-react";
+import { getErrorMessage } from "@/lib/errors";
 
 const baseSchema = z.object({
   email: z.string().email("Invalid email address"),
@@ -142,8 +143,8 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
       form.reset();
       setEmailCheckState("idle");
       onOpenChange(false);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSubmitting(false);
     }

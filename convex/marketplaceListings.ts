@@ -15,6 +15,7 @@ import {
 } from "./utils/storageValidation";
 import { rateLimiter } from "./rateLimit";
 import { throwAppError, AppErrorCode } from "./utils/errors";
+import { logAdminAction } from "./adminAudit";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -790,6 +791,15 @@ export const adminSetListingStatus = mutation({
         updatedAt: Date.now(),
         ...buildAdminStatusPatch(args.status, admin._id, trimmedReason),
       });
+
+      await logAdminAction(ctx, admin, {
+        action: "marketplaceSetListingStatus",
+        targetTable: "marketplaceListings",
+        targetId: args.listingId,
+        before: { status: listing.status },
+        after: { status: args.status, rejectionReason: trimmedReason },
+      });
+
       return null;
     } catch (error) {
       if (error instanceof ConvexError) throw error;

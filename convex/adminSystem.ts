@@ -4,6 +4,7 @@ import { paginationOptsValidator } from "convex/server";
 import { query, internalQuery, internalAction, ActionCtx, QueryCtx } from "./_generated/server";
 import { mutation, internalMutation } from "./functions";
 import { requireSuperAdmin } from "./utils/tenancy";
+import { logAdminAction } from "./adminAudit";
 import { internal } from "./_generated/api";
 import { CRON_HEARTBEAT_JOBS } from "./constants";
 
@@ -232,16 +233,26 @@ export const getSiteConfigInternal = internalQuery({
 export const setSiteConfig = mutation({
   args: { key: v.string(), value: v.any() },
   handler: async (ctx, args) => {
-    await requireSuperAdmin(ctx);
+    const admin = await requireSuperAdmin(ctx);
     const existing = await ctx.db
       .query("siteConfig")
       .withIndex("by_key", (q) => q.eq("key", args.key))
       .unique();
+    let configId: Id<"siteConfig">;
     if (existing) {
       await ctx.db.patch(existing._id, { value: args.value, updatedAt: Date.now() });
+      configId = existing._id;
     } else {
-      await ctx.db.insert("siteConfig", { key: args.key, value: args.value, updatedAt: Date.now() });
+      configId = await ctx.db.insert("siteConfig", { key: args.key, value: args.value, updatedAt: Date.now() });
     }
+
+    await logAdminAction(ctx, admin, {
+      action: "setSiteConfig",
+      targetTable: "siteConfig",
+      targetId: configId,
+      before: existing ? { key: existing.key, value: existing.value } : undefined,
+      after: { key: args.key, value: args.value },
+    });
   },
 });
 
