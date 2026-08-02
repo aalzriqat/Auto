@@ -3,6 +3,7 @@ import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import { requireAuth, requireTenantAuth, requireOwner, requireOwnedRow, requireSuperAdmin } from "./utils/tenancy";
 import { notifyUser } from "./utils/notifications";
+import { logAdminAction } from "./adminAudit";
 
 export const submit = mutation({
   args: {
@@ -160,13 +161,23 @@ export const adminSetStatus = mutation({
     status: v.union(v.literal("OPEN"), v.literal("CLOSED")),
   },
   handler: async (ctx, args) => {
-    await requireSuperAdmin(ctx);
+    const admin = await requireSuperAdmin(ctx);
     const item = await ctx.db.get(args.feedbackId);
     if (!item) throw new Error("Feedback not found");
     const patch: Record<string, unknown> = { status: args.status };
     if (args.status === "CLOSED") patch.resolvedAt = Date.now();
     else patch.resolvedAt = undefined;
     await ctx.db.patch(args.feedbackId, patch);
+
+    await logAdminAction(ctx, admin, {
+      action: "feedbackSetStatus",
+      targetTable: "feedback",
+      targetId: args.feedbackId,
+      orgId: item.orgId,
+      before: { status: item.status },
+      after: { status: args.status },
+    });
+
     if (args.status === "CLOSED") {
       const orgId = item.orgId;
       const link = `/${orgId}/settings/feedback`;
@@ -181,13 +192,23 @@ export const adminReply = mutation({
     reply: v.string(),
   },
   handler: async (ctx, args) => {
-    await requireSuperAdmin(ctx);
+    const admin = await requireSuperAdmin(ctx);
     const item = await ctx.db.get(args.feedbackId);
     if (!item) throw new Error("Feedback not found");
     await ctx.db.patch(args.feedbackId, {
       adminReply: args.reply.trim(),
       adminRepliedAt: Date.now(),
     });
+
+    await logAdminAction(ctx, admin, {
+      action: "feedbackReply",
+      targetTable: "feedback",
+      targetId: args.feedbackId,
+      orgId: item.orgId,
+      before: { adminReply: item.adminReply, adminRepliedAt: item.adminRepliedAt },
+      after: { adminReply: args.reply.trim() },
+    });
+
     const orgId = item.orgId;
     const link = `/${orgId}/settings/feedback`;
     await notifyUser(ctx, orgId, item.userId, "feedback.replied", { title: item.title }, { link });

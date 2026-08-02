@@ -966,6 +966,37 @@ describe("ownership: update / soft-delete", () => {
     ).rejects.toThrow(/cannot edit a listing/i);
   });
 
+  test("an admin status change writes an admin audit row", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const asSeller = await seedUser(t, "seller_71", "seller71@test.com");
+    const asAdmin = await seedUser(t, "admin_21", "admin@autoflow.dev");
+    const imageId = await seedImage(t, "seller_71");
+    const listingId = await asSeller.mutation(api.marketplaceListings.createListing, {
+      ...baseListing,
+      imageIds: [imageId],
+    });
+
+    // Taking a listing down is a moderation decision and used to leave no
+    // record of who made it or what it was before.
+    await asAdmin.mutation(api.marketplaceListings.adminSetListingStatus, {
+      listingId,
+      status: "REJECTED",
+      rejectionReason: "Photos too blurry.",
+    });
+
+    const rows = (await t.run((ctx) => ctx.db.query("adminAuditLog").collect())).filter(
+      (row) => row.action === "marketplaceSetListingStatus"
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      actorEmail: "admin@autoflow.dev",
+      targetTable: "marketplaceListings",
+      targetId: listingId,
+      before: { status: "PENDING_VERIFICATION" },
+      after: { status: "REJECTED", rejectionReason: "Photos too blurry." },
+    });
+  });
+
   test("editing a REJECTED listing resubmits it to PENDING_VERIFICATION and clears the rejection reason", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const asSeller = await seedUser(t, "seller_32", "seller32@test.com");

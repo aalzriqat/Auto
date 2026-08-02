@@ -45,6 +45,24 @@ describe("mobileReleases", () => {
     expect(current?.updateAvailable).toBe(false);
   });
 
+  test("publishing a release writes an admin audit row", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const admin = await asSuperAdmin(t);
+    const releaseId = await admin.mutation(api.mobileReleases.publishRelease, baseRelease);
+
+    // Pushing a new APK at every installed device is a platform-wide action and
+    // used to leave no record of who did it.
+    const rows = await t.run((ctx) => ctx.db.query("adminAuditLog").collect());
+    const published = rows.filter((row) => row.action === "publishMobileRelease");
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({
+      actorEmail: "admin@autoflow.dev",
+      targetTable: "mobileAppReleases",
+      targetId: releaseId,
+      after: { platform: "ANDROID", buildNumber: 5, versionName: "1.2.0" },
+    });
+  });
+
   test("rejects a build number that isn't newer than the current latest", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const admin = await asSuperAdmin(t);

@@ -2,6 +2,7 @@ import { ConvexError, v } from "convex/values";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import { requireSuperAdmin } from "./utils/tenancy";
+import { logAdminAction } from "./adminAudit";
 
 const platformValidator = v.union(v.literal("ANDROID"), v.literal("IOS"));
 
@@ -83,7 +84,7 @@ export const publishRelease = mutation({
       );
     }
 
-    return await ctx.db.insert("mobileAppReleases", {
+    const releaseId = await ctx.db.insert("mobileAppReleases", {
       platform: args.platform,
       buildNumber: args.buildNumber,
       versionName: args.versionName.trim(),
@@ -95,5 +96,22 @@ export const publishRelease = mutation({
       createdBy: admin._id,
       createdAt: Date.now(),
     });
+
+    await logAdminAction(ctx, admin, {
+      action: "publishMobileRelease",
+      targetTable: "mobileAppReleases",
+      targetId: releaseId,
+      before: current ? { buildNumber: current.buildNumber, versionName: current.versionName } : undefined,
+      after: {
+        platform: args.platform,
+        buildNumber: args.buildNumber,
+        versionName: args.versionName.trim(),
+        runtimeVersion: args.runtimeVersion.trim(),
+        apkUrl: args.apkUrl.trim(),
+        mandatory: args.mandatory ?? false,
+      },
+    });
+
+    return releaseId;
   },
 });
