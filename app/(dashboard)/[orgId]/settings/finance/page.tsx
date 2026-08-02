@@ -25,6 +25,7 @@ import { DocumentRuleDialog } from "@/components/settings/DocumentRuleDialog";
 import { FileCheck } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
+import { getErrorMessage } from "@/lib/errors";
 
 export default function FinanceCompaniesPage() {
   const { activeOrgId } = useOrg();
@@ -57,8 +58,8 @@ export default function FinanceCompaniesPage() {
       try {
         await deleteCompany({ id, orgId: activeOrgId });
         toast.success(t("CompanyDeletedSuccess" as any));
-      } catch (error: any) {
-        toast.error(error);
+      } catch (error) {
+        toast.error(getErrorMessage(error));
       }
     }
   };
@@ -68,8 +69,8 @@ export default function FinanceCompaniesPage() {
     try {
       await seedStatuses({ orgId: activeOrgId });
       toast.success(t("DefaultStatusesLoaded" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -81,8 +82,8 @@ export default function FinanceCompaniesPage() {
       setNewStatusLabel("");
       setShowAddStatusInput(false);
       toast.success(t("CustomerStatusAdded" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsAddingStatus(false);
     }
@@ -92,8 +93,8 @@ export default function FinanceCompaniesPage() {
     if (!activeOrgId) return;
     try {
       await updateStatus({ orgId: activeOrgId, statusId, isActive });
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -103,8 +104,8 @@ export default function FinanceCompaniesPage() {
     try {
       await removeStatus({ orgId: activeOrgId, statusId });
       toast.success(t("CustomerStatusDeleted" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -114,8 +115,8 @@ export default function FinanceCompaniesPage() {
     [orderedIds[index - 1], orderedIds[index]] = [orderedIds[index], orderedIds[index - 1]];
     try {
       await reorderStatuses({ orgId: activeOrgId, orderedIds });
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -125,8 +126,8 @@ export default function FinanceCompaniesPage() {
     [orderedIds[index], orderedIds[index + 1]] = [orderedIds[index + 1], orderedIds[index]];
     try {
       await reorderStatuses({ orgId: activeOrgId, orderedIds });
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 

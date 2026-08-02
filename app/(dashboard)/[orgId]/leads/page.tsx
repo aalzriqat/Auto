@@ -38,6 +38,7 @@ import { useTableControls } from "@/hooks/useTableControls";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 
 import { LEAD_STAGES } from "@/convex/constants";
+import { getErrorMessage } from "@/lib/errors";
 
 const STAGE_LABELS: Record<string, string> = {
   NEW: "New",
@@ -120,8 +121,8 @@ export default function LeadsPage() {
       await removeLead({ orgId: activeOrgId, leadId: leadToDelete._id });
       toast.success(t("LeadRemovedSuccess" as any) || "Lead deleted successfully");
       setLeadToDelete(null);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 

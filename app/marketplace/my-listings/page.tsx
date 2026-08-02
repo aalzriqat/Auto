@@ -25,6 +25,7 @@ import {
   type Lang,
   type Translations,
 } from "../marketplaceShell";
+import { getErrorMessage } from "@/lib/errors";
 
 // getMyListings returns each raw listing doc plus a resolved thumbnailUrl
 // (first image only) that doesn't exist on the underlying schema doc.
@@ -186,7 +187,7 @@ function EditListingForm({
       toast.success(t.updated);
       onSaved();
     } catch (error) {
-      toast.error(error);
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSaving(false);
     }
@@ -276,7 +277,7 @@ function ListingCard({ listing, lang, t }: { readonly listing: ListingDoc; reado
       await markSold({ listingId: listing._id });
       toast.success(t.markedSold);
     } catch (error) {
-      toast.error(error);
+      toast.error(getErrorMessage(error));
     } finally {
       setIsMarkingSold(false);
     }
@@ -290,7 +291,7 @@ function ListingCard({ listing, lang, t }: { readonly listing: ListingDoc; reado
       toast.success(t.deleted);
       setIsDeleted(true);
     } catch (error) {
-      toast.error(error);
+      toast.error(getErrorMessage(error));
       setIsDeleting(false);
     }
   }

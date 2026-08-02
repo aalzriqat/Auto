@@ -17,6 +17,7 @@ import { Sparkles, Camera, CheckCircle2, Plus, Trash2, ChevronDown, ChevronUp, U
 import { toast } from "@/components/ui/sonner";
 import { socialSmartReplyEn, socialSmartReplyAr } from "@/lib/i18n/domains/socialSmartReply";
 import { DEFAULT_MOBILE_RECEIVED_AUTO_REPLY } from "@/convex/utils/socialMobileReply";
+import { getErrorMessage } from "@/lib/errors";
 
 const MAX_AUTO_REPLY_MESSAGES = 5;
 
@@ -204,8 +205,8 @@ export function IntegrationsClient() {
     try {
       const url = await createInstagramConnectUrl({ orgId: activeOrgId });
       window.location.href = url;
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -214,8 +215,8 @@ export function IntegrationsClient() {
     try {
       await disconnectInstagram({ orgId: activeOrgId });
       toast.success(t("InstagramDisconnectedSuccess" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -224,8 +225,8 @@ export function IntegrationsClient() {
     try {
       const url = await createFacebookConnectUrl({ orgId: activeOrgId });
       window.location.href = url;
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -234,8 +235,8 @@ export function IntegrationsClient() {
     try {
       await disconnectFacebook({ orgId: activeOrgId });
       toast.success(t("FacebookDisconnectedSuccess" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -256,8 +257,8 @@ export function IntegrationsClient() {
     if (!activeOrgId) return;
     try {
       await setAutoPostEnabled({ orgId: activeOrgId, enabled });
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -282,8 +283,8 @@ export function IntegrationsClient() {
         mobileReceivedMessage,
       });
       toast.success(t("AutoRepliesSaved" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIgSavingAutoReply(false);
     }
@@ -310,8 +311,8 @@ export function IntegrationsClient() {
         mobileReceivedMessage,
       });
       toast.success(t("AutoRepliesSaved" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setFbSavingAutoReply(false);
     }
@@ -338,8 +339,8 @@ export function IntegrationsClient() {
         leadFromDmsEnabled,
         leadFromDmsRequiresMobile,
       });
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -364,8 +365,8 @@ export function IntegrationsClient() {
         leadFromDmsEnabled,
         leadFromDmsRequiresMobile,
       });
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -377,9 +378,9 @@ export function IntegrationsClient() {
     try {
       await setGeneratedLeadAutoAssignmentEnabled({ orgId: activeOrgId, enabled });
       toast.success(t("GeneratedLeadAutoAssignmentSaved" as any));
-    } catch (error: any) {
+    } catch (error) {
       setAutoAssignGeneratedLeads(previous);
-      toast.error(error);
+      toast.error(getErrorMessage(error));
     } finally {
       setSavingAutoAssign(false);
     }
@@ -416,8 +417,8 @@ export function IntegrationsClient() {
         visibility: overrides?.visibility ?? smartReplyVisibility,
       });
       toast.success(t("SmartReplySaved" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setSavingSmartReply(false);
     }
@@ -451,8 +452,8 @@ export function IntegrationsClient() {
         customTemplatesAr: JSON.stringify(filtered(templatesAr)),
       });
       toast.success(t("SmartReplyTemplatesSaved" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setSavingTemplates(false);
     }

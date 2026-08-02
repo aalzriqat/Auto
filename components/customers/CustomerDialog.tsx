@@ -30,6 +30,7 @@ import { Button } from "@/components/ui/button";
 
 import { customerSchema, CustomerFormValues, CustomerDialogProps } from "./customer.schema";
 import { CustomFieldsSection, useSaveCustomFieldValues } from "@/components/custom-fields/CustomFieldsSection";
+import { getErrorMessage } from "@/lib/errors";
 
 
 export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogProps) {
@@ -145,8 +146,8 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
         toast.success(t("CustomerAddedSuccess" as any));
       }
       onOpenChange(false);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSubmitting(false);
     }

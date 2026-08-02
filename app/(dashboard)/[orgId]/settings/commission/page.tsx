@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { toast } from "@/components/ui/sonner";
 import { Plus, Trash2, Zap, PenLine, Users } from "lucide-react";
+import { getErrorMessage } from "@/lib/errors";
 
 interface Tier {
   minProfitAmount: number;
@@ -42,8 +43,8 @@ export default function CommissionSettingsPage() {
     try {
       await upsert({ orgId: activeOrgId, commissionMode: mode });
       toast.success(t("CommissionModeSaved" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSavingMode(false);
     }
@@ -70,8 +71,8 @@ export default function CommissionSettingsPage() {
       await upsert({ orgId: activeOrgId, commissionTiers: sorted });
       setTiers(sorted);
       toast.success(t("CommissionTiersSaved"));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSaving(false);
     }

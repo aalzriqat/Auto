@@ -13,6 +13,7 @@ import { toast } from "@/components/ui/sonner";
 import { Plus, Trash2, ChevronUp, ChevronDown, Loader2 } from "lucide-react";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { translateLeadSourceLabel } from "@/lib/i18n/defaultLabels";
+import { getErrorMessage } from "@/lib/errors";
 
 export default function LeadSourcesPage() {
   const { activeOrgId } = useOrg();
@@ -37,8 +38,8 @@ export default function LeadSourcesPage() {
     try {
       await seedSources({ orgId: activeOrgId });
       toast.success(t("DefaultSourcesLoaded" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -50,8 +51,8 @@ export default function LeadSourcesPage() {
       setNewLabel("");
       setShowAddInput(false);
       toast.success(t("LeadSourceAdded" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsAdding(false);
     }
@@ -61,8 +62,8 @@ export default function LeadSourcesPage() {
     if (!activeOrgId) return;
     try {
       await updateSource({ orgId: activeOrgId, sourceId, isActive });
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -72,8 +73,8 @@ export default function LeadSourcesPage() {
     try {
       await removeSource({ orgId: activeOrgId, sourceId });
       toast.success(t("LeadSourceDeleted" as any));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -83,8 +84,8 @@ export default function LeadSourcesPage() {
     [orderedIds[index - 1], orderedIds[index]] = [orderedIds[index], orderedIds[index - 1]];
     try {
       await reorderSources({ orgId: activeOrgId, orderedIds });
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -94,8 +95,8 @@ export default function LeadSourcesPage() {
     [orderedIds[index], orderedIds[index + 1]] = [orderedIds[index + 1], orderedIds[index]];
     try {
       await reorderSources({ orgId: activeOrgId, orderedIds });
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 

@@ -44,6 +44,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { getErrorMessage } from "@/lib/errors";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 type AgingFilter = "ALL" | "0-30" | "31-60" | "61-90" | "90+";
@@ -167,8 +168,8 @@ export default function VehiclesPage() {
       setStatusRequestVehicle(null);
       setSelectedStatus("");
       setStatusRequestNotes("");
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -177,8 +178,8 @@ export default function VehiclesPage() {
     try {
       await resolveStatusRequest({ orgId: activeOrgId, requestId, status });
       toast.success(`Status request ${status.toLowerCase()}`);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -187,8 +188,8 @@ export default function VehiclesPage() {
     try {
       await resolveEditRequest({ orgId: activeOrgId, requestId, status });
       toast.success(`Edit request ${status.toLowerCase()}`);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -240,8 +241,8 @@ export default function VehiclesPage() {
       await removeVehicle({ orgId: activeOrgId, vehicleId: vehicleToDelete._id });
       toast.success(t("VehicleRemoved" as any));
       setVehicleToDelete(null);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 

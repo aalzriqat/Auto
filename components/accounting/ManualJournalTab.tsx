@@ -33,6 +33,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { manualJournalSchema, ManualJournalFormValues } from "./manualJournal.schema";
 import { scaleForCurrency } from "./AccountingTabShared";
+import { getErrorMessage } from "@/lib/errors";
 
 function emptyLine() {
   return { id: crypto.randomUUID(), accountId: "", side: "DEBIT" as const, amount: 0 };
@@ -109,8 +110,8 @@ export function ManualJournalTab() {
       toast.success(t("ManualJournalCreated"));
       setDialogOpen(false);
       resetForm();
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSubmitting(false);
     }
@@ -122,8 +123,8 @@ export function ManualJournalTab() {
     try {
       await approveDraft({ orgId: activeOrgId, draftId });
       toast.success(t("ManualJournalApproved"));
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setActingOnId(null);
     }
@@ -140,8 +141,8 @@ export function ManualJournalTab() {
       await rejectDraft({ orgId: activeOrgId, draftId: rejecting.id, rejectionReason: rejecting.reason });
       toast.success(t("ManualJournalRejected"));
       setRejecting(null);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setActingOnId(null);
     }

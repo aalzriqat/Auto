@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { parsePhoneLines, phonesToText } from "@/lib/phones";
+import { getErrorMessage } from "@/lib/errors";
 
 export function BranchesClient() {
   const { activeOrgId } = useOrg();
@@ -92,8 +93,8 @@ export function BranchesClient() {
         toast.success(t("BranchCreatedSuccess" as any));
       }
       setIsDialogOpen(false);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 

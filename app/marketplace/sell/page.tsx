@@ -26,6 +26,7 @@ import {
   useMarketplaceLang,
   type Translations,
 } from "../marketplaceShell";
+import { getErrorMessage } from "@/lib/errors";
 
 // Mirrors convex/utils/storageValidation.ts's MARKETPLACE_LISTING_IMAGE_CONTENT_TYPES
 // / max size — checked client-side too so a rejected file is caught before an
@@ -201,7 +202,7 @@ export default function MarketplaceSellPage() {
         setImages((prev) => [...prev, { storageId, previewUrl: url }]);
       }
     } catch (error) {
-      toast.error(error);
+      toast.error(getErrorMessage(error));
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -241,7 +242,7 @@ export default function MarketplaceSellPage() {
       });
       setSubmittedListingId(listingId);
     } catch (error) {
-      toast.error(error);
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSubmitting(false);
     }

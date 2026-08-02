@@ -43,6 +43,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useTableControls } from "@/hooks/useTableControls";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
+import { getErrorMessage } from "@/lib/errors";
 
 export default function CustomersPage() {
   const searchParams = useSearchParams();
@@ -125,8 +126,8 @@ export default function CustomersPage() {
       await removeCustomer({ orgId: activeOrgId, customerId: customerToDelete._id });
       toast.success(t("CustomerRemovedSuccess" as any));
       setCustomerToDelete(null);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 

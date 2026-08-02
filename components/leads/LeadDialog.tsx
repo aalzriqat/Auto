@@ -43,6 +43,7 @@ import { CustomFieldsSection, useSaveCustomFieldValues } from "@/components/cust
 import { LeadActivityTrail } from "./LeadActivityTrail";
 import { LeadCustomerMessages } from "./LeadCustomerMessages";
 import { translateLeadSourceLabel, translatePipelineStageLabel } from "@/lib/i18n/defaultLabels";
+import { getErrorMessage } from "@/lib/errors";
 
 /**
  * Pins a lead's stored value into a dropdown's option list when it isn't
@@ -267,8 +268,8 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
         toast.success(t("LeadAddedSuccess" as any) || "Lead created successfully");
       }
       onOpenChange(false);
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSubmitting(false);
     }
