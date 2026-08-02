@@ -1,5 +1,46 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Animated, Easing, Pressable, type StyleProp, type ViewStyle } from "react-native";
+import { AccessibilityInfo, Animated, Easing, Pressable, type StyleProp, type ViewStyle } from "react-native";
+
+/**
+ * Live "Reduce Motion" state from the OS accessibility settings.
+ *
+ * Reads the current value on mount AND subscribes to changes: a user can flip
+ * the setting from Control Center / quick settings while the app is foregrounded,
+ * and a read-once implementation would keep animating for the rest of the session.
+ * Any failure to read the setting leaves motion enabled — the setting is a
+ * preference, and losing it must not blank the UI.
+ */
+export function useReduceMotion(): boolean {
+  const [reduceMotion, setReduceMotion] = useState(false);
+
+  useEffect(() => {
+    let subscribed = true;
+
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((enabled) => {
+        if (subscribed) {
+          setReduceMotion(Boolean(enabled));
+        }
+      })
+      .catch((error: unknown) => {
+        console.error("Failed to read the reduce-motion accessibility setting", error);
+      });
+
+    const subscription = AccessibilityInfo.addEventListener("reduceMotionChanged", (enabled) => {
+      setReduceMotion(Boolean(enabled));
+    });
+
+    return () => {
+      subscribed = false;
+      subscription?.remove();
+    };
+  }, []);
+
+  return reduceMotion;
+}
+
+/** Where FadeSlideIn ends up. Used directly when motion is reduced. */
+const RESTING_FADE_SLIDE = { opacity: 1, transform: [{ translateY: 0 }] } as const;
 
 export function FadeSlideIn({
   children,
@@ -11,8 +52,13 @@ export function FadeSlideIn({
   style?: StyleProp<ViewStyle>;
 }>) {
   const progress = useRef(new Animated.Value(0)).current;
+  const reduceMotion = useReduceMotion();
 
   useEffect(() => {
+    if (reduceMotion) {
+      return;
+    }
+
     const animation = Animated.timing(progress, {
       toValue: 1,
       duration: 420,
@@ -22,16 +68,22 @@ export function FadeSlideIn({
     });
     animation.start();
     return () => animation.stop();
-  }, [delay, progress]);
+  }, [delay, progress, reduceMotion]);
 
   return (
     <Animated.View
       style={[
         style,
-        {
-          opacity: progress,
-          transform: [{ translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }],
-        },
+        // Reduce motion swaps the driven style for the resting one outright,
+        // rather than jumping the Animated.Value: `progress` drives opacity, so
+        // anything that skips the animation without also replacing the style
+        // renders every list and screen in the app permanently invisible.
+        reduceMotion
+          ? RESTING_FADE_SLIDE
+          : {
+            opacity: progress,
+            transform: [{ translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }],
+          },
       ]}
     >
       {children}
@@ -91,8 +143,15 @@ export function PressableScale({
 export function useCountUp(target: number, duration = 700): number {
   const [display, setDisplay] = useState(0);
   const progress = useRef(new Animated.Value(0)).current;
+  const reduceMotion = useReduceMotion();
 
   useEffect(() => {
+    // The final number is the information; the roll-up is decoration.
+    if (reduceMotion) {
+      setDisplay(target);
+      return;
+    }
+
     progress.setValue(0);
     const listenerId = progress.addListener(({ value }) => {
       setDisplay(Math.round(value * target));
@@ -108,7 +167,7 @@ export function useCountUp(target: number, duration = 700): number {
       animation.stop();
       progress.removeListener(listenerId);
     };
-  }, [target, duration, progress]);
+  }, [target, duration, progress, reduceMotion]);
 
   return display;
 }

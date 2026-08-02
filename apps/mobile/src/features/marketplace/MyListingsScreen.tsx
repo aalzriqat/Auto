@@ -3,6 +3,7 @@ import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { useRouter } from "expo-router";
 import { useState } from "react";
 import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { AppImage } from "../../components/AppImage";
 
 import {
   api,
@@ -62,7 +63,7 @@ function ListingCard({
       <View style={[styles.cardTopRow, { direction: textDirection }]}>
         <View style={styles.thumbWrap}>
           {listing.thumbnailUrl ? (
-            <Image source={{ uri: listing.thumbnailUrl }} style={styles.thumb} resizeMode="cover" />
+            <AppImage uri={listing.thumbnailUrl} style={styles.thumb} />
           ) : (
             <Icon color="mutedText" name="vehicles" size={22} />
           )}

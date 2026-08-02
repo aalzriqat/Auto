@@ -1,6 +1,7 @@
 import type { MobileFoundationStringKey } from "@autoflow/shared";
 import { useMutation, useQuery } from "convex/react";
 import { useEffect, useMemo, useState } from "react";
+import { AppImage } from "../../components/AppImage";
 import {
   Alert,
   Image,
@@ -177,7 +178,7 @@ function OfferCard({
       </View>
 
       {offer.vehicle?.photoUrl ? (
-        <Image source={{ uri: offer.vehicle.photoUrl }} style={styles.offerImage} resizeMode="cover" />
+        <AppImage uri={offer.vehicle.photoUrl} style={styles.offerImage} />
       ) : null}
 
       <Text style={styles.offerTitle}>{title}</Text>

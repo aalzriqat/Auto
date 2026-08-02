@@ -2,13 +2,15 @@ import { useMutation, usePaginatedQuery } from "convex/react";
 import * as ImagePicker from "expo-image-picker";
 import { useEffect, useRef, useState } from "react";
 import { Alert, Image, Pressable, ScrollView, Text, View } from "react-native";
+import { AppImage } from "../../../components/AppImage";
+import { hapticSuccess } from "../../../haptics";
 import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepFlow";
 import { ensurePhotoLibraryPermission } from "../../../permissions/mediaPermissions";
 import { api, type MobileVehicle, type MobileVehicleStatus } from "../../../convexApi";
 import { getFuelTypeOptions, getTransmissionOptions, getVehicleColorOptions, getVehicleMakeOptions } from "../../../data/mobileOptions";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { getMobileVinReadiness, normalizeVinInput } from "../mobileVinDecode";
-import { PAGE_SIZE, type Option, fetchDecodedMobileVin, vinNotReadyMessage, vinChecksumWarningMessage, vinDecodeResultMessage, compactNumber, money, maybeText, parseOptionalNumber, parseRequiredNumber, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, MetricCard, ModuleList, getOptionLabel, firstVehicleImageUrl, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
+import { PAGE_SIZE, type Option, fetchDecodedMobileVin, vinNotReadyMessage, vinChecksumWarningMessage, vinDecodeResultMessage, compactNumber, money, maybeText, parseOptionalNumber, parseRequiredNumber, invalidNumberMessage, requiredFieldMessage, requiredText, useFormErrors, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, MetricCard, ModuleList, getOptionLabel, firstVehicleImageUrl, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
 import { useRouter } from "expo-router";
 import { GradientFill } from "../../../components/Premium";
 import { Icon } from "../../../components/Icon";
@@ -95,6 +97,9 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
       subtitle: locale === "ar" ? "راجع البطاقة قبل إضافتها للمخزون." : "Check the inventory card before saving.",
     },
   ];
+  const { errors, reset, validate } = useFormErrors<
+    "make" | "model" | "year" | "mileage" | "sellingPrice" | "vin"
+  >();
   const vehicleVinReadiness = getMobileVinReadiness(form.vin);
   const selectedVehicleStatusLabel = getOptionLabel(
     statusOptions.filter((option) => option.value !== "ALL").map((option) => ({
@@ -130,6 +135,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
       status: "AVAILABLE",
       notes: "",
     });
+    reset();
     setOpen(true);
   }
 
@@ -160,6 +166,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
       status: vehicle.status,
       notes: vehicle.notes ?? "",
     });
+    reset();
     setOpen(true);
   }
 
@@ -284,17 +291,20 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
     const year = parseRequiredNumber(form.year);
     const mileage = parseRequiredNumber(form.mileage);
     const sellingPrice = parseRequiredNumber(form.sellingPrice);
-    if (!form.make.trim() || !form.model.trim() || year === null || mileage === null || sellingPrice === null) {
-      Alert.alert(locale === "ar" ? "حقول مطلوبة" : "Required fields");
-      return;
-    }
-    if (!vin) {
-      Alert.alert(locale === "ar" ? "رقم الشاصي مطلوب" : "VIN is required");
-      return;
-    }
-    const readinessMessage = vinNotReadyMessage(getMobileVinReadiness(vin), locale);
-    if (readinessMessage) {
-      Alert.alert(locale === "ar" ? "رقم الشاصي غير جاهز" : "VIN is not ready", readinessMessage);
+    // All three old alerts collapse into one pass. They used to fire one at a
+    // time, so a vehicle with a missing make AND a malformed VIN cost three
+    // dismiss-and-retry cycles before the form would save.
+    const valid = validate({
+      make: requiredText(form.make, locale),
+      model: requiredText(form.model, locale),
+      year: year === null ? invalidNumberMessage(locale) : undefined,
+      mileage: mileage === null ? invalidNumberMessage(locale) : undefined,
+      sellingPrice: sellingPrice === null ? invalidNumberMessage(locale) : undefined,
+      vin: vin
+        ? (vinNotReadyMessage(getMobileVinReadiness(vin), locale) ?? undefined)
+        : requiredFieldMessage(locale),
+    });
+    if (!valid || year === null || mileage === null || sellingPrice === null) {
       return;
     }
     setSaving(true);
@@ -342,6 +352,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
           onPress: async () => {
             try {
               await archiveVehicle({ orgId, vehicleId: vehicle._id });
+              hapticSuccess();
               onSuccess?.();
             } catch (error) {
               reportError("Mobile vehicle archive failed", error);
@@ -418,7 +429,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
             >
               <View style={styles.vehiclePhoto}>
                 {imageUrl ? (
-                  <Image source={{ uri: imageUrl }} style={styles.vehiclePhotoImage} resizeMode="cover" />
+                  <AppImage uri={imageUrl} style={styles.vehiclePhotoImage} />
                 ) : (
                   <>
                     <GradientFill colors={theme.gradients.hero} direction="diagonal" />
@@ -471,6 +482,8 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
               <View style={styles.inlineActionGroup}>
                 <View style={styles.inlineActionField}>
                   <FormField
+                    autoCapitalize="characters"
+                    error={errors.vin}
                     label="VIN"
                     value={form.vin}
                     onChangeText={(vin) => {
@@ -496,20 +509,20 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
                 </Text>
               ) : null}
               {vinDecodeMessage ? <Text style={styles.recordMeta}>{vinDecodeMessage}</Text> : null}
-              <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "الماركة" : "Make"} value={form.make} options={vehicleMakeOptions} onChange={(make) => setForm((prev) => ({ ...prev, make }))} />
-              <FormField label={locale === "ar" ? "الموديل" : "Model"} value={form.model} onChangeText={(model) => setForm((prev) => ({ ...prev, model }))} />
+              <SelectField allowCustomValue customValueLabel={customValueLabel} error={errors.make} label={locale === "ar" ? "الماركة" : "Make"} value={form.make} options={vehicleMakeOptions} onChange={(make) => setForm((prev) => ({ ...prev, make }))} />
+              <FormField error={errors.model} label={locale === "ar" ? "الموديل" : "Model"} value={form.model} onChangeText={(model) => setForm((prev) => ({ ...prev, model }))} />
               <FormField label={locale === "ar" ? "الفئة" : "Trim"} value={form.trim} onChangeText={(trim) => setForm((prev) => ({ ...prev, trim }))} />
-              <FormField keyboardType="numeric" label={locale === "ar" ? "السنة" : "Year"} value={form.year} onChangeText={(year) => setForm((prev) => ({ ...prev, year }))} />
+              <FormField error={errors.year} keyboardType="numeric" label={locale === "ar" ? "السنة" : "Year"} value={form.year} onChangeText={(year) => setForm((prev) => ({ ...prev, year }))} />
             </>
           ) : null}
           {vehicleStep === 1 ? (
             <>
-              <FormField keyboardType="numeric" label={locale === "ar" ? "الممشى" : "Mileage"} value={form.mileage} onChangeText={(mileage) => setForm((prev) => ({ ...prev, mileage }))} />
+              <FormField error={errors.mileage} keyboardType="numeric" label={locale === "ar" ? "الممشى" : "Mileage"} value={form.mileage} onChangeText={(mileage) => setForm((prev) => ({ ...prev, mileage }))} />
               <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "اللون" : "Color"} value={form.color} options={vehicleColorOptions} onChange={(color) => setForm((prev) => ({ ...prev, color }))} />
               <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "الوقود" : "Fuel"} value={form.fuelType} options={fuelTypeOptions} onChange={(fuelType) => setForm((prev) => ({ ...prev, fuelType }))} />
               <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "القير" : "Transmission"} value={form.transmission} options={transmissionOptions} onChange={(transmission) => setForm((prev) => ({ ...prev, transmission }))} />
               <FormField keyboardType="numeric" label={locale === "ar" ? "سعر الشراء" : "Purchase price"} value={form.purchasePrice} onChangeText={(purchasePrice) => setForm((prev) => ({ ...prev, purchasePrice }))} />
-              <FormField keyboardType="numeric" label={locale === "ar" ? "سعر البيع" : "Selling price"} value={form.sellingPrice} onChangeText={(sellingPrice) => setForm((prev) => ({ ...prev, sellingPrice }))} />
+              <FormField error={errors.sellingPrice} keyboardType="numeric" label={locale === "ar" ? "سعر البيع" : "Selling price"} value={form.sellingPrice} onChangeText={(sellingPrice) => setForm((prev) => ({ ...prev, sellingPrice }))} />
               <SelectField
                 label={locale === "ar" ? "الحالة" : "Status"}
                 value={form.status}

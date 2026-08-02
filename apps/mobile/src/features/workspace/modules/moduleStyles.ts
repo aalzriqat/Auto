@@ -47,7 +47,7 @@ export const makeStyles = (theme: AppTheme) =>
   },
   brand: {
     color: theme.colors.primaryGlow,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "700",
     letterSpacing: 0,
     textTransform: "uppercase",
@@ -285,7 +285,7 @@ export const makeStyles = (theme: AppTheme) =>
     borderRadius: theme.radius.full,
     backgroundColor: theme.colors.surfaceAlt,
     color: theme.colors.mutedText,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "600",
     letterSpacing: 0.3,
     paddingHorizontal: theme.spacing.md,
@@ -315,7 +315,7 @@ export const makeStyles = (theme: AppTheme) =>
   },
   detailPillText: {
     color: theme.colors.text,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "700",
   },
   cardActions: {
@@ -396,6 +396,16 @@ export const makeStyles = (theme: AppTheme) =>
     padding: theme.spacing.xl,
     ...theme.shadows.sm,
   },
+  loadMoreFooter: {
+    alignItems: "center",
+    paddingVertical: theme.spacing.md,
+  },
+  // For a validation message that belongs to a group of controls rather than to
+  // a single input (e.g. "choose at least two members").
+  inlineFieldError: {
+    color: theme.colors.danger,
+    fontSize: 13,
+  },
   emptyText: {
     color: theme.colors.mutedText,
     fontSize: 14,
@@ -446,7 +456,9 @@ export const makeStyles = (theme: AppTheme) =>
     color: theme.colors.text,
     fontSize: 13,
     fontWeight: "700",
-    textAlign: "right",
+    // textAlign is applied by SummaryRow, which knows the locale: React Native
+    // has no logical "end" keyword for textAlign, and a hardcoded "right" here
+    // pushed the value into the middle of an RTL row.
   },
   wizardActions: {
     flexDirection: "row",
@@ -557,7 +569,7 @@ export const makeStyles = (theme: AppTheme) =>
     borderRadius: theme.radius.sm,
     backgroundColor: "rgba(255,255,255,0.18)",
     color: theme.colors.onPrimary,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "700",
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: theme.spacing.xs,
@@ -628,7 +640,10 @@ export const makeStyles = (theme: AppTheme) =>
   unreadDot: {
     position: "absolute",
     top: 1,
-    right: 1,
+    // Trailing corner of the avatar, so it mirrors with the layout. Both
+    // consumers (messages, socialInbox) render inside a `direction`-carrying
+    // subtree, which is what lets Yoga resolve `end` per locale.
+    end: 1,
     width: 10,
     height: 10,
     borderRadius: 5,
@@ -647,7 +662,7 @@ export const makeStyles = (theme: AppTheme) =>
   },
   conversationTime: {
     color: theme.colors.mutedText,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "600",
   },
   conversationPreview: {
@@ -717,7 +732,7 @@ export const makeStyles = (theme: AppTheme) =>
   },
   messageSender: {
     color: theme.colors.primaryGlow,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "700",
   },
   messageBody: {
@@ -735,7 +750,7 @@ export const makeStyles = (theme: AppTheme) =>
   },
   messageMeta: {
     color: theme.colors.mutedText,
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: "600",
   },
   messageMetaMine: {
@@ -748,7 +763,9 @@ export const makeStyles = (theme: AppTheme) =>
     width: 14,
     height: 14,
     borderRadius: 7,
-    marginLeft: -4,
+    // Overlaps the previous avatar in the stack. The stack is a flex row, so
+    // it reverses under RTL and the overlap has to reverse with it.
+    marginStart: -4,
     borderWidth: 1,
     borderColor: theme.colors.surface,
   },
@@ -1036,7 +1053,7 @@ export const makeStyles = (theme: AppTheme) =>
   },
   vehiclePhotoStatusText: {
     color: "#ffffff",
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "700",
     letterSpacing: 0.3,
   },
@@ -1082,7 +1099,7 @@ export const makeStyles = (theme: AppTheme) =>
     fontSize: 12,
   },
   photoSectionEmpty: {
-    color: theme.colors.subtleText,
+    color: theme.colors.mutedText,
     fontSize: 13,
     paddingVertical: theme.spacing.sm,
   },
@@ -1104,7 +1121,9 @@ export const makeStyles = (theme: AppTheme) =>
   photoThumbRemove: {
     position: "absolute",
     top: 4,
-    right: 4,
+    // Trailing corner of the thumbnail. Rendered inside FormModal's sheet,
+    // which sets `direction`.
+    end: 4,
     width: 26,
     height: 26,
     borderRadius: 13,

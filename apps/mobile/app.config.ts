@@ -111,6 +111,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         locationWhenInUsePermission: "AutoFlow uses your location to tag branch visits and nearby inventory.",
       },
     ],
+    // Disk/memory image cache for remote vehicle and listing photos. NATIVE:
+    // needs a fresh binary — an OTA cannot deliver it, so AppImage falls back
+    // to the platform renderer on older builds.
+    "expo-image",
   ],
   extra: {
     ...config.extra,

@@ -1,6 +1,72 @@
 import { buildTheme, getFontFamily, getTypographyStyle, resolveStatusBarStyle, theme } from "./theme";
 
+/** Relative luminance per WCAG 2.1 §1.4.3. */
+function relativeLuminance(hex: string): number {
+  const channels = [0, 2, 4].map((offset) => {
+    const value = parseInt(hex.replace("#", "").substr(offset, 2), 16) / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+}
+
+function contrastRatio(foreground: string, background: string): number {
+  const a = relativeLuminance(foreground);
+  const b = relativeLuminance(background);
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
+// Every background a foreground token can realistically land on, per mode.
+const SURFACE_TOKENS = ["surface", "background", "surfaceAlt", "surfaceMuted"] as const;
+// Tokens that render as TEXT. WCAG AA body text floor is 4.5:1.
+const TEXT_TOKENS = ["text", "mutedText", "danger"] as const;
+// Tokens that only ever render as icons/dots/dividers. WCAG 1.4.11 asks 3:1.
+const NON_TEXT_TOKENS = ["subtleText"] as const;
+
+/** Every (token, surface) pair below `floor`, named so a regression says which. */
+function contrastFailures(
+  mode: "light" | "dark",
+  tokens: readonly string[],
+  floor: number,
+): string[] {
+  const { colors } = buildTheme(mode) as { colors: Record<string, string> };
+  const failures: string[] = [];
+  for (const token of tokens) {
+    for (const surface of SURFACE_TOKENS) {
+      const ratio = contrastRatio(colors[token], colors[surface]);
+      if (ratio < floor) {
+        failures.push(`${mode}.${token} on ${surface}: ${ratio.toFixed(2)}:1 < ${floor}:1`);
+      }
+    }
+  }
+  return failures;
+}
+
 describe("mobile theme tokens", () => {
+  test.each(["light", "dark"] as const)(
+    "%s text tokens clear the WCAG AA 4.5:1 floor on every surface",
+    (mode) => {
+      expect(contrastFailures(mode, TEXT_TOKENS, 4.5)).toEqual([]);
+    },
+  );
+
+  test.each(["light", "dark"] as const)(
+    "%s non-text tokens clear the WCAG 1.4.11 3:1 floor on every surface",
+    (mode) => {
+      expect(contrastFailures(mode, NON_TEXT_TOKENS, 3)).toEqual([]);
+    },
+  );
+
+  test("keeps subtleText visually lighter than mutedText so the hierarchy survives the contrast fix", () => {
+    for (const mode of ["light", "dark"] as const) {
+      const { colors } = buildTheme(mode);
+      const towardCanvas = mode === "light" ? 1 : -1;
+      expect(
+        Math.sign(relativeLuminance(colors.subtleText) - relativeLuminance(colors.mutedText)),
+      ).toBe(towardCanvas);
+    }
+  });
+
+
   test("keeps the brand color palette stable while expanding shape and depth tokens", () => {
     expect(theme.colors.primary).toBe("#2563eb");
     expect(theme.colors.accent).toBe("#ea580c");

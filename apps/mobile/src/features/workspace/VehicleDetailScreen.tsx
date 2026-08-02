@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "convex/react";
 import { useRouter } from "expo-router";
 import { Component, useEffect, useState, type ReactNode } from "react";
 import { Alert, Image, ScrollView, StyleSheet, Text, View } from "react-native";
+import { AppImage } from "../../components/AppImage";
 
 import { GradientHero } from "../../components/Premium";
 import { RouteLoadingState } from "../../components/RouteState";
@@ -461,7 +462,7 @@ function VehicleDetailContent({
             {galleryUrls.length > 0 ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.galleryStrip}>
                 {galleryUrls.map((url) => (
-                  <Image key={url} resizeMode="cover" source={{ uri: url }} style={styles.galleryImage} />
+                  <AppImage key={url} uri={url} style={styles.galleryImage} />
                 ))}
               </ScrollView>
             ) : null}

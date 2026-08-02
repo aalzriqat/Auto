@@ -4,7 +4,7 @@ import { Text, View } from "react-native";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileCustomField, type MobileCustomFieldEntityType, type MobileCustomFieldType } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { type Option, splitLinesOrCommas, joinList, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, EmptyList, ModuleScroll } from "./moduleShared";
+import { type Option, splitLinesOrCommas, joinList, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 function fieldKeyFromName(name: string): string {
@@ -109,23 +109,32 @@ export function CustomFieldsModule({ orgId }: { orgId: string }) {
   }
 
   return (
-    <ModuleScroll>
-      <SegmentedControl options={entityOptions} value={entityType} onChange={setEntityType} />
-      <PrimaryButton label={locale === "ar" ? "إضافة حقل" : "Add field"} onPress={openCreate} />
-      {fields.length ? fields.map((field) => (
-        <RecordCard key={field._id}>
-          <View style={styles.recordHeader}>
-            <Text style={styles.recordTitle}>{field.fieldName}</Text>
-            <Text style={styles.statusPill}>{field.fieldType}</Text>
-          </View>
-          <Text style={styles.recordMeta}>{field.fieldKey} · {field.entityType} · {field.isRequired ? (locale === "ar" ? "إجباري" : "Required") : (locale === "ar" ? "اختياري" : "Optional")}</Text>
-          {field.options?.length ? <Text style={styles.recordMeta}>{field.options.join(", ")}</Text> : null}
-          <View style={styles.cardActions}>
-            <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openEdit(field)} />
-            <PrimaryButton label={locale === "ar" ? "حذف" : "Delete"} tone="danger" onPress={() => removeField({ orgId, fieldId: field._id }).catch((error: unknown) => reportError("Mobile custom field delete failed", error))} />
-          </View>
-        </RecordCard>
-      )) : <EmptyList label={locale === "ar" ? "لا توجد حقول مخصصة." : "No custom fields found."} />}
+    <>
+      <ModuleList
+        data={fields}
+        emptyLabel={locale === "ar" ? "لا توجد حقول مخصصة." : "No custom fields found."}
+        keyExtractor={(field) => field._id}
+        header={
+          <>
+            <SegmentedControl options={entityOptions} value={entityType} onChange={setEntityType} />
+            <PrimaryButton label={locale === "ar" ? "إضافة حقل" : "Add field"} onPress={openCreate} />
+          </>
+        }
+        renderItem={(field) => (
+          <RecordCard>
+            <View style={styles.recordHeader}>
+              <Text style={styles.recordTitle}>{field.fieldName}</Text>
+              <Text style={styles.statusPill}>{field.fieldType}</Text>
+            </View>
+            <Text style={styles.recordMeta}>{field.fieldKey} · {field.entityType} · {field.isRequired ? (locale === "ar" ? "إجباري" : "Required") : (locale === "ar" ? "اختياري" : "Optional")}</Text>
+            {field.options?.length ? <Text style={styles.recordMeta}>{field.options.join(", ")}</Text> : null}
+            <View style={styles.cardActions}>
+              <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openEdit(field)} />
+              <PrimaryButton label={locale === "ar" ? "حذف" : "Delete"} tone="danger" onPress={() => removeField({ orgId, fieldId: field._id }).catch((error: unknown) => reportError("Mobile custom field delete failed", error))} />
+            </View>
+          </RecordCard>
+        )}
+      />
       <FormModal title={editing ? (locale === "ar" ? "تعديل حقل" : "Edit field") : (locale === "ar" ? "حقل جديد" : "New field")} visible={open} onClose={() => setOpen(false)}>
         {!editing ? (
           <SelectField label={locale === "ar" ? "النوع" : "Entity"} value={form.entityType} options={entityOptions} onChange={(nextEntityType) => setForm((prev) => ({ ...prev, entityType: nextEntityType as MobileCustomFieldEntityType }))} />
@@ -154,7 +163,7 @@ export function CustomFieldsModule({ orgId }: { orgId: string }) {
         ) : null}
         <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={save} />
       </FormModal>
-    </ModuleScroll>
+    </>
   );
 }
 

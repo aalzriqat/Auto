@@ -1,11 +1,11 @@
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { useState } from "react";
-import { Alert, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepFlow";
 import { api, type MobileQuote, type MobileQuoteMode, type MobileQuoteStatus } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { SELECTOR_PAGE_SIZE, type Option, money, dateLabel, maybeText, parseOptionalNumber, parseRequiredNumber, parseRequiredPositiveNumber, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
+import { SELECTOR_PAGE_SIZE, type Option, money, dateLabel, maybeText, parseOptionalNumber, parseRequiredNumber, parseRequiredPositiveNumber, invalidNumberMessage, requiredSelectionMessage, useFormErrors, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function QuotesModule({ orgId }: { orgId: string }) {
@@ -55,6 +55,9 @@ export function QuotesModule({ orgId }: { orgId: string }) {
   const termMonthsPreview = parseOptionalNumber(form.termMonths) ?? 0;
   const monthlyPreview = parseOptionalNumber(form.monthlyInstallment)
     ?? (termMonthsPreview > 0 ? Math.max(0, vehiclePricePreview - quoteDownPaymentPreview) / termMonthsPreview : 0);
+  const { errors, reset, validate } = useFormErrors<
+    "customerId" | "vehicleId" | "vehiclePrice" | "downPayment" | "termMonths"
+  >();
   const quoteSteps: GuidedStep[] = [
     {
       title: locale === "ar" ? "العميل والسيارة" : "Customer and vehicle",
@@ -83,6 +86,7 @@ export function QuotesModule({ orgId }: { orgId: string }) {
       monthlyInstallment: "",
       recipientName: "",
     });
+    reset();
     setOpen(true);
   }
 
@@ -104,8 +108,18 @@ export function QuotesModule({ orgId }: { orgId: string }) {
     const vehiclePrice = parseRequiredPositiveNumber(form.vehiclePrice);
     const downPayment = parseRequiredNumber(form.downPayment);
     const termMonths = parseRequiredPositiveNumber(form.termMonths);
-    if (!form.customerId || !form.vehicleId || vehiclePrice === null || downPayment === null || termMonths === null) {
-      Alert.alert(locale === "ar" ? "حقول مطلوبة" : "Required fields");
+    const valid = validate({
+      customerId: form.customerId ? undefined : requiredSelectionMessage(locale),
+      vehicleId: form.vehicleId ? undefined : requiredSelectionMessage(locale),
+      vehiclePrice: vehiclePrice === null
+        ? (locale === "ar" ? "أدخل سعراً أكبر من صفر" : "Enter a price greater than zero")
+        : undefined,
+      downPayment: downPayment === null ? invalidNumberMessage(locale) : undefined,
+      termMonths: termMonths === null
+        ? (locale === "ar" ? "أدخل عدد أشهر أكبر من صفر" : "Enter a term greater than zero")
+        : undefined,
+    });
+    if (!valid || vehiclePrice === null || downPayment === null || termMonths === null) {
       return;
     }
     // No explicit margin field here: the price starts at the vehicle's list
@@ -189,8 +203,8 @@ export function QuotesModule({ orgId }: { orgId: string }) {
         <GuidedStepFlow activeIndex={quoteStep} steps={quoteSteps}>
           {quoteStep === 0 ? (
             <>
-              <SelectField label={locale === "ar" ? "العميل" : "Customer"} value={form.customerId} options={customerOptions} onChange={(customerIdValue) => setForm((prev) => ({ ...prev, customerId: customerIdValue }))} />
-              <SelectField label={locale === "ar" ? "السيارة" : "Vehicle"} value={form.vehicleId} options={vehicleOptions} onChange={chooseQuoteVehicle} />
+              <SelectField error={errors.customerId} label={locale === "ar" ? "العميل" : "Customer"} value={form.customerId} options={customerOptions} onChange={(customerIdValue) => setForm((prev) => ({ ...prev, customerId: customerIdValue }))} />
+              <SelectField error={errors.vehicleId} label={locale === "ar" ? "السيارة" : "Vehicle"} value={form.vehicleId} options={vehicleOptions} onChange={chooseQuoteVehicle} />
               <SummaryPanel title={locale === "ar" ? "نطاق العرض" : "Quote scope"}>
                 <SummaryRow label={locale === "ar" ? "العميل" : "Customer"} value={selectedQuoteCustomerLabel} />
                 <SummaryRow label={locale === "ar" ? "السيارة" : "Vehicle"} value={selectedQuoteVehicleLabel} />
@@ -201,9 +215,9 @@ export function QuotesModule({ orgId }: { orgId: string }) {
             <>
               <SegmentedControl options={quoteModeOptions} value={form.mode} onChange={(mode) => setForm((prev) => ({ ...prev, mode }))} />
               {form.mode === "CONFIGURED_FINANCE_COMPANY" ? <SelectField label={locale === "ar" ? "شركة التمويل" : "Finance company"} value={form.companyId} options={companyOptions} onChange={(companyId) => setForm((prev) => ({ ...prev, companyId }))} /> : null}
-              <FormField keyboardType="numeric" label={locale === "ar" ? "سعر السيارة" : "Vehicle price"} value={form.vehiclePrice} onChangeText={(vehiclePrice) => setForm((prev) => ({ ...prev, vehiclePrice }))} />
-              <FormField keyboardType="numeric" label={locale === "ar" ? "دفعة أولى" : "Down payment"} value={form.downPayment} onChangeText={(downPayment) => setForm((prev) => ({ ...prev, downPayment }))} />
-              <FormField keyboardType="numeric" label={locale === "ar" ? "الأشهر" : "Term months"} value={form.termMonths} onChangeText={(termMonths) => setForm((prev) => ({ ...prev, termMonths }))} />
+              <FormField error={errors.vehiclePrice} keyboardType="numeric" label={locale === "ar" ? "سعر السيارة" : "Vehicle price"} value={form.vehiclePrice} onChangeText={(vehiclePrice) => setForm((prev) => ({ ...prev, vehiclePrice }))} />
+              <FormField error={errors.downPayment} keyboardType="numeric" label={locale === "ar" ? "دفعة أولى" : "Down payment"} value={form.downPayment} onChangeText={(downPayment) => setForm((prev) => ({ ...prev, downPayment }))} />
+              <FormField error={errors.termMonths} keyboardType="numeric" label={locale === "ar" ? "الأشهر" : "Term months"} value={form.termMonths} onChangeText={(termMonths) => setForm((prev) => ({ ...prev, termMonths }))} />
               <FormField keyboardType="numeric" label={locale === "ar" ? "القسط الشهري" : "Monthly installment"} value={form.monthlyInstallment} onChangeText={(monthlyInstallment) => setForm((prev) => ({ ...prev, monthlyInstallment }))} />
               <View style={styles.metricGrid}>
                 <MetricCard title={locale === "ar" ? "القيمة" : "Price"} value={money(vehiclePricePreview, locale)} caption={locale === "ar" ? "سعر السيارة" : "vehicle price"} />

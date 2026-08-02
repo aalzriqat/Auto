@@ -46,11 +46,12 @@ jest.mock("@expo/vector-icons", () => {
 
 import { fireEvent, render, waitFor } from "@testing-library/react-native";
 import * as SecureStore from "expo-secure-store";
-import { StyleSheet, Text, View } from "react-native";
+import { Platform, StyleSheet, Text, View } from "react-native";
 
 import { getMobileFoundationString } from "@autoflow/shared";
 
 import { LocaleProvider } from "../providers/LocaleProvider";
+import { theme } from "../theme";
 import { Badge, Pill } from "./Badge";
 import { Button, getButtonPressedStyle } from "./Button";
 import { Card, getCardPressedStyle } from "./Card";
@@ -331,11 +332,24 @@ describe("mobile shell components", () => {
     const loading = await render(<RouteLoadingState label="Loading workspace" />);
     expect(loading.getByText("Loading workspace")).toBeTruthy();
 
+    // No provider here on purpose: this mirrors expo-router's root
+    // ErrorBoundary. The default locale is Arabic, so an untranslated error
+    // screen shows English to a user whose whole app is in Arabic.
     const fallbackError = await render(<RouteErrorState />);
-    expect(fallbackError.getByText("An unexpected error occurred.")).toBeTruthy();
+    expect(fallbackError.getByText("حدث خطأ غير متوقع.")).toBeTruthy();
+    expect(fallbackError.queryByText("An unexpected error occurred.")).toBeNull();
+
+    const englishError = await render(
+      <LocaleProvider>
+        <RouteErrorState />
+      </LocaleProvider>,
+    );
+    await waitFor(() => {
+      expect(englishError.getByText(getMobileFoundationString("ar", "appName"))).toBeTruthy();
+    });
 
     const explicitError = await render(<RouteErrorState message="Could not load" onRetry={retry} />);
-    const retryText = explicitError.getByText("Retry");
+    const retryText = explicitError.getByText(getMobileFoundationString("ar", "retry"));
 
     expect(getRouteButtonPressedStyle(false)).toBeNull();
     expect(getRouteButtonPressedStyle(true)).not.toBeNull();
@@ -443,6 +457,54 @@ describe("mobile shell components", () => {
     await waitFor(() => expect(picker.queryByTestId("vehicle-search")).toBeNull());
   });
 
+  test("shows an inline error on the select trigger and announces it with the control", async () => {
+    const invalid = await render(
+      <LocaleProvider>
+        <SearchableSelectField
+          error="Choose an option"
+          label="Finance company"
+          options={[{ label: "Bank", value: "bank" }]}
+          testID="company"
+          value=""
+          onChange={jest.fn()}
+        />
+      </LocaleProvider>,
+    );
+
+    expect(invalid.getByTestId("company-error").props.children).toBe("Choose an option");
+    // A screen reader user has to hear which selection is missing.
+    expect(invalid.getByLabelText("Finance company, Choose an option")).toBeTruthy();
+  });
+
+  test.each(["ios", "android"] as const)(
+    "keeps the select sheet's search field above the keyboard on %s",
+    async (os) => {
+      const originalOs = Platform.OS;
+      Object.defineProperty(Platform, "OS", { configurable: true, value: os });
+
+      try {
+        const picker = await render(
+          <LocaleProvider>
+            <SearchableSelectField
+              label="Vehicle"
+              options={[{ label: "Camry", value: "camry" }]}
+              testID="kav"
+              value=""
+              onChange={jest.fn()}
+            />
+          </LocaleProvider>,
+        );
+
+        fireEvent.press(picker.getByTestId("kav-trigger"));
+        // The sheet is bottom-anchored around a TextInput; without the
+        // KeyboardAvoidingView the keyboard covers the field being typed into.
+        await waitFor(() => expect(picker.getByTestId("kav-search")).toBeTruthy());
+      } finally {
+        Object.defineProperty(Platform, "OS", { configurable: true, value: originalOs });
+      }
+    },
+  );
+
   test("renders member avatars with a photo, initials, or a placeholder fallback", async () => {
     const rendered = await render(
       <View>
@@ -461,7 +523,12 @@ describe("mobile shell components", () => {
     const t = (key: Parameters<typeof getMobileFoundationString>[1]) => getMobileFoundationString("en", key);
     const now = Date.now();
 
-    expect(getPresenceInfo(t, undefined)).toEqual({ label: "Offline", dotColor: "#94a3b8" });
+    // Read the token rather than hard-coding its hex: this assertion is about
+    // which token an offline user gets, not about the palette's current value.
+    expect(getPresenceInfo(t, undefined)).toEqual({
+      label: "Offline",
+      dotColor: theme.colors.subtleText,
+    });
     expect(getPresenceInfo(t, now - 60_000).label).toBe("Active now");
     expect(getPresenceInfo(t, now - 10 * 60_000).label).toBe("Active 10m ago");
     expect(getPresenceInfo(t, now - 3 * 3_600_000).label).toBe("Active 3h ago");

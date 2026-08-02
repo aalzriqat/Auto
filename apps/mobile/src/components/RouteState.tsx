@@ -1,5 +1,6 @@
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 
+import { useOptionalLocale } from "../providers/LocaleProvider";
 import { useAppTheme, useThemedStyles } from "../providers/ThemeProvider";
 import { type AppTheme } from "../theme";
 
@@ -11,6 +12,11 @@ interface RouteErrorStateProps {
   message?: string;
   onRetry?: () => void;
 }
+
+const GENERIC_ERROR_MESSAGE = {
+  en: "An unexpected error occurred.",
+  ar: "حدث خطأ غير متوقع.",
+} as const;
 
 export function RouteLoadingState({ label }: RouteStateProps) {
   const theme = useAppTheme();
@@ -27,14 +33,22 @@ export function RouteLoadingState({ label }: RouteStateProps) {
 
 export function RouteErrorState({ message, onRetry }: RouteErrorStateProps) {
   const styles = useThemedStyles(makeStyles);
+  // Deliberately the provider-free hook: this is expo-router's root
+  // ErrorBoundary, which renders above LocaleProvider.
+  const { locale, t, textDirection } = useOptionalLocale();
+
   return (
     <View style={styles.center}>
-      <View style={styles.stateCard}>
-        <Text style={styles.title}>AutoFlow</Text>
-        <Text style={styles.error}>{message || "An unexpected error occurred."}</Text>
+      <View style={[styles.stateCard, { direction: textDirection }]}>
+        <Text style={styles.title}>{t("appName")}</Text>
+        <Text style={styles.error}>{message || GENERIC_ERROR_MESSAGE[locale]}</Text>
         {onRetry ? (
-          <Pressable style={({ pressed }) => [styles.button, getRouteButtonPressedStyle(pressed)]} onPress={onRetry}>
-            <Text style={styles.buttonText}>Retry</Text>
+          <Pressable
+            accessibilityRole="button"
+            style={({ pressed }) => [styles.button, getRouteButtonPressedStyle(pressed)]}
+            onPress={onRetry}
+          >
+            <Text style={styles.buttonText}>{t("retry")}</Text>
           </Pressable>
         ) : null}
       </View>

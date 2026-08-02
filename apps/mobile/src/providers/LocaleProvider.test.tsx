@@ -5,7 +5,7 @@ import * as SecureStore from "expo-secure-store";
 import { fireEvent, render, waitFor } from "@testing-library/react-native";
 import { Pressable, Text } from "react-native";
 
-import { LocaleProvider, useLocale } from "./LocaleProvider";
+import { LocaleProvider, readInitialLocale, useLocale, useOptionalLocale } from "./LocaleProvider";
 
 const getItemAsync = SecureStore.getItemAsync as jest.MockedFunction<typeof SecureStore.getItemAsync>;
 const setItemAsync = SecureStore.setItemAsync as jest.MockedFunction<typeof SecureStore.setItemAsync>;
@@ -110,6 +110,76 @@ describe("mobile locale provider", () => {
       );
       expect(consoleError).toHaveBeenCalledWith(
         "Failed to load mobile locale preference",
+        expect.any(Error),
+      );
+    });
+  });
+
+  describe("provider-free locale", () => {
+    // expo-router mounts the root ErrorBoundary ABOVE AppProviders, so anything
+    // it renders has to survive without the context.
+    function OptionalLocaleProbe() {
+      const { locale, t, textDirection } = useOptionalLocale();
+      return <Text testID="optional-locale">{`${locale}:${textDirection}:${t("home")}`}</Text>;
+    }
+
+    afterEach(() => {
+      Reflect.deleteProperty(SecureStore, "getItem");
+    });
+
+    test("falls back to the persisted locale when there is no provider", async () => {
+      Object.defineProperty(SecureStore, "getItem", {
+        configurable: true,
+        value: jest.fn(() => "en-GB"),
+      });
+
+      const { getByTestId } = await render(<OptionalLocaleProbe />);
+
+      expect(getByTestId("optional-locale").props.children).toBe(
+        `en:ltr:${getMobileFoundationString("en", "home")}`,
+      );
+    });
+
+    test("uses the default locale when nothing is persisted", async () => {
+      const { getByTestId } = await render(<OptionalLocaleProbe />);
+      const direction = isRtlLocale(DEFAULT_LOCALE) ? "rtl" : "ltr";
+
+      expect(getByTestId("optional-locale").props.children).toBe(
+        `${DEFAULT_LOCALE}:${direction}:${getMobileFoundationString(DEFAULT_LOCALE, "home")}`,
+      );
+    });
+
+    test("prefers the live provider value over the persisted one when both exist", async () => {
+      Object.defineProperty(SecureStore, "getItem", {
+        configurable: true,
+        value: jest.fn(() => "en"),
+      });
+      getItemAsync.mockResolvedValue("ar");
+
+      const { getByTestId } = await render(
+        <LocaleProvider>
+          <OptionalLocaleProbe />
+        </LocaleProvider>,
+      );
+
+      await waitFor(() => {
+        expect(getByTestId("optional-locale").props.children).toBe(
+          `ar:rtl:${getMobileFoundationString("ar", "home")}`,
+        );
+      });
+    });
+
+    test("never throws when the synchronous read fails", () => {
+      Object.defineProperty(SecureStore, "getItem", {
+        configurable: true,
+        value: jest.fn(() => {
+          throw new Error("secure store unavailable");
+        }),
+      });
+
+      expect(readInitialLocale()).toBe(DEFAULT_LOCALE);
+      expect(consoleError).toHaveBeenCalledWith(
+        "Failed to read the persisted mobile locale",
         expect.any(Error),
       );
     });

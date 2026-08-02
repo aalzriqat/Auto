@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { AppImage } from "../../components/AppImage";
 
 import { Card } from "../../components/Card";
 import { EmptyState } from "../../components/EmptyState";
@@ -62,7 +63,7 @@ export function BuyerSavedScreen({ embedded = false }: Readonly<{ embedded?: boo
           return (
             <Card key={item.id} style={styles.card}>
               {item.imageUrl ? (
-                <Image source={{ uri: item.imageUrl }} style={styles.image} resizeMode="cover" />
+                <AppImage uri={item.imageUrl} style={styles.image} />
               ) : null}
               <View style={styles.cardBody}>
                 <Text numberOfLines={1} style={styles.cardTitle}>

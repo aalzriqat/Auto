@@ -2,6 +2,7 @@ import { nativeRoutes, type MobileFoundationStringKey } from "@autoflow/shared";
 import { useQuery } from "convex/react";
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { AppImage } from "../../components/AppImage";
 import {
   Alert,
   Image,
@@ -634,7 +635,7 @@ function SimilarCarCard({
     >
       <View style={styles.similarImageWrap}>
         {vehicle.imageUrls[0] ? (
-          <Image source={{ uri: vehicle.imageUrls[0] }} style={styles.similarImage} resizeMode="cover" />
+          <AppImage uri={vehicle.imageUrls[0]} style={styles.similarImage} />
         ) : (
           <Text style={styles.noImageText}>{t("marketplaceNoImage")}</Text>
         )}
@@ -875,7 +876,7 @@ function VehicleCard({
         onPress={() => setDetailOpen(true)}
       >
         {vehicle.imageUrls[0] ? (
-          <Image source={{ uri: vehicle.imageUrls[0] }} style={styles.vehicleImage} resizeMode="cover" />
+          <AppImage uri={vehicle.imageUrls[0]} style={styles.vehicleImage} />
         ) : (
           <Text style={styles.noImageText}>{t("marketplaceNoImage")}</Text>
         )}
@@ -1411,7 +1412,7 @@ function DealerCard({
       <View style={styles.dealerTopRow}>
         <View style={styles.dealerLogo}>
           {dealer.logoUrl ? (
-            <Image source={{ uri: dealer.logoUrl }} style={styles.dealerLogoImage} resizeMode="cover" />
+            <AppImage uri={dealer.logoUrl} style={styles.dealerLogoImage} />
           ) : (
             <Text style={styles.dealerLogoText}>AF</Text>
           )}
@@ -2237,7 +2238,9 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   priceBadge: {
     position: "absolute",
     bottom: theme.spacing.md,
-    left: theme.spacing.md,
+    // Leading corner of the card image, mirroring with the layout. The card
+    // root sets `direction`, so Yoga resolves this per locale.
+    start: theme.spacing.md,
     borderRadius: theme.radius.full,
     backgroundColor: theme.colors.hero,
     paddingHorizontal: theme.spacing.md,

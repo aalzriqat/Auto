@@ -1,10 +1,11 @@
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { useState } from "react";
-import { Alert, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepFlow";
 import { api, type MobileFinancingType, type MobileMyMembership, type MobileSale } from "../../../convexApi";
+import { hapticSuccess } from "../../../haptics";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, type MobileSaleStatusFilter, compactNumber, money, dateLabel, parseOptionalNumber, parseRequiredNumber, idempotencyKey, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, saleMatchesView, averageSalePrice, saleRemainingBalance, vehicleListPriceLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
+import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, type MobileSaleStatusFilter, compactNumber, money, dateLabel, parseOptionalNumber, parseRequiredNumber, idempotencyKey, invalidNumberMessage, requiredSelectionMessage, useFormErrors, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, saleMatchesView, averageSalePrice, saleRemainingBalance, vehicleListPriceLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function SalesModule({
@@ -72,6 +73,9 @@ export function SalesModule({
   const pendingSalesCount = results.filter((sale) => sale.status === "PENDING").length;
   const completedSalesCount = results.filter((sale) => sale.status === "COMPLETED").length;
   const averageVisibleDeal = averageSalePrice(filteredSales);
+  const { errors, reset, validate } = useFormErrors<
+    "customerId" | "vehicleId" | "salespersonId" | "salePrice"
+  >();
   const salesSteps: GuidedStep[] = [
     {
       title: locale === "ar" ? "العميل والسيارة" : "Customer and vehicle",
@@ -97,6 +101,7 @@ export function SalesModule({
       downPayment: "",
       financingType: "CASH",
     });
+    reset();
     setOpen(true);
   }
 
@@ -126,10 +131,13 @@ export function SalesModule({
 
   async function saveDraft() {
     const salePrice = parseRequiredNumber(form.salePrice);
-    if (!form.customerId || !form.vehicleId || !form.salespersonId || salePrice === null) {
-      Alert.alert(locale === "ar" ? "حقول مطلوبة" : "Required fields");
-      return;
-    }
+    const valid = validate({
+      customerId: form.customerId ? undefined : requiredSelectionMessage(locale),
+      vehicleId: form.vehicleId ? undefined : requiredSelectionMessage(locale),
+      salespersonId: form.salespersonId ? undefined : requiredSelectionMessage(locale),
+      salePrice: salePrice === null ? invalidNumberMessage(locale) : undefined,
+    });
+    if (!valid || salePrice === null) return;
     setSaving(true);
     try {
       await createDraft({
@@ -144,6 +152,7 @@ export function SalesModule({
         downPayment: parseOptionalNumber(form.downPayment),
         idempotencyKey: idempotencyKey("sales.createDraft"),
       });
+      hapticSuccess();
       closeDraft();
       setForm({ customerId: "", vehicleId: "", salespersonId: myMembership.userId, salePrice: "", downPayment: "", financingType: "CASH" });
     } catch (error) {
@@ -224,8 +233,8 @@ export function SalesModule({
         <GuidedStepFlow activeIndex={draftStep} steps={salesSteps}>
           {draftStep === 0 ? (
             <>
-              <SelectField label={locale === "ar" ? "العميل" : "Customer"} value={form.customerId} options={customerOptions} onChange={(customerId) => setForm((prev) => ({ ...prev, customerId }))} />
-              <SelectField label={locale === "ar" ? "السيارة" : "Vehicle"} value={form.vehicleId} options={vehicleOptions} onChange={selectVehicle} />
+              <SelectField error={errors.customerId} label={locale === "ar" ? "العميل" : "Customer"} value={form.customerId} options={customerOptions} onChange={(customerId) => setForm((prev) => ({ ...prev, customerId }))} />
+              <SelectField error={errors.vehicleId} label={locale === "ar" ? "السيارة" : "Vehicle"} value={form.vehicleId} options={vehicleOptions} onChange={selectVehicle} />
               <SummaryPanel
                 title={locale === "ar" ? "اختيار الصفقة" : "Deal selection"}
                 subtitle={locale === "ar" ? "اختيار السيارة يعبئ سعر القائمة تلقائياً." : "Picking a vehicle auto-fills its current list price."}
@@ -243,7 +252,7 @@ export function SalesModule({
           ) : null}
           {draftStep === 1 ? (
             <>
-              <FormField keyboardType="numeric" label={locale === "ar" ? "سعر البيع" : "Sale price"} value={form.salePrice} onChangeText={(salePrice) => setForm((prev) => ({ ...prev, salePrice }))} />
+              <FormField error={errors.salePrice} keyboardType="numeric" label={locale === "ar" ? "سعر البيع" : "Sale price"} value={form.salePrice} onChangeText={(salePrice) => setForm((prev) => ({ ...prev, salePrice }))} />
               <FormField keyboardType="numeric" label={locale === "ar" ? "الدفعة" : "Down payment"} value={form.downPayment} onChangeText={(downPayment) => setForm((prev) => ({ ...prev, downPayment }))} />
               <SummaryPanel
                 title={locale === "ar" ? "مساعد التسعير" : "Pricing assist"}
@@ -285,7 +294,7 @@ export function SalesModule({
           ) : null}
           {draftStep === 2 ? (
             <>
-              <SelectField label={locale === "ar" ? "البائع" : "Salesperson"} value={form.salespersonId} options={memberOptions} onChange={(salespersonId) => setForm((prev) => ({ ...prev, salespersonId }))} />
+              <SelectField error={errors.salespersonId} label={locale === "ar" ? "البائع" : "Salesperson"} value={form.salespersonId} options={memberOptions} onChange={(salespersonId) => setForm((prev) => ({ ...prev, salespersonId }))} />
               <SummaryPanel
                 title={locale === "ar" ? "مراجعة المسودة" : "Draft review"}
                 subtitle={locale === "ar" ? "ستظهر كصفقة معلقة بعد الحفظ." : "This will enter sales as a pending deal."}

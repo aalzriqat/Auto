@@ -1,6 +1,7 @@
 import { useQuery } from "convex/react";
 import { useCallback, useEffect, useState } from "react";
 import { Image, ImageBackground, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { AppImage } from "../../components/AppImage";
 
 import { api, type MobileMarketplaceSearchResult, type MobileMarketplaceVehicle } from "../../convexApi";
 import { Card } from "../../components/Card";
@@ -409,7 +410,7 @@ function HomeOfferCard({
     >
       <View style={styles.offerImageWrap}>
         {vehicle.imageUrls[0] ? (
-          <Image source={{ uri: vehicle.imageUrls[0] }} style={styles.offerImage} resizeMode="cover" />
+          <AppImage uri={vehicle.imageUrls[0]} style={styles.offerImage} />
         ) : (
           <Text style={styles.offerNoImage}>{t("marketplaceNoImage")}</Text>
         )}

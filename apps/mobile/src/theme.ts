@@ -36,15 +36,25 @@ const lightColors = {
   border: "#e3e3e9",
   borderStrong: "#d1d1d6",
   text: "#0f172a",
-  mutedText: "#64748b",
-  subtleText: "#94a3b8",
+  // Secondary text. Must clear WCAG AA (4.5:1) against EVERY light surface it
+  // can land on, not just white: the old #64748b measured 4.17:1 on surfaceAlt
+  // (#eef0f5), so the app's most common secondary-text token was failing on the
+  // card/chip backgrounds it appears on most. #5c6b80 is 4.76:1 at its worst.
+  mutedText: "#5c6b80",
+  // NON-TEXT only (icons, presence dots, chevrons) — WCAG 1.4.11 asks 3:1 for
+  // those, which #94a3b8 (2.25:1 worst case) also failed. Anything that renders
+  // as *text* uses mutedText instead; see the contrast gate in theme.test.ts.
+  subtleText: "#7c8ba3",
   primary: "#2563eb",
   primaryDark: "#1e40af",
   primarySoft: "#dbeafe",
   onPrimary: "#ffffff",
   accent: "#ea580c",
   accentSoft: "#ffedd5",
-  danger: "#e11d48",
+  // Renders as text (inline field errors, destructive labels) as well as a
+  // button fill. #e11d48 was 4.12:1 at worst on light surfaces and 3.91:1 on
+  // dangerSoft — below AA in exactly the place a user must not miss.
+  danger: "#be123c",
   dangerSoft: "#ffe4e6",
   success: "#16a34a",
   successSoft: "#dcfce7",

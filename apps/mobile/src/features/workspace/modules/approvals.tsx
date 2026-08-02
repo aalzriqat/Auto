@@ -3,7 +3,7 @@ import { Text, View } from "react-native";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileApprovalRequest } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { dateLabel, useGenericError, PrimaryButton, RecordCard, EmptyList, ModuleScroll } from "./moduleShared";
+import { dateLabel, useGenericError, PrimaryButton, RecordCard, ModuleList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function ApprovalsModule({ orgId }: { orgId: string }) {
@@ -26,9 +26,12 @@ export function ApprovalsModule({ orgId }: { orgId: string }) {
   }
 
   return (
-    <ModuleScroll>
-      {approvals.length ? approvals.map((request) => (
-        <RecordCard key={request._id}>
+    <ModuleList
+      data={approvals}
+      emptyLabel={locale === "ar" ? "لا توجد موافقات معلقة." : "No pending approvals."}
+      keyExtractor={(request) => request._id}
+      renderItem={(request) => (
+        <RecordCard>
           <Text style={styles.recordTitle}>{request.vehicleMakeModel}</Text>
           <Text style={styles.recordMeta}>{request.vehicleVin} · {request.salespersonName}</Text>
           <Text style={styles.recordMeta}>{dateLabel(request.createdAt, locale)}</Text>
@@ -37,8 +40,8 @@ export function ApprovalsModule({ orgId }: { orgId: string }) {
             <PrimaryButton label={locale === "ar" ? "رفض" : "Reject"} tone="danger" onPress={() => answer(request, "REJECTED")} />
           </View>
         </RecordCard>
-      )) : <EmptyList label={locale === "ar" ? "لا توجد موافقات معلقة." : "No pending approvals."} />}
-    </ModuleScroll>
+      )}
+    />
   );
 }
 

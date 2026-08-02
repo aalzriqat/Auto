@@ -4,7 +4,7 @@ import { Text, View } from "react-native";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileValuationCompany } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, EmptyList, ModuleScroll } from "./moduleShared";
+import { useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function ValuationCompaniesModule({ orgId }: { orgId: string }) {
@@ -61,24 +61,31 @@ export function ValuationCompaniesModule({ orgId }: { orgId: string }) {
   }
 
   return (
-    <ModuleScroll>
-      <View style={styles.actionRow}>
-        <PrimaryButton label={locale === "ar" ? "إضافة شركة" : "Add company"} onPress={openCreate} />
-        <PrimaryButton label={locale === "ar" ? "تهيئة" : "Seed"} tone="muted" onPress={() => seedCompanies({ orgId }).catch((error: unknown) => reportError("Mobile valuation seed failed", error))} />
-      </View>
-      {companies.length ? companies.map((company) => (
-        <RecordCard key={company._id}>
-          <View style={styles.recordHeader}>
-            <Text style={styles.recordTitle}>{company.name}</Text>
-            <Text style={styles.statusPill}>{company.isActive ? "ACTIVE" : "INACTIVE"}</Text>
+    <>
+      <ModuleList
+        data={companies}
+        emptyLabel={locale === "ar" ? "لا توجد شركات تقييم." : "No valuation companies found."}
+        keyExtractor={(company) => company._id}
+        header={
+          <View style={styles.actionRow}>
+            <PrimaryButton label={locale === "ar" ? "إضافة شركة" : "Add company"} onPress={openCreate} />
+            <PrimaryButton label={locale === "ar" ? "تهيئة" : "Seed"} tone="muted" onPress={() => seedCompanies({ orgId }).catch((error: unknown) => reportError("Mobile valuation seed failed", error))} />
           </View>
-          <Text style={styles.recordMeta}>{locale === "ar" ? "الترتيب" : "Order"} {company.order + 1}</Text>
-          <View style={styles.cardActions}>
-            <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openEdit(company)} />
-            <PrimaryButton label={locale === "ar" ? "حذف" : "Delete"} tone="danger" onPress={() => removeCompany({ orgId, companyId: company._id }).catch((error: unknown) => reportError("Mobile valuation delete failed", error))} />
-          </View>
-        </RecordCard>
-      )) : <EmptyList label={locale === "ar" ? "لا توجد شركات تقييم." : "No valuation companies found."} />}
+        }
+        renderItem={(company) => (
+          <RecordCard>
+            <View style={styles.recordHeader}>
+              <Text style={styles.recordTitle}>{company.name}</Text>
+              <Text style={styles.statusPill}>{company.isActive ? "ACTIVE" : "INACTIVE"}</Text>
+            </View>
+            <Text style={styles.recordMeta}>{locale === "ar" ? "الترتيب" : "Order"} {company.order + 1}</Text>
+            <View style={styles.cardActions}>
+              <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openEdit(company)} />
+              <PrimaryButton label={locale === "ar" ? "حذف" : "Delete"} tone="danger" onPress={() => removeCompany({ orgId, companyId: company._id }).catch((error: unknown) => reportError("Mobile valuation delete failed", error))} />
+            </View>
+          </RecordCard>
+        )}
+      />
       <FormModal title={editing ? (locale === "ar" ? "تعديل شركة" : "Edit company") : (locale === "ar" ? "شركة جديدة" : "New company")} visible={open} onClose={() => setOpen(false)}>
         <FormField label={locale === "ar" ? "الاسم" : "Name"} value={form.name} onChangeText={(name) => setForm((prev) => ({ ...prev, name }))} />
         <SelectField
@@ -89,7 +96,7 @@ export function ValuationCompaniesModule({ orgId }: { orgId: string }) {
         />
         <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={save} />
       </FormModal>
-    </ModuleScroll>
+    </>
   );
 }
 

@@ -1,13 +1,17 @@
 import { calculateUnifiedMurabaha } from "@autoflow/shared/financing";
 import { useRouter } from "expo-router";
-import { Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View, type StyleProp, type ViewStyle } from "react-native";
+import { EmptyState } from "../../../components/EmptyState";
+import { FormField as SharedFormField, type FormFieldProps as SharedFormFieldProps } from "../../../components/FormField";
 import { FadeSlideIn } from "../../../components/Motion";
-import { Icon } from "../../../components/Icon";
+import { Icon, type SemanticIconName } from "../../../components/Icon";
 import { LocaleToggle } from "../../../components/LocaleToggle";
 import { ThemeToggle } from "../../../components/ThemeToggle";
 import { SearchableSelectField, type SearchableSelectOption } from "../../../components/SearchableSelectField";
 import { SkeletonRow } from "../../../components/SkeletonRow";
 import { api, type MobileDirectConversation, type MobileFinanceCompany, type MobileOrgSummary, type MobileSale, type MobileSaleStatus, type MobileVehicle } from "../../../convexApi";
+import { hapticWarning } from "../../../haptics";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { useAppTheme } from "../../../providers/ThemeProvider";
 import { getFirstNhtsaResult, getFirstNhtsaWmiName, mapNhtsaVinPayload, type MobileVinDecodedFields, type MobileVinReadiness } from "../mobileVinDecode";
@@ -53,14 +57,7 @@ export type WebsiteColorPreset = {
   secondaryColor: string;
 };
 
-export type FormFieldProps = {
-  keyboardType?: "default" | "email-address" | "numeric" | "phone-pad";
-  label: string;
-  multiline?: boolean;
-  onChangeText: (value: string) => void;
-  placeholder?: string;
-  value: string;
-};
+export type FormFieldProps = Omit<SharedFormFieldProps, "variant">;
 
 export const TERM_MONTH_PRESETS = ["36", "48", "60", "72"] as const;
 
@@ -341,10 +338,67 @@ export function canLoadMore(status: string): boolean {
   return status === "CanLoadMore";
 }
 
+export type FieldErrors<Field extends string> = Partial<Record<Field, string>>;
+
+/**
+ * Per-field validation state for a module form.
+ *
+ * Validation used to be a blocking `Alert.alert("Required fields")`: it
+ * interrupted modally, named no field, and left the user to guess which of a
+ * dozen inputs was wrong. `validate` records a message per field instead and
+ * returns whether the form may proceed, so the message can be rendered against
+ * the field it belongs to.
+ */
+export function useFormErrors<Field extends string>() {
+  const [errors, setErrors] = useState<FieldErrors<Field>>({});
+
+  return useMemo(
+    () => ({
+      errors,
+      /** Drop every message — call when (re)opening a form. */
+      reset: () => setErrors({}),
+      /** Records the failing fields. Returns true when none failed. */
+      validate: (candidate: FieldErrors<Field>) => {
+        const failed = Object.fromEntries(
+          Object.entries(candidate).filter(([, message]) => Boolean(message)),
+        ) as FieldErrors<Field>;
+        setErrors(failed);
+        const valid = Object.keys(failed).length === 0;
+        if (!valid) {
+          // Inline errors are quieter than the modal alert they replaced, so a
+          // rejected submit needs SOME signal that the tap did something. This
+          // is the one place a warning buzz is worth it.
+          hapticWarning();
+        }
+        return valid;
+      },
+    }),
+    [errors],
+  );
+}
+
+export function requiredFieldMessage(locale: AppLocale): string {
+  return locale === "ar" ? "هذا الحقل مطلوب" : "This field is required";
+}
+
+export function requiredSelectionMessage(locale: AppLocale): string {
+  return locale === "ar" ? "اختر خياراً" : "Choose an option";
+}
+
+export function invalidNumberMessage(locale: AppLocale): string {
+  return locale === "ar" ? "أدخل رقماً صالحاً" : "Enter a valid number";
+}
+
+/** `undefined` when the text is present, the required message when it is not. */
+export function requiredText(value: string, locale: AppLocale): string | undefined {
+  return value.trim() ? undefined : requiredFieldMessage(locale);
+}
+
 export function useGenericError() {
   const { locale } = useLocale();
   return (context: string, error: unknown) => {
     console.error(context, error);
+    hapticWarning();
     Alert.alert(
       locale === "ar" ? "تعذر الحفظ" : "Could not save",
       locale === "ar" ? "حدث خطأ غير متوقع. حاول مرة أخرى." : "An unexpected error occurred. Please try again.",
@@ -664,46 +718,62 @@ export function UnderlineTabBar<T extends string>({
   );
 }
 
-export function FormField({
-  keyboardType = "default",
-  label,
-  multiline,
-  onChangeText,
-  placeholder,
-  value,
-}: FormFieldProps) {
-  const styles = useStyles();
-  const theme = useAppTheme();
-  return (
-    <View style={styles.formField}>
-      <Text style={styles.formLabel}>{label}</Text>
-      <TextInput
-        keyboardType={keyboardType}
-        multiline={multiline}
-        placeholder={placeholder}
-        placeholderTextColor={theme.colors.mutedText}
-        style={[styles.formInput, multiline && styles.formInputMultiline]}
-        textAlignVertical={multiline ? "top" : "center"}
-        value={value}
-        onChangeText={onChangeText}
-      />
-    </View>
+/**
+ * The module forms' text field. This used to be a second, divergent copy of
+ * components/FormField that had lost its accessibilityLabel (so every field in
+ * every module form announced as an unlabelled box — React Native has no
+ * htmlFor, the visible label is not connected to the input) and its RTL
+ * textAlign. It is now the same component in its `filled` skin.
+ */
+export function FormField(props: FormFieldProps) {
+  return <SharedFormField {...props} variant="filled" />;
+}
+
+/**
+ * Refs + wiring for return-key focus chaining across a form's text fields.
+ *
+ * `fieldProps(index)` gives each field its ref and, for every field but the
+ * last, an onSubmitEditing that focuses the next one — so the keyboard's return
+ * key walks the form instead of the user tapping every input by hand.
+ */
+export function useFieldFocusChain(count: number) {
+  const refs = useRef<Array<TextInput | null>>([]);
+
+  return useMemo(
+    () => ({
+      fieldProps: (index: number) => ({
+        inputRef: (instance: TextInput | null) => {
+          refs.current[index] = instance;
+        },
+        onSubmitEditing:
+          index < count - 1
+            ? () => {
+              refs.current[index + 1]?.focus();
+            }
+            : undefined,
+      }),
+    }),
+    [count],
   );
 }
 
 export function SelectField({
   allowCustomValue,
   customValueLabel,
+  error,
   label,
   onChange,
   options,
+  testID,
   value,
 }: {
   allowCustomValue?: boolean;
   customValueLabel?: string;
+  error?: string;
   label: string;
   onChange: (value: string) => void;
   options: SelectableOption[];
+  testID?: string;
   value: string;
 }) {
   const { locale } = useLocale();
@@ -714,10 +784,12 @@ export function SelectField({
       closeLabel={locale === "ar" ? "إغلاق" : "Close"}
       customValueLabel={customValueLabel}
       emptyLabel={locale === "ar" ? "لا توجد نتائج." : "No results found."}
+      error={error}
       label={label}
       options={options}
       placeholder={locale === "ar" ? "اختر" : "Select"}
       searchPlaceholder={locale === "ar" ? "بحث" : "Search"}
+      testID={testID}
       value={value}
       onChange={onChange}
     />
@@ -786,12 +858,34 @@ export function MetricCard({
   );
 }
 
-export function EmptyList({ label }: { label: string }) {
-  const styles = useStyles();
+/**
+ * The modules' empty state. Was bare centred text in a card while the app
+ * already had a richer EmptyState (icon + hint + action) that no module list
+ * used — two components for one job, and the lists got the worse one. This is
+ * now a thin adapter over that component so every empty list in the app looks
+ * the same and can offer a way out of the dead end.
+ */
+export function EmptyList({
+  actionLabel,
+  hint,
+  icon,
+  label,
+  onAction,
+}: {
+  actionLabel?: string;
+  hint?: string;
+  icon?: SemanticIconName;
+  label: string;
+  onAction?: () => void;
+}) {
   return (
-    <View style={styles.emptyState}>
-      <Text style={styles.emptyText}>{label}</Text>
-    </View>
+    <EmptyState
+      actionLabel={actionLabel}
+      hint={hint}
+      icon={icon}
+      title={label}
+      onAction={onAction}
+    />
   );
 }
 
@@ -803,6 +897,7 @@ export function LoadMoreFooter({
   status: string;
 }) {
   const { locale } = useLocale();
+  const theme = useAppTheme();
   const styles = useStyles();
 
   if (canLoadMore(status)) {
@@ -816,7 +911,16 @@ export function LoadMoreFooter({
   }
 
   if (isPaginationLoading(status)) {
-    return <Text style={styles.mutedText}>{locale === "ar" ? "جاري التحميل..." : "Loading..."}</Text>;
+    // A spinner, not the word "Loading…": the footer is a progress indicator,
+    // and static text gives no signal that anything is still happening.
+    return (
+      <View style={styles.loadMoreFooter}>
+        <ActivityIndicator
+          accessibilityLabel={locale === "ar" ? "جاري التحميل" : "Loading"}
+          color={theme.colors.primary}
+        />
+      </View>
+    );
   }
 
   return null;
@@ -994,11 +1098,18 @@ export function SummaryRow({
   label: string;
   value: string;
 }) {
+  const { isRtl } = useLocale();
   const styles = useStyles();
   return (
     <View style={styles.summaryRow}>
       <Text style={styles.summaryLabel}>{label}</Text>
-      <Text numberOfLines={2} style={styles.summaryValue}>
+      <Text
+        numberOfLines={2}
+        // The value hugs the row's trailing edge. textAlign takes no logical
+        // keyword in React Native, so the flip is explicit; a hardcoded "right"
+        // pushed the value toward the middle of an RTL row.
+        style={[styles.summaryValue, { textAlign: isRtl ? "left" : "right" }]}
+      >
         {value}
       </Text>
     </View>
@@ -1075,6 +1186,32 @@ export function ModuleScroll({ children }: { children: React.ReactNode }) {
   );
 }
 
+/**
+ * One row. Memoised so scrolling a long list re-renders only the cells that
+ * actually changed, instead of every mounted row on every parent render.
+ * `render` is a compared prop rather than a ref, so a row still updates when
+ * the closure behind it changes (theme, locale, pending state).
+ */
+const ModuleListRow = memo(function ModuleListRow<T>({
+  highlighted,
+  item,
+  render,
+  rowStyle,
+}: {
+  highlighted: boolean;
+  item: T;
+  render: (item: T) => React.ReactElement;
+  rowStyle: StyleProp<ViewStyle>;
+}) {
+  const content = render(item);
+  return highlighted ? <View style={rowStyle}>{content}</View> : content;
+}) as <T>(props: {
+  highlighted: boolean;
+  item: T;
+  render: (item: T) => React.ReactElement;
+  rowStyle: StyleProp<ViewStyle>;
+}) => React.ReactElement;
+
 export function ModuleList<T>({
   data,
   emptyLabel,
@@ -1097,6 +1234,19 @@ export function ModuleList<T>({
   const styles = useStyles();
   const handleEndReached =
     loadMore && status && canLoadMore(status) ? () => loadMore(PAGE_SIZE) : undefined;
+  // Hoisted out of the JSX: an inline arrow here is a new prop on every render,
+  // which makes FlatList discard its cell cache and re-render every row.
+  const renderRow = useCallback(
+    ({ item }: { item: T }) => (
+      <ModuleListRow
+        highlighted={Boolean(highlightId) && keyExtractor(item) === highlightId}
+        item={item}
+        render={renderItem}
+        rowStyle={styles.highlightedRow}
+      />
+    ),
+    [highlightId, keyExtractor, renderItem, styles.highlightedRow],
+  );
   // `data` is empty during the first page load as well as when there genuinely
   // is nothing, so keying the empty state off length alone made every list in
   // the app flash "No results" before its rows arrived — which reads as an
@@ -1114,13 +1264,7 @@ export function ModuleList<T>({
       <FlatList
         data={data as T[]}
         keyExtractor={keyExtractor}
-        renderItem={({ item }) =>
-          highlightId && keyExtractor(item) === highlightId ? (
-            <View style={styles.highlightedRow}>{renderItem(item)}</View>
-          ) : (
-            renderItem(item)
-          )
-        }
+        renderItem={renderRow}
         ListHeaderComponent={header ? <View style={styles.listHeader}>{header}</View> : null}
         ListEmptyComponent={listEmptyComponent}
         ListFooterComponent={

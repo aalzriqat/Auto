@@ -4,7 +4,7 @@ import { Text, View } from "react-native";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileSupplierPayable, type MobileSupplierPayableStatus } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { type Option, money, maybeText, parseOptionalNumber, idempotencyKey, useGenericError, PrimaryButton, SegmentedControl, FormField, FormModal, RecordCard, EmptyList, ModuleScroll } from "./moduleShared";
+import { type Option, money, maybeText, parseOptionalNumber, idempotencyKey, useGenericError, PrimaryButton, SegmentedControl, FormField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function SourcingModule({ orgId }: { orgId: string }) {
@@ -60,21 +60,28 @@ export function SourcingModule({ orgId }: { orgId: string }) {
   }
 
   return (
-    <ModuleScroll>
-      <SegmentedControl options={statusOptions} value={statusFilter} onChange={setStatusFilter} />
-      {payables.length ? payables.map((payable) => (
-        <RecordCard key={payable._id}>
-          <View style={styles.recordHeader}>
-            <Text style={styles.recordTitle}>{payable.sourcedFromName}</Text>
-            <Text style={styles.statusPill}>{payable.status}</Text>
-          </View>
-          <Text style={styles.recordMeta}>{payable.vehicleDesc} · {payable.vehicleVin || "-"}</Text>
-          <Text style={styles.recordMeta}>{money(payable.amountDue, locale)} · {payable.customerName || "-"}</Text>
-          {payable.status === "PENDING" ? (
-            <PrimaryButton label={locale === "ar" ? "تسجيل الدفع" : "Mark paid"} tone="muted" onPress={() => openPay(payable)} />
-          ) : null}
-        </RecordCard>
-      )) : <EmptyList label={locale === "ar" ? "لا توجد مستحقات." : "No sourcing payables found."} />}
+    <>
+      <ModuleList
+        data={payables}
+        emptyLabel={locale === "ar" ? "لا توجد مستحقات." : "No sourcing payables found."}
+        keyExtractor={(payable) => payable._id}
+        header={
+          <SegmentedControl options={statusOptions} value={statusFilter} onChange={setStatusFilter} />
+        }
+        renderItem={(payable) => (
+          <RecordCard>
+            <View style={styles.recordHeader}>
+              <Text style={styles.recordTitle}>{payable.sourcedFromName}</Text>
+              <Text style={styles.statusPill}>{payable.status}</Text>
+            </View>
+            <Text style={styles.recordMeta}>{payable.vehicleDesc} · {payable.vehicleVin || "-"}</Text>
+            <Text style={styles.recordMeta}>{money(payable.amountDue, locale)} · {payable.customerName || "-"}</Text>
+            {payable.status === "PENDING" ? (
+              <PrimaryButton label={locale === "ar" ? "تسجيل الدفع" : "Mark paid"} tone="muted" onPress={() => openPay(payable)} />
+            ) : null}
+          </RecordCard>
+        )}
+      />
       <FormModal
         title={locale === "ar" ? "تسجيل دفع المورد" : "Mark supplier paid"}
         visible={Boolean(selected)}
@@ -84,7 +91,7 @@ export function SourcingModule({ orgId }: { orgId: string }) {
         <FormField multiline label={locale === "ar" ? "ملاحظات" : "Notes"} value={form.notes} onChangeText={(notes) => setForm((prev) => ({ ...prev, notes }))} />
         <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={savePaid} />
       </FormModal>
-    </ModuleScroll>
+    </>
   );
 }
 

@@ -214,7 +214,7 @@ function AuthenticatedHome() {
             autoCorrect={false}
             onChangeText={setWorkspaceQuery}
             placeholder={t("workspacePickerSearchPlaceholder")}
-            placeholderTextColor={theme.colors.subtleText}
+            placeholderTextColor={theme.colors.mutedText}
             style={[styles.searchInput, type.body, { textAlign: textDirection === "rtl" ? "right" : "left" }]}
             value={workspaceQuery}
           />
@@ -325,7 +325,7 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     paddingVertical: theme.spacing.xs,
   },
   devBuildBadgeText: {
-    color: theme.colors.subtleText,
+    color: theme.colors.mutedText,
     fontSize: 11,
     fontWeight: "700",
   },

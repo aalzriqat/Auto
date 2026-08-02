@@ -155,7 +155,7 @@ const makeStyles = (theme: AppTheme) =>
       fontWeight: "700",
     },
     disclaimer: {
-      color: theme.colors.subtleText,
+      color: theme.colors.mutedText,
       fontSize: 12,
       lineHeight: 17,
       textAlign: "center",
