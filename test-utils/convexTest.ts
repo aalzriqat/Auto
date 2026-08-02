@@ -3,6 +3,7 @@ import type { SchemaDefinition, GenericSchema } from "convex/server";
 // Relative rather than the package specifier: the package's `exports` map
 // does not expose `src/`, but convex-test needs the component's schema module.
 import aggregateComponentSchema from "../node_modules/@convex-dev/aggregate/src/component/schema";
+import rateLimiterComponentSchema from "../node_modules/@convex-dev/rate-limiter/src/component/schema";
 import { aggregateTriggers } from "../convex/aggregates";
 
 /**
@@ -31,6 +32,30 @@ import { aggregateTriggers } from "../convex/aggregates";
 const COMPONENT_MODULES = import.meta.glob(
   "../node_modules/@convex-dev/aggregate/src/component/**/*.ts",
 );
+
+const RATE_LIMITER_MODULES = import.meta.glob(
+  "../node_modules/@convex-dev/rate-limiter/src/component/**/*.ts",
+);
+
+/**
+ * Opt-in registration for the `rateLimiter` component (convex/rateLimit.ts).
+ *
+ * Deliberately NOT folded into `convexTestWithComponents` the way the
+ * aggregates are. Aggregates fire from triggers on ordinary writes, so every
+ * test needs them; the rate limiter is only reached by code that calls
+ * `rateLimiter.limit`, and today most suites either never get there or stub the
+ * module out with `vi.mock("./rateLimit", ...)`. Registering it for all ~114
+ * callers would change what those suites execute — scheduled sender actions
+ * that currently abort at `Component "rateLimiter" is not registered` would
+ * suddenly run on to their real network calls. Opting in keeps that blast
+ * radius at the one test that actually wants to assert on rate-limit
+ * behaviour.
+ */
+export function registerRateLimiter(t: {
+  registerComponent: TestConvex<SchemaDefinition<GenericSchema, boolean>>["registerComponent"];
+}): void {
+  t.registerComponent("rateLimiter", rateLimiterComponentSchema, RATE_LIMITER_MODULES);
+}
 
 /** Every aggregate mounted in `convex/convex.config.ts`. Keep in step with it. */
 const AGGREGATE_COMPONENTS = [
