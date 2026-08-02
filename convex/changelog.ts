@@ -1256,6 +1256,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "عند فشل أي إجراء — حفظ مركبة، أو إضافة عميل، أو تسجيل مصروف، أو إرسال عملية بيع للموافقة — كانت الشاشة لا تعرض شيئاً في أغلب الأحيان. فقد كان إشعار الخطأ يُمرَّر إلى نظام الإشعارات بصيغة يتعذّر عليه عرضها، فلا يظهر شيء ويبدو الإجراء وكأنه أُهمل، دون وسيلة للتمييز بين الفشل وبين بطء الحفظ. وقد شمل ذلك كل رسائل الخطأ في النظام. أصبحت الإجراءات الفاشلة الآن توضّح السبب بصياغة مفهومة، مع إبقاء التفاصيل التقنية خارج الرسالة وداخل سجل النظام حيث موضعها.",
     publishedAt: releaseAt(2026, 8, 2, 2),
   },
+  {
+    type: "IMPROVEMENT",
+    titleEn: "Lead stages are now a picker in the mobile app",
+    titleAr: "أصبحت مراحل الفرص قائمة اختيار في التطبيق",
+    descriptionEn: "Moving a lead through the pipeline meant tapping Advance once per stage, and there was no way back — a lead nudged forward by mistake stayed there, and a lead marked Won could go no further. Tapping the stage now opens the full pipeline, so a lead can be moved to any stage, forwards or backwards, in one step. Closing a lead as Won or Lost asks for confirmation first, and stage names appear in your own language everywhere instead of their internal English codes.",
+    descriptionAr: "كان نقل الفرصة عبر مراحل البيع يتطلب الضغط على «التالي» مرة لكل مرحلة، دون إمكانية الرجوع — فالفرصة التي تتقدم بالخطأ تبقى في مكانها، والفرصة المسجّلة ناجحة لا يمكن تحريكها. أصبح الضغط على المرحلة يفتح خط المبيعات كاملاً، فيمكن نقل الفرصة إلى أي مرحلة، للأمام أو للخلف، بخطوة واحدة. وإغلاق الفرصة كناجحة أو خاسرة يطلب تأكيداً أولاً، كما تظهر أسماء المراحل بلغتك في كل مكان بدلاً من رموزها الإنجليزية الداخلية.",
+    publishedAt: releaseAt(2026, 8, 2, 3),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;
