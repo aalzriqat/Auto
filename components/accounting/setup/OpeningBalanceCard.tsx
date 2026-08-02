@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/select";
 import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "@/convex/utils/money";
 import { errorMessage } from "../AccountingTabShared";
+import { accountDisplayName } from "../reports/FinancialReportShared";
 
 /**
  * Opening-balance entry for the accounting Setup tab.
@@ -81,7 +82,7 @@ function dateInputToUtcMs(value: string): number | null {
 }
 
 export function OpeningBalanceCard() {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const { activeOrgId } = useOrg();
 
   const [open, setOpen] = useState(false);
@@ -211,7 +212,11 @@ export function OpeningBalanceCard() {
             <DialogTrigger asChild>
               <Button size="sm">{t("OpeningBalanceSet")}</Button>
             </DialogTrigger>
-            <DialogContent className="max-w-3xl">
+            {/* Height cap + scroll matches every other accounting dialog
+                (ManualJournalTab, FixedAssetsTab, PartnerEquityTab). Without
+                it the form grows past a short viewport and the footer button
+                becomes unreachable once a few lines are added. */}
+            <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>{t("OpeningBalance")}</DialogTitle>
                 <DialogDescription>
@@ -253,10 +258,32 @@ export function OpeningBalanceCard() {
                         <SelectTrigger aria-label={t("OpeningBalanceAccount")}>
                           <SelectValue placeholder={t("OpeningBalanceSelectAccount")} />
                         </SelectTrigger>
-                        <SelectContent>
+                        {/* An explicit cap rather than relying on
+                            `--radix-select-content-available-height`, which the
+                            shared SelectContent uses: the default chart is ~40
+                            accounts, and inside a dialog that computed height
+                            does not reliably bound the list, so it ran off the
+                            screen with nothing to scroll. A fixed max height
+                            makes the existing `overflow-y-auto` engage. */}
+                        <SelectContent className="max-h-72">
                           {(accounts ?? []).map((acc) => (
                             <SelectItem key={acc._id} value={acc._id}>
-                              {acc.code} — {acc.name}
+                              {/* Arabic name when the UI is Arabic — the chart
+                                  carries nameAr for every seeded account, and
+                                  the reports already localize the same way. */}
+                              {acc.code} — {accountDisplayName(acc, locale)}
+                              {" · "}
+                              {/* Which side this account normally takes.
+                                  Assets and expenses are debit-normal; the
+                                  equity, liability and revenue accounts that
+                                  balance them are credit-normal. Surfacing it
+                                  here means nobody has to know the convention
+                                  to fill the form in correctly. */}
+                              <span className="text-xs text-slate-500">
+                                {acc.normalBalance === "DEBIT"
+                                  ? t("OpeningBalanceDebit")
+                                  : t("OpeningBalanceCredit")}
+                              </span>
                             </SelectItem>
                           ))}
                         </SelectContent>
