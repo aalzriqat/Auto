@@ -79,20 +79,28 @@ describe("haptics", () => {
   });
 
   test("swallows a rejected haptic instead of surfacing it", async () => {
+    const consoleError = jest.spyOn(console, "error").mockImplementation(() => undefined);
     mockNotificationAsync.mockRejectedValueOnce(new Error("no vibrator"));
 
     expect(() => hapticSuccess()).not.toThrow();
     // Let the rejection settle; an unhandled one would fail the run.
     await Promise.resolve();
+    await Promise.resolve();
+
+    expect(consoleError).toHaveBeenCalledWith("Haptic feedback failed", expect.any(Error));
   });
 
-  test("swallows a synchronous throw from the native call", () => {
+  test("swallows a synchronous throw from the native call", async () => {
     const consoleError = jest.spyOn(console, "error").mockImplementation(() => undefined);
     mockImpactAsync.mockImplementationOnce(() => {
+      // How a native-module proxy fails when its backing module is gone: it
+      // throws on access, before any promise exists.
       throw new Error("bridge is gone");
     });
 
     expect(() => hapticImpact()).not.toThrow();
+    await Promise.resolve();
+
     expect(consoleError).toHaveBeenCalledWith("Haptic feedback failed", expect.any(Error));
   });
 });

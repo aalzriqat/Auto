@@ -43,42 +43,39 @@ export function resetHapticsCache() {
   cached = undefined;
 }
 
-function run(invoke: (haptics: HapticsModule) => Promise<void>) {
+/**
+ * Runs a haptic and absorbs every way it can fail: a native-module proxy whose
+ * backing module is gone throws SYNCHRONOUSLY on access, and the call itself can
+ * reject. Both end here, logged and no further — a haptic must never surface to
+ * the user or block the action that triggered it.
+ */
+async function run(invoke: (haptics: HapticsModule) => Promise<void>) {
   const haptics = loadHaptics();
   if (!haptics) return;
 
-  let pending: Promise<void>;
   try {
-    // Guards a SYNCHRONOUS throw only: a native-module proxy whose backing
-    // module is gone throws on access, before any promise exists. The try
-    // deliberately stops here so it cannot be mistaken for rejection handling.
-    pending = invoke(haptics);
+    await invoke(haptics);
   } catch (error) {
     console.error("Haptic feedback failed", error);
-    return;
   }
-
-  // Fire and forget. A rejected haptic must never surface to the user or block
-  // the action that triggered it.
-  void pending.catch(() => undefined);
 }
 
 /** A confirmation landed — a record saved, an item added. */
 export function hapticSuccess() {
-  run((haptics) => haptics.notificationAsync(haptics.NotificationFeedbackType.Success));
+  void run((haptics) => haptics.notificationAsync(haptics.NotificationFeedbackType.Success));
 }
 
 /** An action was refused — validation failed, a mutation was rejected. */
 export function hapticWarning() {
-  run((haptics) => haptics.notificationAsync(haptics.NotificationFeedbackType.Warning));
+  void run((haptics) => haptics.notificationAsync(haptics.NotificationFeedbackType.Warning));
 }
 
 /** A terminal, irreversible-feeling move — a deal won or lost, an archive. */
 export function hapticImpact() {
-  run((haptics) => haptics.impactAsync(haptics.ImpactFeedbackStyle.Medium));
+  void run((haptics) => haptics.impactAsync(haptics.ImpactFeedbackStyle.Medium));
 }
 
 /** A pull-to-refresh reaching its trigger point. */
 export function hapticSelection() {
-  run((haptics) => haptics.impactAsync(haptics.ImpactFeedbackStyle.Light));
+  void run((haptics) => haptics.impactAsync(haptics.ImpactFeedbackStyle.Light));
 }
