@@ -1,8 +1,9 @@
 import { calculateUnifiedMurabaha } from "@autoflow/shared/financing";
 import { useRouter } from "expo-router";
-import { Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { EmptyState } from "../../../components/EmptyState";
 import { FadeSlideIn } from "../../../components/Motion";
-import { Icon } from "../../../components/Icon";
+import { Icon, type SemanticIconName } from "../../../components/Icon";
 import { LocaleToggle } from "../../../components/LocaleToggle";
 import { ThemeToggle } from "../../../components/ThemeToggle";
 import { SearchableSelectField, type SearchableSelectOption } from "../../../components/SearchableSelectField";
@@ -786,12 +787,34 @@ export function MetricCard({
   );
 }
 
-export function EmptyList({ label }: { label: string }) {
-  const styles = useStyles();
+/**
+ * The modules' empty state. Was bare centred text in a card while the app
+ * already had a richer EmptyState (icon + hint + action) that no module list
+ * used — two components for one job, and the lists got the worse one. This is
+ * now a thin adapter over that component so every empty list in the app looks
+ * the same and can offer a way out of the dead end.
+ */
+export function EmptyList({
+  actionLabel,
+  hint,
+  icon,
+  label,
+  onAction,
+}: {
+  actionLabel?: string;
+  hint?: string;
+  icon?: SemanticIconName;
+  label: string;
+  onAction?: () => void;
+}) {
   return (
-    <View style={styles.emptyState}>
-      <Text style={styles.emptyText}>{label}</Text>
-    </View>
+    <EmptyState
+      actionLabel={actionLabel}
+      hint={hint}
+      icon={icon}
+      title={label}
+      onAction={onAction}
+    />
   );
 }
 
@@ -803,6 +826,7 @@ export function LoadMoreFooter({
   status: string;
 }) {
   const { locale } = useLocale();
+  const theme = useAppTheme();
   const styles = useStyles();
 
   if (canLoadMore(status)) {
@@ -816,7 +840,16 @@ export function LoadMoreFooter({
   }
 
   if (isPaginationLoading(status)) {
-    return <Text style={styles.mutedText}>{locale === "ar" ? "جاري التحميل..." : "Loading..."}</Text>;
+    // A spinner, not the word "Loading…": the footer is a progress indicator,
+    // and static text gives no signal that anything is still happening.
+    return (
+      <View style={styles.loadMoreFooter}>
+        <ActivityIndicator
+          accessibilityLabel={locale === "ar" ? "جاري التحميل" : "Loading"}
+          color={theme.colors.primary}
+        />
+      </View>
+    );
   }
 
   return null;

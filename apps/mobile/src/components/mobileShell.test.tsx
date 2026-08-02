@@ -51,6 +51,7 @@ import { StyleSheet, Text, View } from "react-native";
 import { getMobileFoundationString } from "@autoflow/shared";
 
 import { LocaleProvider } from "../providers/LocaleProvider";
+import { theme } from "../theme";
 import { Badge, Pill } from "./Badge";
 import { Button, getButtonPressedStyle } from "./Button";
 import { Card, getCardPressedStyle } from "./Card";
@@ -331,11 +332,24 @@ describe("mobile shell components", () => {
     const loading = await render(<RouteLoadingState label="Loading workspace" />);
     expect(loading.getByText("Loading workspace")).toBeTruthy();
 
+    // No provider here on purpose: this mirrors expo-router's root
+    // ErrorBoundary. The default locale is Arabic, so an untranslated error
+    // screen shows English to a user whose whole app is in Arabic.
     const fallbackError = await render(<RouteErrorState />);
-    expect(fallbackError.getByText("An unexpected error occurred.")).toBeTruthy();
+    expect(fallbackError.getByText("حدث خطأ غير متوقع.")).toBeTruthy();
+    expect(fallbackError.queryByText("An unexpected error occurred.")).toBeNull();
+
+    const englishError = await render(
+      <LocaleProvider>
+        <RouteErrorState />
+      </LocaleProvider>,
+    );
+    await waitFor(() => {
+      expect(englishError.getByText(getMobileFoundationString("ar", "appName"))).toBeTruthy();
+    });
 
     const explicitError = await render(<RouteErrorState message="Could not load" onRetry={retry} />);
-    const retryText = explicitError.getByText("Retry");
+    const retryText = explicitError.getByText(getMobileFoundationString("ar", "retry"));
 
     expect(getRouteButtonPressedStyle(false)).toBeNull();
     expect(getRouteButtonPressedStyle(true)).not.toBeNull();
@@ -461,7 +475,12 @@ describe("mobile shell components", () => {
     const t = (key: Parameters<typeof getMobileFoundationString>[1]) => getMobileFoundationString("en", key);
     const now = Date.now();
 
-    expect(getPresenceInfo(t, undefined)).toEqual({ label: "Offline", dotColor: "#94a3b8" });
+    // Read the token rather than hard-coding its hex: this assertion is about
+    // which token an offline user gets, not about the palette's current value.
+    expect(getPresenceInfo(t, undefined)).toEqual({
+      label: "Offline",
+      dotColor: theme.colors.subtleText,
+    });
     expect(getPresenceInfo(t, now - 60_000).label).toBe("Active now");
     expect(getPresenceInfo(t, now - 10 * 60_000).label).toBe("Active 10m ago");
     expect(getPresenceInfo(t, now - 3 * 3_600_000).label).toBe("Active 3h ago");

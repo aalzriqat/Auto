@@ -64,15 +64,22 @@ jest.mock("../providers/AppFontContext", () => ({
   useAppFontState: () => ({ fontLoadError: null, fontsLoaded: true }),
 }));
 
-jest.mock("../providers/LocaleProvider", () => ({
-  useLocale: () => ({
+jest.mock("../providers/LocaleProvider", () => {
+  const value = {
     isRtl: false,
     locale: "en",
     setLocale: jest.fn(),
     t: (key: string) => key,
     textDirection: "ltr",
-  }),
-}));
+  };
+
+  return {
+    useLocale: () => value,
+    // RouteErrorState renders as expo-router's root ErrorBoundary, above the
+    // provider, so it reads the locale through the provider-free hook.
+    useOptionalLocale: () => value,
+  };
+});
 
 jest.mock("../features/home/HomeScreen", () => {
   const React = jest.requireActual<typeof import("react")>("react");
@@ -209,7 +216,9 @@ describe("mobile Expo routes", () => {
 
     const boundary = await render(<ErrorBoundary error={new Error("Route exploded")} retry={retry} />);
     expect(boundary.getByText("Route exploded")).toBeTruthy();
-    await fireEvent.press(boundary.getByText("Retry"));
+    // The mocked t() echoes the key: the label goes through i18n now, so
+    // asserting the literal "Retry" would only prove it is still hardcoded.
+    await fireEvent.press(boundary.getByText("retry"));
     expect(retry).toHaveBeenCalledTimes(1);
   });
 

@@ -396,6 +396,10 @@ export const makeStyles = (theme: AppTheme) =>
     padding: theme.spacing.xl,
     ...theme.shadows.sm,
   },
+  loadMoreFooter: {
+    alignItems: "center",
+    paddingVertical: theme.spacing.md,
+  },
   emptyText: {
     color: theme.colors.mutedText,
     fontSize: 14,
