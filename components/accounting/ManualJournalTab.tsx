@@ -330,7 +330,13 @@ export function ManualJournalTab() {
                                     <SelectValue />
                                   </SelectTrigger>
                                 </FormControl>
-                                <SelectContent>
+                                {/* Same explicit cap as OpeningBalanceCard rather
+                                    than relying on the shared SelectContent's
+                                    `--radix-select-content-available-height`,
+                                    which does not reliably bound a list inside a
+                                    dialog. Only two options today, so this is
+                                    defensive, not a fix for a live overflow. */}
+                                <SelectContent className="max-h-72">
                                   <SelectItem value="DEBIT">{t("Debit")}</SelectItem>
                                   <SelectItem value="CREDIT">{t("Credit")}</SelectItem>
                                 </SelectContent>
