@@ -47,7 +47,7 @@ export const makeStyles = (theme: AppTheme) =>
   },
   brand: {
     color: theme.colors.primaryGlow,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "700",
     letterSpacing: 0,
     textTransform: "uppercase",
@@ -285,7 +285,7 @@ export const makeStyles = (theme: AppTheme) =>
     borderRadius: theme.radius.full,
     backgroundColor: theme.colors.surfaceAlt,
     color: theme.colors.mutedText,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "600",
     letterSpacing: 0.3,
     paddingHorizontal: theme.spacing.md,
@@ -315,7 +315,7 @@ export const makeStyles = (theme: AppTheme) =>
   },
   detailPillText: {
     color: theme.colors.text,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "700",
   },
   cardActions: {
@@ -557,7 +557,7 @@ export const makeStyles = (theme: AppTheme) =>
     borderRadius: theme.radius.sm,
     backgroundColor: "rgba(255,255,255,0.18)",
     color: theme.colors.onPrimary,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "700",
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: theme.spacing.xs,
@@ -647,7 +647,7 @@ export const makeStyles = (theme: AppTheme) =>
   },
   conversationTime: {
     color: theme.colors.mutedText,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "600",
   },
   conversationPreview: {
@@ -717,7 +717,7 @@ export const makeStyles = (theme: AppTheme) =>
   },
   messageSender: {
     color: theme.colors.primaryGlow,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "700",
   },
   messageBody: {
@@ -735,7 +735,7 @@ export const makeStyles = (theme: AppTheme) =>
   },
   messageMeta: {
     color: theme.colors.mutedText,
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: "600",
   },
   messageMetaMine: {
@@ -1036,7 +1036,7 @@ export const makeStyles = (theme: AppTheme) =>
   },
   vehiclePhotoStatusText: {
     color: "#ffffff",
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "700",
     letterSpacing: 0.3,
   },
@@ -1082,7 +1082,7 @@ export const makeStyles = (theme: AppTheme) =>
     fontSize: 12,
   },
   photoSectionEmpty: {
-    color: theme.colors.subtleText,
+    color: theme.colors.mutedText,
     fontSize: 13,
     paddingVertical: theme.spacing.sm,
   },

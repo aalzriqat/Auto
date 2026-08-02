@@ -214,7 +214,7 @@ export function SearchableSelectField({
                   autoCapitalize="none"
                   autoCorrect={false}
                   placeholder={searchPlaceholder}
-                  placeholderTextColor={theme.colors.subtleText}
+                  placeholderTextColor={theme.colors.mutedText}
                   testID={`${testID}-search`}
                   style={[styles.searchInput, getTypographyStyle("body", locale, fontsLoaded)]}
                   value={search}

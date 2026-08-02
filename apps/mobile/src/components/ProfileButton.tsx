@@ -242,7 +242,7 @@ const makeStyles = (theme: AppTheme) =>
       fontWeight: "700",
     },
     buildText: {
-      color: theme.colors.subtleText,
+      color: theme.colors.mutedText,
       fontSize: 12,
       fontWeight: "500",
     },

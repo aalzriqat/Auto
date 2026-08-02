@@ -608,7 +608,7 @@ const makeStyles = (theme: AppTheme) =>
       gap: theme.spacing.sm,
     },
     photoSectionHint: {
-      color: theme.colors.subtleText,
+      color: theme.colors.mutedText,
       fontSize: 12,
       lineHeight: 17,
     },

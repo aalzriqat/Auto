@@ -248,7 +248,7 @@ const makeStyles = (theme: AppTheme) =>
     },
     buildText: {
       alignSelf: "center",
-      color: theme.colors.subtleText,
+      color: theme.colors.mutedText,
       fontSize: 12,
       fontWeight: "500",
     },

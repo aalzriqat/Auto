@@ -41,7 +41,7 @@ export function FormField({
         keyboardType={keyboardType}
         multiline={multiline}
         onChangeText={onChangeText}
-        placeholderTextColor={theme.colors.subtleText}
+        placeholderTextColor={theme.colors.mutedText}
         style={[
           styles.input,
           multiline && styles.multilineInput,

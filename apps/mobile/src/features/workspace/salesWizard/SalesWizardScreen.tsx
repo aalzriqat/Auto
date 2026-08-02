@@ -116,7 +116,7 @@ function Field({
       <Text style={styles.fieldLabel}>{label}</Text>
       <TextInput
         keyboardType={keyboardType ?? "default"}
-        placeholderTextColor={theme.colors.subtleText}
+        placeholderTextColor={theme.colors.mutedText}
         style={styles.fieldInput}
         value={value}
         onChangeText={onChangeText}
@@ -1388,7 +1388,7 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   },
   vehicleSelectorPlaceholder: {
     flex: 1,
-    color: theme.colors.subtleText,
+    color: theme.colors.mutedText,
     fontSize: 15,
   },
   costBar: {

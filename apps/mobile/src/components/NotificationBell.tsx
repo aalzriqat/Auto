@@ -325,7 +325,7 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     fontWeight: "700",
   },
   rowTime: {
-    color: theme.colors.subtleText,
+    color: theme.colors.mutedText,
     fontSize: 11,
   },
   rowMessage: {

@@ -125,7 +125,7 @@ export function WorkspaceModuleLauncher({
           autoCorrect={false}
           onChangeText={setQuery}
           placeholder={t("workspaceSearchPlaceholder")}
-          placeholderTextColor={theme.colors.subtleText}
+          placeholderTextColor={theme.colors.mutedText}
           style={[styles.searchInput, type.body, { textAlign: locale === "ar" ? "right" : "left" }]}
           value={query}
         />
