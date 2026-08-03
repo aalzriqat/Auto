@@ -150,6 +150,26 @@ export function extractSharedMobileNumber(
 }
 
 /**
+ * Writes a freshly-looked-up profile name onto a social contact.
+ *
+ * Only overwrites a name nobody chose: the platform placeholder, a record
+ * still holding the raw PSID/IGSID, or one whose surname merely repeats its
+ * first name (the old splitter's artifact). A name a staff member edited is
+ * never clobbered. `isUnresolved` is supplied per platform because each knows
+ * its own placeholder and id.
+ */
+export async function applyResolvedDisplayName(
+  ctx: MutationCtx,
+  customerId: Id<"customers">,
+  displayName: string,
+  isUnresolved: (customer: Pick<Doc<"customers">, "firstName" | "lastName">) => boolean
+): Promise<void> {
+  const customer = await ctx.db.get(customerId);
+  if (!customer || !(isUnresolved(customer) || hasDuplicatedName(customer))) return;
+  await ctx.db.patch(customerId, splitDisplayName(displayName));
+}
+
+/**
  * Loads the org's settings and, for a DM, the mobile number its sender shared.
  *
  * The two are read together because the exclusion set comes from the settings:

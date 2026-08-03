@@ -19,7 +19,7 @@ import {
 import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
 import { matchVehicleFromText, suggestVehiclesFromText } from "./utils/vehicleTextMatch";
-import { attachSharedMobileNumberToCustomer, readSettingsAndSharedMobile, splitDisplayName, hasDuplicatedName } from "./utils/socialMobile";
+import { attachSharedMobileNumberToCustomer, readSettingsAndSharedMobile, applyResolvedDisplayName } from "./utils/socialMobile";
 import { nextGeneratedLeadAssignee } from "./utils/leadAssignment";
 import { recordLeadCreated, recordLeadActivity, describeLeadFieldValue } from "./utils/leadActivity";
 import { mobileReceivedAutoReplyText } from "./utils/socialMobileReply";
@@ -507,18 +507,9 @@ export const saveCustomerDisplayName = internalMutation({
     senderFacebookId: v.string(),
   },
   handler: async (ctx, args) => {
-    const customer = await ctx.db.get(args.customerId);
-    // Only overwrite an unresolved name — never clobber a name a staff member
-    // may have since edited. A record still holding the raw PSID is unresolved
-    // just as much as one holding the literal placeholder, so it is written
-    // too; without this the Graph lookup could succeed and still be discarded.
-    // A row whose surname merely repeats its first name is the old
-    // splitter's artifact, so it is rewritable too — re-fetching leaves a
-    // genuine "Ali Ali" untouched and collapses a duplicated handle.
-    if (!customer || !(isUnresolvedFacebookName(customer, args.senderFacebookId) || hasDuplicatedName(customer))) {
-      return;
-    }
-    await ctx.db.patch(args.customerId, splitDisplayName(args.displayName));
+    await applyResolvedDisplayName(ctx, args.customerId, args.displayName, (customer) =>
+      isUnresolvedFacebookName(customer, args.senderFacebookId)
+    );
   },
 });
 
