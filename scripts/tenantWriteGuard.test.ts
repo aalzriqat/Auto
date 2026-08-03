@@ -268,12 +268,23 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // (org B's member removed org A's task). Adding the line is what turns it
   // green, so the test discriminates between the real fix and the plausible
   // near-miss rather than merely passing.
+  // Then 436→437 by `socialInboxBackfill.collapseDuplicatedName`, which drops
+  // the repeated surname from contacts the old name splitter wrote into both
+  // name fields. It lands in `skippedNoOrgId` (142→143) rather than `analysed`,
+  // because it takes no `orgId` — so it is worth saying why that is not a hole.
+  // It is an `internalMutation`, unreachable from any client, and its only
+  // caller is `resyncContactNames`, which authenticates the manager against the
+  // org first and then passes ids that came from `getUnresolvedSocialCustomers`
+  // for that same org. The id is therefore never caller-supplied in the sense
+  // this analyzer guards against; adding an `orgId` argument would let a caller
+  // name a pairing rather than prevent one. `analysed` is unchanged at 285, so
+  // nothing dropped out of inspection.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 436,
+      totalMutations: 437,
       analysed: 285,
       skippedNoArgsBlock: 9,
-      skippedNoOrgId: 142,
+      skippedNoOrgId: 143,
     });
   });
 });

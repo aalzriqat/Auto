@@ -28,7 +28,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
-import { customerSchema, CustomerFormValues, CustomerDialogProps } from "./customer.schema";
+import { customerSchema, customerEditSchema, CustomerFormValues, CustomerDialogProps } from "./customer.schema";
 import { CustomFieldsSection, useSaveCustomFieldValues } from "@/components/custom-fields/CustomFieldsSection";
 import { getErrorMessage } from "@/lib/errors";
 
@@ -43,7 +43,8 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
   const saveCustomFields = useSaveCustomFieldValues();
 
   const form = useForm<CustomerFormValues>({
-    resolver: zodResolver(customerSchema as any),
+    // Existing customers may legitimately have no surname (see customerEditSchema).
+    resolver: zodResolver((customer ? customerEditSchema : customerSchema) as any),
     defaultValues: {
       firstName: "",
       lastName: "",

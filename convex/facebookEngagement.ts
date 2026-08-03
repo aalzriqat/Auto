@@ -19,7 +19,7 @@ import {
 import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
 import { matchVehicleFromText, suggestVehiclesFromText } from "./utils/vehicleTextMatch";
-import { attachSharedMobileNumberToCustomer, extractSharedMobileNumber } from "./utils/socialMobile";
+import { attachSharedMobileNumberToCustomer, readSettingsAndSharedMobile, applyResolvedDisplayName } from "./utils/socialMobile";
 import { nextGeneratedLeadAssignee } from "./utils/leadAssignment";
 import { recordLeadCreated, recordLeadActivity, describeLeadFieldValue } from "./utils/leadActivity";
 import { mobileReceivedAutoReplyText } from "./utils/socialMobileReply";
@@ -150,13 +150,14 @@ export const handleIncomingFacebookEvent = internalMutation({
     needsProfileEnrichment: boolean;
   } | null> => {
     const { orgId, kind, externalId, senderFacebookId, senderName, text, mediaId, sourceSurface } = args;
-    const sharedMobileNumber = kind === "dm" ? extractSharedMobileNumber(text) : null;
 
     const duplicate = await ctx.db
       .query("facebookEvents")
       .withIndex("by_org_external", (q) => q.eq("orgId", orgId).eq("externalId", externalId))
       .unique();
     if (duplicate) return null;
+
+    const { settings, sharedMobileNumber } = await readSettingsAndSharedMobile(ctx, orgId, kind, text);
 
     // Find or create customer
     const customers = await ctx.db
@@ -196,11 +197,6 @@ export const handleIncomingFacebookEvent = internalMutation({
     if (kind === "dm") {
       await attachSharedMobileNumberToCustomer(ctx, orgId, customer, sharedMobileNumber);
     }
-
-    const settings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_org", (q) => q.eq("orgId", orgId))
-      .unique();
 
     let vehicleId: Id<"vehicles"> | undefined;
     if (mediaId) {
@@ -506,19 +502,8 @@ export const saveCustomerDisplayName = internalMutation({
     senderFacebookId: v.string(),
   },
   handler: async (ctx, args) => {
-    const customer = await ctx.db.get(args.customerId);
-    // Only overwrite an unresolved name — never clobber a name a staff member
-    // may have since edited. A record still holding the raw PSID is unresolved
-    // just as much as one holding the literal placeholder, so it is written
-    // too; without this the Graph lookup could succeed and still be discarded.
-    if (!customer || !isUnresolvedFacebookName(customer, args.senderFacebookId)) {
-      return;
-    }
-    const nameParts = args.displayName.trim().split(" ");
-    await ctx.db.patch(args.customerId, {
-      firstName: nameParts[0],
-      lastName: nameParts.slice(1).join(" ") || nameParts[0],
-    });
+    const unresolved = (c: Pick<Doc<"customers">, "firstName" | "lastName">) => isUnresolvedFacebookName(c, args.senderFacebookId);
+    await applyResolvedDisplayName(ctx, args.customerId, args.displayName, unresolved);
   },
 });
 

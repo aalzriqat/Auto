@@ -12,7 +12,7 @@ import { postCommentReply, postDirectMessage, INSTAGRAM_GRAPH_VERSION } from "./
 import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
 import { matchVehicleFromText, suggestVehiclesFromText } from "./utils/vehicleTextMatch";
-import { attachSharedMobileNumberToCustomer, extractSharedMobileNumber } from "./utils/socialMobile";
+import { attachSharedMobileNumberToCustomer, readSettingsAndSharedMobile, applyResolvedDisplayName } from "./utils/socialMobile";
 import { nextGeneratedLeadAssignee } from "./utils/leadAssignment";
 import { recordLeadCreated, recordLeadActivity, describeLeadFieldValue } from "./utils/leadActivity";
 import { mobileReceivedAutoReplyText } from "./utils/socialMobileReply";
@@ -126,13 +126,14 @@ export const handleIncomingInstagramEvent = internalMutation({
     replySource?: "smart" | "canned";
   } | null> => {
     const { orgId, kind, externalId, senderInstagramId, senderUsername, text, mediaId } = args;
-    const sharedMobileNumber = kind === "dm" ? extractSharedMobileNumber(text) : null;
 
     const duplicate = await ctx.db
       .query("instagramEvents")
       .withIndex("by_org_external", (q) => q.eq("orgId", orgId).eq("externalId", externalId))
       .unique();
     if (duplicate) return null;
+
+    const { settings, sharedMobileNumber } = await readSettingsAndSharedMobile(ctx, orgId, kind, text);
 
     // Find or create customer
     const customers = await ctx.db
@@ -166,11 +167,6 @@ export const handleIncomingInstagramEvent = internalMutation({
     // the real one from Instagram's profile API.
     const needsProfileEnrichment =
       !senderUsername && isUnresolvedInstagramName(customer, senderInstagramId);
-
-    const settings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_org", (q) => q.eq("orgId", orgId))
-      .unique();
 
     let vehicleId: Id<"vehicles"> | undefined;
     if (mediaId) {
@@ -423,7 +419,12 @@ export const enrichCustomerProfile = internalAction({
       return;
     }
 
-    const displayName: string | undefined = json.username ?? json.name;
+    // The account's real name, falling back to the handle only when Instagram
+    // returns no name. A dealership works from who the person is, not their
+    // handle: "Layla Al Nimri" is a contact a salesperson can greet and search
+    // for, "mhty7220" is not. `name` is also usually two tokens, so it splits
+    // into a proper first/last instead of a one-word contact.
+    const displayName: string | undefined = json.name?.trim() || json.username?.trim();
     if (!displayName) {
       console.error(
         `instagram.enrichCustomerProfile: graph returned no name for customer ${args.customerId}`,
@@ -446,18 +447,8 @@ export const saveCustomerDisplayName = internalMutation({
     senderInstagramId: v.string(),
   },
   handler: async (ctx, args) => {
-    const customer = await ctx.db.get(args.customerId);
-    // Only overwrite an unresolved name — never clobber a name a staff member
-    // may have since edited. A record still holding the raw IGSID is
-    // unresolved too, so it is written rather than discarded.
-    if (!customer || !isUnresolvedInstagramName(customer, args.senderInstagramId)) {
-      return;
-    }
-    const nameParts = args.displayName.trim().split(" ");
-    await ctx.db.patch(args.customerId, {
-      firstName: nameParts[0],
-      lastName: nameParts.slice(1).join(" ") || nameParts[0],
-    });
+    const unresolved = (c: Pick<Doc<"customers">, "firstName" | "lastName">) => isUnresolvedInstagramName(c, args.senderInstagramId);
+    await applyResolvedDisplayName(ctx, args.customerId, args.displayName, unresolved);
   },
 });
 

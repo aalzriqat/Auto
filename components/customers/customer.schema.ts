@@ -18,3 +18,16 @@ export interface CustomerDialogProps {
   onOpenChange: (open: boolean) => void;
   customer?: Doc<"customers"> | null;
 }
+
+/**
+ * Editing an existing customer allows an empty surname.
+ *
+ * Contacts created from a social profile can legitimately have only one name —
+ * an Instagram handle, or a person who goes by a mononym. Requiring a surname
+ * on edit meant a salesperson could not update such a customer's phone or
+ * address without inventing a family name for them. Creating a customer by
+ * hand still requires both.
+ */
+export const customerEditSchema = customerSchema.extend({
+  lastName: z.string(),
+});

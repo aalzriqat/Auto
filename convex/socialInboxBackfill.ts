@@ -4,6 +4,7 @@ import { internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { isUnresolvedInstagramName } from "./instagramEngagement";
+import { hasDuplicatedName } from "./utils/socialMobile";
 import { isUnresolvedFacebookName } from "./facebookEngagement";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -503,24 +504,46 @@ export const getUnresolvedSocialCustomers = internalQuery({
 
     const instagram: Array<{ customerId: Id<"customers">; senderInstagramId: string }> = [];
     const facebook: Array<{ customerId: Id<"customers">; senderFacebookId: string }> = [];
+    // Duplicated names are repaired locally, never by re-fetching. Instagram
+    // frequently returns only a handle, so asking the platform to "resolve"
+    // someone genuinely named "Ali Ali" would replace a real name with
+    // "ali_1990". Dropping the repeated surname is the one edit that cannot
+    // invent a different name — and it costs no Graph call, so these rows
+    // never compete with the placeholder backlog for the lookup budget.
+    const duplicated: Array<Id<"customers">> = [];
 
     for (const customer of customers) {
       if (customer.isDeleted) continue;
+      // `hasDuplicatedName` picks up contacts the old splitter wrote into both
+      // name fields ("mhty7220 mhty7220"). They are not placeholders, so
+      // nothing else would ever revisit them.
+      const isDuplicated = hasDuplicatedName(customer);
+
+      if (isDuplicated) duplicated.push(customer._id);
       if (
         customer.instagramUserId &&
         isUnresolvedInstagramName(customer, customer.instagramUserId)
       ) {
         instagram.push({ customerId: customer._id, senderInstagramId: customer.instagramUserId });
       }
-      if (
-        customer.facebookUserId &&
-        isUnresolvedFacebookName(customer, customer.facebookUserId)
-      ) {
+      if (customer.facebookUserId && isUnresolvedFacebookName(customer, customer.facebookUserId)) {
         facebook.push({ customerId: customer._id, senderFacebookId: customer.facebookUserId });
       }
     }
 
-    return { instagram, facebook };
+    return { instagram, facebook, duplicated };
+  },
+});
+
+export const collapseDuplicatedName = internalMutation({
+  args: { customerId: v.id("customers") },
+  handler: async (ctx, args) => {
+    const customer = await ctx.db.get(args.customerId);
+    // Re-checked inside the mutation: the row may have been renamed between
+    // being listed and being repaired.
+    if (!customer || !hasDuplicatedName(customer)) return false;
+    await ctx.db.patch(args.customerId, { lastName: "" });
+    return true;
   },
 });
 
@@ -552,6 +575,8 @@ export const resyncContactNames = action({
     attemptedButUnresolved: number;
     /** The org's whole remaining backlog, including contacts past the batch. */
     remaining: number;
+    /** Rows whose repeated surname was dropped, with no Graph call. */
+    duplicatesCollapsed: number;
   }> => {
     await ctx.runQuery(internal.socialInboxBackfill.requireManagerAuthQuery, { orgId: args.orgId });
 
@@ -596,6 +621,17 @@ export const resyncContactNames = action({
       });
     }
 
+    // Local repair, so it runs for every duplicated row rather than competing
+    // for the lookup budget above.
+    let duplicatesCollapsed = 0;
+    for (const customerId of before.duplicated) {
+      const collapsed = await ctx.runMutation(
+        internal.socialInboxBackfill.collapseDuplicatedName,
+        { customerId }
+      );
+      if (collapsed) duplicatesCollapsed++;
+    }
+
     const after = await ctx.runQuery(
       internal.socialInboxBackfill.getUnresolvedSocialCustomers,
       { orgId: args.orgId }
@@ -614,6 +650,7 @@ export const resyncContactNames = action({
       resolved: Math.max(0, startingTotal - remaining),
       attemptedButUnresolved: Math.max(0, remaining - (startingTotal - attempted)),
       remaining,
+      duplicatesCollapsed,
     };
   },
 });
