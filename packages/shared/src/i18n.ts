@@ -619,6 +619,32 @@ const mobileFoundationStringEntries = [
   ["signUpResendCode", "Send the code again", "إعادة إرسال الرمز"],
   ["signUpError", "We couldn't create your account. Please try again.", "تعذّر إنشاء الحساب. حاول مرة أخرى."],
   ["signUpNeedsMoreSteps", "This account needs extra setup. Please finish signing up on the AutoFlow website.", "يحتاج هذا الحساب إلى خطوات إضافية. أكمل التسجيل من موقع أوتوفلو."],
+  // Biometric unlock. Note the wording never claims the fingerprint signs you
+  // in — it unlocks the session you already have — and every failure message
+  // ends by pointing at the password, which is the escape hatch that must never
+  // disappear.
+  ["biometricLockTitle", "AutoFlow is locked", "أوتوفلو مقفل"],
+  ["biometricLockBody", "Confirm it's you to reopen your session on this phone.", "أكّد هويتك لإعادة فتح جلستك على هذا الهاتف."],
+  ["biometricLockUnlock", "Unlock", "فتح"],
+  ["biometricLockUsePassword", "Sign in with your password", "تسجيل الدخول بكلمة المرور"],
+  ["biometricOpenSettings", "Open phone settings", "فتح إعدادات الهاتف"],
+  ["biometricPromptFace", "Unlock AutoFlow with your face", "افتح أوتوفلو بالتعرّف على الوجه"],
+  ["biometricPromptFingerprint", "Unlock AutoFlow with your fingerprint", "افتح أوتوفلو ببصمتك"],
+  ["biometricPromptCancel", "Cancel", "إلغاء"],
+  ["biometricPromptFallback", "Use password", "استخدم كلمة المرور"],
+  ["biometricSettingTitle", "Biometric unlock", "الفتح بالبصمة"],
+  ["biometricSettingBody", "Reopen AutoFlow with your fingerprint or face instead of signing in again. Your password is never stored on this phone.", "أعد فتح أوتوفلو ببصمتك أو وجهك بدل تسجيل الدخول من جديد. لا يتم تخزين كلمة المرور على هذا الهاتف أبداً."],
+  ["biometricSettingEnable", "Turn on", "تفعيل"],
+  ["biometricSettingDisable", "Turn off", "إيقاف"],
+  ["biometricSettingOn", "On", "مفعّل"],
+  ["biometricErrorUnsupported", "This version of the app can't use biometric unlock yet. Install the latest AutoFlow build, then try again.", "هذه النسخة من التطبيق لا تدعم الفتح بالبصمة بعد. ثبّت أحدث إصدار من أوتوفلو ثم حاول مجدداً."],
+  ["biometricErrorNoHardware", "This phone has no fingerprint reader or face scanner.", "لا يوجد في هذا الهاتف قارئ بصمة أو ماسح للوجه."],
+  ["biometricErrorNotEnrolled", "No fingerprint or face is set up on this phone yet. Add one in your phone's settings, then turn this on again.", "لا توجد بصمة أو وجه مسجّل على هذا الهاتف. أضف واحداً من إعدادات الهاتف ثم فعّل الخيار من جديد."],
+  ["biometricErrorCancelled", "Cancelled. Try again, or sign in with your password.", "تم الإلغاء. حاول مجدداً أو سجّل الدخول بكلمة المرور."],
+  ["biometricErrorLockout", "Too many attempts. Wait a moment and try again — you may need to unlock this phone with its PIN or pattern first. You can sign in with your password now.", "محاولات كثيرة. انتظر قليلاً وحاول مجدداً — قد تحتاج أولاً إلى فتح الهاتف برمز القفل أو النقش. ويمكنك تسجيل الدخول بكلمة المرور الآن."],
+  ["biometricErrorLockoutPermanent", "Biometric unlock stays locked until you unlock this phone with its PIN or pattern. Sign in with your password to continue now.", "سيبقى الفتح بالبصمة موقوفاً حتى تفتح الهاتف برمز القفل أو النقش. سجّل الدخول بكلمة المرور للمتابعة الآن."],
+  ["biometricErrorEnrolmentChanged", "Your fingerprint or face settings changed on this phone, so biometric unlock was switched off. Sign in with your password, then turn it back on.", "تغيّرت إعدادات البصمة أو الوجه على هذا الهاتف، لذلك تم إيقاف الفتح بالبصمة. سجّل الدخول بكلمة المرور ثم فعّله من جديد."],
+  ["biometricErrorFailed", "We couldn't confirm it's you. Try again, or sign in with your password.", "تعذّر التأكد من هويتك. حاول مجدداً أو سجّل الدخول بكلمة المرور."],
 ] as const satisfies ReadonlyArray<readonly [string, string, string]>;
 
 /**
