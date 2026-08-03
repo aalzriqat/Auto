@@ -403,9 +403,12 @@ describe("facebookEngagement profile enrichment", () => {
         senderFacebookId: "fb_psid_single",
       })
     );
+    // A mononym leaves the surname empty rather than repeating itself. The
+    // old behaviour asserted here wrote the name into both fields, which the
+    // UI then joined back into "Cher Cher".
     const enriched = await t.run((ctx) => ctx.db.get(placeholder));
     expect(enriched?.firstName).toBe("Cher");
-    expect(enriched?.lastName).toBe("Cher");
+    expect(enriched?.lastName).toBe("");
   });
 });
 

@@ -19,7 +19,7 @@ import {
 import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
 import { matchVehicleFromText, suggestVehiclesFromText } from "./utils/vehicleTextMatch";
-import { attachSharedMobileNumberToCustomer, extractSharedMobileNumber } from "./utils/socialMobile";
+import { attachSharedMobileNumberToCustomer, extractSharedMobileNumber, ownNumberExclusions, splitDisplayName, hasDuplicatedName } from "./utils/socialMobile";
 import { nextGeneratedLeadAssignee } from "./utils/leadAssignment";
 import { recordLeadCreated, recordLeadActivity, describeLeadFieldValue } from "./utils/leadActivity";
 import { mobileReceivedAutoReplyText } from "./utils/socialMobileReply";
@@ -150,13 +150,23 @@ export const handleIncomingFacebookEvent = internalMutation({
     needsProfileEnrichment: boolean;
   } | null> => {
     const { orgId, kind, externalId, senderFacebookId, senderName, text, mediaId, sourceSurface } = args;
-    const sharedMobileNumber = kind === "dm" ? extractSharedMobileNumber(text) : null;
 
     const duplicate = await ctx.db
       .query("facebookEvents")
       .withIndex("by_org_external", (q) => q.eq("orgId", orgId).eq("externalId", externalId))
       .unique();
     if (duplicate) return null;
+
+    const settings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .unique();
+
+    // Read after settings so the dealership's own numbers can be excluded:
+    // replying to a post pulls the advert's caption into the payload, and the
+    // showroom numbers printed there are not the sender sharing a contact.
+    const sharedMobileNumber =
+      kind === "dm" ? extractSharedMobileNumber(text, ownNumberExclusions(settings)) : null;
 
     // Find or create customer
     const customers = await ctx.db
@@ -196,11 +206,6 @@ export const handleIncomingFacebookEvent = internalMutation({
     if (kind === "dm") {
       await attachSharedMobileNumberToCustomer(ctx, orgId, customer, sharedMobileNumber);
     }
-
-    const settings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_org", (q) => q.eq("orgId", orgId))
-      .unique();
 
     let vehicleId: Id<"vehicles"> | undefined;
     if (mediaId) {
@@ -511,14 +516,13 @@ export const saveCustomerDisplayName = internalMutation({
     // may have since edited. A record still holding the raw PSID is unresolved
     // just as much as one holding the literal placeholder, so it is written
     // too; without this the Graph lookup could succeed and still be discarded.
-    if (!customer || !isUnresolvedFacebookName(customer, args.senderFacebookId)) {
+    // A row whose surname merely repeats its first name is the old
+    // splitter's artifact, so it is rewritable too — re-fetching leaves a
+    // genuine "Ali Ali" untouched and collapses a duplicated handle.
+    if (!customer || !(isUnresolvedFacebookName(customer, args.senderFacebookId) || hasDuplicatedName(customer))) {
       return;
     }
-    const nameParts = args.displayName.trim().split(" ");
-    await ctx.db.patch(args.customerId, {
-      firstName: nameParts[0],
-      lastName: nameParts.slice(1).join(" ") || nameParts[0],
-    });
+    await ctx.db.patch(args.customerId, splitDisplayName(args.displayName));
   },
 });
 

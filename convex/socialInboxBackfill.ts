@@ -4,6 +4,7 @@ import { internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { isUnresolvedInstagramName } from "./instagramEngagement";
+import { hasDuplicatedName } from "./utils/socialMobile";
 import { isUnresolvedFacebookName } from "./facebookEngagement";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -506,15 +507,19 @@ export const getUnresolvedSocialCustomers = internalQuery({
 
     for (const customer of customers) {
       if (customer.isDeleted) continue;
+      // `hasDuplicatedName` picks up contacts the old splitter wrote into both
+      // name fields ("mhty7220 mhty7220"). They are not placeholders, so
+      // nothing else would ever revisit them.
+      const duplicated = hasDuplicatedName(customer);
       if (
         customer.instagramUserId &&
-        isUnresolvedInstagramName(customer, customer.instagramUserId)
+        (isUnresolvedInstagramName(customer, customer.instagramUserId) || duplicated)
       ) {
         instagram.push({ customerId: customer._id, senderInstagramId: customer.instagramUserId });
       }
       if (
         customer.facebookUserId &&
-        isUnresolvedFacebookName(customer, customer.facebookUserId)
+        (isUnresolvedFacebookName(customer, customer.facebookUserId) || duplicated)
       ) {
         facebook.push({ customerId: customer._id, senderFacebookId: customer.facebookUserId });
       }

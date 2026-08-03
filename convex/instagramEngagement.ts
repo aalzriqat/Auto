@@ -12,7 +12,7 @@ import { postCommentReply, postDirectMessage, INSTAGRAM_GRAPH_VERSION } from "./
 import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
 import { matchVehicleFromText, suggestVehiclesFromText } from "./utils/vehicleTextMatch";
-import { attachSharedMobileNumberToCustomer, extractSharedMobileNumber } from "./utils/socialMobile";
+import { attachSharedMobileNumberToCustomer, extractSharedMobileNumber, ownNumberExclusions, splitDisplayName, hasDuplicatedName } from "./utils/socialMobile";
 import { nextGeneratedLeadAssignee } from "./utils/leadAssignment";
 import { recordLeadCreated, recordLeadActivity, describeLeadFieldValue } from "./utils/leadActivity";
 import { mobileReceivedAutoReplyText } from "./utils/socialMobileReply";
@@ -126,13 +126,23 @@ export const handleIncomingInstagramEvent = internalMutation({
     replySource?: "smart" | "canned";
   } | null> => {
     const { orgId, kind, externalId, senderInstagramId, senderUsername, text, mediaId } = args;
-    const sharedMobileNumber = kind === "dm" ? extractSharedMobileNumber(text) : null;
 
     const duplicate = await ctx.db
       .query("instagramEvents")
       .withIndex("by_org_external", (q) => q.eq("orgId", orgId).eq("externalId", externalId))
       .unique();
     if (duplicate) return null;
+
+    const settings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .unique();
+
+    // Read after settings so the dealership's own numbers can be excluded:
+    // replying to a post pulls the advert's caption into the payload, and the
+    // showroom numbers printed there are not the sender sharing a contact.
+    const sharedMobileNumber =
+      kind === "dm" ? extractSharedMobileNumber(text, ownNumberExclusions(settings)) : null;
 
     // Find or create customer
     const customers = await ctx.db
@@ -166,11 +176,6 @@ export const handleIncomingInstagramEvent = internalMutation({
     // the real one from Instagram's profile API.
     const needsProfileEnrichment =
       !senderUsername && isUnresolvedInstagramName(customer, senderInstagramId);
-
-    const settings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_org", (q) => q.eq("orgId", orgId))
-      .unique();
 
     let vehicleId: Id<"vehicles"> | undefined;
     if (mediaId) {
@@ -450,14 +455,13 @@ export const saveCustomerDisplayName = internalMutation({
     // Only overwrite an unresolved name — never clobber a name a staff member
     // may have since edited. A record still holding the raw IGSID is
     // unresolved too, so it is written rather than discarded.
-    if (!customer || !isUnresolvedInstagramName(customer, args.senderInstagramId)) {
+    // A row whose surname merely repeats its first name is the old
+    // splitter's artifact, so it is rewritable too — re-fetching leaves a
+    // genuine "Ali Ali" untouched and collapses a duplicated handle.
+    if (!customer || !(isUnresolvedInstagramName(customer, args.senderInstagramId) || hasDuplicatedName(customer))) {
       return;
     }
-    const nameParts = args.displayName.trim().split(" ");
-    await ctx.db.patch(args.customerId, {
-      firstName: nameParts[0],
-      lastName: nameParts.slice(1).join(" ") || nameParts[0],
-    });
+    await ctx.db.patch(args.customerId, splitDisplayName(args.displayName));
   },
 });
 
