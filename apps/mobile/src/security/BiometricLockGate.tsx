@@ -54,6 +54,11 @@ export function BiometricLockGate({ children }: Readonly<{ children: ReactNode }
   // an impatient second tap) resolves as a cancel and would flash a spurious
   // "Cancelled" at the user. Flips synchronously, unlike `busy`.
   const inFlightRef = useRef(false);
+  // Set once the user takes the password route. Without it the escape hatch is
+  // a loop: signing back in flips isSignedIn, which re-locks, which re-prompts
+  // the sensor that just refused them, which sends them back to the password.
+  // A user in a biometric lockout could never reach the app at all.
+  const tookPasswordRouteRef = useRef(false);
 
   const attemptUnlock = useCallback(async () => {
     if (inFlightRef.current) return;
@@ -89,6 +94,8 @@ export function BiometricLockGate({ children }: Readonly<{ children: ReactNode }
       return;
     }
 
+    if (tookPasswordRouteRef.current) return;
+
     void isBiometricUnlockArmed().then((armed) => {
       if (armed) setLocked(true);
     });
@@ -110,6 +117,9 @@ export function BiometricLockGate({ children }: Readonly<{ children: ReactNode }
       const awayFor = Date.now() - (leftForegroundAtRef.current ?? Date.now());
       if (!cameBack || awayFor < RELOCK_AFTER_MS) return;
 
+      // A long absence is a fresh "who is holding this phone" moment, so the
+      // gate comes back even for someone who took the password route earlier.
+      tookPasswordRouteRef.current = false;
       void isBiometricUnlockArmed().then((armed) => {
         if (armed) {
           setReason(null);
@@ -131,6 +141,7 @@ export function BiometricLockGate({ children }: Readonly<{ children: ReactNode }
     // Drops the local session, which is the honest meaning of "use my password
     // instead": the next screen is a real Clerk sign-in, not a bypass of this
     // gate. Unlocking first prevents the sign-in screen rendering behind a lock.
+    tookPasswordRouteRef.current = true;
     setLocked(false);
     setReason(null);
     void signOut();

@@ -171,6 +171,60 @@ describe("BiometricLockGate", () => {
     await waitFor(() => expect(getByText(CHILD)).toBeTruthy());
   });
 
+  test("signing back in after the password route does not re-lock immediately", async () => {
+    // The loop this prevents: sensor locked out -> password route -> sign in ->
+    // re-lock -> same lockout. A user in that state could never reach the app.
+    mockUnlock.mockResolvedValue({ ok: false, reason: "lockout" });
+
+    const { getByLabelText, rerender, getByText } = await renderGate();
+    await fireEvent.press(getByLabelText(ar("biometricLockUsePassword")));
+
+    // signOut() lands, then the real Clerk sign-in brings the session back.
+    for (const isSignedIn of [false, true]) {
+      mockAuth = { isSignedIn, signOut: mockSignOut };
+      mockUnlock.mockClear();
+      await act(async () => {
+        rerender(
+          <ThemeProvider>
+            <LocaleProvider>
+              <BiometricLockGate>
+                <Text>{CHILD}</Text>
+              </BiometricLockGate>
+            </LocaleProvider>
+          </ThemeProvider>,
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    }
+
+    expect(getByText(CHILD)).toBeTruthy();
+    expect(mockUnlock).not.toHaveBeenCalled();
+  });
+
+  test("a long background trip re-locks even after the password route", async () => {
+    mockUnlock.mockResolvedValue({ ok: false, reason: "lockout" });
+
+    const { getByLabelText, queryByText } = await renderGate();
+    await fireEvent.press(getByLabelText(ar("biometricLockUsePassword")));
+
+    const now = jest.spyOn(Date, "now");
+    now.mockReturnValue(0);
+    await act(async () => {
+      appStateHandler("background");
+      await Promise.resolve();
+    });
+
+    now.mockReturnValue(90_000);
+    await act(async () => {
+      appStateHandler("active");
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(queryByText(CHILD)).toBeNull());
+  });
+
   test("retrying runs another check and can succeed", async () => {
     mockUnlock.mockResolvedValueOnce({ ok: false, reason: "failed" });
 
