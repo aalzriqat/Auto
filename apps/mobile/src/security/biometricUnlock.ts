@@ -182,6 +182,20 @@ export function classifyLocalAuthError(error: string): BiometricFailure {
 }
 
 /**
+ * The searchable text of a rejection, without ever falling back to a coerced
+ * `String(value)`: an object with no `message` stringifies to "[object Object]",
+ * which is not something to run substring matches against.
+ */
+function readErrorText(error: unknown): string {
+  if (typeof error === "string") {
+    return error;
+  }
+
+  const message = (error as { message?: unknown } | null | undefined)?.message;
+  return typeof message === "string" ? message : "";
+}
+
+/**
  * Maps an expo-secure-store rejection onto our failure set.
  *
  * These prefixes are not localized OS text — expo-secure-store builds the
@@ -196,7 +210,7 @@ export function classifyLocalAuthError(error: string): BiometricFailure {
  * escape hatch.
  */
 export function classifySecureStoreError(error: unknown): BiometricFailure {
-  const message = String((error as { message?: unknown })?.message ?? error ?? "").toLowerCase();
+  const message = readErrorText(error).toLowerCase();
 
   // Order matters: "lockout permanent" also contains "lockout".
   if (message.includes("lockout permanent")) return "lockoutPermanent";

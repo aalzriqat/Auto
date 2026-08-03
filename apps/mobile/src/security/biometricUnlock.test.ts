@@ -121,11 +121,19 @@ describe("classifySecureStoreError", () => {
     expect(classifySecureStoreError(new Error("Hardware not present."))).toBe("noHardware");
   });
 
+  test("reads a rejection thrown as a bare string", () => {
+    expect(classifySecureStoreError("Lockout. Try again later.")).toBe("lockout");
+  });
+
   test("unknown rejections fail closed", () => {
     expect(classifySecureStoreError(new Error("boom"))).toBe("failed");
     expect(classifySecureStoreError("boom")).toBe("failed");
     expect(classifySecureStoreError(null)).toBe("failed");
     expect(classifySecureStoreError(undefined)).toBe("failed");
+    // Never coerced through String(): an object with no usable message would
+    // become "[object Object]", which is not text worth matching against.
+    expect(classifySecureStoreError({ code: "ERR_CANCELLED" })).toBe("failed");
+    expect(classifySecureStoreError({ message: { nested: true } })).toBe("failed");
   });
 });
 
