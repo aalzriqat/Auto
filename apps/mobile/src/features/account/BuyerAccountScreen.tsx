@@ -11,6 +11,7 @@ import { ThemeToggle } from "../../components/ThemeToggle";
 import { OTA_UPDATE_NUMBER } from "../../otaUpdateNumber";
 import { useLocale } from "../../providers/LocaleProvider";
 import { useThemedStyles } from "../../providers/ThemeProvider";
+import { BiometricUnlockToggle } from "../../security/BiometricUnlockToggle";
 import { type AppTheme } from "../../theme";
 import { useOtaUpdate } from "../../updates/otaUpdateContext";
 
@@ -78,6 +79,10 @@ export function BuyerAccountScreen({ embedded = false }: Readonly<{ embedded?: b
             <LocaleToggle />
           </View>
         </Card>
+
+        {/* Renders nothing for signed-out users or phones that cannot back the
+            gate — see BiometricUnlockToggle. */}
+        <BiometricUnlockToggle />
 
         <Card
           accessibilityLabel={isSignedIn ? t("buyerAccountOpenWorkspace") : t("buyerAccountDealerSignIn")}

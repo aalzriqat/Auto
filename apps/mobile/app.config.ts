@@ -74,6 +74,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       "READ_MEDIA_IMAGES",
       "ACCESS_COARSE_LOCATION",
       "ACCESS_FINE_LOCATION",
+      // Biometric unlock. android/ is committed, so this list alone changes
+      // nothing on disk — the permission is also written into
+      // android/app/src/main/AndroidManifest.xml by hand.
+      "USE_BIOMETRIC",
     ],
   },
   plugins: [
@@ -119,6 +123,15 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // needs a fresh binary — an OTA cannot deliver it, so AppImage falls back
     // to the platform renderer on older builds.
     "expo-image",
+    // Biometric unlock of an existing session. NATIVE: an OTA cannot deliver
+    // it, so src/security/biometricUnlock.ts resolves it lazily and reports
+    // "unsupported" on binaries that predate it.
+    [
+      "expo-local-authentication",
+      {
+        faceIDPermission: "AutoFlow uses Face ID to unlock the session you are already signed in to.",
+      },
+    ],
   ],
   extra: {
     ...config.extra,

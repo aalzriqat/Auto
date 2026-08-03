@@ -22,6 +22,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { OfflineBanner } from "../components/OfflineBanner";
 import { validateMobileEnv } from "../config/env";
 import { PushNotificationsGate } from "../notifications/PushNotificationsGate";
+import { BiometricLockGate } from "../security/BiometricLockGate";
 import { getTypographyStyle, type AppTheme } from "../theme";
 import { NativeUpdateGate } from "../updates/NativeUpdateGate";
 import { OtaUpdateGate } from "../updates/OtaUpdateGate";
@@ -121,7 +122,14 @@ export function AppProviders({ children }: { children: ReactNode }) {
                       state) and above every screen, so a dropped connection is
                       reported once rather than per-screen. */}
                   <OfflineBanner />
-                  <PushNotificationsGate>{children}</PushNotificationsGate>
+                  {/* Sits inside Clerk (it needs to know there is a session to
+                      protect, and owns the "sign in with your password"
+                      escape hatch) and above every screen, so a locked app
+                      renders the lock screen INSTEAD of the app rather than
+                      over it. */}
+                  <BiometricLockGate>
+                    <PushNotificationsGate>{children}</PushNotificationsGate>
+                  </BiometricLockGate>
                 </NativeUpdateGate>
               </ConvexProviderWithClerk>
             </ClerkProvider>
