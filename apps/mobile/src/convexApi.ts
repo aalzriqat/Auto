@@ -169,6 +169,36 @@ export interface MobileDataQualityStats {
   vehiclesWithVinWarning: number;
 }
 
+export interface MobileSearchVehicle {
+  id: string;
+  make: string;
+  model: string;
+  vin?: string;
+  year: number;
+  status: string;
+}
+
+export interface MobileSearchCustomer {
+  id: string;
+  firstName: string;
+  lastName: string;
+  phone?: string;
+  email?: string;
+}
+
+export interface MobileSearchLead {
+  id: string;
+  stage: string;
+  customerId: string;
+  customerName: string;
+}
+
+export interface MobileGlobalSearchResult {
+  vehicles: MobileSearchVehicle[];
+  customers: MobileSearchCustomer[];
+  leads: MobileSearchLead[];
+}
+
 export interface MobileDashboardTodayForRoleBucket {
   count: number;
   amount: number;
@@ -1346,6 +1376,10 @@ type DashboardStatsArgs = OrgScopedArgs & {
   timeRange?: MobileDashboardTimeRange;
 };
 
+type GlobalSearchArgs = OrgScopedArgs & {
+  query: string;
+};
+
 export type MobileMarketplaceSortBy = "price_asc" | "price_desc" | "year_desc" | "mileage_asc";
 
 type MarketplaceSearchArgs = {
@@ -2502,6 +2536,11 @@ export const api = {
       MobileLeadConversionReport
     >("reports:getLeadConversionReport"),
   },
+  search: {
+    globalSearch: makeFunctionReference<"query", GlobalSearchArgs, MobileGlobalSearchResult>(
+      "search:globalSearch",
+    ),
+  },
   applications: {
     list: makeFunctionReference<
       "query",
@@ -3168,6 +3207,9 @@ export const api = {
       MobileSalespersonPerformanceRow[]
     >;
     getLeadConversionReport: FunctionReference<"query", "public", ReportRangeArgs, MobileLeadConversionReport>;
+  };
+  search: {
+    globalSearch: FunctionReference<"query", "public", GlobalSearchArgs, MobileGlobalSearchResult>;
   };
   wizardDrafts: {
     getMyDraft: FunctionReference<"query", "public", OrgScopedArgs, MobileWizardDraft | null>;
