@@ -501,10 +501,11 @@ export function HomeSearchRow({
 /**
  * The mock's "+12% ↑" / "−5% ↓".
  *
- * Rendered only from a real previous-period total. `dashboard.stats` does not
- * carry one yet, so today this always collapses — and it collapses to nothing,
- * not to a reserved blank line: the KPI column is a plain vertical stack with a
- * gap, so an absent delta leaves no hole for the eye to land in.
+ * Rendered only from a real previous-period total. When `dashboard.stats`
+ * carries none — a YEAR or ALL_TIME range, an unreadable figure, a truncated
+ * one — this collapses to nothing rather than to a reserved blank line: the KPI
+ * column is a plain vertical stack with a gap, so an absent delta leaves no
+ * hole for the eye to land in.
  */
 function KpiDelta({ delta }: Readonly<{ delta: HomeKpiDelta | null }>) {
   const styles = useThemedStyles(makeStyles);
@@ -608,12 +609,12 @@ function KpiColumn({
  * The three headline figures, all from `dashboard.stats` for the selected
  * period.
  *
- * The mock also shows a coloured "+12% ↑" delta under each figure. The delta is
- * built and wired, but `dashboard.stats` returns no previous-period total, so
- * `readPreviousPeriod` finds nothing and every delta collapses. Faking one from
- * this payload would mean comparing two arbitrary buckets of a sparse trend
- * series and labelling the result a month-over-month change — see
- * `readPreviousPeriod` in homeModel for the backend change that makes it real.
+ * The mock's coloured "+12% ↑" delta under each figure comes from
+ * `stats.previousPeriod` — the same three totals for the window before this
+ * one. Nothing is derived from the trend series here: subtracting two of its
+ * buckets would be a two-day comparison wearing a month-over-month label. When
+ * a previous total is absent the delta collapses; see `readPreviousPeriod` in
+ * homeModel for when that happens.
  */
 export function HomeOverviewCard({
   currency,

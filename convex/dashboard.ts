@@ -110,15 +110,31 @@ export const stats = query({
     const canViewProfitMetrics = canViewSalesMetrics && canViewCostMetrics;
 
     const now = Date.now();
-    let filterStart = 0;
+    let periodLength = 0;
 
     if (args.timeRange === "DAY") {
-      filterStart = now - 24 * 60 * 60 * 1000;
+      periodLength = 24 * 60 * 60 * 1000;
     } else if (args.timeRange === "MONTH") {
-      filterStart = now - 30 * 24 * 60 * 60 * 1000;
+      periodLength = 30 * 24 * 60 * 60 * 1000;
     } else if (args.timeRange === "YEAR") {
-      filterStart = now - 365 * 24 * 60 * 60 * 1000;
+      periodLength = 365 * 24 * 60 * 60 * 1000;
     }
+
+    const filterStart = periodLength > 0 ? now - periodLength : 0;
+
+    // The window immediately before the current one, the same length: a MONTH
+    // view compares the last 30 days against the 30 before them.
+    //
+    // DAY and MONTH only. ALL_TIME has no period before it at all, and YEAR is
+    // excluded on cost: its previous window is a second full year of sales and
+    // expenses, on a subscription query that re-runs on every write to either
+    // table. That is the read amplification PR #166 spent its entire budget
+    // removing, and re-spending it to render one percentage is not the trade.
+    // A YEAR view shows its figures without deltas, which the client already
+    // handles — an absent previous total collapses the delta and leaves the
+    // layout alone.
+    const comparesPeriods = args.timeRange === "DAY" || args.timeRange === "MONTH";
+    const previousStart = filterStart - periodLength;
 
     // 2. Total Vehicles & Available Vehicles
     //
@@ -451,6 +467,143 @@ export const stats = query({
       }
     }
 
+    // 8. Previous-period totals, for the KPI deltas the mobile home renders as
+    // "+12% ↑" under each headline figure.
+    //
+    // Exactly the three figures that row compares, and nothing else: `sales`
+    // mirrors `salesVolumeThisMonth`, `expenses` and `netProfit` mirror the
+    // sums the client already takes over `salesTrend`. Each is computed from
+    // the same source and with the same rules as its current-period twin, so a
+    // delta is never a comparison between two differently-derived numbers.
+    //
+    // These are separate index range reads rather than one widened scan
+    // partitioned in memory. The rows touched are identical either way — the
+    // union of the two ranges IS the widened range — but a widened read would
+    // have to share the current period's `.take()` cap, and an index range
+    // returns its OLDEST rows first. On an org with more rows than the cap the
+    // previous window would consume the whole budget and starve the figures
+    // the dashboard already ships. Splitting the reads leaves every
+    // current-period number above byte-for-byte unchanged.
+    const PREVIOUS_PERIOD_CAP = 5000;
+
+    // Each window settles on its own source, by the same rule the current one
+    // uses: sale rows when that window has any, the VEHICLE_SALE transaction
+    // fallback otherwise.
+    //
+    // Deriving the previous window's source from the CURRENT window's row
+    // count looks like it keeps the two totals comparable, but it skips the
+    // previous window's sale rows entirely whenever this period had none —
+    // reporting no sales, and a profit of just the negated period expenses,
+    // for a window that was profitable. Nothing is truncated and every
+    // permission passes in that state, so the client renders the delta as
+    // confidently as a correct one. A dealer coming off a quiet month is the
+    // case this comparison exists for.
+    const previousSales = comparesPeriods && canViewSalesMetrics
+      ? await ctx.db
+        .query("sales")
+        .withIndex("by_org_saleDate", (q) =>
+          q.eq("orgId", args.orgId).gte("saleDate", previousStart).lt("saleDate", filterStart))
+        .filter(q => q.and(
+          q.eq(q.field("status"), "COMPLETED"),
+          q.neq(q.field("isDeleted"), true)
+        ))
+        .take(PREVIOUS_PERIOD_CAP)
+      : [];
+
+    const previousUsesSaleRows = previousSales.length > 0;
+
+    const previousSaleTransactions = comparesPeriods && canViewSalesMetrics && !previousUsesSaleRows
+      ? await ctx.db
+        .query("transactions")
+        .withIndex("by_org_date", (q) =>
+          q.eq("orgId", args.orgId).gte("date", previousStart).lt("date", filterStart))
+        .filter(q => q.and(
+          q.eq(q.field("category"), "VEHICLE_SALE"),
+          q.eq(q.field("type"), "IN"),
+          q.neq(q.field("isDeleted"), true)
+        ))
+        .take(PREVIOUS_PERIOD_CAP)
+      : [];
+
+    const previousExpenses = comparesPeriods && canViewCostMetrics
+      ? await ctx.db
+        .query("expenses")
+        .withIndex("by_org_date", (q) =>
+          q.eq("orgId", args.orgId).gte("date", previousStart).lt("date", filterStart))
+        .filter((q) => q.and(q.neq(q.field("isDeleted"), true), q.eq(q.field("reversedAt"), undefined)))
+        .take(PREVIOUS_PERIOD_CAP)
+      : [];
+
+    const previousSalesVolume = previousUsesSaleRows
+      ? previousSales.reduce((acc, sale) => acc + sale.salePrice, 0)
+      : previousSaleTransactions.reduce((acc, transaction) => acc + transaction.amount, 0);
+
+    const previousTotalExpenses = previousExpenses.reduce((acc, exp) => acc + exp.amount, 0);
+
+    // Same split the current period makes: a reconditioning expense already
+    // capitalized into a vehicle's cost basis is not a period expense, and
+    // deducting it here too would charge it to profit twice.
+    const previousGeneralExpenses = previousExpenses.reduce(
+      (acc, exp) =>
+        exp.vehicleId && exp.accountingTreatment === "CAPITALIZED_INVENTORY" ? acc : acc + exp.amount,
+      0,
+    );
+
+    // Cost basis for the previous window's profit, from the same authority the
+    // current window uses. Vehicles already costed above are reused rather than
+    // re-read — a car that sold in both windows is a returned unit, not a
+    // reason to run `computeVehicleCapitalizedCost` twice.
+    const previousSoldVehicleIds = Array.from(new Set(previousSales.map((s) => s.vehicleId)));
+    const previousProfitTruncated = previousSoldVehicleIds.length > PROFIT_VEHICLE_CAP;
+    let previousProfit = -previousGeneralExpenses;
+    if (canViewProfitMetrics && !previousProfitTruncated) {
+      const previousCostByVehicle = new Map(
+        await Promise.all(
+          previousSoldVehicleIds.map(async (vehicleId) => {
+            const cached = capitalizedCostByVehicle.get(vehicleId);
+            if (cached !== undefined) return [vehicleId, cached] as const;
+            const vehicle = await ctx.db.get(vehicleId);
+            if (!vehicle || vehicle.orgId !== args.orgId) return [vehicleId, undefined] as const;
+            return [vehicleId, await computeVehicleCapitalizedCost(ctx, vehicle)] as const;
+          })
+        )
+      );
+      for (const sale of previousSales) {
+        const cost = previousCostByVehicle.get(sale.vehicleId);
+        if (cost !== undefined) previousProfit += sale.salePrice - cost;
+      }
+    }
+
+    const previousSalesTruncated =
+      previousSales.length === PREVIOUS_PERIOD_CAP ||
+      previousSaleTransactions.length === PREVIOUS_PERIOD_CAP;
+    const previousExpensesTruncated = previousExpenses.length === PREVIOUS_PERIOD_CAP;
+
+    // A truncated total on EITHER side of the division yields a confidently
+    // wrong percentage, and a dealer has no way to tell that from a real one.
+    // So each field is omitted rather than approximated: the client renders no
+    // delta at all when one is absent, which is the honest outcome. Permission
+    // gating is the same as the current-period figure each one is compared
+    // against — a caller who cannot see the number cannot see its history.
+    const previousPeriod = comparesPeriods
+      ? {
+        sales:
+          canViewSalesMetrics && !salesTruncated && !previousSalesTruncated
+            ? previousSalesVolume
+            : undefined,
+        expenses:
+          canViewCostMetrics && !previousExpensesTruncated ? previousTotalExpenses : undefined,
+        netProfit:
+          canViewProfitMetrics &&
+            !profitTruncated &&
+            !previousProfitTruncated &&
+            !previousSalesTruncated &&
+            !previousExpensesTruncated
+            ? previousProfit
+            : undefined,
+      }
+      : undefined;
+
     return {
       totalVehicles,
       availableVehicles,
@@ -459,6 +612,7 @@ export const stats = query({
       salesVolumeThisMonth: salesVolume,
       teamMembers,
       salesTrend,
+      previousPeriod,
       truncated: {
         // Vehicles and members are exact counts off the B-tree now, so neither
         // can be truncated. The flags stay in the response rather than being
