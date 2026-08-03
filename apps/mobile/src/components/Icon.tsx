@@ -14,6 +14,10 @@ export const semanticIconGlyphs = {
   applications: "document-text-outline",
   approvals: "shield-checkmark-outline",
   approvalsFilled: "shield-checkmark",
+  // Vertical arrows, deliberately absent from `rtlIconGlyphs`: a KPI that rose
+  // rose in both reading directions.
+  arrowUp: "arrow-up",
+  arrowDown: "arrow-down",
   back: "chevron-back",
   biometric: "finger-print-outline",
   billing: "card-outline",
@@ -76,6 +80,7 @@ export const semanticIconGlyphs = {
   themeDark: "moon-outline",
   themeLight: "sunny-outline",
   today: "sunny-outline",
+  trendUp: "trending-up",
   valuationCompanies: "scale-outline",
   vehicles: "car-sport-outline",
   website: "globe-outline",

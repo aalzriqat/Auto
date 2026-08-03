@@ -29,6 +29,37 @@ export const HOME_FAB_CLEARANCE = FAB_SIZE + theme.spacing.md * 2;
  */
 export const HOME_TWO_COLUMN_MIN_WIDTH = 348;
 
+/**
+ * Which end of the task-centre row the completion ring takes.
+ *
+ * The messenger FAB is pinned to the viewport's `end` corner, and React Native
+ * resolves `end` against `I18nManager.isRTL` — the NATIVE layout direction. The
+ * home panels instead set `direction: textDirection`, which follows the app
+ * LOCALE. `LocaleProvider` calls `I18nManager.allowRTL(true)` but never
+ * `forceRTL` (that needs a process restart, and the locale switches live), so an
+ * Arabic UI on an English-locale device has `textDirection: "rtl"` while
+ * `isRTL` is false. `start` for the panel is then the physical right — and so is
+ * `end` for the FAB. The ring, the card's focal element, ends up underneath it.
+ *
+ * Flipping the ring to the row's other end whenever the two axes disagree keeps
+ * it on the opposite physical side in all four combinations, without moving the
+ * FAB (which must stay exactly where it is).
+ */
+export function taskRingSide(localeIsRtl: boolean, layoutIsRtl: boolean): "start" | "end" {
+  return localeIsRtl === layoutIsRtl ? "start" : "end";
+}
+
+/**
+ * Lines a quick-action tile's label may use.
+ *
+ * The mock fits five tiles across a 393dp frame at ~67dp each. A 360dp phone
+ * leaves 328dp of container, so the same five tiles are 59dp — and at one line
+ * "العملاء المحتملون" (Leads) clipped to "العملاء ا…", which sits beside
+ * "العملاء" (Customers) and reads as the same tile twice. Two lines fits both in
+ * full; the row of five is kept because it is the mock's shape.
+ */
+export const HOME_QUICK_ACTION_LABEL_LINES = 2;
+
 /** `search.globalSearch` itself returns nothing under two characters. */
 export const HOME_SEARCH_MIN_LENGTH = 2;
 
@@ -87,6 +118,75 @@ export function deriveOverviewKpis(stats: MobileDashboardStats | undefined): Hom
     expenses,
     netProfit,
   };
+}
+
+export type HomeKpiDelta = Readonly<{
+  /** Whole percent, always positive; `direction` carries the sign. */
+  percent: number;
+  direction: "up" | "down";
+}>;
+
+/**
+ * Previous-period totals for the KPI deltas the mock shows as "+12% ↑".
+ *
+ * `dashboard.stats` does not return these. It takes a `timeRange` but computes
+ * only the current window, and the only figures in the payload that could be
+ * subtracted from each other are two arbitrary buckets of a sparse trend series
+ * — a month-over-month label over a two-day comparison. So nothing here invents
+ * one: `readPreviousPeriod` reads a field that is currently always absent, the
+ * delta collapses, and the row keeps its layout.
+ *
+ * It is written against the shape the backend should grow — `previousPeriod`
+ * accumulated in the SAME indexed pass as the current window, because a second
+ * query would restore the year-range scan PR #166 removed — so the deltas light
+ * up the day that lands, with no further UI work.
+ */
+export type HomePreviousPeriod = Readonly<{
+  sales?: number;
+  expenses?: number;
+  netProfit?: number;
+}>;
+
+export function readPreviousPeriod(
+  stats: MobileDashboardStats | undefined,
+): HomePreviousPeriod | null {
+  const candidate = (stats as { previousPeriod?: unknown } | undefined)?.previousPeriod;
+  if (typeof candidate !== "object" || candidate === null) {
+    return null;
+  }
+
+  return candidate as HomePreviousPeriod;
+}
+
+/**
+ * Period-over-period change for one KPI, or `null` when it cannot be computed.
+ *
+ * `null` — not zero, and not a placeholder — whenever the previous total is
+ * missing, non-finite, or zero. A percentage change from a zero base is not
+ * "infinite growth", it is undefined, and a dealer who reads "+100%" against a
+ * month with no sales has been told something false.
+ */
+export function deriveKpiDelta(
+  current: number,
+  previous: number | null | undefined,
+): HomeKpiDelta | null {
+  if (typeof previous !== "number" || !Number.isFinite(previous) || previous === 0) {
+    return null;
+  }
+  if (!Number.isFinite(current)) {
+    return null;
+  }
+
+  const change = ((current - previous) / Math.abs(previous)) * 100;
+  const percent = Math.abs(Math.round(change));
+  // Anything between -0.5% and 0 rounds to zero while `change < 0` still holds,
+  // which would render "−0% ↓" — a decline reported for movement that did not
+  // happen. Flat is not a direction, so it collapses like a missing baseline.
+  if (percent === 0) {
+    return null;
+  }
+
+  return { percent, direction: change < 0 ? "down" : "up" };
 }
 
 export type HomeTaskCentre = Readonly<{

@@ -17,10 +17,13 @@ import {
   countSearchResults,
   deriveOverviewKpis,
   deriveTaskCentre,
+  deriveKpiDelta,
   greetingKeyForHour,
   isSearchQueryActive,
+  readPreviousPeriod,
   shouldStackHomeColumns,
   summarizeUpcomingPayments,
+  taskRingSide,
 } from "./homeModel";
 
 function makeStats(overrides: Partial<MobileDashboardStats> = {}): MobileDashboardStats {
@@ -363,5 +366,95 @@ describe("search helpers", () => {
         leads: [{ id: "l1", stage: "NEW", customerId: "c1", customerName: "A B" }],
       }),
     ).toBe(3);
+  });
+});
+
+// The messenger FAB is pinned to the viewport's `end` corner and must never
+// move. The task ring is what moves out of its way.
+describe("taskRingSide", () => {
+  test("keeps the ring at the row's start when the locale and the native layout agree", () => {
+    expect(taskRingSide(false, false)).toBe("start");
+    expect(taskRingSide(true, true)).toBe("start");
+  });
+
+  test("flips the ring to the row's end when they disagree", () => {
+    // The shipping case: `LocaleProvider` calls `allowRTL(true)` but never
+    // `forceRTL`, so an Arabic UI on an English-locale device has an RTL panel
+    // direction and an LTR native layout. `start` for the panel and `end` for
+    // the FAB then both resolve to the physical right — the ring would render
+    // underneath the FAB.
+    expect(taskRingSide(true, false)).toBe("end");
+    expect(taskRingSide(false, true)).toBe("end");
+  });
+});
+
+describe("readPreviousPeriod", () => {
+  test("finds nothing on the payload dashboard.stats actually returns today", () => {
+    expect(readPreviousPeriod(makeStats())).toBeNull();
+    expect(readPreviousPeriod(undefined)).toBeNull();
+  });
+
+  test("reads the totals once the backend starts returning them", () => {
+    const withPrevious = {
+      ...makeStats(),
+      previousPeriod: { sales: 40_000, expenses: 9_000, netProfit: 14_000 },
+    } as MobileDashboardStats;
+
+    expect(readPreviousPeriod(withPrevious)).toEqual({
+      sales: 40_000,
+      expenses: 9_000,
+      netProfit: 14_000,
+    });
+  });
+
+  test("ignores a previousPeriod that is not an object", () => {
+    const bogus = { ...makeStats(), previousPeriod: "soon" } as unknown as MobileDashboardStats;
+    expect(readPreviousPeriod(bogus)).toBeNull();
+
+    const nulled = { ...makeStats(), previousPeriod: null } as unknown as MobileDashboardStats;
+    expect(readPreviousPeriod(nulled)).toBeNull();
+  });
+});
+
+describe("deriveKpiDelta", () => {
+  test("computes a rise and a fall against a real previous total", () => {
+    expect(deriveKpiDelta(45_250, 40_402)).toEqual({ percent: 12, direction: "up" });
+    expect(deriveKpiDelta(8_350, 8_790)).toEqual({ percent: 5, direction: "down" });
+  });
+
+  test("returns null rather than a percentage when there is no previous total", () => {
+    expect(deriveKpiDelta(45_250, undefined)).toBeNull();
+    expect(deriveKpiDelta(45_250, null)).toBeNull();
+  });
+
+  test("returns null from a zero base instead of reporting infinite growth", () => {
+    // A month with no sales followed by any sales at all is not "+100%", and it
+    // is certainly not "+Infinity%". The change is undefined and the row hides.
+    expect(deriveKpiDelta(45_250, 0)).toBeNull();
+  });
+
+  test("returns null for non-finite inputs, which Convex's v.number() admits", () => {
+    expect(deriveKpiDelta(Number.NaN, 100)).toBeNull();
+    expect(deriveKpiDelta(100, Number.NaN)).toBeNull();
+    expect(deriveKpiDelta(100, Number.POSITIVE_INFINITY)).toBeNull();
+  });
+
+  test("returns null for a change that rounds away to nothing", () => {
+    // -0.4% rounds to 0 while the change is still negative. Rendering that as
+    // "-0% down" reports a decline that did not happen.
+    expect(deriveKpiDelta(99.6, 100)).toBeNull();
+    expect(deriveKpiDelta(100.4, 100)).toBeNull();
+    expect(deriveKpiDelta(100, 100)).toBeNull();
+    // JS rounds -0.5 to -0, so a half-percent fall still rounds away; 0.6 is the
+    // first change in either direction that survives.
+    expect(deriveKpiDelta(99.5, 100)).toBeNull();
+    expect(deriveKpiDelta(99.4, 100)).toEqual({ percent: 1, direction: "down" });
+    expect(deriveKpiDelta(100.5, 100)).toEqual({ percent: 1, direction: "up" });
+  });
+
+  test("keeps the percentage positive and puts the sign in the direction", () => {
+    const fall = deriveKpiDelta(50, 100);
+    expect(fall?.percent).toBe(50);
+    expect(fall?.direction).toBe("down");
   });
 });

@@ -62,7 +62,11 @@ const lightColors = {
   infoSoft: "#e0f2fe",
   indigo: "#4f46e5",
   indigoSoft: "#e0e7ff",
-  warning: "#d97706",
+  // #d97706 measured 2.86:1 against its own warningSoft — under the 3:1 WCAG
+  // 1.4.11 floor, and the reason HomePanels used to exclude `warning` from the
+  // icon tones entirely. Two lightness steps down the same hue clears it (3.01:1)
+  // without touching saturation. See the tone-on-soft gate in theme.test.ts.
+  warning: "#d37406",
   warningSoft: "#fef3c7",
   hero: "#0f172a",
   heroAlt: "#1e3a8a",
@@ -114,6 +118,101 @@ const darkColors = {
   glassBorder: "rgba(255,255,255,0.10)",
   overlayScrim: "rgba(4,8,16,0.66)",
 } as const;
+
+/**
+ * The dealer-home visual language, light and dark side by side.
+ *
+ * Sampled from DESIGN-light.png and DESIGN-dark.png with PIL: medians over flat
+ * regions, and ink taken as the most-different decile inside each glyph run.
+ * Every value is the mock's own EXCEPT where it failed a WCAG floor as text or
+ * as a graphic — those carry the before/after ratio inline and moved lightness
+ * only, never hue. Not one DARK token needed adjusting.
+ *
+ * Written as `[light, dark]` pairs rather than as two mirrored blocks inside the
+ * palettes above: a token can then never be added to one theme and forgotten in
+ * the other, and a token's two values are readable against each other, which is
+ * the whole question when tuning a dual-theme palette.
+ *
+ * The one deliberate departure from the mocks is elevation, and it lives in
+ * `lightColors` above rather than here — the light mock paints card #fefefe on
+ * page #fdfdfe (1.009:1, invisible in daylight), so `background`/`surface` keep
+ * the app's own 1.116:1 pairing.
+ */
+const homeTokens = {
+  homeCardBorder: ["#eaecf2", "#172031"],
+  homeKpiSalesIcon: ["#0043f8", "#5492fc"],
+  homeKpiSalesSoft: ["#eef4fe", "#132443"],
+  // mock #fe5d00 — 2.72:1 on surfaceAlt, now 3.00:1
+  homeKpiExpenseIcon: ["#f15800", "#f87e16"],
+  homeKpiExpenseSoft: ["#fef3e9", "#34271c"],
+  // mock #0aa128 — 3.00:1, now 3.03:1
+  homeKpiProfitIcon: ["#0aa028", "#48c258"],
+  homeKpiProfitSoft: ["#eaf8ee", "#112226"],
+  // mock #089c4a — 3.14:1, now 4.54:1
+  homeDeltaUp: ["#067e3c", "#4fda57"],
+  // mock #f80618 — 3.66:1, now 4.52:1
+  homeDeltaDown: ["#dc0515", "#f45959"],
+  // The mock uses violet twice — for the settings tile and the expenses tile —
+  // and puts them at opposite ends of a fixed five-tile rail, 3-5° of hue apart.
+  // AutoFlow's rail is permission-filtered, so those two land side by side, and
+  // at that separation they read as a rendering fault rather than as a design.
+  // This one is pushed toward magenta (271°) so the pair stays two violets while
+  // being visibly two. `homeTileIndigo` below keeps the mock's value.
+  homeTileViolet: ["#9333ea", "#a855f7"],
+  homeTileBlue: ["#007cd1", "#2f86f5"],
+  // mock #fd8100 — 2.21:1, now 3.01:1
+  homeTileAmber: ["#d76e00", "#faae27"],
+  // mock #09a624 — 2.84:1, now 3.00:1
+  homeTileGreen: ["#09a123", "#47d25c"],
+  homeTileIndigo: ["#4d1ff5", "#7c63f2"],
+  homeRingTrack: ["#e7ecf6", "#1a2536"],
+  homeRingArc: ["#0957f9", "#3a6cf5"],
+  // Only the overdue chip is washed in the dark mock; the other three sit on a
+  // neutral raised surface and take their identity from the numeral alone.
+  homeChipDangerSurface: ["#fdeaef", "#1e1a29"],
+  // mock #f9000f — 3.61:1, now 4.53:1
+  homeChipDangerText: ["#db000d", "#ff706c"],
+  homeChipWarningSurface: ["#fdf0e0", "#151e2c"],
+  // mock #fe7a08 — 2.30:1, now 4.52:1
+  homeChipWarningText: ["#b15201", "#ffb512"],
+  homeChipInfoSurface: ["#eaf0fe", "#131d2e"],
+  homeChipInfoText: ["#0c52f8", "#7a9efa"],
+  homeChipSuccessSurface: ["#e9f5ee", "#121c2a"],
+  // mock #089c4a — 3.14:1, now 4.54:1
+  homeChipSuccessText: ["#067e3c", "#51da5e"],
+  homeChipBorder: ["#e7eaf1", "#1d2a3c"],
+  // Diagonal, top-start to bottom-end, sampled at t=0/0.5/1 along the banner's
+  // own axis. The light mock is all but flat (#eff3fe end to end); its two
+  // deeper stops keep the fill a gradient rather than inventing one.
+  homeBannerFrom: ["#eff3fe", "#262c82"],
+  homeBannerMid: ["#e7eefd", "#132256"],
+  homeBannerTo: ["#dce6fc", "#0a1939"],
+  homeBannerIconFrom: ["#dbe3fb", "#5b63ea"],
+  homeBannerIconTo: ["#c3d1f8", "#4247b4"],
+  homeBannerTitle: ["#0f172a", "#f5f7ff"],
+  homeBannerBody: ["#4c5a6f", "#c3c6d4"],
+  homeBannerCtaText: ["#1d4fd8", "#bbcefd"],
+  homeBannerCtaBorder: ["#b3c6f4", "#3a46a8"],
+  // The mock leaves both of these panels white in the light theme and washes
+  // them amber / green only in the dark one.
+  homeAlertPanel: ["#ffffff", "#171714"],
+  homeAlertPanelRow: ["#f7f9fc", "#29251b"],
+  homeAlertPanelBorder: ["#e6e9f0", "#3a3116"],
+  homeAlertPanelTone: ["#b15201", "#ffc71e"],
+  homePaymentPanel: ["#ffffff", "#0b1820"],
+  homePaymentPanelRow: ["#f2f6fe", "#0e2123"],
+  homePaymentPanelBorder: ["#e3e8f2", "#16342c"],
+  homePaymentPanelTone: ["#067e3c", "#4fde59"],
+} as const satisfies Record<string, readonly [string, string]>;
+
+type HomeTokens = typeof homeTokens;
+type HomePalette<Index extends 0 | 1> = { [K in keyof HomeTokens]: HomeTokens[K][Index] };
+
+/** 0 picks the light value of every pair, 1 the dark one. */
+function homePalette<Index extends 0 | 1>(index: Index): HomePalette<Index> {
+  const entries = Object.entries(homeTokens).map(([token, pair]) => [token, pair[index]]);
+  return Object.fromEntries(entries) as HomePalette<Index>;
+}
 
 const gradients = {
   // royal blue band: the signature hero (dark in both themes).
@@ -209,7 +308,10 @@ const typography = {
 /** Assemble the theme for a given mode. Non-color tokens are shared. */
 export function buildTheme(mode: ThemeMode) {
   return {
-    colors: mode === "dark" ? darkColors : lightColors,
+    colors:
+      mode === "dark"
+        ? { ...darkColors, ...homePalette(1) }
+        : { ...lightColors, ...homePalette(0) },
     gradients,
     spacing,
     radius,
@@ -217,6 +319,21 @@ export function buildTheme(mode: ThemeMode) {
     fontFamilies,
     typography,
   };
+}
+
+/**
+ * A palette hex as an `rgba()` string.
+ *
+ * The home screen's icon glows are radial-gradient stops that fade the tile's
+ * own accent to nothing, so they need the accent at a series of alphas rather
+ * than a second, pre-blended token per accent per theme.
+ */
+export function withAlpha(hex: string, alpha: number): string {
+  const value = hex.replace("#", "");
+  const red = Number.parseInt(value.slice(0, 2), 16);
+  const green = Number.parseInt(value.slice(2, 4), 16);
+  const blue = Number.parseInt(value.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 }
 
 /** StatusBar content color: dark glyphs on the light theme, light on dark. */
