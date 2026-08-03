@@ -127,7 +127,7 @@ export const create = mutation({
           args.orgId,
           "deposit.created",
           { actorName, amount: String(args.amount) },
-          { link: `/${args.orgId}/sales?highlightId=${quote.vehicleId}` }
+          { link: `/${args.orgId}/vehicles?highlightId=${quote.vehicleId}` }
         );
 
         return depositId;
@@ -286,7 +286,7 @@ export const release = mutation({
           args.orgId,
           "deposit.released",
           { actorName, amount: String(deposit.amount) },
-          { link: `/${args.orgId}/sales?highlightId=${deposit.vehicleId}` }
+          { link: `/${args.orgId}/vehicles?highlightId=${deposit.vehicleId}` }
         );
 
         return args.depositId;

@@ -44,14 +44,37 @@ export function isUnresolvedFacebookName(
   customer: Pick<Doc<"customers">, "firstName" | "lastName">,
   senderFacebookId: string,
 ): boolean {
-  if (
-    customer.firstName === PLACEHOLDER_FIRST_NAME &&
-    customer.lastName === PLACEHOLDER_LAST_NAME
-  ) {
+  // Trimmed before comparing: historical rows carry stray whitespace, and an
+  // untrimmed "Contact " was silently counted as a real name, so those
+  // contacts could never be enriched.
+  const first = customer.firstName.trim();
+  const last = customer.lastName.trim();
+  if (first === PLACEHOLDER_FIRST_NAME && last === PLACEHOLDER_LAST_NAME) {
     return true;
   }
-  const fullName = `${customer.firstName} ${customer.lastName}`.trim();
-  return customer.firstName === senderFacebookId || fullName === senderFacebookId;
+  const fullName = `${first} ${last}`.trim();
+  return first === senderFacebookId || fullName === senderFacebookId;
+}
+
+/**
+ * The name to print in a notification about an inbound message.
+ *
+ * Notification rows are permanent copy — they are rendered from the text
+ * stored at write time, so a later profile lookup never rewrites them. Falling
+ * back to the raw PSID meant one failed lookup left "New Facebook message from
+ * 28136656255928185" in the manager's bell forever. The customer record is
+ * preferred (staff may already have named them), then the webhook's own name,
+ * and only a readable placeholder otherwise.
+ */
+function notificationSenderLabel(
+  senderName: string | undefined,
+  customer: Pick<Doc<"customers">, "firstName" | "lastName" | "facebookUserId">,
+): string {
+  if (senderName?.trim()) return senderName.trim();
+  if (!isUnresolvedFacebookName(customer, customer.facebookUserId ?? "")) {
+    return `${customer.firstName} ${customer.lastName}`.trim();
+  }
+  return `${PLACEHOLDER_FIRST_NAME} ${PLACEHOLDER_LAST_NAME}`;
 }
 
 /**
@@ -236,7 +259,7 @@ export const handleIncomingFacebookEvent = internalMutation({
           ctx,
           orgId,
           "social.lead_created",
-          { platform: label, senderName: senderName ?? senderFacebookId },
+          { platform: label, senderName: notificationSenderLabel(senderName, customer) },
           { link: `/${orgId}/leads?highlightId=${leadId}` }
         );
 
@@ -280,7 +303,7 @@ export const handleIncomingFacebookEvent = internalMutation({
           ctx,
           orgId,
           "social.possible_complaint",
-          { platform: "Facebook", senderName: senderName ?? senderFacebookId, excerpt: text.slice(0, 200) },
+          { platform: "Facebook", senderName: notificationSenderLabel(senderName, customer), excerpt: text.slice(0, 200) },
           { link: leadId ? `/${orgId}/leads?highlightId=${leadId}` : `/${orgId}/leads` }
         );
       } else if (intent && (intent === "location" || intent === "greeting" || vehicleId)) {

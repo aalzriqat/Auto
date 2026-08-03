@@ -93,7 +93,9 @@ export default function LeadsPage() {
   });
 
   const highlightedLeadId = useHighlightRow({
-    rows: leads,
+    // Fed the *rendered* rows: a row hidden by the active search or filter has
+    // no element to scroll to, and the hook must not report it as found.
+    rows: filteredLeads,
     getId: (l) => l._id,
     pagination: { status: leadsStatus, loadMore: loadMoreLeads, batchSize: 25 },
   });

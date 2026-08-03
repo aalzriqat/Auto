@@ -364,6 +364,53 @@ describe("customers.search", () => {
     expect(firstPage.page.some((c) => c.lastName === "WizardTarget")).toBe(false);
   });
 
+  test("finds a customer by national id", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    // The wizard's old client-side filter matched on nationalId. Moving the
+    // search server-side must not quietly drop the field staff use to identify
+    // a walk-in from the document in front of them.
+    await t.run(async (ctx) => {
+      await ctx.db.insert("customers", {
+        orgId,
+        firstName: "Omar",
+        lastName: "Haddad",
+        nationalId: "9881234567",
+      });
+    });
+
+    const results = await asUser.query(api.customers.search, {
+      orgId,
+      search: "9881234567",
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].lastName).toBe("Haddad");
+  });
+
+  test("soft-deleted customers do not consume the result window", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    // Deleted rows used to be dropped only after `.take()` had already spent
+    // the budget on them, so an org that had just deleted a batch could get an
+    // empty picker while live customers sat just past the cap.
+    await t.run(async (ctx) => {
+      await ctx.db.insert("customers", { orgId, firstName: "Live", lastName: "Survivor" });
+      for (let index = 0; index < 80; index += 1) {
+        await ctx.db.insert("customers", {
+          orgId,
+          firstName: "Dead",
+          lastName: `Row${index}`,
+          isDeleted: true,
+        });
+      }
+    });
+
+    const results = await asUser.query(api.customers.search, { orgId, search: "" });
+
+    expect(results.map((c) => c.lastName)).toEqual(["Survivor"]);
+  });
+
   test("returns recent customers with no search term and excludes deleted ones", async () => {
     const { t, orgId, asUser } = await setup();
 

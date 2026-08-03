@@ -78,17 +78,19 @@ export default function ExpensesPage() {
     pagination: { status: expensesStatus, loadMore: loadMoreExpenses, batchSize: 100 },
   });
 
-  // Expense notifications deep-link here with ?highlightId=, which nothing on
-  // this page consumed until now — the link simply landed on an unscrolled list.
-  const highlightedId = useHighlightRow({
-    rows: expenses,
-    getId: (e) => e._id,
-    pagination: { status: expensesStatus, loadMore: loadMoreExpenses, batchSize: 100 },
-  });
-
   const categoryOptions = Array.from(new Set((expenses ?? []).map((e) => e.category)));
 
   const filteredExpenses = sortedExpenses?.filter((e) => categoryFilter === "ALL" || e.category === categoryFilter);
+
+  // Expense notifications deep-link here with ?highlightId=, which nothing on
+  // this page consumed until now — the link simply landed on an unscrolled list.
+  // Fed the *rendered* rows: a row that the active category filter excludes has
+  // no element to scroll to, and the hook must not report it as found.
+  const highlightedId = useHighlightRow({
+    rows: filteredExpenses,
+    getId: (e) => e._id,
+    pagination: { status: expensesStatus, loadMore: loadMoreExpenses, batchSize: 100 },
+  });
 
   const handleEdit = (expense: any) => {
     setEditingExpense(expense);

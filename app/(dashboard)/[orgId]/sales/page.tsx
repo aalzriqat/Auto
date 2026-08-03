@@ -49,7 +49,17 @@ export default function SalesHomePage() {
     // five most recent. Opening that sale's trail is the equivalent of the
     // highlight the other pages do: it lands the operator on the record the
     // notification was about, whether or not it is in the recent list.
-    const highlightSaleId = searchParams.get("highlightId") as Id<"sales"> | null;
+    //
+    // Resolved server-side rather than cast, because notification rows already
+    // delivered can carry a vehicle id here; feeding one straight to a
+    // v.id("sales") argument would error the page instead of doing nothing.
+    const rawHighlightId = searchParams.get("highlightId");
+    const highlightSaleId = useQuery(
+        api.sales.resolveSaleHighlight,
+        activeOrgId && rawHighlightId
+            ? { orgId: activeOrgId as Id<"organizations">, highlightId: rawHighlightId }
+            : "skip"
+    );
     useEffect(() => {
         if (highlightSaleId) setTrailSaleId(highlightSaleId);
     }, [highlightSaleId]);

@@ -215,7 +215,9 @@ export default function VehiclesPage() {
   });
 
   const highlightedId = useHighlightRow({
-    rows: vehicles,
+    // Fed the *rendered* rows: a row hidden by the active search or filter has
+    // no element to scroll to, and the hook must not report it as found.
+    rows: filteredVehicles,
     getId: (v) => v._id,
     pagination: { status: vehiclesStatus, loadMore: loadMoreVehicles, batchSize: 20 },
   });

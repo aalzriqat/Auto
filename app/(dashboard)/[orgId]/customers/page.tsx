@@ -93,7 +93,9 @@ export default function CustomersPage() {
   );
 
   const highlightedId = useHighlightRow({
-    rows: customers,
+    // Fed the *rendered* rows: a row hidden by the active search or filter has
+    // no element to scroll to, and the hook must not report it as found.
+    rows: filteredCustomers,
     getId: (c) => c._id,
     pagination: { status: customersStatus, loadMore: loadMoreCustomers, batchSize: 25 },
   });

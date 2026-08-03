@@ -479,13 +479,27 @@ export const resyncEvents = action({
  */
 const CONTACT_NAME_RESYNC_LIMIT = 200;
 
+/**
+ * How many customer rows one repair run will scan looking for unresolved ones.
+ * Comfortably above the resync limit so a run can always fill its batch, while
+ * staying well inside a Convex query's read budget.
+ */
+const CONTACT_NAME_SCAN_LIMIT = 4_000;
+
 export const getUnresolvedSocialCustomers = internalQuery({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
+    // Bounded scan. "Unresolved" is not indexable, so finding these rows means
+    // reading customers — and an unbounded collect over a large org's whole
+    // customer book can exceed a query's read limit and fail outright, which
+    // would take the repair path down exactly on the orgs that need it most.
+    // Newest-first because social contacts are created by inbound messages, so
+    // unresolved ones cluster at the recent end.
     const customers = await ctx.db
       .query("customers")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
+      .order("desc")
+      .take(CONTACT_NAME_SCAN_LIMIT);
 
     const instagram: Array<{ customerId: Id<"customers">; senderInstagramId: string }> = [];
     const facebook: Array<{ customerId: Id<"customers">; senderFacebookId: string }> = [];
@@ -543,11 +557,23 @@ export const resyncContactNames = action({
       { orgId: args.orgId }
     );
 
-    const instagramBatch = before.instagram.slice(0, CONTACT_NAME_RESYNC_LIMIT);
-    const facebookBatch = before.facebook.slice(
-      0,
-      Math.max(0, CONTACT_NAME_RESYNC_LIMIT - instagramBatch.length)
+    // Split the budget per platform rather than filling it with Instagram
+    // first. Taking Instagram to the cap meant an org with 200+ unresolved
+    // Instagram contacts — especially one whose IG token is broken, so none of
+    // them ever resolve — would retry the same rows on every run and never
+    // reach a single Facebook contact. Each platform gets half, and whatever
+    // one platform does not need is lent to the other.
+    const half = Math.floor(CONTACT_NAME_RESYNC_LIMIT / 2);
+    const instagramShare = Math.min(
+      before.instagram.length,
+      Math.max(half, CONTACT_NAME_RESYNC_LIMIT - before.facebook.length)
     );
+    const facebookShare = Math.min(
+      before.facebook.length,
+      CONTACT_NAME_RESYNC_LIMIT - instagramShare
+    );
+    const instagramBatch = before.instagram.slice(0, instagramShare);
+    const facebookBatch = before.facebook.slice(0, facebookShare);
 
     // Sequential on purpose: these are third-party lookups against a per-page
     // rate limit, and a burst of parallel requests is what gets a page token

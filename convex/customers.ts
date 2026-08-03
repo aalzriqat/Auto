@@ -29,7 +29,12 @@ function customerMatchesSearch(customer: Doc<"customers">, searchTerm: string) {
     customer.firstName.toLowerCase().includes(lowerSearchTerm) ||
     customer.lastName.toLowerCase().includes(lowerSearchTerm) ||
     (customer.phone?.toLowerCase().includes(lowerSearchTerm) ?? false) ||
-    (customer.email?.toLowerCase().includes(lowerSearchTerm) ?? false)
+    (customer.email?.toLowerCase().includes(lowerSearchTerm) ?? false) ||
+    // Staff routinely identify a walk-in by national id, and the sales
+    // wizard's old client-side filter matched on it. Dropping it when the
+    // search moved server-side would have made a customer unfindable by the
+    // number printed on the document in front of the operator.
+    (customer.nationalId?.toLowerCase().includes(lowerSearchTerm) ?? false)
   );
 }
 
@@ -58,6 +63,11 @@ async function collectCustomerMatches(
   const recentCustomers = await ctx.db
     .query("customers")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    // Excluded before `take`, not after. Soft-deleted rows were spending the
+    // window budget and then being dropped, so an org that had just deleted a
+    // batch of customers could get a short — or empty — result while live
+    // customers sat just past the cap.
+    .filter((q) => q.neq(q.field("isDeleted"), true))
     .order("desc")
     .take(
       searchTerm.length >= 2

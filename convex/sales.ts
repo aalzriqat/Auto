@@ -127,6 +127,34 @@ export const get = query({
  * commission accrual, and lead closure — for the read-only Sale Trail view.
  * See saleCompletion.ts:applySaleCompletionSideEffects for the write side.
  */
+/**
+ * Resolves a `?highlightId=` value to a sale in this org, or null.
+ *
+ * Notification rows are long-lived, and some already-delivered ones point at
+ * /sales carrying a *vehicle* id rather than a sale id. `getSaleTrail` takes a
+ * `v.id("sales")`, which rejects a foreign-table id at the argument validator
+ * before any handler could be tolerant about it — so a stale link would error
+ * the page rather than simply not opening anything. Normalising first keeps an
+ * old or malformed link harmless.
+ */
+export const resolveSaleHighlight = query({
+  args: {
+    orgId: v.id("organizations"),
+    highlightId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+
+    const saleId = ctx.db.normalizeId("sales", args.highlightId);
+    if (!saleId) return null;
+
+    const sale = await ctx.db.get(saleId);
+    if (!sale || sale.isDeleted || sale.orgId !== args.orgId) return null;
+
+    return saleId;
+  },
+});
+
 export const getSaleTrail = query({
   args: {
     orgId: v.id("organizations"),

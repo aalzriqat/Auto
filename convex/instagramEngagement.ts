@@ -37,14 +37,28 @@ export function isUnresolvedInstagramName(
   customer: Pick<Doc<"customers">, "firstName" | "lastName">,
   senderInstagramId: string,
 ): boolean {
-  if (
-    customer.firstName === PLACEHOLDER_FIRST_NAME &&
-    customer.lastName === PLACEHOLDER_LAST_NAME
-  ) {
+  // Trimmed before comparing: historical rows carry stray whitespace, and an
+  // untrimmed "Contact " was silently counted as a real name, so those
+  // contacts could never be enriched.
+  const first = customer.firstName.trim();
+  const last = customer.lastName.trim();
+  if (first === PLACEHOLDER_FIRST_NAME && last === PLACEHOLDER_LAST_NAME) {
     return true;
   }
-  const fullName = `${customer.firstName} ${customer.lastName}`.trim();
-  return customer.firstName === senderInstagramId || fullName === senderInstagramId;
+  const fullName = `${first} ${last}`.trim();
+  return first === senderInstagramId || fullName === senderInstagramId;
+}
+
+/** See the note on `facebookEngagement.notificationSenderLabel`. */
+function notificationSenderLabel(
+  senderUsername: string | undefined,
+  customer: Pick<Doc<"customers">, "firstName" | "lastName" | "instagramUserId">,
+): string {
+  if (senderUsername?.trim()) return senderUsername.trim();
+  if (!isUnresolvedInstagramName(customer, customer.instagramUserId ?? "")) {
+    return `${customer.firstName} ${customer.lastName}`.trim();
+  }
+  return `${PLACEHOLDER_FIRST_NAME} ${PLACEHOLDER_LAST_NAME}`;
 }
 
 /** See the note on the Facebook constant of the same name. */
@@ -214,7 +228,7 @@ export const handleIncomingInstagramEvent = internalMutation({
           ctx,
           orgId,
           "social.lead_created",
-          { platform: label, senderName: senderUsername ?? senderInstagramId },
+          { platform: label, senderName: notificationSenderLabel(senderUsername, customer) },
           { link: `/${orgId}/leads?highlightId=${leadId}` }
         );
 
@@ -258,7 +272,7 @@ export const handleIncomingInstagramEvent = internalMutation({
           ctx,
           orgId,
           "social.possible_complaint",
-          { platform: "Instagram", senderName: senderUsername ?? senderInstagramId, excerpt: text.slice(0, 200) },
+          { platform: "Instagram", senderName: notificationSenderLabel(senderUsername, customer), excerpt: text.slice(0, 200) },
           { link: leadId ? `/${orgId}/leads?highlightId=${leadId}` : `/${orgId}/leads` }
         );
       } else if (intent && (intent === "location" || intent === "greeting" || vehicleId)) {
