@@ -64,6 +64,22 @@ describe("ownNumberExclusions", () => {
     expect(extractSharedMobileNumber(reply, excluded)?.normalized).toBe("0781234567");
   });
 
+  test("matches a dealer number stored without a + or 00 prefix", () => {
+    // dealershipPhone is stored exactly as typed and is not even trimmed on
+    // write, so a bare "962..." is a real stored shape. It parses on its own
+    // as neither local nor international, which silently produced an empty
+    // exclusion set and reinstated the original bug.
+    const excluded = ownNumberExclusions({ dealershipPhone: "962799103353" });
+    expect(excluded.size).toBeGreaterThan(0);
+    expect(extractSharedMobileNumber("0799103353", excluded)).toBeNull();
+    expect(extractSharedMobileNumber("+962799103353", excluded)).toBeNull();
+  });
+
+  test("tolerates untrimmed stored numbers", () => {
+    const excluded = ownNumberExclusions({ dealershipPhone: "  0799103353  " });
+    expect(extractSharedMobileNumber("call 0799103353", excluded)).toBeNull();
+  });
+
   test("no configured numbers means nothing is excluded", () => {
     expect(ownNumberExclusions(null).size).toBe(0);
     expect(extractSharedMobileNumber("call 0791234567", ownNumberExclusions(null))?.normalized).toBe(

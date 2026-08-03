@@ -109,7 +109,17 @@ export function ownNumberExclusions(
   const raw = [settings.dealershipPhone, ...(settings.dealershipPhones ?? [])];
   for (const value of raw) {
     if (!value?.trim()) continue;
-    const localNumber = localNumberFromCandidate(normalizePhoneText(value));
+    const normalized = normalizePhoneText(value).trim();
+    // These settings are stored exactly as typed — `dealershipPhone` is not
+    // even trimmed on write — so the same number turns up as "0799103353",
+    // "+962799103353", "00962799103353" or a bare "962799103353". Only the
+    // first three parse on their own; without the prefixed retries a dealer
+    // who wrote their number the fourth way got an empty exclusion set and
+    // the original bug back, silently.
+    const localNumber =
+      localNumberFromCandidate(normalized) ??
+      localNumberFromCandidate(`+${normalized}`) ??
+      localNumberFromCandidate(`00${normalized}`);
     if (!localNumber) continue;
     for (const variant of variantsFromLocalNumber(localNumber)) excluded.add(variant);
   }
@@ -169,7 +179,12 @@ export async function applyResolvedDisplayName(
   // leaving the placeholder that prompted the lookup.
   if (!displayName.trim()) return;
   const customer = await ctx.db.get(customerId);
-  if (!customer || !(isUnresolved(customer) || hasDuplicatedName(customer))) return;
+  // Deliberately does NOT accept a duplicated name as rewritable. Instagram
+  // often returns only a handle, so treating "Ali Ali" as repairable here
+  // would replace a real (possibly staff-entered) name with "ali_1990".
+  // Duplicated rows are repaired by `collapseDuplicatedName`, which can only
+  // drop the repeated surname and can never invent a different name.
+  if (!customer || !isUnresolved(customer)) return;
   await ctx.db.patch(customerId, splitDisplayName(displayName));
 }
 

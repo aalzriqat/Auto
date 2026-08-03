@@ -28,4 +28,10 @@ export const CreateCustomerSchema = z.object({
 export const UpdateCustomerSchema = CreateCustomerSchema.partial().extend({
   orgId: z.string().min(1, "Organization ID is required"),
   customerId: z.string().min(1, "Customer ID is required"),
+  // Contacts created from a social profile can hold a single name — an
+  // Instagram handle, or a person who goes by a mononym. Rejecting an empty
+  // surname on update left those records uneditable: a salesperson could not
+  // save a phone number without inventing a family name. Creation still
+  // requires both names.
+  lastName: z.string().optional(),
 });

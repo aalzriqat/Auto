@@ -504,38 +504,46 @@ export const getUnresolvedSocialCustomers = internalQuery({
 
     const instagram: Array<{ customerId: Id<"customers">; senderInstagramId: string }> = [];
     const facebook: Array<{ customerId: Id<"customers">; senderFacebookId: string }> = [];
-    // Duplicate-name repairs are collected separately and appended after the
-    // placeholders. Someone genuinely named "Ali Ali" matches
-    // `hasDuplicatedName` forever — a re-fetch legitimately writes the same
-    // name back — so without this ordering those rows would take a permanent
-    // slice of every run's budget away from contacts still showing a raw id,
-    // which is the backlog this exists to drain.
-    const instagramDuplicates: typeof instagram = [];
-    const facebookDuplicates: typeof facebook = [];
+    // Duplicated names are repaired locally, never by re-fetching. Instagram
+    // frequently returns only a handle, so asking the platform to "resolve"
+    // someone genuinely named "Ali Ali" would replace a real name with
+    // "ali_1990". Dropping the repeated surname is the one edit that cannot
+    // invent a different name — and it costs no Graph call, so these rows
+    // never compete with the placeholder backlog for the lookup budget.
+    const duplicated: Array<Id<"customers">> = [];
 
     for (const customer of customers) {
       if (customer.isDeleted) continue;
       // `hasDuplicatedName` picks up contacts the old splitter wrote into both
       // name fields ("mhty7220 mhty7220"). They are not placeholders, so
       // nothing else would ever revisit them.
-      const duplicated = hasDuplicatedName(customer);
+      const isDuplicated = hasDuplicatedName(customer);
 
-      if (customer.instagramUserId) {
-        const entry = { customerId: customer._id, senderInstagramId: customer.instagramUserId };
-        if (isUnresolvedInstagramName(customer, customer.instagramUserId)) instagram.push(entry);
-        else if (duplicated) instagramDuplicates.push(entry);
+      if (isDuplicated) duplicated.push(customer._id);
+      if (
+        customer.instagramUserId &&
+        isUnresolvedInstagramName(customer, customer.instagramUserId)
+      ) {
+        instagram.push({ customerId: customer._id, senderInstagramId: customer.instagramUserId });
       }
-      if (customer.facebookUserId) {
-        const entry = { customerId: customer._id, senderFacebookId: customer.facebookUserId };
-        if (isUnresolvedFacebookName(customer, customer.facebookUserId)) facebook.push(entry);
-        else if (duplicated) facebookDuplicates.push(entry);
+      if (customer.facebookUserId && isUnresolvedFacebookName(customer, customer.facebookUserId)) {
+        facebook.push({ customerId: customer._id, senderFacebookId: customer.facebookUserId });
       }
     }
 
-    return {
-      instagram: [...instagram, ...instagramDuplicates],
-      facebook: [...facebook, ...facebookDuplicates],
-    };
+    return { instagram, facebook, duplicated };
+  },
+});
+
+export const collapseDuplicatedName = internalMutation({
+  args: { customerId: v.id("customers") },
+  handler: async (ctx, args) => {
+    const customer = await ctx.db.get(args.customerId);
+    // Re-checked inside the mutation: the row may have been renamed between
+    // being listed and being repaired.
+    if (!customer || !hasDuplicatedName(customer)) return false;
+    await ctx.db.patch(args.customerId, { lastName: "" });
+    return true;
   },
 });
 
@@ -567,6 +575,8 @@ export const resyncContactNames = action({
     attemptedButUnresolved: number;
     /** The org's whole remaining backlog, including contacts past the batch. */
     remaining: number;
+    /** Rows whose repeated surname was dropped, with no Graph call. */
+    duplicatesCollapsed: number;
   }> => {
     await ctx.runQuery(internal.socialInboxBackfill.requireManagerAuthQuery, { orgId: args.orgId });
 
@@ -611,6 +621,17 @@ export const resyncContactNames = action({
       });
     }
 
+    // Local repair, so it runs for every duplicated row rather than competing
+    // for the lookup budget above.
+    let duplicatesCollapsed = 0;
+    for (const customerId of before.duplicated) {
+      const collapsed = await ctx.runMutation(
+        internal.socialInboxBackfill.collapseDuplicatedName,
+        { customerId }
+      );
+      if (collapsed) duplicatesCollapsed++;
+    }
+
     const after = await ctx.runQuery(
       internal.socialInboxBackfill.getUnresolvedSocialCustomers,
       { orgId: args.orgId }
@@ -629,6 +650,7 @@ export const resyncContactNames = action({
       resolved: Math.max(0, startingTotal - remaining),
       attemptedButUnresolved: Math.max(0, remaining - (startingTotal - attempted)),
       remaining,
+      duplicatesCollapsed,
     };
   },
 });

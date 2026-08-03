@@ -1,7 +1,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 async function seedOrgWithEditor(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run(async (ctx) =>
@@ -554,5 +554,52 @@ describe("socialInbox.setConversationVehicle tenant isolation", () => {
     });
     expect(events[0].vehicleId ?? null).toBeNull();
     expect(events[0].vehicleSummary).toBeNull();
+  });
+});
+
+describe("socialInboxBackfill duplicate-name repair", () => {
+  test("drops the repeated surname without asking the platform for a name", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithEditor(t);
+
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "mhty7220",
+        lastName: "mhty7220",
+        instagramUserId: "ig_dup_repair",
+      })
+    );
+
+    const collapsed = await t.run((ctx) =>
+      ctx.runMutation(internal.socialInboxBackfill.collapseDuplicatedName, { customerId })
+    );
+
+    expect(collapsed).toBe(true);
+    const repaired = await t.run((ctx) => ctx.db.get(customerId));
+    expect(repaired?.firstName).toBe("mhty7220");
+    expect(repaired?.lastName).toBe("");
+  });
+
+  test("leaves a name that is not duplicated alone", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithEditor(t);
+
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "Layla",
+        lastName: "Al Nimri",
+        instagramUserId: "ig_real_name",
+      })
+    );
+
+    const collapsed = await t.run((ctx) =>
+      ctx.runMutation(internal.socialInboxBackfill.collapseDuplicatedName, { customerId })
+    );
+
+    expect(collapsed).toBe(false);
+    const untouched = await t.run((ctx) => ctx.db.get(customerId));
+    expect(untouched?.lastName).toBe("Al Nimri");
   });
 });
