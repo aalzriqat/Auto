@@ -1,4 +1,11 @@
-import { buildTheme, getFontFamily, getTypographyStyle, resolveStatusBarStyle, theme } from "./theme";
+import {
+  buildTheme,
+  getFontFamily,
+  getTypographyStyle,
+  resolveStatusBarStyle,
+  theme,
+  withAlpha,
+} from "./theme";
 
 /** Relative luminance per WCAG 2.1 §1.4.3. */
 function relativeLuminance(hex: string): number {
@@ -7,6 +14,20 @@ function relativeLuminance(hex: string): number {
     return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
   });
   return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+}
+
+/** Hue in degrees, so "five distinct accents" can be asserted as five hues. */
+function hueOf(hex: string): number {
+  const [red, green, blue] = [0, 2, 4].map(
+    (offset) => parseInt(hex.replace("#", "").substr(offset, 2), 16) / 255,
+  );
+  const max = Math.max(red, green, blue);
+  const min = Math.min(red, green, blue);
+  const span = max - min;
+  if (span === 0) return 0;
+  if (max === red) return (60 * ((green - blue) / span) + 360) % 360;
+  if (max === green) return 60 * ((blue - red) / span) + 120;
+  return 60 * ((red - green) / span) + 240;
 }
 
 function contrastRatio(foreground: string, background: string): number {
@@ -21,6 +42,93 @@ const SURFACE_TOKENS = ["surface", "background", "surfaceAlt", "surfaceMuted"] a
 const TEXT_TOKENS = ["text", "mutedText", "danger"] as const;
 // Tokens that only ever render as icons/dots/dividers. WCAG 1.4.11 asks 3:1.
 const NON_TEXT_TOKENS = ["subtleText"] as const;
+
+/**
+ * Home-screen tokens that render as TEXT on one of the four neutral surfaces.
+ * Same 4.5:1 floor as TEXT_TOKENS — listed separately only because they arrived
+ * with the dealer-home redesign.
+ */
+const HOME_TEXT_TOKENS = [
+  "homeDeltaUp",
+  "homeDeltaDown",
+  "homeChipDangerText",
+  "homeChipWarningText",
+  "homeChipInfoText",
+  "homeChipSuccessText",
+] as const;
+
+/**
+ * Home-screen tokens that only ever render as an icon, an arc, or a divider.
+ * 3:1 per WCAG 1.4.11.
+ */
+const HOME_NON_TEXT_TOKENS = [
+  "homeKpiSalesIcon",
+  "homeKpiExpenseIcon",
+  "homeKpiProfitIcon",
+  "homeTileViolet",
+  "homeTileBlue",
+  "homeTileAmber",
+  "homeTileGreen",
+  "homeTileIndigo",
+  "homeRingArc",
+] as const;
+
+/**
+ * Tone-on-its-own-tint pairs — the class the gate used to miss entirely.
+ *
+ * `warning` on `warningSoft` measured 2.86:1 in the light theme and nothing
+ * caught it, because every check above compares a foreground against the four
+ * NEUTRAL surfaces only. A tinted chip or panel is a surface too, and the tone
+ * that fills it is usually the tone drawn on top of it.
+ *
+ * 3:1 here, not 4.5:1: these are the app-wide brand tones, and on their own
+ * tints they appear as icons, borders and dots (WCAG 1.4.11). Tones that render
+ * as TEXT on a tint are checked at 4.5:1 by HOME_TEXT_ON_TINT below.
+ */
+const TONE_ON_SOFT_PAIRS = [
+  ["primary", "primarySoft"],
+  ["accent", "accentSoft"],
+  ["danger", "dangerSoft"],
+  ["success", "successSoft"],
+  ["info", "infoSoft"],
+  ["indigo", "indigoSoft"],
+  ["warning", "warningSoft"],
+] as const;
+
+/** Home tones that render as TEXT on their own tint. WCAG AA, 4.5:1. */
+const HOME_TEXT_ON_TINT = [
+  ["homeChipDangerText", "homeChipDangerSurface"],
+  ["homeChipWarningText", "homeChipWarningSurface"],
+  ["homeChipInfoText", "homeChipInfoSurface"],
+  ["homeChipSuccessText", "homeChipSuccessSurface"],
+  ["homeAlertPanelTone", "homeAlertPanel"],
+  ["homeAlertPanelTone", "homeAlertPanelRow"],
+  ["homePaymentPanelTone", "homePaymentPanel"],
+  ["homePaymentPanelTone", "homePaymentPanelRow"],
+  ["homeBannerTitle", "homeBannerFrom"],
+  ["homeBannerTitle", "homeBannerTo"],
+  ["homeBannerBody", "homeBannerFrom"],
+  ["homeBannerBody", "homeBannerTo"],
+  ["homeBannerCtaText", "homeBannerFrom"],
+  ["homeBannerCtaText", "homeBannerTo"],
+] as const;
+
+/** Every (foreground, background) pair below `floor`, named so a failure says which. */
+function pairFailures(
+  mode: "light" | "dark",
+  pairs: ReadonlyArray<readonly [string, string]>,
+  floor: number,
+): string[] {
+  const { colors } = buildTheme(mode) as { colors: Record<string, string> };
+  const failures: string[] = [];
+  for (const [foreground, background] of pairs) {
+    const ratio = contrastRatio(colors[foreground], colors[background]);
+    if (ratio < floor) {
+      failures.push(`${mode}.${foreground} on ${background}: ${ratio.toFixed(2)}:1 < ${floor}:1`);
+    }
+  }
+  return failures;
+}
 
 /** Every (token, surface) pair below `floor`, named so a regression says which. */
 function contrastFailures(
@@ -56,6 +164,36 @@ describe("mobile theme tokens", () => {
     },
   );
 
+  test.each(["light", "dark"] as const)(
+    "%s dealer-home text tokens clear the WCAG AA 4.5:1 floor on every surface",
+    (mode) => {
+      expect(contrastFailures(mode, HOME_TEXT_TOKENS, 4.5)).toEqual([]);
+    },
+  );
+
+  test.each(["light", "dark"] as const)(
+    "%s dealer-home icon tokens clear the WCAG 1.4.11 3:1 floor on every surface",
+    (mode) => {
+      expect(contrastFailures(mode, HOME_NON_TEXT_TOKENS, 3)).toEqual([]);
+    },
+  );
+
+  // The hole this closes: nothing here compared a tone against its OWN tint, so
+  // `warning` on `warningSoft` sat at 2.86:1 in the light theme unnoticed.
+  test.each(["light", "dark"] as const)(
+    "%s brand tones clear 3:1 against their own soft tint, not just the neutral surfaces",
+    (mode) => {
+      expect(pairFailures(mode, TONE_ON_SOFT_PAIRS, 3)).toEqual([]);
+    },
+  );
+
+  test.each(["light", "dark"] as const)(
+    "%s dealer-home tones that render as text on a tint clear 4.5:1 against that tint",
+    (mode) => {
+      expect(pairFailures(mode, HOME_TEXT_ON_TINT, 4.5)).toEqual([]);
+    },
+  );
+
   test("keeps subtleText visually lighter than mutedText so the hierarchy survives the contrast fix", () => {
     for (const mode of ["light", "dark"] as const) {
       const { colors } = buildTheme(mode);
@@ -66,6 +204,53 @@ describe("mobile theme tokens", () => {
     }
   });
 
+
+  // The previous pass at this screen reused the existing muted tones for all
+  // five quick-action tiles, so they rendered as one pastel blue. The mock gives
+  // each tile its own hue.
+  test.each(["light", "dark"] as const)("%s gives every quick-action tile its own hue", (mode) => {
+    const { colors } = buildTheme(mode);
+    const accents = [
+      colors.homeTileViolet,
+      colors.homeTileBlue,
+      colors.homeTileAmber,
+      colors.homeTileGreen,
+      colors.homeTileIndigo,
+    ];
+
+    expect(new Set(accents).size).toBe(accents.length);
+    // Distinct *hues*, not five shades of one: violet/blue/amber/green must sit
+    // far apart on the wheel, which a set of near-identical blues would not.
+    const hues = accents.map(hueOf);
+    expect(Math.abs(hues[1] - hues[2])).toBeGreaterThan(60);
+    expect(Math.abs(hues[2] - hues[3])).toBeGreaterThan(60);
+    expect(Math.abs(hues[0] - hues[1])).toBeGreaterThan(40);
+  });
+
+  test("ships the dark home palette exactly as measured from the design mock", () => {
+    const { colors } = buildTheme("dark");
+
+    // Not one dark token needed a contrast adjustment, so these are the mock's
+    // own sampled values. A change here means the design drifted, not that a
+    // WCAG floor moved.
+    expect(colors.homeTileGreen).toBe("#47d25c");
+    expect(colors.homeTileAmber).toBe("#faae27");
+    expect(colors.homeRingArc).toBe("#3a6cf5");
+    expect(colors.homeDeltaUp).toBe("#4fda57");
+    expect(colors.homeBannerFrom).toBe("#262c82");
+    expect(colors.homeBannerTo).toBe("#0a1939");
+    // The dark mock washes these two panels; the light mock leaves them white.
+    expect(colors.homeAlertPanel).toBe("#171714");
+    expect(colors.homePaymentPanel).toBe("#0b1820");
+    expect(buildTheme("light").colors.homeAlertPanel).toBe("#ffffff");
+    expect(buildTheme("light").colors.homePaymentPanel).toBe("#ffffff");
+  });
+
+  test("renders a palette hex at an alpha for the icon glows", () => {
+    expect(withAlpha("#47d25c", 0.35)).toBe("rgba(71, 210, 92, 0.35)");
+    expect(withAlpha("#000000", 0)).toBe("rgba(0, 0, 0, 0)");
+    expect(withAlpha("#ffffff", 1)).toBe("rgba(255, 255, 255, 1)");
+  });
 
   test("keeps the brand color palette stable while expanding shape and depth tokens", () => {
     expect(theme.colors.primary).toBe("#2563eb");

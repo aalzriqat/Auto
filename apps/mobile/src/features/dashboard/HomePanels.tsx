@@ -2,7 +2,7 @@ import { nativeRoutes } from "@autoflow/shared";
 import { useQuery } from "convex/react";
 import { useRouter } from "expo-router";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { I18nManager, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import {
   api,
@@ -16,7 +16,7 @@ import { Icon, type SemanticIconName } from "../../components/Icon";
 import { parseNotificationLink } from "../../components/NotificationBell";
 import { SkeletonRow } from "../../components/SkeletonRow";
 import { useLocale } from "../../providers/LocaleProvider";
-import { useAppTheme, useThemedStyles } from "../../providers/ThemeProvider";
+import { useAppTheme, useThemedStyles, useThemeMode } from "../../providers/ThemeProvider";
 import { type AppTheme } from "../../theme";
 import { money } from "../workspace/modules/moduleShared";
 import {
@@ -30,37 +30,94 @@ import { useDashboardTypography } from "./dashboardTypography";
 import {
   buildAlertRows,
   countSearchResults,
+  deriveKpiDelta,
   deriveOverviewKpis,
   deriveTaskCentre,
   isSearchQueryActive,
+  readPreviousPeriod,
   shouldStackHomeColumns,
+  taskRingSide,
+  HOME_QUICK_ACTION_LABEL_LINES,
   type HomeAlertRow,
+  type HomeKpiDelta,
   type HomeUpcomingPayments as UpcomingPaymentsSummary,
 } from "./homeModel";
+import { GradientSurface, GradientTile, IconGlow, toneBorder } from "./HomeVisuals";
 import { ProgressRing } from "./ProgressRing";
 
 /**
- * Tones an ICON may take on this screen.
+ * Corner radii, measured off the design mock rather than taken from
+ * `theme.radius`.
  *
- * Deliberately excludes `warning`: measured against its own soft background it
- * is 2.86:1 in the light theme, under the 3:1 WCAG 1.4.11 floor for non-text.
- * Every tone here clears 3:1 in BOTH themes on its soft background AND on
- * `surfaceAlt` — the two backgrounds icons actually land on here.
- * (light / dark, on soft) success 3.00/6.98 · info 3.57/6.84 · indigo 5.10/4.90
- * · primary 4.24/4.23 · accent 3.11/4.09.
+ * The mock's cards round at ~22px on an 852px/393dp frame — 10dp, not the
+ * `radius.lg` 18 the previous pass used, which is nearly twice as round and is
+ * a large part of why the shipped screen "wasn't the shape". Nested tiles and
+ * chips step down from there; the KPI badge rounds at ~13px (6dp).
  */
-type PanelTone = "primary" | "success" | "info" | "indigo" | "accent";
+const HOME_RADIUS = {
+  panel: 10,
+  tile: 10,
+  nested: 8,
+  badge: 9,
+} as const;
 
-/** Tones usable as a CHIP BACKGROUND, where the content is text-coloured. */
-type ChipTone = PanelTone | "warning";
+/**
+ * The five accents the mock gives the quick-action rail, keyed by module rather
+ * than by position — which tiles a role sees depends on its permissions, and an
+ * accent that shifted with the filtered list would make the rail a different
+ * screen for every role.
+ *
+ * Sampled left→right from DESIGN-dark.png; the screen is RTL, so the *rightmost*
+ * tile in the image is the first item in the list.
+ */
+type HomeAccentToken = Extract<keyof AppTheme["colors"], `homeTile${string}`>;
 
-const toneSoftToken: Record<ChipTone, keyof AppTheme["colors"]> = {
-  primary: "primarySoft",
-  success: "successSoft",
-  warning: "warningSoft",
-  info: "infoSoft",
-  indigo: "indigoSoft",
-  accent: "accentSoft",
+const MODULE_ACCENTS: Partial<Record<NativeModuleId, HomeAccentToken>> = {
+  vehicles: "homeTileGreen",
+  customers: "homeTileAmber",
+  leads: "homeTileViolet",
+  expenses: "homeTileIndigo",
+  messages: "homeTileBlue",
+  tasks: "homeTileAmber",
+  settings: "homeTileViolet",
+  reports: "homeTileBlue",
+  sales: "homeTileIndigo",
+  accounting: "homeTileViolet",
+  team: "homeTileBlue",
+  commissions: "homeTileAmber",
+  applications: "homeTileGreen",
+};
+
+const FALLBACK_ACCENT: HomeAccentToken = "homeTileBlue";
+
+/**
+ * How loud the icon halo is, per theme.
+ *
+ * The dark mock's glow is unmistakable — the accent's excess over the tile
+ * background peaks around +28/255. The light mock barely lifts off white; the
+ * same gradient at full strength would be a smudge. One multiplier keeps a
+ * single gradient definition faithful to both.
+ */
+const GLOW_STRENGTH = { dark: 1, light: 0.34 } as const;
+
+/** Halo diameter. The mock's falloff is gone by ~24dp from the icon's centre. */
+const QUICK_ACTION_GLOW_SIZE = 46;
+
+function accentTokenFor(moduleId: NativeModuleId): HomeAccentToken {
+  return MODULE_ACCENTS[moduleId] ?? FALLBACK_ACCENT;
+}
+
+/** The four status chips, each with its own fill and its own text colour. */
+type ChipTone = "danger" | "warning" | "info" | "success";
+
+const chipTokens: Record<
+  ChipTone,
+  Readonly<{ surface: keyof AppTheme["colors"]; text: keyof AppTheme["colors"] }>
+> = {
+  danger: { surface: "homeChipDangerSurface", text: "homeChipDangerText" },
+  warning: { surface: "homeChipWarningSurface", text: "homeChipWarningText" },
+  info: { surface: "homeChipInfoSurface", text: "homeChipInfoText" },
+  success: { surface: "homeChipSuccessSurface", text: "homeChipSuccessText" },
 };
 
 const TIME_RANGES: ReadonlyArray<{
@@ -74,31 +131,26 @@ const TIME_RANGES: ReadonlyArray<{
 ];
 
 /** Day-to-day destinations, in the order they fill the five action tiles. */
-const QUICK_ACTION_CANDIDATES: ReadonlyArray<{ moduleId: NativeModuleId; tone: PanelTone }> = [
-  { moduleId: "vehicles", tone: "success" },
-  { moduleId: "customers", tone: "indigo" },
-  { moduleId: "leads", tone: "accent" },
-  { moduleId: "expenses", tone: "primary" },
-  { moduleId: "messages", tone: "info" },
-  { moduleId: "tasks", tone: "accent" },
-  { moduleId: "settings", tone: "indigo" },
+const QUICK_ACTION_CANDIDATES: readonly NativeModuleId[] = [
+  "vehicles",
+  "customers",
+  "leads",
+  "expenses",
+  "messages",
+  "tasks",
+  "settings",
 ];
 
 const QUICK_ACTION_LIMIT = 5;
 
-/**
- * Analysis destinations for the 2×2 shortcuts panel. These icons sit directly
- * on `surfaceAlt`, so the tones are the subset that clears 3:1 there in both
- * themes: info 3.59/6.98 · indigo 5.51/5.01 · primary 4.53/4.07 · accent
- * 3.12/4.20.
- */
-const SHORTCUT_CANDIDATES: ReadonlyArray<{ moduleId: NativeModuleId; tone: PanelTone }> = [
-  { moduleId: "reports", tone: "info" },
-  { moduleId: "sales", tone: "indigo" },
-  { moduleId: "accounting", tone: "primary" },
-  { moduleId: "team", tone: "accent" },
-  { moduleId: "commissions", tone: "info" },
-  { moduleId: "applications", tone: "indigo" },
+/** Analysis destinations for the 2×2 shortcuts panel. */
+const SHORTCUT_CANDIDATES: readonly NativeModuleId[] = [
+  "reports",
+  "sales",
+  "accounting",
+  "team",
+  "commissions",
+  "applications",
 ];
 
 const SHORTCUT_LIMIT = 4;
@@ -113,17 +165,17 @@ function useModulePush(orgId: string) {
 }
 
 function visibleModules(
-  candidates: ReadonlyArray<{ moduleId: NativeModuleId; tone: PanelTone }>,
+  candidates: readonly NativeModuleId[],
   permissions: readonly string[],
   roleName: string | undefined,
   limit: number,
 ) {
   const resolved = [];
-  for (const candidate of candidates) {
-    const definition = getNativeModule(candidate.moduleId);
+  for (const moduleId of candidates) {
+    const definition = getNativeModule(moduleId);
     if (!definition) continue;
     if (!canAccessNativeModule(definition, permissions, roleName)) continue;
-    resolved.push({ ...candidate, definition });
+    resolved.push({ moduleId, accent: accentTokenFor(moduleId), definition });
     if (resolved.length >= limit) break;
   }
   return resolved;
@@ -135,16 +187,29 @@ function visibleModules(
 
 export function PanelHeading({
   icon,
+  iconColor = "mutedText",
   title,
+  titleColor,
   trailing,
-}: Readonly<{ icon: SemanticIconName; title: string; trailing?: ReactNode }>) {
+}: Readonly<{
+  icon: SemanticIconName;
+  /** The mock tints a tinted panel's heading icon in that panel's tone. */
+  iconColor?: keyof AppTheme["colors"];
+  title: string;
+  titleColor?: keyof AppTheme["colors"];
+  trailing?: ReactNode;
+}>) {
+  const theme = useAppTheme();
   const styles = useThemedStyles(makeStyles);
   const type = useDashboardTypography();
 
   return (
     <View style={styles.panelHeading}>
-      <Icon color="mutedText" name={icon} size={16} />
-      <Text numberOfLines={1} style={[styles.panelTitle, type.heading]}>
+      <Icon color={iconColor} name={icon} size={18} />
+      <Text
+        numberOfLines={1}
+        style={[styles.panelTitle, type.heading, titleColor && { color: theme.colors[titleColor] }]}
+      >
         {title}
       </Text>
       <View style={styles.panelHeadingSpacer} />
@@ -153,25 +218,38 @@ export function PanelHeading({
   );
 }
 
-/** Full-width footer link, e.g. "View all tasks". */
+/**
+ * Full-width footer link, e.g. "View all tasks".
+ *
+ * The mock draws it as an outlined pill in the panel's own tone rather than as a
+ * filled grey bar — green inside the payments card, amber inside the alerts
+ * card, blue everywhere else.
+ */
 export function PanelAction({
   label,
   onPress,
-}: Readonly<{ label: string; onPress: () => void }>) {
+  tone = "primary",
+}: Readonly<{ label: string; onPress: () => void; tone?: keyof AppTheme["colors"] }>) {
+  const theme = useAppTheme();
   const styles = useThemedStyles(makeStyles);
   const type = useDashboardTypography();
   const { textDirection } = useLocale();
+  const toneColor = theme.colors[tone];
 
   return (
     <Pressable
       accessibilityRole="button"
-      style={({ pressed }) => [styles.panelAction, { direction: textDirection }, pressed && styles.pressed]}
+      style={({ pressed }) => [
+        styles.panelAction,
+        { borderColor: toneBorder(toneColor, 0.34), direction: textDirection },
+        pressed && styles.pressed,
+      ]}
       onPress={onPress}
     >
-      <Text numberOfLines={1} style={[styles.panelActionText, type.label]}>
+      <Text numberOfLines={1} style={[styles.panelActionText, type.label, { color: toneColor }]}>
         {label}
       </Text>
-      <Icon color="primary" name="chevronForward" size={15} />
+      <Icon color={tone} name="chevronForward" size={15} />
     </Pressable>
   );
 }
@@ -429,27 +507,87 @@ export function HomeSearchRow({
 // Today's overview
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * The mock's "+12% ↑" / "−5% ↓".
+ *
+ * Rendered only from a real previous-period total. `dashboard.stats` does not
+ * carry one yet, so today this always collapses — and it collapses to nothing,
+ * not to a reserved blank line: the KPI column is a plain vertical stack with a
+ * gap, so an absent delta leaves no hole for the eye to land in.
+ */
+function KpiDelta({ delta }: Readonly<{ delta: HomeKpiDelta | null }>) {
+  const styles = useThemedStyles(makeStyles);
+  const { locale } = useLocale();
+  const type = useDashboardTypography();
+
+  if (!delta) {
+    return null;
+  }
+
+  const rising = delta.direction === "up";
+  // U+2212 MINUS SIGN, not a hyphen: it aligns with the digits and survives the
+  // RTL bidi run instead of being reordered as punctuation.
+  const sign = rising ? "+" : "−";
+
+  return (
+    <View style={styles.kpiDelta}>
+      <Text
+        numberOfLines={1}
+        style={[styles.kpiDeltaText, type.caption, rising ? styles.kpiDeltaUp : styles.kpiDeltaDown]}
+        testID={`kpi-delta-${delta.direction}`}
+      >
+        {`${sign}${plainNumber(delta.percent, locale)}%`}
+      </Text>
+      <Icon
+        color={rising ? "homeDeltaUp" : "homeDeltaDown"}
+        name={rising ? "arrowUp" : "arrowDown"}
+        size={13}
+      />
+    </View>
+  );
+}
+
 function KpiColumn({
   amount,
+  delta,
   icon,
+  iconToken,
   label,
-  tone,
-}: Readonly<{ amount: string; icon: SemanticIconName; label: string; tone: PanelTone }>) {
+  softToken,
+}: Readonly<{
+  amount: string;
+  delta: HomeKpiDelta | null;
+  icon: SemanticIconName;
+  iconToken: keyof AppTheme["colors"];
+  label: string;
+  softToken: keyof AppTheme["colors"];
+}>) {
   const theme = useAppTheme();
   const styles = useThemedStyles(makeStyles);
   const type = useDashboardTypography();
 
   return (
     <View style={styles.kpiColumn}>
-      <View style={[styles.kpiIconShell, { backgroundColor: theme.colors[toneSoftToken[tone]] }]}>
-        <Icon color={tone} name={icon} size={18} />
+      <View style={styles.kpiHeadRow}>
+        <View
+          style={[
+            styles.kpiIconShell,
+            {
+              backgroundColor: theme.colors[softToken],
+              borderColor: toneBorder(theme.colors[iconToken], 0.22),
+            },
+          ]}
+        >
+          <Icon color={iconToken} name={icon} size={19} />
+        </View>
+        <Text numberOfLines={2} style={[styles.kpiLabel, type.caption]}>
+          {label}
+        </Text>
       </View>
-      <Text numberOfLines={2} style={[styles.kpiLabel, type.caption]}>
-        {label}
-      </Text>
       <Text numberOfLines={1} style={[styles.kpiValue, type.heading]}>
         {amount}
       </Text>
+      <KpiDelta delta={delta} />
     </View>
   );
 }
@@ -458,12 +596,12 @@ function KpiColumn({
  * The three headline figures, all from `dashboard.stats` for the selected
  * period.
  *
- * The mock also shows a coloured "+12% ↑" delta beside each figure. There is no
- * previous-period total anywhere in the backend to compute one from, and the
- * only way to fake it from this payload would be to compare two arbitrary
- * buckets of a sparse trend series and label the result a month-over-month
- * change. The delta is left out rather than invented — see the PR description
- * for the `dashboard.stats` change that would make it real.
+ * The mock also shows a coloured "+12% ↑" delta under each figure. The delta is
+ * built and wired, but `dashboard.stats` returns no previous-period total, so
+ * `readPreviousPeriod` finds nothing and every delta collapses. Faking one from
+ * this payload would mean comparing two arbitrary buckets of a sparse trend
+ * series and labelling the result a month-over-month change — see
+ * `readPreviousPeriod` in homeModel for the backend change that makes it real.
  */
 export function HomeOverviewCard({
   currency,
@@ -494,6 +632,7 @@ export function HomeOverviewCard({
   }
 
   const kpis = deriveOverviewKpis(stats);
+  const previous = readPreviousPeriod(stats);
 
   return (
     <Card style={[styles.panel, { direction: textDirection }]}>
@@ -517,23 +656,29 @@ export function HomeOverviewCard({
       <View style={styles.kpiRow}>
         <KpiColumn
           amount={money(kpis.sales, locale, currency)}
-          icon="sales"
+          delta={deriveKpiDelta(kpis.sales, previous?.sales)}
+          icon="reports"
+          iconToken="homeKpiSalesIcon"
           label={t("dealerHomeKpiSales")}
-          tone="info"
+          softToken="homeKpiSalesSoft"
         />
         <View style={styles.kpiDivider} />
         <KpiColumn
           amount={money(kpis.expenses, locale, currency)}
-          icon="expenses"
+          delta={deriveKpiDelta(kpis.expenses, previous?.expenses)}
+          icon="finance"
+          iconToken="homeKpiExpenseIcon"
           label={t("dealerHomeKpiExpenses")}
-          tone="accent"
+          softToken="homeKpiExpenseSoft"
         />
         <View style={styles.kpiDivider} />
         <KpiColumn
           amount={money(kpis.netProfit, locale, currency)}
-          icon="reports"
+          delta={deriveKpiDelta(kpis.netProfit, previous?.netProfit)}
+          icon="trendUp"
+          iconToken="homeKpiProfitIcon"
           label={t("dealerHomeKpiNetProfit")}
-          tone="success"
+          softToken="homeKpiProfitSoft"
         />
       </View>
       {stats.truncated?.sales ? (
@@ -553,6 +698,8 @@ export function HomeQuickActions({
   roleName,
 }: Readonly<{ orgId: string; permissions: readonly string[]; roleName: string | undefined }>) {
   const theme = useAppTheme();
+  const { mode } = useThemeMode();
+  const glowStrength = GLOW_STRENGTH[mode];
   const styles = useThemedStyles(makeStyles);
   const pushModule = useModulePush(orgId);
   const { locale, textDirection } = useLocale();
@@ -565,27 +712,41 @@ export function HomeQuickActions({
 
   return (
     <View style={[styles.quickRail, { direction: textDirection }]}>
-      {actions.map((action) => (
-        <Pressable
-          key={action.moduleId}
-          accessibilityLabel={labelFor(action.definition.title, locale)}
-          accessibilityRole="button"
-          style={({ pressed }) => [styles.quickRailItem, pressed && styles.pressed]}
-          onPress={() => pushModule(action.moduleId)}
-        >
-          <View
-            style={[
-              styles.quickRailIconShell,
-              { backgroundColor: theme.colors[toneSoftToken[action.tone]] },
+      {actions.map((action) => {
+        const accent = theme.colors[action.accent];
+        return (
+          <Pressable
+            key={action.moduleId}
+            accessibilityLabel={labelFor(action.definition.title, locale)}
+            accessibilityRole="button"
+            style={({ pressed }) => [
+              styles.quickRailItem,
+              { borderColor: toneBorder(accent, glowStrength * 0.28) },
+              pressed && styles.pressed,
             ]}
+            onPress={() => pushModule(action.moduleId)}
           >
-            <Icon color={action.tone} name={action.definition.icon} size={19} />
-          </View>
-          <Text numberOfLines={1} style={[styles.quickRailText, type.label]}>
-            {labelFor(action.definition.title, locale)}
-          </Text>
-        </Pressable>
-      ))}
+            {/* The mock has no badge behind these icons — it has a halo. The
+                icon sits directly on the tile with the accent bleeding out
+                around it, which is why reusing the flat `*Soft` chips read as
+                pastel squares rather than as the design. */}
+            <IconGlow color={accent} size={QUICK_ACTION_GLOW_SIZE} strength={glowStrength}>
+              <Icon
+                color={action.accent}
+                name={action.definition.icon}
+                size={23}
+                testID={`quick-action-icon-${action.moduleId}`}
+              />
+            </IconGlow>
+            <Text
+              numberOfLines={HOME_QUICK_ACTION_LABEL_LINES}
+              style={[styles.quickRailText, type.label]}
+            >
+              {labelFor(action.definition.title, locale)}
+            </Text>
+          </Pressable>
+        );
+      })}
     </View>
   );
 }
@@ -595,22 +756,37 @@ export function HomeQuickActions({
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Status chip. The tone tints the background only — the number renders in
- * `text` and the label in `mutedText`, which measure 12.3–16.3:1 and 4.7–6.4:1
- * on these tints. Colouring the number with its own tone would put
- * `warning` on `warningSoft` at 2.86:1 in the light theme.
+ * Status chip.
+ *
+ * The mock colours the numeral AND the label in the chip's own tone — red,
+ * orange, blue, green — over a tint of the same hue. The previous pass rendered
+ * both in neutral `text`/`mutedText` because `warning` on `warningSoft` measured
+ * 2.86:1; the answer was a chip palette that clears AA rather than a neutral
+ * chip. Every pair here is asserted at 4.5:1 by the tone-on-tint gate in
+ * theme.test.ts.
  */
 function TaskChip({ label, tone, value }: Readonly<{ label: string; tone: ChipTone; value: string }>) {
   const theme = useAppTheme();
   const styles = useThemedStyles(makeStyles);
   const type = useDashboardTypography();
+  const tokens = chipTokens[tone];
+  const toneColor = theme.colors[tokens.text];
 
   return (
-    <View style={[styles.taskChip, { backgroundColor: theme.colors[toneSoftToken[tone]] }]}>
-      <Text numberOfLines={1} style={[styles.taskChipValue, type.heading]}>
+    <View
+      style={[
+        styles.taskChip,
+        {
+          backgroundColor: theme.colors[tokens.surface],
+          borderColor: toneBorder(toneColor, 0.28),
+        },
+      ]}
+      testID={`task-chip-${tone}`}
+    >
+      <Text numberOfLines={1} style={[styles.taskChipValue, type.heading, { color: toneColor }]}>
         {value}
       </Text>
-      <Text numberOfLines={1} style={[styles.taskChipLabel, type.caption]}>
+      <Text numberOfLines={1} style={[styles.taskChipLabel, type.caption, { color: toneColor }]}>
         {label}
       </Text>
     </View>
@@ -632,8 +808,12 @@ export function HomeTaskCentre({
 }: Readonly<{ canViewTasks: boolean; orgId: string; stats: MobileDashboardStats | undefined }>) {
   const styles = useThemedStyles(makeStyles);
   const pushModule = useModulePush(orgId);
-  const { locale, t, textDirection } = useLocale();
+  const { isRtl, locale, t, textDirection } = useLocale();
   const type = useDashboardTypography();
+  // Keeps the ring off the physical corner the messenger FAB owns. See
+  // `taskRingSide` for why the panel's direction and the FAB's `end` can
+  // resolve to the same side.
+  const ringSide = taskRingSide(isRtl, I18nManager.isRTL);
 
   if (stats === undefined) {
     return (
@@ -653,7 +833,10 @@ export function HomeTaskCentre({
         <PanelEmpty text={t("dealerHomeTaskCentreEmpty")} />
       ) : (
         <>
-          <View style={styles.taskTopRow}>
+          <View
+            style={[styles.taskTopRow, ringSide === "end" && styles.taskTopRowFlipped]}
+            testID="task-centre-top-row"
+          >
             <ProgressRing
               caption={t("dealerHomeTasksCompletedCaption")}
               label={`${plainNumber(summary.completed, locale)}/${plainNumber(summary.total, locale)}`}
@@ -666,14 +849,16 @@ export function HomeTaskCentre({
             </Text>
           </View>
           <View style={styles.taskChipRow}>
+            {/* Overdue is the mock's red chip, not its amber one: amber is the
+                in-progress state, and work that is late is not "in progress". */}
             <TaskChip
               label={t("overdue")}
-              tone="warning"
+              tone="danger"
               value={plainNumber(summary.overdue, locale)}
             />
             <TaskChip
               label={t("pending")}
-              tone="info"
+              tone="warning"
               value={plainNumber(summary.inProgress, locale)}
             />
             <TaskChip
@@ -721,7 +906,7 @@ export function HomeShortcuts({
               style={({ pressed }) => [styles.shortcutTile, pressed && styles.pressed]}
               onPress={() => pushModule(shortcut.moduleId)}
             >
-              <Icon color={shortcut.tone} name={shortcut.definition.icon} size={20} />
+              <Icon color={shortcut.accent} name={shortcut.definition.icon} size={24} />
               <Text numberOfLines={1} style={[styles.shortcutTitle, type.body]}>
                 {labelFor(shortcut.definition.title, locale)}
               </Text>
@@ -783,8 +968,12 @@ export function HomeUpcomingPayments({
 
   if (todayForRole === undefined) {
     return (
-      <Card style={[styles.panel, { direction: textDirection }]}>
-        <PanelHeading icon="calendar" title={t("dealerHomeUpcomingPayments")} />
+      <Card style={[styles.panel, styles.paymentPanel, { direction: textDirection }]}>
+        <PanelHeading
+          icon="calendar"
+          iconColor="homePaymentPanelTone"
+          title={t("dealerHomeUpcomingPayments")}
+        />
         <SkeletonRow count={2} />
       </Card>
     );
@@ -793,8 +982,12 @@ export function HomeUpcomingPayments({
   const currency = todayForRole.currency;
 
   return (
-    <Card style={[styles.panel, { direction: textDirection }]}>
-      <PanelHeading icon="calendar" title={t("dealerHomeUpcomingPayments")} />
+    <Card style={[styles.panel, styles.paymentPanel, { direction: textDirection }]}>
+      <PanelHeading
+        icon="calendar"
+        iconColor="homePaymentPanelTone"
+        title={t("dealerHomeUpcomingPayments")}
+      />
       {summary.isEmpty ? (
         <PanelEmpty text={t("dealerHomeUpcomingPaymentsEmpty")} />
       ) : (
@@ -833,6 +1026,7 @@ export function HomeUpcomingPayments({
       ) : null}
       <PanelAction
         label={t("dealerHomeViewUpcomingPayments")}
+        tone="homePaymentPanelTone"
         onPress={() => pushModule("accounting")}
       />
     </Card>
@@ -885,9 +1079,15 @@ function AlertRow({ orgId, row }: Readonly<{ orgId: string; row: HomeAlertRow }>
       style={({ pressed }) => [styles.alertRow, { direction: textDirection }, pressed && styles.pressed]}
       onPress={openAlert}
     >
-      {/* `accent`, not `warning`: this icon sits on `surfaceAlt`, where warning
-          measures 2.79:1 in the light theme and accent measures 3.12:1. */}
-      <Icon color={unread ? "accent" : "subtleText"} name="notifications" size={16} />
+      {/* The dark mock rings every bell in the panel's amber; the light mock
+          leaves them neutral and marks unread rows with a coloured dot instead.
+          `homeAlertPanelTone` is that amber in dark and the AA-safe amber text
+          colour in light, so one token serves both. */}
+      <Icon
+        color={unread ? "homeAlertPanelTone" : "subtleText"}
+        name="notifications"
+        size={17}
+      />
       <Text numberOfLines={2} style={[styles.alertTitle, type.body]}>
         {title}
       </Text>
@@ -923,8 +1123,13 @@ export function HomeAlerts({
   // approvals row still missing, and then watch it appear.
   if (notifications === undefined || pendingApprovals === undefined) {
     return (
-      <Card style={[styles.panel, { direction: textDirection }]}>
-        <PanelHeading icon="notifications" title={t("dealerHomeAlerts")} />
+      <Card style={[styles.panel, styles.alertPanel, { direction: textDirection }]}>
+        <PanelHeading
+          icon="notifications"
+          iconColor="homeAlertPanelTone"
+          title={t("dealerHomeAlerts")}
+          titleColor="homeAlertPanelTone"
+        />
         <SkeletonRow count={3} />
       </Card>
     );
@@ -933,8 +1138,13 @@ export function HomeAlerts({
   const rows = buildAlertRows({ notifications, pendingApprovals, now: Date.now() });
 
   return (
-    <Card style={[styles.panel, { direction: textDirection }]}>
-      <PanelHeading icon="notifications" title={t("dealerHomeAlerts")} />
+    <Card style={[styles.panel, styles.alertPanel, { direction: textDirection }]}>
+      <PanelHeading
+        icon="notifications"
+        iconColor="homeAlertPanelTone"
+        title={t("dealerHomeAlerts")}
+        titleColor="homeAlertPanelTone"
+      />
       {rows.length === 0 ? (
         <PanelEmpty text={t("dealerHomeAlertsEmpty")} />
       ) : (
@@ -946,6 +1156,7 @@ export function HomeAlerts({
       )}
       <PanelAction
         label={t("dealerHomeViewAllAlerts")}
+        tone="homeAlertPanelTone"
         onPress={() => pushModule("notifications")}
       />
     </Card>
@@ -956,7 +1167,16 @@ export function HomeAlerts({
 // Marketplace banner
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * The marketplace banner.
+ *
+ * Not a flat `primarySoft` tint: the mock runs a diagonal gradient across it and
+ * lights the icon plaque with its own vertical gradient and a coloured shadow.
+ * The gradient is an SVG paint server sitting behind the content, so the banner
+ * keeps working as a `Card` — press feedback, accessibility role and all.
+ */
 export function HomeMarketplaceBanner({ orgId }: Readonly<{ orgId: string }>) {
+  const theme = useAppTheme();
   const styles = useThemedStyles(makeStyles);
   const router = useRouter();
   const { t, textDirection } = useLocale();
@@ -970,9 +1190,21 @@ export function HomeMarketplaceBanner({ orgId }: Readonly<{ orgId: string }>) {
         router.push({ pathname: nativeRoutes.orgMarketplace, params: { orgId } })
       }
     >
-      <View style={styles.marketplaceIcon}>
-        <Icon color="primary" name="marketplace" size={24} />
-      </View>
+      <GradientSurface
+        colors={[
+          theme.colors.homeBannerFrom,
+          theme.colors.homeBannerMid,
+          theme.colors.homeBannerTo,
+        ]}
+        radius={HOME_RADIUS.panel}
+      />
+      <GradientTile
+        colors={[theme.colors.homeBannerIconFrom, theme.colors.homeBannerIconTo]}
+        radius={14}
+        size={52}
+      >
+        <Icon color="onPrimary" name="marketplace" size={26} />
+      </GradientTile>
       <View style={styles.marketplaceText}>
         <Text numberOfLines={1} style={[styles.marketplaceTitle, type.heading]}>
           {t("dealerMarketplace")}
@@ -986,7 +1218,7 @@ export function HomeMarketplaceBanner({ orgId }: Readonly<{ orgId: string }>) {
           </Text>
         </View>
       </View>
-      <Icon color="primary" name="chevronForward" size={20} />
+      <Icon color="homeBannerCtaText" name="chevronForward" size={22} />
     </Card>
   );
 }
@@ -1020,10 +1252,25 @@ export function HomeDetailStat({
 const makeStyles = (theme: AppTheme) => StyleSheet.create({
   // Panels sit on `surface` over the screen's `background`. That pairing is the
   // app's elevation contract (1.116:1 in the light theme) — the design mock put
-  // near-white cards on pure white, 1.009:1, which disappears in daylight.
+  // near-white cards on pure white, 1.009:1, which disappears in daylight. It is
+  // the ONE place this screen departs from the mock; everything else below is
+  // measured from it.
   panel: {
     gap: theme.spacing.md,
-    borderRadius: theme.radius.lg,
+    borderRadius: HOME_RADIUS.panel,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.homeCardBorder,
+    padding: 14,
+  },
+  // The dark mock washes the alerts card amber and the payments card green, and
+  // leaves both white in the light mock. The tokens carry that difference.
+  alertPanel: {
+    backgroundColor: theme.colors.homeAlertPanel,
+    borderColor: theme.colors.homeAlertPanelBorder,
+  },
+  paymentPanel: {
+    backgroundColor: theme.colors.homePaymentPanel,
+    borderColor: theme.colors.homePaymentPanelBorder,
   },
   panelHeading: {
     flexDirection: "row",
@@ -1048,22 +1295,23 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     color: theme.colors.mutedText,
     fontStyle: "italic",
   },
+  // An outlined pill in the panel's own tone, as drawn — not a filled grey bar.
   panelAction: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: theme.spacing.xs,
-    borderRadius: theme.radius.md,
-    // Nested surface inside a card: `surfaceAlt` on `surface` is 1.140:1, so the
-    // control reads as a control without needing a hairline to survive.
-    backgroundColor: theme.colors.surfaceAlt,
+    minHeight: 40,
+    borderRadius: theme.radius.full,
+    borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: theme.spacing.md,
     paddingVertical: theme.spacing.sm,
   },
   panelActionText: {
     flexShrink: 1,
-    color: theme.colors.primary,
+    fontSize: 13,
     fontWeight: "700",
+    letterSpacing: 0,
     textTransform: "none",
   },
   inlineAction: {
@@ -1137,7 +1385,7 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   },
   searchResults: {
     gap: theme.spacing.xs,
-    borderRadius: theme.radius.lg,
+    borderRadius: HOME_RADIUS.panel,
   },
   searchRow: {
     flexDirection: "row",
@@ -1192,57 +1440,85 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   kpiColumn: {
     flex: 1,
     minWidth: 0,
-    gap: theme.spacing.xs,
+    gap: 6,
+  },
+  // Icon and label share a line in the mock, with the figure below them.
+  kpiHeadRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.sm,
   },
   kpiDivider: {
     width: StyleSheet.hairlineWidth,
     alignSelf: "stretch",
-    backgroundColor: theme.colors.border,
+    backgroundColor: theme.colors.homeCardBorder,
     marginHorizontal: theme.spacing.sm,
   },
   kpiIconShell: {
-    width: 34,
-    height: 34,
+    width: 32,
+    height: 32,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: theme.radius.sm,
+    borderRadius: HOME_RADIUS.badge,
+    borderWidth: StyleSheet.hairlineWidth,
   },
   kpiLabel: {
+    flex: 1,
+    minWidth: 0,
     color: theme.colors.mutedText,
+    fontSize: 12,
     fontWeight: "600",
   },
+  // The mock's headline figure is ~1.45x its label. `heading` (17) alone read as
+  // just another line of copy.
   kpiValue: {
     color: theme.colors.text,
+    fontSize: 19,
+    lineHeight: 26,
     fontWeight: "700",
     fontVariant: ["tabular-nums"],
+  },
+  kpiDelta: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+  },
+  kpiDeltaText: {
+    fontSize: 12,
+    fontWeight: "700",
+    fontVariant: ["tabular-nums"],
+  },
+  kpiDeltaUp: {
+    color: theme.colors.homeDeltaUp,
+  },
+  kpiDeltaDown: {
+    color: theme.colors.homeDeltaDown,
   },
   quickRail: {
     flexDirection: "row",
     gap: theme.spacing.sm,
   },
+  // Five across, as drawn. On a 360dp phone that is 59dp per tile, which is why
+  // the label below gets two lines instead of one — see
+  // HOME_QUICK_ACTION_LABEL_LINES.
   quickRailItem: {
     flex: 1,
     minWidth: 0,
-    minHeight: 78,
+    minHeight: 92,
     alignItems: "center",
     justifyContent: "center",
-    gap: theme.spacing.xs,
-    borderRadius: theme.radius.lg,
+    gap: 2,
+    borderRadius: HOME_RADIUS.tile,
+    borderWidth: StyleSheet.hairlineWidth,
     backgroundColor: theme.colors.surface,
     paddingHorizontal: 2,
     paddingVertical: theme.spacing.sm,
     ...theme.shadows.sm,
   },
-  quickRailIconShell: {
-    width: 38,
-    height: 38,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: theme.radius.md,
-  },
   quickRailText: {
     color: theme.colors.text,
     fontSize: 11,
+    lineHeight: 14,
     fontWeight: "700",
     letterSpacing: 0,
     textAlign: "center",
@@ -1252,6 +1528,11 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing.md,
+  },
+  // Puts the ring on the row's other end so it never lands under the messenger
+  // FAB. See `taskRingSide`.
+  taskTopRowFlipped: {
+    flexDirection: "row-reverse",
   },
   taskBody: {
     flex: 1,
@@ -1267,21 +1548,23 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   },
   taskChip: {
     flexGrow: 1,
-    flexBasis: 78,
+    flexBasis: 72,
     alignItems: "center",
     gap: 2,
-    borderRadius: theme.radius.md,
+    borderRadius: HOME_RADIUS.nested,
+    borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: theme.spacing.sm,
   },
   taskChipValue: {
-    color: theme.colors.text,
+    fontSize: 18,
+    lineHeight: 24,
     fontWeight: "700",
     fontVariant: ["tabular-nums"],
   },
   taskChipLabel: {
-    color: theme.colors.mutedText,
-    fontWeight: "600",
+    fontSize: 11,
+    fontWeight: "700",
     textAlign: "center",
   },
   shortcutGrid: {
@@ -1293,7 +1576,9 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     flexGrow: 1,
     flexBasis: 128,
     gap: theme.spacing.xs,
-    borderRadius: theme.radius.md,
+    borderRadius: HOME_RADIUS.nested,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.homeChipBorder,
     backgroundColor: theme.colors.surfaceAlt,
     padding: theme.spacing.sm,
   },
@@ -1311,25 +1596,32 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     gap: theme.spacing.md,
   },
   dateBadge: {
-    minWidth: 78,
+    minWidth: 84,
     alignItems: "center",
     gap: 2,
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.surfaceAlt,
+    borderRadius: HOME_RADIUS.nested,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.homePaymentPanelBorder,
+    backgroundColor: theme.colors.homePaymentPanelRow,
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: theme.spacing.md,
   },
   dateBadgeMonth: {
-    color: theme.colors.mutedText,
-    fontWeight: "600",
+    color: theme.colors.homePaymentPanelTone,
+    fontSize: 12,
+    fontWeight: "700",
   },
   dateBadgeDay: {
     color: theme.colors.text,
+    fontSize: 30,
+    lineHeight: 38,
     fontWeight: "700",
     fontVariant: ["tabular-nums"],
   },
   dateBadgeWeekday: {
-    color: theme.colors.mutedText,
+    color: theme.colors.homePaymentPanelTone,
+    fontSize: 12,
+    fontWeight: "600",
   },
   paymentsText: {
     flex: 1,
@@ -1361,10 +1653,12 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing.sm,
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.surfaceAlt,
+    borderRadius: HOME_RADIUS.nested,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.homeAlertPanelBorder,
+    backgroundColor: theme.colors.homeAlertPanelRow,
     paddingHorizontal: theme.spacing.sm,
-    paddingVertical: theme.spacing.sm,
+    paddingVertical: 10,
   },
   alertTitle: {
     flex: 1,
@@ -1380,16 +1674,12 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing.md,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.primarySoft,
-  },
-  marketplaceIcon: {
-    width: 48,
-    height: 48,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.surface,
+    borderRadius: HOME_RADIUS.panel,
+    // The gradient is painted by GradientSurface behind the content; this fill
+    // is only what shows through if the SVG layer somehow fails to mount.
+    backgroundColor: theme.colors.homeBannerMid,
+    overflow: "hidden",
+    padding: 14,
   },
   marketplaceText: {
     flex: 1,
@@ -1397,31 +1687,39 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     gap: 2,
   },
   marketplaceTitle: {
-    color: theme.colors.text,
+    color: theme.colors.homeBannerTitle,
+    fontSize: 18,
     fontWeight: "700",
   },
   marketplaceBody: {
-    color: theme.colors.mutedText,
+    color: theme.colors.homeBannerBody,
     lineHeight: 18,
   },
+  // Outlined pill, as drawn — the previous solid white chip cut the banner in
+  // two.
   marketplaceCta: {
     alignSelf: "flex-start",
     borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.homeBannerCtaBorder,
     paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.xs,
-    marginTop: theme.spacing.xs,
+    paddingVertical: 5,
+    marginTop: 6,
   },
   marketplaceCtaText: {
-    color: theme.colors.primary,
+    color: theme.colors.homeBannerCtaText,
+    fontSize: 12,
     fontWeight: "700",
+    letterSpacing: 0,
     textTransform: "none",
   },
   detailStat: {
     flexGrow: 1,
     flexBasis: 128,
     gap: 2,
-    borderRadius: theme.radius.md,
+    borderRadius: HOME_RADIUS.nested,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.homeChipBorder,
     backgroundColor: theme.colors.surfaceAlt,
     padding: theme.spacing.sm,
   },

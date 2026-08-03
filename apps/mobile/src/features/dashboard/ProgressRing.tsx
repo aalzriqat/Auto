@@ -7,7 +7,14 @@ import { useAppTheme, useThemedStyles } from "../../providers/ThemeProvider";
 import { type AppTheme } from "../../theme";
 import { useDashboardTypography } from "./dashboardTypography";
 
-const STROKE = 9;
+/**
+ * Ring weight, as a fraction of the diameter.
+ *
+ * Measured off DESIGN-dark.png: the arc is ~10px thick on a ~106px outer
+ * diameter, so the mock's ring is 9.4% of its own size at every size it is
+ * drawn at. Hard-coding 9dp made the ring thinner the larger it got.
+ */
+const STROKE_RATIO = 0.094;
 const PROGRESS_STEPS = 100;
 
 /**
@@ -44,7 +51,8 @@ export function ProgressRing({
   const animatedSteps = useCountUp(Math.round(safeRatio * PROGRESS_STEPS));
   const progress = animatedSteps / PROGRESS_STEPS;
 
-  const radius = (size - STROKE) / 2;
+  const stroke = Math.round(size * STROKE_RATIO);
+  const radius = (size - stroke) / 2;
   const circumference = 2 * Math.PI * radius;
 
   return (
@@ -61,8 +69,10 @@ export function ProgressRing({
             cy={size / 2}
             fill="none"
             r={radius}
-            stroke={theme.colors.surfaceAlt}
-            strokeWidth={STROKE}
+            // `homeRingTrack`, not `surfaceAlt`: the mock tints the unfilled
+            // arc toward the ring's own blue rather than leaving it neutral.
+            stroke={theme.colors.homeRingTrack}
+            strokeWidth={stroke}
           />
           <Circle
             cx={size / 2}
@@ -72,11 +82,11 @@ export function ProgressRing({
             origin={`${size / 2}, ${size / 2}`}
             r={radius}
             rotation={-90}
-            stroke={theme.colors.primary}
+            stroke={theme.colors.homeRingArc}
             strokeDasharray={`${circumference} ${circumference}`}
             strokeDashoffset={circumference * (1 - progress)}
             strokeLinecap="round"
-            strokeWidth={STROKE}
+            strokeWidth={stroke}
           />
         </Svg>
         <View pointerEvents="none" style={styles.overlay}>
@@ -123,10 +133,13 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   },
   label: {
     color: theme.colors.text,
+    fontSize: 21,
+    fontWeight: "700",
     fontVariant: ["tabular-nums"],
   },
   caption: {
-    color: theme.colors.mutedText,
+    // The mock captions the ring in the completion tone, not in neutral grey.
+    color: theme.colors.homeChipSuccessText,
     fontWeight: "700",
   },
 });

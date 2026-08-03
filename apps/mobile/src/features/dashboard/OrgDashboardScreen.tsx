@@ -52,6 +52,12 @@ import {
 } from "./HomePanels";
 import { SmoothAreaChart } from "./SmoothAreaChart";
 
+/**
+ * Matches `HOME_RADIUS.panel` in HomePanels — the design mock rounds its cards
+ * at ~22px on an 852px/393dp frame, which is 10dp, not `radius.lg`'s 18.
+ */
+const HOME_PANEL_RADIUS = 10;
+
 function getDataQualityTotal(dataQuality: MobileDataQualityStats): number {
   return (
     dataQuality.customersMissingPhone +
@@ -127,7 +133,8 @@ function hasViewFinancePermission(myMembership: MobileMyMembership): boolean {
   return hasPermission(myMembership, VIEW_FINANCE_PERMISSION);
 }
 
-function Header({
+/** Exported so the greeting's truncation behaviour can be asserted directly. */
+export function DealerHomeHeader({
   myMembership,
   org,
 }: Readonly<{ myMembership: MobileMyMembership; org: MobileOrgSummary }>) {
@@ -153,7 +160,18 @@ function Header({
         <Icon color="text" name="back" size={20} />
       </Pressable>
       <View style={styles.headerText}>
-        <Text numberOfLines={1} style={[type.title, styles.greetingText]}>
+        {/*
+          Two lines, not one.
+
+          At 720px (360dp) the header keeps a 34dp back button, the notification
+          bell and the profile button, leaving the text about 180dp. "صباح
+          الخير، عبدالكريم" does not fit that on one line at the mock's heading
+          size, and `numberOfLines={1}` clipped it to "صباح الخير، Abd…" —
+          truncating the owner's own name, which is the one word on this screen
+          that is unambiguously about them. Wrapping costs a line of header and
+          loses nothing.
+        */}
+        <Text numberOfLines={2} style={[type.heading, styles.greetingText]}>
           {firstName ? `${greeting}${separator}${firstName}` : greeting}
         </Text>
         <Text numberOfLines={1} style={[type.caption, styles.greetingSubtitle]}>
@@ -417,7 +435,7 @@ function DashboardContent({
       style={styles.scroll}
       contentContainerStyle={styles.scrollContentFull}
     >
-      <Header myMembership={myMembership} org={org} />
+      <DealerHomeHeader myMembership={myMembership} org={org} />
       <View style={styles.contentBody}>
         <HomeSearchRow
           orgId={orgId}
@@ -636,18 +654,20 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "center",
-    gap: theme.spacing.md,
+    gap: theme.spacing.sm,
     paddingHorizontal: theme.spacing.lg,
     paddingTop: theme.spacing.sm,
     paddingBottom: theme.spacing.md,
   },
   backButton: {
-    width: 38,
-    height: 38,
+    width: 34,
+    height: 34,
     alignItems: "center",
     justifyContent: "center",
     borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.surfaceAlt,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.homeCardBorder,
+    backgroundColor: theme.colors.surface,
   },
   headerText: {
     flex: 1,
@@ -661,13 +681,19 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   },
   greetingText: {
     color: theme.colors.text,
+    fontSize: 19,
+    lineHeight: 25,
+    fontWeight: "700",
   },
   greetingSubtitle: {
     color: theme.colors.mutedText,
   },
   panel: {
     gap: theme.spacing.md,
-    borderRadius: theme.radius.lg,
+    borderRadius: HOME_PANEL_RADIUS,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.homeCardBorder,
+    padding: 14,
   },
   panelTitle: {
     color: theme.colors.text,
@@ -699,7 +725,7 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing.md,
-    borderRadius: theme.radius.lg,
+    borderRadius: HOME_PANEL_RADIUS,
     backgroundColor: theme.colors.primary,
   },
   roleStartIcon: {
@@ -707,7 +733,7 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     height: 44,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: theme.radius.lg,
+    borderRadius: 10,
     backgroundColor: theme.colors.primaryDark,
   },
   roleStartText: {
@@ -726,7 +752,8 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   warningPanel: {
     gap: theme.spacing.md,
     borderColor: theme.colors.warning,
-    borderRadius: theme.radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: HOME_PANEL_RADIUS,
     backgroundColor: theme.colors.warningSoft,
   },
   qualityGrid: {
@@ -737,7 +764,7 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     gap: theme.spacing.md,
-    borderRadius: theme.radius.lg,
+    borderRadius: 8,
     backgroundColor: theme.colors.surface,
     paddingHorizontal: theme.spacing.md,
     paddingVertical: theme.spacing.sm,
