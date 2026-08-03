@@ -123,10 +123,17 @@ export const stats = query({
     const filterStart = periodLength > 0 ? now - periodLength : 0;
 
     // The window immediately before the current one, the same length: a MONTH
-    // view compares the last 30 days against the 30 before them. ALL_TIME has
-    // no period before it, so `comparesPeriods` is false and every
-    // previous-period read in section 8 is skipped outright.
-    const comparesPeriods = periodLength > 0;
+    // view compares the last 30 days against the 30 before them.
+    //
+    // DAY and MONTH only. ALL_TIME has no period before it at all, and YEAR is
+    // excluded on cost: its previous window is a second full year of sales and
+    // expenses, on a subscription query that re-runs on every write to either
+    // table. That is the read amplification PR #166 spent its entire budget
+    // removing, and re-spending it to render one percentage is not the trade.
+    // A YEAR view shows its figures without deltas, which the client already
+    // handles — an absent previous total collapses the delta and leaves the
+    // layout alone.
+    const comparesPeriods = args.timeRange === "DAY" || args.timeRange === "MONTH";
     const previousStart = filterStart - periodLength;
 
     // 2. Total Vehicles & Available Vehicles

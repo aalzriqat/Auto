@@ -502,10 +502,10 @@ export function HomeSearchRow({
  * The mock's "+12% ↑" / "−5% ↓".
  *
  * Rendered only from a real previous-period total. When `dashboard.stats`
- * carries none — ALL_TIME, an unreadable figure, a truncated one — this
- * collapses to nothing rather than to a reserved blank line: the KPI column is
- * a plain vertical stack with a gap, so an absent delta leaves no hole for the
- * eye to land in.
+ * carries none — a YEAR or ALL_TIME range, an unreadable figure, a truncated
+ * one — this collapses to nothing rather than to a reserved blank line: the KPI
+ * column is a plain vertical stack with a gap, so an absent delta leaves no
+ * hole for the eye to land in.
  */
 function KpiDelta({ delta }: Readonly<{ delta: HomeKpiDelta | null }>) {
   const styles = useThemedStyles(makeStyles);

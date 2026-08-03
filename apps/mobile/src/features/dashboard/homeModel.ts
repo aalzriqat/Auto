@@ -129,12 +129,13 @@ export type HomeKpiDelta = Readonly<{
 /**
  * Previous-period totals for the KPI deltas the mock shows as "+12% ↑".
  *
- * `dashboard.stats` returns these for a bounded `timeRange`: the window
+ * `dashboard.stats` returns these for the DAY and MONTH ranges: the window
  * immediately before the selected one, the same length, read off the same
  * indexes and derived by the same rules as the current-period figures.
  *
  * Every field stays optional and the runtime guard stays in place, because
- * absence is a normal answer, not a fault: ALL_TIME has no period before it, a
+ * absence is a normal answer, not a fault: ALL_TIME has no period before it,
+ * YEAR's would cost a second full year of reads on a subscription query, a
  * caller who cannot see a figure is not sent its history, and a total the
  * server had to truncate is omitted rather than turned into a percentage that
  * would look exactly as authoritative as a correct one. In each case the delta

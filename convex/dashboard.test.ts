@@ -955,6 +955,23 @@ describe("dashboard.stats previous-period totals", () => {
     expect(result.previousPeriod).toBeUndefined();
   });
 
+  test("omits previousPeriod for YEAR, whose previous window is a second full year of reads", async () => {
+    const { t, orgId, asUser } = await setup(FULL_PERMISSIONS);
+    freezeNow();
+
+    // Inside YEAR's own window, and inside the year before it — a naive
+    // "any bounded range compares" rule would read both and return a total.
+    await seedSaleAt(t, orgId, { daysAgo: 100, salePrice: 20_000, purchasePrice: 15_000, vin: "LCOC76CA9R4800009" });
+    await seedSaleAt(t, orgId, { daysAgo: 400, salePrice: 30_000, purchasePrice: 22_000, vin: "LCOC76CA9R4800010" });
+    await seedExpenseAt(t, orgId, { daysAgo: 400, amount: 700 });
+
+    const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "YEAR" });
+
+    // The current year's figures are unaffected — only the comparison is off.
+    expect(result.salesVolumeThisMonth).toBe(20_000);
+    expect(result.previousPeriod).toBeUndefined();
+  });
+
   test("counts previous-window expenses on the same rules as the current total", async () => {
     const { t, orgId, asUser } = await setup(FULL_PERMISSIONS);
     freezeNow();

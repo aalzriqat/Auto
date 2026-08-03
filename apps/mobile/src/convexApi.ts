@@ -143,9 +143,10 @@ export interface MobileDashboardStats {
   salesTrend: MobileDashboardTrendPoint[];
   /**
    * Totals for the window immediately before the selected one, for the KPI
-   * deltas. Absent for `ALL_TIME`, which has no period before it; individual
-   * fields are absent when the caller cannot see that figure or when either
-   * side of the comparison was truncated.
+   * deltas. Sent for `DAY` and `MONTH` only — `ALL_TIME` has no period before
+   * it and `YEAR`'s would cost a second year of reads. Individual fields are
+   * absent when the caller cannot see that figure, or when either side of the
+   * comparison was truncated.
    */
   previousPeriod?: {
     sales?: number;
