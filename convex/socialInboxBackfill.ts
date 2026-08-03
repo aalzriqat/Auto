@@ -504,6 +504,14 @@ export const getUnresolvedSocialCustomers = internalQuery({
 
     const instagram: Array<{ customerId: Id<"customers">; senderInstagramId: string }> = [];
     const facebook: Array<{ customerId: Id<"customers">; senderFacebookId: string }> = [];
+    // Duplicate-name repairs are collected separately and appended after the
+    // placeholders. Someone genuinely named "Ali Ali" matches
+    // `hasDuplicatedName` forever — a re-fetch legitimately writes the same
+    // name back — so without this ordering those rows would take a permanent
+    // slice of every run's budget away from contacts still showing a raw id,
+    // which is the backlog this exists to drain.
+    const instagramDuplicates: typeof instagram = [];
+    const facebookDuplicates: typeof facebook = [];
 
     for (const customer of customers) {
       if (customer.isDeleted) continue;
@@ -511,21 +519,23 @@ export const getUnresolvedSocialCustomers = internalQuery({
       // name fields ("mhty7220 mhty7220"). They are not placeholders, so
       // nothing else would ever revisit them.
       const duplicated = hasDuplicatedName(customer);
-      if (
-        customer.instagramUserId &&
-        (isUnresolvedInstagramName(customer, customer.instagramUserId) || duplicated)
-      ) {
-        instagram.push({ customerId: customer._id, senderInstagramId: customer.instagramUserId });
+
+      if (customer.instagramUserId) {
+        const entry = { customerId: customer._id, senderInstagramId: customer.instagramUserId };
+        if (isUnresolvedInstagramName(customer, customer.instagramUserId)) instagram.push(entry);
+        else if (duplicated) instagramDuplicates.push(entry);
       }
-      if (
-        customer.facebookUserId &&
-        (isUnresolvedFacebookName(customer, customer.facebookUserId) || duplicated)
-      ) {
-        facebook.push({ customerId: customer._id, senderFacebookId: customer.facebookUserId });
+      if (customer.facebookUserId) {
+        const entry = { customerId: customer._id, senderFacebookId: customer.facebookUserId };
+        if (isUnresolvedFacebookName(customer, customer.facebookUserId)) facebook.push(entry);
+        else if (duplicated) facebookDuplicates.push(entry);
       }
     }
 
-    return { instagram, facebook };
+    return {
+      instagram: [...instagram, ...instagramDuplicates],
+      facebook: [...facebook, ...facebookDuplicates],
+    };
   },
 });
 

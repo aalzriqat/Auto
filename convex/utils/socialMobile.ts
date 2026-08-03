@@ -164,6 +164,10 @@ export async function applyResolvedDisplayName(
   displayName: string,
   isUnresolved: (customer: Pick<Doc<"customers">, "firstName" | "lastName">) => boolean
 ): Promise<void> {
+  // Guarded here rather than in each caller: this is the only write path, and
+  // a blank name would clear the contact's name outright — strictly worse than
+  // leaving the placeholder that prompted the lookup.
+  if (!displayName.trim()) return;
   const customer = await ctx.db.get(customerId);
   if (!customer || !(isUnresolved(customer) || hasDuplicatedName(customer))) return;
   await ctx.db.patch(customerId, splitDisplayName(displayName));
