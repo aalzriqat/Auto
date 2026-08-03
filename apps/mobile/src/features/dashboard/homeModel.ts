@@ -129,17 +129,16 @@ export type HomeKpiDelta = Readonly<{
 /**
  * Previous-period totals for the KPI deltas the mock shows as "+12% ↑".
  *
- * `dashboard.stats` does not return these. It takes a `timeRange` but computes
- * only the current window, and the only figures in the payload that could be
- * subtracted from each other are two arbitrary buckets of a sparse trend series
- * — a month-over-month label over a two-day comparison. So nothing here invents
- * one: `readPreviousPeriod` reads a field that is currently always absent, the
- * delta collapses, and the row keeps its layout.
+ * `dashboard.stats` returns these for a bounded `timeRange`: the window
+ * immediately before the selected one, the same length, read off the same
+ * indexes and derived by the same rules as the current-period figures.
  *
- * It is written against the shape the backend should grow — `previousPeriod`
- * accumulated in the SAME indexed pass as the current window, because a second
- * query would restore the year-range scan PR #166 removed — so the deltas light
- * up the day that lands, with no further UI work.
+ * Every field stays optional and the runtime guard stays in place, because
+ * absence is a normal answer, not a fault: ALL_TIME has no period before it, a
+ * caller who cannot see a figure is not sent its history, and a total the
+ * server had to truncate is omitted rather than turned into a percentage that
+ * would look exactly as authoritative as a correct one. In each case the delta
+ * collapses and the row keeps its layout.
  */
 export type HomePreviousPeriod = Readonly<{
   sales?: number;
