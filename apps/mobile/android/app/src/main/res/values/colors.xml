@@ -1,7 +1,8 @@
 <resources>
-  <color name="splashscreen_background">#FFFFFF</color>
-  <!-- Adaptive-icon plate. The AutoFlow logo is drawn on white, so the icon
-       background matches it and the mark reads cleanly under any launcher mask. -->
-  <color name="iconBackground">#FFFFFF</color>
+  <color name="splashscreen_background">#0a0f1c</color>
+  <!-- Adaptive-icon plate. The AutoFlow mark is a dark car with neon blue/orange
+       flow, drawn for a dark backdrop, so the plate is the brand navy rather than
+       white — on white the glow washes out and the car reads as a heavy blob. -->
+  <color name="iconBackground">#0a0f1c</color>
   <color name="colorPrimary">#023c69</color>
 </resources>
