@@ -39,6 +39,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useTableControls } from "@/hooks/useTableControls";
+import { useHighlightRow } from "@/hooks/useHighlightRow";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 import { getErrorMessage } from "@/lib/errors";
 
@@ -80,6 +81,16 @@ export default function ExpensesPage() {
   const categoryOptions = Array.from(new Set((expenses ?? []).map((e) => e.category)));
 
   const filteredExpenses = sortedExpenses?.filter((e) => categoryFilter === "ALL" || e.category === categoryFilter);
+
+  // Expense notifications deep-link here with ?highlightId=, which nothing on
+  // this page consumed until now — the link simply landed on an unscrolled list.
+  // Fed the *rendered* rows: a row that the active category filter excludes has
+  // no element to scroll to, and the hook must not report it as found.
+  const highlightedId = useHighlightRow({
+    rows: filteredExpenses,
+    getId: (e) => e._id,
+    pagination: { status: expensesStatus, loadMore: loadMoreExpenses, batchSize: 100 },
+  });
 
   const handleEdit = (expense: any) => {
     setEditingExpense(expense);
@@ -207,7 +218,11 @@ export default function ExpensesPage() {
               </TableRow>
             ) : (
               filteredExpenses.map((expense) => (
-                <TableRow key={expense._id}>
+                <TableRow
+                  key={expense._id}
+                  id={`row-${expense._id}`}
+                  className={highlightedId === expense._id ? "bg-primary/20 transition-all duration-1000" : ""}
+                >
                   <TableCell className="font-medium">
                     {new Date(expense.date).toLocaleDateString()}
                   </TableCell>

@@ -296,6 +296,173 @@ describe("customers.selectorOptions", () => {
   });
 });
 
+describe("customers.search", () => {
+  test("finds a newly added customer past the sales wizard's old 100-row window", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    // The wizard used to load one page of `customers.list` (oldest-first, 100
+    // rows, no loadMore) and filter it in the browser. With 120 older
+    // customers ahead of them, this customer sat outside that page and the
+    // search box could never return them.
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 120; index += 1) {
+        await ctx.db.insert("customers", {
+          orgId,
+          firstName: "Existing",
+          lastName: `Customer${index}`,
+        });
+      }
+      await ctx.db.insert("customers", {
+        orgId,
+        firstName: "Fresh",
+        lastName: "WizardTarget",
+        phone: "0790000111",
+        nationalId: "9990001112",
+      });
+    });
+
+    const results = await asUser.query(api.customers.search, {
+      orgId,
+      search: "WizardTarget",
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      firstName: "Fresh",
+      lastName: "WizardTarget",
+      // The wizard renders the national id and hands the whole record to the
+      // quote it builds, so `search` must return full documents — the
+      // projected selector shape is not enough.
+      nationalId: "9990001112",
+    });
+  });
+
+  test("the replaced approach — first page of customers.list — does not contain that customer", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 120; index += 1) {
+        await ctx.db.insert("customers", {
+          orgId,
+          firstName: "Existing",
+          lastName: `Customer${index}`,
+        });
+      }
+      await ctx.db.insert("customers", { orgId, firstName: "Fresh", lastName: "WizardTarget" });
+    });
+
+    // Pins the defect this change fixes rather than just the new behaviour:
+    // `list` is ordered oldest-first, so the newest customer is on the last
+    // page, and the wizard never called loadMore. No amount of typing in the
+    // search box could surface someone who was not in this array.
+    const firstPage = await asUser.query(api.customers.list, {
+      orgId,
+      paginationOpts: { numItems: 100, cursor: null },
+    });
+
+    expect(firstPage.page).toHaveLength(100);
+    expect(firstPage.page.some((c) => c.lastName === "WizardTarget")).toBe(false);
+  });
+
+  test("finds a customer by national id", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    // The wizard's old client-side filter matched on nationalId. Moving the
+    // search server-side must not quietly drop the field staff use to identify
+    // a walk-in from the document in front of them.
+    await t.run(async (ctx) => {
+      await ctx.db.insert("customers", {
+        orgId,
+        firstName: "Omar",
+        lastName: "Haddad",
+        nationalId: "9881234567",
+      });
+    });
+
+    const results = await asUser.query(api.customers.search, {
+      orgId,
+      search: "9881234567",
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].lastName).toBe("Haddad");
+  });
+
+  test("soft-deleted customers do not consume the result window", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    // Deleted rows used to be dropped only after `.take()` had already spent
+    // the budget on them, so an org that had just deleted a batch could get an
+    // empty picker while live customers sat just past the cap.
+    await t.run(async (ctx) => {
+      await ctx.db.insert("customers", { orgId, firstName: "Live", lastName: "Survivor" });
+      for (let index = 0; index < 80; index += 1) {
+        await ctx.db.insert("customers", {
+          orgId,
+          firstName: "Dead",
+          lastName: `Row${index}`,
+          isDeleted: true,
+        });
+      }
+    });
+
+    const results = await asUser.query(api.customers.search, { orgId, search: "" });
+
+    expect(results.map((c) => c.lastName)).toEqual(["Survivor"]);
+  });
+
+  test("deleted name matches do not crowd a live one out of the search index", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    // The empty-search test above only exercises the recent-window path. This
+    // is the typed-search path: deleted rows sharing the searched surname used
+    // to fill the index query's own budget before any live match was read.
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 60; index += 1) {
+        await ctx.db.insert("customers", {
+          orgId,
+          firstName: `Ghost${index}`,
+          lastName: "Qasimi",
+          isDeleted: true,
+        });
+      }
+      await ctx.db.insert("customers", { orgId, firstName: "Rania", lastName: "Qasimi" });
+      // Push the live match out of the recent window so only the search index
+      // can find her — otherwise the first pass would mask the defect.
+      for (let index = 0; index < 260; index += 1) {
+        await ctx.db.insert("customers", {
+          orgId,
+          firstName: "Filler",
+          lastName: `Person${index}`,
+        });
+      }
+    });
+
+    const results = await asUser.query(api.customers.search, { orgId, search: "Qasimi" });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].firstName).toBe("Rania");
+  });
+
+  test("returns recent customers with no search term and excludes deleted ones", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert("customers", { orgId, firstName: "Live", lastName: "One" });
+      await ctx.db.insert("customers", {
+        orgId,
+        firstName: "Gone",
+        lastName: "Two",
+        isDeleted: true,
+      });
+    });
+
+    const results = await asUser.query(api.customers.search, { orgId, search: "" });
+
+    expect(results.map((c) => c.firstName)).toEqual(["Live"]);
+  });
+});
+
 describe("customers.findMergeCandidates", () => {
   test("groups customers with a matching normalized name", async () => {
     const { orgId, asUser } = await setup();

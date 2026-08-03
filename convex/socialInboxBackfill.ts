@@ -2,6 +2,9 @@ import { v } from "convex/values";
 import { action, internalQuery } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { internal } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
+import { isUnresolvedInstagramName } from "./instagramEngagement";
+import { isUnresolvedFacebookName } from "./facebookEngagement";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { INSTAGRAM_GRAPH_VERSION } from "./utils/instagramApi";
@@ -464,5 +467,153 @@ export const resyncEvents = action({
     }
 
     return { igPostIds, fbPostIds, igVehicles, fbVehicles, igHints, fbHints };
+  },
+});
+
+/**
+ * Ceiling on how many contacts one repair run will look up.
+ *
+ * Each contact costs a Graph round trip, and the action holds a single
+ * execution slot for the whole batch. Bounded so a large inbox cannot run the
+ * action past its time budget; the caller re-runs to continue.
+ */
+const CONTACT_NAME_RESYNC_LIMIT = 200;
+
+/**
+ * How many customer rows one repair run will scan looking for unresolved ones.
+ * Comfortably above the resync limit so a run can always fill its batch, while
+ * staying well inside a Convex query's read budget.
+ */
+const CONTACT_NAME_SCAN_LIMIT = 4_000;
+
+export const getUnresolvedSocialCustomers = internalQuery({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    // Bounded scan. "Unresolved" is not indexable, so finding these rows means
+    // reading customers — and an unbounded collect over a large org's whole
+    // customer book can exceed a query's read limit and fail outright, which
+    // would take the repair path down exactly on the orgs that need it most.
+    // Newest-first because social contacts are created by inbound messages, so
+    // unresolved ones cluster at the recent end.
+    const customers = await ctx.db
+      .query("customers")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .order("desc")
+      .take(CONTACT_NAME_SCAN_LIMIT);
+
+    const instagram: Array<{ customerId: Id<"customers">; senderInstagramId: string }> = [];
+    const facebook: Array<{ customerId: Id<"customers">; senderFacebookId: string }> = [];
+
+    for (const customer of customers) {
+      if (customer.isDeleted) continue;
+      if (
+        customer.instagramUserId &&
+        isUnresolvedInstagramName(customer, customer.instagramUserId)
+      ) {
+        instagram.push({ customerId: customer._id, senderInstagramId: customer.instagramUserId });
+      }
+      if (
+        customer.facebookUserId &&
+        isUnresolvedFacebookName(customer, customer.facebookUserId)
+      ) {
+        facebook.push({ customerId: customer._id, senderFacebookId: customer.facebookUserId });
+      }
+    }
+
+    return { instagram, facebook };
+  },
+});
+
+/**
+ * Re-runs profile enrichment for social contacts that never got a real name.
+ *
+ * Enrichment normally only fires while a webhook is being processed, so a
+ * lookup that failed once — expired page token, a permission not yet granted,
+ * a transient Graph error — left that contact showing "Facebook Contact" or a
+ * bare numeric PSID until the same person happened to message again. Contacts
+ * captured before enrichment existed were never retried at all. This is the
+ * repair path for both: it walks the org's unresolved social contacts and
+ * re-attempts the lookup for each.
+ *
+ * Safe to re-run. The underlying save refuses to overwrite any name that is
+ * not still a placeholder, so a contact a staff member has already renamed by
+ * hand is left alone.
+ */
+export const resyncContactNames = action({
+  args: { orgId: v.id("organizations") },
+  handler: async (
+    ctx,
+    args
+  ): Promise<{
+    instagramAttempted: number;
+    facebookAttempted: number;
+    resolved: number;
+    /** Retried this run and still unresolved — a subset of `remaining`. */
+    attemptedButUnresolved: number;
+    /** The org's whole remaining backlog, including contacts past the batch. */
+    remaining: number;
+  }> => {
+    await ctx.runQuery(internal.socialInboxBackfill.requireManagerAuthQuery, { orgId: args.orgId });
+
+    const before = await ctx.runQuery(
+      internal.socialInboxBackfill.getUnresolvedSocialCustomers,
+      { orgId: args.orgId }
+    );
+
+    // Split the budget per platform rather than filling it with Instagram
+    // first. Taking Instagram to the cap meant an org with 200+ unresolved
+    // Instagram contacts — especially one whose IG token is broken, so none of
+    // them ever resolve — would retry the same rows on every run and never
+    // reach a single Facebook contact. Each platform gets half, and whatever
+    // one platform does not need is lent to the other.
+    const half = Math.floor(CONTACT_NAME_RESYNC_LIMIT / 2);
+    const instagramShare = Math.min(
+      before.instagram.length,
+      Math.max(half, CONTACT_NAME_RESYNC_LIMIT - before.facebook.length)
+    );
+    const facebookShare = Math.min(
+      before.facebook.length,
+      CONTACT_NAME_RESYNC_LIMIT - instagramShare
+    );
+    const instagramBatch = before.instagram.slice(0, instagramShare);
+    const facebookBatch = before.facebook.slice(0, facebookShare);
+
+    // Sequential on purpose: these are third-party lookups against a per-page
+    // rate limit, and a burst of parallel requests is what gets a page token
+    // throttled. Each enrichment already swallows its own failures.
+    for (const contact of instagramBatch) {
+      await ctx.runAction(internal.instagramEngagement.enrichCustomerProfile, {
+        orgId: args.orgId,
+        customerId: contact.customerId,
+        senderInstagramId: contact.senderInstagramId,
+      });
+    }
+    for (const contact of facebookBatch) {
+      await ctx.runAction(internal.facebookEngagement.enrichCustomerProfile, {
+        orgId: args.orgId,
+        customerId: contact.customerId,
+        senderFacebookId: contact.senderFacebookId,
+      });
+    }
+
+    const after = await ctx.runQuery(
+      internal.socialInboxBackfill.getUnresolvedSocialCustomers,
+      { orgId: args.orgId }
+    );
+    const remaining = after.instagram.length + after.facebook.length;
+    const attempted = instagramBatch.length + facebookBatch.length;
+    const startingTotal = before.instagram.length + before.facebook.length;
+
+    // Two separate numbers rather than one ambiguous "stillUnresolved":
+    // `resolved` is org-wide, so reporting a batch-only failure count beside
+    // it invited reading the backlog as smaller than it is whenever it exceeds
+    // one run's budget.
+    return {
+      instagramAttempted: instagramBatch.length,
+      facebookAttempted: facebookBatch.length,
+      resolved: Math.max(0, startingTotal - remaining),
+      attemptedButUnresolved: Math.max(0, remaining - (startingTotal - attempted)),
+      remaining,
+    };
   },
 });

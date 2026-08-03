@@ -1,8 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { RoleGuard } from "@/components/auth/RoleGuard";
-import { useSearchParams } from "next/navigation";
 import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -42,12 +41,11 @@ import {
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useTableControls } from "@/hooks/useTableControls";
+import { useHighlightRow } from "@/hooks/useHighlightRow";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 import { getErrorMessage } from "@/lib/errors";
 
 export default function CustomersPage() {
-  const searchParams = useSearchParams();
-  const highlightId = searchParams.get("highlightId");
 
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
@@ -94,14 +92,13 @@ export default function CustomersPage() {
     sourceFilter === "ALL" || (c as any).source === sourceFilter
   );
 
-  useEffect(() => {
-    if (highlightId && customers) {
-      const el = document.getElementById(`row-${highlightId}`);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-      }
-    }
-  }, [highlightId, customers]);
+  const highlightedId = useHighlightRow({
+    // Fed the *rendered* rows: a row hidden by the active search or filter has
+    // no element to scroll to, and the hook must not report it as found.
+    rows: filteredCustomers,
+    getId: (c) => c._id,
+    pagination: { status: customersStatus, loadMore: loadMoreCustomers, batchSize: 25 },
+  });
 
   const handleEdit = (customer: Doc<"customers">, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -183,7 +180,7 @@ export default function CustomersPage() {
           <div
             key={customer._id}
             id={`row-${customer._id}`}
-            className={`rounded-xl border bg-card p-4 space-y-2 active:bg-muted/50 ${highlightId === customer._id ? "ring-2 ring-primary" : ""}`}
+            className={`rounded-xl border bg-card p-4 space-y-2 active:bg-muted/50 ${highlightedId === customer._id ? "ring-2 ring-primary" : ""}`}
           >
             <div className="flex items-start justify-between gap-2">
               <button
@@ -262,7 +259,7 @@ export default function CustomersPage() {
                 <TableRow
                   key={customer._id}
                   id={`row-${customer._id}`}
-                  className={`cursor-pointer hover:bg-muted/50 ${highlightId === customer._id ? "bg-primary/20 transition-all duration-1000" : ""}`}
+                  className={`cursor-pointer hover:bg-muted/50 ${highlightedId === customer._id ? "bg-primary/20 transition-all duration-1000" : ""}`}
                   onClick={() => handleRowClick(customer._id)}
                 >
                   <TableCell className="font-medium">

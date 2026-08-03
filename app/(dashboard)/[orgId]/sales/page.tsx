@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { RoleGuard } from "@/components/auth/RoleGuard";
 import { usePaginatedQuery, useQuery, useMutation } from "convex/react";
@@ -43,6 +43,26 @@ export default function SalesHomePage() {
     // wizard's sourcing form instead of selecting an existing vehicle.
     const prefillSourceLikeVehicleId = searchParams.get("sourceLikeVehicleId");
     const hasPrefill = !!(prefillLeadId || prefillCustomerId || prefillVehicleId || prefillSourceLikeVehicleId);
+
+    // Sale notifications deep-link here with ?highlightId=<saleId>, which
+    // nothing consumed — this page has no sales table to highlight, only the
+    // five most recent. Opening that sale's trail is the equivalent of the
+    // highlight the other pages do: it lands the operator on the record the
+    // notification was about, whether or not it is in the recent list.
+    //
+    // Resolved server-side rather than cast, because notification rows already
+    // delivered can carry a vehicle id here; feeding one straight to a
+    // v.id("sales") argument would error the page instead of doing nothing.
+    const rawHighlightId = searchParams.get("highlightId");
+    const highlightSaleId = useQuery(
+        api.sales.resolveSaleHighlight,
+        activeOrgId && rawHighlightId
+            ? { orgId: activeOrgId as Id<"organizations">, highlightId: rawHighlightId }
+            : "skip"
+    );
+    useEffect(() => {
+        if (highlightSaleId) setTrailSaleId(highlightSaleId);
+    }, [highlightSaleId]);
 
     const prefillCustomer = useQuery(
         api.customers.get,

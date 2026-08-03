@@ -91,13 +91,37 @@ function normalizeFacebookEvent(ev: Doc<"facebookEvents">): NormalizedEvent {
   };
 }
 
+/**
+ * Picks what to show as the contact's name in the inbox.
+ *
+ * The customer record wins over the platform handle. Staff rename these
+ * auto-created contacts to the person's real name, and that edit has to show
+ * up here like it does on every other screen — previously the handle was
+ * checked first, so a renamed Instagram contact kept displaying its old
+ * username forever. The handle is still returned separately as
+ * `latestSenderHandle`, which is what the profile/DM deep links use.
+ *
+ * The raw PSID/IGSID is never used as a name. It is a 17-digit platform
+ * identifier, meaningless to the person reading the inbox, and it was landing
+ * in the contact list whenever a profile lookup had not resolved yet.
+ */
 function resolveSenderDisplayName(event: NormalizedEvent, customer: Doc<"customers"> | null): string {
-  if (event.senderHandle) return event.senderHandle;
   if (customer) {
-    const name = `${customer.firstName} ${customer.lastName}`.trim();
-    if (name && !PLACEHOLDER_NAMES.has(name)) return name;
+    // Trimmed per field, matching the engagement helpers: a trailing space on
+    // firstName otherwise leaves a double space in the joined name, which then
+    // matches neither the placeholder set nor a raw id — so exactly the
+    // historical rows this is meant to clean up would slip through.
+    const first = customer.firstName.trim();
+    const last = customer.lastName.trim();
+    const name = `${first} ${last}`.trim();
+    // Records whose name was written as the raw id by an earlier intake path
+    // are placeholders too. Both shapes occur: the id alone, and the id split
+    // into `firstName` with "Contact" left in `lastName`.
+    const isIdName = name === event.senderRawId || first === event.senderRawId;
+    if (name && !PLACEHOLDER_NAMES.has(name) && !isIdName) return name;
   }
-  return event.senderRawId;
+  if (event.senderHandle && event.senderHandle !== event.senderRawId) return event.senderHandle;
+  return event.platform === "instagram" ? "Instagram Contact" : "Facebook Contact";
 }
 
 function buildVehicleSuggestion(

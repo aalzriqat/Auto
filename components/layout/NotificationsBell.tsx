@@ -159,21 +159,29 @@ export function NotificationsBell() {
                   return (
                     <div
                       key={notif._id}
-                      className={`flex items-start gap-3 p-4 border-b last:border-0 hover:bg-muted/50 transition-colors ${!notif.isRead ? 'bg-blue-50/50 dark:bg-blue-950/20' : ''}`}
+                      className={`group relative flex items-start gap-3 p-4 border-b last:border-0 hover:bg-muted/50 transition-colors ${!notif.isRead ? 'bg-blue-50/50 dark:bg-blue-950/20' : ''}`}
                     >
+                      {/* The whole notification is the target, not just the
+                          title text. Clicking the message — or the empty space
+                          beside it — used to do nothing, which read as "the
+                          notification doesn't go anywhere". Stretched over the
+                          row behind the content so the mark-as-read button on
+                          top of it still receives its own clicks. */}
+                      {notif.link && (
+                        <Link
+                          href={notif.link}
+                          onClick={() => handleNotificationClick(notif)}
+                          aria-label={title}
+                          className="absolute inset-0 z-0"
+                        />
+                      )}
                       {CategoryIcon && (
                         <CategoryIcon className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
                       )}
-                      <div className="flex-1 space-y-1">
+                      <div className="flex-1 space-y-1 pointer-events-none">
                         <div className="flex items-center justify-between gap-2">
-                          <p className={`text-sm font-medium leading-none ${!notif.isRead ? 'text-foreground' : 'text-muted-foreground'}`}>
-                            {notif.link ? (
-                              <Link href={notif.link} onClick={() => handleNotificationClick(notif)} className="hover:underline">
-                                {title}
-                              </Link>
-                            ) : (
-                              title
-                            )}
+                          <p className={`text-sm font-medium leading-none ${!notif.isRead ? 'text-foreground' : 'text-muted-foreground'} ${notif.link ? 'group-hover:underline' : ''}`}>
+                            {title}
                           </p>
                           <span className="text-[10px] text-muted-foreground whitespace-nowrap">
                             {formatTime(notif._creationTime)}
@@ -189,7 +197,7 @@ export function NotificationsBell() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-6 w-6 rounded-full shrink-0"
+                          className="relative z-10 h-6 w-6 rounded-full shrink-0"
                           onClick={(e) => { e.stopPropagation(); handleMarkAsRead(notif._id); }}
                         >
                           <Check className="h-3 w-3" />

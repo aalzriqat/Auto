@@ -1,8 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { RoleGuard } from "@/components/auth/RoleGuard";
-import { useSearchParams } from "next/navigation";
 import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -14,6 +13,7 @@ import { VehicleDetailsDialog } from "@/components/vehicles/VehicleDetailsDialog
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useTableControls } from "@/hooks/useTableControls";
+import { useHighlightRow } from "@/hooks/useHighlightRow";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 import {
   Table,
@@ -72,8 +72,6 @@ function StatusBadge({ status, t }: { status: string; t: any }) {
 
 export default function VehiclesPage() {
   const { t } = useLanguage();
-  const searchParams = useSearchParams();
-  const highlightId = searchParams.get("highlightId");
 
   const { activeOrgId } = useOrg();
   const { results: vehicles, status: vehiclesStatus, loadMore: loadMoreVehicles } = usePaginatedQuery(
@@ -216,14 +214,13 @@ export default function VehiclesPage() {
     );
   });
 
-  useEffect(() => {
-    if (highlightId && vehicles) {
-      const el = document.getElementById(`row-${highlightId}`);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-      }
-    }
-  }, [highlightId, vehicles]);
+  const highlightedId = useHighlightRow({
+    // Fed the *rendered* rows: a row hidden by the active search or filter has
+    // no element to scroll to, and the hook must not report it as found.
+    rows: filteredVehicles,
+    getId: (v) => v._id,
+    pagination: { status: vehiclesStatus, loadMore: loadMoreVehicles, batchSize: 20 },
+  });
 
   const handleEdit = (vehicle: Doc<"vehicles">) => {
     setEditingVehicle(vehicle);
@@ -350,7 +347,7 @@ export default function VehiclesPage() {
           <div
             key={vehicle._id}
             id={`row-${vehicle._id}`}
-            className={`rounded-xl border bg-card p-4 space-y-3 ${highlightId === vehicle._id ? "ring-2 ring-primary" : ""}`}
+            className={`rounded-xl border bg-card p-4 space-y-3 ${highlightedId === vehicle._id ? "ring-2 ring-primary" : ""}`}
           >
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
@@ -443,7 +440,7 @@ export default function VehiclesPage() {
                 <TableRow
                   key={vehicle._id}
                   id={`row-${vehicle._id}`}
-                  className={highlightId === vehicle._id ? "bg-primary/20 transition-all duration-1000" : ""}
+                  className={highlightedId === vehicle._id ? "bg-primary/20 transition-all duration-1000" : ""}
                 >
                   <TableCell className="font-medium">
                     {vehicle.make} {vehicle.model} {vehicle.trim && <span className="text-muted-foreground text-xs ms-1">{vehicle.trim}</span>}

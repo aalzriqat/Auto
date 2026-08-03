@@ -144,6 +144,47 @@ describe("facebookEngagement profile enrichment", () => {
     expect(second?.needsProfileEnrichment).toBe(true);
   });
 
+  test("a contact stored under its bare PSID is still treated as unresolved", async () => {
+    // Matching only the literal "Facebook Contact" placeholder meant a record
+    // whose name had been written as the raw PSID was never retried and never
+    // overwritten — so the operator saw a 17-digit number in the inbox
+    // permanently, with no path back to a real name.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+
+    const psid = "28136656255928185";
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: psid,
+        lastName: "Contact",
+        facebookUserId: psid,
+      })
+    );
+
+    const result = await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "fb_dm_psid_named",
+        senderFacebookId: psid,
+        text: "hello",
+      })
+    );
+    expect(result?.needsProfileEnrichment).toBe(true);
+
+    await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.saveCustomerDisplayName, {
+        customerId,
+        displayName: "Omar Haddad",
+        senderFacebookId: psid,
+      })
+    );
+    const enriched = await t.run((ctx) => ctx.db.get(customerId));
+    expect(enriched?.firstName).toBe("Omar");
+    expect(enriched?.lastName).toBe("Haddad");
+  });
+
   test("saveCustomerDisplayName replaces the placeholder but never a staff-edited name", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
@@ -160,6 +201,7 @@ describe("facebookEngagement profile enrichment", () => {
       ctx.runMutation(internal.facebookEngagement.saveCustomerDisplayName, {
         customerId: placeholder,
         displayName: "Layla Al Nimri",
+        senderFacebookId: "fb_psid_named",
       })
     );
     const enriched = await t.run((ctx) => ctx.db.get(placeholder));
@@ -178,6 +220,7 @@ describe("facebookEngagement profile enrichment", () => {
       ctx.runMutation(internal.facebookEngagement.saveCustomerDisplayName, {
         customerId: edited,
         displayName: "Graph Name",
+        senderFacebookId: "fb_psid_edited",
       })
     );
     const untouched = await t.run((ctx) => ctx.db.get(edited));
@@ -357,6 +400,7 @@ describe("facebookEngagement profile enrichment", () => {
       ctx.runMutation(internal.facebookEngagement.saveCustomerDisplayName, {
         customerId: placeholder,
         displayName: "Cher",
+        senderFacebookId: "fb_psid_single",
       })
     );
     const enriched = await t.run((ctx) => ctx.db.get(placeholder));

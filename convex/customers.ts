@@ -1,5 +1,5 @@
 import { v, ConvexError } from "convex/values";
-import { query } from "./_generated/server";
+import { query, QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
@@ -29,22 +29,98 @@ function customerMatchesSearch(customer: Doc<"customers">, searchTerm: string) {
     customer.firstName.toLowerCase().includes(lowerSearchTerm) ||
     customer.lastName.toLowerCase().includes(lowerSearchTerm) ||
     (customer.phone?.toLowerCase().includes(lowerSearchTerm) ?? false) ||
-    (customer.email?.toLowerCase().includes(lowerSearchTerm) ?? false)
+    (customer.email?.toLowerCase().includes(lowerSearchTerm) ?? false) ||
+    // Staff routinely identify a walk-in by national id, and the sales
+    // wizard's old client-side filter matched on it. Dropping it when the
+    // search moved server-side would have made a customer unfindable by the
+    // number printed on the document in front of the operator.
+    (customer.nationalId?.toLowerCase().includes(lowerSearchTerm) ?? false)
   );
 }
 
-function addCustomerSelectorOption(
-  optionsById: Map<Id<"customers">, CustomerSelectorOption>,
-  customer: Doc<"customers">,
-) {
-  if (customer.isDeleted || optionsById.has(customer._id)) return;
-  optionsById.set(customer._id, {
+/**
+ * Finds the customers a picker should offer for a given search term.
+ *
+ * Two passes, because neither alone is sufficient: a recent-customer window so
+ * a just-created customer is selectable before they match anything, plus the
+ * name search indexes so older records are reachable once the user types. The
+ * result is capped — pickers show a shortlist, not the whole book.
+ *
+ * Shared by `selectorOptions` (projected shape) and `search` (full documents)
+ * so the two can never drift into disagreeing about who is findable.
+ */
+async function collectCustomerMatches(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  searchTerm: string,
+): Promise<Doc<"customers">[]> {
+  const matchesById = new Map<Id<"customers">, Doc<"customers">>();
+  const addMatch = (customer: Doc<"customers">) => {
+    if (customer.isDeleted || matchesById.has(customer._id)) return;
+    matchesById.set(customer._id, customer);
+  };
+
+  const recentCustomers = await ctx.db
+    .query("customers")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    // Excluded before `take`, not after. Soft-deleted rows were spending the
+    // window budget and then being dropped, so an org that had just deleted a
+    // batch of customers could get a short — or empty — result while live
+    // customers sat just past the cap.
+    .filter((q) => q.neq(q.field("isDeleted"), true))
+    .order("desc")
+    .take(
+      searchTerm.length >= 2
+        ? RECENT_CUSTOMER_SEARCH_WINDOW
+        : CUSTOMER_SELECTOR_LIMIT,
+    );
+
+  for (const customer of recentCustomers) {
+    if (!searchTerm || customerMatchesSearch(customer, searchTerm)) {
+      addMatch(customer);
+    }
+    if (matchesById.size >= CUSTOMER_SELECTOR_LIMIT) break;
+  }
+
+  if (searchTerm.length >= 2 && matchesById.size < CUSTOMER_SELECTOR_LIMIT) {
+    const [firstNameMatches, lastNameMatches] = await Promise.all([
+      // Same pre-`take` exclusion as the recent window above. Filtering only
+      // inside `addMatch` let soft-deleted name matches spend this budget and
+      // hide live customers behind them — the identical defect, on the path
+      // that actually serves a typed search.
+      ctx.db
+        .query("customers")
+        .withSearchIndex("search_firstName", (q) =>
+          q.search("firstName", searchTerm).eq("orgId", orgId),
+        )
+        .filter((q) => q.neq(q.field("isDeleted"), true))
+        .take(CUSTOMER_SELECTOR_LIMIT),
+      ctx.db
+        .query("customers")
+        .withSearchIndex("search_lastName", (q) =>
+          q.search("lastName", searchTerm).eq("orgId", orgId),
+        )
+        .filter((q) => q.neq(q.field("isDeleted"), true))
+        .take(CUSTOMER_SELECTOR_LIMIT),
+    ]);
+
+    for (const customer of [...firstNameMatches, ...lastNameMatches]) {
+      addMatch(customer);
+      if (matchesById.size >= CUSTOMER_SELECTOR_LIMIT) break;
+    }
+  }
+
+  return Array.from(matchesById.values());
+}
+
+function toCustomerSelectorOption(customer: Doc<"customers">): CustomerSelectorOption {
+  return {
     _id: customer._id,
     firstName: customer.firstName,
     lastName: customer.lastName,
     phone: customer.phone,
     email: customer.email,
-  });
+  };
 }
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
@@ -93,48 +169,31 @@ export const selectorOptions = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_CUSTOMERS]);
 
-    const searchTerm = args.search.trim();
-    const optionsById = new Map<Id<"customers">, CustomerSelectorOption>();
-    const recentCustomers = await ctx.db
-      .query("customers")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .order("desc")
-      .take(
-        searchTerm.length >= 2
-          ? RECENT_CUSTOMER_SEARCH_WINDOW
-          : CUSTOMER_SELECTOR_LIMIT,
-      );
+    const matches = await collectCustomerMatches(ctx, args.orgId, args.search.trim());
+    return matches.map(toCustomerSelectorOption);
+  },
+});
 
-    for (const customer of recentCustomers) {
-      if (!searchTerm || customerMatchesSearch(customer, searchTerm)) {
-        addCustomerSelectorOption(optionsById, customer);
-      }
-      if (optionsById.size >= CUSTOMER_SELECTOR_LIMIT) break;
-    }
+/**
+ * Same search as `selectorOptions`, returning whole customer documents.
+ *
+ * The sales wizard needs more than the selector projection — it renders the
+ * national id and hands the selected record straight to the quote it builds —
+ * so it cannot use the projected shape. It previously paginated
+ * `customers.list` with a fixed first page and filtered that page in the
+ * browser; `list` is ordered oldest-first and nothing ever called `loadMore`,
+ * so every customer past the first page was invisible to the search box and
+ * newly-added customers were the first to fall off the end.
+ */
+export const search = query({
+  args: {
+    orgId: v.id("organizations"),
+    search: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_CUSTOMERS]);
 
-    if (searchTerm.length >= 2 && optionsById.size < CUSTOMER_SELECTOR_LIMIT) {
-      const [firstNameMatches, lastNameMatches] = await Promise.all([
-        ctx.db
-          .query("customers")
-          .withSearchIndex("search_firstName", (q) =>
-            q.search("firstName", searchTerm).eq("orgId", args.orgId),
-          )
-          .take(CUSTOMER_SELECTOR_LIMIT),
-        ctx.db
-          .query("customers")
-          .withSearchIndex("search_lastName", (q) =>
-            q.search("lastName", searchTerm).eq("orgId", args.orgId),
-          )
-          .take(CUSTOMER_SELECTOR_LIMIT),
-      ]);
-
-      for (const customer of [...firstNameMatches, ...lastNameMatches]) {
-        addCustomerSelectorOption(optionsById, customer);
-        if (optionsById.size >= CUSTOMER_SELECTOR_LIMIT) break;
-      }
-    }
-
-    return Array.from(optionsById.values());
+    return await collectCustomerMatches(ctx, args.orgId, args.search.trim());
   },
 });
 

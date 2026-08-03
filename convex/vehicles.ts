@@ -1472,7 +1472,7 @@ export const expireReservations = internalMutation({
             reservation.orgId,
             "deposit.expired",
             { vehicleLabel, customerLabel, amount: String(deposit.amount) },
-            { link: `/${reservation.orgId}/sales?highlightId=${reservation.vehicleId}` }
+            { link: `/${reservation.orgId}/vehicles?highlightId=${reservation.vehicleId}` }
           );
         }
       }

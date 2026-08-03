@@ -1,6 +1,5 @@
 "use client";
 
-import { useMemo, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Check, Search, UserPlus } from "lucide-react";
@@ -11,7 +10,10 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 type Customer = Doc<"customers">;
 
 interface CustomerSearchProps {
+  /** Server-side search results. `undefined` while the query is in flight. */
   customers: Customer[] | undefined;
+  query: string;
+  onQueryChange: (query: string) => void;
   selectedCustomer: Customer | null;
   onSelect: (customer: Customer | null) => void;
   onCreateNew: () => void;
@@ -20,29 +22,19 @@ interface CustomerSearchProps {
 
 export default function CustomerSearch({
   customers,
+  query,
+  onQueryChange,
   selectedCustomer,
   onSelect,
   onCreateNew,
   accentClass = "border-indigo-500 bg-indigo-500/10",
 }: CustomerSearchProps) {
   const { t } = useLanguage();
-  const [query, setQuery] = useState("");
 
-  const filtered = useMemo(() => {
-    if (!customers) return [];
-
-    const q = query.toLowerCase();
-    if (!q) return customers;
-
-    return customers.filter((c) => {
-      return (
-        c.firstName.toLowerCase().includes(q) ||
-        c.lastName.toLowerCase().includes(q) ||
-        (c.phone || "").includes(q) ||
-        (c.nationalId || "").includes(q)
-      );
-    });
-  }, [customers, query]);
+  // The server already applied the search term — filtering again here would
+  // re-introduce the cap this component was changed to remove.
+  const isLoading = customers === undefined;
+  const filtered = customers ?? [];
 
   return (
     <div className="space-y-3">
@@ -52,7 +44,7 @@ export default function CustomerSearch({
         <Input
           placeholder={t("CustomerSearchPlaceholder")}
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => onQueryChange(e.target.value)}
           className="ps-10 bg-background"
         />
       </div>
@@ -60,7 +52,11 @@ export default function CustomerSearch({
       {/* Results */}
       {query.length > 0 && (
         <div className="space-y-2 max-h-64 overflow-y-auto pe-1">
-          {filtered.length === 0 ? (
+          {isLoading ? (
+            <p className="text-sm text-center py-6 text-muted-foreground">
+              {t("Loading")}
+            </p>
+          ) : filtered.length === 0 ? (
             <p className="text-sm text-center py-6 text-muted-foreground">
               {t("NoCustomersFoundWizard")}
             </p>

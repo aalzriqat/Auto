@@ -110,19 +110,46 @@ export default function SocialInboxPage() {
   const [activeConversation, setActiveConversation] = useState<ConversationKey | null>(null);
   const [resyncing, setResyncing] = useState(false);
   const resyncAction = useAction(api.socialInboxBackfill.resyncEvents);
+  const resyncContactNamesAction = useAction(api.socialInboxBackfill.resyncContactNames);
 
   const handleResync = async () => {
     if (!activeOrgId || resyncing) return;
     setResyncing(true);
     try {
-      const result = await resyncAction({ orgId: activeOrgId });
-      const linked = result.igVehicles + result.fbVehicles;
-      const hints = result.igHints + result.fbHints;
+      // Contact names are repaired alongside the event resync: a conversation
+      // showing a raw PSID is the same "this thread never got enriched"
+      // problem, and the operator reaches for the same button to fix it.
+      //
+      // allSettled, not all: these are two independent server actions whose
+      // writes have already committed by the time either resolves. Rejecting
+      // the pair on one failure would report "Resync failed" over work that
+      // actually succeeded, and the operator would re-run it blind.
+      const [eventsOutcome, namesOutcome] = await Promise.allSettled([
+        resyncAction({ orgId: activeOrgId }),
+        resyncContactNamesAction({ orgId: activeOrgId }),
+      ]);
+      const result = eventsOutcome.status === "fulfilled" ? eventsOutcome.value : null;
+      const names = namesOutcome.status === "fulfilled" ? namesOutcome.value : null;
+      if (eventsOutcome.status === "rejected") console.error(eventsOutcome.reason);
+      if (namesOutcome.status === "rejected") console.error(namesOutcome.reason);
+
+      const linked = result ? result.igVehicles + result.fbVehicles : 0;
+      const hints = result ? result.igHints + result.fbHints : 0;
       const details = [
         linked > 0 ? `${linked} ${t("ResyncLinkedVehicles" as any) || "linked"}` : null,
         hints > 0 ? `${hints} ${t("ResyncSuggestionsFound" as any) || "suggestions"}` : null,
+        names && names.resolved > 0
+          ? `${names.resolved} ${t("ResyncResolvedNames" as any) || "names resolved"}`
+          : null,
       ].filter(Boolean);
-      toast.success(details.length > 0 ? `${t("ResyncSuccess" as any)} ${details.join(", ")}.` : t("ResyncSuccess" as any));
+
+      if (!result && !names) {
+        toast.error(t("ResyncFailed" as any) || "Resync failed");
+      } else if (!result || !names) {
+        toast.warning(t("ResyncPartial" as any) || "Resync partially completed");
+      } else {
+        toast.success(details.length > 0 ? `${t("ResyncSuccess" as any)} ${details.join(", ")}.` : t("ResyncSuccess" as any));
+      }
     } catch {
       toast.error("Resync failed");
     } finally {

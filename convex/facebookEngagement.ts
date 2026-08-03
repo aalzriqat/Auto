@@ -33,6 +33,54 @@ export const PLACEHOLDER_FIRST_NAME = "Facebook";
 export const PLACEHOLDER_LAST_NAME = "Contact";
 
 /**
+ * True when a customer still has no human-readable name for Messenger.
+ *
+ * Covers both shapes an unresolved contact can take: the literal placeholder,
+ * and a record whose name is just the sender's PSID (written by earlier intake
+ * paths, and by any caller that passed the id through as a display name). Both
+ * mean "we never got a real name", so both stay eligible for a Graph lookup.
+ */
+export function isUnresolvedFacebookName(
+  customer: Pick<Doc<"customers">, "firstName" | "lastName">,
+  senderFacebookId: string,
+): boolean {
+  // Trimmed before comparing: historical rows carry stray whitespace, and an
+  // untrimmed "Contact " was silently counted as a real name, so those
+  // contacts could never be enriched.
+  const first = customer.firstName.trim();
+  const last = customer.lastName.trim();
+  if (first === PLACEHOLDER_FIRST_NAME && last === PLACEHOLDER_LAST_NAME) {
+    return true;
+  }
+  const fullName = `${first} ${last}`.trim();
+  return first === senderFacebookId || fullName === senderFacebookId;
+}
+
+/**
+ * The name to print in a notification about an inbound message.
+ *
+ * Notification rows are permanent copy — they are rendered from the text
+ * stored at write time, so a later profile lookup never rewrites them. Falling
+ * back to the raw PSID meant one failed lookup left "New Facebook message from
+ * 28136656255928185" in the manager's bell forever. The customer record is
+ * preferred (staff may already have named them), then the webhook's own name,
+ * and only a readable placeholder otherwise.
+ */
+function notificationSenderLabel(
+  senderName: string | undefined,
+  customer: Pick<Doc<"customers">, "firstName" | "lastName" | "facebookUserId">,
+): string {
+  // Customer record first, matching `socialInbox.resolveSenderDisplayName`: if
+  // staff have renamed this contact, that is the name the dealership knows them
+  // by and it should be the one in the bell too.
+  if (!isUnresolvedFacebookName(customer, customer.facebookUserId ?? "")) {
+    return `${customer.firstName} ${customer.lastName}`.trim();
+  }
+  if (senderName?.trim()) return senderName.trim();
+  return `${PLACEHOLDER_FIRST_NAME} ${PLACEHOLDER_LAST_NAME}`;
+}
+
+/**
  * Ceiling on a profile lookup.
  *
  * `http.ts` *awaits* the enrichment action while processing a webhook entry, so
@@ -139,8 +187,11 @@ export const handleIncomingFacebookEvent = internalMutation({
     // be fetched. Recomputed on each event rather than only at creation, so a
     // sender whose earlier lookup failed (expired token, transient API error)
     // is retried the next time they write in.
-    const needsProfileEnrichment =
-      customer.firstName === PLACEHOLDER_FIRST_NAME && customer.lastName === PLACEHOLDER_LAST_NAME;
+    // A record whose name is the bare PSID counts as unresolved too. Matching
+    // only the exact placeholder meant any contact that had once been stored
+    // under its raw id was never retried, and the operator saw a 17-digit
+    // number in the inbox permanently.
+    const needsProfileEnrichment = isUnresolvedFacebookName(customer, senderFacebookId);
 
     if (kind === "dm") {
       await attachSharedMobileNumberToCustomer(ctx, orgId, customer, sharedMobileNumber);
@@ -211,7 +262,7 @@ export const handleIncomingFacebookEvent = internalMutation({
           ctx,
           orgId,
           "social.lead_created",
-          { platform: label, senderName: senderName ?? senderFacebookId },
+          { platform: label, senderName: notificationSenderLabel(senderName, customer) },
           { link: `/${orgId}/leads?highlightId=${leadId}` }
         );
 
@@ -255,7 +306,7 @@ export const handleIncomingFacebookEvent = internalMutation({
           ctx,
           orgId,
           "social.possible_complaint",
-          { platform: "Facebook", senderName: senderName ?? senderFacebookId, excerpt: text.slice(0, 200) },
+          { platform: "Facebook", senderName: notificationSenderLabel(senderName, customer), excerpt: text.slice(0, 200) },
           { link: leadId ? `/${orgId}/leads?highlightId=${leadId}` : `/${orgId}/leads` }
         );
       } else if (intent && (intent === "location" || intent === "greeting" || vehicleId)) {
@@ -443,21 +494,24 @@ export const enrichCustomerProfile = internalAction({
     await ctx.runMutation(internal.facebookEngagement.saveCustomerDisplayName, {
       customerId: args.customerId,
       displayName,
+      senderFacebookId: args.senderFacebookId,
     });
   },
 });
 
 export const saveCustomerDisplayName = internalMutation({
-  args: { customerId: v.id("customers"), displayName: v.string() },
+  args: {
+    customerId: v.id("customers"),
+    displayName: v.string(),
+    senderFacebookId: v.string(),
+  },
   handler: async (ctx, args) => {
     const customer = await ctx.db.get(args.customerId);
-    // Only overwrite the placeholder — never clobber a name a staff member may
-    // have since edited.
-    if (
-      !customer ||
-      customer.firstName !== PLACEHOLDER_FIRST_NAME ||
-      customer.lastName !== PLACEHOLDER_LAST_NAME
-    ) {
+    // Only overwrite an unresolved name — never clobber a name a staff member
+    // may have since edited. A record still holding the raw PSID is unresolved
+    // just as much as one holding the literal placeholder, so it is written
+    // too; without this the Graph lookup could succeed and still be discarded.
+    if (!customer || !isUnresolvedFacebookName(customer, args.senderFacebookId)) {
       return;
     }
     const nameParts = args.displayName.trim().split(" ");
