@@ -1,9 +1,23 @@
+import { FAB_SIZE } from "../../components/fabGeometry";
+import { theme } from "../../theme";
 import type {
   MobileDashboardStats,
   MobileDashboardTodayForRole,
   MobileGlobalSearchResult,
   MobileNotification,
 } from "../../convexApi";
+
+/**
+ * Bottom padding the home scroll container needs so the floating messenger FAB
+ * never covers its last control.
+ *
+ * `WorkspaceTabsLayout` parks the FAB `spacing.md` above the tab bar, so it
+ * reaches `FAB_SIZE + spacing.md` into the screen's content area; the second
+ * `spacing.md` is breathing room. The previous value here was `spacing.xxl`
+ * (32), which left "view all alerts" sitting underneath it — and the FAB must
+ * not move: it is a standing product requirement that it stays put.
+ */
+export const HOME_FAB_CLEARANCE = FAB_SIZE + theme.spacing.md * 2;
 
 /**
  * Narrowest container that still fits the two-up rows (task centre + shortcuts).

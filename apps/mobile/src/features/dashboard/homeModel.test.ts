@@ -1,5 +1,7 @@
 /// <reference types="jest" />
 
+import { FAB_SIZE } from "../../components/fabGeometry";
+import { theme } from "../../theme";
 import type {
   MobileDashboardStats,
   MobileDashboardTodayForRole,
@@ -7,6 +9,7 @@ import type {
 } from "../../convexApi";
 import {
   HOME_ALERT_LIMIT,
+  HOME_FAB_CLEARANCE,
   HOME_SEARCH_MIN_LENGTH,
   HOME_TWO_COLUMN_MIN_WIDTH,
   alertTimeKey,
@@ -71,6 +74,18 @@ describe("shouldStackHomeColumns", () => {
 
   test("stacks rather than throwing when the measurement is not a number", () => {
     expect(shouldStackHomeColumns(Number.NaN)).toBe(true);
+  });
+});
+
+describe("HOME_FAB_CLEARANCE", () => {
+  test("clears the floating messenger FAB, which must never be moved or hidden", () => {
+    // The FAB sits `spacing.md` above the tab bar, so it reaches this far into
+    // the scrolling content. Anything less and the last control in the last
+    // panel is unreachable underneath it — which is what the previous
+    // `spacing.xxl` (32) padding did.
+    const fabIntrusion = FAB_SIZE + theme.spacing.md;
+    expect(HOME_FAB_CLEARANCE).toBeGreaterThan(fabIntrusion);
+    expect(HOME_FAB_CLEARANCE).toBeGreaterThan(theme.spacing.xxl);
   });
 });
 

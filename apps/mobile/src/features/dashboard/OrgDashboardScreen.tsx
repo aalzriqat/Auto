@@ -19,90 +19,38 @@ import { Card } from "../../components/Card";
 import { EmptyState } from "../../components/EmptyState";
 import { Icon } from "../../components/Icon";
 import type { SemanticIconName } from "../../components/Icon";
-import { FadeSlideIn, useCountUp } from "../../components/Motion";
+import { FadeSlideIn } from "../../components/Motion";
 import { NotificationBell } from "../../components/NotificationBell";
 import { MemberAvatar } from "../../components/Avatar";
 import { PresenceDot, PresencePill } from "../../components/Presence";
 import { RouteLoadingState } from "../../components/RouteState";
 import { Screen } from "../../components/Screen";
 import { SkeletonRow } from "../../components/SkeletonRow";
-import { StatTile, type StatTileTone } from "../../components/StatTile";
-import { useAppFontState } from "../../providers/AppFontContext";
 import { useLocale } from "../../providers/LocaleProvider";
-import { getTypographyStyle, type AppTheme } from "../../theme";
+import { type AppTheme } from "../../theme";
 import { useAppTheme, useThemedStyles } from "../../providers/ThemeProvider";
-import { money } from "../workspace/modules/moduleShared";
 import { WorkspaceModuleLauncher } from "../workspace/WorkspaceModuleLauncher";
+import { compactNumber, plainNumber } from "./dashboardFormat";
+import { useDashboardTypography } from "./dashboardTypography";
+import {
+  HOME_FAB_CLEARANCE,
+  greetingKeyForHour,
+  summarizeUpcomingPayments,
+} from "./homeModel";
+import {
+  HomeAlerts,
+  HomeDetailStat,
+  HomeMarketplaceBanner,
+  HomeOverviewCard,
+  HomeQuickActions,
+  HomeSearchRow,
+  HomeShortcuts,
+  HomeTaskCentre,
+  HomeTwoUp,
+  HomeUpcomingPayments,
+  PanelHeading,
+} from "./HomePanels";
 import { SmoothAreaChart } from "./SmoothAreaChart";
-import { TodayAgenda } from "./TodayAgenda";
-
-const TIME_RANGES: ReadonlyArray<{
-  value: MobileDashboardTimeRange;
-  labelKey: "timeRangeDay" | "timeRangeMonth" | "timeRangeYear" | "timeRangeAllTime";
-}> = [
-  { value: "DAY", labelKey: "timeRangeDay" },
-  { value: "MONTH", labelKey: "timeRangeMonth" },
-  { value: "YEAR", labelKey: "timeRangeYear" },
-  { value: "ALL_TIME", labelKey: "timeRangeAllTime" },
-];
-
-function useDashboardTypography() {
-  const { locale } = useLocale();
-  const { fontsLoaded } = useAppFontState();
-
-  return useMemo(
-    () => ({
-      body: getTypographyStyle("body", locale, fontsLoaded),
-      caption: getTypographyStyle("caption", locale, fontsLoaded),
-      display: getTypographyStyle("display", locale, fontsLoaded),
-      heading: getTypographyStyle("heading", locale, fontsLoaded),
-      label: getTypographyStyle("label", locale, fontsLoaded),
-      title: getTypographyStyle("title", locale, fontsLoaded),
-    }),
-    [fontsLoaded, locale],
-  );
-}
-
-function compactNumber(value: number, locale: "en" | "ar"): string {
-  const safeValue = Number.isFinite(value) ? value : 0;
-
-  try {
-    return new Intl.NumberFormat(locale === "ar" ? "ar-JO" : "en-US", {
-      maximumFractionDigits: 0,
-      notation: "compact",
-    }).format(safeValue);
-  } catch {
-    return Math.round(safeValue).toLocaleString();
-  }
-}
-
-function plainNumber(value: number, locale: "en" | "ar"): string {
-  const safeValue = Number.isFinite(value) ? value : 0;
-
-  try {
-    return new Intl.NumberFormat(locale === "ar" ? "ar-JO" : "en-US", {
-      maximumFractionDigits: 0,
-    }).format(safeValue);
-  } catch {
-    return Math.round(safeValue).toString();
-  }
-}
-
-type QuickActionTone = "success" | "warning" | "info" | "indigo";
-
-const quickActionToneSoft: Record<QuickActionTone, "successSoft" | "warningSoft" | "infoSoft" | "indigoSoft"> = {
-  success: "successSoft",
-  warning: "warningSoft",
-  info: "infoSoft",
-  indigo: "indigoSoft",
-};
-
-const quickActionToneFg: Record<QuickActionTone, QuickActionTone> = {
-  success: "success",
-  warning: "warning",
-  info: "info",
-  indigo: "indigo",
-};
 
 function getDataQualityTotal(dataQuality: MobileDataQualityStats): number {
   return (
@@ -114,16 +62,6 @@ function getDataQualityTotal(dataQuality: MobileDataQualityStats): number {
 
 function getSafeOrgs(orgs: Array<MobileOrgSummary | null> | undefined): MobileOrgSummary[] {
   return (orgs ?? []).filter((org): org is MobileOrgSummary => org !== null);
-}
-
-function getGreeting(locale: string, hour: number): string {
-  if (hour < 12) {
-    return locale === "ar" ? "صباح الخير" : "Good morning";
-  }
-  if (hour < 17) {
-    return locale === "ar" ? "طاب يومك" : "Good afternoon";
-  }
-  return locale === "ar" ? "مساء الخير" : "Good evening";
 }
 
 function getFirstName(fullName: string | undefined): string | null {
@@ -158,13 +96,25 @@ function getRoleStart(roleName: string | undefined): RoleStart | null {
 
 const FINANCE_PERMISSIONS: readonly string[] = ["view:sales", "view:reports", "view:finance"];
 const VIEW_FINANCE_PERMISSION = "view:finance";
+const VIEW_TASKS_PERMISSION = "view:tasks";
+const APPROVE_REQUESTS_PERMISSION = "approve:requests";
 
-// The owner/manager "performance" section (revenue hero, metric grid, team) reads
-// permission-gated numbers server-side; hide it for roles that would only see
-// zeros so their Today stays clean.
+function isOwner(myMembership: MobileMyMembership): boolean {
+  return myMembership.roleName?.toUpperCase() === "OWNER";
+}
+
+function hasPermission(myMembership: MobileMyMembership, permission: string): boolean {
+  return isOwner(myMembership) || (myMembership.permissions ?? []).includes(permission);
+}
+
+// The owner/manager "performance" numbers (the KPI row, the trend, the team
+// panel) read permission-gated fields server-side; hide them for roles that
+// would only ever see zeros so their home stays honest.
 function showsPerformanceSection(myMembership: MobileMyMembership): boolean {
-  if (myMembership.roleName?.toUpperCase() === "OWNER") return true;
-  return myMembership.permissions.some((permission) => FINANCE_PERMISSIONS.includes(permission));
+  if (isOwner(myMembership)) return true;
+  return (myMembership.permissions ?? []).some((permission) =>
+    FINANCE_PERMISSIONS.includes(permission),
+  );
 }
 
 // `dashboard.todayForRole` is gated server-side on `view:finance` specifically
@@ -174,20 +124,22 @@ function showsPerformanceSection(myMembership: MobileMyMembership): boolean {
 // query (it would just error), and any role that DOES have the permission
 // should see the panel regardless of its name.
 function hasViewFinancePermission(myMembership: MobileMyMembership): boolean {
-  if (myMembership.roleName?.toUpperCase() === "OWNER") return true;
-  return myMembership.permissions.includes(VIEW_FINANCE_PERMISSION);
+  return hasPermission(myMembership, VIEW_FINANCE_PERMISSION);
 }
 
-function Header({ org }: { org: MobileOrgSummary }) {
+function Header({
+  myMembership,
+  org,
+}: Readonly<{ myMembership: MobileMyMembership; org: MobileOrgSummary }>) {
   const styles = useThemedStyles(makeStyles);
   const router = useRouter();
-  const { locale, t, textDirection } = useLocale();
+  const { t, textDirection } = useLocale();
   const type = useDashboardTypography();
-  const greeting = getGreeting(locale, new Date().getHours());
   const me = useQuery(api.users.getMe, {});
   const firstName = getFirstName(me?.name);
+  const greeting = t(greetingKeyForHour(new Date().getHours()));
   const orgName = org.name || t("untitledWorkspace");
-  const subtitleLine = firstName ? `${firstName} · ${orgName}` : orgName;
+  const roleName = myMembership.roleName || t("unknownRole");
 
   return (
     <View style={[styles.header, { direction: textDirection }]}>
@@ -201,10 +153,10 @@ function Header({ org }: { org: MobileOrgSummary }) {
       </Pressable>
       <View style={styles.headerText}>
         <Text numberOfLines={1} style={[type.title, styles.greetingText]}>
-          {greeting}
+          {firstName ? `${greeting}، ${firstName}` : greeting}
         </Text>
         <Text numberOfLines={1} style={[type.caption, styles.greetingSubtitle]}>
-          {subtitleLine}
+          {`${orgName} · ${roleName}`}
         </Text>
       </View>
       <View style={styles.headerActions}>
@@ -215,291 +167,75 @@ function Header({ org }: { org: MobileOrgSummary }) {
   );
 }
 
-function TimeRangeControl({
-  value,
-  onChange,
-}: {
-  value: MobileDashboardTimeRange;
-  onChange: (value: MobileDashboardTimeRange) => void;
-}) {
-  const styles = useThemedStyles(makeStyles);
-  const { t, textDirection } = useLocale();
-  const type = useDashboardTypography();
-
-  return (
-    <View style={[styles.segmentedControl, { direction: textDirection }]}>
-      {TIME_RANGES.map((range) => {
-        const selected = range.value === value;
-        return (
-          <Pressable
-            key={range.value}
-            accessibilityRole="button"
-            accessibilityState={{ selected }}
-            style={({ pressed }) => [
-              styles.segment,
-              selected && styles.segmentSelected,
-              pressed && styles.pressed,
-            ]}
-            onPress={() => onChange(range.value)}
-          >
-            <Text style={[styles.segmentText, type.label, selected && styles.segmentTextSelected]}>
-              {t(range.labelKey)}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
-function SalesHero({
-  stats,
-  timeRange,
-  onChangeTimeRange,
-}: {
-  stats: MobileDashboardStats;
-  timeRange: MobileDashboardTimeRange;
-  onChangeTimeRange: (value: MobileDashboardTimeRange) => void;
-}) {
+/**
+ * The "view details" drawer under the overview card: the revenue trend and the
+ * secondary counts that used to occupy their own always-visible section. All of
+ * it is real `dashboard.stats` data — it is collapsed by default, not dropped.
+ */
+function HomeOverviewDetails({ stats }: Readonly<{ stats: MobileDashboardStats }>) {
   const theme = useAppTheme();
   const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
   const type = useDashboardTypography();
-  const latestTrend = stats.salesTrend.at(-1);
-  const trendPoints = stats.salesTrend.length > 0 ? stats.salesTrend.slice(-8) : [{ name: "0", Revenue: 0 }];
-  const animatedRevenue = useCountUp(stats.salesVolumeThisMonth);
-  const animatedSoldCount = useCountUp(stats.salesThisMonth);
   const [chartWidth, setChartWidth] = useState(0);
+  const trend = stats.salesTrend ?? [];
+  const trendPoints = trend.length > 0 ? trend.slice(-8) : [];
 
   return (
-    <Card style={[styles.salesHero, { direction: textDirection }]}>
-      <View style={styles.heroTopRow}>
-        <View style={styles.heroTitleGroup}>
-          <Text style={[styles.heroEyebrow, type.label]}>{t("salesOverview")}</Text>
-          <Text style={[styles.heroTitle, type.display]}>{compactNumber(animatedRevenue, locale)}</Text>
-          <Text style={[styles.heroSubtitle, type.caption]}>{t("revenue")}</Text>
-        </View>
-        <View style={styles.soldPill}>
-          <Icon color="primaryDark" name="sales" size={18} />
-          <Text style={[styles.soldValue, type.title]}>{plainNumber(animatedSoldCount, locale)}</Text>
-          <Text style={[styles.soldLabel, type.caption]}>{t("vehiclesSold")}</Text>
-        </View>
-      </View>
-
-      <TimeRangeControl value={timeRange} onChange={onChangeTimeRange} />
-
+    <Card style={[styles.panel, { direction: textDirection }]}>
+      <PanelHeading icon="reports" title={t("salesOverview")} />
       <View
         style={styles.trendRow}
         onLayout={(event) => setChartWidth(event.nativeEvent.layout.width)}
       >
-        {chartWidth > 0 ? (
+        {chartWidth > 0 && trendPoints.length > 0 ? (
           <SmoothAreaChart
             color={theme.colors.primary}
-            height={110}
+            height={104}
             values={trendPoints.map((point) => point.Revenue)}
             width={chartWidth}
           />
         ) : (
-          <View style={{ height: 110 }} />
+          <View style={styles.trendPlaceholder} />
         )}
         <Text style={[styles.trendCaption, type.caption]}>
-          {latestTrend?.name ? `${t("revenue")} ${latestTrend.name}` : t("revenue")}
+          {trendPoints.at(-1)?.name
+            ? `${t("revenue")} · ${trendPoints.at(-1)?.name}`
+            : t("revenue")}
         </Text>
       </View>
-    </Card>
-  );
-}
-
-function MetricCard({
-  title,
-  value,
-  caption,
-  icon,
-  tone,
-  fullWidth,
-}: {
-  title: string;
-  value: string;
-  caption: string;
-  icon: SemanticIconName;
-  tone: StatTileTone;
-  fullWidth?: boolean;
-}) {
-  const styles = useThemedStyles(makeStyles);
-  return (
-    <StatTile
-      caption={caption}
-      icon={icon}
-      label={title}
-      style={fullWidth ? styles.metricCardFull : styles.metricCard}
-      tone={tone}
-      value={value}
-    />
-  );
-}
-
-// Increment 3 — progressive disclosure: the primary inventory metric stays
-// visible up front (matching the "start here" philosophy of not dumping every
-// number on the user at once); the remaining three metrics collapse behind a
-// tap, mirroring the segmented-control / quick-rail tap interactions already
-// used elsewhere on this screen.
-function MetricGridSection({
-  stats,
-  locale,
-  showFinanceMetricProminent,
-  todayForRole,
-}: Readonly<{
-  stats: MobileDashboardStats;
-  locale: "en" | "ar";
-  showFinanceMetricProminent: boolean;
-  todayForRole?: MobileDashboardTodayForRole;
-}>) {
-  const styles = useThemedStyles(makeStyles);
-  const { t, textDirection } = useLocale();
-  const type = useDashboardTypography();
-  const [expanded, setExpanded] = useState(false);
-
-  // A caller may have `view:finance` but not `view:vehicles` — forcing
-  // vehicles as the always-visible prominent tile would show a permission-
-  // withheld "0" as if it were real data. Show a finance-relevant figure
-  // instead when the caller actually has `view:finance` (the same permission
-  // that gates `todayForRole` itself — a role-NAME heuristic here would wrongly
-  // keep showing "Vehicles: 0" to a differently-named role that has the
-  // permission), and keep vehicles for every other role/no-role.
-  const collectionsDueToday = todayForRole?.collectionsDueToday ?? { count: 0, amount: 0 };
-  const showFinanceProminent = showFinanceMetricProminent && todayForRole !== undefined;
-  const currency = todayForRole?.currency ?? "JOD";
-
-  const vehiclesCard = (
-    <MetricCard
-      title={t("vehiclesUpper")}
-      value={plainNumber(stats.totalVehicles, locale)}
-      caption={`${plainNumber(stats.availableVehicles, locale)} ${t("available")}`}
-      icon="vehicles"
-      tone="success"
-      fullWidth={!showFinanceProminent}
-    />
-  );
-
-  return (
-    <View style={styles.metricSection}>
-      <View style={styles.metricGrid}>
-        {showFinanceProminent ? (
-          <MetricCard
-            title={t("collectionsDueToday")}
-            value={`${money(collectionsDueToday.amount, locale, currency)} · ${plainNumber(collectionsDueToday.count, locale)}`}
-            caption={t("collectionsDueTodayCaption")}
-            icon="finance"
-            tone="info"
-            fullWidth
-          />
-        ) : (
-          vehiclesCard
-        )}
-      </View>
-
-      {expanded ? (
-        <FadeSlideIn delay={0}>
-          <View style={styles.metricGrid}>
-            {showFinanceProminent ? vehiclesCard : null}
-            <MetricCard
-              title={t("leadsUpper")}
-              value={plainNumber(stats.activeLeads, locale)}
-              caption={t("activeLeads")}
-              icon="leads"
-              tone="warning"
-            />
-            <MetricCard
-              title={t("teamUpper")}
-              value={plainNumber(stats.teamMembers, locale)}
-              caption={t("activeStaff")}
-              icon="team"
-              tone="info"
-            />
-            <MetricCard
-              title={t("tasksUpper")}
-              value={plainNumber(stats.taskStats.total, locale)}
-              caption={`${plainNumber(stats.taskStats.overdue, locale)} ${t("overdue")}`}
-              icon="tasks"
-              tone="primary"
-            />
-          </View>
-        </FadeSlideIn>
-      ) : null}
-
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ expanded }}
-        style={({ pressed }) => [styles.metricToggle, { direction: textDirection }, pressed && styles.pressed]}
-        onPress={() => setExpanded((prev) => !prev)}
-      >
-        <Text style={[styles.metricToggleText, type.label]}>
-          {expanded ? t("metricGridShowLess") : t("metricGridShowMore")}
-        </Text>
-        <Icon color="primary" name={expanded ? "chevronUp" : "chevronDown"} size={16} />
-      </Pressable>
-    </View>
-  );
-}
-
-// Wave 2 — role-aware Today data for accountants: collections due, cheques
-// due this week, and overdue receivables. Reuses the same panel/pill visual
-// language as DataQualityPanel below.
-// `todayForRole` is fetched by the caller (gated on the real `view:finance`
-// permission, using Convex's "skip" sentinel when the caller lacks it — see
-// hasViewFinancePermission) so this panel never fires the query itself.
-function AccountantTodayPanel({
-  todayForRole,
-}: Readonly<{ todayForRole: MobileDashboardTodayForRole | undefined }>) {
-  const styles = useThemedStyles(makeStyles);
-  const { locale, t, textDirection } = useLocale();
-  const type = useDashboardTypography();
-
-  if (todayForRole === undefined) {
-    return (
-      <Card style={[styles.panel, { direction: textDirection }]}>
-        <Text style={[styles.panelTitle, type.label]}>{t("accountantTodayUpper")}</Text>
-        <SkeletonRow count={3} />
-      </Card>
-    );
-  }
-
-  const collectionsDueToday = todayForRole.collectionsDueToday;
-  const chequesDueThisWeek = todayForRole.chequesDueThisWeek;
-  const overdueReceivables = todayForRole.overdueReceivables;
-  const currency = todayForRole.currency;
-
-  return (
-    <Card style={[styles.panel, { direction: textDirection }]}>
-      <Text style={[styles.panelTitle, type.label]}>{t("accountantTodayUpper")}</Text>
-      {todayForRole.truncated ? (
-        <Text style={[styles.panelTruncatedNote, type.caption]}>{t("todayForRolePartialTotal")}</Text>
-      ) : null}
-      <View style={styles.qualityGrid}>
-        <MetricPill
-          label={t("collectionsDueToday")}
-          value={`${money(collectionsDueToday.amount, locale, currency)} · ${plainNumber(collectionsDueToday.count, locale)}`}
+      <View style={styles.detailGrid}>
+        <HomeDetailStat
+          caption={`${plainNumber(stats.availableVehicles, locale)} ${t("available")}`}
+          label={t("vehiclesUpper")}
+          value={plainNumber(stats.totalVehicles, locale)}
         />
-        <MetricPill
-          label={t("chequesDueThisWeek")}
-          value={`${money(chequesDueThisWeek.amount, locale, currency)} · ${plainNumber(chequesDueThisWeek.count, locale)}`}
+        <HomeDetailStat
+          caption={t("activeLeads")}
+          label={t("leadsUpper")}
+          value={plainNumber(stats.activeLeads, locale)}
         />
-        <MetricPill
-          label={t("overdueReceivables")}
-          value={`${money(overdueReceivables.amount, locale, currency)} · ${plainNumber(overdueReceivables.count, locale)}`}
+        <HomeDetailStat
+          caption={t("activeStaff")}
+          label={t("teamUpper")}
+          value={plainNumber(stats.teamMembers, locale)}
+        />
+        <HomeDetailStat
+          caption={t("vehiclesSold")}
+          label={t("salesOverview")}
+          value={compactNumber(stats.salesThisMonth, locale)}
         />
       </View>
     </Card>
   );
 }
 
-function DataQualityPanel({ dataQuality }: { dataQuality: MobileDataQualityStats }) {
+function DataQualityPanel({ dataQuality }: Readonly<{ dataQuality: MobileDataQualityStats | undefined }>) {
   const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
   const type = useDashboardTypography();
-  const total = getDataQualityTotal(dataQuality);
 
-  if (total === 0) {
+  if (dataQuality === undefined || getDataQualityTotal(dataQuality) === 0) {
     return null;
   }
 
@@ -524,7 +260,7 @@ function DataQualityPanel({ dataQuality }: { dataQuality: MobileDataQualityStats
   );
 }
 
-function MetricPill({ label, value }: { label: string; value: string }) {
+function MetricPill({ label, value }: Readonly<{ label: string; value: string }>) {
   const styles = useThemedStyles(makeStyles);
   const type = useDashboardTypography();
 
@@ -536,15 +272,25 @@ function MetricPill({ label, value }: { label: string; value: string }) {
   );
 }
 
-function TeamPanel({ stats }: { stats: MobileDashboardStats }) {
+function TeamPanel({ stats }: Readonly<{ stats: MobileDashboardStats | undefined }>) {
   const styles = useThemedStyles(makeStyles);
   const { locale, t, textDirection } = useLocale();
   const type = useDashboardTypography();
-  const topTeamTasks = stats.teamTasks.slice(0, 3);
+
+  if (stats === undefined) {
+    return (
+      <Card style={[styles.panel, { direction: textDirection }]}>
+        <PanelHeading icon="team" title={t("teamActivity")} />
+        <SkeletonRow count={2} />
+      </Card>
+    );
+  }
+
+  const topTeamTasks = (stats.teamTasks ?? []).slice(0, 3);
 
   return (
     <Card style={[styles.panel, { direction: textDirection }]}>
-      <Text style={[styles.panelTitle, type.label]}>{t("teamActivity")}</Text>
+      <PanelHeading icon="team" title={t("teamActivity")} />
       {stats.topPerformer ? (
         <View style={styles.performerRow}>
           <MemberAvatar imageUrl={stats.topPerformer.imageUrl} name={stats.topPerformer.name} />
@@ -582,77 +328,6 @@ function TeamPanel({ stats }: { stats: MobileDashboardStats }) {
   );
 }
 
-function QuickActionRail({
-  orgId,
-  roleName,
-}: Readonly<{
-  orgId: string;
-  roleName: string;
-}>) {
-  const theme = useAppTheme();
-  const styles = useThemedStyles(makeStyles);
-  const router = useRouter();
-  const { t, textDirection } = useLocale();
-  const type = useDashboardTypography();
-  const isOwner = roleName.toUpperCase() === "OWNER";
-  const actions = [
-    {
-      icon: "vehicles",
-      label: t("inventory"),
-      moduleId: "vehicles",
-      tone: "success",
-    },
-    {
-      icon: "leads",
-      label: t("leads"),
-      moduleId: "leads",
-      tone: "warning",
-    },
-    {
-      icon: "messages",
-      label: t("messages"),
-      moduleId: "messages",
-      tone: "info",
-    },
-    {
-      icon: isOwner ? "settings" : "team",
-      label: isOwner ? t("settings") : t("team"),
-      moduleId: isOwner ? "settings" : "team",
-      tone: "indigo",
-    },
-  ] as const satisfies ReadonlyArray<{
-    icon: SemanticIconName;
-    label: string;
-    moduleId: string;
-    tone: QuickActionTone;
-  }>;
-
-  return (
-    <View style={[styles.quickRail, { direction: textDirection }]}>
-      {actions.map((action) => (
-        <Pressable
-          key={action.moduleId}
-          accessibilityRole="button"
-          style={({ pressed }) => [styles.quickRailItem, pressed && styles.pressed]}
-          onPress={() =>
-            router.push({
-              pathname: nativeRoutes.orgModule,
-              params: { orgId, moduleId: action.moduleId },
-            })
-          }
-        >
-          <View style={[styles.quickRailIconShell, { backgroundColor: theme.colors[quickActionToneSoft[action.tone]] }]}>
-            <Icon color={quickActionToneFg[action.tone]} name={action.icon} size={20} />
-          </View>
-          <Text numberOfLines={1} style={[styles.quickRailText, type.label]}>
-            {action.label}
-          </Text>
-        </Pressable>
-      ))}
-    </View>
-  );
-}
-
 function RoleStartCard({ orgId, start }: Readonly<{ orgId: string; start: RoleStart }>) {
   const styles = useThemedStyles(makeStyles);
   const router = useRouter();
@@ -674,7 +349,7 @@ function RoleStartCard({ orgId, start }: Readonly<{ orgId: string; start: RoleSt
         <Text style={[styles.roleStartTitle, type.heading]}>{t(start.titleKey)}</Text>
         <Text style={[styles.roleStartBody, type.caption]}>{t(start.bodyKey)}</Text>
       </View>
-      <Icon color="onPrimary" name={textDirection === "rtl" ? "back" : "chevronForward"} size={22} />
+      <Icon color="onPrimary" name="chevronForward" size={22} />
     </Card>
   );
 }
@@ -682,94 +357,131 @@ function RoleStartCard({ orgId, start }: Readonly<{ orgId: string; start: RoleSt
 function DashboardContent({
   myMembership,
   org,
-  stats,
-  dataQuality,
   timeRange,
   onChangeTimeRange,
-}: {
+}: Readonly<{
   myMembership: MobileMyMembership;
   org: MobileOrgSummary;
-  stats: MobileDashboardStats;
-  dataQuality: MobileDataQualityStats;
   timeRange: MobileDashboardTimeRange;
   onChangeTimeRange: (value: MobileDashboardTimeRange) => void;
-}) {
+}>) {
   const styles = useThemedStyles(makeStyles);
-  const { locale, t } = useLocale();
-  const router = useRouter();
-  const type = useDashboardTypography();
+  const orgId = org._id;
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
   const roleStart = getRoleStart(myMembership.roleName);
   const showsPerformance = showsPerformanceSection(myMembership);
-  // Gated on the caller's ACTUAL `view:finance` permission, not the role-name
-  // match `roleStart` uses — a differently-named role with the permission
-  // should still see this, and a role literally named ACCOUNTANT without it
-  // must not mount the query (which requires the permission server-side).
   const canViewFinanceToday = hasViewFinancePermission(myMembership);
+  const canViewTasks = hasPermission(myMembership, VIEW_TASKS_PERMISSION);
+  const canApprove = hasPermission(myMembership, APPROVE_REQUESTS_PERMISSION);
+
+  // Every panel owns its own loading state, so the screen paints as soon as the
+  // membership resolves instead of blocking behind the slowest query.
+  const stats = useQuery(api.dashboard.stats, { orgId, timeRange });
+  const dataQuality = useQuery(api.dashboard.dataQualityStats, { orgId });
   const todayForRole: MobileDashboardTodayForRole | undefined = useQuery(
     api.dashboard.todayForRole,
-    canViewFinanceToday ? { orgId: org._id } : "skip",
+    canViewFinanceToday ? { orgId } : "skip",
+  );
+  const notifications = useQuery(api.notifications.list, { orgId });
+  const pendingApprovals = useQuery(
+    api.approvals.listPendingApprovals,
+    canApprove ? { orgId } : "skip",
+  );
+  const upcomingPayments = useMemo(
+    () => summarizeUpcomingPayments(todayForRole),
+    [todayForRole],
   );
 
   return (
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContentFull}>
-      <Header org={org} />
+    <ScrollView
+      keyboardShouldPersistTaps="handled"
+      style={styles.scroll}
+      contentContainerStyle={styles.scrollContentFull}
+    >
+      <Header myMembership={myMembership} org={org} />
       <View style={styles.contentBody}>
-        <FadeSlideIn delay={0}>
-          <TodayAgenda orgId={org._id} myMembership={myMembership} />
-        </FadeSlideIn>
+        <HomeSearchRow
+          orgId={orgId}
+          timeRange={timeRange}
+          onChangeTimeRange={onChangeTimeRange}
+        />
+
+        {showsPerformance ? (
+          <FadeSlideIn delay={0}>
+            <HomeOverviewCard
+              currency={todayForRole?.currency ?? "JOD"}
+              detailsExpanded={detailsExpanded}
+              stats={stats}
+              onToggleDetails={() => setDetailsExpanded((previous) => !previous)}
+            />
+          </FadeSlideIn>
+        ) : null}
+
+        {showsPerformance && detailsExpanded && stats !== undefined ? (
+          <FadeSlideIn delay={0}>
+            <HomeOverviewDetails stats={stats} />
+          </FadeSlideIn>
+        ) : null}
+
         {roleStart ? (
           <FadeSlideIn delay={40}>
-            <RoleStartCard orgId={org._id} start={roleStart} />
+            <RoleStartCard orgId={orgId} start={roleStart} />
           </FadeSlideIn>
         ) : null}
-        {canViewFinanceToday ? (
-          <FadeSlideIn delay={100}>
-            <AccountantTodayPanel todayForRole={todayForRole} />
-          </FadeSlideIn>
-        ) : null}
+
         <FadeSlideIn delay={70}>
-          <QuickActionRail orgId={org._id} roleName={myMembership.roleName} />
+          <HomeQuickActions
+            orgId={orgId}
+            permissions={myMembership.permissions ?? []}
+            roleName={myMembership.roleName}
+          />
         </FadeSlideIn>
-        <FadeSlideIn delay={140}>
-          <Card
-            accessibilityLabel={t("dealerMarketplace")}
-            onPress={() =>
-              router.push({
-                pathname: nativeRoutes.orgMarketplace,
-                params: { orgId: org._id },
-              })
+
+        <FadeSlideIn delay={110}>
+          <HomeMarketplaceBanner orgId={orgId} />
+        </FadeSlideIn>
+
+        <FadeSlideIn delay={150}>
+          <HomeTwoUp
+            first={<HomeTaskCentre canViewTasks={canViewTasks} orgId={orgId} stats={stats} />}
+            second={
+              <HomeShortcuts
+                orgId={orgId}
+                permissions={myMembership.permissions ?? []}
+                roleName={myMembership.roleName}
+              />
             }
-            style={styles.marketplaceLink}
-          >
-            <View style={styles.marketplaceLinkIcon}>
-              <Icon color="primary" name="marketplace" size={22} />
-            </View>
-            <View style={styles.marketplaceLinkText}>
-              <Text style={[styles.marketplaceLinkTitle, type.heading]}>{t("dealerMarketplace")}</Text>
-              <Text style={[styles.marketplaceLinkBody, type.caption]}>{t("dealerMarketplaceSubtitle")}</Text>
-            </View>
-            <Icon color="primary" name="chevronForward" size={22} />
-          </Card>
+          />
         </FadeSlideIn>
-        <FadeSlideIn delay={180}>
+
+        {canViewFinanceToday ? (
+          <FadeSlideIn delay={190}>
+            <HomeUpcomingPayments
+              orgId={orgId}
+              summary={upcomingPayments}
+              todayForRole={todayForRole}
+            />
+          </FadeSlideIn>
+        ) : null}
+
+        <FadeSlideIn delay={230}>
+          <HomeAlerts
+            notifications={notifications}
+            orgId={orgId}
+            pendingApprovals={pendingApprovals?.length ?? 0}
+          />
+        </FadeSlideIn>
+
+        <FadeSlideIn delay={270}>
           <WorkspaceModuleLauncher
-            orgId={org._id}
+            orgId={orgId}
             permissions={myMembership.permissions}
             roleName={myMembership.roleName}
           />
         </FadeSlideIn>
+
         {showsPerformance ? (
-          <FadeSlideIn delay={230} style={styles.performanceSection}>
-            <Text style={[styles.performanceEyebrow, type.label]}>{t("performanceUpper")}</Text>
-            <SalesHero stats={stats} timeRange={timeRange} onChangeTimeRange={onChangeTimeRange} />
-
-            <MetricGridSection
-              stats={stats}
-              locale={locale}
-              showFinanceMetricProminent={canViewFinanceToday}
-              todayForRole={todayForRole}
-            />
-
+          <FadeSlideIn delay={310} style={styles.performanceSection}>
             <DataQualityPanel dataQuality={dataQuality} />
             <TeamPanel stats={stats} />
           </FadeSlideIn>
@@ -779,23 +491,19 @@ function DashboardContent({
   );
 }
 
-function DashboardSkeleton({ org }: { org: MobileOrgSummary }) {
+function DashboardSkeleton() {
   const styles = useThemedStyles(makeStyles);
   const { t, textDirection } = useLocale();
   const type = useDashboardTypography();
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContentFull}>
-      <Header org={org} />
       <View style={styles.contentBody}>
-        <Card style={[styles.skeletonPanel, { direction: textDirection }]}>
+        <Card style={[styles.panel, { direction: textDirection }]}>
           <Text style={[styles.panelTitle, type.label]}>{t("dashboardLoading")}</Text>
           <SkeletonRow count={2} />
         </Card>
-        <View style={styles.metricGrid}>
-          <SkeletonRow count={4} />
-        </View>
-        <Card style={styles.skeletonPanel}>
+        <Card style={styles.panel}>
           <SkeletonRow count={3} />
         </Card>
       </View>
@@ -831,14 +539,6 @@ export function OrgDashboardScreen({ orgId }: Readonly<{ orgId: string | null }>
   const safeOrgs = useMemo(() => getSafeOrgs(orgs), [orgs]);
   const selectedOrg = safeOrgs.find((org) => org._id === orgId) ?? null;
   const [timeRange, setTimeRange] = useState<MobileDashboardTimeRange>("MONTH");
-  const stats = useQuery(
-    api.dashboard.stats,
-    selectedOrg ? { orgId: selectedOrg._id, timeRange } : "skip",
-  );
-  const dataQuality = useQuery(
-    api.dashboard.dataQualityStats,
-    selectedOrg ? { orgId: selectedOrg._id } : "skip",
-  );
   const myMembership = useQuery(
     api.memberships.getMyMembership,
     selectedOrg ? { orgId: selectedOrg._id } : "skip",
@@ -874,10 +574,13 @@ export function OrgDashboardScreen({ orgId }: Readonly<{ orgId: string | null }>
     );
   }
 
-  if (stats === undefined || dataQuality === undefined || myMembership === undefined) {
+  // Only the membership blocks the whole screen: it decides which panels the
+  // caller may see at all, and which queries are safe to mount. Everything else
+  // renders its own skeleton in place.
+  if (myMembership === undefined) {
     return (
       <Screen>
-        <DashboardSkeleton org={selectedOrg} />
+        <DashboardSkeleton />
       </Screen>
     );
   }
@@ -887,8 +590,6 @@ export function OrgDashboardScreen({ orgId }: Readonly<{ orgId: string | null }>
       <DashboardContent
         myMembership={myMembership}
         org={selectedOrg}
-        stats={stats}
-        dataQuality={dataQuality}
         timeRange={timeRange}
         onChangeTimeRange={setTimeRange}
       />
@@ -901,7 +602,10 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     flex: 1,
   },
   scrollContentFull: {
-    paddingBottom: theme.spacing.xxl,
+    // The floating messenger FAB is absolutely positioned over this screen. The
+    // old `spacing.xxl` (32) left the last control — "view all alerts" — under
+    // it. HOME_FAB_CLEARANCE is derived from the FAB's own size and offset.
+    paddingBottom: HOME_FAB_CLEARANCE,
   },
   contentBody: {
     gap: theme.spacing.lg,
@@ -942,62 +646,35 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   greetingSubtitle: {
     color: theme.colors.mutedText,
   },
-  quickRail: {
-    flexDirection: "row",
+  panel: {
+    gap: theme.spacing.md,
+    borderRadius: theme.radius.lg,
+  },
+  panelTitle: {
+    color: theme.colors.text,
+    fontSize: 13,
+    fontWeight: "700",
+    textTransform: "uppercase",
+  },
+  panelBody: {
+    color: theme.colors.mutedText,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  trendRow: {
     gap: theme.spacing.sm,
   },
-  quickRailItem: {
-    flex: 1,
-    minHeight: 76,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: theme.spacing.xs,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.surface,
-    paddingVertical: theme.spacing.sm,
-    ...theme.shadows.sm,
+  trendPlaceholder: {
+    height: 104,
   },
-  quickRailIconShell: {
-    width: 40,
-    height: 40,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: theme.radius.md,
-  },
-  quickRailText: {
-    color: theme.colors.text,
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  marketplaceLink: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing.md,
-    borderColor: theme.colors.primary,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.primarySoft,
-  },
-  marketplaceLinkIcon: {
-    width: 44,
-    height: 44,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.surface,
-  },
-  marketplaceLinkText: {
-    flex: 1,
-    minWidth: 0,
-  },
-  marketplaceLinkTitle: {
-    color: theme.colors.text,
-    fontSize: 17,
-    fontWeight: "700",
-  },
-  marketplaceLinkBody: {
+  trendCaption: {
     color: theme.colors.mutedText,
-    fontSize: 13,
-    lineHeight: 18,
+    fontWeight: "500",
+  },
+  detailGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: theme.spacing.sm,
   },
   roleStartCard: {
     flexDirection: "row",
@@ -1020,168 +697,18 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   },
   roleStartTitle: {
     color: theme.colors.onPrimary,
-    fontSize: 17,
     fontWeight: "700",
   },
   roleStartBody: {
     color: theme.colors.onPrimary,
     opacity: 0.85,
-    fontSize: 13,
     lineHeight: 18,
-  },
-  performanceEyebrow: {
-    color: theme.colors.mutedText,
-    fontSize: 13,
-    fontWeight: "700",
-    letterSpacing: 0.4,
-    textTransform: "uppercase",
-    marginTop: theme.spacing.xs,
-  },
-  salesHero: {
-    gap: theme.spacing.lg,
-    borderRadius: theme.radius.xl,
-    backgroundColor: theme.colors.surface,
-    padding: theme.spacing.lg,
-    ...theme.shadows.md,
-  },
-  heroTopRow: {
-    flexDirection: "row",
-    gap: theme.spacing.md,
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-  },
-  heroTitleGroup: {
-    flex: 1,
-    minWidth: 0,
-    gap: theme.spacing.xs,
-  },
-  heroEyebrow: {
-    color: theme.colors.primary,
-    fontSize: 12,
-    fontWeight: "600",
-    letterSpacing: 0.5,
-    textTransform: "uppercase",
-  },
-  heroTitle: {
-    color: theme.colors.text,
-    fontSize: 34,
-    fontWeight: "700",
-    letterSpacing: -0.6,
-    lineHeight: 40,
-    fontVariant: ["tabular-nums"],
-  },
-  heroSubtitle: {
-    color: theme.colors.mutedText,
-    fontSize: 13,
-    fontWeight: "500",
-  },
-  soldPill: {
-    minWidth: 88,
-    alignItems: "center",
-    gap: theme.spacing.xs,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.primarySoft,
-    padding: theme.spacing.sm,
-  },
-  soldValue: {
-    color: theme.colors.primaryDark,
-    fontSize: 22,
-    fontWeight: "700",
-    textAlign: "center",
-    fontVariant: ["tabular-nums"],
-  },
-  soldLabel: {
-    color: theme.colors.primaryDark,
-    fontSize: 11,
-    fontWeight: "600",
-    textAlign: "center",
-  },
-  segmentedControl: {
-    flexDirection: "row",
-    gap: theme.spacing.xs,
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.surfaceAlt,
-    padding: theme.spacing.xs,
-  },
-  segment: {
-    flex: 1,
-    minHeight: 36,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: theme.radius.sm,
-  },
-  segmentSelected: {
-    backgroundColor: theme.colors.surface,
-    ...theme.shadows.sm,
-  },
-  segmentText: {
-    color: theme.colors.mutedText,
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  segmentTextSelected: {
-    color: theme.colors.text,
-  },
-  trendRow: {
-    gap: theme.spacing.sm,
-  },
-  trendCaption: {
-    color: theme.colors.mutedText,
-    fontSize: 12,
-    fontWeight: "500",
-  },
-  metricSection: {
-    gap: theme.spacing.md,
-  },
-  metricGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: theme.spacing.md,
-  },
-  metricCard: {
-    width: "47.8%",
-  },
-  metricCardFull: {
-    width: "100%",
-  },
-  metricToggle: {
-    flexDirection: "row",
-    alignSelf: "flex-start",
-    alignItems: "center",
-    gap: theme.spacing.xs,
-    borderRadius: theme.radius.md,
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: theme.spacing.xs,
-  },
-  metricToggleText: {
-    color: theme.colors.primary,
-    fontWeight: "700",
   },
   warningPanel: {
     gap: theme.spacing.md,
     borderColor: theme.colors.warning,
     borderRadius: theme.radius.lg,
     backgroundColor: theme.colors.warningSoft,
-  },
-  panel: {
-    gap: theme.spacing.md,
-    borderRadius: theme.radius.lg,
-  },
-  panelTitle: {
-    color: theme.colors.text,
-    fontSize: 13,
-    fontWeight: "700",
-    textTransform: "uppercase",
-  },
-  panelBody: {
-    color: theme.colors.mutedText,
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  panelTruncatedNote: {
-    color: theme.colors.mutedText,
-    fontSize: 12,
-    fontStyle: "italic",
   },
   qualityGrid: {
     gap: theme.spacing.sm,
@@ -1198,14 +725,12 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   },
   metricPillValue: {
     color: theme.colors.text,
-    fontSize: 18,
     fontWeight: "700",
     fontVariant: ["tabular-nums"],
   },
   metricPillLabel: {
     flex: 1,
     color: theme.colors.mutedText,
-    fontSize: 13,
     fontWeight: "700",
   },
   performerRow: {
@@ -1219,12 +744,10 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   },
   performerName: {
     color: theme.colors.text,
-    fontSize: 16,
     fontWeight: "600",
   },
   performerMeta: {
     color: theme.colors.mutedText,
-    fontSize: 13,
   },
   teamList: {
     gap: theme.spacing.sm,
@@ -1238,21 +761,16 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   teamName: {
     flex: 1,
     color: theme.colors.text,
-    fontSize: 14,
     fontWeight: "600",
   },
   teamMeta: {
     color: theme.colors.mutedText,
-    fontSize: 13,
     fontWeight: "700",
   },
   routeStateShell: {
     flex: 1,
     justifyContent: "center",
     padding: theme.spacing.xl,
-  },
-  skeletonPanel: {
-    borderRadius: theme.radius.lg,
   },
   pressed: {
     opacity: 0.82,
