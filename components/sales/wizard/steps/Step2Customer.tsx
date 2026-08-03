@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { usePaginatedQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -43,11 +43,15 @@ export default function Step2Customer({
   const { t } = useLanguage();
 
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [customerQuery, setCustomerQuery] = useState("");
 
-  const { results: customers } = usePaginatedQuery(
-    api.customers.list,
-    activeOrgId ? { orgId: activeOrgId } : "skip",
-    { initialNumItems: 100 }
+  // Searched server-side. The previous approach loaded one fixed page of
+  // `customers.list` and filtered it in the browser, which silently hid every
+  // customer outside that page — including the most recently added ones,
+  // since `list` is ordered oldest-first.
+  const customers = useQuery(
+    api.customers.search,
+    activeOrgId ? { orgId: activeOrgId, search: customerQuery } : "skip"
   );
 
   // CustomerCreateForm already creates the customer and returns the full Doc.
@@ -83,6 +87,8 @@ export default function Step2Customer({
       {!showCreateForm && (
         <CustomerSearch
           customers={customers}
+          query={customerQuery}
+          onQueryChange={setCustomerQuery}
           selectedCustomer={selectedCustomer}
           onSelect={onSelectCustomer}
           onCreateNew={() => setShowCreateForm(true)}

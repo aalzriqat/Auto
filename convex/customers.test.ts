@@ -296,6 +296,93 @@ describe("customers.selectorOptions", () => {
   });
 });
 
+describe("customers.search", () => {
+  test("finds a newly added customer past the sales wizard's old 100-row window", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    // The wizard used to load one page of `customers.list` (oldest-first, 100
+    // rows, no loadMore) and filter it in the browser. With 120 older
+    // customers ahead of them, this customer sat outside that page and the
+    // search box could never return them.
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 120; index += 1) {
+        await ctx.db.insert("customers", {
+          orgId,
+          firstName: "Existing",
+          lastName: `Customer${index}`,
+        });
+      }
+      await ctx.db.insert("customers", {
+        orgId,
+        firstName: "Fresh",
+        lastName: "WizardTarget",
+        phone: "0790000111",
+        nationalId: "9990001112",
+      });
+    });
+
+    const results = await asUser.query(api.customers.search, {
+      orgId,
+      search: "WizardTarget",
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      firstName: "Fresh",
+      lastName: "WizardTarget",
+      // The wizard renders the national id and hands the whole record to the
+      // quote it builds, so `search` must return full documents — the
+      // projected selector shape is not enough.
+      nationalId: "9990001112",
+    });
+  });
+
+  test("the replaced approach — first page of customers.list — does not contain that customer", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 120; index += 1) {
+        await ctx.db.insert("customers", {
+          orgId,
+          firstName: "Existing",
+          lastName: `Customer${index}`,
+        });
+      }
+      await ctx.db.insert("customers", { orgId, firstName: "Fresh", lastName: "WizardTarget" });
+    });
+
+    // Pins the defect this change fixes rather than just the new behaviour:
+    // `list` is ordered oldest-first, so the newest customer is on the last
+    // page, and the wizard never called loadMore. No amount of typing in the
+    // search box could surface someone who was not in this array.
+    const firstPage = await asUser.query(api.customers.list, {
+      orgId,
+      paginationOpts: { numItems: 100, cursor: null },
+    });
+
+    expect(firstPage.page).toHaveLength(100);
+    expect(firstPage.page.some((c) => c.lastName === "WizardTarget")).toBe(false);
+  });
+
+  test("returns recent customers with no search term and excludes deleted ones", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert("customers", { orgId, firstName: "Live", lastName: "One" });
+      await ctx.db.insert("customers", {
+        orgId,
+        firstName: "Gone",
+        lastName: "Two",
+        isDeleted: true,
+      });
+    });
+
+    const results = await asUser.query(api.customers.search, { orgId, search: "" });
+
+    expect(results.map((c) => c.firstName)).toEqual(["Live"]);
+  });
+});
+
 describe("customers.findMergeCandidates", () => {
   test("groups customers with a matching normalized name", async () => {
     const { orgId, asUser } = await setup();
