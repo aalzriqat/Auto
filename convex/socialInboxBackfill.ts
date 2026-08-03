@@ -548,7 +548,10 @@ export const resyncContactNames = action({
     instagramAttempted: number;
     facebookAttempted: number;
     resolved: number;
-    stillUnresolved: number;
+    /** Retried this run and still unresolved — a subset of `remaining`. */
+    attemptedButUnresolved: number;
+    /** The org's whole remaining backlog, including contacts past the batch. */
+    remaining: number;
   }> => {
     await ctx.runQuery(internal.socialInboxBackfill.requireManagerAuthQuery, { orgId: args.orgId });
 
@@ -601,11 +604,16 @@ export const resyncContactNames = action({
     const attempted = instagramBatch.length + facebookBatch.length;
     const startingTotal = before.instagram.length + before.facebook.length;
 
+    // Two separate numbers rather than one ambiguous "stillUnresolved":
+    // `resolved` is org-wide, so reporting a batch-only failure count beside
+    // it invited reading the backlog as smaller than it is whenever it exceeds
+    // one run's budget.
     return {
       instagramAttempted: instagramBatch.length,
       facebookAttempted: facebookBatch.length,
       resolved: Math.max(0, startingTotal - remaining),
-      stillUnresolved: Math.max(0, remaining - (startingTotal - attempted)),
+      attemptedButUnresolved: Math.max(0, remaining - (startingTotal - attempted)),
+      remaining,
     };
   },
 });

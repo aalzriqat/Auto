@@ -70,10 +70,13 @@ function notificationSenderLabel(
   senderName: string | undefined,
   customer: Pick<Doc<"customers">, "firstName" | "lastName" | "facebookUserId">,
 ): string {
-  if (senderName?.trim()) return senderName.trim();
+  // Customer record first, matching `socialInbox.resolveSenderDisplayName`: if
+  // staff have renamed this contact, that is the name the dealership knows them
+  // by and it should be the one in the bell too.
   if (!isUnresolvedFacebookName(customer, customer.facebookUserId ?? "")) {
     return `${customer.firstName} ${customer.lastName}`.trim();
   }
+  if (senderName?.trim()) return senderName.trim();
   return `${PLACEHOLDER_FIRST_NAME} ${PLACEHOLDER_LAST_NAME}`;
 }
 

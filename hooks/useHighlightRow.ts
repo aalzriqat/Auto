@@ -1,10 +1,20 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { PaginationStatus } from "convex/react";
 
 /** How long a highlighted row stays visually marked after being scrolled to. */
 const HIGHLIGHT_DURATION_MS = 4000;
+
+/**
+ * Ceiling on pages fetched while hunting for the target row.
+ *
+ * A stale notification can name a row that will never load — soft-deleted, or
+ * an id from another table. Without a cap this walks the entire table client
+ * side looking for it, which on a large org is far worse than the old
+ * behaviour of silently failing.
+ */
+const MAX_AUTO_LOAD_ATTEMPTS = 20;
 
 interface UseHighlightRowPagination {
   status: PaginationStatus;
@@ -75,14 +85,19 @@ export function useHighlightRow<T>({
   // rather than mirrored into state — the effect below only writes on the
   // timer, never synchronously during render.
   const [fadedId, setFadedId] = useState<string | null>(null);
+  const attemptsRef = useRef(0);
 
   const isLoaded = !!highlightId && !!rows?.some((row) => getId(row) === highlightId);
   const paginationStatus = pagination?.status;
   const highlightedId = isLoaded && highlightId !== fadedId ? highlightId : null;
 
   useEffect(() => {
-    if (!highlightId || isLoaded) return;
-    if (paginationStatus === "CanLoadMore") {
+    if (!highlightId || isLoaded) {
+      attemptsRef.current = 0;
+      return;
+    }
+    if (paginationStatus === "CanLoadMore" && attemptsRef.current < MAX_AUTO_LOAD_ATTEMPTS) {
+      attemptsRef.current += 1;
       pagination?.loadMore(pagination.batchSize ?? 100);
     }
     // `pagination` is a fresh object each render, so it cannot be a dependency

@@ -107,11 +107,17 @@ function normalizeFacebookEvent(ev: Doc<"facebookEvents">): NormalizedEvent {
  */
 function resolveSenderDisplayName(event: NormalizedEvent, customer: Doc<"customers"> | null): string {
   if (customer) {
-    const name = `${customer.firstName} ${customer.lastName}`.trim();
+    // Trimmed per field, matching the engagement helpers: a trailing space on
+    // firstName otherwise leaves a double space in the joined name, which then
+    // matches neither the placeholder set nor a raw id — so exactly the
+    // historical rows this is meant to clean up would slip through.
+    const first = customer.firstName.trim();
+    const last = customer.lastName.trim();
+    const name = `${first} ${last}`.trim();
     // Records whose name was written as the raw id by an earlier intake path
     // are placeholders too. Both shapes occur: the id alone, and the id split
     // into `firstName` with "Contact" left in `lastName`.
-    const isIdName = name === event.senderRawId || customer.firstName === event.senderRawId;
+    const isIdName = name === event.senderRawId || first === event.senderRawId;
     if (name && !PLACEHOLDER_NAMES.has(name) && !isIdName) return name;
   }
   if (event.senderHandle && event.senderHandle !== event.senderRawId) return event.senderHandle;

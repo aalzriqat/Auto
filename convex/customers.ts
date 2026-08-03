@@ -84,17 +84,23 @@ async function collectCustomerMatches(
 
   if (searchTerm.length >= 2 && matchesById.size < CUSTOMER_SELECTOR_LIMIT) {
     const [firstNameMatches, lastNameMatches] = await Promise.all([
+      // Same pre-`take` exclusion as the recent window above. Filtering only
+      // inside `addMatch` let soft-deleted name matches spend this budget and
+      // hide live customers behind them — the identical defect, on the path
+      // that actually serves a typed search.
       ctx.db
         .query("customers")
         .withSearchIndex("search_firstName", (q) =>
           q.search("firstName", searchTerm).eq("orgId", orgId),
         )
+        .filter((q) => q.neq(q.field("isDeleted"), true))
         .take(CUSTOMER_SELECTOR_LIMIT),
       ctx.db
         .query("customers")
         .withSearchIndex("search_lastName", (q) =>
           q.search("lastName", searchTerm).eq("orgId", orgId),
         )
+        .filter((q) => q.neq(q.field("isDeleted"), true))
         .take(CUSTOMER_SELECTOR_LIMIT),
     ]);
 

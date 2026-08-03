@@ -54,10 +54,10 @@ function notificationSenderLabel(
   senderUsername: string | undefined,
   customer: Pick<Doc<"customers">, "firstName" | "lastName" | "instagramUserId">,
 ): string {
-  if (senderUsername?.trim()) return senderUsername.trim();
   if (!isUnresolvedInstagramName(customer, customer.instagramUserId ?? "")) {
     return `${customer.firstName} ${customer.lastName}`.trim();
   }
+  if (senderUsername?.trim()) return senderUsername.trim();
   return `${PLACEHOLDER_FIRST_NAME} ${PLACEHOLDER_LAST_NAME}`;
 }
 

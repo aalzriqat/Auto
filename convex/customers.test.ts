@@ -411,6 +411,39 @@ describe("customers.search", () => {
     expect(results.map((c) => c.lastName)).toEqual(["Survivor"]);
   });
 
+  test("deleted name matches do not crowd a live one out of the search index", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    // The empty-search test above only exercises the recent-window path. This
+    // is the typed-search path: deleted rows sharing the searched surname used
+    // to fill the index query's own budget before any live match was read.
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 60; index += 1) {
+        await ctx.db.insert("customers", {
+          orgId,
+          firstName: `Ghost${index}`,
+          lastName: "Qasimi",
+          isDeleted: true,
+        });
+      }
+      await ctx.db.insert("customers", { orgId, firstName: "Rania", lastName: "Qasimi" });
+      // Push the live match out of the recent window so only the search index
+      // can find her — otherwise the first pass would mask the defect.
+      for (let index = 0; index < 260; index += 1) {
+        await ctx.db.insert("customers", {
+          orgId,
+          firstName: "Filler",
+          lastName: `Person${index}`,
+        });
+      }
+    });
+
+    const results = await asUser.query(api.customers.search, { orgId, search: "Qasimi" });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].firstName).toBe("Rania");
+  });
+
   test("returns recent customers with no search term and excludes deleted ones", async () => {
     const { t, orgId, asUser } = await setup();
 
