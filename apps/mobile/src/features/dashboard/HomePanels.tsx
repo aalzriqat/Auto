@@ -192,10 +192,15 @@ export function HomeTwoUp({
   return (
     <View
       style={stacked ? styles.twoUpStacked : styles.twoUpRow}
+      testID="home-two-up"
       onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
     >
-      <View style={stacked ? styles.twoUpFull : styles.twoUpHalf}>{first}</View>
-      <View style={stacked ? styles.twoUpFull : styles.twoUpHalf}>{second}</View>
+      <View style={stacked ? styles.twoUpFull : styles.twoUpHalf} testID="home-two-up-first">
+        {first}
+      </View>
+      <View style={stacked ? styles.twoUpFull : styles.twoUpHalf} testID="home-two-up-second">
+        {second}
+      </View>
     </View>
   );
 }
