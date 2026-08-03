@@ -39,6 +39,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useTableControls } from "@/hooks/useTableControls";
+import { useHighlightRow } from "@/hooks/useHighlightRow";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 import { getErrorMessage } from "@/lib/errors";
 
@@ -74,6 +75,14 @@ export default function ExpensesPage() {
       date: (e) => e.date,
       amount: (e) => e.amount,
     },
+    pagination: { status: expensesStatus, loadMore: loadMoreExpenses, batchSize: 100 },
+  });
+
+  // Expense notifications deep-link here with ?highlightId=, which nothing on
+  // this page consumed until now — the link simply landed on an unscrolled list.
+  const highlightedId = useHighlightRow({
+    rows: expenses,
+    getId: (e) => e._id,
     pagination: { status: expensesStatus, loadMore: loadMoreExpenses, batchSize: 100 },
   });
 
@@ -207,7 +216,11 @@ export default function ExpensesPage() {
               </TableRow>
             ) : (
               filteredExpenses.map((expense) => (
-                <TableRow key={expense._id}>
+                <TableRow
+                  key={expense._id}
+                  id={`row-${expense._id}`}
+                  className={highlightedId === expense._id ? "bg-primary/20 transition-all duration-1000" : ""}
+                >
                   <TableCell className="font-medium">
                     {new Date(expense.date).toLocaleDateString()}
                   </TableCell>

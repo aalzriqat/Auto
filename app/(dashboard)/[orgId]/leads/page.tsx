@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useState } from "react";
 import { RoleGuard } from "@/components/auth/RoleGuard";
 import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -35,6 +34,7 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { useTableControls } from "@/hooks/useTableControls";
+import { useHighlightRow } from "@/hooks/useHighlightRow";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 
 import { LEAD_STAGES } from "@/convex/constants";
@@ -60,8 +60,6 @@ export default function LeadsPage() {
     { initialNumItems: 25 }
   );
   const removeLead = useMutation(api.leads.softDelete);
-  const searchParams = useSearchParams();
-  const highlightId = searchParams.get("highlightId");
   const orgSettings = useOrgSettings();
   const logoUrl = useQuery(
     api.orgSettings.getLogoUrl,
@@ -74,8 +72,6 @@ export default function LeadsPage() {
   const [printingLead, setPrintingLead] = useState<any>(null);
   const [view, setView] = useState<"table" | "kanban">("table");
   const [conversationCustomerId, setConversationCustomerId] = useState<Id<"customers"> | null>(null);
-  const [highlightedLeadId, setHighlightedLeadId] = useState<string | null>(null);
-  const rowRefs = useRef<Record<string, HTMLElement | null>>({});
 
   const {
     search: searchQuery,
@@ -96,14 +92,11 @@ export default function LeadsPage() {
     pagination: { status: leadsStatus, loadMore: loadMoreLeads, batchSize: 25 },
   });
 
-  useEffect(() => {
-    if (!highlightId || !leads?.some((l) => l._id === highlightId)) return;
-    setHighlightedLeadId(highlightId);
-    rowRefs.current[highlightId]?.scrollIntoView({ behavior: "smooth", block: "center" });
-    const timeout = setTimeout(() => setHighlightedLeadId(null), 4000);
-    return () => clearTimeout(timeout);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [highlightId, leads]);
+  const highlightedLeadId = useHighlightRow({
+    rows: leads,
+    getId: (l) => l._id,
+    pagination: { status: leadsStatus, loadMore: loadMoreLeads, batchSize: 25 },
+  });
 
   const handleEdit = (lead: any) => {
     setEditingLead(lead);
@@ -241,7 +234,7 @@ export default function LeadsPage() {
             ) : filteredLeads.map((lead) => (
               <div
                 key={lead._id}
-                ref={(el) => { rowRefs.current[lead._id] = el; }}
+                id={`row-${lead._id}`}
                 className={`rounded-xl border bg-card p-4 space-y-3 active:bg-muted/30 transition-shadow ${highlightedLeadId === lead._id ? "ring-2 ring-amber-400" : ""}`}
               >
                 <button type="button" onClick={() => handleEdit(lead)} className="w-full text-start">
@@ -330,7 +323,7 @@ export default function LeadsPage() {
                   filteredLeads?.map((lead) => (
                     <TableRow
                       key={lead._id}
-                      ref={(el) => { rowRefs.current[lead._id] = el; }}
+                      id={`row-${lead._id}`}
                       className={`cursor-pointer group hover:bg-slate-50/50 dark:hover:bg-zinc-900/50 transition-colors ${highlightedLeadId === lead._id ? "ring-2 ring-inset ring-amber-400" : ""}`}
                       onClick={() => handleEdit(lead)}
                     >
