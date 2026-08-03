@@ -42,24 +42,8 @@ import {
   type HomeKpiDelta,
   type HomeUpcomingPayments as UpcomingPaymentsSummary,
 } from "./homeModel";
-import { GradientSurface, GradientTile, IconGlow, toneBorder } from "./HomeVisuals";
+import { GradientSurface, GradientTile, HOME_RADIUS, IconGlow, toneBorder } from "./HomeVisuals";
 import { ProgressRing } from "./ProgressRing";
-
-/**
- * Corner radii, measured off the design mock rather than taken from
- * `theme.radius`.
- *
- * The mock's cards round at ~22px on an 852px/393dp frame — 10dp, not the
- * `radius.lg` 18 the previous pass used, which is nearly twice as round and is
- * a large part of why the shipped screen "wasn't the shape". Nested tiles and
- * chips step down from there; the KPI badge rounds at ~13px (6dp).
- */
-const HOME_RADIUS = {
-  panel: 10,
-  tile: 10,
-  nested: 8,
-  badge: 9,
-} as const;
 
 /**
  * The five accents the mock gives the quick-action rail, keyed by module rather
@@ -69,6 +53,13 @@ const HOME_RADIUS = {
  *
  * Sampled left→right from DESIGN-dark.png; the screen is RTL, so the *rightmost*
  * tile in the image is the first item in the list.
+ *
+ * Thirteen modules share five accents, so a rail filtered down to an unusual
+ * permission set can repeat one. That is accepted rather than resolved by
+ * assigning accents per rendered position: the alternative would mean the same
+ * module wears a different colour for a manager than for an owner, which is a
+ * worse property than two amber tiles. The accent is decorative — every tile
+ * carries its own text label, and the labels are what disambiguate them.
  */
 type HomeAccentToken = Extract<keyof AppTheme["colors"], `homeTile${string}`>;
 

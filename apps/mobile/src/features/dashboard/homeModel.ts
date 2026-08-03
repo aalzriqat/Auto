@@ -178,7 +178,15 @@ export function deriveKpiDelta(
   }
 
   const change = ((current - previous) / Math.abs(previous)) * 100;
-  return { percent: Math.abs(Math.round(change)), direction: change < 0 ? "down" : "up" };
+  const percent = Math.abs(Math.round(change));
+  // Anything between -0.5% and 0 rounds to zero while `change < 0` still holds,
+  // which would render "−0% ↓" — a decline reported for movement that did not
+  // happen. Flat is not a direction, so it collapses like a missing baseline.
+  if (percent === 0) {
+    return null;
+  }
+
+  return { percent, direction: change < 0 ? "down" : "up" };
 }
 
 export type HomeTaskCentre = Readonly<{

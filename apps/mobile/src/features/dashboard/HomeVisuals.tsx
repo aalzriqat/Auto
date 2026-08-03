@@ -18,7 +18,7 @@ import { withAlpha } from "../../theme";
  * never resolve to each other's paint server.
  */
 function useGradientId(prefix: string): string {
-  return `${prefix}${useId().replace(/:/g, "")}`;
+  return `${prefix}${useId().replaceAll(":", "")}`;
 }
 
 /**
@@ -129,12 +129,13 @@ export function GradientTile({
   const gradientId = useGradientId("homeTile");
 
   return (
+    // Two views, not one: iOS clips a shadow against its own view's bounds, so
+    // the `overflow: "hidden"` that keeps the SVG inside the rounded corners
+    // would also erase the accent glow if they shared a node.
     <View
       style={[
-        styles.gradientTile,
+        styles.gradientTileShadow,
         {
-          width: size,
-          height: size,
           borderRadius: radius,
           shadowColor: colors[0],
           shadowOpacity: 0.55,
@@ -143,27 +144,47 @@ export function GradientTile({
         },
       ]}
     >
-      <Svg height={size} pointerEvents="none" style={StyleSheet.absoluteFill} width={size}>
-        <Defs>
-          <LinearGradient id={gradientId} x1="0%" x2="0%" y1="0%" y2="100%">
-            <Stop offset="0" stopColor={colors[0]} />
-            <Stop offset="1" stopColor={colors[1]} />
-          </LinearGradient>
-        </Defs>
-        <Rect
-          fill={`url(#${gradientId})`}
-          height={size}
-          rx={radius}
-          ry={radius}
-          width={size}
-          x={0}
-          y={0}
-        />
-      </Svg>
-      {children}
+      <View style={[styles.gradientTile, { width: size, height: size, borderRadius: radius }]}>
+        <Svg height={size} pointerEvents="none" style={StyleSheet.absoluteFill} width={size}>
+          <Defs>
+            <LinearGradient id={gradientId} x1="0%" x2="0%" y1="0%" y2="100%">
+              <Stop offset="0" stopColor={colors[0]} />
+              <Stop offset="1" stopColor={colors[1]} />
+            </LinearGradient>
+          </Defs>
+          <Rect
+            fill={`url(#${gradientId})`}
+            height={size}
+            rx={radius}
+            ry={radius}
+            width={size}
+            x={0}
+            y={0}
+          />
+        </Svg>
+        {children}
+      </View>
     </View>
   );
 }
+
+/**
+ * Corner radii, measured off the design mock rather than taken from
+ * `theme.radius`.
+ *
+ * The mock's cards round at ~22px on an 852px/393dp frame — 10dp, not the
+ * `radius.lg` 18 the previous pass used, which is nearly twice as round and is
+ * a large part of why the shipped screen "wasn't the shape". Nested tiles and
+ * chips step down from there; the KPI badge rounds at ~13px (6dp).
+ *
+ * Lives here rather than in either screen file so the two cannot drift apart.
+ */
+export const HOME_RADIUS = {
+  panel: 10,
+  tile: 10,
+  nested: 8,
+  badge: 9,
+} as const;
 
 /** A hairline in the accent's own hue, used for the tinted panels and chips. */
 export function toneBorder(color: string, alpha = 0.35): string {
@@ -178,10 +199,12 @@ const styles = StyleSheet.create({
   clip: {
     overflow: "hidden",
   },
+  gradientTileShadow: {
+    elevation: 4,
+  },
   gradientTile: {
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
-    elevation: 4,
   },
 });

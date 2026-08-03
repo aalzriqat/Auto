@@ -152,7 +152,13 @@ const homeTokens = {
   homeDeltaUp: ["#067e3c", "#4fda57"],
   // mock #f80618 — 3.66:1, now 4.52:1
   homeDeltaDown: ["#dc0515", "#f45959"],
-  homeTileViolet: ["#4524f3", "#8561f4"],
+  // The mock uses violet twice — for the settings tile and the expenses tile —
+  // and puts them at opposite ends of a fixed five-tile rail, 3-5° of hue apart.
+  // AutoFlow's rail is permission-filtered, so those two land side by side, and
+  // at that separation they read as a rendering fault rather than as a design.
+  // This one is pushed toward magenta (271°) so the pair stays two violets while
+  // being visibly two. `homeTileIndigo` below keeps the mock's value.
+  homeTileViolet: ["#9333ea", "#a855f7"],
   homeTileBlue: ["#007cd1", "#2f86f5"],
   // mock #fd8100 — 2.21:1, now 3.01:1
   homeTileAmber: ["#d76e00", "#faae27"],
@@ -324,9 +330,9 @@ export function buildTheme(mode: ThemeMode) {
  */
 export function withAlpha(hex: string, alpha: number): string {
   const value = hex.replace("#", "");
-  const red = parseInt(value.slice(0, 2), 16);
-  const green = parseInt(value.slice(2, 4), 16);
-  const blue = parseInt(value.slice(4, 6), 16);
+  const red = Number.parseInt(value.slice(0, 2), 16);
+  const green = Number.parseInt(value.slice(2, 4), 16);
+  const blue = Number.parseInt(value.slice(4, 6), 16);
   return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 }
 

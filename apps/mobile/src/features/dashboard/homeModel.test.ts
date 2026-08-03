@@ -439,6 +439,19 @@ describe("deriveKpiDelta", () => {
     expect(deriveKpiDelta(100, Number.POSITIVE_INFINITY)).toBeNull();
   });
 
+  test("returns null for a change that rounds away to nothing", () => {
+    // -0.4% rounds to 0 while the change is still negative. Rendering that as
+    // "-0% down" reports a decline that did not happen.
+    expect(deriveKpiDelta(99.6, 100)).toBeNull();
+    expect(deriveKpiDelta(100.4, 100)).toBeNull();
+    expect(deriveKpiDelta(100, 100)).toBeNull();
+    // JS rounds -0.5 to -0, so a half-percent fall still rounds away; 0.6 is the
+    // first change in either direction that survives.
+    expect(deriveKpiDelta(99.5, 100)).toBeNull();
+    expect(deriveKpiDelta(99.4, 100)).toEqual({ percent: 1, direction: "down" });
+    expect(deriveKpiDelta(100.5, 100)).toEqual({ percent: 1, direction: "up" });
+  });
+
   test("keeps the percentage positive and puts the sign in the direction", () => {
     const fall = deriveKpiDelta(50, 100);
     expect(fall?.percent).toBe(50);

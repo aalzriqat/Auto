@@ -95,6 +95,20 @@ const TONE_ON_SOFT_PAIRS = [
   ["warning", "warningSoft"],
 ] as const;
 
+/**
+ * Home graphics measured against the tint they are actually drawn on, not
+ * against the neutral surfaces. The KPI icons sit inside their own soft badge
+ * and the ring arc sits on the ring track — checking them against `surface`
+ * alone would be checking a background they never appear over. 3:1, per WCAG
+ * 1.4.11.
+ */
+const HOME_NON_TEXT_ON_TINT = [
+  ["homeKpiSalesIcon", "homeKpiSalesSoft"],
+  ["homeKpiExpenseIcon", "homeKpiExpenseSoft"],
+  ["homeKpiProfitIcon", "homeKpiProfitSoft"],
+  ["homeRingArc", "homeRingTrack"],
+] as const;
+
 /** Home tones that render as TEXT on their own tint. WCAG AA, 4.5:1. */
 const HOME_TEXT_ON_TINT = [
   ["homeChipDangerText", "homeChipDangerSurface"],
@@ -194,6 +208,13 @@ describe("mobile theme tokens", () => {
     },
   );
 
+  test.each(["light", "dark"] as const)(
+    "%s dealer-home icons clear 3:1 against the tint they are drawn on",
+    (mode) => {
+      expect(pairFailures(mode, HOME_NON_TEXT_ON_TINT, 3)).toEqual([]);
+    },
+  );
+
   test("keeps subtleText visually lighter than mutedText so the hierarchy survives the contrast fix", () => {
     for (const mode of ["light", "dark"] as const) {
       const { colors } = buildTheme(mode);
@@ -219,12 +240,16 @@ describe("mobile theme tokens", () => {
     ];
 
     expect(new Set(accents).size).toBe(accents.length);
-    // Distinct *hues*, not five shades of one: violet/blue/amber/green must sit
-    // far apart on the wheel, which a set of near-identical blues would not.
+
+    // Distinct *hues*, not five shades of one — and checked over EVERY pair, not
+    // just adjacent ones. The mock uses violet twice, 3-5° apart, at opposite
+    // ends of a fixed rail; AutoFlow's rail is permission-filtered, so those two
+    // can land side by side and have to be told apart.
     const hues = accents.map(hueOf);
-    expect(Math.abs(hues[1] - hues[2])).toBeGreaterThan(60);
-    expect(Math.abs(hues[2] - hues[3])).toBeGreaterThan(60);
-    expect(Math.abs(hues[0] - hues[1])).toBeGreaterThan(40);
+    const separations = hues.flatMap((hue, index) =>
+      hues.slice(index + 1).map((other) => Math.abs(hue - other)),
+    );
+    expect(Math.min(...separations)).toBeGreaterThan(15);
   });
 
   test("ships the dark home palette exactly as measured from the design mock", () => {

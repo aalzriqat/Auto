@@ -50,13 +50,8 @@ import {
   HomeUpcomingPayments,
   PanelHeading,
 } from "./HomePanels";
+import { HOME_RADIUS } from "./HomeVisuals";
 import { SmoothAreaChart } from "./SmoothAreaChart";
-
-/**
- * Matches `HOME_RADIUS.panel` in HomePanels — the design mock rounds its cards
- * at ~22px on an 852px/393dp frame, which is 10dp, not `radius.lg`'s 18.
- */
-const HOME_PANEL_RADIUS = 10;
 
 function getDataQualityTotal(dataQuality: MobileDataQualityStats): number {
   return (
@@ -154,6 +149,10 @@ export function DealerHomeHeader({
       <Pressable
         accessibilityLabel={t("back")}
         accessibilityRole="button"
+        // The mock's control is 34dp; the floor for a touch target is 44dp.
+        // hitSlop buys the missing 10dp without widening the header, which is
+        // what was squeezing the greeting in the first place.
+        hitSlop={5}
         style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
         onPress={() => router.replace(nativeRoutes.dealerWorkspaces)}
       >
@@ -690,7 +689,7 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   },
   panel: {
     gap: theme.spacing.md,
-    borderRadius: HOME_PANEL_RADIUS,
+    borderRadius: HOME_RADIUS.panel,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.homeCardBorder,
     padding: 14,
@@ -725,7 +724,7 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing.md,
-    borderRadius: HOME_PANEL_RADIUS,
+    borderRadius: HOME_RADIUS.panel,
     backgroundColor: theme.colors.primary,
   },
   roleStartIcon: {
@@ -753,7 +752,7 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     gap: theme.spacing.md,
     borderColor: theme.colors.warning,
     borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: HOME_PANEL_RADIUS,
+    borderRadius: HOME_RADIUS.panel,
     backgroundColor: theme.colors.warningSoft,
   },
   qualityGrid: {
