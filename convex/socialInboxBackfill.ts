@@ -2,6 +2,9 @@ import { v } from "convex/values";
 import { action, internalQuery } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { internal } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
+import { isUnresolvedInstagramName } from "./instagramEngagement";
+import { isUnresolvedFacebookName } from "./facebookEngagement";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { INSTAGRAM_GRAPH_VERSION } from "./utils/instagramApi";
@@ -464,5 +467,119 @@ export const resyncEvents = action({
     }
 
     return { igPostIds, fbPostIds, igVehicles, fbVehicles, igHints, fbHints };
+  },
+});
+
+/**
+ * Ceiling on how many contacts one repair run will look up.
+ *
+ * Each contact costs a Graph round trip, and the action holds a single
+ * execution slot for the whole batch. Bounded so a large inbox cannot run the
+ * action past its time budget; the caller re-runs to continue.
+ */
+const CONTACT_NAME_RESYNC_LIMIT = 200;
+
+export const getUnresolvedSocialCustomers = internalQuery({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const customers = await ctx.db
+      .query("customers")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+
+    const instagram: Array<{ customerId: Id<"customers">; senderInstagramId: string }> = [];
+    const facebook: Array<{ customerId: Id<"customers">; senderFacebookId: string }> = [];
+
+    for (const customer of customers) {
+      if (customer.isDeleted) continue;
+      if (
+        customer.instagramUserId &&
+        isUnresolvedInstagramName(customer, customer.instagramUserId)
+      ) {
+        instagram.push({ customerId: customer._id, senderInstagramId: customer.instagramUserId });
+      }
+      if (
+        customer.facebookUserId &&
+        isUnresolvedFacebookName(customer, customer.facebookUserId)
+      ) {
+        facebook.push({ customerId: customer._id, senderFacebookId: customer.facebookUserId });
+      }
+    }
+
+    return { instagram, facebook };
+  },
+});
+
+/**
+ * Re-runs profile enrichment for social contacts that never got a real name.
+ *
+ * Enrichment normally only fires while a webhook is being processed, so a
+ * lookup that failed once — expired page token, a permission not yet granted,
+ * a transient Graph error — left that contact showing "Facebook Contact" or a
+ * bare numeric PSID until the same person happened to message again. Contacts
+ * captured before enrichment existed were never retried at all. This is the
+ * repair path for both: it walks the org's unresolved social contacts and
+ * re-attempts the lookup for each.
+ *
+ * Safe to re-run. The underlying save refuses to overwrite any name that is
+ * not still a placeholder, so a contact a staff member has already renamed by
+ * hand is left alone.
+ */
+export const resyncContactNames = action({
+  args: { orgId: v.id("organizations") },
+  handler: async (
+    ctx,
+    args
+  ): Promise<{
+    instagramAttempted: number;
+    facebookAttempted: number;
+    resolved: number;
+    stillUnresolved: number;
+  }> => {
+    await ctx.runQuery(internal.socialInboxBackfill.requireManagerAuthQuery, { orgId: args.orgId });
+
+    const before = await ctx.runQuery(
+      internal.socialInboxBackfill.getUnresolvedSocialCustomers,
+      { orgId: args.orgId }
+    );
+
+    const instagramBatch = before.instagram.slice(0, CONTACT_NAME_RESYNC_LIMIT);
+    const facebookBatch = before.facebook.slice(
+      0,
+      Math.max(0, CONTACT_NAME_RESYNC_LIMIT - instagramBatch.length)
+    );
+
+    // Sequential on purpose: these are third-party lookups against a per-page
+    // rate limit, and a burst of parallel requests is what gets a page token
+    // throttled. Each enrichment already swallows its own failures.
+    for (const contact of instagramBatch) {
+      await ctx.runAction(internal.instagramEngagement.enrichCustomerProfile, {
+        orgId: args.orgId,
+        customerId: contact.customerId,
+        senderInstagramId: contact.senderInstagramId,
+      });
+    }
+    for (const contact of facebookBatch) {
+      await ctx.runAction(internal.facebookEngagement.enrichCustomerProfile, {
+        orgId: args.orgId,
+        customerId: contact.customerId,
+        senderFacebookId: contact.senderFacebookId,
+      });
+    }
+
+    const after = await ctx.runQuery(
+      internal.socialInboxBackfill.getUnresolvedSocialCustomers,
+      { orgId: args.orgId }
+    );
+    const remaining = after.instagram.length + after.facebook.length;
+    const attempted = instagramBatch.length + facebookBatch.length;
+    const startingTotal = before.instagram.length + before.facebook.length;
+
+    return {
+      instagramAttempted: instagramBatch.length,
+      facebookAttempted: facebookBatch.length,
+      resolved: Math.max(0, startingTotal - remaining),
+      stillUnresolved: Math.max(0, remaining - (startingTotal - attempted)),
+    };
   },
 });

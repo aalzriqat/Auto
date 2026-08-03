@@ -194,6 +194,115 @@ describe("socialInbox.listConversations", () => {
   });
 });
 
+describe("socialInbox conversation display names", () => {
+  test("never shows the raw PSID for a DM sender whose profile never resolved", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrgWithEditor(t);
+
+    // A Messenger DM carries a PSID and nothing else. Until the Graph profile
+    // lookup lands, the customer holds the placeholder name — and the inbox
+    // used to fall back to printing the PSID itself as the contact's name.
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "Facebook",
+        lastName: "Contact",
+        facebookUserId: "28136656255928185",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("facebookEvents", {
+        orgId,
+        externalId: "inbox_fb_psid",
+        kind: "dm",
+        senderFacebookId: "28136656255928185",
+        customerId,
+        text: "كيف يمكنني الحصول على تمويل لشراء السيارة؟",
+      })
+    );
+
+    const result = await asEditor.query(api.socialInbox.listConversations, {
+      orgId,
+      paginationOpts: { numItems: 25, cursor: null },
+    });
+
+    expect(result.page).toHaveLength(1);
+    expect(result.page[0].senderDisplayName).not.toBe("28136656255928185");
+    expect(result.page[0].senderDisplayName).toBe("Facebook Contact");
+  });
+
+  test("shows the customer's edited name instead of the stored social handle", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrgWithEditor(t);
+
+    // Staff renamed this auto-created contact to the person's real name. The
+    // handle used to win, so the rename never reached the inbox even though
+    // every other screen showed it.
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "Layla",
+        lastName: "Al Nimri",
+        instagramUserId: "ig_renamed_1",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "inbox_ig_renamed",
+        kind: "dm",
+        senderInstagramId: "ig_renamed_1",
+        senderUsername: "old_ig_handle",
+        customerId,
+        text: "hi",
+      })
+    );
+
+    const result = await asEditor.query(api.socialInbox.listConversations, {
+      orgId,
+      paginationOpts: { numItems: 25, cursor: null },
+    });
+
+    expect(result.page).toHaveLength(1);
+    expect(result.page[0].senderDisplayName).toBe("Layla Al Nimri");
+    // The handle is still available separately — the profile/DM deep links
+    // depend on it, so preferring the real name must not drop it.
+    expect(result.page[0].latestSenderHandle).toBe("old_ig_handle");
+  });
+
+  test("falls back to the handle when the contact has only a placeholder name", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrgWithEditor(t);
+
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "Instagram",
+        lastName: "Contact",
+        instagramUserId: "ig_placeholder_1",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "inbox_ig_placeholder",
+        kind: "comment",
+        senderInstagramId: "ig_placeholder_1",
+        senderUsername: "real_handle",
+        customerId,
+        text: "nice car",
+      })
+    );
+
+    const result = await asEditor.query(api.socialInbox.listConversations, {
+      orgId,
+      paginationOpts: { numItems: 25, cursor: null },
+    });
+
+    expect(result.page[0].senderDisplayName).toBe("real_handle");
+  });
+});
+
 describe("socialInbox.listEventsForCustomer", () => {
   test("returns merged Instagram + Facebook events for the customer, oldest first", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));

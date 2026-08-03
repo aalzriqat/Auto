@@ -110,17 +110,27 @@ export default function SocialInboxPage() {
   const [activeConversation, setActiveConversation] = useState<ConversationKey | null>(null);
   const [resyncing, setResyncing] = useState(false);
   const resyncAction = useAction(api.socialInboxBackfill.resyncEvents);
+  const resyncContactNamesAction = useAction(api.socialInboxBackfill.resyncContactNames);
 
   const handleResync = async () => {
     if (!activeOrgId || resyncing) return;
     setResyncing(true);
     try {
-      const result = await resyncAction({ orgId: activeOrgId });
+      // Contact names are repaired alongside the event resync: a conversation
+      // showing a raw PSID is the same "this thread never got enriched"
+      // problem, and the operator reaches for the same button to fix it.
+      const [result, names] = await Promise.all([
+        resyncAction({ orgId: activeOrgId }),
+        resyncContactNamesAction({ orgId: activeOrgId }),
+      ]);
       const linked = result.igVehicles + result.fbVehicles;
       const hints = result.igHints + result.fbHints;
       const details = [
         linked > 0 ? `${linked} ${t("ResyncLinkedVehicles" as any) || "linked"}` : null,
         hints > 0 ? `${hints} ${t("ResyncSuggestionsFound" as any) || "suggestions"}` : null,
+        names.resolved > 0
+          ? `${names.resolved} ${t("ResyncResolvedNames" as any) || "names resolved"}`
+          : null,
       ].filter(Boolean);
       toast.success(details.length > 0 ? `${t("ResyncSuccess" as any)} ${details.join(", ")}.` : t("ResyncSuccess" as any));
     } catch {

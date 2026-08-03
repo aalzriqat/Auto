@@ -26,6 +26,27 @@ const MAX_AUTO_REPLY_RETRIES = 3;
 export const PLACEHOLDER_FIRST_NAME = "Instagram";
 export const PLACEHOLDER_LAST_NAME = "Contact";
 
+/**
+ * True when a customer still has no human-readable name for Instagram.
+ *
+ * Mirrors `facebookEngagement.isUnresolvedFacebookName`: both the literal
+ * placeholder and a record whose name is just the sender's IGSID mean the
+ * profile lookup never landed, so both stay eligible for a retry.
+ */
+export function isUnresolvedInstagramName(
+  customer: Pick<Doc<"customers">, "firstName" | "lastName">,
+  senderInstagramId: string,
+): boolean {
+  if (
+    customer.firstName === PLACEHOLDER_FIRST_NAME &&
+    customer.lastName === PLACEHOLDER_LAST_NAME
+  ) {
+    return true;
+  }
+  const fullName = `${customer.firstName} ${customer.lastName}`.trim();
+  return customer.firstName === senderInstagramId || fullName === senderInstagramId;
+}
+
 /** See the note on the Facebook constant of the same name. */
 const GRAPH_LOOKUP_TIMEOUT_MS = 5_000;
 
@@ -130,7 +151,7 @@ export const handleIncomingInstagramEvent = internalMutation({
     // only have the placeholder name, the caller (an action) should fetch
     // the real one from Instagram's profile API.
     const needsProfileEnrichment =
-      !senderUsername && customer.firstName === PLACEHOLDER_FIRST_NAME && customer.lastName === PLACEHOLDER_LAST_NAME;
+      !senderUsername && isUnresolvedInstagramName(customer, senderInstagramId);
 
     const settings = await ctx.db
       .query("orgSettings")
@@ -399,16 +420,23 @@ export const enrichCustomerProfile = internalAction({
     await ctx.runMutation(internal.instagramEngagement.saveCustomerDisplayName, {
       customerId: args.customerId,
       displayName,
+      senderInstagramId: args.senderInstagramId,
     });
   },
 });
 
 export const saveCustomerDisplayName = internalMutation({
-  args: { customerId: v.id("customers"), displayName: v.string() },
+  args: {
+    customerId: v.id("customers"),
+    displayName: v.string(),
+    senderInstagramId: v.string(),
+  },
   handler: async (ctx, args) => {
     const customer = await ctx.db.get(args.customerId);
-    // Only overwrite the placeholder — never clobber a name a staff member may have since edited.
-    if (!customer || customer.firstName !== PLACEHOLDER_FIRST_NAME || customer.lastName !== PLACEHOLDER_LAST_NAME) {
+    // Only overwrite an unresolved name — never clobber a name a staff member
+    // may have since edited. A record still holding the raw IGSID is
+    // unresolved too, so it is written rather than discarded.
+    if (!customer || !isUnresolvedInstagramName(customer, args.senderInstagramId)) {
       return;
     }
     const nameParts = args.displayName.trim().split(" ");
