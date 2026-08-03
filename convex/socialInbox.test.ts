@@ -231,6 +231,43 @@ describe("socialInbox conversation display names", () => {
     expect(result.page[0].senderDisplayName).toBe("Facebook Contact");
   });
 
+  test("never shows a PSID that was split into firstName with 'Contact' left behind", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrgWithEditor(t);
+
+    // The other shape an unresolved record takes: intake splits a display name
+    // on spaces, so an id passed through as a name lands in firstName with the
+    // placeholder surname still attached. Comparing only the joined full name
+    // against the id misses this one.
+    const psid = "28136656255928185";
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: psid,
+        lastName: "Contact",
+        facebookUserId: psid,
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("facebookEvents", {
+        orgId,
+        externalId: "inbox_fb_psid_split",
+        kind: "dm",
+        senderFacebookId: psid,
+        customerId,
+        text: "hello",
+      })
+    );
+
+    const result = await asEditor.query(api.socialInbox.listConversations, {
+      orgId,
+      paginationOpts: { numItems: 25, cursor: null },
+    });
+
+    expect(result.page[0].senderDisplayName).not.toContain(psid);
+    expect(result.page[0].senderDisplayName).toBe("Facebook Contact");
+  });
+
   test("shows the customer's edited name instead of the stored social handle", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);

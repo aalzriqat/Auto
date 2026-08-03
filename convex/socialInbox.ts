@@ -108,9 +108,11 @@ function normalizeFacebookEvent(ev: Doc<"facebookEvents">): NormalizedEvent {
 function resolveSenderDisplayName(event: NormalizedEvent, customer: Doc<"customers"> | null): string {
   if (customer) {
     const name = `${customer.firstName} ${customer.lastName}`.trim();
-    // `name !== senderRawId` guards records whose name was already written as
-    // the raw id by an earlier code path — those are placeholders too.
-    if (name && !PLACEHOLDER_NAMES.has(name) && name !== event.senderRawId) return name;
+    // Records whose name was written as the raw id by an earlier intake path
+    // are placeholders too. Both shapes occur: the id alone, and the id split
+    // into `firstName` with "Contact" left in `lastName`.
+    const isIdName = name === event.senderRawId || customer.firstName === event.senderRawId;
+    if (name && !PLACEHOLDER_NAMES.has(name) && !isIdName) return name;
   }
   if (event.senderHandle && event.senderHandle !== event.senderRawId) return event.senderHandle;
   return event.platform === "instagram" ? "Instagram Contact" : "Facebook Contact";
