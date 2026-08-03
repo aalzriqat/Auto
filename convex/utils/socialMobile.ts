@@ -149,6 +149,35 @@ export function extractSharedMobileNumber(
   return null;
 }
 
+/**
+ * Loads the org's settings and, for a DM, the mobile number its sender shared.
+ *
+ * The two are read together because the exclusion set comes from the settings:
+ * extraction has to run *after* them, and both social handlers need the
+ * settings anyway. Shared rather than mirrored so the Facebook and Instagram
+ * intake paths cannot drift on which numbers they ignore.
+ */
+export async function readSettingsAndSharedMobile(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  kind: "comment" | "dm",
+  text: string | undefined
+): Promise<{
+  settings: Doc<"orgSettings"> | null;
+  sharedMobileNumber: SharedMobileNumber | null;
+}> {
+  const settings = await ctx.db
+    .query("orgSettings")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .unique();
+
+  return {
+    settings,
+    sharedMobileNumber:
+      kind === "dm" ? extractSharedMobileNumber(text, ownNumberExclusions(settings)) : null,
+  };
+}
+
 export async function attachSharedMobileNumberToCustomer(
   ctx: MutationCtx,
   orgId: Id<"organizations">,

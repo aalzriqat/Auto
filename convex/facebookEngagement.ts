@@ -19,7 +19,7 @@ import {
 import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
 import { matchVehicleFromText, suggestVehiclesFromText } from "./utils/vehicleTextMatch";
-import { attachSharedMobileNumberToCustomer, extractSharedMobileNumber, ownNumberExclusions, splitDisplayName, hasDuplicatedName } from "./utils/socialMobile";
+import { attachSharedMobileNumberToCustomer, readSettingsAndSharedMobile, splitDisplayName, hasDuplicatedName } from "./utils/socialMobile";
 import { nextGeneratedLeadAssignee } from "./utils/leadAssignment";
 import { recordLeadCreated, recordLeadActivity, describeLeadFieldValue } from "./utils/leadActivity";
 import { mobileReceivedAutoReplyText } from "./utils/socialMobileReply";
@@ -157,16 +157,12 @@ export const handleIncomingFacebookEvent = internalMutation({
       .unique();
     if (duplicate) return null;
 
-    const settings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_org", (q) => q.eq("orgId", orgId))
-      .unique();
-
-    // Read after settings so the dealership's own numbers can be excluded:
-    // replying to a post pulls the advert's caption into the payload, and the
-    // showroom numbers printed there are not the sender sharing a contact.
-    const sharedMobileNumber =
-      kind === "dm" ? extractSharedMobileNumber(text, ownNumberExclusions(settings)) : null;
+    const { settings, sharedMobileNumber } = await readSettingsAndSharedMobile(
+      ctx,
+      orgId,
+      kind,
+      text
+    );
 
     // Find or create customer
     const customers = await ctx.db
