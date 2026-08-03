@@ -78,62 +78,6 @@ const lightColors = {
   glassStrong: "rgba(255,255,255,0.08)",
   glassBorder: "rgba(255,255,255,0.10)",
   overlayScrim: "rgba(15,23,42,0.42)",
-
-  // ── Dealer-home visual language ────────────────────────────────────────────
-  // Sampled from DESIGN-light.png with PIL (medians over flat regions, ink taken
-  // as the most-different decile inside each glyph run). Every value below is
-  // the mock's own, EXCEPT where it failed a WCAG floor as text — those carry
-  // the before/after ratio inline and moved lightness only, never hue.
-  //
-  // The one deliberate departure from the mock is elevation, and it lives above,
-  // not here: the mock paints card #fefefe on page #fdfdfe (1.009:1, invisible
-  // in daylight), so `background`/`surface` keep the app's 1.116:1 pairing.
-  homeCardBorder: "#eaecf2",
-  homeKpiSalesIcon: "#0043f8",
-  homeKpiSalesSoft: "#eef4fe",
-  homeKpiExpenseIcon: "#f15800", // mock #fe5d00 — 2.72:1 on surfaceAlt, now 3.00:1
-  homeKpiExpenseSoft: "#fef3e9",
-  homeKpiProfitIcon: "#0aa028", // mock #0aa128 — 3.00:1, now 3.03:1
-  homeKpiProfitSoft: "#eaf8ee",
-  homeDeltaUp: "#067e3c", // mock #089c4a — 3.14:1, now 4.54:1
-  homeDeltaDown: "#dc0515", // mock #f80618 — 3.66:1, now 4.52:1
-  homeTileViolet: "#4524f3",
-  homeTileBlue: "#007cd1",
-  homeTileAmber: "#d76e00", // mock #fd8100 — 2.21:1, now 3.01:1
-  homeTileGreen: "#09a123", // mock #09a624 — 2.84:1, now 3.00:1
-  homeTileIndigo: "#4d1ff5",
-  homeRingTrack: "#e7ecf6",
-  homeRingArc: "#0957f9",
-  homeChipDangerSurface: "#fdeaef",
-  homeChipDangerText: "#db000d", // mock #f9000f — 3.61:1, now 4.53:1
-  homeChipWarningSurface: "#fdf0e0",
-  homeChipWarningText: "#b15201", // mock #fe7a08 — 2.30:1, now 4.52:1
-  homeChipInfoSurface: "#eaf0fe",
-  homeChipInfoText: "#0c52f8",
-  homeChipSuccessSurface: "#e9f5ee",
-  homeChipSuccessText: "#067e3c", // mock #089c4a — 3.14:1, now 4.54:1
-  homeChipBorder: "#e7eaf1",
-  // The banner is all but flat in the light mock (#eff3fe end to end); the two
-  // deeper stops keep it a gradient rather than inventing one.
-  homeBannerFrom: "#eff3fe",
-  homeBannerMid: "#e7eefd",
-  homeBannerTo: "#dce6fc",
-  homeBannerIconFrom: "#dbe3fb",
-  homeBannerIconTo: "#c3d1f8",
-  homeBannerTitle: "#0f172a",
-  homeBannerBody: "#4c5a6f",
-  homeBannerCtaText: "#1d4fd8",
-  homeBannerCtaBorder: "#b3c6f4",
-  // The mock leaves both of these panels white in the light theme and washes
-  // them amber / green only in the dark one — see darkColors below.
-  homeAlertPanel: "#ffffff",
-  homeAlertPanelRow: "#f7f9fc",
-  homeAlertPanelBorder: "#e6e9f0",
-  homeAlertPanelTone: "#b15201",
-  homePaymentPanel: "#ffffff",
-  homePaymentPanelRow: "#f2f6fe",
-  homePaymentPanelBorder: "#e3e8f2",
-  homePaymentPanelTone: "#067e3c",
 } as const;
 
 // Premium dark ("automotive") theme. Same brand hues; only the neutral canvas /
@@ -173,58 +117,96 @@ const darkColors = {
   glassStrong: "rgba(255,255,255,0.08)",
   glassBorder: "rgba(255,255,255,0.10)",
   overlayScrim: "rgba(4,8,16,0.66)",
+} as const;
 
-  // ── Dealer-home visual language ────────────────────────────────────────────
-  // Sampled from DESIGN-dark.png. Not one of these needed a contrast
-  // adjustment: every text token clears 4.5:1 and every icon token 3:1 on the
-  // dark surfaces, so the dark theme ships the mock's palette verbatim.
-  homeCardBorder: "#172031",
-  homeKpiSalesIcon: "#5492fc",
-  homeKpiSalesSoft: "#132443",
-  homeKpiExpenseIcon: "#f87e16",
-  homeKpiExpenseSoft: "#34271c",
-  homeKpiProfitIcon: "#48c258",
-  homeKpiProfitSoft: "#112226",
-  homeDeltaUp: "#4fda57",
-  homeDeltaDown: "#f45959",
-  homeTileViolet: "#8561f4",
-  homeTileBlue: "#2f86f5",
-  homeTileAmber: "#faae27",
-  homeTileGreen: "#47d25c",
-  homeTileIndigo: "#7c63f2",
-  homeRingTrack: "#1a2536",
-  homeRingArc: "#3a6cf5",
+/**
+ * The dealer-home visual language, light and dark side by side.
+ *
+ * Sampled from DESIGN-light.png and DESIGN-dark.png with PIL: medians over flat
+ * regions, and ink taken as the most-different decile inside each glyph run.
+ * Every value is the mock's own EXCEPT where it failed a WCAG floor as text or
+ * as a graphic — those carry the before/after ratio inline and moved lightness
+ * only, never hue. Not one DARK token needed adjusting.
+ *
+ * Written as `[light, dark]` pairs rather than as two mirrored blocks inside the
+ * palettes above: a token can then never be added to one theme and forgotten in
+ * the other, and a token's two values are readable against each other, which is
+ * the whole question when tuning a dual-theme palette.
+ *
+ * The one deliberate departure from the mocks is elevation, and it lives in
+ * `lightColors` above rather than here — the light mock paints card #fefefe on
+ * page #fdfdfe (1.009:1, invisible in daylight), so `background`/`surface` keep
+ * the app's own 1.116:1 pairing.
+ */
+const homeTokens = {
+  homeCardBorder: ["#eaecf2", "#172031"],
+  homeKpiSalesIcon: ["#0043f8", "#5492fc"],
+  homeKpiSalesSoft: ["#eef4fe", "#132443"],
+  // mock #fe5d00 — 2.72:1 on surfaceAlt, now 3.00:1
+  homeKpiExpenseIcon: ["#f15800", "#f87e16"],
+  homeKpiExpenseSoft: ["#fef3e9", "#34271c"],
+  // mock #0aa128 — 3.00:1, now 3.03:1
+  homeKpiProfitIcon: ["#0aa028", "#48c258"],
+  homeKpiProfitSoft: ["#eaf8ee", "#112226"],
+  // mock #089c4a — 3.14:1, now 4.54:1
+  homeDeltaUp: ["#067e3c", "#4fda57"],
+  // mock #f80618 — 3.66:1, now 4.52:1
+  homeDeltaDown: ["#dc0515", "#f45959"],
+  homeTileViolet: ["#4524f3", "#8561f4"],
+  homeTileBlue: ["#007cd1", "#2f86f5"],
+  // mock #fd8100 — 2.21:1, now 3.01:1
+  homeTileAmber: ["#d76e00", "#faae27"],
+  // mock #09a624 — 2.84:1, now 3.00:1
+  homeTileGreen: ["#09a123", "#47d25c"],
+  homeTileIndigo: ["#4d1ff5", "#7c63f2"],
+  homeRingTrack: ["#e7ecf6", "#1a2536"],
+  homeRingArc: ["#0957f9", "#3a6cf5"],
   // Only the overdue chip is washed in the dark mock; the other three sit on a
   // neutral raised surface and take their identity from the numeral alone.
-  homeChipDangerSurface: "#1e1a29",
-  homeChipDangerText: "#ff706c",
-  homeChipWarningSurface: "#151e2c",
-  homeChipWarningText: "#ffb512",
-  homeChipInfoSurface: "#131d2e",
-  homeChipInfoText: "#7a9efa",
-  homeChipSuccessSurface: "#121c2a",
-  homeChipSuccessText: "#51da5e",
-  homeChipBorder: "#1d2a3c",
-  // Diagonal, top-start indigo to bottom-end navy. Sampled at t=0/0.5/1 along
-  // the banner's own axis: #262c82 → #132256 → #0a1939.
-  homeBannerFrom: "#262c82",
-  homeBannerMid: "#132256",
-  homeBannerTo: "#0a1939",
-  homeBannerIconFrom: "#5b63ea",
-  homeBannerIconTo: "#4247b4",
-  homeBannerTitle: "#f5f7ff",
-  homeBannerBody: "#c3c6d4",
-  homeBannerCtaText: "#bbcefd",
-  homeBannerCtaBorder: "#3a46a8",
-  homeAlertPanel: "#171714",
-  homeAlertPanelRow: "#29251b",
-  homeAlertPanelBorder: "#3a3116",
-  homeAlertPanelTone: "#ffc71e",
-  homePaymentPanel: "#0b1820",
-  homePaymentPanelRow: "#0e2123",
-  homePaymentPanelBorder: "#16342c",
-  homePaymentPanelTone: "#4fde59",
-} as const;
+  homeChipDangerSurface: ["#fdeaef", "#1e1a29"],
+  // mock #f9000f — 3.61:1, now 4.53:1
+  homeChipDangerText: ["#db000d", "#ff706c"],
+  homeChipWarningSurface: ["#fdf0e0", "#151e2c"],
+  // mock #fe7a08 — 2.30:1, now 4.52:1
+  homeChipWarningText: ["#b15201", "#ffb512"],
+  homeChipInfoSurface: ["#eaf0fe", "#131d2e"],
+  homeChipInfoText: ["#0c52f8", "#7a9efa"],
+  homeChipSuccessSurface: ["#e9f5ee", "#121c2a"],
+  // mock #089c4a — 3.14:1, now 4.54:1
+  homeChipSuccessText: ["#067e3c", "#51da5e"],
+  homeChipBorder: ["#e7eaf1", "#1d2a3c"],
+  // Diagonal, top-start to bottom-end, sampled at t=0/0.5/1 along the banner's
+  // own axis. The light mock is all but flat (#eff3fe end to end); its two
+  // deeper stops keep the fill a gradient rather than inventing one.
+  homeBannerFrom: ["#eff3fe", "#262c82"],
+  homeBannerMid: ["#e7eefd", "#132256"],
+  homeBannerTo: ["#dce6fc", "#0a1939"],
+  homeBannerIconFrom: ["#dbe3fb", "#5b63ea"],
+  homeBannerIconTo: ["#c3d1f8", "#4247b4"],
+  homeBannerTitle: ["#0f172a", "#f5f7ff"],
+  homeBannerBody: ["#4c5a6f", "#c3c6d4"],
+  homeBannerCtaText: ["#1d4fd8", "#bbcefd"],
+  homeBannerCtaBorder: ["#b3c6f4", "#3a46a8"],
+  // The mock leaves both of these panels white in the light theme and washes
+  // them amber / green only in the dark one.
+  homeAlertPanel: ["#ffffff", "#171714"],
+  homeAlertPanelRow: ["#f7f9fc", "#29251b"],
+  homeAlertPanelBorder: ["#e6e9f0", "#3a3116"],
+  homeAlertPanelTone: ["#b15201", "#ffc71e"],
+  homePaymentPanel: ["#ffffff", "#0b1820"],
+  homePaymentPanelRow: ["#f2f6fe", "#0e2123"],
+  homePaymentPanelBorder: ["#e3e8f2", "#16342c"],
+  homePaymentPanelTone: ["#067e3c", "#4fde59"],
+} as const satisfies Record<string, readonly [string, string]>;
+
+type HomeTokens = typeof homeTokens;
+type HomePalette<Index extends 0 | 1> = { [K in keyof HomeTokens]: HomeTokens[K][Index] };
+
+/** 0 picks the light value of every pair, 1 the dark one. */
+function homePalette<Index extends 0 | 1>(index: Index): HomePalette<Index> {
+  const entries = Object.entries(homeTokens).map(([token, pair]) => [token, pair[index]]);
+  return Object.fromEntries(entries) as HomePalette<Index>;
+}
 
 const gradients = {
   // royal blue band: the signature hero (dark in both themes).
@@ -320,7 +302,10 @@ const typography = {
 /** Assemble the theme for a given mode. Non-color tokens are shared. */
 export function buildTheme(mode: ThemeMode) {
   return {
-    colors: mode === "dark" ? darkColors : lightColors,
+    colors:
+      mode === "dark"
+        ? { ...darkColors, ...homePalette(1) }
+        : { ...lightColors, ...homePalette(0) },
     gradients,
     spacing,
     radius,
