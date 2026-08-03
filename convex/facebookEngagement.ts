@@ -157,12 +157,7 @@ export const handleIncomingFacebookEvent = internalMutation({
       .unique();
     if (duplicate) return null;
 
-    const { settings, sharedMobileNumber } = await readSettingsAndSharedMobile(
-      ctx,
-      orgId,
-      kind,
-      text
-    );
+    const { settings, sharedMobileNumber } = await readSettingsAndSharedMobile(ctx, orgId, kind, text);
 
     // Find or create customer
     const customers = await ctx.db
@@ -507,9 +502,8 @@ export const saveCustomerDisplayName = internalMutation({
     senderFacebookId: v.string(),
   },
   handler: async (ctx, args) => {
-    await applyResolvedDisplayName(ctx, args.customerId, args.displayName, (customer) =>
-      isUnresolvedFacebookName(customer, args.senderFacebookId)
-    );
+    const unresolved = (c: Pick<Doc<"customers">, "firstName" | "lastName">) => isUnresolvedFacebookName(c, args.senderFacebookId);
+    await applyResolvedDisplayName(ctx, args.customerId, args.displayName, unresolved);
   },
 });
 

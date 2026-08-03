@@ -133,12 +133,7 @@ export const handleIncomingInstagramEvent = internalMutation({
       .unique();
     if (duplicate) return null;
 
-    const { settings, sharedMobileNumber } = await readSettingsAndSharedMobile(
-      ctx,
-      orgId,
-      kind,
-      text
-    );
+    const { settings, sharedMobileNumber } = await readSettingsAndSharedMobile(ctx, orgId, kind, text);
 
     // Find or create customer
     const customers = await ctx.db
@@ -452,9 +447,8 @@ export const saveCustomerDisplayName = internalMutation({
     senderInstagramId: v.string(),
   },
   handler: async (ctx, args) => {
-    await applyResolvedDisplayName(ctx, args.customerId, args.displayName, (customer) =>
-      isUnresolvedInstagramName(customer, args.senderInstagramId)
-    );
+    const unresolved = (c: Pick<Doc<"customers">, "firstName" | "lastName">) => isUnresolvedInstagramName(c, args.senderInstagramId);
+    await applyResolvedDisplayName(ctx, args.customerId, args.displayName, unresolved);
   },
 });
 
