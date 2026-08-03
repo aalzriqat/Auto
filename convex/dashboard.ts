@@ -486,12 +486,19 @@ export const stats = query({
     // current-period number above byte-for-byte unchanged.
     const PREVIOUS_PERIOD_CAP = 5000;
 
-    // Which source the current period settled on. The previous window has to
-    // use the same one: a sale-row total compared against a transaction total
-    // is two different measurements wearing one percentage.
-    const usesSaleRows = activeSales.length > 0;
-
-    const previousSales = comparesPeriods && canViewSalesMetrics && usesSaleRows
+    // Each window settles on its own source, by the same rule the current one
+    // uses: sale rows when that window has any, the VEHICLE_SALE transaction
+    // fallback otherwise.
+    //
+    // Deriving the previous window's source from the CURRENT window's row
+    // count looks like it keeps the two totals comparable, but it skips the
+    // previous window's sale rows entirely whenever this period had none —
+    // reporting no sales, and a profit of just the negated period expenses,
+    // for a window that was profitable. Nothing is truncated and every
+    // permission passes in that state, so the client renders the delta as
+    // confidently as a correct one. A dealer coming off a quiet month is the
+    // case this comparison exists for.
+    const previousSales = comparesPeriods && canViewSalesMetrics
       ? await ctx.db
         .query("sales")
         .withIndex("by_org_saleDate", (q) =>
@@ -503,7 +510,9 @@ export const stats = query({
         .take(PREVIOUS_PERIOD_CAP)
       : [];
 
-    const previousSaleTransactions = comparesPeriods && canViewSalesMetrics && !usesSaleRows
+    const previousUsesSaleRows = previousSales.length > 0;
+
+    const previousSaleTransactions = comparesPeriods && canViewSalesMetrics && !previousUsesSaleRows
       ? await ctx.db
         .query("transactions")
         .withIndex("by_org_date", (q) =>
@@ -525,7 +534,7 @@ export const stats = query({
         .take(PREVIOUS_PERIOD_CAP)
       : [];
 
-    const previousSalesVolume = usesSaleRows
+    const previousSalesVolume = previousUsesSaleRows
       ? previousSales.reduce((acc, sale) => acc + sale.salePrice, 0)
       : previousSaleTransactions.reduce((acc, transaction) => acc + transaction.amount, 0);
 

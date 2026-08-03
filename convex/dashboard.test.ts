@@ -1022,6 +1022,27 @@ describe("dashboard.stats previous-period totals", () => {
     expect(result.previousPeriod?.expenses).toBe(1_700);
   });
 
+  test("reports a previous window that has sale rows even when the current window has none", async () => {
+    const { t, orgId, asUser } = await setup(FULL_PERMISSIONS);
+    freezeNow();
+
+    // Nothing sold in the last 30 days; the 30 before were profitable. This is
+    // precisely the case the comparison exists for, and picking the previous
+    // window's source from the CURRENT window's row count skips the sale rows
+    // entirely: sales collapses to 0 and profit is reported as a bare expense
+    // loss, with every truncation flag false so the client renders the delta.
+    await seedSaleAt(t, orgId, { daysAgo: 40, salePrice: 30_000, purchasePrice: 22_000, vin: "LCOC76CA9R4800011" });
+    await seedExpenseAt(t, orgId, { daysAgo: 40, amount: 700 });
+
+    const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "MONTH" });
+
+    expect(result.salesVolumeThisMonth).toBe(0);
+    expect(result.previousPeriod?.sales).toBe(30_000);
+    // (30,000 − 22,000) − 700, not −700.
+    expect(result.previousPeriod?.netProfit).toBe(7_300);
+    expect(result.previousPeriod?.expenses).toBe(700);
+  });
+
   test("compares transactions against transactions when the org has no sale rows", async () => {
     const { t, orgId, asUser } = await setup(FULL_PERMISSIONS);
     freezeNow();
