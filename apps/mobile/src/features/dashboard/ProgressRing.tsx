@@ -2,10 +2,10 @@ import { StyleSheet, Text, View } from "react-native";
 import Svg, { Circle } from "react-native-svg";
 
 import { useCountUp } from "../../components/Motion";
-import { useAppFontState } from "../../providers/AppFontContext";
 import { useLocale } from "../../providers/LocaleProvider";
 import { useAppTheme, useThemedStyles } from "../../providers/ThemeProvider";
-import { getTypographyStyle, type AppTheme } from "../../theme";
+import { type AppTheme } from "../../theme";
+import { useDashboardTypography } from "./dashboardTypography";
 
 const STROKE = 9;
 const PROGRESS_STEPS = 100;
@@ -34,8 +34,11 @@ export function ProgressRing({
 }>) {
   const theme = useAppTheme();
   const styles = useThemedStyles(makeStyles);
-  const { isRtl, locale } = useLocale();
-  const { fontsLoaded } = useAppFontState();
+  const { isRtl } = useLocale();
+  // The memoized hook, not a second copy of it: `useCountUp` re-renders this
+  // component on every animation frame, so the style objects need stable
+  // identities.
+  const type = useDashboardTypography();
 
   const safeRatio = Number.isFinite(ratio) ? Math.min(1, Math.max(0, ratio)) : 0;
   const animatedSteps = useCountUp(Math.round(safeRatio * PROGRESS_STEPS));
@@ -77,7 +80,7 @@ export function ProgressRing({
           />
         </Svg>
         <View pointerEvents="none" style={styles.overlay}>
-          <Text style={[styles.label, getTypographyStyle("heading", locale, fontsLoaded)]}>
+          <Text style={[styles.label, type.heading]}>
             {label}
           </Text>
         </View>
@@ -85,7 +88,7 @@ export function ProgressRing({
       {caption ? (
         <Text
           numberOfLines={1}
-          style={[styles.caption, getTypographyStyle("caption", locale, fontsLoaded)]}
+          style={[styles.caption, type.caption]}
         >
           {caption}
         </Text>

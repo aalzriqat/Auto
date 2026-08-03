@@ -20,7 +20,9 @@ export function compactNumber(value: number, locale: "en" | "ar"): string {
       notation: "compact",
     }).format(safeValue);
   } catch {
-    return Math.round(safeValue).toLocaleString();
+    // NOT `toLocaleString()` — that routes through the same Intl machinery the
+    // try block just failed in, so the fallback would throw inside a render.
+    return Math.round(safeValue).toString();
   }
 }
 

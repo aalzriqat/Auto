@@ -121,6 +121,10 @@ const mobileFoundationStringEntries = [
   // the `home*` prefix already belongs to the public buyer home screen, and
   // reusing it is exactly how `homeSearchPlaceholder` ended up shared between
   // two unrelated screens (see the duplicate-key note further down).
+  // Arabic uses U+060C (،) and English a plain comma. Hardcoding one of them
+  // in the component put an Arabic comma after "Good morning" for English
+  // users, which is the kind of detail that makes an app read as untranslated.
+  ["dealerHomeGreetingSeparator", ", ", "، "],
   ["dealerHomeGreetingMorning", "Good morning", "صباح الخير"],
   ["dealerHomeGreetingAfternoon", "Good afternoon", "طاب يومك"],
   ["dealerHomeGreetingEvening", "Good evening", "مساء الخير"],

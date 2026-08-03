@@ -138,6 +138,7 @@ function Header({
   const me = useQuery(api.users.getMe, {});
   const firstName = getFirstName(me?.name);
   const greeting = t(greetingKeyForHour(new Date().getHours()));
+  const separator = t("dealerHomeGreetingSeparator");
   const orgName = org.name || t("untitledWorkspace");
   const roleName = myMembership.roleName || t("unknownRole");
 
@@ -153,7 +154,7 @@ function Header({
       </Pressable>
       <View style={styles.headerText}>
         <Text numberOfLines={1} style={[type.title, styles.greetingText]}>
-          {firstName ? `${greeting}، ${firstName}` : greeting}
+          {firstName ? `${greeting}${separator}${firstName}` : greeting}
         </Text>
         <Text numberOfLines={1} style={[type.caption, styles.greetingSubtitle]}>
           {`${orgName} · ${roleName}`}
@@ -221,8 +222,7 @@ function HomeOverviewDetails({ stats }: Readonly<{ stats: MobileDashboardStats }
           value={plainNumber(stats.teamMembers, locale)}
         />
         <HomeDetailStat
-          caption={t("vehiclesSold")}
-          label={t("salesOverview")}
+          label={t("vehiclesSold")}
           value={compactNumber(stats.salesThisMonth, locale)}
         />
       </View>
@@ -377,7 +377,19 @@ function DashboardContent({
   // Every panel owns its own loading state, so the screen paints as soon as the
   // membership resolves instead of blocking behind the slowest query.
   const stats = useQuery(api.dashboard.stats, { orgId, timeRange });
-  const dataQuality = useQuery(api.dashboard.dataQualityStats, { orgId });
+  // Only the performance section reads this. Mounting it for every other role
+  // would keep a live subscription open on a result nothing renders.
+  const dataQuality = useQuery(
+    api.dashboard.dataQualityStats,
+    showsPerformance ? { orgId } : "skip",
+  );
+  // The workspace currency. `orgSettings.get` returns null (rather than
+  // throwing) for a caller without `view:settings`, and `todayForRole` carries
+  // the same value for finance roles — so between them every role that can see
+  // the KPI row gets the real currency wherever the backend will disclose it.
+  // "JOD" is the last resort AND the backend's own default (see
+  // `getOrgTimezoneAndCurrency` in convex/dashboard.ts).
+  const orgSettings = useQuery(api.orgSettings.get, { orgId });
   const todayForRole: MobileDashboardTodayForRole | undefined = useQuery(
     api.dashboard.todayForRole,
     canViewFinanceToday ? { orgId } : "skip",
@@ -391,6 +403,13 @@ function DashboardContent({
     () => summarizeUpcomingPayments(todayForRole),
     [todayForRole],
   );
+  const currency =
+    orgSettings === undefined
+      ? undefined
+      : (orgSettings?.currency ?? todayForRole?.currency ?? "JOD");
+  // `undefined` while the query is in flight, a real 0 when it is skipped, so
+  // the alerts panel can tell "loading" from "nothing waiting".
+  const pendingApprovalsCount = canApprove ? pendingApprovals?.length : 0;
 
   return (
     <ScrollView
@@ -409,7 +428,7 @@ function DashboardContent({
         {showsPerformance ? (
           <FadeSlideIn delay={0}>
             <HomeOverviewCard
-              currency={todayForRole?.currency ?? "JOD"}
+              currency={currency}
               detailsExpanded={detailsExpanded}
               stats={stats}
               onToggleDetails={() => setDetailsExpanded((previous) => !previous)}
@@ -468,7 +487,7 @@ function DashboardContent({
           <HomeAlerts
             notifications={notifications}
             orgId={orgId}
-            pendingApprovals={pendingApprovals?.length ?? 0}
+            pendingApprovals={pendingApprovalsCount}
           />
         </FadeSlideIn>
 

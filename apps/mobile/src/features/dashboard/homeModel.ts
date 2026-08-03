@@ -181,9 +181,10 @@ function isSameCalendarDay(a: number, b: number): boolean {
  * a dealer reading "Today" against yesterday's cheque would act on it wrongly.
  */
 export function alertTimeKey(createdAt: number, now: number): HomeAlertTimeKey {
-  const age = now - safeNumber(createdAt);
+  const safeCreatedAt = safeNumber(createdAt);
+  const age = now - safeCreatedAt;
   if (age < HOUR_MS) return "dealerHomeJustNow";
-  if (isSameCalendarDay(createdAt, now)) return "dealerHomeToday";
+  if (isSameCalendarDay(safeCreatedAt, now)) return "dealerHomeToday";
   return "dealerHomeEarlier";
 }
 

@@ -1,7 +1,7 @@
 /// <reference types="jest" />
 
 import { mobileFoundationStrings } from "@autoflow/shared";
-import { fireEvent, render } from "@testing-library/react-native";
+import { act, fireEvent, render } from "@testing-library/react-native";
 import { useQuery } from "convex/react";
 import { Text } from "react-native";
 
@@ -22,7 +22,9 @@ import { LocaleProvider } from "../../providers/LocaleProvider";
 import {
   HomeAlerts,
   HomeOverviewCard,
+  HomeQuickActions,
   HomeSearchRow,
+  HomeShortcuts,
   HomeTaskCentre,
   HomeTwoUp,
   HomeUpcomingPayments,
@@ -77,6 +79,73 @@ describe("HomeAlerts", () => {
 
     expect(rendered.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
     expect(rendered.queryByText(ar.dealerHomeAlertsEmpty)).toBeNull();
+  });
+
+  test("keeps the skeleton while the approvals query is still in flight", async () => {
+    // notifications landed first. An approver must not see the panel — or its
+    // empty state — before the approvals row can be counted.
+    const rendered = await render(
+      wrap(<HomeAlerts notifications={[]} orgId="org1" pendingApprovals={undefined} />),
+    );
+
+    expect(rendered.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
+    expect(rendered.queryByText(ar.dealerHomeAlertsEmpty)).toBeNull();
+  });
+
+  test("follows a notification's own deep link when it has a valid one", async () => {
+    const rendered = await render(
+      wrap(
+        <HomeAlerts
+          notifications={[
+            {
+              _id: "n1",
+              _creationTime: Date.now(),
+              orgId: "org1",
+              userId: "u1",
+              isRead: false,
+              title: "قيد مالي",
+              link: "/org1/accounting?highlightId=tx1",
+            },
+          ]}
+          orgId="org1"
+          pendingApprovals={0}
+        />,
+      ),
+    );
+
+    await fireEvent.press(rendered.getByLabelText("قيد مالي"));
+    expect(mockPush).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: { orgId: "org1", moduleId: "accounting", highlightId: "tx1" },
+      }),
+    );
+  });
+
+  test("falls back to the notifications module for a link belonging to another org", async () => {
+    const rendered = await render(
+      wrap(
+        <HomeAlerts
+          notifications={[
+            {
+              _id: "n1",
+              _creationTime: Date.now(),
+              orgId: "org1",
+              userId: "u1",
+              isRead: false,
+              title: "تنبيه",
+              link: "/org2/accounting",
+            },
+          ]}
+          orgId="org1"
+          pendingApprovals={0}
+        />,
+      ),
+    );
+
+    await fireEvent.press(rendered.getByLabelText("تنبيه"));
+    expect(mockPush).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { orgId: "org1", moduleId: "notifications" } }),
+    );
   });
 
   test("shows the empty state only once the query has resolved to nothing", async () => {
@@ -298,11 +367,77 @@ describe("HomeTwoUp", () => {
   });
 });
 
+// `visibleModules` is the screen's permission boundary: it decides which
+// navigation entry points a role is offered at all.
+describe("permission filtering", () => {
+  test("offers a role with no permissions no shortcuts at all", async () => {
+    const rendered = await render(
+      wrap(<HomeShortcuts orgId="org1" permissions={[]} roleName="SALES" />),
+    );
+
+    expect(rendered.getByText(ar.dealerHomeShortcutsEmpty)).toBeTruthy();
+  });
+
+  test("offers only the modules a role's permissions actually cover", async () => {
+    const rendered = await render(
+      wrap(<HomeShortcuts orgId="org1" permissions={["view:reports"]} roleName="SALES" />),
+    );
+
+    expect(rendered.getByText("التقارير")).toBeTruthy();
+    // view:sales was not granted, so the sales shortcut must not be offered.
+    expect(rendered.queryByText("المبيعات")).toBeNull();
+    expect(rendered.queryByText(ar.dealerHomeShortcutsEmpty)).toBeNull();
+  });
+
+  test("withholds owner-only quick actions from a non-owner who holds every permission", async () => {
+    const everyPermission = [
+      "view:vehicles",
+      "view:customers",
+      "view:leads",
+      "view:expenses",
+      "view:tasks",
+    ];
+    const rendered = await render(
+      wrap(
+        <HomeQuickActions orgId="org1" permissions={everyPermission} roleName="MANAGER" />,
+      ),
+    );
+
+    // `settings` is ownerOnly in nativeModules.
+    expect(rendered.queryByText(ar.settings)).toBeNull();
+    expect(rendered.getByText("المخزون")).toBeTruthy();
+  });
+
+  test("leaves a bare role with only the public quick action", async () => {
+    const rendered = await render(
+      wrap(<HomeQuickActions orgId="org1" permissions={[]} roleName="SALES" />),
+    );
+
+    // `messages` is the one module with no permission requirement.
+    expect(rendered.getByText(ar.messages)).toBeTruthy();
+    expect(rendered.queryByText("المخزون")).toBeNull();
+  });
+});
+
 describe("HomeSearchRow", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   function searchArgsFor(): unknown[] {
     return mockUseQuery.mock.calls
       .filter((call) => call[0] === api.search.globalSearch)
       .map((call) => call[1]);
+  }
+
+  async function settleDebounce() {
+    await act(async () => {
+      jest.advanceTimersByTime(400);
+    });
   }
 
   test("does not fire the search query for a single character", async () => {
@@ -311,7 +446,11 @@ describe("HomeSearchRow", () => {
     );
 
     await fireEvent.changeText(rendered.getByLabelText(ar.dealerHomeSearchLabel), "ب");
+    await settleDebounce();
 
+    // Asserted non-empty first: `every` is vacuously true over an empty list,
+    // so without this the test would still pass if the filter stopped matching.
+    expect(searchArgsFor().length).toBeGreaterThan(0);
     expect(searchArgsFor().every((args) => args === "skip")).toBe(true);
     expect(rendered.getByText(ar.dealerHomeSearchHint)).toBeTruthy();
   });
@@ -322,8 +461,24 @@ describe("HomeSearchRow", () => {
     );
 
     await fireEvent.changeText(rendered.getByLabelText(ar.dealerHomeSearchLabel), "  كامري  ");
+    await settleDebounce();
 
     expect(searchArgsFor()).toContainEqual({ orgId: "org1", query: "كامري" });
+  });
+
+  test("issues one search for a burst of typing, not one per keystroke", async () => {
+    const rendered = await render(
+      wrap(<HomeSearchRow orgId="org1" timeRange="MONTH" onChangeTimeRange={jest.fn()} />),
+    );
+    const input = rendered.getByLabelText(ar.dealerHomeSearchLabel);
+
+    for (const value of ["ك", "كا", "كام", "كامر", "كامري"]) {
+      await fireEvent.changeText(input, value);
+    }
+    await settleDebounce();
+
+    const fired = searchArgsFor().filter((args) => args !== "skip");
+    expect(fired).toEqual([{ orgId: "org1", query: "كامري" }]);
   });
 
   test("reveals the period filter and reports the chosen range", async () => {

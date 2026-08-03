@@ -1,7 +1,7 @@
 import { nativeRoutes } from "@autoflow/shared";
 import { useQuery } from "convex/react";
 import { useRouter } from "expo-router";
-import { useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import {
@@ -13,6 +13,7 @@ import {
 } from "../../convexApi";
 import { Card } from "../../components/Card";
 import { Icon, type SemanticIconName } from "../../components/Icon";
+import { parseNotificationLink } from "../../components/NotificationBell";
 import { SkeletonRow } from "../../components/SkeletonRow";
 import { useLocale } from "../../providers/LocaleProvider";
 import { useAppTheme, useThemedStyles } from "../../providers/ThemeProvider";
@@ -101,6 +102,9 @@ const SHORTCUT_CANDIDATES: ReadonlyArray<{ moduleId: NativeModuleId; tone: Panel
 ];
 
 const SHORTCUT_LIMIT = 4;
+
+/** Long enough to swallow a burst of typing, short enough to feel immediate. */
+const SEARCH_DEBOUNCE_MS = 250;
 
 function useModulePush(orgId: string) {
   const router = useRouter();
@@ -266,13 +270,26 @@ export function HomeSearchRow({
   const { t, textDirection } = useLocale();
   const type = useDashboardTypography();
   const [term, setTerm] = useState("");
+  const [settledTerm, setSettledTerm] = useState("");
   const [filterOpen, setFilterOpen] = useState(false);
-  const active = isSearchQueryActive(term);
+
+  // Every distinct argument object tears down the live subscription and opens a
+  // new one, and `search.globalSearch` runs four search-index scans per call.
+  // Without this, typing "camry" fires four full searches. The two-character
+  // floor governs when searching starts, not how often it restarts.
+  useEffect(() => {
+    const handle = setTimeout(() => setSettledTerm(term), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(handle);
+  }, [term]);
+
+  const active = isSearchQueryActive(settledTerm);
   const results = useQuery(
     api.search.globalSearch,
-    active ? { orgId, query: term.trim() } : "skip",
+    active ? { orgId, query: settledTerm.trim() } : "skip",
   );
-  const loading = active && results === undefined;
+  // Still typing counts as loading, so the previous term's results are never
+  // shown against the new one.
+  const loading = (active && results === undefined) || term.trim() !== settledTerm.trim();
   const total = countSearchResults(results);
 
   return (
@@ -345,7 +362,7 @@ export function HomeSearchRow({
         </View>
       ) : null}
 
-      {term.trim().length > 0 && !active ? (
+      {term.trim().length > 0 && !isSearchQueryActive(term) ? (
         <Card style={styles.searchResults}>
           <PanelEmpty text={t("dealerHomeSearchHint")} />
         </Card>
@@ -454,7 +471,8 @@ export function HomeOverviewCard({
   onToggleDetails,
   stats,
 }: Readonly<{
-  currency: string;
+  /** `undefined` until the workspace currency is known — see the skeleton below. */
+  currency: string | undefined;
   detailsExpanded: boolean;
   onToggleDetails: () => void;
   stats: MobileDashboardStats | undefined;
@@ -463,7 +481,10 @@ export function HomeOverviewCard({
   const { locale, t, textDirection } = useLocale();
   const type = useDashboardTypography();
 
-  if (stats === undefined) {
+  // Money cannot be rendered before its unit is known. Formatting in JOD and
+  // then re-rendering in the real currency a tick later shows the dealer a
+  // number that was briefly, confidently wrong.
+  if (stats === undefined || currency === undefined) {
     return (
       <Card style={[styles.panel, { direction: textDirection }]}>
         <PanelHeading icon="calendar" title={t("dealerHomeTodayOverview")} />
@@ -679,7 +700,6 @@ export function HomeShortcuts({
   permissions,
   roleName,
 }: Readonly<{ orgId: string; permissions: readonly string[]; roleName: string | undefined }>) {
-  const theme = useAppTheme();
   const styles = useThemedStyles(makeStyles);
   const pushModule = useModulePush(orgId);
   const { locale, t, textDirection } = useLocale();
@@ -756,6 +776,10 @@ export function HomeUpcomingPayments({
   const pushModule = useModulePush(orgId);
   const { locale, t, textDirection } = useLocale();
   const type = useDashboardTypography();
+  // Three `Intl.DateTimeFormat` constructions; this panel re-renders whenever
+  // any dashboard state changes, and the badge only moves with the locale and
+  // the calendar day.
+  const badge = useMemo(() => todayBadgeParts(locale, new Date()), [locale]);
 
   if (todayForRole === undefined) {
     return (
@@ -767,7 +791,6 @@ export function HomeUpcomingPayments({
   }
 
   const currency = todayForRole.currency;
-  const badge = todayBadgeParts(locale, new Date());
 
   return (
     <Card style={[styles.panel, { direction: textDirection }]}>
@@ -826,6 +849,7 @@ function AlertRow({ orgId, row }: Readonly<{ orgId: string; row: HomeAlertRow }>
   const { locale, t, textDirection } = useLocale();
   const type = useDashboardTypography();
 
+  const router = useRouter();
   const isApprovals = row.kind === "approvals";
   const title = isApprovals
     ? `${plainNumber(row.count, locale)} ${t("todayAgendaApprovalsWaiting")}`
@@ -833,12 +857,33 @@ function AlertRow({ orgId, row }: Readonly<{ orgId: string; row: HomeAlertRow }>
   const meta = isApprovals ? t("dealerHomeJustNow") : t(row.timeKey);
   const unread = isApprovals || row.unread;
 
+  // A notification's own deep link, parsed by the same org-scoped helper the
+  // notification bell uses — it rejects links belonging to another org or to an
+  // unknown module, so a bad `link` falls back to the notifications list rather
+  // than navigating somewhere the caller should not be.
+  const deepLink = isApprovals ? null : parseNotificationLink(row.link, orgId);
+
+  function openAlert() {
+    if (isApprovals) {
+      pushModule("approvals");
+      return;
+    }
+    if (deepLink) {
+      router.push({
+        pathname: nativeRoutes.orgModule,
+        params: { orgId, moduleId: deepLink.moduleId, highlightId: deepLink.highlightId },
+      });
+      return;
+    }
+    pushModule("notifications");
+  }
+
   return (
     <Pressable
       accessibilityLabel={title}
       accessibilityRole="button"
       style={({ pressed }) => [styles.alertRow, { direction: textDirection }, pressed && styles.pressed]}
-      onPress={() => pushModule(isApprovals ? "approvals" : "notifications")}
+      onPress={openAlert}
     >
       {/* `accent`, not `warning`: this icon sits on `surfaceAlt`, where warning
           measures 2.79:1 in the light theme and accent measures 3.12:1. */}
@@ -866,13 +911,17 @@ export function HomeAlerts({
 }: Readonly<{
   notifications: readonly MobileNotification[] | undefined;
   orgId: string;
-  pendingApprovals: number;
+  /** `undefined` while the approvals query is in flight; `0` when it is skipped. */
+  pendingApprovals: number | undefined;
 }>) {
   const styles = useThemedStyles(makeStyles);
   const pushModule = useModulePush(orgId);
   const { t, textDirection } = useLocale();
 
-  if (notifications === undefined) {
+  // Both inputs, not just notifications: if the notification list lands first,
+  // an approver would see the panel render — or show its empty state — with the
+  // approvals row still missing, and then watch it appear.
+  if (notifications === undefined || pendingApprovals === undefined) {
     return (
       <Card style={[styles.panel, { direction: textDirection }]}>
         <PanelHeading icon="notifications" title={t("dealerHomeAlerts")} />
@@ -947,7 +996,7 @@ export function HomeDetailStat({
   caption,
   label,
   value,
-}: Readonly<{ caption: string; label: string; value: string }>) {
+}: Readonly<{ caption?: string; label: string; value: string }>) {
   const styles = useThemedStyles(makeStyles);
   const type = useDashboardTypography();
 
@@ -959,9 +1008,11 @@ export function HomeDetailStat({
       <Text numberOfLines={1} style={[styles.detailStatValue, type.heading]}>
         {value}
       </Text>
-      <Text numberOfLines={1} style={[styles.detailStatCaption, type.caption]}>
-        {caption}
-      </Text>
+      {caption ? (
+        <Text numberOfLines={1} style={[styles.detailStatCaption, type.caption]}>
+          {caption}
+        </Text>
+      ) : null}
     </View>
   );
 }
