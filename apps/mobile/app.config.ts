@@ -59,10 +59,12 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     googleServicesFile,
     adaptiveIcon: {
       // Android crops the foreground to a circle/squircle and only shows the
-      // centre ~66%, so this must be the AF/car MARK (no wordmark), centred on
-      // transparency, over a white plate matching the logo background.
+      // centre ~66%, so this must be the car MARK (no wordmark), centred on
+      // transparency, over the brand navy plate. The previous foreground was an
+      // opaque white square whose artwork ran edge to edge, so every launcher
+      // mask cut straight through the logo.
       foregroundImage: "./assets/adaptive-icon.png",
-      backgroundColor: "#FFFFFF",
+      backgroundColor: "#0a0f1c",
     },
     // Declared here for clarity; the config plugins below also inject the ones
     // they own. Expo dedupes, so listing them is safe and self-documenting.
@@ -81,11 +83,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       "expo-splash-screen",
       {
         // Full horizontal AutoFlow logo (car + wordmark) is fine here — the
-        // splash isn't cropped like the icon is.
+        // splash isn't cropped like the icon is. The previous file had 150px
+        // black bars baked into the top and bottom of a square canvas, which
+        // rendered as literal black bands over the splash background.
         image: "./assets/splash-logo.png",
         imageWidth: 240,
         resizeMode: "contain",
-        backgroundColor: "#FFFFFF",
+        backgroundColor: "#0a0f1c",
       },
     ],
     "@clerk/expo",
