@@ -13,7 +13,10 @@ jest.mock("expo-splash-screen", () => ({
 
 jest.mock("@clerk/expo", () => ({
   ClerkProvider: ({ children }: { children: ReactNode }) => children,
-  useAuth: jest.fn(),
+  // Signed out, so BiometricLockGate stays transparent — which is exactly what
+  // this suite needs it to be, and asserts it does not gate an app with no
+  // session behind it. Its own behaviour is covered in BiometricLockGate.test.
+  useAuth: jest.fn(() => ({ isSignedIn: false, signOut: jest.fn() })),
 }));
 
 jest.mock("@clerk/expo/token-cache", () => ({

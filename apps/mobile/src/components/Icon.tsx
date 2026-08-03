@@ -13,6 +13,7 @@ export const semanticIconGlyphs = {
   admin: "settings-outline",
   applications: "document-text-outline",
   approvals: "shield-checkmark-outline",
+  biometric: "finger-print-outline",
   approvalsFilled: "shield-checkmark",
   back: "chevron-back",
   billing: "card-outline",
