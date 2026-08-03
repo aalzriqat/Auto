@@ -27,6 +27,27 @@ interface UseHighlightRowOptions<T> {
 }
 
 /**
+ * Finds the row element that is actually on screen.
+ *
+ * These pages render the same record twice — a card list for mobile
+ * (`md:hidden`) and a table for desktop (`hidden md:block`) — both carrying
+ * `id="row-<id>"`. `getElementById` returns whichever comes first in the
+ * document, which is the mobile card, so on a desktop viewport the scroll was
+ * being aimed at a `display:none` element and did nothing at all. Picking the
+ * rendered one is what makes the scroll work on both layouts.
+ */
+function findVisibleRow(rowId: string): HTMLElement | null {
+  const candidates = document.querySelectorAll<HTMLElement>(
+    `[id="row-${CSS.escape(rowId)}"]`
+  );
+  for (const candidate of candidates) {
+    // getClientRects() is empty when the element or any ancestor is hidden.
+    if (candidate.getClientRects().length > 0) return candidate;
+  }
+  return candidates[0] ?? null;
+}
+
+/**
  * Scrolls to and briefly highlights the row named by `?highlightId=`.
  *
  * Notifications deep-link here, and the reason they so often appeared to do
@@ -74,9 +95,7 @@ export function useHighlightRow<T>({
     if (!highlightId || !isLoaded) return;
     // The row rendered in the same commit that made `isLoaded` true, so the
     // element is in the DOM by the time this effect runs.
-    document
-      .getElementById(`row-${highlightId}`)
-      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    findVisibleRow(highlightId)?.scrollIntoView({ behavior: "smooth", block: "center" });
     const timeout = setTimeout(() => setFadedId(highlightId), HIGHLIGHT_DURATION_MS);
     return () => clearTimeout(timeout);
   }, [highlightId, isLoaded]);
