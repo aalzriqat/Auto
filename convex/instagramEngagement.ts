@@ -428,7 +428,12 @@ export const enrichCustomerProfile = internalAction({
       return;
     }
 
-    const displayName: string | undefined = json.username ?? json.name;
+    // The account's real name, falling back to the handle only when Instagram
+    // returns no name. A dealership works from who the person is, not their
+    // handle: "Layla Al Nimri" is a contact a salesperson can greet and search
+    // for, "mhty7220" is not. `name` is also usually two tokens, so it splits
+    // into a proper first/last instead of a one-word contact.
+    const displayName: string | undefined = json.name?.trim() || json.username?.trim();
     if (!displayName) {
       console.error(
         `instagram.enrichCustomerProfile: graph returned no name for customer ${args.customerId}`,

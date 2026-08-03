@@ -1381,6 +1381,80 @@ describe("instagramEngagement.enrichCustomerProfile", () => {
     vi.unstubAllGlobals();
   });
 
+  test("prefers the account's real name over its handle", async () => {
+    // A salesperson works from who the person is: "Layla Al Nimri" is a
+    // contact they can greet and search for, "mhty7220" is not. The real name
+    // also splits into a proper first/last instead of a one-word contact.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId);
+
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "Instagram",
+        lastName: "Contact",
+        instagramUserId: "ig_named_account",
+      })
+    );
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ username: "mhty7220", name: "Layla Al Nimri" }),
+      })
+    );
+
+    await t.action(internal.instagramEngagement.enrichCustomerProfile, {
+      orgId,
+      customerId,
+      senderInstagramId: "ig_named_account",
+    });
+
+    const customer = await t.run((ctx) => ctx.db.get(customerId));
+    expect(customer?.firstName).toBe("Layla");
+    expect(customer?.lastName).toBe("Al Nimri");
+
+    vi.unstubAllGlobals();
+  });
+
+  test("falls back to the handle when the account has no name set", async () => {
+    // Instagram's `name` is optional, so the handle stays the fallback.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId);
+
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "Instagram",
+        lastName: "Contact",
+        instagramUserId: "ig_nameless_account",
+      })
+    );
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ username: "mhty7220", name: "   " }),
+      })
+    );
+
+    await t.action(internal.instagramEngagement.enrichCustomerProfile, {
+      orgId,
+      customerId,
+      senderInstagramId: "ig_nameless_account",
+    });
+
+    const customer = await t.run((ctx) => ctx.db.get(customerId));
+    expect(customer?.firstName).toBe("mhty7220");
+    expect(customer?.lastName).toBe("");
+
+    vi.unstubAllGlobals();
+  });
+
   test("does not overwrite a name that's already been resolved", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
