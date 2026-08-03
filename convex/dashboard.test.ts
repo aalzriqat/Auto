@@ -820,3 +820,219 @@ describe("dashboard.stats profit uses the authoritative cost basis", () => {
     expect(profitOf(result)).toBe(3300);
   });
 });
+
+describe("dashboard.stats previous-period totals", () => {
+  const FULL_PERMISSIONS = [
+    "view:customers",
+    "view:vehicles",
+    "view:users",
+    "view:sales",
+    "view:expenses",
+  ];
+  const SALES_ONLY_PERMISSIONS = ["view:customers", "view:vehicles", "view:users", "view:sales"];
+
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  // Mid-month, so a 100-day lookback stays well clear of any calendar edge.
+  // Nothing here depends on the date itself, only on distances from "now":
+  // MONTH is the last 30 days, and the previous window is the 30 before those.
+  const NOW = Date.UTC(2026, 6, 15);
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function freezeNow() {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  }
+
+  async function seedSaleAt(
+    t: any,
+    orgId: any,
+    options: { daysAgo: number; salePrice: number; purchasePrice: number; vin: string },
+  ) {
+    const salespersonId = await t.run((ctx: any) =>
+      ctx.db
+        .query("memberships")
+        .withIndex("by_org", (q: any) => q.eq("orgId", orgId))
+        .first()
+        .then((membership: any) => membership!.userId)
+    );
+    const vehicleId = await t.run((ctx: any) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: options.vin,
+        make: "BYD",
+        model: "QIN L",
+        year: 2024,
+        mileage: 100,
+        color: "White",
+        fuelType: "Hybrid",
+        transmission: "Automatic",
+        purchasePrice: options.purchasePrice,
+        sellingPrice: options.salePrice,
+        status: "SOLD",
+      })
+    );
+    const customerId = await t.run((ctx: any) =>
+      ctx.db.insert("customers", { orgId, firstName: "Sara", lastName: "Haddad" })
+    );
+    await t.run((ctx: any) =>
+      ctx.db.insert("sales", {
+        orgId,
+        vehicleId,
+        customerId,
+        salespersonId,
+        salePrice: options.salePrice,
+        saleDate: NOW - options.daysAgo * DAY_MS,
+        status: "COMPLETED",
+      })
+    );
+    return vehicleId;
+  }
+
+  function seedExpenseAt(
+    t: any,
+    orgId: any,
+    options: { daysAgo: number; amount: number; vehicleId?: any; capitalized?: boolean },
+  ) {
+    return t.run((ctx: any) =>
+      ctx.db.insert("expenses", {
+        orgId,
+        ...(options.vehicleId ? { vehicleId: options.vehicleId } : {}),
+        title: "Seeded expense",
+        amount: options.amount,
+        date: NOW - options.daysAgo * DAY_MS,
+        category: options.capitalized ? "REPAIR" : "MARKETING",
+        status: "PAID",
+        ...(options.capitalized
+          ? { accountingTreatment: "CAPITALIZED_INVENTORY", capitalizedAmount: options.amount }
+          : {}),
+      })
+    );
+  }
+
+  function seedSaleTransactionAt(t: any, orgId: any, daysAgo: number, amount: number) {
+    return t.run((ctx: any) =>
+      ctx.db.insert("transactions", {
+        orgId,
+        type: "IN",
+        amount,
+        date: NOW - daysAgo * DAY_MS,
+        category: "VEHICLE_SALE",
+        description: "Seeded vehicle sale",
+      })
+    );
+  }
+
+  test("keeps the two windows apart instead of folding the older one into the current total", async () => {
+    const { t, orgId, asUser } = await setup(FULL_PERMISSIONS);
+    freezeNow();
+
+    await seedSaleAt(t, orgId, { daysAgo: 5, salePrice: 20_000, purchasePrice: 15_000, vin: "LCOC76CA9R4800001" });
+    await seedSaleAt(t, orgId, { daysAgo: 40, salePrice: 30_000, purchasePrice: 22_000, vin: "LCOC76CA9R4800002" });
+    // Older than both windows — outside the comparison entirely.
+    await seedSaleAt(t, orgId, { daysAgo: 100, salePrice: 99_000, purchasePrice: 50_000, vin: "LCOC76CA9R4800003" });
+
+    const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "MONTH" });
+
+    // Reaching back for the previous window by widening the CURRENT scan and
+    // forgetting to partition it reports 50,000 here — a silent regression in a
+    // number the dashboard already ships.
+    expect(result.salesVolumeThisMonth).toBe(20_000);
+    // 30,000 on its own: not 129,000 (no lower bound on the previous read) and
+    // not 50,000 (no upper bound, so the current window leaks into its own past).
+    expect(result.previousPeriod?.sales).toBe(30_000);
+  });
+
+  test("omits previousPeriod entirely for ALL_TIME, which has no period before it", async () => {
+    const { t, orgId, asUser } = await setup(FULL_PERMISSIONS);
+    freezeNow();
+    await seedSaleAt(t, orgId, { daysAgo: 40, salePrice: 30_000, purchasePrice: 22_000, vin: "LCOC76CA9R4800004" });
+
+    const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "ALL_TIME" });
+
+    expect(result.previousPeriod).toBeUndefined();
+  });
+
+  test("counts previous-window expenses on the same rules as the current total", async () => {
+    const { t, orgId, asUser } = await setup(FULL_PERMISSIONS);
+    freezeNow();
+
+    await seedExpenseAt(t, orgId, { daysAgo: 5, amount: 1_500 });
+    await seedExpenseAt(t, orgId, { daysAgo: 40, amount: 900 });
+    await seedExpenseAt(t, orgId, { daysAgo: 45, amount: 700 });
+    await seedExpenseAt(t, orgId, { daysAgo: 100, amount: 5_000 });
+
+    const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "MONTH" });
+
+    // The current figure, which the client sums off the trend, is unchanged.
+    expect(result.salesTrend.reduce((sum: number, point: any) => sum + point.Expenses, 0)).toBe(1_500);
+    expect(result.previousPeriod?.expenses).toBe(1_600);
+  });
+
+  test("computes previous-window profit off the same capitalized cost basis as the current one", async () => {
+    const { t, orgId, asUser } = await setup(FULL_PERMISSIONS);
+    freezeNow();
+
+    // A current-period sale, so the previous window is costed off sale rows
+    // rather than the transaction fallback.
+    await seedSaleAt(t, orgId, { daysAgo: 5, salePrice: 20_000, purchasePrice: 15_000, vin: "LCOC76CA9R4800005" });
+    const previousVehicleId = await seedSaleAt(t, orgId, {
+      daysAgo: 40,
+      salePrice: 30_000,
+      purchasePrice: 22_000,
+      vin: "LCOC76CA9R4800006",
+    });
+    // Capitalized into the vehicle at posting time: part of its cost basis, and
+    // therefore not also a period expense.
+    await seedExpenseAt(t, orgId, {
+      daysAgo: 40,
+      amount: 1_000,
+      vehicleId: previousVehicleId,
+      capitalized: true,
+    });
+    // Operating spend in the same window: a period expense, deducted.
+    await seedExpenseAt(t, orgId, { daysAgo: 40, amount: 700 });
+
+    const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "MONTH" });
+
+    // (30,000 − (22,000 + 1,000)) − 700. Charging the capitalized 1,000 twice
+    // gives 5,300; leaving it out of the cost basis gives 7,300.
+    expect(result.previousPeriod?.netProfit).toBe(6_300);
+    // Total expenses is every expense in the window, capitalized ones included —
+    // it answers a different question than the profit deduction above.
+    expect(result.previousPeriod?.expenses).toBe(1_700);
+  });
+
+  test("compares transactions against transactions when the org has no sale rows", async () => {
+    const { t, orgId, asUser } = await setup(FULL_PERMISSIONS);
+    freezeNow();
+
+    await seedSaleTransactionAt(t, orgId, 5, 20_000);
+    await seedSaleTransactionAt(t, orgId, 40, 12_000);
+    await seedSaleTransactionAt(t, orgId, 100, 88_000);
+
+    const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "MONTH" });
+
+    expect(result.salesVolumeThisMonth).toBe(20_000);
+    expect(result.previousPeriod?.sales).toBe(12_000);
+  });
+
+  test("withholds the previous totals for figures the caller cannot see today", async () => {
+    const { t, orgId, asUser } = await setup(SALES_ONLY_PERMISSIONS);
+    freezeNow();
+
+    await seedSaleAt(t, orgId, { daysAgo: 5, salePrice: 20_000, purchasePrice: 15_000, vin: "LCOC76CA9R4800007" });
+    await seedSaleAt(t, orgId, { daysAgo: 40, salePrice: 30_000, purchasePrice: 22_000, vin: "LCOC76CA9R4800008" });
+    await seedExpenseAt(t, orgId, { daysAgo: 40, amount: 700 });
+
+    const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "MONTH" });
+
+    expect(result.previousPeriod?.sales).toBe(30_000);
+    // No view:expenses / view:reports / view:finance, so neither the current
+    // cost figures nor their history are readable.
+    expect(result.previousPeriod?.expenses).toBeUndefined();
+    expect(result.previousPeriod?.netProfit).toBeUndefined();
+  });
+});
