@@ -8,9 +8,8 @@ import { MessagesModule } from "../features/workspace/modules/messages";
 import { useLocale } from "../providers/LocaleProvider";
 import { useAppTheme, useThemedStyles } from "../providers/ThemeProvider";
 import { type AppTheme } from "../theme";
+import { FAB_SIZE } from "./fabGeometry";
 import { Icon } from "./Icon";
-
-const FAB_SIZE = 58;
 
 export function getFabPressedStyle(pressed: boolean) {
   return pressed ? pressedStyles.pressed : null;

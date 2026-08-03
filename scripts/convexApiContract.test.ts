@@ -29,7 +29,12 @@ const CONTRACT = path.join(REPO_ROOT, "apps", "mobile", "src", "convexApi.ts");
 // Moved 193→194 by `tasks:softDelete`, the mobile binding for the new task
 // delete path. Coverage going up: one more real reference is now checked
 // against the backend, and nothing moved out of the extraction.
-const EXPECTED_REFERENCE_COUNT = 194;
+//
+// Moved 194→195 by `search:globalSearch`, bound into the mobile contract for
+// the dealer home screen's workspace search. Same story: the query already
+// existed in `convex/search.ts`, so this is one more real reference now
+// checked against the backend, with nothing dropped from the extraction.
+const EXPECTED_REFERENCE_COUNT = 195;
 
 describe("mobile convexApi contract extraction", () => {
   test("reads the reference out of a multi-line declaration with nested generics", () => {
