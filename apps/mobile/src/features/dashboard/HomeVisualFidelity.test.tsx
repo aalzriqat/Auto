@@ -233,6 +233,35 @@ describe("task centre", () => {
   });
 });
 
+describe("KPI labels", () => {
+  test("never breaks an Arabic label across lines", async () => {
+    const rendered = await render(
+      wrap(
+        <HomeOverviewCard
+          currency="JOD"
+          detailsExpanded={false}
+          stats={makeStats({ salesVolumeThisMonth: 45_250 })}
+          onToggleDetails={jest.fn()}
+        />,
+      ),
+    );
+
+    // The mock seats the badge beside the label, leaving this column ~95px on a
+    // 720px screen. Allowing two lines let RN fill the second by breaking
+    // *inside* the word: "المصاريف" came out as "المصاري" + an orphaned "ف".
+    // Arabic is cursive, so that also severs the joined letterforms — the text
+    // is malformed, not merely ugly. Every one of these labels is a single word
+    // with no space to break at, so any wrap is a mid-word wrap.
+    for (const key of ["dealerHomeKpiSales", "dealerHomeKpiExpenses", "dealerHomeKpiNetProfit"] as const) {
+      const label = rendered.getByText(ar[key]);
+      expect(label.props.numberOfLines).toBe(1);
+      // Shrink to fit rather than truncate — truncating is the defect this
+      // screen's previous pass already had.
+      expect(label.props.adjustsFontSizeToFit).toBe(true);
+    }
+  });
+});
+
 describe("KPI deltas", () => {
   test("renders no delta at all while dashboard.stats carries no previous period", async () => {
     const rendered = await render(

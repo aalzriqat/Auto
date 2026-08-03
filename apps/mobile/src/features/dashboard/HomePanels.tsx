@@ -571,7 +571,28 @@ function KpiColumn({
         >
           <Icon color={iconToken} name={icon} size={19} />
         </View>
-        <Text numberOfLines={2} style={[styles.kpiLabel, type.caption]}>
+        {/*
+          One line that shrinks, never two that wrap.
+
+          The mock puts the badge beside the label rather than above it, which
+          on a 720px screen leaves this column ~95px wide. `numberOfLines={2}`
+          let React Native fill that second line by breaking *inside* a word:
+          "المصاريف" rendered as "المصاري" + an orphaned "ف". Arabic is cursive,
+          so a mid-word break also severs the joined letterforms — it is not the
+          Latin equivalent of an ugly hyphenation, it is malformed text. These
+          labels are single words with no space to break at, so wrapping can
+          only ever break badly.
+
+          `adjustsFontSizeToFit` scales the glyphs down instead, which keeps the
+          whole word intact and avoids the ellipsis that truncating would bring
+          back.
+        */}
+        <Text
+          adjustsFontSizeToFit
+          minimumFontScale={0.75}
+          numberOfLines={1}
+          style={[styles.kpiLabel, type.caption]}
+        >
           {label}
         </Text>
       </View>
