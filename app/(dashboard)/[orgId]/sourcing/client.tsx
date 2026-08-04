@@ -12,7 +12,8 @@ import { Button } from "@/components/ui/button";
 import { Truck, CheckCircle2, Clock, XCircle } from "lucide-react";
 import { format } from "date-fns";
 import { toast } from "@/components/ui/sonner";
-import { Doc } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
+import { getErrorMessage } from "@/lib/errors";
 import { type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { SupplierPaymentDialog } from "@/components/sourcing/SupplierPaymentDialog";
 
@@ -51,7 +52,30 @@ export function SourcingClient() {
     activeOrgId ? { orgId: activeOrgId, status: statusFilter === "ALL" ? undefined : statusFilter } : "skip"
   );
 
+  // The live special-order pipeline — cars on order for a customer that have
+  // not sold yet. Payables below only exist once the sale completes, so without
+  // this the page was empty for the entire life of an order.
+  const pipeline = useQuery(
+    api.sourcingPayables.listPipeline,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
+
   const markPaid = useMutation(api.sourcingPayables.markPaid);
+  const markArrived = useMutation(api.vehicles.markSourcedVehicleArrived);
+  const [arrivingVehicleId, setArrivingVehicleId] = useState<string | null>(null);
+
+  const handleMarkArrived = async (vehicleId: Id<"vehicles">) => {
+    if (!activeOrgId) return;
+    setArrivingVehicleId(vehicleId);
+    try {
+      await markArrived({ orgId: activeOrgId, vehicleId });
+      toast.success(t("VehicleMarkedArrived" as any) || "Marked as arrived");
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setArrivingVehicleId(null);
+    }
+  };
 
   const handleMarkPaid = async () => {
     if (!activeOrgId || !payDialogPayable) return;
@@ -129,6 +153,136 @@ export function SourcingClient() {
         </Card>
       </div>
 
+      {/* In-progress special orders.
+          Deliberately not another table: each row is one live commitment to a
+          customer, and the thing that matters is how long they have been
+          waiting — so the layout leads with the stage and the wait, not with
+          columns of figures. The payables table below stays financial. */}
+      <section>
+        <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+          <h2 className="text-base font-semibold">{t("OrdersInProgress" as any) || "Orders in progress"}</h2>
+          {pipeline && pipeline.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {pipeline.length} {t("VehiclesOnOrder" as any) || "vehicles on order"}
+              {" · "}
+              {pipeline.reduce((sum, row) => sum + row.sourceCost, 0).toLocaleString()} JOD{" "}
+              {t("CommittedToSuppliers" as any) || "committed to source dealers"}
+            </p>
+          )}
+        </div>
+
+        {pipeline === undefined ? (
+          <Card>
+            <CardContent className="py-8 text-center text-sm text-muted-foreground">
+              {t("Loading" as any) || "Loading..."}
+            </CardContent>
+          </Card>
+        ) : pipeline.length === 0 ? (
+          <Card>
+            <CardContent className="py-8 text-center text-sm text-muted-foreground">
+              {t("NoOrdersInProgress" as any) ||
+                "No special orders in progress. Sourced vehicles appear here from the moment they are ordered until the sale completes."}
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-2">
+            {pipeline.map((row) => {
+              // Arrival is its own fact, not a status: a car that arrives while
+              // a deposit holds it stays RESERVED. So the stage is read from
+              // both — "here and spoken for" is a real and common state.
+              const stage = row.hasArrived
+                ? {
+                  label: row.isHeld
+                    ? (t("StageArrivedHeld" as any) || "Arrived · held")
+                    : (t("StageArrived" as any) || "Arrived"),
+                  icon: CheckCircle2,
+                  rail: "bg-emerald-500",
+                  chip: "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-400",
+                }
+                : row.isHeld
+                  ? {
+                    label: t("StageHeldForCustomer" as any) || "Held for customer",
+                    icon: Truck,
+                    rail: "bg-sky-500",
+                    chip: "border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-950 dark:text-sky-400",
+                  }
+                  : {
+                    label: t("StageOnOrder" as any) || "On order",
+                    icon: Clock,
+                    rail: "bg-amber-400",
+                    chip: "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-400",
+                  };
+              const StageIcon = stage.icon;
+              return (
+                <div
+                  key={row._id}
+                  className="relative flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border bg-card ps-5 pe-4 py-3 overflow-hidden"
+                >
+                  <span className={`absolute inset-y-0 start-0 w-1 ${stage.rail}`} aria-hidden="true" />
+
+                  <div className="min-w-[12rem] flex-1">
+                    <p className="font-medium leading-tight">{row.vehicleDesc}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {row.sourcedFromName || t("UnknownSupplier" as any) || "Unknown supplier"}
+                    </p>
+                  </div>
+
+                  <span
+                    className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs font-medium ${stage.chip}`}
+                  >
+                    <StageIcon className="h-3 w-3" aria-hidden="true" />
+                    {stage.label}
+                  </span>
+
+                  <div className="min-w-[9rem]">
+                    <p className="text-xs text-muted-foreground">{t("Customer" as any) || "Customer"}</p>
+                    <p className="text-sm">
+                      {row.customerName ?? (
+                        <span className="text-muted-foreground">
+                          {t("NoCustomerYet" as any) || "Not assigned"}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+
+                  <div className="min-w-[7rem]">
+                    <p className="text-xs text-muted-foreground">{t("DepositTaken" as any) || "Deposit"}</p>
+                    <p className="text-sm font-medium tabular-nums">
+                      {row.depositTotal > 0 ? `${row.depositTotal.toLocaleString()} JOD` : "—"}
+                    </p>
+                  </div>
+
+                  <div className="min-w-[7rem]">
+                    <p className="text-xs text-muted-foreground">{t("SupplierCost" as any) || "Supplier cost"}</p>
+                    <p className="text-sm font-medium tabular-nums">{row.sourceCost.toLocaleString()} JOD</p>
+                  </div>
+
+                  <div className="text-end min-w-[6rem]">
+                    <p
+                      className={`text-lg font-bold tabular-nums leading-none ${row.daysWaiting >= 30 ? "text-red-600 dark:text-red-400" : row.daysWaiting >= 14 ? "text-amber-600 dark:text-amber-500" : ""}`}
+                    >
+                      {row.daysWaiting}
+                    </p>
+                    <p className="text-xs text-muted-foreground">{t("DaysWaiting" as any) || "days waiting"}</p>
+                  </div>
+
+                  {!row.hasArrived && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={arrivingVehicleId === row._id}
+                      onClick={() => void handleMarkArrived(row._id)}
+                    >
+                      {t("MarkArrived" as any) || "Mark arrived"}
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
       {/* Status filter tabs */}
       <div className="flex gap-2">
         {(["PENDING", "PAID", "CANCELLED", "ALL"] as StatusFilter[]).map((s) => (
@@ -146,6 +300,10 @@ export function SourcingClient() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">{t("SupplierPayables" as any)}</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            {t("SupplierPayablesHint" as any) ||
+              "Amounts owed to source dealers. A row appears once the sale completes, or immediately for owned stock bought on account."}
+          </p>
         </CardHeader>
         <CardContent>
           <Table>

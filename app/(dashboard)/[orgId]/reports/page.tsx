@@ -340,7 +340,10 @@ export default function ReportsPage() {
             <div className="flex flex-wrap items-center justify-between gap-2 no-print">
               <div>
                 <h3 className="text-lg font-medium">{t("InventoryValuation")}</h3>
-                <p className="text-sm text-muted-foreground">{t("CurrentAvailableAndReserved")}</p>
+                <p className="text-sm text-muted-foreground">
+                  {t("InventoryValuationScope" as any) ||
+                    "Available, reserved and on-order vehicles, split by ownership"}
+                </p>
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => inventoryReport?.vehicles && downloadCSV(inventoryReport.vehicles, "inventory_report.csv")}>
@@ -352,26 +355,64 @@ export default function ReportsPage() {
               </div>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2 mb-4">
-              <Card className="print-shadow-none border print:border-gray-200">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">{t("ActiveVehicles")}</CardTitle>
-                  <Car className="h-4 w-4 text-muted-foreground no-print" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{inventoryReport?.availableCount ?? 0}</div>
-                </CardContent>
-              </Card>
-              <Card className="print-shadow-none border print:border-gray-200">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">{t("InventoryValue") || "Inventory Value"}</CardTitle>
-                  <BadgeDollarSign className="h-4 w-4 text-muted-foreground no-print" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{format(inventoryReport?.totalValue ?? 0)}</div>
-                </CardContent>
-              </Card>
-            </div>
+            {/* Owned stock and sourced cars are deliberately NOT two equal cards.
+                One is an asset that reconciles to the GL's Vehicle Inventory
+                account; the other is an obligation to a source dealer for a car
+                this dealership does not own. Giving them matching tiles is what
+                let them be read — and summed — as the same thing. */}
+            <Card className="print-shadow-none border print:border-gray-200 mb-4">
+              <CardContent className="p-5">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <BadgeDollarSign className="h-4 w-4 text-muted-foreground no-print" />
+                      <CardTitle className="text-sm font-medium">
+                        {t("OwnedInventoryValue" as any) || "Owned Inventory Value"}
+                      </CardTitle>
+                    </div>
+                    <div className="text-3xl font-bold mt-2 tabular-nums">
+                      {format(inventoryReport?.totalValue ?? 0)}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1 max-w-md">
+                      {t("OwnedInventoryValueHint" as any) ||
+                        "Vehicles this dealership owns. Reconciles to the Vehicle Inventory account in the general ledger."}
+                    </p>
+                  </div>
+                  <div className="text-end">
+                    <div className="text-2xl font-bold tabular-nums">{inventoryReport?.ownedCount ?? 0}</div>
+                    <p className="text-xs text-muted-foreground">
+                      {t("OwnedVehicles" as any) || "Owned vehicles"}
+                    </p>
+                  </div>
+                </div>
+
+                {(inventoryReport?.sourcedCount ?? 0) > 0 && (
+                  <div className="mt-4 border-t pt-4 flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <Car className="h-4 w-4 text-amber-600 no-print" />
+                        <span className="text-sm font-medium text-amber-700 dark:text-amber-500">
+                          {t("SourcedCommitment" as any) || "Sourced — committed, not owned"}
+                        </span>
+                      </div>
+                      <div className="text-2xl font-bold mt-1 tabular-nums text-amber-700 dark:text-amber-500">
+                        {format(inventoryReport?.sourcedCommitment ?? 0)}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1 max-w-md">
+                        {t("SourcedCommitmentHint" as any) ||
+                          "Owed to source dealers for special-order cars. An obligation, not an asset — excluded from inventory value above."}
+                      </p>
+                    </div>
+                    <div className="text-end">
+                      <div className="text-2xl font-bold tabular-nums">{inventoryReport?.sourcedCount ?? 0}</div>
+                      <p className="text-xs text-muted-foreground">
+                        {t("SourcedVehicles" as any) || "Sourced vehicles"}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
 
             <Card className="print-shadow-none border print:border-gray-200 overflow-x-auto">
               <Table>
@@ -379,6 +420,7 @@ export default function ReportsPage() {
                   <TableRow>
                     <TableHead>{t("Vehicle")}</TableHead>
                     <TableHead>{t("VIN")}</TableHead>
+                    <TableHead>{t("Ownership" as any) || "Ownership"}</TableHead>
                     <TableHead>{t("Status")}</TableHead>
                     <TableHead className="text-right">{t("PurchasePrice") || "Purchase Price"}</TableHead>
                     <TableHead className="text-right">{t("Expenses")}</TableHead>
@@ -390,6 +432,15 @@ export default function ReportsPage() {
                     <TableRow key={vehicle._id}>
                       <TableCell className="font-medium">{vehicle.year} {vehicle.make} {vehicle.model}</TableCell>
                       <TableCell className="font-mono text-xs">{vehicle.vin}</TableCell>
+                      <TableCell>
+                        {vehicle.isSourced ? (
+                          <span className="inline-flex items-center rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-400">
+                            {t("Sourced" as any) || "Sourced"}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">{t("OwnedStock" as any) || "Owned"}</span>
+                        )}
+                      </TableCell>
                       <TableCell>{vehicle.status}</TableCell>
                       <TableCell className="text-right">{format(vehicle.purchasePrice || 0)}</TableCell>
                       <TableCell className="text-right">{format(vehicle.totalExpenses || 0)}</TableCell>
@@ -398,7 +449,7 @@ export default function ReportsPage() {
                   ))}
                   {!inventoryReport?.vehicles?.length && (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center py-6 text-muted-foreground">
+                      <TableCell colSpan={7} className="text-center py-6 text-muted-foreground">
                         {t("NoActiveVehiclesInInventory")}
                       </TableCell>
                     </TableRow>

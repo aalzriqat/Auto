@@ -652,6 +652,12 @@ export default defineSchema({
     sourceType: v.optional(v.union(v.literal("STOCK"), v.literal("SOURCED"))),
     sourcedFromName: v.optional(v.string()),
     sourceCost: v.optional(v.number()),
+    // When a sourced car physically reached the dealership. Arrival cannot be
+    // expressed through `status`: a special-order car that arrives while a
+    // customer deposit is holding it must stay RESERVED, and the status guard
+    // refuses to move a vehicle out of RESERVED anyway — so "on order" vs
+    // "arrived" had no representation for exactly the cars that need it.
+    arrivedAt: v.optional(v.number()),
     notes: v.optional(v.string()),
     imageIds: v.optional(v.array(v.id("_storage"))),
     // Phase 61 — trust passport (widen-only). Dealer self-service form (vehicle

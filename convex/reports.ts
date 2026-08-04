@@ -162,8 +162,11 @@ export const getInventoryReport = query({
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
     }
 
-    // Fetch AVAILABLE and RESERVED vehicles via index — avoids scanning sold/archived
-    const [availableVehicles, reservedVehicles] = await Promise.all([
+    // Fetch AVAILABLE, RESERVED and SOURCING vehicles via index — avoids
+    // scanning sold/archived. SOURCING is included so special-order cars appear
+    // in the sourced/committed figure below; they are never part of owned
+    // inventory value.
+    const [availableVehicles, reservedVehicles, sourcingVehicles] = await Promise.all([
       ctx.db
         .query("vehicles")
         .withIndex("by_org_status", (q) =>
@@ -178,9 +181,16 @@ export const getInventoryReport = query({
         )
         .filter((q) => q.neq(q.field("isDeleted"), true))
         .collect(),
+      ctx.db
+        .query("vehicles")
+        .withIndex("by_org_status", (q) =>
+          q.eq("orgId", args.orgId).eq("status", "SOURCING")
+        )
+        .filter((q) => q.neq(q.field("isDeleted"), true))
+        .collect(),
     ]);
 
-    const activeInventory = [...availableVehicles, ...reservedVehicles];
+    const activeInventory = [...availableVehicles, ...reservedVehicles, ...sourcingVehicles];
 
     // Fetch expenses only for active inventory vehicles
     const expensesByVehicle = new Map<string, any[]>();
@@ -196,7 +206,17 @@ export const getInventoryReport = query({
       })
     );
 
-    let totalValue = 0;
+    // Owned stock and sourced (drop-ship) cars are two different things and
+    // must not share a total. A SOURCED vehicle is located at another dealer on
+    // a customer's behalf: it never enters physical inventory, never posts to
+    // Vehicle Inventory (postVehicleAcquisitionIfOwned returns early for it),
+    // and on sale credits AP — Vehicle Suppliers. Summing it into "Inventory
+    // Value" overstated the org's assets against its own general ledger by the
+    // sum of every sourced car's cost, and presented a liability as an asset.
+    let ownedValue = 0;
+    let sourcedCommitment = 0;
+    let ownedCount = 0;
+    let sourcedCount = 0;
 
     const enrichedInventory = activeInventory.map((vehicle) => {
       // Deleted and reversed expenses are not part of a vehicle's cost. The
@@ -221,24 +241,38 @@ export const getInventoryReport = query({
       const capitalizedExpenses = expenses
         .filter((exp) => exp.accountingTreatment === "CAPITALIZED_INVENTORY")
         .reduce((sum, exp) => sum + (exp.capitalizedAmount ?? 0), 0);
-      const totalInvestment =
-        vehicle.sourceType === "SOURCED"
-          ? (vehicle.sourceCost ?? 0)
-          : (vehicle.purchasePrice ?? 0) + (vehicle.landedCostTotal ?? 0) + capitalizedExpenses;
+      const isSourced = vehicle.sourceType === "SOURCED";
+      const totalInvestment = isSourced
+        ? (vehicle.sourceCost ?? 0)
+        : (vehicle.purchasePrice ?? 0) + (vehicle.landedCostTotal ?? 0) + capitalizedExpenses;
 
-      totalValue += totalInvestment;
+      if (isSourced) {
+        sourcedCommitment += totalInvestment;
+        sourcedCount += 1;
+      } else {
+        ownedValue += totalInvestment;
+        ownedCount += 1;
+      }
 
       return {
         ...vehicle,
         purchasePrice: vehicle.purchasePrice ?? 0,
         totalExpenses,
         totalInvestment,
+        isSourced,
       };
     });
 
     return {
       availableCount: activeInventory.length,
-      totalValue,
+      ownedCount,
+      sourcedCount,
+      // Owned stock only — this is the figure that reconciles to the GL's
+      // Vehicle Inventory account.
+      totalValue: ownedValue,
+      // What the dealership will owe source dealers for cars it has committed
+      // to but does not own. An obligation, not an asset.
+      sourcedCommitment,
       vehicles: enrichedInventory,
     };
   },

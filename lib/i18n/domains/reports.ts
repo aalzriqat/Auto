@@ -9,8 +9,19 @@ export const reportsEn = {
   // Inventory
   InventoryValuation: "Inventory Valuation",
   CurrentAvailableAndReserved: "Current available and reserved vehicles",
+  InventoryValuationScope: "Available, reserved and on-order vehicles, split by ownership",
   ActiveVehicles: "Active Vehicles",
   InventoryValue: "Inventory Value",
+  OwnedInventoryValue: "Owned Inventory Value",
+  OwnedInventoryValueHint:
+    "Vehicles this dealership owns. Reconciles to the Vehicle Inventory account in the general ledger.",
+  OwnedVehicles: "Owned vehicles",
+  SourcedCommitment: "Sourced — committed, not owned",
+  SourcedCommitmentHint:
+    "Owed to source dealers for special-order cars. An obligation, not an asset — excluded from inventory value above.",
+  SourcedVehicles: "Sourced vehicles",
+  Ownership: "Ownership",
+  OwnedStock: "Owned",
   TotalInvested: "Total Invested",
   NoActiveVehiclesInInventory: "No active vehicles in inventory.",
 
@@ -80,8 +91,19 @@ export const reportsAr = {
   // Inventory
   InventoryValuation: "تقييم المخزون",
   CurrentAvailableAndReserved: "المركبات المتاحة والمحجوزة حالياً",
+  InventoryValuationScope: "المركبات المتاحة والمحجوزة وقيد الطلب، مقسّمة حسب الملكية",
   ActiveVehicles: "المركبات النشطة",
   InventoryValue: "قيمة المخزون",
+  OwnedInventoryValue: "قيمة المخزون المملوك",
+  OwnedInventoryValueHint:
+    "المركبات التي يملكها المعرض. تتطابق مع حساب مخزون المركبات في دفتر الأستاذ العام.",
+  OwnedVehicles: "مركبات مملوكة",
+  SourcedCommitment: "مورَّدة — التزام وليست ملكاً",
+  SourcedCommitmentHint:
+    "مبالغ مستحقة لمعارض التوريد عن الطلبيات الخاصة. التزام وليس أصلاً — مستثناة من قيمة المخزون أعلاه.",
+  SourcedVehicles: "مركبات مورَّدة",
+  Ownership: "الملكية",
+  OwnedStock: "مملوكة",
   TotalInvested: "إجمالي الاستثمار",
   NoActiveVehiclesInInventory: "لا توجد مركبات نشطة في المخزون.",
 

@@ -347,14 +347,27 @@ export const reconcileVehicleHolds = internalMutation({
         (await hasActiveDepositHold(ctx, vehicle._id)) ||
         (await hasActiveReservationHold(ctx, { orgId: args.orgId, vehicleId: vehicle._id }));
 
-      const target = hasHold ? "RESERVED" : "AVAILABLE";
+      // Mirror syncVehicleHoldStatus exactly, so the dry-run report and the real
+      // run can never disagree. A released hold now restores `preHoldStatus`
+      // rather than always falling back to AVAILABLE, and SOURCING is a status a
+      // hold can promote *from* — so computing the target as a flat
+      // RESERVED/AVAILABLE pair would have printed "to: AVAILABLE" while the
+      // write produced SOURCING.
+      const target = hasHold ? "RESERVED" : (vehicle.preHoldStatus ?? "AVAILABLE");
       if (vehicle.status === target) continue;
-      // Only the two states syncVehicleHoldStatus itself moves between. This
-      // is what keeps SOLD and ARCHIVED out — a sold car is not "unheld", and
-      // re-listing one because its sale row was deleted would be worse than
-      // the inconsistency being fixed — and equally keeps SOURCING and
-      // IN_INSPECTION out, which are mid-workflow rather than mis-held.
-      if (vehicle.status !== "RESERVED" && vehicle.status !== "AVAILABLE") continue;
+      // Only the states syncVehicleHoldStatus itself moves between. This is what
+      // keeps SOLD and ARCHIVED out — a sold car is not "unheld", and re-listing
+      // one because its sale row was deleted would be worse than the
+      // inconsistency being fixed — and equally keeps IN_INSPECTION/IN_REPAIR
+      // out, which describe where the car physically is.
+      //
+      // SOURCING is included: a deposit taken on a special-order car used to
+      // leave the vehicle on SOURCING while writing a live hold, so those rows
+      // are exactly the drift this migration exists to repair, and skipping
+      // them meant the one tool for the job could not fix the one case that
+      // produced it.
+      const reconcilableStatuses = ["RESERVED", "AVAILABLE", "SOURCING"];
+      if (!reconcilableStatuses.includes(vehicle.status)) continue;
 
       released.push({ vehicleId: vehicle._id.toString(), from: vehicle.status, to: target });
       if (!dryRun) {

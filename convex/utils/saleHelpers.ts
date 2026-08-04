@@ -13,12 +13,17 @@ export async function markVehicleAsSold(
 /**
  * Puts a vehicle back on the lot after its sale is cancelled/reversed.
  *
- * A SOURCED (drop-ship) car has never been owned — it is located at another
- * dealer on a customer's behalf and only ever credits AP-Suppliers, never
- * Vehicle Inventory. Blanket-restoring it to AVAILABLE presented a car the
- * dealership does not possess as owned stock on the lot, and counted its cost
- * as owned inventory value. It goes back to SOURCING instead, where the
- * special order resumes.
+ * A SOURCED (drop-ship) car that has NOT arrived has never been owned — it is
+ * located at another dealer on a customer's behalf and only ever credits
+ * AP-Suppliers, never Vehicle Inventory. Blanket-restoring it to AVAILABLE
+ * presented a car the dealership does not possess as owned stock on the lot,
+ * and counted its cost as owned inventory value. It goes back to SOURCING
+ * instead, where the special order resumes.
+ *
+ * A sourced car that HAS arrived is physically on the lot, so it returns to
+ * AVAILABLE like any other. Sending it back to SOURCING would drop it out of
+ * the public marketplace (marketplaceBrowse only lists AVAILABLE/SOLD) even
+ * though it is sitting there ready to sell.
  */
 export async function restoreVehicleFromSale(
   ctx: MutationCtx,
@@ -26,10 +31,9 @@ export async function restoreVehicleFromSale(
 ): Promise<void> {
   const vehicle = await ctx.db.get(vehicleId);
   if (vehicle && vehicle.status === "SOLD") {
+    const notYetArrived = vehicle.sourceType === "SOURCED" && vehicle.arrivedAt == null;
     await ctx.db.patch(vehicleId, {
-      status:
-        vehicle.preHoldStatus ??
-        (vehicle.sourceType === "SOURCED" ? ("SOURCING" as const) : ("AVAILABLE" as const)),
+      status: vehicle.preHoldStatus ?? (notYetArrived ? ("SOURCING" as const) : ("AVAILABLE" as const)),
       preHoldStatus: undefined,
     });
   }

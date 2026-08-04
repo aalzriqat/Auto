@@ -7,6 +7,7 @@ import { runWithIdempotency } from "./utils/idempotency";
 import { hookSupplierPaymentSettled } from "./accounting/workflowHooks";
 import { toMinorUnits } from "./utils/money";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
+import { Id } from "./_generated/dataModel";
 
 export const list = query({
   args: {
@@ -59,6 +60,100 @@ export const list = query({
         };
       })
     );
+  },
+});
+
+/**
+ * The live special-order pipeline: cars being sourced from another dealer on a
+ * customer's behalf that have not yet been sold.
+ *
+ * This is the half of the Special Orders page that was named and described but
+ * never built. `vehicleSupplierPayables` rows — the only thing the page showed
+ * — are written at SALE COMPLETION (utils/saleCompletion.ts) or at acquisition
+ * for owned stock bought ON_ACCOUNT, so a special order in progress produced no
+ * row at all and the page sat empty for exactly as long as the order was live,
+ * then filled up once it was over.
+ *
+ * A sourced car is in the pipeline while it is SOURCING, RESERVED (a customer
+ * deposit is holding it) or AVAILABLE. SOLD and ARCHIVED cars drop out — at
+ * that point the payable exists and the table below covers it.
+ *
+ * Arrival is read from `vehicle.arrivedAt`, not from the status: a car that
+ * arrives while a deposit is holding it stays RESERVED, so status alone cannot
+ * distinguish "still at the source dealer" from "here and spoken for".
+ */
+export const listPipeline = query({
+  args: {
+    orgId: v.id("organizations"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+
+    const pipelineStatuses = ["SOURCING", "RESERVED", "AVAILABLE"] as const;
+    const byStatus = await Promise.all(
+      pipelineStatuses.map((status) =>
+        ctx.db
+          .query("vehicles")
+          .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", status))
+          .filter((q) => q.neq(q.field("isDeleted"), true))
+          .collect()
+      )
+    );
+
+    const sourcedVehicles = byStatus.flat().filter((vehicle) => vehicle.sourceType === "SOURCED");
+    const now = Date.now();
+
+    const rows = await Promise.all(
+      sourcedVehicles.map(async (vehicle) => {
+        // Who the car is being sourced for. A deposit taken in the sales wizard
+        // is the strongest signal; an active reservation is the fallback.
+        const deposits = await ctx.db
+          .query("deposits")
+          .withIndex("by_vehicle_hold", (q) => q.eq("vehicleId", vehicle._id).eq("holdActive", true))
+          .take(20);
+        const activeDeposits = deposits.filter(
+          (deposit) => deposit.orgId === args.orgId && deposit.isDeleted !== true
+        );
+        const depositTotal = activeDeposits.reduce((sum, deposit) => sum + deposit.amount, 0);
+
+        let customerId: Id<"customers"> | null = activeDeposits[0]?.customerId ?? null;
+        if (!customerId) {
+          const reservations = await ctx.db
+            .query("vehicleReservations")
+            .withIndex("by_org_vehicle_status", (q) =>
+              q.eq("orgId", args.orgId).eq("vehicleId", vehicle._id).eq("status", "ACTIVE")
+            )
+            .take(20);
+          const liveReservation = reservations.find(
+            (reservation) => reservation.expiresAt === undefined || reservation.expiresAt > now
+          );
+          customerId = liveReservation?.customerId ?? null;
+        }
+
+        const customer = customerId ? await ctx.db.get(customerId) : null;
+        const safeCustomer = customer?.orgId === args.orgId ? customer : null;
+
+        return {
+          _id: vehicle._id,
+          vehicleDesc: `${vehicle.year} ${vehicle.make} ${vehicle.model}${vehicle.trim ? ` ${vehicle.trim}` : ""}`,
+          vin: vehicle.vin,
+          status: vehicle.status,
+          arrivedAt: vehicle.arrivedAt ?? null,
+          hasArrived: vehicle.arrivedAt != null,
+          isHeld: depositTotal > 0 || vehicle.status === "RESERVED",
+          sourcedFromName: vehicle.sourcedFromName ?? null,
+          sourceCost: vehicle.sourceCost ?? 0,
+          sellingPrice: vehicle.sellingPrice,
+          customerName: safeCustomer
+            ? `${safeCustomer.firstName} ${safeCustomer.lastName}`.trim()
+            : null,
+          depositTotal,
+          daysWaiting: Math.floor((now - (vehicle.createdAt ?? vehicle._creationTime)) / (24 * 60 * 60 * 1000)),
+        };
+      })
+    );
+
+    return rows.sort((a, b) => b.daysWaiting - a.daysWaiting);
   },
 });
 
