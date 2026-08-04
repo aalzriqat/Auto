@@ -1304,6 +1304,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "كان حذف حالة عميل يترك كل شركة تمويل تقبل تلك الحالة مشيرةً إلى حالة لم تعد موجودة. فيفشل تعديل الشركة برسالة «حالة العميل المقبولة غير موجودة في هذه المؤسسة» — دون مخرج، لأن قائمة الاختيار لا تعرض إلا الحالات الموجودة فعلاً، فلا يمكن إلغاء تحديد الحالة المفقودة وتُرسل مجدداً مع كل حفظ. ولم يكن حذف الحالات وإعادة إنشائها يحل المشكلة: فالإدخالات الجديدة تحمل هويات جديدة بينما تظل الشركة تشير إلى القديمة. أصبح حذف الحالة الآن يزيلها من كل شركة تقبلها، ويؤدي حفظ الشركة إلى إصلاح أي إشارة متبقية. أما الشركة التي لم تعد لديها أي حالة مقبولة فتُعطَّل بدلاً من توسيعها بصمت لتقبل جميع العملاء، وتعرض الشاشة أسماء الشركات التي جرى ذلك لها لتحديد حالة وإعادة تفعيلها. وهذا يفسّر أيضاً الشركات التي كانت قد اختفت بصمت من مقارنة التمويل.",
     publishedAt: releaseAt(2026, 8, 4, 5),
   },
+  {
+    type: "FIX",
+    titleEn: "The newest leads are now at the top of the list",
+    titleAr: "أصبحت أحدث الفرص في أعلى القائمة",
+    descriptionEn: "The leads list opened on your oldest leads, so a lead that came in minutes ago sat at the very bottom — on the last page, after loading every older one. Sorting the column did not help, because that only reorders the rows already on screen. Leads now arrive newest first everywhere: the leads page, the stage and assignee filters, the mobile app, and the dashboard's recent-leads strip, which had been showing the oldest leads under a \"recent\" heading.",
+    descriptionAr: "كانت قائمة الفرص تبدأ بأقدم الفرص، فتقع الفرصة التي وردت قبل دقائق في آخر القائمة تماماً — في الصفحة الأخيرة، بعد تحميل كل ما هو أقدم منها. ولم يكن ترتيب العمود يحل المشكلة لأنه لا يعيد ترتيب سوى الصفوف الظاهرة على الشاشة. أصبحت الفرص تظهر من الأحدث إلى الأقدم في كل مكان: صفحة الفرص، وفلاتر المرحلة والمسؤول، وتطبيق الجوال، وشريط الفرص الأخيرة في لوحة التحكم الذي كان يعرض أقدم الفرص تحت عنوان «الأحدث».",
+    publishedAt: releaseAt(2026, 8, 4, 6),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

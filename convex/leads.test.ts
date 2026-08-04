@@ -297,3 +297,64 @@ describe("leads.getLinkedSale", () => {
     expect(result?._id).toBe(linkedSaleId);
   });
 });
+
+describe("leads.list ordering", () => {
+  test("returns the newest leads first, and puts them on the first page", async () => {
+    const { t, orgId, customerId, asUser } = await setup();
+
+    // Created oldest → newest, so an ascending scan would return them in this
+    // same order and bury "newest" at the very end.
+    const labels = ["oldest", "middle", "newest"];
+    for (const source of labels) {
+      await asUser.mutation(api.leads.create, { orgId, customerId, source });
+    }
+
+    const firstPage = await asUser.query(api.leads.list, {
+      orgId,
+      paginationOpts: { numItems: 2, cursor: null },
+    });
+
+    // The point is the *page*, not just the sort: a client-side sort could
+    // reorder these two rows, but it could never pull "newest" into a page it
+    // was not part of.
+    expect(firstPage.page.map((lead: any) => lead.source)).toEqual(["newest", "middle"]);
+
+    const secondPage = await asUser.query(api.leads.list, {
+      orgId,
+      paginationOpts: { numItems: 2, cursor: firstPage.continueCursor },
+    });
+    expect(secondPage.page.map((lead: any) => lead.source)).toEqual(["oldest"]);
+  });
+
+  test("newest first also holds when filtering by stage", async () => {
+    const { t, orgId, customerId, asUser } = await setup();
+
+    const olderId = await asUser.mutation(api.leads.create, { orgId, customerId, source: "older" });
+    const newerId = await asUser.mutation(api.leads.create, { orgId, customerId, source: "newer" });
+    await asUser.mutation(api.leads.update, { orgId, leadId: olderId, stage: "CONTACTED" });
+    await asUser.mutation(api.leads.update, { orgId, leadId: newerId, stage: "CONTACTED" });
+
+    const page = await asUser.query(api.leads.list, {
+      orgId,
+      stage: "CONTACTED",
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+    expect(page.page.map((lead: any) => lead.source)).toEqual(["newer", "older"]);
+  });
+
+  test("newest first also holds when filtering by assignee", async () => {
+    const { t, orgId, userId, customerId, asUser } = await setup();
+
+    const olderId = await asUser.mutation(api.leads.create, { orgId, customerId, source: "older" });
+    const newerId = await asUser.mutation(api.leads.create, { orgId, customerId, source: "newer" });
+    await asUser.mutation(api.leads.update, { orgId, leadId: olderId, assignedUserId: userId });
+    await asUser.mutation(api.leads.update, { orgId, leadId: newerId, assignedUserId: userId });
+
+    const page = await asUser.query(api.leads.list, {
+      orgId,
+      assignedUserId: userId,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+    expect(page.page.map((lead: any) => lead.source)).toEqual(["newer", "older"]);
+  });
+});
