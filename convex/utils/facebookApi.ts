@@ -1,5 +1,126 @@
 export const FACEBOOK_GRAPH_VERSION = "v25.0";
 
+const FACEBOOK_PROFILE_LOOKUP_TIMEOUT_MS = 5_000;
+
+export type FacebookUserProfileLookup =
+  | { ok: true; name: string }
+  | { ok: false; error: string };
+
+function nonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return normalized || undefined;
+}
+
+function recordValue(candidate: unknown): Record<string, unknown> | null {
+  return candidate && typeof candidate === "object"
+    ? candidate as Record<string, unknown>
+    : null;
+}
+
+function recordArray(candidate: unknown): Record<string, unknown>[] {
+  return Array.isArray(candidate)
+    ? candidate.map(recordValue).filter((entry): entry is Record<string, unknown> => entry !== null)
+    : [];
+}
+
+function profileName(payload: Record<string, unknown> | null): string | undefined {
+  const fullName = nonEmptyString(payload?.name);
+  if (fullName) return fullName;
+  const firstName = nonEmptyString(payload?.first_name);
+  const lastName = nonEmptyString(payload?.last_name);
+  return [firstName, lastName].filter(Boolean).join(" ") || undefined;
+}
+
+function profileError(payload: Record<string, unknown> | null, status: number): string {
+  const error = recordValue(payload?.error);
+  return nonEmptyString(error?.message) ?? `Facebook profile lookup failed (${status})`;
+}
+
+function conversationParticipantName(
+  payload: Record<string, unknown> | null,
+  psid: string,
+  pageId: string,
+): string | undefined {
+  const conversation = recordArray(payload?.data)[0];
+  const participants = recordArray(recordValue(conversation?.participants)?.data);
+  const customer = participants.find((participant) => participant.id === psid)
+    ?? participants.find((participant) => participant.id !== pageId);
+  return profileName(customer ?? null);
+}
+
+async function fetchGraphJson(url: URL, pageAccessToken: string): Promise<{
+  ok: boolean;
+  status: number;
+  payload: Record<string, unknown> | null;
+}> {
+  const response = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${pageAccessToken}` },
+    signal: AbortSignal.timeout(FACEBOOK_PROFILE_LOOKUP_TIMEOUT_MS),
+  });
+  const payload: unknown = await response.json().catch(() => null);
+  return { ok: response.ok, status: response.status, payload: recordValue(payload) };
+}
+
+async function fetchConversationParticipantProfile(
+  psid: string,
+  pageId: string,
+  pageAccessToken: string,
+): Promise<FacebookUserProfileLookup> {
+  const url = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${pageId}/conversations`);
+  url.searchParams.set("platform", "messenger");
+  url.searchParams.set("user_id", psid);
+  url.searchParams.set("fields", "id,participants");
+
+  const response = await fetchGraphJson(url, pageAccessToken);
+  const name = conversationParticipantName(response.payload, psid, pageId);
+  return response.ok && name
+    ? { ok: true, name }
+    : { ok: false, error: profileError(response.payload, response.status) };
+}
+
+async function fetchDirectFacebookProfile(
+  psid: string,
+  pageAccessToken: string,
+): Promise<FacebookUserProfileLookup> {
+  const url = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${psid}`);
+  url.searchParams.set("fields", "first_name,last_name,name");
+
+  const response = await fetchGraphJson(url, pageAccessToken);
+  const name = profileName(response.payload);
+  return response.ok && name
+    ? { ok: true, name }
+    : { ok: false, error: profileError(response.payload, response.status) };
+}
+
+/**
+ * Resolves a Messenger Page-scoped user ID to the account name visible in the
+ * Page conversation. Production Graph responses expose the participant name
+ * here even when the legacy direct PSID endpoint rejects the same sender with
+ * object/permission error 100/33. The direct endpoint remains a fallback for
+ * accounts where Meta still permits it.
+ */
+export async function fetchFacebookUserProfileName(
+  psid: string,
+  pageId: string,
+  pageAccessToken: string,
+): Promise<FacebookUserProfileLookup> {
+  try {
+    const conversationProfile = await fetchConversationParticipantProfile(
+      psid,
+      pageId,
+      pageAccessToken,
+    );
+    if (conversationProfile.ok) return conversationProfile;
+    return await fetchDirectFacebookProfile(psid, pageAccessToken);
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Facebook profile lookup failed",
+    };
+  }
+}
+
 /**
  * Text-bearing fields to request when fetching a post/reel's content to
  * match against vehicle inventory. Reels resolve to a Video node (not a
