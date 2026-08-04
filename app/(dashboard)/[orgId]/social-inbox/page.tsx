@@ -20,6 +20,12 @@ import {
 } from "@/components/ui/select";
 import { Id } from "@/convex/_generated/dataModel";
 import { Car, MessageCircle, ExternalLink, RefreshCw } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { SocialConversationDialog, ConversationKey } from "@/components/leads/SocialConversationDialog";
 import {
   Table,
@@ -108,12 +114,15 @@ export default function SocialInboxPage() {
   );
 
   const [activeConversation, setActiveConversation] = useState<ConversationKey | null>(null);
-  const [resyncing, setResyncing] = useState(false);
+  // Which maintenance job is in flight, so the trigger can name it while it
+  // runs instead of showing an unlabelled spinner.
+  const [resyncing, setResyncing] = useState<"names" | "vehicles" | null>(null);
   const resyncContactNamesAction = useAction(api.socialInboxBackfill.resyncContactNames);
+  const resyncEventsAction = useAction(api.socialInboxBackfill.resyncEvents);
 
-  const handleResync = async () => {
+  const handleResyncNames = async () => {
     if (!activeOrgId || resyncing) return;
-    setResyncing(true);
+    setResyncing("names");
     try {
       // This button is intentionally name-only. Vehicle matching, assignment,
       // and suggestion backfills must never run as a side effect of repairing
@@ -144,7 +153,32 @@ export default function SocialInboxPage() {
       console.error("Social contact name resync failed", error);
       toast.error(t("ResyncFailed") || "Resync failed");
     } finally {
-      setResyncing(false);
+      setResyncing(null);
+    }
+  };
+
+  // Kept as a separate, explicitly chosen action. Folding it back into the
+  // name repair is what caused vehicle links and suggestions to change as a
+  // side effect of fixing a contact's name.
+  const handleResyncVehicleLinks = async () => {
+    if (!activeOrgId || resyncing) return;
+    setResyncing("vehicles");
+    try {
+      const summary = await resyncEventsAction({ orgId: activeOrgId });
+      const linked = summary.igVehicles + summary.fbVehicles;
+      const suggested = summary.igHints + summary.fbHints;
+      const details = [
+        linked > 0 ? `${linked} ${t("ResyncLinkedVehicles")}` : null,
+        suggested > 0 ? `${suggested} ${t("ResyncSuggestionsFound")}` : null,
+      ].filter(Boolean);
+      toast.success(
+        details.length > 0 ? `${t("ResyncSuccess")} ${details.join(", ")}.` : t("ResyncSuccess")
+      );
+    } catch (error) {
+      console.error("Social vehicle link resync failed", error);
+      toast.error(t("ResyncFailed") || "Resync failed");
+    } finally {
+      setResyncing(null);
     }
   };
 
@@ -313,19 +347,49 @@ export default function SocialInboxPage() {
             </Button>
           )}
 
+          {/* One trigger, two named repairs. Separate side-by-side buttons
+              would put a second "Resync …" control in a bar that already
+              carries four filters, and the two jobs are chosen rarely — what
+              matters is that picking vehicle matching is deliberate rather
+              than something a name repair does on the operator's behalf. */}
           {isManager && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 text-xs ms-auto"
-              onClick={handleResync}
-              disabled={resyncing}
-            >
-              <RefreshCw className={`h-3 w-3 me-1 ${resyncing ? "animate-spin" : ""}`} />
-              {resyncing
-                ? (t("Resyncing") || "Resyncing...")
-                : (t("ResyncContactNames") || "Resync contact names")}
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs ms-auto"
+                  disabled={resyncing !== null}
+                >
+                  <RefreshCw className={`h-3 w-3 me-1 ${resyncing ? "animate-spin" : ""}`} />
+                  {resyncing === "names"
+                    ? t("ResyncingNames")
+                    : resyncing === "vehicles"
+                      ? t("ResyncingVehicleLinks")
+                      : t("ResyncMaintenance")}
+                </Button>
+              </DropdownMenuTrigger>
+              {/* align="end" follows the trigger's own edge, so this opens
+                  inward in both LTR and RTL rather than off-screen. */}
+              <DropdownMenuContent align="end" className="w-64">
+                <DropdownMenuItem onClick={handleResyncNames}>
+                  <span className="flex flex-col gap-0.5">
+                    <span className="text-xs font-medium">{t("ResyncContactNames")}</span>
+                    <span className="text-[11px] text-muted-foreground">
+                      {t("ResyncContactNamesHint")}
+                    </span>
+                  </span>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleResyncVehicleLinks}>
+                  <span className="flex flex-col gap-0.5">
+                    <span className="text-xs font-medium">{t("ResyncVehicleLinks")}</span>
+                    <span className="text-[11px] text-muted-foreground">
+                      {t("ResyncVehicleLinksHint")}
+                    </span>
+                  </span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
         </div>
 
