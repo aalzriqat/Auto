@@ -10,7 +10,7 @@ overrides:
   postcss: 8.5.22
   fast-uri: ">=4.1.2"
   ip-address: ">=10.3.1"
-  "js-yaml@>=4.0.0 <4.3.0": ">=4.3.0"
+  "js-yaml@>=4.0.0 <4.3.0": ">=4.3.0 <5.0.0"
   # brace-expansion: pin each major line to its own patched release. The 5.x
   # line changed the module's export shape, so it is NOT a drop-in for the
   # old-API CommonJS consumers (minimatch@3 via eslint/exceljs) — forcing 5.x
@@ -19,14 +19,9 @@ overrides:
   "brace-expansion@1": 1.1.18
   "brace-expansion@2": 2.1.4
   "brace-expansion@>=3.0.0": 5.0.9
-# GHSA-mh99 (brace-expansion unbounded-expansion DoS) has no fix on the 1.x/2.x
-# lines — only the 5.x API, which breaks minimatch@3's old-API consumers (above). The
-# only affected paths are dev/build tooling (eslint) and archiver's fixed-path
-# globbing, where brace patterns are never attacker-controlled. Ignore it rather
-# than take a build-breaking bump.
-auditConfig:
-  ignoreGhsas:
-    - GHSA-mh99-v99m-4gvg
+# GHSA-mh99 (brace-expansion unbounded-expansion DoS) is patched by the pins
+# above. Separate per-major overrides remain necessary because minimatch@3's
+# old-API CommonJS consumers are incompatible with the 5.x export shape.
 allowBuilds:
   '@sentry/cli': true
   core-js: true

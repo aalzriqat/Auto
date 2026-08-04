@@ -121,9 +121,16 @@ export default function SocialInboxPage() {
       const nameResyncSummary = await resyncContactNamesAction({ orgId: activeOrgId });
       const updatedContactCount =
         nameResyncSummary.resolved + nameResyncSummary.duplicatesCollapsed;
-      if (nameResyncSummary.remaining > 0) {
+      if (nameResyncSummary.attemptedButUnresolved > 0) {
         toast.warning(
           t("ResyncNamesPartialFailure").replace(
+            "{count}",
+            String(nameResyncSummary.attemptedButUnresolved),
+          ),
+        );
+      } else if (nameResyncSummary.remaining > 0) {
+        toast.warning(
+          t("ResyncNamesRemaining").replace(
             "{count}",
             String(nameResyncSummary.remaining),
           ),
