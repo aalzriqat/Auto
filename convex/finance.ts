@@ -14,9 +14,11 @@ import { PERMISSIONS } from "./utils/permissions";
  *  - A status that exists but belongs to **another org** is a cross-tenant
  *    reference. That still throws.
  *  - A status id that resolves to **nothing** is a dangling reference to a row
- *    that has since been deleted. `orgCustomerStatuses.remove` hard-deletes and
- *    cleans up nothing, so every finance company that accepted that status was
- *    left holding an id pointing at no row.
+ *    that has since been deleted. `orgCustomerStatuses.remove` used to
+ *    hard-delete without clearing these references, leaving every finance
+ *    company that accepted that status holding an id pointing at no row. That
+ *    delete now cascades, so this case is about the rows it already created,
+ *    which stay in the data until each company is next saved.
  *
  * Throwing on the second case bricked the record. The edit dialog seeds its form
  * from the company's stored `acceptedStatuses`, and its checkbox list only
@@ -110,7 +112,15 @@ export const updateCompany = mutation({
     // since-deleted statuses is repaired the first time it is saved.
     const acceptedStatuses = await sanitizeAcceptedStatuses(ctx, orgId, updates.acceptedStatuses);
 
-    await ctx.db.patch(id, { ...updates, acceptedStatuses });
+    // `acceptedStatuses` is optional, and Convex deletes a field patched to
+    // `undefined`. Spreading it unconditionally would therefore erase a
+    // company's restriction list for any caller that simply left the argument
+    // out — silently widening it to "accepts every customer". Only write the
+    // key when the caller actually sent one.
+    await ctx.db.patch(id, {
+      ...updates,
+      ...(acceptedStatuses === undefined ? {} : { acceptedStatuses }),
+    });
   },
 });
 

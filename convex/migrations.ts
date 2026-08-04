@@ -393,6 +393,8 @@ export const cleanupDanglingAcceptedStatuses = internalMutation({
   args: {
     orgId: v.id("organizations"),
     dryRun: v.optional(v.boolean()),
+    batchSize: v.optional(v.number()),
+    cursor: v.optional(v.string()),
   },
   handler: async (
     ctx,
@@ -401,13 +403,22 @@ export const cleanupDanglingAcceptedStatuses = internalMutation({
     dryRun: boolean;
     scanned: number;
     repaired: Array<{ companyId: string; name: string; removed: number; remaining: number }>;
+    isDone: boolean;
+    continueCursor: string | null;
   }> => {
     const dryRun = args.dryRun ?? true;
+    const batchSize = Math.min(Math.max(args.batchSize ?? 200, 1), 500);
 
-    const companies = await ctx.db
+    // Paginated rather than collected: this reads one status document per
+    // accepted reference and patches every affected company in a single
+    // transaction, so an org with a long company list could blow Convex's read
+    // or write limits and fail after reporting what it would have done. Feed
+    // `continueCursor` back in until `isDone`.
+    const page = await ctx.db
       .query("financeCompanies")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
+      .paginate({ numItems: batchSize, cursor: args.cursor ?? null });
+    const companies = page.page;
 
     const repaired: Array<{ companyId: string; name: string; removed: number; remaining: number }> = [];
 
@@ -437,6 +448,12 @@ export const cleanupDanglingAcceptedStatuses = internalMutation({
       }
     }
 
-    return { dryRun, scanned: companies.length, repaired };
+    return {
+      dryRun,
+      scanned: companies.length,
+      repaired,
+      isDone: page.isDone,
+      continueCursor: page.isDone ? null : page.continueCursor,
+    };
   },
 });

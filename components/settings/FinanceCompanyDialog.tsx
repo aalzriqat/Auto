@@ -108,6 +108,11 @@ export function FinanceCompanyDialog({
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeOrgId) return;
+    // Refuse to save against a status list that has not arrived. The checkbox
+    // list renders empty while loading, so the form would otherwise submit a
+    // selection the user was never shown — and for a new company that persists
+    // an empty list, which downstream reads as "accepts every customer".
+    if (loadedCustomerStatuses === undefined) return;
 
     setIsLoading(true);
     try {
@@ -115,13 +120,10 @@ export function FinanceCompanyDialog({
       // saved with, and deleting a customer status used to leave those ids
       // behind — the checkbox list below only renders live statuses, so a
       // stale one was invisible here, could not be unticked, and was re-sent on
-      // every save. Skipped entirely until the list has loaded, so a slow query
-      // cannot be mistaken for "no statuses exist" and clear a real selection.
-      const liveStatusIds = new Set(loadedCustomerStatuses?.map((status) => status._id));
-      const acceptedStatuses = (
-        loadedCustomerStatuses === undefined
-          ? formData.acceptedStatuses
-          : formData.acceptedStatuses.filter((id) => liveStatusIds.has(id as Id<"orgCustomerStatuses">))
+      // every save.
+      const liveStatusIds = new Set(loadedCustomerStatuses.map((status) => status._id));
+      const acceptedStatuses = formData.acceptedStatuses.filter((id) =>
+        liveStatusIds.has(id as Id<"orgCustomerStatuses">)
       ) as Id<"orgCustomerStatuses">[];
 
       const payload = {
@@ -294,7 +296,9 @@ export function FinanceCompanyDialog({
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               {t("Cancel" as any)}
             </Button>
-            <Button type="submit" disabled={isLoading}>
+            {/* Also disabled until the customer statuses arrive, so the button
+                cannot be pressed while the tick-list below is still empty. */}
+            <Button type="submit" disabled={isLoading || loadedCustomerStatuses === undefined}>
               {isLoading ? t("Saving..." as any) : t("Save" as any)}
             </Button>
           </DialogFooter>

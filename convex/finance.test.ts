@@ -210,6 +210,40 @@ describe("finance companies", () => {
     expect(company?.acceptedStatuses).toEqual([liveStatusId]);
   });
 
+  test("omitting_accepted_statuses_on_update_preserves_the_existing_restriction", async () => {
+    const { t, orgId, asOwner } = await setupFinanceOrg();
+    const statusId = await t.run((ctx) =>
+      ctx.db.insert("orgCustomerStatuses", { orgId, label: "Salary Slip", isActive: true, order: 1 })
+    );
+
+    const companyId = await asOwner.mutation(api.finance.createCompany, {
+      orgId,
+      name: "Restricted Finance",
+      profitRate: 4,
+      maxTermMonths: 48,
+      gracePeriodMonths: 0,
+      isActive: true,
+      acceptedStatuses: [statusId],
+    });
+
+    // The argument is optional. Convex deletes a field patched to `undefined`,
+    // so writing it unconditionally would erase the restriction and silently
+    // widen the company to "accepts every customer".
+    await asOwner.mutation(api.finance.updateCompany, {
+      id: companyId,
+      orgId,
+      name: "Restricted Finance Renamed",
+      profitRate: 4,
+      maxTermMonths: 48,
+      gracePeriodMonths: 0,
+      isActive: true,
+    });
+
+    const company = await t.run((ctx) => ctx.db.get(companyId));
+    expect(company?.name).toBe("Restricted Finance Renamed");
+    expect(company?.acceptedStatuses).toEqual([statusId]);
+  });
+
   test("cleanup_migration_strips_dangling_accepted_statuses", async () => {
     const { t, orgId } = await setupFinanceOrg();
     const liveStatusId = await t.run((ctx) =>
@@ -240,6 +274,8 @@ describe("finance companies", () => {
 
     const dry = await t.mutation(internal.migrations.cleanupDanglingAcceptedStatuses, { orgId });
     expect(dry.dryRun).toBe(true);
+    expect(dry.isDone).toBe(true);
+    expect(dry.continueCursor).toBeNull();
     expect(dry.repaired).toEqual([
       { companyId, name: "Quietly Broken Finance", removed: 1, remaining: 1 },
     ]);
