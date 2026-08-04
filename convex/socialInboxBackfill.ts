@@ -1,11 +1,18 @@
 import { v } from "convex/values";
-import { action, internalQuery } from "./_generated/server";
+import { action, internalQuery, MutationCtx } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
-import { isUnresolvedInstagramName } from "./instagramEngagement";
-import { hasDuplicatedName } from "./utils/socialMobile";
-import { isUnresolvedFacebookName } from "./facebookEngagement";
+import {
+  isUnresolvedInstagramName,
+  PLACEHOLDER_FIRST_NAME as INSTAGRAM_PLACEHOLDER_FIRST_NAME,
+} from "./instagramEngagement";
+import { hasDuplicatedName, hasStrayPlaceholderSurname } from "./utils/socialMobile";
+
+import {
+  isUnresolvedFacebookName,
+  PLACEHOLDER_FIRST_NAME as FACEBOOK_PLACEHOLDER_FIRST_NAME,
+} from "./facebookEngagement";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { INSTAGRAM_GRAPH_VERSION } from "./utils/instagramApi";
@@ -17,6 +24,16 @@ import {
 } from "./utils/facebookApi";
 import { matchVehicleFromText, suggestVehiclesFromText } from "./utils/vehicleTextMatch";
 import { requireFeature } from "./subscriptions";
+
+/**
+ * Both platforms' placeholder first names. Checked as a set so a contact
+ * holding ids for both platforms cannot clear one platform's test purely
+ * because it carries the other's placeholder.
+ */
+const PLACEHOLDER_FIRST_NAMES = [
+  FACEBOOK_PLACEHOLDER_FIRST_NAME,
+  INSTAGRAM_PLACEHOLDER_FIRST_NAME,
+] as const;
 
 export const requireManagerAuthQuery = internalQuery({
   args: { orgId: v.id("organizations") },
@@ -487,6 +504,9 @@ const CONTACT_NAME_RESYNC_LIMIT = 200;
  */
 const CONTACT_NAME_SCAN_LIMIT = 4_000;
 
+/** Events read per customer when proving a surname was manufactured. */
+const RECORDED_NAME_EVENT_LIMIT = 20;
+
 export const getUnresolvedSocialCustomers = internalQuery({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
@@ -510,16 +530,28 @@ export const getUnresolvedSocialCustomers = internalQuery({
     // "ali_1990". Dropping the repeated surname is the one edit that cannot
     // invent a different name — and it costs no Graph call, so these rows
     // never compete with the placeholder backlog for the lookup budget.
-    const duplicated: Array<Id<"customers">> = [];
+    // Rows repaired locally by dropping a surname nobody chose.
+    const artificialSurnames: Array<Id<"customers">> = [];
 
     for (const customer of customers) {
       if (customer.isDeleted) continue;
-      // `hasDuplicatedName` picks up contacts the old splitter wrote into both
-      // name fields ("mhty7220 mhty7220"). They are not placeholders, so
-      // nothing else would ever revisit them.
-      const isDuplicated = hasDuplicatedName(customer);
-
-      if (isDuplicated) duplicated.push(customer._id);
+      // Two shapes the old splitter left behind, neither of which any other
+      // repair can see: the name written into both fields ("mhty7220
+      // mhty7220"), and a real first name carrying the placeholder's surname
+      // ("kamalalia19 Contact", "Feras Contact"). The second is the common one
+      // — every single-token profile name produced it — and it is the reason
+      // contacts kept showing a "Contact" surname after a resync.
+      // Requires a social id even for the duplicated-name shape. Without it
+      // an ordinary manual or imported customer legitimately named "Ali Ali"
+      // was queued and shortened — equal given and family names are common in
+      // Arabic, and nothing in the create or import paths forbids them.
+      const isSocialContact = Boolean(customer.facebookUserId || customer.instagramUserId);
+      const artificialShape =
+        hasDuplicatedName(customer) ||
+        hasStrayPlaceholderSurname(customer, PLACEHOLDER_FIRST_NAMES);
+      if (isSocialContact && artificialShape) {
+        artificialSurnames.push(customer._id);
+      }
       if (
         customer.instagramUserId &&
         isUnresolvedInstagramName(customer, customer.instagramUserId)
@@ -531,17 +563,87 @@ export const getUnresolvedSocialCustomers = internalQuery({
       }
     }
 
-    return { instagram, facebook, duplicated };
+    return { instagram, facebook, artificialSurnames };
   },
 });
 
-export const collapseDuplicatedName = internalMutation({
+/**
+ * Drops a surname the contact never had — either the first name repeated, or
+ * the placeholder's "Contact" left behind next to a real name.
+ *
+ * Local only: it can shorten a name but never replace one, so it cannot put a
+ * handle where a person's name used to be. A staff-entered name is untouched
+ * because neither shape can arise from one.
+ */
+/**
+ * Every handle or profile name this customer's own social events recorded.
+ *
+ * This is the evidence that a surname was manufactured rather than chosen. The
+ * artefact arises when intake splits a *single-token* name, so the resulting
+ * `firstName` is character-for-character the value the platform sent. Anything
+ * a person or staff member actually typed will not match one of these.
+ */
+async function recordedSenderNames(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  customerId: Id<"customers">
+): Promise<Set<string>> {
+  const [igEvents, fbEvents] = await Promise.all([
+    ctx.db
+      .query("instagramEvents")
+      .withIndex("by_org_customer", (q) => q.eq("orgId", orgId).eq("customerId", customerId))
+      .take(RECORDED_NAME_EVENT_LIMIT),
+    ctx.db
+      .query("facebookEvents")
+      .withIndex("by_org_customer", (q) => q.eq("orgId", orgId).eq("customerId", customerId))
+      .take(RECORDED_NAME_EVENT_LIMIT),
+  ]);
+
+  const names = new Set<string>();
+  for (const event of igEvents) {
+    const handle = event.senderUsername?.trim();
+    if (handle) names.add(handle);
+  }
+  for (const event of fbEvents) {
+    const name = event.senderName?.trim();
+    if (name) names.add(name);
+  }
+  return names;
+}
+
+/**
+ * Drops a surname the contact never had.
+ *
+ * Fires only when `firstName` is exactly a value the platform sent us for this
+ * same customer. That is what separates the artefact from a real name:
+ *
+ *   "kamalalia19 Contact"  — events recorded "kamalalia19"  → manufactured
+ *   "Jane Contact"         — events recorded "Jane Contact" → genuine, kept
+ *   "Ahmad Contact"        — staff typed it, never recorded → genuine, kept
+ *   "Ali Ali" (no social)  — no events at all               → genuine, kept
+ *
+ * The proof requirement is what makes this safe to run repeatedly: a staff
+ * member who corrects a name to one ending in "Contact" cannot have it
+ * silently re-broken on the next resync, and an ordinary manual or imported
+ * customer is never a candidate because it has no social events to match.
+ *
+ * Local only: it can shorten a name, never replace one.
+ */
+export const collapseArtificialSurname = internalMutation({
   args: { customerId: v.id("customers") },
   handler: async (ctx, args) => {
     const customer = await ctx.db.get(args.customerId);
-    // Re-checked inside the mutation: the row may have been renamed between
-    // being listed and being repaired.
-    if (!customer || !hasDuplicatedName(customer)) return false;
+    // Re-checked inside the mutation, and matching discovery exactly: the row
+    // may have been renamed or archived while the Graph lookups above ran.
+    if (!customer || customer.isDeleted) return false;
+
+    const shape =
+      hasDuplicatedName(customer) || hasStrayPlaceholderSurname(customer, PLACEHOLDER_FIRST_NAMES);
+    if (!shape) return false;
+
+    const recorded = await recordedSenderNames(ctx, customer.orgId, customer._id);
+    if (!recorded.has(customer.firstName.trim())) return false;
+
     await ctx.db.patch(args.customerId, { lastName: "" });
     return true;
   },
@@ -575,8 +677,8 @@ export const resyncContactNames = action({
     attemptedButUnresolved: number;
     /** The org's whole remaining backlog, including contacts past the batch. */
     remaining: number;
-    /** Rows whose repeated surname was dropped, with no Graph call. */
-    duplicatesCollapsed: number;
+    /** Rows whose artificial surname was dropped locally, with no Graph call. */
+    surnamesRepaired: number;
   }> => {
     await ctx.runQuery(internal.socialInboxBackfill.requireManagerAuthQuery, { orgId: args.orgId });
 
@@ -623,13 +725,13 @@ export const resyncContactNames = action({
 
     // Local repair, so it runs for every duplicated row rather than competing
     // for the lookup budget above.
-    let duplicatesCollapsed = 0;
-    for (const customerId of before.duplicated) {
+    let surnamesRepaired = 0;
+    for (const customerId of before.artificialSurnames) {
       const collapsed = await ctx.runMutation(
-        internal.socialInboxBackfill.collapseDuplicatedName,
+        internal.socialInboxBackfill.collapseArtificialSurname,
         { customerId }
       );
-      if (collapsed) duplicatesCollapsed++;
+      if (collapsed) surnamesRepaired++;
     }
 
     const after = await ctx.runQuery(
@@ -650,7 +752,7 @@ export const resyncContactNames = action({
       resolved: Math.max(0, startingTotal - remaining),
       attemptedButUnresolved: Math.max(0, remaining - (startingTotal - attempted)),
       remaining,
-      duplicatesCollapsed,
+      surnamesRepaired,
     };
   },
 });

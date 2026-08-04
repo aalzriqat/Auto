@@ -129,7 +129,7 @@ export default function SocialInboxPage() {
       // a social contact's display name.
       const nameResyncSummary = await resyncContactNamesAction({ orgId: activeOrgId });
       const updatedContactCount =
-        nameResyncSummary.resolved + nameResyncSummary.duplicatesCollapsed;
+        nameResyncSummary.resolved + nameResyncSummary.surnamesRepaired;
       if (nameResyncSummary.attemptedButUnresolved > 0) {
         toast.warning(
           t("ResyncNamesPartialFailure").replace(

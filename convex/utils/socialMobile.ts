@@ -24,16 +24,54 @@ export function splitDisplayName(displayName: string): { firstName: string; last
  * prefers the account's `username` — always a single token — so essentially
  * every IG contact it touched ended up like "mhty7220 mhty7220".
  *
- * Used to make those rows eligible for a re-fetch, not to rewrite them blind.
- * Re-fetching is what makes this safe for someone genuinely named "Ali Ali":
- * Graph returns first_name "Ali" and last_name "Ali", which the fixed splitter
- * writes back unchanged, while a handle collapses to a single name.
+ * Recognising the shape is not on its own permission to edit. Equal given and
+ * family names are ordinary — "Ali Ali" is a real name, particularly in Arabic
+ * — so the caller additionally requires a social id and proof that the first
+ * name is exactly what the platform sent for that customer. See
+ * `socialInboxBackfill.collapseArtificialSurname`.
  */
 export function hasDuplicatedName(
   customer: { firstName: string; lastName: string }
 ): boolean {
   const first = customer.firstName.trim();
   return first.length > 0 && first === customer.lastName.trim();
+}
+
+/** The surname half of both platform placeholders. */
+export const PLACEHOLDER_SURNAME = "Contact";
+
+/**
+ * True when a contact carries a real first name but the placeholder's surname.
+ *
+ * The old splitter read a single-token name as
+ * `lastName: parts.slice(1).join(" ") || PLACEHOLDER_LAST_NAME`, so an
+ * Instagram handle or a mononym came out as "kamalalia19 Contact" or
+ * "Feras Contact". Those rows are invisible to every other repair: the first
+ * name is genuine so they are not placeholders, and the two halves differ so
+ * they are not duplicates — which left them stuck with a surname no one ever
+ * had.
+ *
+ * `firstName` must not itself be a platform placeholder, so a true
+ * "Facebook Contact" stays fully unresolved and still gets a name lookup
+ * rather than being quietly shortened to "Facebook".
+ *
+ * Every placeholder is checked, not just the one for the platform being
+ * repaired. A contact carrying both a Facebook and an Instagram id and named
+ * "Facebook Contact" would otherwise clear the Instagram check — "Facebook" is
+ * not "Instagram" — and be shortened, which is the one outcome this must never
+ * produce: it looks repaired while having thrown away the marker that says a
+ * real name is still missing.
+ */
+export function hasStrayPlaceholderSurname(
+  customer: { firstName: string; lastName: string },
+  placeholderFirstNames: readonly string[]
+): boolean {
+  const first = customer.firstName.trim();
+  return (
+    customer.lastName.trim() === PLACEHOLDER_SURNAME &&
+    first.length > 0 &&
+    !placeholderFirstNames.includes(first)
+  );
 }
 
 export type SharedMobileNumber = {
@@ -182,8 +220,8 @@ export async function applyResolvedDisplayName(
   // Deliberately does NOT accept a duplicated name as rewritable. Instagram
   // often returns only a handle, so treating "Ali Ali" as repairable here
   // would replace a real (possibly staff-entered) name with "ali_1990".
-  // Duplicated rows are repaired by `collapseDuplicatedName`, which can only
-  // drop the repeated surname and can never invent a different name.
+  // Duplicated rows are repaired by `collapseArtificialSurname`, which can
+  // only drop the repeated surname and can never invent a different name.
   if (!customer || !isUnresolved(customer)) return;
   await ctx.db.patch(customerId, splitDisplayName(displayName));
 }

@@ -12,7 +12,7 @@ import { postCommentReply, postDirectMessage, INSTAGRAM_GRAPH_VERSION } from "./
 import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
 import { matchVehicleFromText, suggestVehiclesFromText } from "./utils/vehicleTextMatch";
-import { attachSharedMobileNumberToCustomer, readSettingsAndSharedMobile, applyResolvedDisplayName } from "./utils/socialMobile";
+import { attachSharedMobileNumberToCustomer, readSettingsAndSharedMobile, applyResolvedDisplayName, splitDisplayName } from "./utils/socialMobile";
 import { nextGeneratedLeadAssignee } from "./utils/leadAssignment";
 import { recordLeadCreated, recordLeadActivity, describeLeadFieldValue } from "./utils/leadActivity";
 import { mobileReceivedAutoReplyText } from "./utils/socialMobileReply";
@@ -145,11 +145,18 @@ export const handleIncomingInstagramEvent = internalMutation({
       customers.find((c) => c.instagramUserId === senderInstagramId) ?? null;
 
     if (!customer) {
-      const nameParts = (senderUsername ?? `${PLACEHOLDER_FIRST_NAME} ${PLACEHOLDER_LAST_NAME}`).split(" ");
+      // The placeholder is only a fallback for having no name at all. Reusing
+      // its surname for a single-token name is what produced contacts reading
+      // "kamalalia19 Contact" — the fixed splitter leaves the surname empty
+      // instead, so intake stops creating the artefact the repair cleans up.
+      const inboundName = senderUsername?.trim();
+      const { firstName, lastName } = inboundName
+        ? splitDisplayName(inboundName)
+        : { firstName: PLACEHOLDER_FIRST_NAME, lastName: PLACEHOLDER_LAST_NAME };
       const customerId = await ctx.db.insert("customers", {
         orgId,
-        firstName: nameParts[0] ?? PLACEHOLDER_FIRST_NAME,
-        lastName: nameParts.slice(1).join(" ") || PLACEHOLDER_LAST_NAME,
+        firstName,
+        lastName,
         instagramUserId: senderInstagramId,
         createdAt: Date.now(),
         source: "Instagram",
