@@ -868,7 +868,16 @@ export function VehicleDetailsDialog({
               )}
             </TabsContent>
             <TabsContent value="reservations" className="m-0 focus-visible:outline-none space-y-5">
-              {canEditVehicles && canViewCustomers && vehicle.status === "AVAILABLE" && (
+              {/* SOURCING belongs here as much as AVAILABLE — a special-order
+                  car is located for a specific customer, so reserving one is
+                  the whole point. Gating the form on AVAILABLE alone left the
+                  backend's sourced-reservation path with no way to reach it.
+                  RESERVED is included because a deposit hold already promotes
+                  the vehicle there, and adding the formal reservation record on
+                  top is exactly what a dealer does next. */}
+              {canEditVehicles &&
+                canViewCustomers &&
+                ["AVAILABLE", "SOURCING", "RESERVED"].includes(vehicle.status) && (
                 <div className="rounded-lg border p-4 space-y-3">
                   <h3 className="font-semibold text-sm">{t("CreateReservation" as any)}</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">

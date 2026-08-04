@@ -52,8 +52,32 @@ const HOLDABLE_STATUSES = ["AVAILABLE", "SOURCING"] as const;
 
 type HoldableStatus = (typeof HOLDABLE_STATUSES)[number];
 
-function isHoldable(status: string): status is HoldableStatus {
+export function isHoldableStatus(status: string): status is HoldableStatus {
   return (HOLDABLE_STATUSES as readonly string[]).includes(status);
+}
+
+/**
+ * The status `syncVehicleHoldStatus` would move this vehicle to, or null if it
+ * would leave it alone. Exported so `migrations.reconcileVehicleHolds` can
+ * report a dry run that cannot disagree with what the real run writes.
+ */
+export function resolveHoldTargetStatus(
+  vehicle: Pick<Doc<"vehicles">, "status" | "preHoldStatus" | "sourceType">,
+  hasHold: boolean
+): HoldableStatus | "RESERVED" | null {
+  if (hasHold && isHoldableStatus(vehicle.status)) return "RESERVED";
+  if (!hasHold && vehicle.status === "RESERVED") {
+    // A snapshot of SOURCING only still means something while the vehicle is
+    // actually sourced. `vehicles.update` can flip sourceType to STOCK without
+    // requesting a status change, which the workflow guard permits — restoring
+    // the stale snapshot then parked owned stock in the sourcing lifecycle,
+    // where it is excluded from available inventory and from the lot.
+    if (vehicle.preHoldStatus === "SOURCING" && vehicle.sourceType !== "SOURCED") {
+      return "AVAILABLE";
+    }
+    return vehicle.preHoldStatus ?? "AVAILABLE";
+  }
+  return null;
 }
 
 /**
@@ -74,7 +98,7 @@ export async function holdVehicleForDeposit(
   if (vehicle.status === "ARCHIVED") {
     throwAppError(AppErrorCode.VEHICLE_ARCHIVED, "Cannot place a deposit on an archived vehicle.");
   }
-  if (isHoldable(vehicle.status)) {
+  if (isHoldableStatus(vehicle.status)) {
     await ctx.db.patch(vehicleId, {
       status: "RESERVED" as const,
       preHoldStatus: vehicle.status,
@@ -109,15 +133,21 @@ export async function hasActiveReservationHold(
   args: { orgId: Id<"organizations">; vehicleId: Id<"vehicles"> }
 ): Promise<boolean> {
   const now = Date.now();
+  // Filter to ACTIVE in the index, not in memory. `by_org_vehicle` returns
+  // oldest-first across every status, so a vehicle with 50+ historical
+  // released/expired reservations pushed a genuinely active one out of the
+  // window — and this function answering "no hold" is what releases a vehicle
+  // back to AVAILABLE. A car could be handed back to the lot while a live
+  // reservation still pointed at it.
   const reservations = await ctx.db
     .query("vehicleReservations")
-    .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
+    .withIndex("by_org_vehicle_status", (q) =>
+      q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId).eq("status", "ACTIVE")
+    )
     .take(50);
 
   return reservations.some(
-    (reservation) =>
-      reservation.status === "ACTIVE" &&
-      (reservation.expiresAt === undefined || reservation.expiresAt > now),
+    (reservation) => reservation.expiresAt === undefined || reservation.expiresAt > now,
   );
 }
 
@@ -134,7 +164,13 @@ export async function syncVehicleHoldStatus(
     (await hasActiveDepositHold(ctx, vehicleId)) ||
     (await hasActiveReservationHold(ctx, { orgId: vehicle.orgId, vehicleId }));
 
-  if (hasHold && isHoldable(vehicle.status)) {
+  // One resolver decides the target for both this function and the
+  // reconcileVehicleHolds migration, so a dry-run preview cannot disagree with
+  // what actually gets written.
+  const target = resolveHoldTargetStatus(vehicle, hasHold);
+  if (target === null || target === vehicle.status) return;
+
+  if (target === "RESERVED") {
     const patch: {
       status: "RESERVED";
       preHoldStatus: HoldableStatus;
@@ -142,12 +178,14 @@ export async function syncVehicleHoldStatus(
       updatedBy?: Id<"users">;
     } = {
       status: "RESERVED" as const,
-      preHoldStatus: vehicle.status,
+      // Safe: resolveHoldTargetStatus only returns RESERVED when the current
+      // status is holdable.
+      preHoldStatus: vehicle.status as HoldableStatus,
       updatedAt: Date.now(),
     };
     if (actorId) patch.updatedBy = actorId;
     await ctx.db.patch(vehicleId, patch);
-  } else if (!hasHold && vehicle.status === "RESERVED") {
+  } else {
     // Restore where the hold found it. Rows written before preHoldStatus
     // existed have none — AVAILABLE is the right fallback for those, since
     // that was the only status a hold could previously promote from.
@@ -157,7 +195,7 @@ export async function syncVehicleHoldStatus(
       updatedAt: number;
       updatedBy?: Id<"users">;
     } = {
-      status: vehicle.preHoldStatus ?? "AVAILABLE",
+      status: target,
       preHoldStatus: undefined,
       updatedAt: Date.now(),
     };

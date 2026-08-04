@@ -1420,12 +1420,19 @@ export const createReservation = mutation({
       ? amountToMinorOrThrow(args.depositAmount!, currency!, "Reservation deposit amount")
       : undefined;
 
+    // ACTIVE-only, filtered in the index. `by_org_vehicle` returns oldest-first
+    // over every status, so on a vehicle with 100+ historical released/expired
+    // reservations a live one fell outside the window — the expiry sweep below
+    // missed it and the duplicate check further down let a second active
+    // reservation be written on top of it.
     const existingReservations = await ctx.db
       .query("vehicleReservations")
-      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
+      .withIndex("by_org_vehicle_status", (q) =>
+        q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId).eq("status", "ACTIVE")
+      )
       .take(100);
     for (const reservation of existingReservations) {
-      if (reservation.status === "ACTIVE" && reservation.expiresAt !== undefined && reservation.expiresAt <= now) {
+      if (reservation.expiresAt !== undefined && reservation.expiresAt <= now) {
         if (reservation.depositId) {
           const deposit = await ctx.db.get(reservation.depositId);
           if (deposit && deposit.orgId === args.orgId && deposit.status === "HELD" && deposit.holdActive) {
@@ -1458,9 +1465,12 @@ export const createReservation = mutation({
     if (!reservableStatuses.includes(currentVehicle.status)) {
       throw new ConvexError("Vehicle must be available or on order before it can be reserved.");
     }
-    if (existingReservations.some((reservation) =>
-      reservation.status === "ACTIVE" &&
-      (reservation.expiresAt === undefined || reservation.expiresAt > now)
+    // Every row here was ACTIVE when read; the loop above may since have
+    // patched some to EXPIRED, and those are exactly the ones whose expiry has
+    // passed — so the expiry comparison, not the now-stale in-memory `status`,
+    // is what distinguishes a reservation that still stands.
+    if (existingReservations.some(
+      (reservation) => reservation.expiresAt === undefined || reservation.expiresAt > now
     )) {
       throw new ConvexError("Vehicle already has an active reservation.");
     }

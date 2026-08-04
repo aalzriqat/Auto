@@ -1,7 +1,8 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
+import type { Doc, Id } from "./_generated/dataModel";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }), check: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }) },
@@ -53,6 +54,15 @@ async function setup() {
   );
 
   return { t, orgId, userId, approverId, customerId, asUser, asApprover };
+}
+
+/**
+ * Reads a vehicle back with a concrete type. `t.run` with an `any`-typed ctx
+ * infers `unknown`, which plain `tsc --noEmit` tolerates but the stricter
+ * typecheck Convex runs does not.
+ */
+async function getVehicle(t: any, vehicleId: any): Promise<Doc<"vehicles">> {
+  return (await t.run((ctx: any) => ctx.db.get(vehicleId))) as Doc<"vehicles">;
 }
 
 async function makeSourcedVehicle(t: any, orgId: any, overrides: Record<string, unknown> = {}) {
@@ -119,7 +129,7 @@ describe("deposit hold on a sourced vehicle", () => {
       method: "CASH",
     });
 
-    const vehicle = await t.run((ctx: any) => ctx.db.get(vehicleId));
+    const vehicle = await getVehicle(t, vehicleId);
     // Before the fix this stayed "SOURCING" while the deposit was written with
     // holdActive: true — a hold that existed in the database and nowhere on
     // the vehicle.
@@ -153,7 +163,7 @@ describe("deposit hold on a sourced vehicle", () => {
       refundMethod: "CASH",
     });
 
-    const vehicle = await t.run((ctx: any) => ctx.db.get(vehicleId));
+    const vehicle = await getVehicle(t, vehicleId);
     // A blanket fallback to AVAILABLE would present a car the dealership does
     // not own as owned stock on the lot.
     expect(vehicle.status).toBe("SOURCING");
@@ -178,7 +188,7 @@ describe("deposit hold on a sourced vehicle", () => {
       amount: 500,
       method: "CASH",
     });
-    expect((await t.run((ctx: any) => ctx.db.get(vehicleId))).status).toBe("RESERVED");
+    expect((await getVehicle(t, vehicleId)).status).toBe("RESERVED");
 
     await asApprover.mutation(api.deposits.release, {
       orgId,
@@ -187,7 +197,7 @@ describe("deposit hold on a sourced vehicle", () => {
       refundMethod: "CASH",
     });
 
-    expect((await t.run((ctx: any) => ctx.db.get(vehicleId))).status).toBe("AVAILABLE");
+    expect((await getVehicle(t, vehicleId)).status).toBe("AVAILABLE");
   });
 });
 
@@ -202,7 +212,7 @@ describe("createReservation on a sourced vehicle", () => {
       customerId,
     });
 
-    const vehicle = await t.run((ctx: any) => ctx.db.get(vehicleId));
+    const vehicle = await getVehicle(t, vehicleId);
     expect(vehicle.status).toBe("RESERVED");
     expect(vehicle.preHoldStatus).toBe("SOURCING");
   });
@@ -227,16 +237,16 @@ describe("createReservation on a sourced vehicle", () => {
     // exactly as it started — the case this flow exists for could never pass.
     await asUser.mutation(api.vehicles.createReservation, { orgId, vehicleId, customerId });
 
-    const vehicle = await t.run((ctx: any) => ctx.db.get(vehicleId));
+    const vehicle = await getVehicle(t, vehicleId);
     expect(vehicle.status).toBe("RESERVED");
   });
 
   test("another customer's deposit hold still blocks a reservation", async () => {
     const { t, orgId, customerId, asUser } = await setup();
     const vehicleId = await makeSourcedVehicle(t, orgId);
-    const otherCustomerId = await t.run((ctx: any) =>
+    const otherCustomerId = (await t.run((ctx: any) =>
       ctx.db.insert("customers", { orgId, firstName: "Rania", lastName: "Haddad" })
-    );
+    )) as Id<"customers">;
 
     const quoteId = await asUser.mutation(api.quotes.saveQuote, {
       orgId,
@@ -331,7 +341,7 @@ describe("markSourcedVehicleArrived", () => {
 
     await asUser.mutation(api.vehicles.markSourcedVehicleArrived, { orgId, vehicleId });
 
-    const vehicle = await t.run((ctx: any) => ctx.db.get(vehicleId));
+    const vehicle = await getVehicle(t, vehicleId);
     // The status guard refuses to move a vehicle out of RESERVED, so arrival
     // cannot be a status change for exactly the cars in this pipeline.
     expect(vehicle.status).toBe("RESERVED");
@@ -344,7 +354,7 @@ describe("markSourcedVehicleArrived", () => {
 
     await asUser.mutation(api.vehicles.markSourcedVehicleArrived, { orgId, vehicleId });
 
-    const vehicle = await t.run((ctx: any) => ctx.db.get(vehicleId));
+    const vehicle = await getVehicle(t, vehicleId);
     expect(vehicle.status).toBe("AVAILABLE");
     expect(vehicle.arrivedAt).toBeTypeOf("number");
   });
@@ -383,6 +393,154 @@ describe("inventory valuation split", () => {
     expect(report.sourcedCount).toBe(1);
     expect(report.sourcedCommitment).toBe(12800);
     expect(report.totalValue).toBe(0);
+  });
+});
+
+describe("hold detection is not truncated by reservation history", () => {
+  test("an active reservation is still found behind 60 historical ones", async () => {
+    const { t, orgId, customerId, userId, asUser, asApprover } = await setup();
+    const vehicleId = await makeOwnedVehicle(t, orgId);
+
+    // by_org_vehicle returns oldest-first across every status, so a long tail of
+    // released reservations used to push the live one out of the .take(50)
+    // window — and "no hold found" is what hands a vehicle back to the lot.
+    await t.run(async (ctx: any) => {
+      for (let i = 0; i < 60; i++) {
+        await ctx.db.insert("vehicleReservations", {
+          orgId,
+          vehicleId,
+          customerId,
+          status: "RELEASED",
+          reservedBy: userId,
+          reservedAt: Date.now() - (i + 2) * 86400000,
+          releasedAt: Date.now() - (i + 1) * 86400000,
+        });
+      }
+      await ctx.db.insert("vehicleReservations", {
+        orgId,
+        vehicleId,
+        customerId,
+        status: "ACTIVE",
+        reservedBy: userId,
+        reservedAt: Date.now(),
+        expiresAt: Date.now() + 7 * 86400000,
+      });
+      await ctx.db.patch(vehicleId, { status: "RESERVED", preHoldStatus: "AVAILABLE" });
+    });
+
+    // Take an unrelated deposit and release it: the release path asks "is
+    // anything else holding this?" and must see the live reservation.
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 14000,
+      downPayment: 1000,
+      termMonths: 0,
+    });
+    const depositId = await asUser.mutation(api.deposits.create, {
+      orgId,
+      quoteId,
+      amount: 500,
+      method: "CASH",
+    });
+    await asApprover.mutation(api.deposits.release, {
+      orgId,
+      depositId,
+      resolution: "REFUNDED",
+      refundMethod: "CASH",
+    });
+
+    const vehicle = await getVehicle(t, vehicleId);
+    expect(vehicle.status).toBe("RESERVED");
+  });
+});
+
+describe("preHoldStatus does not outlive its meaning", () => {
+  test("a vehicle converted from sourced to owned mid-hold is released to AVAILABLE", async () => {
+    const { t, orgId, customerId, asUser, asApprover } = await setup();
+    const vehicleId = await makeSourcedVehicle(t, orgId);
+
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 15000,
+      downPayment: 1000,
+      termMonths: 0,
+    });
+    const depositId = await asUser.mutation(api.deposits.create, {
+      orgId,
+      quoteId,
+      amount: 500,
+      method: "CASH",
+    });
+    expect((await getVehicle(t, vehicleId)).preHoldStatus).toBe("SOURCING");
+
+    // The dealership bought the car outright while the deposit was live. This
+    // needs no status transition, so the workflow guard permits it.
+    await t.run((ctx: any) =>
+      ctx.db.patch(vehicleId, { sourceType: "STOCK", purchasePrice: 12800 })
+    );
+
+    await asApprover.mutation(api.deposits.release, {
+      orgId,
+      depositId,
+      resolution: "REFUNDED",
+      refundMethod: "CASH",
+    });
+
+    // Restoring the stale SOURCING snapshot would park owned stock in the
+    // sourcing lifecycle, off the lot and out of available inventory.
+    const vehicle = await getVehicle(t, vehicleId);
+    expect(vehicle.status).toBe("AVAILABLE");
+  });
+});
+
+describe("reconcileVehicleHolds repairs pre-existing drift", () => {
+  test("promotes a SOURCING vehicle that a live deposit hold is already holding", async () => {
+    const { t, orgId, customerId, userId } = await setup();
+    const vehicleId = await makeSourcedVehicle(t, orgId);
+
+    // Reproduce the shipped-bug state directly: a live hold recorded against a
+    // vehicle the old code left on SOURCING. This is the row the dealership
+    // already has in production, which no forward code path would ever heal.
+    await t.run((ctx: any) =>
+      ctx.db.insert("deposits", {
+        orgId,
+        vehicleId,
+        customerId,
+        amount: 500,
+        currency: "JOD",
+        method: "CASH",
+        status: "HELD",
+        holdActive: true,
+        createdBy: userId,
+        createdAt: Date.now(),
+      })
+    );
+
+    const dry = await t.mutation(internal.migrations.reconcileVehicleHolds, { orgId });
+    expect(dry.released).toEqual([
+      { vehicleId, from: "SOURCING", to: "RESERVED" },
+    ]);
+
+    await t.mutation(internal.migrations.reconcileVehicleHolds, { orgId, dryRun: false });
+
+    const vehicle = await getVehicle(t, vehicleId);
+    expect(vehicle.status).toBe("RESERVED");
+    expect(vehicle.preHoldStatus).toBe("SOURCING");
+  });
+
+  test("leaves an unheld SOURCING vehicle alone", async () => {
+    const { t, orgId } = await setup();
+    const vehicleId = await makeSourcedVehicle(t, orgId);
+
+    const dry = await t.mutation(internal.migrations.reconcileVehicleHolds, { orgId });
+    expect(dry.released).toEqual([]);
+
+    await t.mutation(internal.migrations.reconcileVehicleHolds, { orgId, dryRun: false });
+    expect((await getVehicle(t, vehicleId)).status).toBe("SOURCING");
   });
 });
 

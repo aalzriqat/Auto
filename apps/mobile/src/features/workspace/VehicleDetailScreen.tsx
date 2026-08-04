@@ -860,7 +860,13 @@ function VehicleDetailContent({
 
         {activeTab === "holds" ? (
           <View style={styles.detailSection}>
-            {canEdit && can(PERMISSION.viewCustomers) && vehicle.status === "AVAILABLE" ? (
+            {/* Mirrors the web dialog: a SOURCING special-order car is exactly
+                what a dealer reserves for a customer, and a RESERVED one is
+                already deposit-held. Gating on AVAILABLE alone made the
+                sourced-reservation path unreachable on mobile too. */}
+            {canEdit &&
+              can(PERMISSION.viewCustomers) &&
+              ["AVAILABLE", "SOURCING", "RESERVED"].includes(vehicle.status) ? (
               <>
                 <Text style={styles.sectionTitle}>{locale === "ar" ? "إنشاء حجز" : "Create reservation"}</Text>
                 <SelectField

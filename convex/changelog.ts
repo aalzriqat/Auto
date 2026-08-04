@@ -1264,6 +1264,38 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "كان نقل الفرصة عبر مراحل البيع يتطلب الضغط على «التالي» مرة لكل مرحلة، دون إمكانية الرجوع — فالفرصة التي تتقدم بالخطأ تبقى في مكانها، والفرصة المسجّلة ناجحة لا يمكن تحريكها. أصبح الضغط على المرحلة يفتح خط المبيعات كاملاً، فيمكن نقل الفرصة إلى أي مرحلة، للأمام أو للخلف، بخطوة واحدة. وإغلاق الفرصة كناجحة أو خاسرة يطلب تأكيداً أولاً، كما تظهر أسماء المراحل بلغتك في كل مكان بدلاً من رموزها الإنجليزية الداخلية.",
     publishedAt: releaseAt(2026, 8, 2, 3),
   },
+  {
+    type: "FIX",
+    titleEn: "A deposit on a special-order car now reserves it",
+    titleAr: "أصبح العربون على سيارة الطلبية الخاصة يحجزها فعلياً",
+    descriptionEn: "Taking a customer's deposit on a car you were sourcing left it showing \"Sourcing\" instead of \"Reserved\". The money was recorded and the hold existed in the system, but nothing showed on the car — and the status could not be corrected by hand, because changing it to Reserved asked you to take a deposit you had already taken. The car could not be reserved by any route. It now moves to Reserved automatically, and returns to Sourcing — not to Available — if the deposit is refunded, so a car you do not own is never presented as stock on your lot. The vehicle's Reservations tab also shows deposit holds taken in the sales wizard, which previously read \"No reservations recorded\" while a live deposit was holding the car.",
+    descriptionAr: "كان أخذ عربون من عميل على سيارة قيد التوريد يُبقيها بحالة «قيد التوريد» بدلاً من «محجوزة». فالمبلغ يُسجَّل والحجز موجود في النظام، لكن لا شيء يظهر على السيارة — ولم يكن بالإمكان تصحيح الحالة يدوياً، لأن تغييرها إلى «محجوزة» كان يطالبك بأخذ عربون سبق أن أخذته. فلم يكن ممكناً حجز السيارة بأي طريق. أصبحت الآن تنتقل إلى «محجوزة» تلقائياً، وتعود إلى «قيد التوريد» — لا إلى «متاحة» — عند رد العربون، فلا تُعرض سيارة لا تملكها كأنها من مخزون معرضك. كما أصبح تبويب الحجوزات في المركبة يعرض حجوزات العربون المأخوذة من معالج المبيعات، بعد أن كان يعرض «لا توجد حجوزات مسجلة» بينما هناك عربون فعلي يحجز السيارة.",
+    publishedAt: releaseAt(2026, 8, 4, 1),
+  },
+  {
+    type: "FEATURE",
+    titleEn: "Special Orders now tracks the cars you are sourcing, not just what you owe",
+    titleAr: "أصبحت الطلبيات الخاصة تتابع السيارات قيد التوريد، لا المستحقات فقط",
+    descriptionEn: "The Special Orders page promised to track vehicles sourced from other dealers on behalf of customers, but only ever listed supplier payments — and those are only created once the sale completes, so the page sat empty for exactly as long as an order was live and filled up once it was over. It now opens with the orders actually in progress: the source dealer, the customer waiting, the deposit taken, and how many days it has been, with anything past two weeks flagged. You can mark a car as arrived from there, which is recorded separately from the status so a car that arrives while a customer's deposit is holding it stays reserved for them.",
+    descriptionAr: "كانت صفحة الطلبيات الخاصة تَعِد بمتابعة المركبات المورَّدة من معارض أخرى لصالح العملاء، لكنها لم تكن تعرض سوى مدفوعات الموردين — وهذه لا تُنشأ إلا بعد إتمام البيع، فتبقى الصفحة فارغة طوال فترة الطلبية ثم تمتلئ بعد انتهائها. أصبحت الآن تبدأ بالطلبيات الجارية فعلاً: معرض المورد، والعميل المنتظر، والعربون المأخوذ، وعدد أيام الانتظار، مع تمييز ما تجاوز أسبوعين. ويمكنك تسجيل وصول السيارة من هناك، ويُحفظ الوصول بمعزل عن الحالة، فالسيارة التي تصل بينما يحجزها عربون عميل تبقى محجوزة له.",
+    publishedAt: releaseAt(2026, 8, 4, 2),
+  },
+  {
+    type: "FIX",
+    titleEn: "Inventory value no longer counts cars you do not own",
+    titleAr: "لم تعد قيمة المخزون تحتسب سيارات لا تملكها",
+    descriptionEn: "The inventory valuation report added sourced cars into the same total as your own stock, so the figure overstated what the dealership owns by the cost of every special order — and disagreed with your own general ledger, which never puts a sourced car into the Vehicle Inventory account. Owned stock and sourced cars are now reported separately: one is inventory value that reconciles to the ledger, the other is what you have committed to pay source dealers, shown as an obligation. Each row in the table says which it is.",
+    descriptionAr: "كان تقرير تقييم المخزون يجمع السيارات المورَّدة في الإجمالي نفسه مع مخزونك الخاص، فيضخّم الرقم بما يعادل تكلفة كل طلبية خاصة — ويخالف دفتر الأستاذ لديك، الذي لا يُدخل السيارة المورَّدة في حساب مخزون المركبات إطلاقاً. أصبح المخزون المملوك والسيارات المورَّدة يُعرضان منفصلين: الأول قيمة مخزون تتطابق مع الدفاتر، والثاني ما التزمت بدفعه لمعارض التوريد ويُعرض بوصفه التزاماً. ويوضّح كل سطر في الجدول إلى أيهما ينتمي.",
+    publishedAt: releaseAt(2026, 8, 4, 3),
+  },
+  {
+    type: "FIX",
+    titleEn: "Dashboard vehicle and lead cards now show real numbers",
+    titleAr: "أصبحت بطاقتا المركبات والعملاء المحتملين في لوحة التحكم تعرضان أرقاماً حقيقية",
+    descriptionEn: "The Vehicles card showed the same number twice, once labelled \"Active Inventory\" and once \"Total\", and that number counted every car you had ever owned — including sold and archived ones. It now shows cars actually on the lot, split into available and reserved, and the \"Stock Level: Healthy\" line — which was fixed text that said Healthy even at zero stock — is replaced by a real count of cars aged over 90 days. On the Leads card, the pipeline chart left out the Interested and Reserved stages entirely, so leads sitting in them vanished from the chart while still being counted beside it, and its legend listed four fixed categories regardless of what the chart contained. The chart now covers every stage and the legend follows it. \"+0.0% growth\", which was fixed text, is gone.",
+    descriptionAr: "كانت بطاقة المركبات تعرض الرقم نفسه مرتين، مرة بعنوان «المخزون النشط» ومرة «الإجمالي»، وكان ذلك الرقم يحتسب كل سيارة امتلكتها يوماً — بما فيها المباعة والمؤرشفة. أصبحت تعرض السيارات الموجودة فعلاً، موزّعة بين متاحة ومحجوزة، واستُبدل سطر «مستوى المخزون: صحي» — وكان نصاً ثابتاً يقول «صحي» حتى عند خلو المخزون — بعدد حقيقي للسيارات التي تجاوز عمرها 90 يوماً. أما بطاقة العملاء المحتملين، فكان مخطط المراحل يُسقِط مرحلتي «مهتم» و«محجوز» تماماً، فتختفي الفرص الموجودة فيهما من المخطط رغم احتسابها بجانبه، وكان مفتاح المخطط يسرد أربع فئات ثابتة مهما كان محتواه. أصبح المخطط يغطي كل المراحل ويتبعه المفتاح. وأُزيلت عبارة «+0.0% نمو» التي كانت نصاً ثابتاً.",
+    publishedAt: releaseAt(2026, 8, 4, 4),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

@@ -441,6 +441,7 @@ export const salesEn = {
   // Special-order pipeline (the tracking half of this page)
   OrdersInProgress: "Orders in progress",
   VehiclesOnOrder: "vehicles on order",
+  VehicleOnOrder: "vehicle on order",
   CommittedToSuppliers: "committed to source dealers",
   NoOrdersInProgress:
     "No special orders in progress. Sourced vehicles appear here from the moment they are ordered until the sale completes.",
@@ -943,6 +944,7 @@ export const salesAr = {
   // مسار الطلبيات الخاصة
   OrdersInProgress: "طلبيات قيد التنفيذ",
   VehiclesOnOrder: "مركبات قيد الطلب",
+  VehicleOnOrder: "مركبة قيد الطلب",
   CommittedToSuppliers: "التزامات تجاه معارض التوريد",
   NoOrdersInProgress:
     "لا توجد طلبيات خاصة قيد التنفيذ. تظهر المركبات المورَّدة هنا منذ لحظة طلبها وحتى إتمام البيع.",

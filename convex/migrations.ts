@@ -15,6 +15,7 @@ import {
   hasActiveDepositHold,
   hasActiveReservationHold,
   syncVehicleHoldStatus,
+  resolveHoldTargetStatus,
 } from "./utils/depositHelpers";
 
 export const backfillPermissions = internalMutation({
@@ -347,27 +348,21 @@ export const reconcileVehicleHolds = internalMutation({
         (await hasActiveDepositHold(ctx, vehicle._id)) ||
         (await hasActiveReservationHold(ctx, { orgId: args.orgId, vehicleId: vehicle._id }));
 
-      // Mirror syncVehicleHoldStatus exactly, so the dry-run report and the real
-      // run can never disagree. A released hold now restores `preHoldStatus`
-      // rather than always falling back to AVAILABLE, and SOURCING is a status a
-      // hold can promote *from* — so computing the target as a flat
-      // RESERVED/AVAILABLE pair would have printed "to: AVAILABLE" while the
-      // write produced SOURCING.
-      const target = hasHold ? "RESERVED" : (vehicle.preHoldStatus ?? "AVAILABLE");
-      if (vehicle.status === target) continue;
-      // Only the states syncVehicleHoldStatus itself moves between. This is what
-      // keeps SOLD and ARCHIVED out — a sold car is not "unheld", and re-listing
-      // one because its sale row was deleted would be worse than the
-      // inconsistency being fixed — and equally keeps IN_INSPECTION/IN_REPAIR
-      // out, which describe where the car physically is.
+      // Ask the hold state machine itself what it would do, rather than
+      // re-deriving it here. The previous flat RESERVED/AVAILABLE pair drifted
+      // from `syncVehicleHoldStatus` in two ways: it could not see that a
+      // SOURCING car with a live hold needs promoting (so the one migration
+      // meant to repair hold drift skipped exactly the rows that produced this
+      // bug), and it printed "to: AVAILABLE" for a released hold that now
+      // restores `preHoldStatus` — a dry run that disagreed with the write.
       //
-      // SOURCING is included: a deposit taken on a special-order car used to
-      // leave the vehicle on SOURCING while writing a live hold, so those rows
-      // are exactly the drift this migration exists to repair, and skipping
-      // them meant the one tool for the job could not fix the one case that
-      // produced it.
-      const reconcilableStatuses = ["RESERVED", "AVAILABLE", "SOURCING"];
-      if (!reconcilableStatuses.includes(vehicle.status)) continue;
+      // A null target means "leave it alone", which is what keeps SOLD and
+      // ARCHIVED out (a sold car is not "unheld", and re-listing one because
+      // its sale row was deleted would be worse than the inconsistency being
+      // fixed), along with IN_INSPECTION/IN_REPAIR and any unheld SOURCING car
+      // that is simply still on order.
+      const target = resolveHoldTargetStatus(vehicle, hasHold);
+      if (target === null || vehicle.status === target) continue;
 
       released.push({ vehicleId: vehicle._id.toString(), from: vehicle.status, to: target });
       if (!dryRun) {

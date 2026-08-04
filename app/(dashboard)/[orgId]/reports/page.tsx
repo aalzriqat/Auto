@@ -381,7 +381,9 @@ export default function ReportsPage() {
                   <div className="text-end">
                     <div className="text-2xl font-bold tabular-nums">{inventoryReport?.ownedCount ?? 0}</div>
                     <p className="text-xs text-muted-foreground">
-                      {t("OwnedVehicles" as any) || "Owned vehicles"}
+                      {inventoryReport?.ownedCount === 1
+                        ? (t("OwnedVehicle" as any) || "Owned vehicle")
+                        : (t("OwnedVehicles" as any) || "Owned vehicles")}
                     </p>
                   </div>
                 </div>
@@ -406,7 +408,9 @@ export default function ReportsPage() {
                     <div className="text-end">
                       <div className="text-2xl font-bold tabular-nums">{inventoryReport?.sourcedCount ?? 0}</div>
                       <p className="text-xs text-muted-foreground">
-                        {t("SourcedVehicles" as any) || "Sourced vehicles"}
+                        {inventoryReport?.sourcedCount === 1
+                          ? (t("SourcedVehicle" as any) || "Sourced vehicle")
+                          : (t("SourcedVehicles" as any) || "Sourced vehicles")}
                       </p>
                     </div>
                   </div>

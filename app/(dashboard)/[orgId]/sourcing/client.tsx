@@ -148,7 +148,13 @@ export function SourcingClient() {
         <Card>
           <CardContent className="pt-4">
             <p className="text-sm text-muted-foreground">{t("TotalSourcedDeals" as any)}</p>
-            <p className="text-2xl font-bold">{allPayables?.length ?? 0}</p>
+            {/* Counts both halves of the page. Reading only the payables table
+                made this card say "0 sourced deals" directly above a list of
+                live special orders, because a payable is not written until the
+                sale completes. */}
+            <p className="text-2xl font-bold">
+              {(pipeline?.length ?? 0) + (allPayables?.length ?? 0)}
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -163,7 +169,10 @@ export function SourcingClient() {
           <h2 className="text-base font-semibold">{t("OrdersInProgress" as any) || "Orders in progress"}</h2>
           {pipeline && pipeline.length > 0 && (
             <p className="text-xs text-muted-foreground">
-              {pipeline.length} {t("VehiclesOnOrder" as any) || "vehicles on order"}
+              {pipeline.length}{" "}
+              {pipeline.length === 1
+                ? (t("VehicleOnOrder" as any) || "vehicle on order")
+                : (t("VehiclesOnOrder" as any) || "vehicles on order")}
               {" · "}
               {pipeline.reduce((sum, row) => sum + row.sourceCost, 0).toLocaleString()} JOD{" "}
               {t("CommittedToSuppliers" as any) || "committed to source dealers"}
