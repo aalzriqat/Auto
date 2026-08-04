@@ -8,6 +8,16 @@ import {
   PLACEHOLDER_FIRST_NAME as INSTAGRAM_PLACEHOLDER_FIRST_NAME,
 } from "./instagramEngagement";
 import { hasDuplicatedName, hasStrayPlaceholderSurname } from "./utils/socialMobile";
+
+/**
+ * Both platforms' placeholder first names. Checked as a set so a contact
+ * holding ids for both platforms cannot clear one platform's test purely
+ * because it carries the other's placeholder.
+ */
+const PLACEHOLDER_FIRST_NAMES = [
+  FACEBOOK_PLACEHOLDER_FIRST_NAME,
+  INSTAGRAM_PLACEHOLDER_FIRST_NAME,
+] as const;
 import {
   isUnresolvedFacebookName,
   PLACEHOLDER_FIRST_NAME as FACEBOOK_PLACEHOLDER_FIRST_NAME,
@@ -529,10 +539,10 @@ export const getUnresolvedSocialCustomers = internalQuery({
       // contacts kept showing a "Contact" surname after a resync.
       const strayFacebookSurname =
         Boolean(customer.facebookUserId) &&
-        hasStrayPlaceholderSurname(customer, FACEBOOK_PLACEHOLDER_FIRST_NAME);
+        hasStrayPlaceholderSurname(customer, PLACEHOLDER_FIRST_NAMES);
       const strayInstagramSurname =
         Boolean(customer.instagramUserId) &&
-        hasStrayPlaceholderSurname(customer, INSTAGRAM_PLACEHOLDER_FIRST_NAME);
+        hasStrayPlaceholderSurname(customer, PLACEHOLDER_FIRST_NAMES);
       if (hasDuplicatedName(customer) || strayFacebookSurname || strayInstagramSurname) {
         artificialSurnames.push(customer._id);
       }
@@ -567,10 +577,10 @@ export const collapseArtificialSurname = internalMutation({
     // Re-checked inside the mutation: the row may have been renamed between
     // being listed and being repaired.
     const strayFacebookSurname = Boolean(
-      customer.facebookUserId && hasStrayPlaceholderSurname(customer, FACEBOOK_PLACEHOLDER_FIRST_NAME)
+      customer.facebookUserId && hasStrayPlaceholderSurname(customer, PLACEHOLDER_FIRST_NAMES)
     );
     const strayInstagramSurname = Boolean(
-      customer.instagramUserId && hasStrayPlaceholderSurname(customer, INSTAGRAM_PLACEHOLDER_FIRST_NAME)
+      customer.instagramUserId && hasStrayPlaceholderSurname(customer, PLACEHOLDER_FIRST_NAMES)
     );
     if (!hasDuplicatedName(customer) && !strayFacebookSurname && !strayInstagramSurname) {
       return false;

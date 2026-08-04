@@ -50,19 +50,26 @@ export const PLACEHOLDER_SURNAME = "Contact";
  * they are not duplicates — which left them stuck with a surname no one ever
  * had.
  *
- * `firstName` must not itself be the platform placeholder, so a true
+ * `firstName` must not itself be a platform placeholder, so a true
  * "Facebook Contact" stays fully unresolved and still gets a name lookup
  * rather than being quietly shortened to "Facebook".
+ *
+ * Every placeholder is checked, not just the one for the platform being
+ * repaired. A contact carrying both a Facebook and an Instagram id and named
+ * "Facebook Contact" would otherwise clear the Instagram check — "Facebook" is
+ * not "Instagram" — and be shortened, which is the one outcome this must never
+ * produce: it looks repaired while having thrown away the marker that says a
+ * real name is still missing.
  */
 export function hasStrayPlaceholderSurname(
   customer: { firstName: string; lastName: string },
-  placeholderFirstName: string
+  placeholderFirstNames: readonly string[]
 ): boolean {
   const first = customer.firstName.trim();
   return (
     customer.lastName.trim() === PLACEHOLDER_SURNAME &&
     first.length > 0 &&
-    first !== placeholderFirstName
+    !placeholderFirstNames.includes(first)
   );
 }
 

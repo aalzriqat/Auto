@@ -698,3 +698,32 @@ describe("socialInboxBackfill stray placeholder surname", () => {
     expect(found.artificialSurnames).toContain(strayId);
   });
 });
+
+describe("socialInboxBackfill cross-platform placeholder", () => {
+  test("a dual-id contact named 'Facebook Contact' is not shortened by the Instagram check", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithEditor(t);
+
+    // Checking only the platform being repaired would clear this on the
+    // Instagram test ("Facebook" is not "Instagram") and drop the surname,
+    // leaving a row that looks repaired while having discarded the marker
+    // saying a real name is still missing.
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "Facebook",
+        lastName: "Contact",
+        facebookUserId: "28007134862281013",
+        instagramUserId: "1678691899891601",
+      })
+    );
+
+    const repaired = await t.run((ctx) =>
+      ctx.runMutation(internal.socialInboxBackfill.collapseArtificialSurname, { customerId })
+    );
+
+    expect(repaired).toBe(false);
+    const row = await t.run((ctx) => ctx.db.get(customerId));
+    expect(row?.lastName).toBe("Contact");
+  });
+});
