@@ -133,22 +133,27 @@ export async function hasActiveReservationHold(
   args: { orgId: Id<"organizations">; vehicleId: Id<"vehicles"> }
 ): Promise<boolean> {
   const now = Date.now();
-  // Filter to ACTIVE in the index, not in memory. `by_org_vehicle` returns
-  // oldest-first across every status, so a vehicle with 50+ historical
-  // released/expired reservations pushed a genuinely active one out of the
-  // window — and this function answering "no hold" is what releases a vehicle
-  // back to AVAILABLE. A car could be handed back to the lot while a live
-  // reservation still pointed at it.
-  const reservations = await ctx.db
+  // Filter to ACTIVE in the index and stream rather than taking a fixed page.
+  //
+  // `by_org_vehicle` returned oldest-first across every status, so a vehicle
+  // with 50+ historical released/expired reservations pushed a genuinely active
+  // one out of the window — and this function answering "no hold" is what
+  // releases a vehicle back to the lot, so a car could be handed back while a
+  // live reservation still pointed at it.
+  //
+  // Narrowing to ACTIVE is not enough on its own: a reservation keeps
+  // `status: "ACTIVE"` until a sweep patches it to EXPIRED, and this index is
+  // still oldest-first, so a page of stale-but-unswept rows can sit in front of
+  // the live one. Iterating stops at the first row that is genuinely unexpired,
+  // which is the answer being asked for.
+  for await (const reservation of ctx.db
     .query("vehicleReservations")
     .withIndex("by_org_vehicle_status", (q) =>
       q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId).eq("status", "ACTIVE")
-    )
-    .take(50);
-
-  return reservations.some(
-    (reservation) => reservation.expiresAt === undefined || reservation.expiresAt > now,
-  );
+    )) {
+    if (reservation.expiresAt === undefined || reservation.expiresAt > now) return true;
+  }
+  return false;
 }
 
 export async function syncVehicleHoldStatus(

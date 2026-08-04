@@ -89,18 +89,23 @@ export const listPipeline = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
+    // Keyed on sourceType so this reads only sourced cars. Going through
+    // by_org_status meant fetching every AVAILABLE vehicle in the org — the
+    // entire lot — to keep the handful that are drop-ships.
     const pipelineStatuses = ["SOURCING", "RESERVED", "AVAILABLE"] as const;
     const byStatus = await Promise.all(
       pipelineStatuses.map((status) =>
         ctx.db
           .query("vehicles")
-          .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", status))
+          .withIndex("by_org_sourceType_status", (q) =>
+            q.eq("orgId", args.orgId).eq("sourceType", "SOURCED").eq("status", status)
+          )
           .filter((q) => q.neq(q.field("isDeleted"), true))
           .collect()
       )
     );
 
-    const sourcedVehicles = byStatus.flat().filter((vehicle) => vehicle.sourceType === "SOURCED");
+    const sourcedVehicles = byStatus.flat();
     const now = Date.now();
 
     const rows = await Promise.all(

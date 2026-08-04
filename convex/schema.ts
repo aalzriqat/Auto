@@ -680,6 +680,10 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
+    // The special-order pipeline wants sourced cars in a few statuses. Without
+    // sourceType in the key it had to fetch every AVAILABLE vehicle — the whole
+    // lot — and discard almost all of them.
+    .index("by_org_sourceType_status", ["orgId", "sourceType", "status"])
     .index("by_org_vin", ["orgId", "vin"])
     .searchIndex("search_make", { searchField: "make", filterFields: ["orgId", "isDeleted"] })
     .searchIndex("search_vin", { searchField: "vin", filterFields: ["orgId", "isDeleted"] }),

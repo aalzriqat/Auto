@@ -359,6 +359,36 @@ describe("markSourcedVehicleArrived", () => {
     expect(vehicle.arrivedAt).toBeTypeOf("number");
   });
 
+  test("a legacy SOURCING row with a live hold is not put back on the lot", async () => {
+    const { t, orgId, customerId, userId, asUser } = await setup();
+    const vehicleId = await makeSourcedVehicle(t, orgId);
+
+    // The exact pre-fix state: a deposit holding a vehicle that was left on
+    // SOURCING. These rows survive in production until reconcileVehicleHolds
+    // runs, and marking one arrived must not hand it back to the lot while a
+    // customer's money is still on it.
+    await t.run((ctx: any) =>
+      ctx.db.insert("deposits", {
+        orgId,
+        vehicleId,
+        customerId,
+        amount: 500,
+        currency: "JOD",
+        method: "CASH",
+        status: "HELD",
+        holdActive: true,
+        createdBy: userId,
+        createdAt: Date.now(),
+      })
+    );
+
+    await asUser.mutation(api.vehicles.markSourcedVehicleArrived, { orgId, vehicleId });
+
+    const vehicle = await getVehicle(t, vehicleId);
+    expect(vehicle.status).toBe("RESERVED");
+    expect(vehicle.arrivedAt).toBeTypeOf("number");
+  });
+
   test("rejects an owned-stock vehicle", async () => {
     const { t, orgId, asUser } = await setup();
     const vehicleId = await makeOwnedVehicle(t, orgId);

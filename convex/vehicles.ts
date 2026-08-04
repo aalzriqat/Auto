@@ -1420,17 +1420,22 @@ export const createReservation = mutation({
       ? amountToMinorOrThrow(args.depositAmount!, currency!, "Reservation deposit amount")
       : undefined;
 
-    // ACTIVE-only, filtered in the index. `by_org_vehicle` returns oldest-first
-    // over every status, so on a vehicle with 100+ historical released/expired
-    // reservations a live one fell outside the window — the expiry sweep below
-    // missed it and the duplicate check further down let a second active
-    // reservation be written on top of it.
+    // ACTIVE-only and streamed, not a fixed page. `by_org_vehicle` returned
+    // oldest-first over every status, so on a vehicle with 100+ historical
+    // released/expired reservations a live one fell outside the window — the
+    // expiry sweep below missed it and the duplicate check further down let a
+    // second active reservation be written on top of it. Narrowing to ACTIVE
+    // alone does not close that: a reservation stays ACTIVE until this very
+    // sweep expires it, so unswept rows can still fill a page ahead of the live
+    // one. Collecting the whole ACTIVE range is bounded in practice — a vehicle
+    // holds at most one live reservation, and the rest are rows this loop is
+    // about to retire.
     const existingReservations = await ctx.db
       .query("vehicleReservations")
       .withIndex("by_org_vehicle_status", (q) =>
         q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId).eq("status", "ACTIVE")
       )
-      .take(100);
+      .collect();
     for (const reservation of existingReservations) {
       if (reservation.expiresAt !== undefined && reservation.expiresAt <= now) {
         if (reservation.depositId) {
@@ -1563,13 +1568,29 @@ export const markSourcedVehicleArrived = mutation({
     }
 
     const now = Date.now();
+
+    // Resolve the hold state before deciding where the car goes. A row written
+    // before this fix can be SOURCING *with* a live deposit hold — that is the
+    // exact state this PR exists to repair, and it survives until
+    // reconcileVehicleHolds runs. Reading the pre-sync status would put such a
+    // car back on the lot while a customer's deposit still points at it, free
+    // to be sold or reserved to somebody else.
+    //
+    // Note this promotes rather than clearing `holdActive`: the deposit is real
+    // money and only a manager's refund/forfeit decision may release it.
+    await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);
+    const current = await ctx.db.get(args.vehicleId);
+    if (!current || current.orgId !== args.orgId || current.isDeleted) {
+      throw new ConvexError("Vehicle not found in this organization.");
+    }
+
     await ctx.db.patch(args.vehicleId, {
       arrivedAt: now,
       updatedAt: now,
       updatedBy: user._id,
       // A held car stays RESERVED — the deposit still owns it. Only unclaimed
       // stock moves onto the lot.
-      ...(vehicle.status === "SOURCING" ? { status: "AVAILABLE" as const } : {}),
+      ...(current.status === "SOURCING" ? { status: "AVAILABLE" as const } : {}),
     });
 
     return args.vehicleId;

@@ -31,6 +31,50 @@ function payableMethodLabel(t: (key: any) => string, method?: PaymentMethod) {
   return t(`PaymentMethod_${method ?? "CASH"}` as any);
 }
 
+const ARRIVED_CHIP =
+  "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-400";
+
+/**
+ * How a special order presents in the pipeline. Arrival is its own fact rather
+ * than a status — a car that arrives while a deposit holds it stays RESERVED —
+ * so the stage is read from both, and "here and spoken for" is a real state.
+ */
+const PIPELINE_STAGES = {
+  ARRIVED_HELD: {
+    icon: CheckCircle2,
+    rail: "bg-emerald-500",
+    chip: ARRIVED_CHIP,
+    labelKey: "StageArrivedHeld",
+    fallbackLabel: "Arrived · held",
+  },
+  ARRIVED: {
+    icon: CheckCircle2,
+    rail: "bg-emerald-500",
+    chip: ARRIVED_CHIP,
+    labelKey: "StageArrived",
+    fallbackLabel: "Arrived",
+  },
+  HELD: {
+    icon: Truck,
+    rail: "bg-sky-500",
+    chip: "border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-950 dark:text-sky-400",
+    labelKey: "StageHeldForCustomer",
+    fallbackLabel: "Held for customer",
+  },
+  ON_ORDER: {
+    icon: Clock,
+    rail: "bg-amber-400",
+    chip: "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-400",
+    labelKey: "StageOnOrder",
+    fallbackLabel: "On order",
+  },
+} as const;
+
+function pipelineStageKey(row: { hasArrived: boolean; isHeld: boolean }): keyof typeof PIPELINE_STAGES {
+  if (row.hasArrived) return row.isHeld ? "ARRIVED_HELD" : "ARRIVED";
+  return row.isHeld ? "HELD" : "ON_ORDER";
+}
+
 export function SourcingClient() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
@@ -196,32 +240,9 @@ export function SourcingClient() {
         ) : (
           <div className="space-y-2">
             {pipeline.map((row) => {
-              // Arrival is its own fact, not a status: a car that arrives while
-              // a deposit holds it stays RESERVED. So the stage is read from
-              // both — "here and spoken for" is a real and common state.
-              const stage = row.hasArrived
-                ? {
-                  label: row.isHeld
-                    ? (t("StageArrivedHeld" as any) || "Arrived · held")
-                    : (t("StageArrived" as any) || "Arrived"),
-                  icon: CheckCircle2,
-                  rail: "bg-emerald-500",
-                  chip: "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-400",
-                }
-                : row.isHeld
-                  ? {
-                    label: t("StageHeldForCustomer" as any) || "Held for customer",
-                    icon: Truck,
-                    rail: "bg-sky-500",
-                    chip: "border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-950 dark:text-sky-400",
-                  }
-                  : {
-                    label: t("StageOnOrder" as any) || "On order",
-                    icon: Clock,
-                    rail: "bg-amber-400",
-                    chip: "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-400",
-                  };
+              const stage = PIPELINE_STAGES[pipelineStageKey(row)];
               const StageIcon = stage.icon;
+              const stageLabel = t(stage.labelKey as any) || stage.fallbackLabel;
               return (
                 <div
                   key={row._id}
@@ -240,7 +261,7 @@ export function SourcingClient() {
                     className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs font-medium ${stage.chip}`}
                   >
                     <StageIcon className="h-3 w-3" aria-hidden="true" />
-                    {stage.label}
+                    {stageLabel}
                   </span>
 
                   <div className="min-w-[9rem]">

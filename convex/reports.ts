@@ -264,7 +264,14 @@ export const getInventoryReport = query({
     });
 
     return {
-      availableCount: activeInventory.length,
+      // Owned stock only. This query now also pulls SOURCING vehicles in, so
+      // counting the whole set here would have reported cars still sitting at
+      // another dealer as available inventory — the mobile workspace renders
+      // this straight into its "Inventory" metric beside the owned-only value.
+      availableCount: ownedCount,
+      // Everything the report covers, owned and sourced, for callers that want
+      // the full active set rather than owned stock.
+      activeCount: activeInventory.length,
       ownedCount,
       sourcedCount,
       // Owned stock only — this is the figure that reconciles to the GL's
