@@ -27,8 +27,13 @@ import { PERMISSIONS } from "./utils/permissions";
  * edited again, and deleting the statuses and re-creating them made it worse:
  * the new rows get new ids while the company still holds the old ones.
  *
- * Dropping a dangling id leaks nothing (it names no document) and is the only
- * outcome that lets the record heal itself on the next save.
+ * Dropping a dangling id leaks nothing by itself — it names no document — and is
+ * the only outcome that lets the record heal on the next save. Note the
+ * asymmetry it creates, though: throwing now means "this id is a live row in
+ * some other org" and succeeding means "no such row exists anywhere", where
+ * previously both cases threw the same message. That tells an owner whether an
+ * arbitrary id exists in the deployment, and nothing more — no field of it is
+ * readable — which is an acceptable trade for making the record recoverable.
  */
 async function sanitizeAcceptedStatuses(
   ctx: QueryCtx | MutationCtx,

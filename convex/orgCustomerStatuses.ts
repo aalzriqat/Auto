@@ -130,27 +130,53 @@ export const remove = mutation({
     orgId: v.id("organizations"),
     statusId: v.id("orgCustomerStatuses"),
   },
-  handler: async (ctx, args) => {
+  handler: async (
+    ctx,
+    args
+  ): Promise<{ updatedCompanies: string[]; deactivatedCompanies: string[] }> => {
     await requireOwner(ctx, args.orgId);
 
     await requireOwnedRow(ctx, args.orgId, "orgCustomerStatuses", args.statusId, "Customer status not found.");
 
     // Drop the reference everywhere before the row goes, so no company is left
-    // pointing at it. A company whose whole list was this one status becomes an
-    // empty list, which the comparison reads as "accepts every customer" — the
-    // same meaning it has for a company that never restricted its statuses.
+    // pointing at it.
     const companies = await ctx.db
       .query("financeCompanies")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .collect();
+
+    const updatedCompanies: string[] = [];
+    // A company whose *only* accepted status was this one ends up with an empty
+    // list, and empty means "accepts every customer" everywhere it is read. So
+    // deleting a status would otherwise widen a lender from one customer
+    // profile to all of them — a fail-open change to financing eligibility,
+    // made from a settings screen that never mentions finance companies, with
+    // the customer finding out when the lender rejects them.
+    //
+    // Eligibility fails closed instead: such a company is deactivated pending
+    // the owner reconfiguring it, which is the same state it was effectively in
+    // before (a company whose references all dangled matched nobody), only now
+    // it is honest and visible. The names go back to the caller so the UI can
+    // say exactly which lenders were switched off and why.
+    const deactivatedCompanies: string[] = [];
+
     for (const company of companies) {
       if (!company.acceptedStatuses?.includes(args.statusId)) continue;
+      const remaining = company.acceptedStatuses.filter((id) => id !== args.statusId);
+      const emptied = remaining.length === 0;
+
       await ctx.db.patch(company._id, {
-        acceptedStatuses: company.acceptedStatuses.filter((id) => id !== args.statusId),
+        acceptedStatuses: remaining,
+        ...(emptied && company.isActive ? { isActive: false } : {}),
       });
+
+      updatedCompanies.push(company.name);
+      if (emptied && company.isActive) deactivatedCompanies.push(company.name);
     }
 
     await ctx.db.delete(args.statusId);
+
+    return { updatedCompanies, deactivatedCompanies };
   },
 });
 

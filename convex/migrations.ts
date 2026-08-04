@@ -402,7 +402,8 @@ export const cleanupDanglingAcceptedStatuses = internalMutation({
   ): Promise<{
     dryRun: boolean;
     scanned: number;
-    repaired: Array<{ companyId: string; name: string; removed: number; remaining: number }>;
+    repaired: Array<{ companyId: string; name: string; removed: number; remaining: number; deactivated: boolean }>;
+    crossOrgReferences: Array<{ companyId: string; name: string; count: number }>;
     isDone: boolean;
     continueCursor: string | null;
   }> => {
@@ -420,31 +421,57 @@ export const cleanupDanglingAcceptedStatuses = internalMutation({
       .paginate({ numItems: batchSize, cursor: args.cursor ?? null });
     const companies = page.page;
 
-    const repaired: Array<{ companyId: string; name: string; removed: number; remaining: number }> = [];
+    const repaired: Array<{ companyId: string; name: string; removed: number; remaining: number; deactivated: boolean }> = [];
+    // Reported, never rewritten. A cross-org id is a data problem to look at
+    // rather than one to erase silently — but it is also the one value that
+    // still makes a company unsaveable, so leaving it out of the report would
+    // mark such a row "clean" while it stays stuck. Nothing writes one today;
+    // a raw import, a restore or an org merge could.
+    const crossOrgReferences: Array<{ companyId: string; name: string; count: number }> = [];
 
     for (const company of companies) {
       const accepted = company.acceptedStatuses;
       if (!accepted || accepted.length === 0) continue;
 
       const live: typeof accepted = [];
+      let crossOrg = 0;
       for (const statusId of accepted) {
         const status = await ctx.db.get(statusId);
-        // Another org's status is left alone deliberately: that is a data
-        // problem to look at, not one to silently erase.
-        if (status) live.push(statusId);
+        if (!status) continue;
+        if (status.orgId !== args.orgId) crossOrg += 1;
+        live.push(statusId);
+      }
+
+      if (crossOrg > 0) {
+        crossOrgReferences.push({
+          companyId: company._id.toString(),
+          name: company.name,
+          count: crossOrg,
+        });
       }
 
       if (live.length === accepted.length) continue;
+
+      // Same fail-closed rule as the delete cascade: a company whose whole list
+      // was dangling would otherwise come out of this repair reading as
+      // "accepts every customer". It currently matches nobody, so deactivating
+      // preserves the behaviour it already has and makes it visible, instead of
+      // quietly widening a lender's eligibility during a cleanup run.
+      const deactivate = live.length === 0 && company.isActive;
 
       repaired.push({
         companyId: company._id.toString(),
         name: company.name,
         removed: accepted.length - live.length,
         remaining: live.length,
+        deactivated: deactivate,
       });
 
       if (!dryRun) {
-        await ctx.db.patch(company._id, { acceptedStatuses: live });
+        await ctx.db.patch(company._id, {
+          acceptedStatuses: live,
+          ...(deactivate ? { isActive: false } : {}),
+        });
       }
     }
 
@@ -452,6 +479,7 @@ export const cleanupDanglingAcceptedStatuses = internalMutation({
       dryRun,
       scanned: companies.length,
       repaired,
+      crossOrgReferences,
       isDone: page.isDone,
       continueCursor: page.isDone ? null : page.continueCursor,
     };

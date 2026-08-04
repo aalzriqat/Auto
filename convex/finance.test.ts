@@ -244,6 +244,116 @@ describe("finance companies", () => {
     expect(company?.acceptedStatuses).toEqual([statusId]);
   });
 
+  test("update_also_rejects_a_status_from_another_organization", async () => {
+    const { t, orgId, asOwner } = await setupFinanceOrg();
+    const companyId = await asOwner.mutation(api.finance.createCompany, {
+      orgId,
+      name: "Boundary Finance",
+      profitRate: 4,
+      maxTermMonths: 48,
+      gracePeriodMonths: 0,
+      isActive: true,
+    });
+    const otherOrgStatusId = await t.run(async (ctx) => {
+      const otherOrgId = await ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() });
+      return await ctx.db.insert("orgCustomerStatuses", {
+        orgId: otherOrgId,
+        label: "External",
+        isActive: true,
+        order: 1,
+      });
+    });
+
+    // Relaxing the guard for *missing* statuses must not relax it for statuses
+    // that exist in someone else's org. Only createCompany covered this before.
+    await expect(
+      asOwner.mutation(api.finance.updateCompany, {
+        id: companyId,
+        orgId,
+        name: "Boundary Finance",
+        profitRate: 4,
+        maxTermMonths: 48,
+        gracePeriodMonths: 0,
+        isActive: true,
+        acceptedStatuses: [otherOrgStatusId],
+      })
+    ).rejects.toThrow(/accepted customer status/i);
+  });
+
+  test("deleting_a_status_deactivates_companies_left_with_no_statuses", async () => {
+    const { t, orgId, asOwner } = await setupFinanceOrg();
+    const soleStatusId = await t.run((ctx) =>
+      ctx.db.insert("orgCustomerStatuses", { orgId, label: "Delivery Apps", isActive: true, order: 1 })
+    );
+    const otherStatusId = await t.run((ctx) =>
+      ctx.db.insert("orgCustomerStatuses", { orgId, label: "Salary Slip", isActive: true, order: 2 })
+    );
+
+    await asOwner.mutation(api.finance.createCompany, {
+      orgId,
+      name: "Narrow Lender",
+      profitRate: 4,
+      maxTermMonths: 48,
+      gracePeriodMonths: 0,
+      isActive: true,
+      acceptedStatuses: [soleStatusId],
+    });
+    await asOwner.mutation(api.finance.createCompany, {
+      orgId,
+      name: "Broad Lender",
+      profitRate: 4,
+      maxTermMonths: 48,
+      gracePeriodMonths: 0,
+      isActive: true,
+      acceptedStatuses: [soleStatusId, otherStatusId],
+    });
+
+    const result = await asOwner.mutation(api.orgCustomerStatuses.remove, {
+      orgId,
+      statusId: soleStatusId,
+    });
+
+    // An emptied list reads as "accepts every customer" everywhere, so deleting
+    // a status can widen a lender from one customer profile to all of them.
+    // The caller has to be told which ones, or that happens unannounced.
+    expect(result.updatedCompanies.sort()).toEqual(["Broad Lender", "Narrow Lender"]);
+    expect(result.deactivatedCompanies).toEqual(["Narrow Lender"]);
+
+    // Fail closed: the lender that lost its only accepted status is switched
+    // off rather than quietly re-scoped to every customer. The one that still
+    // has a status keeps running.
+    const companies = await asOwner.query(api.finance.listCompanies, { orgId });
+    expect(companies.find((c) => c.name === "Narrow Lender")?.isActive).toBe(false);
+    expect(companies.find((c) => c.name === "Broad Lender")?.isActive).toBe(true);
+  });
+
+  test("deleting_a_status_never_touches_another_organizations_companies", async () => {
+    const { t, orgId, asOwner } = await setupFinanceOrg();
+    const statusId = await t.run((ctx) =>
+      ctx.db.insert("orgCustomerStatuses", { orgId, label: "Shared Label", isActive: true, order: 1 })
+    );
+
+    // Same id recorded against a company in a different org. The cascade walks
+    // financeCompanies.by_org from the guarded orgId, so it must not be reached.
+    const foreignCompanyId = await t.run(async (ctx) => {
+      const otherOrgId = await ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() });
+      return await ctx.db.insert("financeCompanies", {
+        orgId: otherOrgId,
+        name: "Foreign Finance",
+        profitRate: 4,
+        maxTermMonths: 48,
+        gracePeriodMonths: 0,
+        isActive: true,
+        acceptedStatuses: [statusId],
+      });
+    });
+
+    await asOwner.mutation(api.orgCustomerStatuses.remove, { orgId, statusId });
+
+    const foreign = await t.run((ctx) => ctx.db.get(foreignCompanyId));
+    expect(foreign?.acceptedStatuses).toEqual([statusId]);
+  });
+
   test("cleanup_migration_strips_dangling_accepted_statuses", async () => {
     const { t, orgId } = await setupFinanceOrg();
     const liveStatusId = await t.run((ctx) =>
@@ -277,7 +387,7 @@ describe("finance companies", () => {
     expect(dry.isDone).toBe(true);
     expect(dry.continueCursor).toBeNull();
     expect(dry.repaired).toEqual([
-      { companyId, name: "Quietly Broken Finance", removed: 1, remaining: 1 },
+      { companyId, name: "Quietly Broken Finance", removed: 1, remaining: 1, deactivated: false },
     ]);
     // A dry run changes nothing.
     expect((await t.run((ctx) => ctx.db.get(companyId)))?.acceptedStatuses).toHaveLength(2);

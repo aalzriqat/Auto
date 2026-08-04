@@ -242,7 +242,12 @@ export function FinanceCompanyDialog({
             <p className="text-xs text-muted-foreground">
               {t("AcceptedCustomerStatusesHelp" as any)}
             </p>
-            {customerStatusOptions.length === 0 ? (
+            {/* Loading and "none configured" are different statements. Reading
+                them off the same empty array told the user no statuses exist
+                while the query was still in flight. */}
+            {loadedCustomerStatuses === undefined ? (
+              <p className="text-xs text-muted-foreground">{t("Loading" as any) ?? "Loading..."}</p>
+            ) : customerStatusOptions.length === 0 ? (
               <p className="text-xs text-muted-foreground">
                 {t("NoCustomerStatusesConfigured" as any) ?? "No customer statuses configured yet — add some below."}
               </p>
