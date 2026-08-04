@@ -279,17 +279,27 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // this analyzer guards against; adding an `orgId` argument would let a caller
   // name a pairing rather than prevent one. `analysed` is unchanged at 285, so
   // nothing dropped out of inspection.
-  // `vehicles.markSourcedVehicleArrived` records that a special-order car
-  // reached the dealership (437→438 mutations, 285→286 analysed). It takes an
-  // `orgId` and a caller-supplied `vehicleId`, so it lands in `analysed` and is
-  // held to the `requireOwnedRow` rule — which it satisfies: the handler
-  // resolves the vehicle through `requireOwnedRow(ctx, args.orgId, "vehicles",
+  // Then 437→439 / 285→287 by two mutations landing in the same release, each
+  // adding one to both counts:
+  //
+  // `vehicles.markSourcedVehicleArrived` (#199) records that a special-order
+  // car reached the dealership. It takes an `orgId` and a caller-supplied
+  // `vehicleId`, so it lands in `analysed` and is held to the
+  // `requireOwnedRow` rule — which it satisfies: the handler resolves the
+  // vehicle through `requireOwnedRow(ctx, args.orgId, "vehicles",
   // args.vehicleId)` before touching it, so naming another org's vehicle id
   // cannot reach the patch.
+  //
+  // `migrations.cleanupDanglingAcceptedStatuses` (#200) strips finance-company
+  // references to deleted customer statuses. It takes an `orgId` so it lands in
+  // `analysed`, and it needs no `requireOwnedRow`: every row it touches is
+  // reached by walking `financeCompanies.by_org` from that same `orgId`, so no
+  // document id is caller-supplied and there is nothing for a caller to point
+  // elsewhere.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 438,
-      analysed: 286,
+      totalMutations: 439,
+      analysed: 287,
       skippedNoArgsBlock: 9,
       skippedNoOrgId: 143,
     });

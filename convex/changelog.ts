@@ -1296,6 +1296,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "كانت بطاقة المركبات تعرض الرقم نفسه مرتين، مرة بعنوان «المخزون النشط» ومرة «الإجمالي»، وكان ذلك الرقم يحتسب كل سيارة امتلكتها يوماً — بما فيها المباعة والمؤرشفة. أصبحت تعرض السيارات الموجودة فعلاً، موزّعة بين متاحة ومحجوزة، واستُبدل سطر «مستوى المخزون: صحي» — وكان نصاً ثابتاً يقول «صحي» حتى عند خلو المخزون — بعدد حقيقي للسيارات التي تجاوز عمرها 90 يوماً. أما بطاقة العملاء المحتملين، فكان مخطط المراحل يُسقِط مرحلتي «مهتم» و«محجوز» تماماً، فتختفي الفرص الموجودة فيهما من المخطط رغم احتسابها بجانبه، وكان مفتاح المخطط يسرد أربع فئات ثابتة مهما كان محتواه. أصبح المخطط يغطي كل المراحل ويتبعه المفتاح. وأُزيلت عبارة «+0.0% نمو» التي كانت نصاً ثابتاً.",
     publishedAt: releaseAt(2026, 8, 4, 4),
   },
+  {
+    type: "FIX",
+    titleEn: "Finance companies can be saved again after deleting a customer status",
+    titleAr: "أصبح بالإمكان حفظ شركات التمويل بعد حذف حالة عميل",
+    descriptionEn: "Deleting a customer status left every finance company that accepted it pointing at a status that no longer existed. Editing one then failed with \"Accepted customer status not found in this organization\" — and there was no way out, because the tick-list only shows statuses that still exist, so the missing one could not be unticked and was sent again on every save. Deleting the statuses and re-creating them did not help either: the new entries get new identities while the company still referred to the old ones. Deleting a status now removes it from every company that accepted it, and saving a company repairs any leftover reference. A company left with no accepted status at all is switched off rather than quietly widened to accept every customer, and the screen names the companies this happened to so you can set a status and turn them back on. This also explains companies that had silently stopped appearing in the financing comparison.",
+    descriptionAr: "كان حذف حالة عميل يترك كل شركة تمويل تقبل تلك الحالة مشيرةً إلى حالة لم تعد موجودة. فيفشل تعديل الشركة برسالة «حالة العميل المقبولة غير موجودة في هذه المؤسسة» — دون مخرج، لأن قائمة الاختيار لا تعرض إلا الحالات الموجودة فعلاً، فلا يمكن إلغاء تحديد الحالة المفقودة وتُرسل مجدداً مع كل حفظ. ولم يكن حذف الحالات وإعادة إنشائها يحل المشكلة: فالإدخالات الجديدة تحمل هويات جديدة بينما تظل الشركة تشير إلى القديمة. أصبح حذف الحالة الآن يزيلها من كل شركة تقبلها، ويؤدي حفظ الشركة إلى إصلاح أي إشارة متبقية. أما الشركة التي لم تعد لديها أي حالة مقبولة فتُعطَّل بدلاً من توسيعها بصمت لتقبل جميع العملاء، وتعرض الشاشة أسماء الشركات التي جرى ذلك لها لتحديد حالة وإعادة تفعيلها. وهذا يفسّر أيضاً الشركات التي كانت قد اختفت بصمت من مقارنة التمويل.",
+    publishedAt: releaseAt(2026, 8, 4, 5),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

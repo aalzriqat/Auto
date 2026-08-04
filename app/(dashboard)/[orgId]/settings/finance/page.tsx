@@ -102,8 +102,18 @@ export default function FinanceCompaniesPage() {
     if (!activeOrgId) return;
     if (!confirm(t("CustomerStatusDeleteConfirm" as any))) return;
     try {
-      await removeStatus({ orgId: activeOrgId, statusId });
+      const result = await removeStatus({ orgId: activeOrgId, statusId });
       toast.success(t("CustomerStatusDeleted" as any));
+      // A company left with no accepted statuses would read as accepting every
+      // customer, so it is deactivated instead of silently widened. Name the
+      // ones that were switched off — an owner cannot re-enable what they were
+      // never told about.
+      if (result?.deactivatedCompanies?.length) {
+        toast.warning(
+          `${t("CompaniesDeactivatedNoStatuses" as any) || "Deactivated — no accepted statuses left"}: ${result.deactivatedCompanies.join(", ")}`,
+          { duration: 10000 }
+        );
+      }
     } catch (error) {
       toast.error(getErrorMessage(error));
     }

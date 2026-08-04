@@ -54,10 +54,14 @@ export function FinanceCompanyDialog({
 
   const createCompany = useMutation(api.finance.createCompany);
   const updateCompany = useMutation(api.finance.updateCompany);
-  const customerStatusOptions = useQuery(
+  // Kept undefined-until-loaded on purpose: an empty list and a list that has
+  // not arrived yet mean different things below, and conflating them would drop
+  // a company's real accepted statuses on the first render.
+  const loadedCustomerStatuses = useQuery(
     api.orgCustomerStatuses.list,
     activeOrgId ? { orgId: activeOrgId } : "skip"
-  ) ?? [];
+  );
+  const customerStatusOptions = loadedCustomerStatuses ?? [];
 
   const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
@@ -104,12 +108,27 @@ export function FinanceCompanyDialog({
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeOrgId) return;
+    // Refuse to save against a status list that has not arrived. The checkbox
+    // list renders empty while loading, so the form would otherwise submit a
+    // selection the user was never shown — and for a new company that persists
+    // an empty list, which downstream reads as "accepts every customer".
+    if (loadedCustomerStatuses === undefined) return;
 
     setIsLoading(true);
     try {
+      // Only send statuses that still exist. A company keeps the ids it was
+      // saved with, and deleting a customer status used to leave those ids
+      // behind — the checkbox list below only renders live statuses, so a
+      // stale one was invisible here, could not be unticked, and was re-sent on
+      // every save.
+      const liveStatusIds = new Set(loadedCustomerStatuses.map((status) => status._id));
+      const acceptedStatuses = formData.acceptedStatuses.filter((id) =>
+        liveStatusIds.has(id as Id<"orgCustomerStatuses">)
+      ) as Id<"orgCustomerStatuses">[];
+
       const payload = {
         ...formData,
-        acceptedStatuses: formData.acceptedStatuses as Id<"orgCustomerStatuses">[],
+        acceptedStatuses,
       };
       if (company) {
         await updateCompany({
@@ -223,7 +242,12 @@ export function FinanceCompanyDialog({
             <p className="text-xs text-muted-foreground">
               {t("AcceptedCustomerStatusesHelp" as any)}
             </p>
-            {customerStatusOptions.length === 0 ? (
+            {/* Loading and "none configured" are different statements. Reading
+                them off the same empty array told the user no statuses exist
+                while the query was still in flight. */}
+            {loadedCustomerStatuses === undefined ? (
+              <p className="text-xs text-muted-foreground">{t("Loading" as any) ?? "Loading..."}</p>
+            ) : customerStatusOptions.length === 0 ? (
               <p className="text-xs text-muted-foreground">
                 {t("NoCustomerStatusesConfigured" as any) ?? "No customer statuses configured yet — add some below."}
               </p>
@@ -277,7 +301,9 @@ export function FinanceCompanyDialog({
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               {t("Cancel" as any)}
             </Button>
-            <Button type="submit" disabled={isLoading}>
+            {/* Also disabled until the customer statuses arrive, so the button
+                cannot be pressed while the tick-list below is still empty. */}
+            <Button type="submit" disabled={isLoading || loadedCustomerStatuses === undefined}>
               {isLoading ? t("Saving..." as any) : t("Save" as any)}
             </Button>
           </DialogFooter>

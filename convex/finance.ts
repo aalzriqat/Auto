@@ -5,18 +5,52 @@ import { Id } from "./_generated/dataModel";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 
-async function validateAcceptedStatuses(
+/**
+ * Checks the accepted-status ids on a finance company and returns the set worth
+ * storing.
+ *
+ * The two failure modes are not the same thing and must not be treated alike:
+ *
+ *  - A status that exists but belongs to **another org** is a cross-tenant
+ *    reference. That still throws.
+ *  - A status id that resolves to **nothing** is a dangling reference to a row
+ *    that has since been deleted. `orgCustomerStatuses.remove` used to
+ *    hard-delete without clearing these references, leaving every finance
+ *    company that accepted that status holding an id pointing at no row. That
+ *    delete now cascades, so this case is about the rows it already created,
+ *    which stay in the data until each company is next saved.
+ *
+ * Throwing on the second case bricked the record. The edit dialog seeds its form
+ * from the company's stored `acceptedStatuses`, and its checkbox list only
+ * renders statuses that still exist — so a dangling id was invisible in the UI,
+ * impossible to untick, and re-sent on every save. The company could never be
+ * edited again, and deleting the statuses and re-creating them made it worse:
+ * the new rows get new ids while the company still holds the old ones.
+ *
+ * Dropping a dangling id leaks nothing by itself — it names no document — and is
+ * the only outcome that lets the record heal on the next save. Note the
+ * asymmetry it creates, though: throwing now means "this id is a live row in
+ * some other org" and succeeding means "no such row exists anywhere", where
+ * previously both cases threw the same message. That tells an owner whether an
+ * arbitrary id exists in the deployment, and nothing more — no field of it is
+ * readable — which is an acceptable trade for making the record recoverable.
+ */
+async function sanitizeAcceptedStatuses(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   statusIds?: Id<"orgCustomerStatuses">[]
-) {
-  if (!statusIds) return;
+): Promise<Id<"orgCustomerStatuses">[] | undefined> {
+  if (!statusIds) return undefined;
+
+  const live: Id<"orgCustomerStatuses">[] = [];
   for (const statusId of statusIds) {
     const status = await ctx.db.get(statusId);
-    if (!status || status.orgId !== orgId) {
+    if (status && status.orgId !== orgId) {
       throw new ConvexError("Accepted customer status not found in this organization.");
     }
+    if (status) live.push(statusId);
   }
+  return live;
 }
 
 // --- Finance Companies ---
@@ -49,9 +83,10 @@ export const createCompany = mutation({
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
-    await validateAcceptedStatuses(ctx, args.orgId, args.acceptedStatuses);
+    const acceptedStatuses = await sanitizeAcceptedStatuses(ctx, args.orgId, args.acceptedStatuses);
     return await ctx.db.insert("financeCompanies", {
       ...args,
+      acceptedStatuses,
     });
   },
 });
@@ -78,9 +113,19 @@ export const updateCompany = mutation({
     
     const existing = await ctx.db.get(id);
     if (!existing || existing.orgId !== orgId) throw new ConvexError("Not found");
-    await validateAcceptedStatuses(ctx, orgId, updates.acceptedStatuses);
-    
-    await ctx.db.patch(id, updates);
+    // Writes back the sanitized list, so a company carrying ids of
+    // since-deleted statuses is repaired the first time it is saved.
+    const acceptedStatuses = await sanitizeAcceptedStatuses(ctx, orgId, updates.acceptedStatuses);
+
+    // `acceptedStatuses` is optional, and Convex deletes a field patched to
+    // `undefined`. Spreading it unconditionally would therefore erase a
+    // company's restriction list for any caller that simply left the argument
+    // out — silently widening it to "accepts every customer". Only write the
+    // key when the caller actually sent one.
+    await ctx.db.patch(id, {
+      ...updates,
+      ...(acceptedStatuses === undefined ? {} : { acceptedStatuses }),
+    });
   },
 });
 
