@@ -268,9 +268,9 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // (org B's member removed org A's task). Adding the line is what turns it
   // green, so the test discriminates between the real fix and the plausible
   // near-miss rather than merely passing.
-  // Then 436→437 by `socialInboxBackfill.collapseDuplicatedName`, which drops
-  // the repeated surname from contacts the old name splitter wrote into both
-  // name fields. It lands in `skippedNoOrgId` (142→143) rather than `analysed`,
+  // Then 436→437 by `socialInboxBackfill.collapseArtificialSurname`, which
+  // drops a surname the contact never had — the first name repeated, or the
+  // placeholder's "Contact" left beside a real name by the old splitter. It lands in `skippedNoOrgId` (142→143) rather than `analysed`,
   // because it takes no `orgId` — so it is worth saying why that is not a hole.
   // It is an `internalMutation`, unreachable from any client, and its only
   // caller is `resyncContactNames`, which authenticates the manager against the

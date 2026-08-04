@@ -192,9 +192,13 @@ export function CustomerDetailScreen({
 
   async function saveOverview() {
     if (!orgId || !customerId) return;
+    // Surname deliberately not required. Contacts created from a social
+    // profile can hold a single name — an Instagram handle, or someone who
+    // goes by a mononym — and demanding one here meant a salesperson could
+    // not save a phone number against such a customer without inventing a
+    // family name for them. The web form and the backend already allow it.
     const valid = overviewErrors.validate({
       firstName: requiredText(overviewForm.firstName, locale),
-      lastName: requiredText(overviewForm.lastName, locale),
     });
     if (!valid) return;
     setSavingOverview(true);

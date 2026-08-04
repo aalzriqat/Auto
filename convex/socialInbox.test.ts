@@ -570,6 +570,16 @@ describe("socialInboxBackfill artificial-surname repair", () => {
         instagramUserId: "ig_dup_repair",
       })
     );
+    await t.run((ctx) =>
+      ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "ev_mhty7220",
+        kind: "dm",
+        senderInstagramId: "ig_dup_repair",
+        senderUsername: "mhty7220",
+        customerId,
+      })
+    );
 
     const collapsed = await t.run((ctx) =>
       ctx.runMutation(internal.socialInboxBackfill.collapseArtificialSurname, { customerId })
@@ -619,6 +629,18 @@ describe("socialInboxBackfill stray placeholder surname", () => {
         firstName: "kamalalia19",
         lastName: "Contact",
         instagramUserId: "1678691899891601",
+      })
+    );
+    // The proof that intake manufactured the surname: the platform sent this
+    // exact handle for this customer.
+    await t.run((ctx) =>
+      ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "ev_kamalalia19",
+        kind: "comment",
+        senderInstagramId: "1678691899891601",
+        senderUsername: "kamalalia19",
+        customerId,
       })
     );
 
@@ -715,6 +737,136 @@ describe("socialInboxBackfill cross-platform placeholder", () => {
         lastName: "Contact",
         facebookUserId: "28007134862281013",
         instagramUserId: "1678691899891601",
+      })
+    );
+
+    const repaired = await t.run((ctx) =>
+      ctx.runMutation(internal.socialInboxBackfill.collapseArtificialSurname, { customerId })
+    );
+
+    expect(repaired).toBe(false);
+    const row = await t.run((ctx) => ctx.db.get(customerId));
+    expect(row?.lastName).toBe("Contact");
+  });
+});
+
+describe("socialInboxBackfill repair requires recorded evidence", () => {
+  test("a genuine surname that happens to be 'Contact' is never dropped", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithEditor(t);
+
+    // The platform sent "Jane Contact" as one name, so intake split a real
+    // two-word name. The surname was chosen, not manufactured.
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "Jane",
+        lastName: "Contact",
+        facebookUserId: "fb_jane_contact",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("facebookEvents", {
+        orgId,
+        externalId: "ev_jane",
+        kind: "comment",
+        senderFacebookId: "fb_jane_contact",
+        senderName: "Jane Contact",
+        customerId,
+      })
+    );
+
+    const repaired = await t.run((ctx) =>
+      ctx.runMutation(internal.socialInboxBackfill.collapseArtificialSurname, { customerId })
+    );
+
+    expect(repaired).toBe(false);
+    const row = await t.run((ctx) => ctx.db.get(customerId));
+    expect(row?.lastName).toBe("Contact");
+  });
+
+  test("a staff-corrected name ending in 'Contact' survives repeated resyncs", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithEditor(t);
+
+    // Staff renamed a social contact by hand. customers.update keeps the
+    // social id, so without the evidence check the next resync would delete
+    // the surname they just typed — every single run.
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "Ahmad",
+        lastName: "Contact",
+        instagramUserId: "ig_staff_edited",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "ev_staff_edited",
+        kind: "dm",
+        senderInstagramId: "ig_staff_edited",
+        senderUsername: "some_other_handle",
+        customerId,
+      })
+    );
+
+    for (let run = 0; run < 2; run += 1) {
+      const repaired = await t.run((ctx) =>
+        ctx.runMutation(internal.socialInboxBackfill.collapseArtificialSurname, { customerId })
+      );
+      expect(repaired).toBe(false);
+    }
+    const row = await t.run((ctx) => ctx.db.get(customerId));
+    expect(row?.lastName).toBe("Contact");
+  });
+
+  test("an ordinary customer named \"Ali Ali\" is not a candidate at all", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithEditor(t);
+
+    // Equal given and family names are ordinary, particularly in Arabic. This
+    // row has no social ids, so it must never enter the repair queue.
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Ali", lastName: "Ali" })
+    );
+
+    const found = await t.run((ctx) =>
+      ctx.runQuery(internal.socialInboxBackfill.getUnresolvedSocialCustomers, { orgId })
+    );
+    expect(found.artificialSurnames).not.toContain(customerId);
+
+    const repaired = await t.run((ctx) =>
+      ctx.runMutation(internal.socialInboxBackfill.collapseArtificialSurname, { customerId })
+    );
+    expect(repaired).toBe(false);
+    const row = await t.run((ctx) => ctx.db.get(customerId));
+    expect(row?.lastName).toBe("Ali");
+  });
+
+  test("an archived customer is not repaired between discovery and the write", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithEditor(t);
+
+    // Discovery skips deleted rows; the mutation must too, or a row archived
+    // during the Graph lookups gets written and counted as repaired.
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "kamalalia19",
+        lastName: "Contact",
+        instagramUserId: "ig_archived",
+        isDeleted: true,
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "ev_archived",
+        kind: "dm",
+        senderInstagramId: "ig_archived",
+        senderUsername: "kamalalia19",
+        customerId,
       })
     );
 

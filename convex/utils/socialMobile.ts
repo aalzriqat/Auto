@@ -24,10 +24,11 @@ export function splitDisplayName(displayName: string): { firstName: string; last
  * prefers the account's `username` — always a single token — so essentially
  * every IG contact it touched ended up like "mhty7220 mhty7220".
  *
- * Used to make those rows eligible for a re-fetch, not to rewrite them blind.
- * Re-fetching is what makes this safe for someone genuinely named "Ali Ali":
- * Graph returns first_name "Ali" and last_name "Ali", which the fixed splitter
- * writes back unchanged, while a handle collapses to a single name.
+ * Recognising the shape is not on its own permission to edit. Equal given and
+ * family names are ordinary — "Ali Ali" is a real name, particularly in Arabic
+ * — so the caller additionally requires a social id and proof that the first
+ * name is exactly what the platform sent for that customer. See
+ * `socialInboxBackfill.collapseArtificialSurname`.
  */
 export function hasDuplicatedName(
   customer: { firstName: string; lastName: string }
@@ -219,8 +220,8 @@ export async function applyResolvedDisplayName(
   // Deliberately does NOT accept a duplicated name as rewritable. Instagram
   // often returns only a handle, so treating "Ali Ali" as repairable here
   // would replace a real (possibly staff-entered) name with "ali_1990".
-  // Duplicated rows are repaired by `collapseDuplicatedName`, which can only
-  // drop the repeated surname and can never invent a different name.
+  // Duplicated rows are repaired by `collapseArtificialSurname`, which can
+  // only drop the repeated surname and can never invent a different name.
   if (!customer || !isUnresolved(customer)) return;
   await ctx.db.patch(customerId, splitDisplayName(displayName));
 }
