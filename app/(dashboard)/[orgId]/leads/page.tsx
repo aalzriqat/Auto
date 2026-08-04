@@ -89,6 +89,13 @@ export default function LeadsPage() {
       createdAt: (l) => l._creationTime,
       updatedAt: (l) => l.updatedAt ?? l._creationTime,
     },
+    // Matches the order the query already returns, so the Created At header
+    // shows the sort that is actually in effect instead of appearing unsorted.
+    // It has to agree with the server: this sort only reorders rows already
+    // loaded, so a default that disagreed would shuffle each page against the
+    // stream it came from and make newest-first true only within a page.
+    defaultSortKey: "createdAt",
+    defaultSortDir: "desc",
     pagination: { status: leadsStatus, loadMore: loadMoreLeads, batchSize: 25 },
   });
 

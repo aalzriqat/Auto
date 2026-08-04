@@ -46,6 +46,14 @@ export const list = query({
 
     let pageResult;
 
+    // Newest first, on every branch. A Convex query with no explicit order
+    // scans the index ascending, so this paginated list handed back the
+    // *oldest* leads on page one and buried a lead created a minute ago at the
+    // very end — the opposite of what a leads list is for. It is not something
+    // the client could correct either: the table's sort only reorders the rows
+    // already loaded, so a newly arrived lead stayed invisible until every
+    // older page had been fetched. Same reason the dashboard's "recent leads"
+    // strip was showing the oldest ones.
     if (args.stage) {
       pageResult = await ctx.db
         .query("leads")
@@ -53,6 +61,7 @@ export const list = query({
           q.eq("orgId", args.orgId).eq("stage", args.stage!)
         )
         .filter((q) => q.neq(q.field("isDeleted"), true))
+        .order("desc")
         .paginate(args.paginationOpts);
     } else if (args.assignedUserId) {
       pageResult = await ctx.db
@@ -61,12 +70,14 @@ export const list = query({
           q.eq("orgId", args.orgId).eq("assignedUserId", args.assignedUserId!)
         )
         .filter((q) => q.neq(q.field("isDeleted"), true))
+        .order("desc")
         .paginate(args.paginationOpts);
     } else {
       pageResult = await ctx.db
         .query("leads")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
         .filter((q) => q.neq(q.field("isDeleted"), true))
+        .order("desc")
         .paginate(args.paginationOpts);
     }
 
