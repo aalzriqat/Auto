@@ -10,13 +10,28 @@ export async function markVehicleAsSold(
   await ctx.db.patch(vehicleId, { status: "SOLD" as const });
 }
 
-export async function restoreVehicleToAvailable(
+/**
+ * Puts a vehicle back on the lot after its sale is cancelled/reversed.
+ *
+ * A SOURCED (drop-ship) car has never been owned — it is located at another
+ * dealer on a customer's behalf and only ever credits AP-Suppliers, never
+ * Vehicle Inventory. Blanket-restoring it to AVAILABLE presented a car the
+ * dealership does not possess as owned stock on the lot, and counted its cost
+ * as owned inventory value. It goes back to SOURCING instead, where the
+ * special order resumes.
+ */
+export async function restoreVehicleFromSale(
   ctx: MutationCtx,
   vehicleId: Id<"vehicles">
 ): Promise<void> {
   const vehicle = await ctx.db.get(vehicleId);
   if (vehicle && vehicle.status === "SOLD") {
-    await ctx.db.patch(vehicleId, { status: "AVAILABLE" as const });
+    await ctx.db.patch(vehicleId, {
+      status:
+        vehicle.preHoldStatus ??
+        (vehicle.sourceType === "SOURCED" ? ("SOURCING" as const) : ("AVAILABLE" as const)),
+      preHoldStatus: undefined,
+    });
   }
 }
 

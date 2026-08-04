@@ -34,6 +34,29 @@ type ResolvedDepositsForQuoteResult = {
 };
 
 /**
+ * The statuses a deposit or reservation hold is allowed to promote a vehicle
+ * out of, into RESERVED.
+ *
+ * SOURCING belongs here: a special-order car is sourced *because* a customer
+ * asked for it, so a deposit against one is the most committed a hold ever
+ * gets. Excluding it meant the deposit was recorded, the money posted to the
+ * GL and `holdActive: true` was written, while the car stayed SOURCING — a
+ * hold that existed in the database and nowhere on the vehicle. The manual
+ * escape hatch was closed too (RESERVED is workflow-controlled), so the car
+ * could not be reserved by any path.
+ *
+ * IN_INSPECTION / IN_REPAIR stay out on purpose: those describe where the car
+ * physically is, and overwriting them would lose the only record of it.
+ */
+const HOLDABLE_STATUSES = ["AVAILABLE", "SOURCING"] as const;
+
+type HoldableStatus = (typeof HOLDABLE_STATUSES)[number];
+
+function isHoldable(status: string): status is HoldableStatus {
+  return (HOLDABLE_STATUSES as readonly string[]).includes(status);
+}
+
+/**
  * Puts a soft hold on a vehicle when a deposit is recorded. Reserving an
  * already-RESERVED vehicle is a no-op — multiple parallel deposits/quotes on
  * the same vehicle record are allowed (the same car can be sourced again from
@@ -51,8 +74,11 @@ export async function holdVehicleForDeposit(
   if (vehicle.status === "ARCHIVED") {
     throwAppError(AppErrorCode.VEHICLE_ARCHIVED, "Cannot place a deposit on an archived vehicle.");
   }
-  if (vehicle.status === "AVAILABLE") {
-    await ctx.db.patch(vehicleId, { status: "RESERVED" as const });
+  if (isHoldable(vehicle.status)) {
+    await ctx.db.patch(vehicleId, {
+      status: "RESERVED" as const,
+      preHoldStatus: vehicle.status,
+    });
   }
 }
 
@@ -108,16 +134,31 @@ export async function syncVehicleHoldStatus(
     (await hasActiveDepositHold(ctx, vehicleId)) ||
     (await hasActiveReservationHold(ctx, { orgId: vehicle.orgId, vehicleId }));
 
-  if (hasHold && vehicle.status === "AVAILABLE") {
-    const patch: { status: "RESERVED"; updatedAt: number; updatedBy?: Id<"users"> } = {
+  if (hasHold && isHoldable(vehicle.status)) {
+    const patch: {
+      status: "RESERVED";
+      preHoldStatus: HoldableStatus;
+      updatedAt: number;
+      updatedBy?: Id<"users">;
+    } = {
       status: "RESERVED" as const,
+      preHoldStatus: vehicle.status,
       updatedAt: Date.now(),
     };
     if (actorId) patch.updatedBy = actorId;
     await ctx.db.patch(vehicleId, patch);
   } else if (!hasHold && vehicle.status === "RESERVED") {
-    const patch: { status: "AVAILABLE"; updatedAt: number; updatedBy?: Id<"users"> } = {
-      status: "AVAILABLE" as const,
+    // Restore where the hold found it. Rows written before preHoldStatus
+    // existed have none — AVAILABLE is the right fallback for those, since
+    // that was the only status a hold could previously promote from.
+    const patch: {
+      status: HoldableStatus;
+      preHoldStatus: undefined;
+      updatedAt: number;
+      updatedBy?: Id<"users">;
+    } = {
+      status: vehicle.preHoldStatus ?? "AVAILABLE",
+      preHoldStatus: undefined,
       updatedAt: Date.now(),
     };
     if (actorId) patch.updatedBy = actorId;

@@ -642,6 +642,12 @@ export default defineSchema({
       v.literal("ARCHIVED"),
       v.literal("SOURCING")
     ),
+    // The status a deposit/reservation hold promoted this vehicle away from, so
+    // releasing the hold restores where it actually came from. Without it, a
+    // released hold always fell back to AVAILABLE — which silently converted a
+    // special-order car (SOURCING) into what looks like owned stock on the lot.
+    // Set when syncVehicleHoldStatus promotes to RESERVED, cleared on release.
+    preHoldStatus: v.optional(v.union(v.literal("AVAILABLE"), v.literal("SOURCING"))),
     // Sourced / drop-ship vehicles: dealer locates from another dealer on demand
     sourceType: v.optional(v.union(v.literal("STOCK"), v.literal("SOURCED"))),
     sourcedFromName: v.optional(v.string()),

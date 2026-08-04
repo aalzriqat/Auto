@@ -625,19 +625,72 @@ export const getReservationHistory = query({
       .order("desc")
       .take(100);
 
-    return await Promise.all(
+    const reservationRows = await Promise.all(
       reservations.map(async (reservation) => {
         const customer = await ctx.db.get(reservation.customerId);
         const reservedBy = await ctx.db.get(reservation.reservedBy);
         const releasedBy = reservation.releasedBy ? await ctx.db.get(reservation.releasedBy) : null;
         return {
           ...reservation,
+          origin: "RESERVATION" as const,
           customerName: customer ? `${customer.firstName} ${customer.lastName}` : null,
           reservedByName: reservedBy?.name ?? reservedBy?.email ?? null,
           releasedByName: releasedBy?.name ?? releasedBy?.email ?? null,
         };
       })
     );
+
+    // A deposit taken in the sales wizard holds the vehicle just as hard as a
+    // reservation does, but writes only a `deposits` row — so this tab used to
+    // read "No reservations recorded" while a live hold was keeping the car off
+    // the market. Deposits that were created *by* a reservation are skipped:
+    // the reservation row above already represents them.
+    const heldDeposits = await ctx.db
+      .query("deposits")
+      .withIndex("by_vehicle_hold", (q) => q.eq("vehicleId", args.vehicleId))
+      .order("desc")
+      .take(100);
+
+    const depositRows = await Promise.all(
+      heldDeposits
+        .filter(
+          (deposit) =>
+            deposit.orgId === args.orgId &&
+            deposit.reservationId === undefined &&
+            deposit.isDeleted !== true
+        )
+        .map(async (deposit) => {
+          const [customer, reservedBy, releasedBy] = await Promise.all([
+            ctx.db.get(deposit.customerId),
+            ctx.db.get(deposit.createdBy),
+            deposit.resolvedBy ? ctx.db.get(deposit.resolvedBy) : Promise.resolve(null),
+          ]);
+          const status =
+            deposit.status === "HELD"
+              ? ("ACTIVE" as const)
+              : deposit.status === "APPLIED"
+                ? ("CONVERTED" as const)
+                : ("RELEASED" as const);
+          return {
+            _id: deposit._id,
+            _creationTime: deposit._creationTime,
+            origin: "DEPOSIT" as const,
+            orgId: deposit.orgId,
+            vehicleId: deposit.vehicleId,
+            customerId: deposit.customerId,
+            status,
+            depositAmount: deposit.amount,
+            expiresAt: undefined as number | undefined,
+            reservedAt: deposit.createdAt ?? deposit._creationTime,
+            releasedAt: deposit.resolvedAt,
+            customerName: customer ? `${customer.firstName} ${customer.lastName}` : null,
+            reservedByName: reservedBy?.name ?? reservedBy?.email ?? null,
+            releasedByName: releasedBy?.name ?? releasedBy?.email ?? null,
+          };
+        })
+    );
+
+    return [...reservationRows, ...depositRows].sort((a, b) => b.reservedAt - a.reservedAt);
   },
 });
 
@@ -1349,8 +1402,13 @@ export const createReservation = mutation({
     if (!currentVehicle || currentVehicle.isDeleted || currentVehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found in this organization.");
     }
-    if (currentVehicle.status !== "AVAILABLE") {
-      throw new ConvexError("Vehicle must be available before it can be reserved.");
+    // SOURCING is reservable: a special-order car is located for a specific
+    // customer, so reserving one is the whole point of the flow. Requiring
+    // AVAILABLE meant a sourced car could not be reserved from the vehicle's
+    // Reservations tab either — the only other route was blocked by the
+    // workflow-controlled status guard, leaving no path at all.
+    if (currentVehicle.status !== "AVAILABLE" && currentVehicle.status !== "SOURCING") {
+      throw new ConvexError("Vehicle must be available or on order before it can be reserved.");
     }
     if (existingReservations.some((reservation) =>
       reservation.status === "ACTIVE" &&
