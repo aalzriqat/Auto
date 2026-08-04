@@ -642,10 +642,22 @@ export default defineSchema({
       v.literal("ARCHIVED"),
       v.literal("SOURCING")
     ),
+    // The status a deposit/reservation hold promoted this vehicle away from, so
+    // releasing the hold restores where it actually came from. Without it, a
+    // released hold always fell back to AVAILABLE — which silently converted a
+    // special-order car (SOURCING) into what looks like owned stock on the lot.
+    // Set when syncVehicleHoldStatus promotes to RESERVED, cleared on release.
+    preHoldStatus: v.optional(v.union(v.literal("AVAILABLE"), v.literal("SOURCING"))),
     // Sourced / drop-ship vehicles: dealer locates from another dealer on demand
     sourceType: v.optional(v.union(v.literal("STOCK"), v.literal("SOURCED"))),
     sourcedFromName: v.optional(v.string()),
     sourceCost: v.optional(v.number()),
+    // When a sourced car physically reached the dealership. Arrival cannot be
+    // expressed through `status`: a special-order car that arrives while a
+    // customer deposit is holding it must stay RESERVED, and the status guard
+    // refuses to move a vehicle out of RESERVED anyway — so "on order" vs
+    // "arrived" had no representation for exactly the cars that need it.
+    arrivedAt: v.optional(v.number()),
     notes: v.optional(v.string()),
     imageIds: v.optional(v.array(v.id("_storage"))),
     // Phase 61 — trust passport (widen-only). Dealer self-service form (vehicle
@@ -668,6 +680,10 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
+    // The special-order pipeline wants sourced cars in a few statuses. Without
+    // sourceType in the key it had to fetch every AVAILABLE vehicle — the whole
+    // lot — and discard almost all of them.
+    .index("by_org_sourceType_status", ["orgId", "sourceType", "status"])
     .index("by_org_vin", ["orgId", "vin"])
     .searchIndex("search_make", { searchField: "make", filterFields: ["orgId", "isDeleted"] })
     .searchIndex("search_vin", { searchField: "vin", filterFields: ["orgId", "isDeleted"] }),

@@ -3,7 +3,7 @@ import { MutationCtx, QueryCtx, query } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
 import { vehiclesByOrg, LIVE, OWN_STOCK, SOURCED, SUM_EPOCH } from "./aggregates";
 import { Id } from "./_generated/dataModel";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireTenantAuth, requireOwnedRow } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
@@ -14,7 +14,7 @@ import { internal } from "./_generated/api";
 import { getOrgCurrency, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
 import { toMinorUnits, assertFiniteNumber } from "./utils/money";
 import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePaymentMethod, type AcquisitionPaymentMethod, type PaymentMethod } from "./utils/paymentMethods";
-import { syncVehicleHoldStatus, getDefaultReservationExpiry } from "./utils/depositHelpers";
+import { syncVehicleHoldStatus, getDefaultReservationExpiry, getActiveDepositHolds } from "./utils/depositHelpers";
 import {
   amountToMinorOrThrow,
   depositMethodValidator,
@@ -625,19 +625,113 @@ export const getReservationHistory = query({
       .order("desc")
       .take(100);
 
-    return await Promise.all(
+    const reservationRows = await Promise.all(
       reservations.map(async (reservation) => {
         const customer = await ctx.db.get(reservation.customerId);
         const reservedBy = await ctx.db.get(reservation.reservedBy);
         const releasedBy = reservation.releasedBy ? await ctx.db.get(reservation.releasedBy) : null;
         return {
           ...reservation,
+          origin: "RESERVATION" as const,
           customerName: customer ? `${customer.firstName} ${customer.lastName}` : null,
           reservedByName: reservedBy?.name ?? reservedBy?.email ?? null,
           releasedByName: releasedBy?.name ?? releasedBy?.email ?? null,
         };
       })
     );
+
+    // A deposit taken in the sales wizard holds the vehicle just as hard as a
+    // reservation does, but writes only a `deposits` row — so this tab used to
+    // read "No reservations recorded" while a live hold was keeping the car off
+    // the market. Deposits that were created *by* a reservation are skipped:
+    // the reservation row above already represents them.
+    const heldDeposits = await ctx.db
+      .query("deposits")
+      .withIndex("by_vehicle_hold", (q) => q.eq("vehicleId", args.vehicleId))
+      .order("desc")
+      .take(100);
+
+    // A vehicle can also be a *secondary* line on a multi-vehicle quote, whose
+    // deposit row only ever snapshots the primary vehicleId — the join table is
+    // the sole record. Without this, the second and third cars on a three-car
+    // deal showed "No reservations recorded" while genuinely being held.
+    const secondaryHolds = await ctx.db
+      .query("depositVehicleHolds")
+      .withIndex("by_vehicle_active", (q) => q.eq("vehicleId", args.vehicleId))
+      .take(100);
+    const secondaryDeposits = await Promise.all(
+      secondaryHolds.map(async (hold) => {
+        const deposit = await ctx.db.get(hold.depositId);
+        return deposit ? { deposit, joinActive: hold.active } : null;
+      })
+    );
+
+    const candidateDeposits = [
+      ...heldDeposits.map((deposit) => ({ deposit, joinActive: null as boolean | null })),
+      ...secondaryDeposits.filter((entry): entry is NonNullable<typeof entry> => entry !== null),
+    ];
+
+    const seenDepositIds = new Set<string>();
+    const depositRows = await Promise.all(
+      candidateDeposits
+        .filter(({ deposit }) => {
+          if (
+            deposit.orgId !== args.orgId ||
+            deposit.reservationId !== undefined ||
+            deposit.isDeleted === true
+          ) {
+            return false;
+          }
+          if (seenDepositIds.has(deposit._id)) return false;
+          seenDepositIds.add(deposit._id);
+          return true;
+        })
+        .map(async ({ deposit, joinActive }) => {
+          const [customer, reservedBy, releasedBy] = await Promise.all([
+            ctx.db.get(deposit.customerId),
+            ctx.db.get(deposit.createdBy),
+            deposit.resolvedBy ? ctx.db.get(deposit.resolvedBy) : Promise.resolve(null),
+          ]);
+          // ACTIVE is driven by `holdActive`, not by `status`. The two are
+          // deliberately decoupled (see the deposits table in schema.ts): a
+          // rejected finance application, a released reservation and an expired
+          // reservation all clear holdActive while leaving the deposit HELD so a
+          // manager still decides refund vs forfeit. Reading `status` alone
+          // rendered those as ACTIVE holds forever, with a live Release button,
+          // long after they stopped holding anything.
+          const stillHolding =
+            deposit.status === "HELD" && deposit.holdActive === true && joinActive !== false;
+          const status = stillHolding
+            ? ("ACTIVE" as const)
+            : deposit.status === "APPLIED"
+              ? ("CONVERTED" as const)
+              : ("RELEASED" as const);
+          return {
+            _id: deposit._id,
+            _creationTime: deposit._creationTime,
+            origin: "DEPOSIT" as const,
+            // A forfeited deposit means the dealership kept the money — a
+            // materially different outcome from a refund, and the tab used to
+            // render both identically.
+            depositResolution: deposit.status,
+            orgId: deposit.orgId,
+            vehicleId: deposit.vehicleId,
+            customerId: deposit.customerId,
+            status,
+            depositAmount: deposit.amount,
+            expiresAt: undefined as number | undefined,
+            reservedAt: deposit.createdAt ?? deposit._creationTime,
+            releasedAt: deposit.resolvedAt,
+            customerName: customer ? `${customer.firstName} ${customer.lastName}` : null,
+            reservedByName: reservedBy?.name ?? reservedBy?.email ?? null,
+            releasedByName: releasedBy?.name ?? releasedBy?.email ?? null,
+          };
+        })
+    );
+
+    return [...reservationRows, ...depositRows]
+      .sort((a, b) => b.reservedAt - a.reservedAt)
+      .slice(0, 100);
   },
 });
 
@@ -1326,12 +1420,24 @@ export const createReservation = mutation({
       ? amountToMinorOrThrow(args.depositAmount!, currency!, "Reservation deposit amount")
       : undefined;
 
+    // ACTIVE-only and streamed, not a fixed page. `by_org_vehicle` returned
+    // oldest-first over every status, so on a vehicle with 100+ historical
+    // released/expired reservations a live one fell outside the window — the
+    // expiry sweep below missed it and the duplicate check further down let a
+    // second active reservation be written on top of it. Narrowing to ACTIVE
+    // alone does not close that: a reservation stays ACTIVE until this very
+    // sweep expires it, so unswept rows can still fill a page ahead of the live
+    // one. Collecting the whole ACTIVE range is bounded in practice — a vehicle
+    // holds at most one live reservation, and the rest are rows this loop is
+    // about to retire.
     const existingReservations = await ctx.db
       .query("vehicleReservations")
-      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
-      .take(100);
+      .withIndex("by_org_vehicle_status", (q) =>
+        q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId).eq("status", "ACTIVE")
+      )
+      .collect();
     for (const reservation of existingReservations) {
-      if (reservation.status === "ACTIVE" && reservation.expiresAt !== undefined && reservation.expiresAt <= now) {
+      if (reservation.expiresAt !== undefined && reservation.expiresAt <= now) {
         if (reservation.depositId) {
           const deposit = await ctx.db.get(reservation.depositId);
           if (deposit && deposit.orgId === args.orgId && deposit.status === "HELD" && deposit.holdActive) {
@@ -1349,14 +1455,46 @@ export const createReservation = mutation({
     if (!currentVehicle || currentVehicle.isDeleted || currentVehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found in this organization.");
     }
-    if (currentVehicle.status !== "AVAILABLE") {
-      throw new ConvexError("Vehicle must be available before it can be reserved.");
+    // SOURCING is reservable: a special-order car is located for a specific
+    // customer, so reserving one is the whole point of the flow.
+    //
+    // RESERVED has to be accepted too, and the ordering above is why. The
+    // `syncVehicleHoldStatus` call on the line before this promotes any vehicle
+    // that already carries a deposit hold to RESERVED — so by the time the
+    // status is re-read, a car being reserved *because* a deposit was taken on
+    // it always reads RESERVED. Rejecting that threw and rolled the promotion
+    // back with it, leaving the vehicle exactly as it started: the sourced car
+    // this flow exists to reserve could never get past this line. Reserving on
+    // top of someone else's deposit is still refused, just below.
+    const reservableStatuses = ["AVAILABLE", "SOURCING", "RESERVED"];
+    if (!reservableStatuses.includes(currentVehicle.status)) {
+      throw new ConvexError("Vehicle must be available or on order before it can be reserved.");
     }
-    if (existingReservations.some((reservation) =>
-      reservation.status === "ACTIVE" &&
-      (reservation.expiresAt === undefined || reservation.expiresAt > now)
+    // Every row here was ACTIVE when read; the loop above may since have
+    // patched some to EXPIRED, and those are exactly the ones whose expiry has
+    // passed — so the expiry comparison, not the now-stale in-memory `status`,
+    // is what distinguishes a reservation that still stands.
+    if (existingReservations.some(
+      (reservation) => reservation.expiresAt === undefined || reservation.expiresAt > now
     )) {
       throw new ConvexError("Vehicle already has an active reservation.");
+    }
+    // A hold belonging to a different customer still blocks the reservation —
+    // accepting RESERVED above must not let customer B reserve a car that
+    // customer A's deposit is holding.
+    //
+    // Resolved through getActiveDepositHolds so a *secondary* vehicle on a
+    // multi-vehicle quote is covered too: those are recorded only in
+    // depositVehicleHolds, so querying deposits.by_vehicle_hold alone reported
+    // car 2 of a three-car deal as unheld and would have let a second customer
+    // reserve it out from under the first.
+    const holdingDeposits = await getActiveDepositHolds(ctx, args.vehicleId);
+    if (
+      holdingDeposits.some(
+        (deposit) => deposit.orgId === args.orgId && deposit.customerId !== args.customerId
+      )
+    ) {
+      throw new ConvexError("Another customer's deposit is currently holding this vehicle.");
     }
 
     const reservationId = await ctx.db.insert("vehicleReservations", {
@@ -1393,6 +1531,69 @@ export const createReservation = mutation({
     await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);
 
     return reservationId;
+  },
+});
+
+/**
+ * Records that a special-order car physically reached the dealership.
+ *
+ * Arrival is stored as its own timestamp rather than a status change because a
+ * car can be arrived *and* still held: if a customer deposit promoted it to
+ * RESERVED, `assertDirectVehicleStatusTransition` refuses to move it out of
+ * RESERVED at all, so "it's here now" had nowhere to live for precisely the
+ * cars in the special-order pipeline. An unheld car still on SOURCING is moved
+ * to AVAILABLE at the same time, since that is what SOURCING→arrived means for
+ * stock nobody has claimed.
+ */
+export const markSourcedVehicleArrived = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    const vehicle = await requireOwnedRow(ctx, args.orgId, "vehicles", args.vehicleId);
+
+    if (vehicle.isDeleted) {
+      throw new ConvexError("Vehicle not found in this organization.");
+    }
+    if (vehicle.sourceType !== "SOURCED") {
+      throw new ConvexError("Only sourced vehicles can be marked as arrived.");
+    }
+    if (vehicle.status === "SOLD" || vehicle.status === "ARCHIVED") {
+      throw new ConvexError("This vehicle is no longer in the sourcing pipeline.");
+    }
+    if (vehicle.arrivedAt != null) {
+      return args.vehicleId;
+    }
+
+    const now = Date.now();
+
+    // Resolve the hold state before deciding where the car goes. A row written
+    // before this fix can be SOURCING *with* a live deposit hold — that is the
+    // exact state this PR exists to repair, and it survives until
+    // reconcileVehicleHolds runs. Reading the pre-sync status would put such a
+    // car back on the lot while a customer's deposit still points at it, free
+    // to be sold or reserved to somebody else.
+    //
+    // Note this promotes rather than clearing `holdActive`: the deposit is real
+    // money and only a manager's refund/forfeit decision may release it.
+    await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);
+    const current = await ctx.db.get(args.vehicleId);
+    if (!current || current.orgId !== args.orgId || current.isDeleted) {
+      throw new ConvexError("Vehicle not found in this organization.");
+    }
+
+    await ctx.db.patch(args.vehicleId, {
+      arrivedAt: now,
+      updatedAt: now,
+      updatedBy: user._id,
+      // A held car stays RESERVED — the deposit still owns it. Only unclaimed
+      // stock moves onto the lot.
+      ...(current.status === "SOURCING" ? { status: "AVAILABLE" as const } : {}),
+    });
+
+    return args.vehicleId;
   },
 });
 

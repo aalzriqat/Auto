@@ -279,10 +279,17 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // this analyzer guards against; adding an `orgId` argument would let a caller
   // name a pairing rather than prevent one. `analysed` is unchanged at 285, so
   // nothing dropped out of inspection.
+  // `vehicles.markSourcedVehicleArrived` records that a special-order car
+  // reached the dealership (437→438 mutations, 285→286 analysed). It takes an
+  // `orgId` and a caller-supplied `vehicleId`, so it lands in `analysed` and is
+  // held to the `requireOwnedRow` rule — which it satisfies: the handler
+  // resolves the vehicle through `requireOwnedRow(ctx, args.orgId, "vehicles",
+  // args.vehicleId)` before touching it, so naming another org's vehicle id
+  // cannot reach the patch.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 437,
-      analysed: 285,
+      totalMutations: 438,
+      analysed: 286,
       skippedNoArgsBlock: 9,
       skippedNoOrgId: 143,
     });

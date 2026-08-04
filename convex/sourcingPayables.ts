@@ -7,6 +7,8 @@ import { runWithIdempotency } from "./utils/idempotency";
 import { hookSupplierPaymentSettled } from "./accounting/workflowHooks";
 import { toMinorUnits } from "./utils/money";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
+import { Id } from "./_generated/dataModel";
+import { getActiveDepositHolds } from "./utils/depositHelpers";
 
 export const list = query({
   args: {
@@ -59,6 +61,110 @@ export const list = query({
         };
       })
     );
+  },
+});
+
+/**
+ * The live special-order pipeline: cars being sourced from another dealer on a
+ * customer's behalf that have not yet been sold.
+ *
+ * This is the half of the Special Orders page that was named and described but
+ * never built. `vehicleSupplierPayables` rows — the only thing the page showed
+ * — are written at SALE COMPLETION (utils/saleCompletion.ts) or at acquisition
+ * for owned stock bought ON_ACCOUNT, so a special order in progress produced no
+ * row at all and the page sat empty for exactly as long as the order was live,
+ * then filled up once it was over.
+ *
+ * A sourced car is in the pipeline while it is SOURCING, RESERVED (a customer
+ * deposit is holding it) or AVAILABLE. SOLD and ARCHIVED cars drop out — at
+ * that point the payable exists and the table below covers it.
+ *
+ * Arrival is read from `vehicle.arrivedAt`, not from the status: a car that
+ * arrives while a deposit is holding it stays RESERVED, so status alone cannot
+ * distinguish "still at the source dealer" from "here and spoken for".
+ */
+export const listPipeline = query({
+  args: {
+    orgId: v.id("organizations"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+
+    // Keyed on sourceType so this reads only sourced cars. Going through
+    // by_org_status meant fetching every AVAILABLE vehicle in the org — the
+    // entire lot — to keep the handful that are drop-ships.
+    const pipelineStatuses = ["SOURCING", "RESERVED", "AVAILABLE"] as const;
+    const byStatus = await Promise.all(
+      pipelineStatuses.map((status) =>
+        ctx.db
+          .query("vehicles")
+          .withIndex("by_org_sourceType_status", (q) =>
+            q.eq("orgId", args.orgId).eq("sourceType", "SOURCED").eq("status", status)
+          )
+          .filter((q) => q.neq(q.field("isDeleted"), true))
+          .collect()
+      )
+    );
+
+    const sourcedVehicles = byStatus.flat();
+    const now = Date.now();
+
+    const rows = await Promise.all(
+      sourcedVehicles.map(async (vehicle) => {
+        // Who the car is being sourced for. A deposit taken in the sales wizard
+        // is the strongest signal; an active reservation is the fallback.
+        //
+        // getActiveDepositHolds covers secondary vehicles on a multi-vehicle
+        // quote, which live only in depositVehicleHolds — reading the deposits
+        // table alone showed car 2 of a three-car deal with no customer and no
+        // deposit while it was genuinely held.
+        const activeDeposits = (await getActiveDepositHolds(ctx, vehicle._id)).filter(
+          (deposit) => deposit.orgId === args.orgId
+        );
+        const depositTotal = activeDeposits.reduce((sum, deposit) => sum + deposit.amount, 0);
+
+        let customerId: Id<"customers"> | null = activeDeposits[0]?.customerId ?? null;
+        if (!customerId) {
+          // Stream rather than take a fixed page: a reservation keeps
+          // status ACTIVE until a sweep expires it and this index is
+          // oldest-first, so stale rows could fill the page ahead of the live
+          // one and leave the order showing an unassigned customer.
+          for await (const reservation of ctx.db
+            .query("vehicleReservations")
+            .withIndex("by_org_vehicle_status", (q) =>
+              q.eq("orgId", args.orgId).eq("vehicleId", vehicle._id).eq("status", "ACTIVE")
+            )) {
+            if (reservation.expiresAt === undefined || reservation.expiresAt > now) {
+              customerId = reservation.customerId;
+              break;
+            }
+          }
+        }
+
+        const customer = customerId ? await ctx.db.get(customerId) : null;
+        const safeCustomer = customer?.orgId === args.orgId ? customer : null;
+
+        return {
+          _id: vehicle._id,
+          vehicleDesc: `${vehicle.year} ${vehicle.make} ${vehicle.model}${vehicle.trim ? ` ${vehicle.trim}` : ""}`,
+          vin: vehicle.vin,
+          status: vehicle.status,
+          arrivedAt: vehicle.arrivedAt ?? null,
+          hasArrived: vehicle.arrivedAt != null,
+          isHeld: depositTotal > 0 || vehicle.status === "RESERVED",
+          sourcedFromName: vehicle.sourcedFromName ?? null,
+          sourceCost: vehicle.sourceCost ?? 0,
+          sellingPrice: vehicle.sellingPrice,
+          customerName: safeCustomer
+            ? `${safeCustomer.firstName} ${safeCustomer.lastName}`.trim()
+            : null,
+          depositTotal,
+          daysWaiting: Math.floor((now - (vehicle.createdAt ?? vehicle._creationTime)) / (24 * 60 * 60 * 1000)),
+        };
+      })
+    );
+
+    return rows.sort((a, b) => b.daysWaiting - a.daysWaiting);
   },
 });
 

@@ -7,7 +7,7 @@ import {
   hookFiCommissionRecognitionsReversed,
 } from "../accounting/workflowHooks";
 import { reverseAllocation, voidCanonicalPayment } from "../subledger";
-import { restoreVehicleToAvailable } from "./saleHelpers";
+import { restoreVehicleFromSale } from "./saleHelpers";
 import {
   reactivateAllVehiclesForDeposit,
   syncVehicleHoldStatus,
@@ -431,7 +431,7 @@ export async function cancelCompletedSaleOperationalRecords(
     reason: args.reason,
     reversalDate: args.reversalDate,
   });
-  await restoreVehicleToAvailable(ctx, args.sale.vehicleId);
+  await restoreVehicleFromSale(ctx, args.sale.vehicleId);
   await reinstateAppliedDeposits(ctx, {
     orgId: args.orgId,
     quoteId: args.sale.quoteId,

@@ -860,6 +860,14 @@ export interface MobileVehiclePriceHistoryEntry {
 
 export interface MobileVehicleReservation {
   _id: string;
+  /**
+   * Which hold this row came from. A deposit taken in the sales wizard holds a
+   * vehicle just as hard as a reservation but lives in the `deposits` table, so
+   * the history merges both. DEPOSIT rows must not be released through
+   * `releaseReservation` — that mutation validates the id against
+   * `vehicleReservations` and rejects it.
+   */
+  origin: "RESERVATION" | "DEPOSIT";
   status: MobileReservationStatus;
   customerName: string | null;
   reservedByName: string | null;

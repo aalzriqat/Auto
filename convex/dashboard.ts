@@ -146,26 +146,62 @@ export const stats = query({
     // filter: a sourced car is located on demand from another dealer and was
     // never in this dealer's inventory. `sourcedFlag` sits above `status` in
     // the key precisely so this is one contiguous range.
-    const [totalVehicles, availableVehicles] = canViewVehicles
-      ? await vehiclesByOrg.countBatch(ctx, [
-        { namespace: args.orgId, bounds: ownStockBounds(ANY_STATUS) },
-        { namespace: args.orgId, bounds: ownStockBounds("AVAILABLE") },
-      ])
-      : [0, 0];
+    // `totalVehicles` spans every status, which includes SOLD and ARCHIVED —
+    // it is a lifetime count, not stock on hand. The dashboard card presented
+    // it as "Active Inventory", so a dealership that had sold half its cars
+    // still saw them counted as inventory. `activeVehicles` is the real
+    // on-the-lot figure: available + reserved + in inspection/repair.
+    const [totalVehicles, availableVehicles, reservedVehicles, inInspectionVehicles, inRepairVehicles] =
+      canViewVehicles
+        ? await vehiclesByOrg.countBatch(ctx, [
+          { namespace: args.orgId, bounds: ownStockBounds(ANY_STATUS) },
+          { namespace: args.orgId, bounds: ownStockBounds("AVAILABLE") },
+          { namespace: args.orgId, bounds: ownStockBounds("RESERVED") },
+          { namespace: args.orgId, bounds: ownStockBounds("IN_INSPECTION") },
+          { namespace: args.orgId, bounds: ownStockBounds("IN_REPAIR") },
+        ])
+        : [0, 0, 0, 0, 0];
+    const activeVehicles =
+      availableVehicles + reservedVehicles + inInspectionVehicles + inRepairVehicles;
 
     // 3. Active Leads (not WON/LOST)
     //
     // The tree stores the raw stage, so "active" stays a subtraction here
     // rather than a flag baked into the key — see `leadsByOrg`. Three counts
     // in one batched round-trip, replacing a scan of up to 1,000 leads.
-    const [liveLeads, wonLeads, lostLeads] = canViewLeads
+    // The per-stage breakdown is counted here rather than derived on the client
+    // from `leads.list`: that is a paginated query and the dashboard only holds
+    // its first 100 rows, so above 100 leads the donut silently disagreed with
+    // the headline number beside it. Every non-terminal stage is counted — the
+    // client-side version omitted INTERESTED and RESERVED entirely, so leads
+    // parked in those stages vanished from the chart while still being counted
+    // in the tiles next to it.
+    const activeStages = [
+      "NEW",
+      "CONTACTED",
+      "INTERESTED",
+      "TEST_DRIVE",
+      "NEGOTIATION",
+      "RESERVED",
+    ] as const;
+
+    const leadCounts = canViewLeads
       ? await leadsByOrg.countBatch(ctx, [
         { namespace: args.orgId, bounds: liveStageBounds(ANY_STAGE) },
         { namespace: args.orgId, bounds: liveStageBounds("WON") },
         { namespace: args.orgId, bounds: liveStageBounds("LOST") },
+        ...activeStages.map((stage) => ({
+          namespace: args.orgId,
+          bounds: liveStageBounds(stage),
+        })),
       ])
-      : [0, 0, 0];
+      : [0, 0, 0, ...activeStages.map(() => 0)];
+
+    const [liveLeads, wonLeads, lostLeads] = leadCounts;
     const activeLeads = liveLeads - wonLeads - lostLeads;
+    const leadsByStage = Object.fromEntries(
+      activeStages.map((stage, index) => [stage, leadCounts[3 + index]])
+    ) as Record<(typeof activeStages)[number], number>;
 
     // 4. Sales this period
     let periodSales: Doc<"sales">[] = [];
@@ -607,7 +643,11 @@ export const stats = query({
     return {
       totalVehicles,
       availableVehicles,
+      activeVehicles,
+      reservedVehicles,
       activeLeads,
+      totalLeads: liveLeads,
+      leadsByStage,
       salesThisMonth: salesCount,
       salesVolumeThisMonth: salesVolume,
       teamMembers,
