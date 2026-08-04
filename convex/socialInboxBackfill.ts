@@ -3,9 +3,15 @@ import { action, internalQuery } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
-import { isUnresolvedInstagramName } from "./instagramEngagement";
-import { hasDuplicatedName } from "./utils/socialMobile";
-import { isUnresolvedFacebookName } from "./facebookEngagement";
+import {
+  isUnresolvedInstagramName,
+  PLACEHOLDER_FIRST_NAME as INSTAGRAM_PLACEHOLDER_FIRST_NAME,
+} from "./instagramEngagement";
+import { hasDuplicatedName, hasStrayPlaceholderSurname } from "./utils/socialMobile";
+import {
+  isUnresolvedFacebookName,
+  PLACEHOLDER_FIRST_NAME as FACEBOOK_PLACEHOLDER_FIRST_NAME,
+} from "./facebookEngagement";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { INSTAGRAM_GRAPH_VERSION } from "./utils/instagramApi";
@@ -510,16 +516,26 @@ export const getUnresolvedSocialCustomers = internalQuery({
     // "ali_1990". Dropping the repeated surname is the one edit that cannot
     // invent a different name — and it costs no Graph call, so these rows
     // never compete with the placeholder backlog for the lookup budget.
-    const duplicated: Array<Id<"customers">> = [];
+    // Rows repaired locally by dropping a surname nobody chose.
+    const artificialSurnames: Array<Id<"customers">> = [];
 
     for (const customer of customers) {
       if (customer.isDeleted) continue;
-      // `hasDuplicatedName` picks up contacts the old splitter wrote into both
-      // name fields ("mhty7220 mhty7220"). They are not placeholders, so
-      // nothing else would ever revisit them.
-      const isDuplicated = hasDuplicatedName(customer);
-
-      if (isDuplicated) duplicated.push(customer._id);
+      // Two shapes the old splitter left behind, neither of which any other
+      // repair can see: the name written into both fields ("mhty7220
+      // mhty7220"), and a real first name carrying the placeholder's surname
+      // ("kamalalia19 Contact", "Feras Contact"). The second is the common one
+      // — every single-token profile name produced it — and it is the reason
+      // contacts kept showing a "Contact" surname after a resync.
+      const strayFacebookSurname =
+        Boolean(customer.facebookUserId) &&
+        hasStrayPlaceholderSurname(customer, FACEBOOK_PLACEHOLDER_FIRST_NAME);
+      const strayInstagramSurname =
+        Boolean(customer.instagramUserId) &&
+        hasStrayPlaceholderSurname(customer, INSTAGRAM_PLACEHOLDER_FIRST_NAME);
+      if (hasDuplicatedName(customer) || strayFacebookSurname || strayInstagramSurname) {
+        artificialSurnames.push(customer._id);
+      }
       if (
         customer.instagramUserId &&
         isUnresolvedInstagramName(customer, customer.instagramUserId)
@@ -531,17 +547,34 @@ export const getUnresolvedSocialCustomers = internalQuery({
       }
     }
 
-    return { instagram, facebook, duplicated };
+    return { instagram, facebook, artificialSurnames };
   },
 });
 
-export const collapseDuplicatedName = internalMutation({
+/**
+ * Drops a surname the contact never had — either the first name repeated, or
+ * the placeholder's "Contact" left behind next to a real name.
+ *
+ * Local only: it can shorten a name but never replace one, so it cannot put a
+ * handle where a person's name used to be. A staff-entered name is untouched
+ * because neither shape can arise from one.
+ */
+export const collapseArtificialSurname = internalMutation({
   args: { customerId: v.id("customers") },
   handler: async (ctx, args) => {
     const customer = await ctx.db.get(args.customerId);
+    if (!customer) return false;
     // Re-checked inside the mutation: the row may have been renamed between
     // being listed and being repaired.
-    if (!customer || !hasDuplicatedName(customer)) return false;
+    const strayFacebookSurname = Boolean(
+      customer.facebookUserId && hasStrayPlaceholderSurname(customer, FACEBOOK_PLACEHOLDER_FIRST_NAME)
+    );
+    const strayInstagramSurname = Boolean(
+      customer.instagramUserId && hasStrayPlaceholderSurname(customer, INSTAGRAM_PLACEHOLDER_FIRST_NAME)
+    );
+    if (!hasDuplicatedName(customer) && !strayFacebookSurname && !strayInstagramSurname) {
+      return false;
+    }
     await ctx.db.patch(args.customerId, { lastName: "" });
     return true;
   },
@@ -575,8 +608,8 @@ export const resyncContactNames = action({
     attemptedButUnresolved: number;
     /** The org's whole remaining backlog, including contacts past the batch. */
     remaining: number;
-    /** Rows whose repeated surname was dropped, with no Graph call. */
-    duplicatesCollapsed: number;
+    /** Rows whose artificial surname was dropped locally, with no Graph call. */
+    surnamesRepaired: number;
   }> => {
     await ctx.runQuery(internal.socialInboxBackfill.requireManagerAuthQuery, { orgId: args.orgId });
 
@@ -623,13 +656,13 @@ export const resyncContactNames = action({
 
     // Local repair, so it runs for every duplicated row rather than competing
     // for the lookup budget above.
-    let duplicatesCollapsed = 0;
-    for (const customerId of before.duplicated) {
+    let surnamesRepaired = 0;
+    for (const customerId of before.artificialSurnames) {
       const collapsed = await ctx.runMutation(
-        internal.socialInboxBackfill.collapseDuplicatedName,
+        internal.socialInboxBackfill.collapseArtificialSurname,
         { customerId }
       );
-      if (collapsed) duplicatesCollapsed++;
+      if (collapsed) surnamesRepaired++;
     }
 
     const after = await ctx.runQuery(
@@ -650,7 +683,7 @@ export const resyncContactNames = action({
       resolved: Math.max(0, startingTotal - remaining),
       attemptedButUnresolved: Math.max(0, remaining - (startingTotal - attempted)),
       remaining,
-      duplicatesCollapsed,
+      surnamesRepaired,
     };
   },
 });

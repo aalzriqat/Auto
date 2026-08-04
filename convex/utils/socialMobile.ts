@@ -36,6 +36,36 @@ export function hasDuplicatedName(
   return first.length > 0 && first === customer.lastName.trim();
 }
 
+/** The surname half of both platform placeholders. */
+export const PLACEHOLDER_SURNAME = "Contact";
+
+/**
+ * True when a contact carries a real first name but the placeholder's surname.
+ *
+ * The old splitter read a single-token name as
+ * `lastName: parts.slice(1).join(" ") || PLACEHOLDER_LAST_NAME`, so an
+ * Instagram handle or a mononym came out as "kamalalia19 Contact" or
+ * "Feras Contact". Those rows are invisible to every other repair: the first
+ * name is genuine so they are not placeholders, and the two halves differ so
+ * they are not duplicates — which left them stuck with a surname no one ever
+ * had.
+ *
+ * `firstName` must not itself be the platform placeholder, so a true
+ * "Facebook Contact" stays fully unresolved and still gets a name lookup
+ * rather than being quietly shortened to "Facebook".
+ */
+export function hasStrayPlaceholderSurname(
+  customer: { firstName: string; lastName: string },
+  placeholderFirstName: string
+): boolean {
+  const first = customer.firstName.trim();
+  return (
+    customer.lastName.trim() === PLACEHOLDER_SURNAME &&
+    first.length > 0 &&
+    first !== placeholderFirstName
+  );
+}
+
 export type SharedMobileNumber = {
   normalized: string;
   variants: string[];

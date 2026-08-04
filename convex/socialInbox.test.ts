@@ -557,7 +557,7 @@ describe("socialInbox.setConversationVehicle tenant isolation", () => {
   });
 });
 
-describe("socialInboxBackfill duplicate-name repair", () => {
+describe("socialInboxBackfill artificial-surname repair", () => {
   test("drops the repeated surname without asking the platform for a name", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithEditor(t);
@@ -572,7 +572,7 @@ describe("socialInboxBackfill duplicate-name repair", () => {
     );
 
     const collapsed = await t.run((ctx) =>
-      ctx.runMutation(internal.socialInboxBackfill.collapseDuplicatedName, { customerId })
+      ctx.runMutation(internal.socialInboxBackfill.collapseArtificialSurname, { customerId })
     );
 
     expect(collapsed).toBe(true);
@@ -595,11 +595,106 @@ describe("socialInboxBackfill duplicate-name repair", () => {
     );
 
     const collapsed = await t.run((ctx) =>
-      ctx.runMutation(internal.socialInboxBackfill.collapseDuplicatedName, { customerId })
+      ctx.runMutation(internal.socialInboxBackfill.collapseArtificialSurname, { customerId })
     );
 
     expect(collapsed).toBe(false);
     const untouched = await t.run((ctx) => ctx.db.get(customerId));
     expect(untouched?.lastName).toBe("Al Nimri");
+  });
+});
+
+describe("socialInboxBackfill stray placeholder surname", () => {
+  test("drops the leftover \"Contact\" surname beside a real Instagram handle", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithEditor(t);
+
+    // The shape the old splitter produced for every single-token profile name:
+    // `lastName: parts.slice(1).join(" ") || PLACEHOLDER_LAST_NAME`. The first
+    // name is genuine so it is not a placeholder, and the halves differ so it
+    // is not a duplicate — which left these invisible to every other repair.
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "kamalalia19",
+        lastName: "Contact",
+        instagramUserId: "1678691899891601",
+      })
+    );
+
+    const repaired = await t.run((ctx) =>
+      ctx.runMutation(internal.socialInboxBackfill.collapseArtificialSurname, { customerId })
+    );
+
+    expect(repaired).toBe(true);
+    const row = await t.run((ctx) => ctx.db.get(customerId));
+    expect(row?.firstName).toBe("kamalalia19");
+    expect(row?.lastName).toBe("");
+  });
+
+  test("leaves a true placeholder alone so it still gets a name lookup", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithEditor(t);
+
+    // Shortening this to "Facebook" would destroy the signal that the contact
+    // still needs a real name fetched.
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "Facebook",
+        lastName: "Contact",
+        facebookUserId: "28007134862281013",
+      })
+    );
+
+    const repaired = await t.run((ctx) =>
+      ctx.runMutation(internal.socialInboxBackfill.collapseArtificialSurname, { customerId })
+    );
+
+    expect(repaired).toBe(false);
+    const row = await t.run((ctx) => ctx.db.get(customerId));
+    expect(row?.lastName).toBe("Contact");
+  });
+
+  test("does not touch a contact whose surname is genuinely something else", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithEditor(t);
+
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "Feras",
+        lastName: "Al Nimri",
+        facebookUserId: "27578165338517461",
+      })
+    );
+
+    const repaired = await t.run((ctx) =>
+      ctx.runMutation(internal.socialInboxBackfill.collapseArtificialSurname, { customerId })
+    );
+
+    expect(repaired).toBe(false);
+    const row = await t.run((ctx) => ctx.db.get(customerId));
+    expect(row?.lastName).toBe("Al Nimri");
+  });
+
+  test("the discovery query queues these rows for repair", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithEditor(t);
+
+    const strayId = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "Feras",
+        lastName: "Contact",
+        facebookUserId: "27578165338517461",
+      })
+    );
+
+    const found = await t.run((ctx) =>
+      ctx.runQuery(internal.socialInboxBackfill.getUnresolvedSocialCustomers, { orgId })
+    );
+
+    expect(found.artificialSurnames).toContain(strayId);
   });
 });
