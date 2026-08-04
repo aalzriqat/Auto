@@ -15,6 +15,7 @@ import {
   hasActiveDepositHold,
   hasActiveReservationHold,
   syncVehicleHoldStatus,
+  resolveHoldTargetStatus,
 } from "./utils/depositHelpers";
 
 export const backfillPermissions = internalMutation({
@@ -347,14 +348,21 @@ export const reconcileVehicleHolds = internalMutation({
         (await hasActiveDepositHold(ctx, vehicle._id)) ||
         (await hasActiveReservationHold(ctx, { orgId: args.orgId, vehicleId: vehicle._id }));
 
-      const target = hasHold ? "RESERVED" : "AVAILABLE";
-      if (vehicle.status === target) continue;
-      // Only the two states syncVehicleHoldStatus itself moves between. This
-      // is what keeps SOLD and ARCHIVED out — a sold car is not "unheld", and
-      // re-listing one because its sale row was deleted would be worse than
-      // the inconsistency being fixed — and equally keeps SOURCING and
-      // IN_INSPECTION out, which are mid-workflow rather than mis-held.
-      if (vehicle.status !== "RESERVED" && vehicle.status !== "AVAILABLE") continue;
+      // Ask the hold state machine itself what it would do, rather than
+      // re-deriving it here. The previous flat RESERVED/AVAILABLE pair drifted
+      // from `syncVehicleHoldStatus` in two ways: it could not see that a
+      // SOURCING car with a live hold needs promoting (so the one migration
+      // meant to repair hold drift skipped exactly the rows that produced this
+      // bug), and it printed "to: AVAILABLE" for a released hold that now
+      // restores `preHoldStatus` — a dry run that disagreed with the write.
+      //
+      // A null target means "leave it alone", which is what keeps SOLD and
+      // ARCHIVED out (a sold car is not "unheld", and re-listing one because
+      // its sale row was deleted would be worse than the inconsistency being
+      // fixed), along with IN_INSPECTION/IN_REPAIR and any unheld SOURCING car
+      // that is simply still on order.
+      const target = resolveHoldTargetStatus(vehicle, hasHold);
+      if (target === null || vehicle.status === target) continue;
 
       released.push({ vehicleId: vehicle._id.toString(), from: vehicle.status, to: target });
       if (!dryRun) {

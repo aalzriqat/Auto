@@ -10,14 +10,51 @@ export async function markVehicleAsSold(
   await ctx.db.patch(vehicleId, { status: "SOLD" as const });
 }
 
-export async function restoreVehicleToAvailable(
+/**
+ * Puts a vehicle back on the lot after its sale is cancelled/reversed.
+ *
+ * A SOURCED (drop-ship) car that has NOT arrived has never been owned — it is
+ * located at another dealer on a customer's behalf and only ever credits
+ * AP-Suppliers, never Vehicle Inventory. Blanket-restoring it to AVAILABLE
+ * presented a car the dealership does not possess as owned stock on the lot,
+ * and counted its cost as owned inventory value. It goes back to SOURCING
+ * instead, where the special order resumes.
+ *
+ * A sourced car that HAS arrived is physically on the lot, so it returns to
+ * AVAILABLE like any other. Sending it back to SOURCING would drop it out of
+ * the public marketplace (marketplaceBrowse only lists AVAILABLE/SOLD) even
+ * though it is sitting there ready to sell.
+ */
+export async function restoreVehicleFromSale(
   ctx: MutationCtx,
   vehicleId: Id<"vehicles">
 ): Promise<void> {
   const vehicle = await ctx.db.get(vehicleId);
-  if (vehicle && vehicle.status === "SOLD") {
-    await ctx.db.patch(vehicleId, { status: "AVAILABLE" as const });
-  }
+  if (!vehicle || vehicle.status !== "SOLD") return;
+
+  // `preHoldStatus` is a snapshot, and two things can make it wrong by the time
+  // a sale is cancelled:
+  //
+  //  - The car arrived after the hold was taken. The snapshot still says
+  //    SOURCING, but the car is physically on the lot, and SOURCING would drop
+  //    it out of the public marketplace (marketplaceBrowse lists AVAILABLE/SOLD
+  //    only) while it sits there ready to sell.
+  //  - The dealership bought the car outright, flipping sourceType to STOCK.
+  //    That needs no status transition, so the workflow guard permits it and
+  //    the stale snapshot would park owned stock in the sourcing lifecycle.
+  //
+  // Both mean the same thing: a SOURCING snapshot only still applies to a car
+  // that is genuinely still sourced and still elsewhere. Mirrors the identical
+  // guard in resolveHoldTargetStatus (utils/depositHelpers.ts).
+  const stillOnOrder = vehicle.sourceType === "SOURCED" && vehicle.arrivedAt == null;
+  const snapshot = vehicle.preHoldStatus === "SOURCING" && !stillOnOrder
+    ? undefined
+    : vehicle.preHoldStatus;
+
+  await ctx.db.patch(vehicleId, {
+    status: snapshot ?? (stillOnOrder ? ("SOURCING" as const) : ("AVAILABLE" as const)),
+    preHoldStatus: undefined,
+  });
 }
 
 export async function createSaleTransaction(

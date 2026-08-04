@@ -147,8 +147,12 @@ export default function DashboardPage() {
   const trendRange = (stats?.salesTrend?.length || 0) > 1
     ? `${stats!.salesTrend![0].name} - ${stats!.salesTrend![stats!.salesTrend!.length - 1].name}`
     : timeRange === "DAY" ? t("Today") : timeRange === "MONTH" ? t("ThisMonth") : timeRange === "YEAR" ? t("ThisYear") : t("AllTime");
-  const newLeadsCount = leads?.filter(l => l.stage === "NEW").length || 0;
-  const qualifiedLeadsCount = leads?.filter(l => l.stage === "INTERESTED" || l.stage === "TEST_DRIVE").length || 0;
+  // Counted server-side across every lead, not derived from `leads` — that is
+  // the first 100 rows of a paginated query, so past 100 leads these tiles and
+  // the donut disagreed with the headline number beside them.
+  const leadsByStage = stats?.leadsByStage;
+  const newLeadsCount = leadsByStage?.NEW ?? 0;
+  const qualifiedLeadsCount = (leadsByStage?.INTERESTED ?? 0) + (leadsByStage?.TEST_DRIVE ?? 0);
   const agingLabelByBucket = {
     "0-30": t("AgingBucket0To30" as any),
     "31-60": t("AgingBucket31To60" as any),
@@ -162,14 +166,25 @@ export default function DashboardPage() {
     "90+": "bg-rose-50 text-rose-700 border-rose-200",
   } as const;
 
+  // Every non-terminal stage, in pipeline order. INTERESTED and RESERVED were
+  // missing before, so leads sitting in them were absent from the chart while
+  // still being counted in the tiles beside it — a dealership with two
+  // interested leads saw an empty-looking donut.
   const donutChartData = [
-    { name: t("New" as any) || "New", value: newLeadsCount, color: "#10b981" },
-    { name: t("Contacted" as any) || "Contacted", value: leads?.filter(l => l.stage === "CONTACTED").length || 0, color: "#3b82f6" },
-    { name: t("TestDrive" as any) || "Test Drive", value: leads?.filter(l => l.stage === "TEST_DRIVE").length || 0, color: "#f97316" },
-    { name: t("Nurturing" as any) || "Negotiation", value: leads?.filter(l => l.stage === "NEGOTIATION").length || 0, color: "#eab308" },
-  ].filter(d => d.value > 0);
+    { name: t("New" as any) || "New", value: leadsByStage?.NEW ?? 0, color: "#10b981" },
+    { name: t("Contacted" as any) || "Contacted", value: leadsByStage?.CONTACTED ?? 0, color: "#3b82f6" },
+    { name: t("Interested" as any) || "Interested", value: leadsByStage?.INTERESTED ?? 0, color: "#8b5cf6" },
+    { name: t("TestDrive" as any) || "Test Drive", value: leadsByStage?.TEST_DRIVE ?? 0, color: "#f97316" },
+    { name: t("Nurturing" as any) || "Negotiation", value: leadsByStage?.NEGOTIATION ?? 0, color: "#eab308" },
+    { name: t("Reserved" as any) || "Reserved", value: leadsByStage?.RESERVED ?? 0, color: "#0ea5e9" },
+  ];
 
-  const finalDonutData = donutChartData;
+  // The legend is driven by the same filtered array the chart renders, so it can
+  // no longer advertise categories the donut does not contain.
+  const finalDonutData = donutChartData.filter(d => d.value > 0);
+
+  const agedStockCount =
+    agingBuckets?.find((bucket: { bucket: string; count: number }) => bucket.bucket === "90+")?.count ?? 0;
 
   return (
     <RoleGuard permissions={[]}>
@@ -288,21 +303,30 @@ export default function DashboardPage() {
           className="rounded-2xl bg-[#dcfce7] p-5 shadow-sm border border-[#bbf7d0]/50 relative"
         >
           <h3 className="text-xs font-bold text-slate-700 tracking-wider uppercase mb-2">{t("VehiclesUpper" as any) || "VEHICLES"}</h3>
-          <div className="text-4xl font-bold text-slate-900 tracking-tight">{stats?.totalVehicles || 0}</div>
+          <div className="text-4xl font-bold text-slate-900 tracking-tight">{stats?.activeVehicles ?? 0}</div>
           <p className="text-sm text-slate-600 font-medium mb-4">{t("ActiveInventory" as any) || "Active Inventory"}</p>
 
           <div className="flex gap-6 mb-4">
             <div>
-              <div className="text-xl font-bold text-slate-900">{stats?.totalVehicles || 0}</div>
-              <p className="text-xs text-slate-600 font-medium">{t("Total" as any) || "Total"}</p>
+              <div className="text-xl font-bold text-slate-900">{stats?.availableVehicles ?? 0}</div>
+              <p className="text-xs text-slate-600 font-medium">{t("Available" as any) || "Available"}</p>
             </div>
             <div>
-              <div className="text-xl font-bold text-slate-900">{stats?.availableVehicles || 0}</div>
-              <p className="text-xs text-slate-600 font-medium">{t("Available" as any) || "Available"}</p>
+              <div className="text-xl font-bold text-slate-900">{stats?.reservedVehicles ?? 0}</div>
+              <p className="text-xs text-slate-600 font-medium">{t("Reserved" as any) || "Reserved"}</p>
             </div>
           </div>
 
-          <div className="text-sm font-medium text-[#16a34a]">{t("StockLevelHealthy" as any) || "Stock Level: Healthy"}</div>
+          {/* Real stock signal from the aging data already loaded on this page,
+              replacing a "Stock Level: Healthy" string that was hardcoded and
+              therefore claimed health even at zero stock. */}
+          {agedStockCount > 0 ? (
+            <div className="text-sm font-medium text-[#b45309]">
+              {agedStockCount} {t("AgedOver90Days" as any) || "aged 90+ days"}
+            </div>
+          ) : (
+            <div className="text-sm font-medium text-[#16a34a]">{t("StockLevelHealthy" as any) || "Stock Level: Healthy"}</div>
+          )}
 
           <div className="absolute bottom-6 end-6 flex items-end gap-1.5 opacity-50">
             <div className="w-2 h-6 bg-[#22c55e] rounded-t-sm"></div>
@@ -320,7 +344,10 @@ export default function DashboardPage() {
         >
           <div>
             <h3 className="text-xs font-bold text-slate-700 tracking-wider uppercase mb-2">{t("LeadsUpper" as any) || "LEADS"}</h3>
-            <div className="text-4xl font-bold text-slate-900 tracking-tight">{stats?.activeLeads || 0}</div>
+            {/* Was `activeLeads` (live minus won/lost) under a "Total Leads"
+                label — two different figures. The headline is the total; the
+                still-working count moves to the line below, where it is named. */}
+            <div className="text-4xl font-bold text-slate-900 tracking-tight">{stats?.totalLeads ?? 0}</div>
             <p className="text-sm text-slate-600 font-medium mb-4">{t("TotalLeads" as any) || "Total Leads"}</p>
 
             <div className="flex gap-6 mb-4">
@@ -334,10 +361,21 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <div className="text-sm font-medium text-[#16a34a]">+0.0% {t("Growth" as any) || "growth"}</div>
+            {/* Replaces a hardcoded "+0.0% growth" that was literal text and never
+                computed anything. This is a real count of leads still in play. */}
+            <div className="text-sm font-medium text-[#16a34a]">
+              {stats?.activeLeads ?? 0} {t("StillActive" as any) || "still active"}
+            </div>
           </div>
 
           <div className="hidden sm:flex w-32 flex-col items-center justify-center mt-2">
+            {finalDonutData.length === 0 ? (
+              <div className="flex h-20 w-20 items-center justify-center rounded-full border-4 border-dashed border-[#fed7aa]">
+                <span className="text-[10px] font-medium text-slate-500 text-center px-1">
+                  {t("NoActiveLeads" as any) || "No active leads"}
+                </span>
+              </div>
+            ) : (
             <div className="h-20 w-20">
               <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                 <PieChart>
@@ -357,11 +395,18 @@ export default function DashboardPage() {
                 </PieChart>
               </ResponsiveContainer>
             </div>
+            )}
+            {/* Derived from the rendered slices instead of four hardcoded rows,
+                which previously advertised categories the donut did not contain
+                (and omitted the ones it did). */}
             <div className="mt-2 flex flex-col gap-1 w-full ps-4">
-              <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-[#10b981]"></div><span className="text-[10px] font-medium text-slate-700">{t("New" as any) || "New"}</span></div>
-              <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-[#3b82f6]"></div><span className="text-[10px] font-medium text-slate-700">{t("Contacted" as any) || "Contacted"}</span></div>
-              <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-[#f97316]"></div><span className="text-[10px] font-medium text-slate-700">{t("TestDrive" as any) || "Test Drive"}</span></div>
-              <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-[#eab308]"></div><span className="text-[10px] font-medium text-slate-700">{t("Nurturing" as any) || "Nurturing"}</span></div>
+              {finalDonutData.map((entry) => (
+                <div key={entry.name} className="flex items-center gap-1.5">
+                  <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: entry.color }}></div>
+                  <span className="text-[10px] font-medium text-slate-700">{entry.name}</span>
+                  <span className="text-[10px] font-semibold text-slate-900 ms-auto">{entry.value}</span>
+                </div>
+              ))}
             </div>
           </div>
         </motion.div>

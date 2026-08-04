@@ -868,7 +868,16 @@ export function VehicleDetailsDialog({
               )}
             </TabsContent>
             <TabsContent value="reservations" className="m-0 focus-visible:outline-none space-y-5">
-              {canEditVehicles && canViewCustomers && vehicle.status === "AVAILABLE" && (
+              {/* SOURCING belongs here as much as AVAILABLE — a special-order
+                  car is located for a specific customer, so reserving one is
+                  the whole point. Gating the form on AVAILABLE alone left the
+                  backend's sourced-reservation path with no way to reach it.
+                  RESERVED is included because a deposit hold already promotes
+                  the vehicle there, and adding the formal reservation record on
+                  top is exactly what a dealer does next. */}
+              {canEditVehicles &&
+                canViewCustomers &&
+                ["AVAILABLE", "SOURCING", "RESERVED"].includes(vehicle.status) && (
                 <div className="rounded-lg border p-4 space-y-3">
                   <h3 className="font-semibold text-sm">{t("CreateReservation" as any)}</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -928,7 +937,14 @@ export function VehicleDetailsDialog({
                       <div key={reservation._id} className="rounded-lg border bg-muted/30 p-3 text-sm">
                         <div className="flex items-start justify-between gap-3">
                           <div>
-                            <p className="font-medium">{reservation.customerName}</p>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-medium">{reservation.customerName}</p>
+                              <span className="rounded border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                                {reservation.origin === "DEPOSIT"
+                                  ? (t("HoldOriginDeposit" as any) || "Deposit hold")
+                                  : (t("HoldOriginReservation" as any) || "Reservation")}
+                              </span>
+                            </div>
                             <p className="text-xs text-muted-foreground mt-1">
                               {t("ReservedAt" as any)}: {format(reservation.reservedAt, "PP p")}
                             </p>
@@ -960,15 +976,27 @@ export function VehicleDetailsDialog({
                             <Badge variant={reservation.status === "ACTIVE" ? "default" : "secondary"}>
                               {getReservationStatusLabel(reservation.status)}
                             </Badge>
-                            {canEditVehicles && reservation.status === "ACTIVE" && (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleReleaseReservation(reservation._id)}
-                                disabled={savingReservation}
-                              >
-                                {t("ReleaseReservation" as any)}
-                              </Button>
+                            {/* Deposit-origin rows are released through the
+                                Deposits section, which refunds or forfeits real
+                                money. Releasing one here would hand a `deposits`
+                                id to a mutation that expects a
+                                `vehicleReservations` id, and would skip the
+                                refund decision entirely. */}
+                            {reservation.origin === "DEPOSIT" ? (
+                              <span className="text-xs text-muted-foreground text-end max-w-[10rem]">
+                                {t("HoldFromDepositHint" as any) || "Held by a deposit — resolve it in Deposits"}
+                              </span>
+                            ) : (
+                              canEditVehicles && reservation.status === "ACTIVE" && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleReleaseReservation(reservation._id)}
+                                  disabled={savingReservation}
+                                >
+                                  {t("ReleaseReservation" as any)}
+                                </Button>
+                              )
                             )}
                           </div>
                         </div>

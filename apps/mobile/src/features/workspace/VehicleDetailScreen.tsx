@@ -860,7 +860,13 @@ function VehicleDetailContent({
 
         {activeTab === "holds" ? (
           <View style={styles.detailSection}>
-            {canEdit && can(PERMISSION.viewCustomers) && vehicle.status === "AVAILABLE" ? (
+            {/* Mirrors the web dialog: a SOURCING special-order car is exactly
+                what a dealer reserves for a customer, and a RESERVED one is
+                already deposit-held. Gating on AVAILABLE alone made the
+                sourced-reservation path unreachable on mobile too. */}
+            {canEdit &&
+              can(PERMISSION.viewCustomers) &&
+              ["AVAILABLE", "SOURCING", "RESERVED"].includes(vehicle.status) ? (
               <>
                 <Text style={styles.sectionTitle}>{locale === "ar" ? "إنشاء حجز" : "Create reservation"}</Text>
                 <SelectField
@@ -926,7 +932,17 @@ function VehicleDetailContent({
                       {reservation.releasedByName ? ` · ${reservation.releasedByName}` : ""}
                     </Text>
                   ) : null}
-                  {canEdit && reservation.status === "ACTIVE" ? (
+                  {/* Deposit-origin holds are resolved from the deposits flow,
+                      which decides refund vs forfeit. Releasing one here would
+                      pass a `deposits` id to a mutation that validates it as a
+                      `vehicleReservations` id and always fails. */}
+                  {reservation.origin === "DEPOSIT" ? (
+                    <Text style={styles.recordMeta}>
+                      {locale === "ar"
+                        ? "محجوزة بعربون — تُسوّى من قسم العرابين"
+                        : "Held by a deposit — resolve it in Deposits"}
+                    </Text>
+                  ) : canEdit && reservation.status === "ACTIVE" ? (
                     <PrimaryButton
                       disabled={savingReservation}
                       label={locale === "ar" ? "إلغاء الحجز" : "Release reservation"}

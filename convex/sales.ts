@@ -9,7 +9,7 @@ import { notifyManagers, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
 import { CreateDraftSaleSchema, CreateSaleSchema, UpdateSaleSchema } from "./validations/sales";
-import { restoreVehicleToAvailable } from "./utils/saleHelpers";
+import { restoreVehicleFromSale } from "./utils/saleHelpers";
 import { vehicleHasCostBasis } from "./utils/vehicleCost";
 import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
@@ -651,7 +651,7 @@ export const softDelete = mutation({
       throwAppError(AppErrorCode.SALE_ALREADY_COMPLETED, "Cannot delete a completed sale. Cancel it first.");
     }
 
-    await restoreVehicleToAvailable(ctx, sale.vehicleId);
+    await restoreVehicleFromSale(ctx, sale.vehicleId);
 
     await ctx.db.patch(args.saleId, {
       isDeleted: true,
