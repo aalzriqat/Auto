@@ -14,7 +14,7 @@ import { internal } from "./_generated/api";
 import { getOrgCurrency, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
 import { toMinorUnits, assertFiniteNumber } from "./utils/money";
 import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePaymentMethod, type AcquisitionPaymentMethod, type PaymentMethod } from "./utils/paymentMethods";
-import { syncVehicleHoldStatus, getDefaultReservationExpiry } from "./utils/depositHelpers";
+import { syncVehicleHoldStatus, getDefaultReservationExpiry, getActiveDepositHolds } from "./utils/depositHelpers";
 import {
   amountToMinorOrThrow,
   depositMethodValidator,
@@ -1482,16 +1482,16 @@ export const createReservation = mutation({
     // A hold belonging to a different customer still blocks the reservation —
     // accepting RESERVED above must not let customer B reserve a car that
     // customer A's deposit is holding.
-    const holdingDeposits = await ctx.db
-      .query("deposits")
-      .withIndex("by_vehicle_hold", (q) => q.eq("vehicleId", args.vehicleId).eq("holdActive", true))
-      .take(50);
+    //
+    // Resolved through getActiveDepositHolds so a *secondary* vehicle on a
+    // multi-vehicle quote is covered too: those are recorded only in
+    // depositVehicleHolds, so querying deposits.by_vehicle_hold alone reported
+    // car 2 of a three-car deal as unheld and would have let a second customer
+    // reserve it out from under the first.
+    const holdingDeposits = await getActiveDepositHolds(ctx, args.vehicleId);
     if (
       holdingDeposits.some(
-        (deposit) =>
-          deposit.orgId === args.orgId &&
-          deposit.isDeleted !== true &&
-          deposit.customerId !== args.customerId
+        (deposit) => deposit.orgId === args.orgId && deposit.customerId !== args.customerId
       )
     ) {
       throw new ConvexError("Another customer's deposit is currently holding this vehicle.");

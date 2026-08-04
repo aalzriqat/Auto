@@ -268,6 +268,92 @@ describe("createReservation on a sourced vehicle", () => {
   });
 });
 
+describe("multi-vehicle deposits hold their secondary vehicles too", () => {
+  test("a secondary vehicle cannot be reserved out from under the holding customer", async () => {
+    const { t, orgId, customerId, userId, asUser } = await setup();
+    const primaryId = await makeOwnedVehicle(t, orgId);
+    const secondaryId = await makeSourcedVehicle(t, orgId, { vin: "SOURCING-TEST-2" });
+    const otherCustomerId = (await t.run((ctx: any) =>
+      ctx.db.insert("customers", { orgId, firstName: "Rania", lastName: "Haddad" })
+    )) as Id<"customers">;
+
+    // A multi-vehicle quote snapshots only its primary vehicleId on the deposit
+    // row; every other car on the deal lives in depositVehicleHolds alone.
+    const depositId = await t.run((ctx: any) =>
+      ctx.db.insert("deposits", {
+        orgId,
+        vehicleId: primaryId,
+        customerId,
+        amount: 1000,
+        currency: "JOD",
+        method: "CASH",
+        status: "HELD",
+        holdActive: true,
+        createdBy: userId,
+        createdAt: Date.now(),
+      })
+    );
+    await t.run((ctx: any) =>
+      ctx.db.insert("depositVehicleHolds", {
+        orgId,
+        depositId,
+        vehicleId: secondaryId,
+        active: true,
+        createdAt: Date.now(),
+      })
+    );
+    await t.run((ctx: any) =>
+      ctx.db.patch(secondaryId, { status: "RESERVED", preHoldStatus: "SOURCING" })
+    );
+
+    // Checking only deposits.by_vehicle_hold reports this car as unheld.
+    await expect(
+      asUser.mutation(api.vehicles.createReservation, {
+        orgId,
+        vehicleId: secondaryId,
+        customerId: otherCustomerId,
+      })
+    ).rejects.toThrow(/another customer's deposit/i);
+  });
+
+  test("the pipeline shows the holding customer and deposit for a secondary vehicle", async () => {
+    const { t, orgId, customerId, userId, asUser } = await setup();
+    const primaryId = await makeOwnedVehicle(t, orgId);
+    const secondaryId = await makeSourcedVehicle(t, orgId, { vin: "SOURCING-TEST-3" });
+
+    const depositId = await t.run((ctx: any) =>
+      ctx.db.insert("deposits", {
+        orgId,
+        vehicleId: primaryId,
+        customerId,
+        amount: 1000,
+        currency: "JOD",
+        method: "CASH",
+        status: "HELD",
+        holdActive: true,
+        createdBy: userId,
+        createdAt: Date.now(),
+      })
+    );
+    await t.run((ctx: any) =>
+      ctx.db.insert("depositVehicleHolds", {
+        orgId,
+        depositId,
+        vehicleId: secondaryId,
+        active: true,
+        createdAt: Date.now(),
+      })
+    );
+
+    const pipeline = await asUser.query(api.sourcingPayables.listPipeline, { orgId });
+    const row = pipeline.find((entry: any) => entry._id === secondaryId);
+    expect(row).toBeDefined();
+    expect(row!.customerName).toBe("Sami Odeh");
+    expect(row!.depositTotal).toBe(1000);
+    expect(row!.isHeld).toBe(true);
+  });
+});
+
 describe("getReservationHistory", () => {
   test("surfaces a wizard deposit hold that writes no reservation row", async () => {
     const { orgId, customerId, asUser, t } = await setup();

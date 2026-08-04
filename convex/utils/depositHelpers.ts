@@ -1,4 +1,4 @@
-import { MutationCtx } from "../_generated/server";
+import { MutationCtx, QueryCtx } from "../_generated/server";
 import { Doc, Id } from "../_generated/dataModel";
 import { throwAppError, AppErrorCode } from "./errors";
 
@@ -104,6 +104,43 @@ export async function holdVehicleForDeposit(
       preHoldStatus: vehicle.status,
     });
   }
+}
+
+/**
+ * Every deposit actively holding a vehicle — the ones naming it directly, plus
+ * the ones holding it as a *secondary* line on a multi-vehicle quote.
+ *
+ * That second set is easy to miss and has caused real bugs: a deposit row only
+ * ever snapshots the quote's primary `vehicleId`, so cars 2 and 3 of a
+ * three-car deal are recorded solely in `depositVehicleHolds`. Any check that
+ * queries `deposits.by_vehicle_hold` alone concludes those vehicles are unheld
+ * while they are genuinely reserved.
+ *
+ * Readable from a query as well as a mutation, so the sourcing pipeline and the
+ * reservation guard can share one definition of "who is holding this car".
+ */
+export async function getActiveDepositHolds(
+  ctx: QueryCtx | MutationCtx,
+  vehicleId: Id<"vehicles">
+): Promise<Doc<"deposits">[]> {
+  const direct = await ctx.db
+    .query("deposits")
+    .withIndex("by_vehicle_hold", (q) => q.eq("vehicleId", vehicleId).eq("holdActive", true))
+    .take(50);
+
+  const secondaryHolds = await ctx.db
+    .query("depositVehicleHolds")
+    .withIndex("by_vehicle_active", (q) => q.eq("vehicleId", vehicleId).eq("active", true))
+    .take(50);
+  const secondary = await Promise.all(secondaryHolds.map((hold) => ctx.db.get(hold.depositId)));
+
+  const byId = new Map<string, Doc<"deposits">>();
+  for (const deposit of [...direct, ...secondary]) {
+    if (!deposit || deposit.isDeleted === true) continue;
+    if (deposit.status !== "HELD" || deposit.holdActive !== true) continue;
+    byId.set(deposit._id, deposit);
+  }
+  return Array.from(byId.values());
 }
 
 /** Exported for saleCancellation.ts's trade-in-reversal safety guard, in addition to internal use by syncVehicleHoldStatus below. */

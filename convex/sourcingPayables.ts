@@ -8,6 +8,7 @@ import { hookSupplierPaymentSettled } from "./accounting/workflowHooks";
 import { toMinorUnits } from "./utils/money";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 import { Id } from "./_generated/dataModel";
+import { getActiveDepositHolds } from "./utils/depositHelpers";
 
 export const list = query({
   args: {
@@ -112,27 +113,32 @@ export const listPipeline = query({
       sourcedVehicles.map(async (vehicle) => {
         // Who the car is being sourced for. A deposit taken in the sales wizard
         // is the strongest signal; an active reservation is the fallback.
-        const deposits = await ctx.db
-          .query("deposits")
-          .withIndex("by_vehicle_hold", (q) => q.eq("vehicleId", vehicle._id).eq("holdActive", true))
-          .take(20);
-        const activeDeposits = deposits.filter(
-          (deposit) => deposit.orgId === args.orgId && deposit.isDeleted !== true
+        //
+        // getActiveDepositHolds covers secondary vehicles on a multi-vehicle
+        // quote, which live only in depositVehicleHolds — reading the deposits
+        // table alone showed car 2 of a three-car deal with no customer and no
+        // deposit while it was genuinely held.
+        const activeDeposits = (await getActiveDepositHolds(ctx, vehicle._id)).filter(
+          (deposit) => deposit.orgId === args.orgId
         );
         const depositTotal = activeDeposits.reduce((sum, deposit) => sum + deposit.amount, 0);
 
         let customerId: Id<"customers"> | null = activeDeposits[0]?.customerId ?? null;
         if (!customerId) {
-          const reservations = await ctx.db
+          // Stream rather than take a fixed page: a reservation keeps
+          // status ACTIVE until a sweep expires it and this index is
+          // oldest-first, so stale rows could fill the page ahead of the live
+          // one and leave the order showing an unassigned customer.
+          for await (const reservation of ctx.db
             .query("vehicleReservations")
             .withIndex("by_org_vehicle_status", (q) =>
               q.eq("orgId", args.orgId).eq("vehicleId", vehicle._id).eq("status", "ACTIVE")
-            )
-            .take(20);
-          const liveReservation = reservations.find(
-            (reservation) => reservation.expiresAt === undefined || reservation.expiresAt > now
-          );
-          customerId = liveReservation?.customerId ?? null;
+            )) {
+            if (reservation.expiresAt === undefined || reservation.expiresAt > now) {
+              customerId = reservation.customerId;
+              break;
+            }
+          }
         }
 
         const customer = customerId ? await ctx.db.get(customerId) : null;
