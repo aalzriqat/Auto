@@ -15,6 +15,7 @@ import {
   FACEBOOK_REEL_VIDEO_FIELDS,
   FACEBOOK_PAGE_POST_FIELDS,
   FACEBOOK_POST_TEXT_FIELDS,
+  fetchFacebookUserProfileName,
 } from "./utils/facebookApi";
 import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
@@ -79,18 +80,6 @@ function notificationSenderLabel(
   if (senderName?.trim()) return senderName.trim();
   return `${PLACEHOLDER_FIRST_NAME} ${PLACEHOLDER_LAST_NAME}`;
 }
-
-/**
- * Ceiling on a profile lookup.
- *
- * `http.ts` *awaits* the enrichment action while processing a webhook entry, so
- * a hung Graph response does not just delay a name — it holds the webhook open,
- * burns the action's time budget, and can push Meta into redelivering the event.
- * Enrichment is the least important thing happening on that request, so it gets
- * a short leash: the abort surfaces as a thrown fetch, which the caller already
- * treats as a failed best-effort lookup and retries on the sender's next message.
- */
-const GRAPH_LOOKUP_TIMEOUT_MS = 5_000;
 
 const AUTO_REPLY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 reply per sender per 24h
 const MAX_AUTO_REPLY_RETRIES = 3;
@@ -429,10 +418,9 @@ export const handleIncomingFacebookEvent = internalMutation({
  * Fetches a sender's real name from Facebook and applies it to their customer
  * record.
  *
- * Mirrors `instagramEngagement.enrichCustomerProfile`. Messenger's webhook
- * gives a PSID and nothing else, so the name has to come from a Graph lookup
- * against the Page token that received the message — a PSID is only resolvable
- * by the page it was issued for.
+ * Messenger's webhook gives a PSID and nothing else. Resolve it through the
+ * Page's Messenger conversation, where Meta exposes participant names even
+ * when the legacy direct PSID profile endpoint refuses the lookup.
  */
 export const enrichCustomerProfile = internalAction({
   args: {
@@ -453,43 +441,22 @@ export const enrichCustomerProfile = internalAction({
       return;
     }
 
-    const url = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${args.senderFacebookId}`);
-    url.searchParams.set("fields", "first_name,last_name,name");
-
-    let json: { first_name?: string; last_name?: string; name?: string };
-    try {
-      // Token in the Authorization header rather than a query parameter: URLs
-      // end up in proxy access logs and observability traces, and a Page access
-      // token is a durable credential. Graph documents the Bearer form.
-      const res = await fetch(url.toString(), {
-        headers: { Authorization: `Bearer ${token.facebookPageAccessToken}` },
-        signal: AbortSignal.timeout(GRAPH_LOOKUP_TIMEOUT_MS),
-      });
-      if (!res.ok) {
-        console.error(
-          `facebook.enrichCustomerProfile: graph lookup failed (${res.status}) for customer ${args.customerId}`,
-        );
-        return; // best-effort enrichment — not worth failing the webhook over
-      }
-      json = await res.json();
-    } catch (error) {
-      console.error("facebook.enrichCustomerProfile: graph lookup threw", error);
-      return;
-    }
-
-    const first = json.first_name?.trim();
-    const last = json.last_name?.trim();
-    const displayName = first || last ? [first, last].filter(Boolean).join(" ") : json.name?.trim();
-    if (!displayName) {
+    const profile = await fetchFacebookUserProfileName(
+      args.senderFacebookId,
+      token.facebookPageId,
+      token.facebookPageAccessToken,
+    );
+    if (!profile.ok) {
       console.error(
-        `facebook.enrichCustomerProfile: graph returned no name for customer ${args.customerId}`,
+        `facebook.enrichCustomerProfile: graph lookup failed for customer ${args.customerId}`,
+        { error: profile.error },
       );
       return;
     }
 
     await ctx.runMutation(internal.facebookEngagement.saveCustomerDisplayName, {
       customerId: args.customerId,
-      displayName,
+      displayName: profile.name,
       senderFacebookId: args.senderFacebookId,
     });
   },
