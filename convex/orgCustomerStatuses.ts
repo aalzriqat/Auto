@@ -116,6 +116,14 @@ export const update = mutation({
 
 /**
  * Hard-deletes a customer status. Owner-only.
+ *
+ * Finance companies opt into the statuses they accept by storing an array of
+ * these ids (`financeCompanies.acceptedStatuses`). Deleting the row without
+ * clearing those references left every company that accepted this status
+ * holding an id pointing at nothing, which had two consequences: the company
+ * could no longer be saved at all (its edit dialog re-sent the dangling id,
+ * which the finance mutation rejected), and it silently matched no customer in
+ * the sales wizard's finance comparison, disappearing from the list of options.
  */
 export const remove = mutation({
   args: {
@@ -126,6 +134,21 @@ export const remove = mutation({
     await requireOwner(ctx, args.orgId);
 
     await requireOwnedRow(ctx, args.orgId, "orgCustomerStatuses", args.statusId, "Customer status not found.");
+
+    // Drop the reference everywhere before the row goes, so no company is left
+    // pointing at it. A company whose whole list was this one status becomes an
+    // empty list, which the comparison reads as "accepts every customer" — the
+    // same meaning it has for a company that never restricted its statuses.
+    const companies = await ctx.db
+      .query("financeCompanies")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    for (const company of companies) {
+      if (!company.acceptedStatuses?.includes(args.statusId)) continue;
+      await ctx.db.patch(company._id, {
+        acceptedStatuses: company.acceptedStatuses.filter((id) => id !== args.statusId),
+      });
+    }
 
     await ctx.db.delete(args.statusId);
   },

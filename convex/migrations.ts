@@ -365,3 +365,78 @@ export const reconcileVehicleHolds = internalMutation({
     return { dryRun, scanned: vehicles.length, released };
   },
 });
+
+/**
+ * Strips finance-company accepted-status references that point at customer
+ * status rows which no longer exist.
+ *
+ * `orgCustomerStatuses.remove` used to hard-delete a status without clearing it
+ * from `financeCompanies.acceptedStatuses`. Every company that accepted that
+ * status was left holding an id naming no row, with two consequences: the
+ * company could not be saved at all, because its edit dialog re-sent the
+ * dangling id and the finance mutation rejected it; and the sales wizard's
+ * finance comparison matched the company against no customer status at all, so
+ * it quietly stopped being offered.
+ *
+ * The delete now cascades and a save repairs the row it touches, so this exists
+ * for companies nobody has re-saved since — the silent half of the bug, which
+ * shows no error to anyone.
+ *
+ * A company whose entire list was dangling ends up with an empty array, which
+ * the comparison reads as "accepts every customer" — the same meaning it
+ * carries for a company that never restricted its statuses.
+ *
+ * `dryRun` defaults to **true**: the safe call is the one you get by forgetting
+ * the flag.
+ */
+export const cleanupDanglingAcceptedStatuses = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    dryRun: v.optional(v.boolean()),
+  },
+  handler: async (
+    ctx,
+    args
+  ): Promise<{
+    dryRun: boolean;
+    scanned: number;
+    repaired: Array<{ companyId: string; name: string; removed: number; remaining: number }>;
+  }> => {
+    const dryRun = args.dryRun ?? true;
+
+    const companies = await ctx.db
+      .query("financeCompanies")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+
+    const repaired: Array<{ companyId: string; name: string; removed: number; remaining: number }> = [];
+
+    for (const company of companies) {
+      const accepted = company.acceptedStatuses;
+      if (!accepted || accepted.length === 0) continue;
+
+      const live: typeof accepted = [];
+      for (const statusId of accepted) {
+        const status = await ctx.db.get(statusId);
+        // Another org's status is left alone deliberately: that is a data
+        // problem to look at, not one to silently erase.
+        if (status) live.push(statusId);
+      }
+
+      if (live.length === accepted.length) continue;
+
+      repaired.push({
+        companyId: company._id.toString(),
+        name: company.name,
+        removed: accepted.length - live.length,
+        remaining: live.length,
+      });
+
+      if (!dryRun) {
+        await ctx.db.patch(company._id, { acceptedStatuses: live });
+      }
+    }
+
+    return { dryRun, scanned: companies.length, repaired };
+  },
+});

@@ -1,7 +1,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 
@@ -130,6 +130,124 @@ describe("finance companies", () => {
       deactivatedBy: userId,
     });
     expect(companies[0]?.deactivatedAt).toBeTypeOf("number");
+  });
+
+  test("deleting_a_customer_status_clears_it_from_finance_companies", async () => {
+    const { t, orgId, asOwner } = await setupFinanceOrg();
+    const keptStatusId = await t.run((ctx) =>
+      ctx.db.insert("orgCustomerStatuses", { orgId, label: "Salary Slip", isActive: true, order: 1 })
+    );
+    const doomedStatusId = await t.run((ctx) =>
+      ctx.db.insert("orgCustomerStatuses", { orgId, label: "Delivery Apps", isActive: true, order: 2 })
+    );
+
+    const companyId = await asOwner.mutation(api.finance.createCompany, {
+      orgId,
+      name: "Cascade Finance",
+      profitRate: 4,
+      maxTermMonths: 48,
+      gracePeriodMonths: 0,
+      isActive: true,
+      acceptedStatuses: [keptStatusId, doomedStatusId],
+    });
+
+    await asOwner.mutation(api.orgCustomerStatuses.remove, { orgId, statusId: doomedStatusId });
+
+    // The reference has to go with the row. Leaving it behind is what stranded
+    // the company: an id pointing at nothing, invisible in the edit dialog.
+    const company = await t.run((ctx) => ctx.db.get(companyId));
+    expect(company?.acceptedStatuses).toEqual([keptStatusId]);
+  });
+
+  test("a_company_holding_a_deleted_status_id_can_still_be_saved", async () => {
+    const { t, orgId, asOwner } = await setupFinanceOrg();
+    const liveStatusId = await t.run((ctx) =>
+      ctx.db.insert("orgCustomerStatuses", { orgId, label: "ID Only", isActive: true, order: 1 })
+    );
+
+    // Reproduces the shipped state: a company whose acceptedStatuses names a
+    // status row that no longer exists, written before deletes cascaded.
+    const staleStatusId = await t.run(async (ctx) => {
+      const id = await ctx.db.insert("orgCustomerStatuses", {
+        orgId,
+        label: "Removed",
+        isActive: true,
+        order: 2,
+      });
+      await ctx.db.delete(id);
+      return id;
+    });
+
+    const companyId = await t.run((ctx) =>
+      ctx.db.insert("financeCompanies", {
+        orgId,
+        name: "Stranded Finance",
+        profitRate: 4,
+        maxTermMonths: 48,
+        gracePeriodMonths: 0,
+        isActive: true,
+        acceptedStatuses: [liveStatusId, staleStatusId],
+      })
+    );
+
+    // Before the fix this threw "Accepted customer status not found in this
+    // organization." and the record could never be edited again — the dialog
+    // re-sent the dangling id on every save and offered no way to remove it.
+    await asOwner.mutation(api.finance.updateCompany, {
+      id: companyId,
+      orgId,
+      name: "Stranded Finance Renamed",
+      profitRate: 4.5,
+      maxTermMonths: 48,
+      gracePeriodMonths: 0,
+      isActive: true,
+      acceptedStatuses: [liveStatusId, staleStatusId],
+    });
+
+    const company = await t.run((ctx) => ctx.db.get(companyId));
+    expect(company?.name).toBe("Stranded Finance Renamed");
+    // Saving heals the row rather than persisting the ghost.
+    expect(company?.acceptedStatuses).toEqual([liveStatusId]);
+  });
+
+  test("cleanup_migration_strips_dangling_accepted_statuses", async () => {
+    const { t, orgId } = await setupFinanceOrg();
+    const liveStatusId = await t.run((ctx) =>
+      ctx.db.insert("orgCustomerStatuses", { orgId, label: "Salary Slip", isActive: true, order: 1 })
+    );
+    const staleStatusId = await t.run(async (ctx) => {
+      const id = await ctx.db.insert("orgCustomerStatuses", {
+        orgId,
+        label: "Gone",
+        isActive: true,
+        order: 2,
+      });
+      await ctx.db.delete(id);
+      return id;
+    });
+
+    const companyId = await t.run((ctx) =>
+      ctx.db.insert("financeCompanies", {
+        orgId,
+        name: "Quietly Broken Finance",
+        profitRate: 4,
+        maxTermMonths: 48,
+        gracePeriodMonths: 0,
+        isActive: true,
+        acceptedStatuses: [liveStatusId, staleStatusId],
+      })
+    );
+
+    const dry = await t.mutation(internal.migrations.cleanupDanglingAcceptedStatuses, { orgId });
+    expect(dry.dryRun).toBe(true);
+    expect(dry.repaired).toEqual([
+      { companyId, name: "Quietly Broken Finance", removed: 1, remaining: 1 },
+    ]);
+    // A dry run changes nothing.
+    expect((await t.run((ctx) => ctx.db.get(companyId)))?.acceptedStatuses).toHaveLength(2);
+
+    await t.mutation(internal.migrations.cleanupDanglingAcceptedStatuses, { orgId, dryRun: false });
+    expect((await t.run((ctx) => ctx.db.get(companyId)))?.acceptedStatuses).toEqual([liveStatusId]);
   });
 
   test("accepted_customer_statuses_must_belong_to_company_organization", async () => {

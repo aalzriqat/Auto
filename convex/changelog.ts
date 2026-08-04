@@ -1264,6 +1264,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "كان نقل الفرصة عبر مراحل البيع يتطلب الضغط على «التالي» مرة لكل مرحلة، دون إمكانية الرجوع — فالفرصة التي تتقدم بالخطأ تبقى في مكانها، والفرصة المسجّلة ناجحة لا يمكن تحريكها. أصبح الضغط على المرحلة يفتح خط المبيعات كاملاً، فيمكن نقل الفرصة إلى أي مرحلة، للأمام أو للخلف، بخطوة واحدة. وإغلاق الفرصة كناجحة أو خاسرة يطلب تأكيداً أولاً، كما تظهر أسماء المراحل بلغتك في كل مكان بدلاً من رموزها الإنجليزية الداخلية.",
     publishedAt: releaseAt(2026, 8, 2, 3),
   },
+  {
+    type: "FIX",
+    titleEn: "Finance companies can be saved again after deleting a customer status",
+    titleAr: "أصبح بالإمكان حفظ شركات التمويل بعد حذف حالة عميل",
+    descriptionEn: "Deleting a customer status left every finance company that accepted it pointing at a status that no longer existed. Editing one then failed with \"Accepted customer status not found in this organization\" — and there was no way out, because the tick-list only shows statuses that still exist, so the missing one could not be unticked and was sent again on every save. Deleting the statuses and re-creating them did not help either: the new entries get new identities while the company still referred to the old ones. Deleting a status now removes it from every company that accepted it, saving a company repairs any leftover reference, and a company left accepting nothing is treated as accepting everyone — which also restores companies that had quietly stopped appearing in the financing comparison for every customer.",
+    descriptionAr: "كان حذف حالة عميل يترك كل شركة تمويل تقبل تلك الحالة مشيرةً إلى حالة لم تعد موجودة. فيفشل تعديل الشركة برسالة «حالة العميل المقبولة غير موجودة في هذه المؤسسة» — دون مخرج، لأن قائمة الاختيار لا تعرض إلا الحالات الموجودة فعلاً، فلا يمكن إلغاء تحديد الحالة المفقودة وتُرسل مجدداً مع كل حفظ. ولم يكن حذف الحالات وإعادة إنشائها يحل المشكلة: فالإدخالات الجديدة تحمل هويات جديدة بينما تظل الشركة تشير إلى القديمة. أصبح حذف الحالة الآن يزيلها من كل شركة تقبلها، ويؤدي حفظ الشركة إلى إصلاح أي إشارة متبقية، وتُعامل الشركة التي لا تقبل أي حالة على أنها تقبل الجميع — وهو ما يعيد أيضاً الشركات التي كانت قد اختفت بصمت من مقارنة التمويل لكل العملاء.",
+    publishedAt: releaseAt(2026, 8, 4, 5),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

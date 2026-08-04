@@ -54,10 +54,14 @@ export function FinanceCompanyDialog({
 
   const createCompany = useMutation(api.finance.createCompany);
   const updateCompany = useMutation(api.finance.updateCompany);
-  const customerStatusOptions = useQuery(
+  // Kept undefined-until-loaded on purpose: an empty list and a list that has
+  // not arrived yet mean different things below, and conflating them would drop
+  // a company's real accepted statuses on the first render.
+  const loadedCustomerStatuses = useQuery(
     api.orgCustomerStatuses.list,
     activeOrgId ? { orgId: activeOrgId } : "skip"
-  ) ?? [];
+  );
+  const customerStatusOptions = loadedCustomerStatuses ?? [];
 
   const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
@@ -107,9 +111,22 @@ export function FinanceCompanyDialog({
 
     setIsLoading(true);
     try {
+      // Only send statuses that still exist. A company keeps the ids it was
+      // saved with, and deleting a customer status used to leave those ids
+      // behind — the checkbox list below only renders live statuses, so a
+      // stale one was invisible here, could not be unticked, and was re-sent on
+      // every save. Skipped entirely until the list has loaded, so a slow query
+      // cannot be mistaken for "no statuses exist" and clear a real selection.
+      const liveStatusIds = new Set(loadedCustomerStatuses?.map((status) => status._id));
+      const acceptedStatuses = (
+        loadedCustomerStatuses === undefined
+          ? formData.acceptedStatuses
+          : formData.acceptedStatuses.filter((id) => liveStatusIds.has(id as Id<"orgCustomerStatuses">))
+      ) as Id<"orgCustomerStatuses">[];
+
       const payload = {
         ...formData,
-        acceptedStatuses: formData.acceptedStatuses as Id<"orgCustomerStatuses">[],
+        acceptedStatuses,
       };
       if (company) {
         await updateCompany({
