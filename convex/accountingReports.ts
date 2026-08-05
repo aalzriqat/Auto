@@ -1118,7 +1118,13 @@ export async function computeCommissionRecognitionDivergence(
     // backlog read as ledger corruption. One is fixed by running the backfill;
     // the other needs a human to work out what happened.
     if (recognizedMinor === 0) {
-      unrecognizedCount++;
+      // Only counted when the backfill could actually fix it — i.e. the
+      // commission is still unpaid. A commission SETTLED before commission GL
+      // hooks existed has no entries and never will: the backfill skips it
+      // (isCommissionOwed requires an unpaid commission), so counting it here
+      // named a remedy that provably cannot clear the warning, on a line that
+      // must be acknowledged verbatim at every close, forever.
+      if (sale.commissionPaidAt == null) unrecognizedCount++;
     } else if (recognizedMinor !== toMinorUnits(sale.commissionAmount ?? 0, orgCurrency)) {
       divergentCount++;
     }

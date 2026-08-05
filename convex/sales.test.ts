@@ -650,7 +650,7 @@ describe("C1/C2: MANUAL commission lifecycle", () => {
 });
 
 describe("correcting a commission already in the ledger", () => {
-  test("a change posts an adjustment, and a REVERSED accrual starts over instead", async () => {
+  test("each change posts its own adjustment, and a queued accrual still counts as accrued", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "rev_unlock");
     await t.run(async (ctx) => {

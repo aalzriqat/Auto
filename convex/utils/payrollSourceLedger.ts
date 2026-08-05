@@ -1,6 +1,6 @@
 import { Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
-import { commissionPrereqUnpostedReason } from "./commissionSourceLedger";
+import { commissionPrereqUnpostedReason, recognizedCommissionForSale } from "./commissionSourceLedger";
 
 /**
  * Outbox posting guard for payroll/advance settlement events, mirroring
@@ -86,6 +86,7 @@ async function payrollPaidBlockedReason(
   }
 
   const commissionMinor = typeof payload.commissionMinor === "number" ? payload.commissionMinor : 0;
+  let recognizedTotal = 0;
   if (commissionMinor > 0) {
     if (!item) {
       return "its payslip could not be resolved in this organization, so the commission accruals behind the Commission Payable it clears cannot be verified";
@@ -107,6 +108,19 @@ async function payrollPaidBlockedReason(
         sale.commissionAdjustmentSeq ?? 0
       );
       if (unposted) return unposted;
+      recognizedTotal += await recognizedCommissionForSale(
+        ctx,
+        orgId,
+        saleId,
+        sale.commissionAdjustmentSeq ?? 0
+      );
+    }
+    // The mutation-side check is skipped whenever the payment would queue, so a
+    // run frozen at a divergent commission total replays unchecked and clears
+    // more Commission Payable than was ever recognized. Compared against the
+    // payload as queued, which is what will actually post.
+    if (commissionMinor !== recognizedTotal) {
+      return "the commission it clears does not match what the ledger recognized for those sales, so it would leave Commission Payable wrong";
     }
   }
   // Advance recovery: the payment credits Employee Advances for every advance

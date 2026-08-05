@@ -91,6 +91,8 @@ export const backfillCommissionAccruals = internalMutation({
     let accruedMinor = 0;
     let skippedAlreadyRecognized = 0;
     let skippedNoOwner = 0;
+    let skippedNoAccounts = 0;
+    let skippedInvalidAmount = 0;
     let capped = false;
     const now = Date.now();
 
@@ -107,6 +109,15 @@ export const backfillCommissionAccruals = internalMutation({
         console.warn(
           `[commission-backfill] org ${org._id}: ${owed.length} owed commission(s) skipped — no OWNER-role member to attribute the posting to`
         );
+      } else if (!(await commissionAccountsExist(ctx, org._id))) {
+        // An older chart without the commission accounts makes every posting
+        // throw inside resolveSystemAccount. Since a throw rolls back the whole
+        // mutation INCLUDING the self-reschedule, that would silently kill the
+        // walk here and leave every later organization unprocessed.
+        skippedNoAccounts = owed.length;
+        console.warn(
+          `[commission-backfill] org ${org._id}: ${owed.length} skipped — chart has no commission accounts`
+        );
       } else {
         const currency = await getOrgCurrency(ctx, org._id);
         for (const sale of owed) {
@@ -121,6 +132,20 @@ export const backfillCommissionAccruals = internalMutation({
             skippedAlreadyRecognized++;
             continue;
           }
+          // Checked BEFORE posting rather than caught after. isCommissionOwed
+          // only asks for a positive number, and Infinity or an absurd finite
+          // value — both reachable through the admin raw-JSON editor — makes
+          // toMinorUnits throw. Catching that around the hook would be worse
+          // than useless: the rolled-back writes it had already made would
+          // still commit with the surrounding transaction. Skipping the row
+          // leaves it visible in the close checklist as unrecognized.
+          if (!isConvertibleAmount(sale.commissionAmount, currency)) {
+            skippedInvalidAmount++;
+            console.warn(
+              `[commission-backfill] org ${org._id}: sale ${sale._id} skipped — commission amount ${sale.commissionAmount} cannot be converted to minor units`
+            );
+            continue;
+          }
           const amountMinor = toMinorUnits(sale.commissionAmount, currency);
           accruedCount++;
           accruedMinor += amountMinor;
@@ -132,14 +157,14 @@ export const backfillCommissionAccruals = internalMutation({
             amountMinor,
             currency,
             actorId,
-            occurredAt: await commissionAccountingDate(ctx, org._id, sale.saleDate, now),
+            occurredAt: await commissionAccountingDate(ctx, org._id, sale._id, sale.saleDate, now),
           });
         }
       }
     }
 
     console.log(
-      `[commission-backfill] org ${org._id}: scanned ${salePage.page.length}, owed ${owed.length}, accrued ${accruedCount}, skipped ${skippedAlreadyRecognized}, noOwner ${skippedNoOwner}${args.dryRun ? " (dry run)" : ""}`
+      `[commission-backfill] org ${org._id}: scanned ${salePage.page.length}, owed ${owed.length}, accrued ${accruedCount}, alreadyRecognized ${skippedAlreadyRecognized}, noOwner ${skippedNoOwner}, noAccounts ${skippedNoAccounts}, invalidAmount ${skippedInvalidAmount}${args.dryRun ? " (dry run)" : ""}`
     );
 
     // Advance within the org until its sales are exhausted, then move on to the
@@ -160,6 +185,12 @@ export const backfillCommissionAccruals = internalMutation({
         internal.migrateCommissionAccruals.backfillCommissionAccruals,
         nextArgs
       );
+    } else {
+      // The operator's `convex run` only ever sees the FIRST page's return
+      // value; every page after that is invisible to them. Without a terminal
+      // line there is no way to tell a finished migration from one that stopped
+      // on organization 3 of 40.
+      console.log("[commission-backfill] complete: all organizations processed");
     }
 
     return {
@@ -169,9 +200,41 @@ export const backfillCommissionAccruals = internalMutation({
       accruedMinor,
       skippedAlreadyRecognized,
       skippedNoOwner,
+      skippedNoAccounts,
+      skippedInvalidAmount,
     };
   },
 });
+
+/**
+ * Whether the amount survives conversion to minor units. `toMinorUnits` throws
+ * on a non-finite or out-of-range value, and a throw here would roll back the
+ * self-reschedule with it.
+ */
+function isConvertibleAmount(amount: number, currency: string): boolean {
+  if (!Number.isFinite(amount) || amount < 0) return false;
+  try {
+    const minor = toMinorUnits(amount, currency);
+    return Number.isFinite(minor) && Number.isSafeInteger(minor);
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the org's chart carries the accounts a commission posting resolves. */
+async function commissionAccountsExist(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">
+): Promise<boolean> {
+  for (const systemKey of ["COMMISSION_EXPENSE", "COMMISSION_PAYABLE"] as const) {
+    const account = await ctx.db
+      .query("chartOfAccounts")
+      .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", systemKey))
+      .unique();
+    if (!account) return false;
+  }
+  return true;
+}
 
 /** A posted (non-reversed) or still-queued accrual — either means recognition exists. */
 async function hasCommissionRecognition(

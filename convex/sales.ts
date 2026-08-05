@@ -1195,7 +1195,7 @@ export const markCommissionPaid = mutation({
           amountMinor,
           currency,
           actorId: user._id,
-          occurredAt: await commissionAccountingDate(ctx, args.orgId, sale.saleDate, now),
+          occurredAt: await commissionAccountingDate(ctx, args.orgId, args.saleId, sale.saleDate, now),
         });
         // The payment clears the payable, so everything that built it must
         // already be on the books. Without this the direct path could pay
@@ -1320,6 +1320,7 @@ export const setCommissionAmount = mutation({
       const accountingDate = await commissionAccountingDate(
         ctx,
         args.orgId,
+        args.saleId,
         sale.saleDate,
         Date.now()
       );
@@ -1510,7 +1511,7 @@ export const recalculateCommission = mutation({
           // work removes — and, once the mode is switched to MANUAL, let a
           // later correction post into the sale's own open period with no
           // accrual behind it there.
-          occurredAt: await commissionAccountingDate(ctx, args.orgId, sale.saleDate, now),
+          occurredAt: await commissionAccountingDate(ctx, args.orgId, args.saleId, sale.saleDate, now),
         });
       }
       return { commissionAmount };

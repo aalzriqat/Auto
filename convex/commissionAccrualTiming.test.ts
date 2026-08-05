@@ -942,7 +942,8 @@ describe("the outbox will not drain a settlement ahead of its own accrual", () =
    * periods, so the first commissions queue, and the first period an accountant
    * opens is usually the current month rather than the month of the sale.
    */
-  async function queuedAccrualAndPayment(suffix: string) {
+  async function queuedAccrualAndPayment(suffix: string, opts: { pay?: boolean } = {}) {
+    const pay = opts.pay ?? true;
     const t = convexTestWithComponents(schema, MODULE_GLOB);
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: `Drain ${suffix}`, createdAt: Date.now() })
@@ -990,9 +991,11 @@ describe("the outbox will not drain a settlement ahead of its own accrual", () =
     await asAdmin.mutation(api.sales.setCommissionAmount, {
       orgId, saleId, commissionAmount: 250,
     });
-    await asAdmin.mutation(api.sales.markCommissionPaid, {
-      orgId, saleId, paymentMethod: "CASH",
-    });
+    if (pay) {
+      await asAdmin.mutation(api.sales.markCommissionPaid, {
+        orgId, saleId, paymentMethod: "CASH",
+      });
+    }
 
     const queued = await t.run(async (ctx) =>
       await ctx.db
@@ -1000,8 +1003,8 @@ describe("the outbox will not drain a settlement ahead of its own accrual", () =
         .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
         .collect()
     );
-    expect(queued.map((q) => q.eventType).sort()).toContain("COMMISSION_ACCRUED");
-    expect(queued.map((q) => q.eventType)).toContain("COMMISSION_PAID");
+    expect(queued.map((q) => q.eventType)).toContain("COMMISSION_ACCRUED");
+    if (pay) expect(queued.map((q) => q.eventType)).toContain("COMMISSION_PAID");
 
     return { t, orgId, userId, saleId, asAdmin, year };
   }
@@ -1033,6 +1036,44 @@ describe("the outbox will not drain a settlement ahead of its own accrual", () =
         .collect()
     );
     expect(stillQueued.map((q) => q.eventType)).toContain("COMMISSION_PAID");
+  });
+
+  test("a queued correction does not drain ahead of the accrual it corrects", async () => {
+    // End-to-end cover for "a queued correction never posts alone". Note what
+    // actually holds it here: every commission entry for a sale whose own
+    // posting is queued inherits that posting's date, so the correction is out
+    // of the opened period. The dispatcher rule that ALSO forbids it is proved
+    // directly in utils/commissionSourceLedger.test.ts — deliberately, because
+    // a drain test can pass because the entry happened to be held on its own
+    // period rather than by the rule under test, which is how this class of
+    // ordering bug survives a green suite.
+    const { t, orgId, saleId, asAdmin, year } = await queuedAccrualAndPayment("adj_first", {
+      pay: false,
+    });
+    await asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId, saleId, commissionAmount: 100,
+    });
+
+    await asAdmin.mutation(api.accountingPeriods.create, {
+      orgId,
+      startDate: Date.UTC(year, 5, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+      fiscalYear: year,
+      periodNumber: 2,
+    });
+    const period = (await asAdmin.query(api.accountingPeriods.list, { orgId }))[0];
+    await asAdmin.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+
+    expect(await commissionPayableMinor({ t, orgId })).toBe(0);
+    expect(await commissionExpenseMinor({ t, orgId })).toBe(0);
+    const stillQueued = await t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+        .collect()
+    );
+    expect(stillQueued.map((q) => q.eventType)).toContain("COMMISSION_ADJUSTED");
   });
 
   test("once the accrual's period opens too, both post and net to zero", async () => {
@@ -1123,6 +1164,61 @@ describe("commission entries are dated by one rule everywhere", () => {
         .first()
     );
     expect(queued?.accountingDate).toBe(saleDate);
+  });
+});
+
+describe("a commission never outruns the sale that earned it", () => {
+  test("completing a sale backdated into a closed period does not post its commission alone", async () => {
+    // On main the sale and its commission shared one date, so either both
+    // posted or both queued. Giving only the commission a fallback let August
+    // carry Commission Expense for a sale whose revenue, COGS and receivable
+    // were queued in a closed June — and would eventually dead-letter.
+    // Backdated month-end data entry after a close is routine.
+    const d = await seedDealer("no_outrun", "AUTO_MEMBER", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    await d.t.run(async (ctx) => {
+      const membership = (await ctx.db.query("memberships").collect()).find(
+        (m) => m.orgId === d.orgId && m.userId === d.userId
+      );
+      await ctx.db.patch(membership!._id, { commissionRate: 10 });
+    });
+    await closePriorYearPeriod(d, priorYear);
+
+    await completedSale(d, Date.UTC(priorYear, 5, 20));
+
+    // The sale's own entry could not post into the closed year, so its
+    // commission must not have posted into the open one either.
+    expect(await commissionExpenseMinor(d)).toBe(0);
+    expect(await commissionPayableMinor(d)).toBe(0);
+  });
+
+  test("a legacy sale with no SALE_COMPLETED event is not blocked forever", async () => {
+    // Sales completed before the accounting hooks existed, and sales brought
+    // over by the cutover (which posts under migrate_<txId>), have no
+    // sale_completed_* event and never will. Blocking on that would hold their
+    // accrual permanently: held entries never increment attempts, so they never
+    // reach the FAILED list retryFailed can act on, and nothing in the product
+    // can clear them — a permanent unposted blocker on every close.
+    const d = await seedDealer("legacy_sale");
+    const saleId = await d.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: d.orgId,
+        vehicleId: d.vehicleId,
+        customerId: d.customerId,
+        salespersonId: d.userId,
+        salePrice: 15000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        commissionAmount: 250,
+      })
+    );
+
+    const run = await d.t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
+    expect(run.accruedCount).toBe(1);
+    await d.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: d.orgId });
+
+    expect(await commissionPayableMinor(d)).toBe(25_000);
+    expect(saleId).toBeTruthy();
   });
 });
 
@@ -1294,6 +1390,51 @@ describe("round-3 review fixes", () => {
     expect(accrual).toBeTruthy();
     expect(accrual?.createdBy).toBe(d.managerId);
     expect(accrual?.createdBy).not.toBe(d.userId);
+  });
+
+  test("a commission settled before commission GL hooks existed is not reported as backfillable", async () => {
+    // It has no entries and never will — the backfill skips paid commissions —
+    // so counting it named a remedy that cannot clear the warning, on a line
+    // that must be acknowledged verbatim at every close, forever.
+    const d = await seedDealer("historic_paid");
+    const saleId = await completedSale(d);
+    await d.t.run((ctx) =>
+      ctx.db.patch(saleId, { commissionAmount: 250, commissionPaidAt: Date.now() })
+    );
+
+    const period = (await d.asAdmin.query(api.accountingPeriods.list, { orgId: d.orgId }))[0];
+    const checklist = await d.asAdmin.query(api.accountingPeriods.closeChecklist, {
+      orgId: d.orgId,
+      periodId: period._id,
+    });
+    expect(checklist.warnings.join(" ")).not.toMatch(/not recognized in the ledger at all/i);
+  });
+
+  test("the backfill skips a commission amount that cannot be converted, and keeps going", async () => {
+    // isCommissionOwed admits any positive number, including Infinity, and
+    // toMinorUnits throws on it. A throw rolls back the self-reschedule with
+    // it, so one bad row would silently halt the walk for every later org.
+    const d = await seedDealer("backfill_bad_amount");
+    const bad = await completedSale(d);
+    const good = await d.t.run(async (ctx) => {
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId: d.orgId, vin: "VIN-GOOD", make: "Kia", model: "K5", year: 2024,
+        color: "White", fuelType: "Gasoline", transmission: "Automatic",
+        mileage: 1, purchasePrice: 9000, sellingPrice: 15000, status: "AVAILABLE",
+      });
+      return await ctx.db.insert("sales", {
+        orgId: d.orgId, vehicleId, customerId: d.customerId, salespersonId: d.userId,
+        salePrice: 15000, saleDate: Date.now(), status: "COMPLETED", commissionAmount: 100,
+      });
+    });
+    await d.t.run((ctx) => ctx.db.patch(bad, { commissionAmount: Number.POSITIVE_INFINITY }));
+
+    const run = await d.t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
+    expect(run.skippedInvalidAmount).toBe(1);
+    expect(run.accruedCount).toBe(1);
+    // The good one still accrued rather than being lost with the bad one.
+    expect(await commissionPayableMinor(d)).toBe(10_000);
+    expect(good).toBeTruthy();
   });
 
   test("the backfill skips an org with no owner rather than inventing an actor", async () => {

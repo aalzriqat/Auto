@@ -510,7 +510,7 @@ async function applySaleCompletionSideEffects(
       // raw saleDate let a backdated completion queue its accrual behind a
       // closed period while a later correction or payment — which DO use the
       // rule — posted into an open one, leaving Commission Payable negative.
-      occurredAt: await commissionAccountingDate(ctx, args.orgId, args.saleDate, Date.now()),
+      occurredAt: await commissionAccountingDate(ctx, args.orgId, saleId, args.saleDate, Date.now()),
     });
   }
 

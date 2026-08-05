@@ -840,10 +840,26 @@ export function commissionAdjustmentSourceId(saleId: Id<"sales">, sequence: numb
 export async function commissionAccountingDate(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
+  saleId: Id<"sales">,
   saleDate: number,
   now: number
 ): Promise<number> {
   if (!(await isChartInitialized(ctx, orgId))) return saleDate;
+  // Third exception, and the one the outbox cannot cover on its own: while the
+  // SALE'S OWN entry is still unposted, the commission must share its date so
+  // the two travel together. The sale is dated at saleDate with no fallback, so
+  // moving only the commission forward posts expense into an open period while
+  // the revenue and COGS behind it sit in a closed one — or dead-letter. The
+  // drain guard refuses that ordering, but only for entries that go through the
+  // queue; an entry that posts immediately never reaches it.
+  const salePosting = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", orgId).eq("idempotencyKey", `sale_completed_${saleId}`)
+    )
+    .filter((q) => q.neq(q.field("status"), "POSTED"))
+    .first();
+  if (salePosting) return salePosting.accountingDate;
   return (await getOpenPeriodForDate(ctx, orgId, saleDate)) ? saleDate : now;
 }
 
