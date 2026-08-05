@@ -888,12 +888,51 @@ export async function isEventQueued(
   orgId: Id<"organizations">,
   idempotencyKey: string
 ): Promise<boolean> {
+  return (await queuedEntryStatus(ctx, orgId, idempotencyKey)) !== null;
+}
+
+/**
+ * "PENDING", "FAILED", or null when nothing is outstanding.
+ *
+ * The distinction is the difference between a message that helps and one that
+ * misleads. A PENDING entry really is waiting for its period to open. A FAILED
+ * one has exhausted its retries: `drainPendingForOrg` reads only PENDING rows,
+ * so opening a period does nothing for it, and telling someone to do that sends
+ * them somewhere they cannot fix it.
+ */
+export async function queuedEntryStatus(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  idempotencyKey: string
+): Promise<"PENDING" | "FAILED" | null> {
   const pending = await ctx.db
     .query("pendingAccountingEvents")
     .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
     .filter((q) => q.neq(q.field("status"), "POSTED"))
     .first();
-  return pending !== null;
+  if (!pending) return null;
+  return pending.status === "FAILED" ? "FAILED" : "PENDING";
+}
+
+/** The worst outstanding state across a sale's commission entries and its sale posting. */
+export async function commissionEntriesOutstandingStatus(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  sale: { _id: Id<"sales">; commissionAdjustmentSeq?: number }
+): Promise<"PENDING" | "FAILED" | null> {
+  const keys = [`sale_completed_${sale._id}`, `commission_accrued_${sale._id}`];
+  const seq = safeAdjustmentSeq(sale.commissionAdjustmentSeq);
+  if (seq === null) return "PENDING";
+  for (let sequence = 1; sequence <= seq; sequence++) {
+    keys.push(`commission_adjusted_${sale._id}_${sequence}`);
+  }
+  let worst: "PENDING" | "FAILED" | null = null;
+  for (const key of keys) {
+    const status = await queuedEntryStatus(ctx, orgId, key);
+    if (status === "FAILED") return "FAILED";
+    if (status === "PENDING") worst = "PENDING";
+  }
+  return worst;
 }
 
 /**
@@ -1282,7 +1321,29 @@ export async function reverseCommissionForSale(
       "This sale's commission correction count is not a usable number, so its ledger entries cannot be reversed safely. Have accounting review it before cancelling."
     );
   }
-  for (let sequence = 1; sequence <= seq; sequence++) {
+  // The counter says how many corrections there SHOULD be; the entries say how
+  // many there are. Validating the counter's type and range does not make it
+  // true — a row edited back to 0 while commission_adjusted_..._1 sits posted
+  // passes every check, and cancellation would then reverse the accrual, walk
+  // nothing, and report success, leaving that correction's expense and payable
+  // on a voided sale. The divergence control excludes cancelled sales, so it
+  // would never surface. So walk past the counter until the entries actually
+  // run out, and reverse what is really there.
+  let actualSeq = seq;
+  while (actualSeq < MAX_COMMISSION_ADJUSTMENTS) {
+    const next = actualSeq + 1;
+    const exists =
+      (await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", args.orgId).eq("idempotencyKey", `commission_adjusted_${args.saleId}_${next}`)
+        )
+        .first()) !== null ||
+      (await isEventQueued(ctx, args.orgId, `commission_adjusted_${args.saleId}_${next}`));
+    if (!exists) break;
+    actualSeq = next;
+  }
+  for (let sequence = 1; sequence <= actualSeq; sequence++) {
     await hookCommissionAdjustmentReversed(ctx, {
       orgId: args.orgId,
       saleId: args.saleId,

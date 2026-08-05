@@ -119,10 +119,14 @@ export const backfillCommissionAccruals = internalMutation({
         //
         // An org with NO chart at all is a normal, supported state and must NOT
         // be skipped: nothing posts there, so hookCommissionAccrued simply
-        // enqueues, and the accrual drains by itself when the chart is
-        // initialized. Skipping it consumed the migration cursor and left that
-        // dealership's whole backlog unrecognized, with no signal and no second
-        // pass — this is a one-time migration.
+        // enqueues, and initializing the chart drains the queue. Skipping it
+        // consumed the migration cursor and left that dealership's whole
+        // backlog unrecognized, with no signal and no second pass — this is a
+        // one-time migration.
+        //
+        // The drain reschedules itself while a batch stays full, so a backlog
+        // larger than one 50-row pass does finish on its own. Watch the
+        // `[commission-backfill]` and drain logs rather than assuming it.
         skippedNoAccounts = owed.length;
         console.warn(
           `[commission-backfill] org ${org._id}: ${owed.length} skipped — chart exists but has no commission accounts`

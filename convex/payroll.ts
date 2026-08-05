@@ -14,6 +14,7 @@ import {
   isPostableNow,
   commissionEntriesStillQueued,
   recognizedCommissionMinor,
+  commissionAccountingDate,
 } from "./accounting/workflowHooks";
 import { toMinorUnits, fromMinorUnits } from "./utils/money";
 import { paymentMethodValidator, normalizePaymentMethod, PaymentMethod } from "./utils/paymentMethods";
@@ -581,7 +582,10 @@ async function assertAccrualsPosted(
       const recognized = await recognizedCommissionMinor(ctx, orgId, sale, item.currency);
       if (recognized === null) {
         throw new ConvexError(
-          "A commission on this run was recognized in a different currency than the run pays. Have accounting reconcile it before paying."
+          sale.commissionAdjustmentSeq === undefined ||
+          Number.isSafeInteger(sale.commissionAdjustmentSeq)
+            ? "A commission on this run was recognized in a different currency than the run pays. Have accounting reconcile it before paying."
+            : "A commission on this run has an unreadable correction history. Have accounting review it before paying."
         );
       }
       if (recognized !== toMinorUnits(sale.commissionAmount, item.currency)) {
@@ -1034,6 +1038,13 @@ export const approveRun = mutation({
           // so accruing (or later paying) them here would corrupt the payable.
           // Same shared rule as the sweep and the settlement path.
           if (!sale || !isCommissionOwed(sale)) continue;
+          // The last accrual path that dated itself independently. For a sale
+          // that already accrued this is a no-op on the shared key — but for a
+          // BACKLOG sale that never did, this creates the first accrual, and
+          // dating it at the payroll period rather than the sale defeats the
+          // whole point of earned-time recognition for exactly the population
+          // the backfill exists to fix. Whichever runs first wins the key, so
+          // approval racing the backfill decided the date.
           await hookCommissionAccrued(ctx, {
             orgId: args.orgId,
             saleId,
@@ -1041,7 +1052,13 @@ export const approveRun = mutation({
             amountMinor: toMinorUnits(sale.commissionAmount, item.currency),
             currency: item.currency,
             actorId: user._id,
-            occurredAt: accrualDate,
+            occurredAt: await commissionAccountingDate(
+              ctx,
+              args.orgId,
+              saleId,
+              sale.saleDate,
+              accrualDate
+            ),
           });
           commissionMinor += toMinorUnits(sale.commissionAmount, item.currency);
           liveSaleIds.push(saleId);

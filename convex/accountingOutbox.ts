@@ -18,6 +18,7 @@ import { query } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
 import { MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 import { PostCommand, postAccountingEvent } from "./accounting/postingEngine";
 import { prepaidPostingBlockedReason } from "./utils/prepaidSourceLedger";
 import { payrollPostingBlockedReason } from "./utils/payrollSourceLedger";
@@ -334,10 +335,36 @@ export async function drainPendingForOrg(
 
 // ─── Internal mutation (scheduler target) ─────────────────────────────────────
 
+/** Continuation passes, so a backlog larger than one batch cannot stall silently. */
+const MAX_DRAIN_PASSES = 40;
+
 export const drainPendingAccountingEvents = internalMutation({
-  args: { orgId: v.id("organizations"), limit: v.optional(v.number()) },
+  args: {
+    orgId: v.id("organizations"),
+    limit: v.optional(v.number()),
+    pass: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
-    return drainPendingForOrg(ctx, args.orgId, args.limit ?? 50);
+    const limit = args.limit ?? 50;
+    const result = await drainPendingForOrg(ctx, args.orgId, limit);
+
+    // Reschedule while this pass did real work and filled its batch. A single
+    // drain read only the first 50 rows and stopped, so an organization whose
+    // backlog exceeded that — now ordinary, since every commission enqueues
+    // before a chart exists — needed an operator to press redrive repeatedly,
+    // with nothing telling them to. Held rows are excluded from "real work" on
+    // purpose: they are waiting on something else, so re-reading them would
+    // spin without progress.
+    const pass = args.pass ?? 0;
+    const progressed = result.posted + result.failed > 0;
+    if (progressed && result.posted + result.failed + result.held >= limit && pass < MAX_DRAIN_PASSES) {
+      await ctx.scheduler.runAfter(0, internal.accountingOutbox.drainPendingAccountingEvents, {
+        orgId: args.orgId,
+        limit,
+        pass: pass + 1,
+      });
+    }
+    return result;
   },
 });
 

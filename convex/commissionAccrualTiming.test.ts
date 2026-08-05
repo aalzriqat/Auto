@@ -1672,6 +1672,66 @@ describe("round-3 review fixes", () => {
     expect(phantom).toBeNull();
   });
 
+  test("a dead-lettered ledger entry is reported as needing a retry, not as a closed period", async () => {
+    // drainPendingForOrg reads only PENDING rows, so "open the period" is
+    // advice that provably cannot work for a FAILED entry — the same cry-wolf
+    // failure this work removed from the close checklist.
+    const d = await seedDealer("failed_entry_message");
+    const saleId = await completedSale(d);
+    await d.t.run(async (ctx) => {
+      await ctx.db.insert("pendingAccountingEvents", {
+        orgId: d.orgId,
+        kind: "POST",
+        status: "FAILED",
+        idempotencyKey: `sale_completed_${saleId}`,
+        accountingDate: Date.now(),
+        actorId: d.userId,
+        attempts: 10,
+        createdAt: Date.now(),
+        eventType: "SALE_COMPLETED",
+        sourceType: "sales",
+        sourceId: saleId,
+        eventVersion: 1,
+        occurredAt: Date.now(),
+        currency: "USD",
+        payload: { saleId },
+      });
+    });
+
+    await expect(
+      d.asAdmin.mutation(api.sales.setCommissionAmount, {
+        orgId: d.orgId, saleId, commissionAmount: 250,
+      })
+    ).rejects.toThrow(/failed and needs to be retried/i);
+  });
+
+  test("cancellation reverses corrections the counter does not admit to", async () => {
+    // safeAdjustmentSeq validates the counter's type and range, not its truth.
+    // A row edited back to 0 while commission_adjusted_..._1 sits posted passes
+    // every check, and cancellation would reverse the accrual, walk nothing,
+    // and report success — leaving that correction on a voided sale, where the
+    // divergence control (which excludes cancelled sales) never looks.
+    const d = await seedDealer("stale_counter");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 250,
+    });
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 400,
+    });
+    expect(await commissionPayableMinor(d)).toBe(40_000);
+
+    // The counter lies; the entries do not.
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAdjustmentSeq: 0 }));
+
+    await d.asManager.mutation(api.sales.update, {
+      orgId: d.orgId, saleId, status: "CANCELLED",
+    });
+
+    expect(await commissionPayableMinor(d)).toBe(0);
+    expect(await commissionExpenseMinor(d)).toBe(0);
+  });
+
   test("the backfill skips an org with no owner rather than inventing an actor", async () => {
     const d = await seedDealer("backfill_no_owner");
     const saleId = await completedSale(d);

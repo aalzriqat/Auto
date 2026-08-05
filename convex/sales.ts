@@ -18,7 +18,7 @@ import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation"
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
-import { getOrgCurrency, hookCommissionAccrued, hookCommissionAdjusted, hookCommissionPaid, hookSaleCancelled, isPostableNow, reverseCommissionForSale, commissionAccountingDate, commissionEntriesStillQueued, recognizedCommissionMinor, safeAdjustmentSeq, MAX_COMMISSION_ADJUSTMENTS } from "./accounting/workflowHooks";
+import { getOrgCurrency, hookCommissionAccrued, hookCommissionAdjusted, hookCommissionPaid, hookSaleCancelled, isPostableNow, reverseCommissionForSale, commissionAccountingDate, commissionEntriesOutstandingStatus, recognizedCommissionMinor, safeAdjustmentSeq, MAX_COMMISSION_ADJUSTMENTS } from "./accounting/workflowHooks";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 import { toMinorUnits, fromMinorUnits, assertFiniteNumber } from "./utils/money";
 
@@ -1095,7 +1095,17 @@ async function assertCommissionEntriesPosted(
   action: string
 ): Promise<void> {
   if (!(await isPostableNow(ctx, orgId, entryDate))) return;
-  if (await commissionEntriesStillQueued(ctx, orgId, sale)) {
+  const outstanding = await commissionEntriesOutstandingStatus(ctx, orgId, sale);
+  if (outstanding === "FAILED") {
+    // Deliberately NOT "open the period". A dead-lettered entry is skipped by
+    // every drain, so that instruction sends the user somewhere they cannot fix
+    // it — the same cry-wolf failure this work removed from the close checklist.
+    throwAppError(
+      AppErrorCode.VALIDATION_FAILED,
+      `A ledger entry for this sale has failed and needs to be retried before you can ${action}. Ask an administrator to retry it from Accounting → Setup.`
+    );
+  }
+  if (outstanding === "PENDING") {
     throwAppError(
       AppErrorCode.VALIDATION_FAILED,
       `This commission hasn't posted to the ledger yet (its accounting period may be closed). Open the period so it posts, then ${action}.`
@@ -1130,9 +1140,14 @@ async function assertCommissionRecognitionMatches(
   if (!(await isPostableNow(ctx, orgId, entryDate))) return;
   const recognized = await recognizedCommissionMinor(ctx, orgId, sale, currency);
   if (recognized === null) {
+    // `null` has two causes and they send accounting after different things:
+    // an unreadable correction count, or recognition in another currency.
+    const usableSeq = safeAdjustmentSeq(sale.commissionAdjustmentSeq) !== null;
     throwAppError(
       AppErrorCode.VALIDATION_FAILED,
-      "This commission was recognized in a different currency than it would be paid in. Have accounting reconcile it before settling."
+      usableSeq
+        ? "This commission was recognized in a different currency than it would be paid in. Have accounting reconcile it before settling."
+        : "This commission's correction history cannot be read, so it cannot be paid. Have accounting review it."
     );
   }
   const decided = toMinorUnits(sale.commissionAmount ?? 0, currency);

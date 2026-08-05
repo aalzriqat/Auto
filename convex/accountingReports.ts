@@ -1158,6 +1158,15 @@ export async function computeCommissionRecognitionDivergence(
     // wrong figure, and reporting them under one message made the deploy-time
     // backlog read as ledger corruption. One is fixed by running the backfill;
     // the other needs a human to work out what happened.
+    // Convertibility is checked BEFORE the not-recognized branch. An amount the
+    // ledger cannot express is a divergence whatever its recognition is, and
+    // the backfill refuses it (isConvertibleAmount) — so routing it to "run the
+    // backfill" named a remedy that can never clear the warning.
+    const decided = safeToMinorUnits(sale.commissionAmount, orgCurrency);
+    if (decided === null) {
+      divergentCount++;
+      continue;
+    }
     if (recognizedMinor === 0) {
       // Only counted when the backfill could actually fix it — i.e. the
       // commission is still unpaid. A commission SETTLED before commission GL
@@ -1168,15 +1177,7 @@ export async function computeCommissionRecognitionDivergence(
       if (sale.commissionPaidAt == null) unrecognizedCount++;
       continue;
     }
-    // Converted defensively. `commissionAmount > 0` admits Infinity, which
-    // toMinorUnits throws on — and this runs inside computeCloseChecklist,
-    // which the `close` mutation recomputes before it builds its blockers. A
-    // throw here would take down the close path entirely, ahead of the owner
-    // override that is supposed to be the escape hatch, and hide which control
-    // failed. An amount that cannot be expressed in the ledger's own units is
-    // itself a divergence, so report it as one.
-    const decided = safeToMinorUnits(sale.commissionAmount, orgCurrency);
-    if (decided === null || recognizedMinor !== decided) {
+    if (recognizedMinor !== decided) {
       divergentCount++;
     }
   }

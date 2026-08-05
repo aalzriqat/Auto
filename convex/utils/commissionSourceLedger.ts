@@ -233,6 +233,9 @@ export async function commissionPostingBlockedReason(
   if (payingCurrency === null) {
     return "it carries no currency, so what it clears cannot be checked against what was recognized";
   }
+  if (recognized === null) {
+    return "this sale's correction count is not a usable number, so what it clears cannot be checked against what was recognized";
+  }
   if (!recognized.has(payingCurrency)) {
     return "this commission was recognized in a different currency than the payment clears, so accounting must reconcile it before it can settle";
   }
@@ -257,7 +260,7 @@ export async function recognizedCommissionForSale(
   orgId: Id<"organizations">,
   saleId: Id<"sales">,
   adjustmentSeq: number
-): Promise<Map<string, number>> {
+): Promise<Map<string, number> | null> {
   const postedAmount = async (idempotencyKey: string, field: "amountMinor" | "deltaMinor") => {
     const event = await ctx.db
       .query("accountingEvents")
@@ -269,7 +272,11 @@ export async function recognizedCommissionForSale(
     if (typeof value !== "number" || !Number.isFinite(value)) return null;
     return { minor: value, currency: event.currency };
   };
-  const seq = boundedSeq(adjustmentSeq) ?? 0;
+  // Fails CLOSED, like every other walk over this counter. `?? 0` returned the
+  // accrual alone and silently dropped the corrections — a partial total that
+  // a settlement check would compare against and, finding it plausible, allow.
+  const seq = boundedSeq(adjustmentSeq);
+  if (seq === null) return null;
   const total = new Map<string, number>();
   const add = (entry: { minor: number; currency: string } | null) => {
     if (!entry) return;

@@ -118,6 +118,9 @@ async function payrollPaidBlockedReason(
       // The run's own currency, not a sum across currencies: minor units only
       // mean anything alongside their scale, so folding a scale-3 JOD figure in
       // with a scale-2 USD one compares numbers that are not the same unit.
+      if (perCurrency === null) {
+        return "a sale on it has an unusable correction count, so the Commission Payable it clears cannot be verified";
+      }
       const inRunCurrency = perCurrency.get(runCurrency);
       if (perCurrency.size > 0 && inRunCurrency === undefined) {
         return "a commission on it was recognized in a different currency than the run pays, so accounting must reconcile it before this can settle";
