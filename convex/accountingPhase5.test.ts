@@ -620,4 +620,66 @@ describe("Phase 5 — commission payable reconciliation", () => {
     const recon = await asUser.query(api.accountingReports.commissionPayableReconciliation, { orgId });
     expect(recon.currencies).toEqual([]);
   });
+
+  test("a commission on a sale that has not completed is not part of the subledger", async () => {
+    const { t, orgId, userId, asUser } = await seedReportingDealer();
+    const now = Date.now();
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Draft", lastName: "Customer" })
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, make: "Test", model: "Draft", year: 2024, mileage: 0, color: "Black",
+        fuelType: "PETROL", transmission: "AUTOMATIC", sellingPrice: 30000, status: "AVAILABLE",
+      })
+    );
+    // An amount may be entered on a draft — it survives completion by design.
+    // But a PENDING sale has no COMMISSION_ACCRUED event, so counting it here
+    // pushed the subledger above a GL liability of exactly zero, leaving the
+    // reconciliation permanently and inexplicably out.
+    const saleId = await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId, salePrice: 30000, saleDate: now,
+        status: "PENDING", commissionAmount: 500,
+      })
+    );
+
+    expect(
+      (await asUser.query(api.accountingReports.commissionPayableReconciliation, { orgId }))
+        .currencies
+    ).toEqual([]);
+
+    // Completing it is what makes the liability real.
+    await t.run((ctx) => ctx.db.patch(saleId, { status: "COMPLETED" }));
+    const afterCompletion = await asUser.query(
+      api.accountingReports.commissionPayableReconciliation,
+      { orgId }
+    );
+    expect(afterCompletion.byCurrency.JOD.subledgerBalanceMinor).toBe(500_000);
+  });
+
+  test("a cancelled sale's commission is not part of the subledger either", async () => {
+    const { t, orgId, userId, asUser } = await seedReportingDealer();
+    const now = Date.now();
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Void", lastName: "Customer" })
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, make: "Test", model: "Void", year: 2024, mileage: 0, color: "Black",
+        fuelType: "PETROL", transmission: "AUTOMATIC", sellingPrice: 30000, status: "AVAILABLE",
+      })
+    );
+    // Cancellation reverses the GL accrual but deliberately keeps the amount on
+    // the row as history, so the subledger side has to exclude it explicitly.
+    await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId, salePrice: 30000, saleDate: now,
+        status: "CANCELLED", commissionAmount: 500,
+      })
+    );
+
+    const recon = await asUser.query(api.accountingReports.commissionPayableReconciliation, { orgId });
+    expect(recon.currencies).toEqual([]);
+  });
 });

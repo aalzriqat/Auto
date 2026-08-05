@@ -429,7 +429,10 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
     expect(notSet.find((r) => r._id === saleId)).toBeUndefined();
   });
 
-  test("a cancelled sale's commission is excluded from the Commission Payable subledger", async () => {
+  // The reconciliation query itself is asserted in accountingPhase5.test.ts —
+  // this one checks that the PAGE agrees with it, which is the disagreement
+  // that started this: two screens showing different amounts owed.
+  test("the page's owed total matches what the subledger counts", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const ids = await seedCommissionOrg(t, "manual_recon");
     await setMode(t, ids.orgId, "MANUAL");
