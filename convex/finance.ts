@@ -38,7 +38,6 @@ const dealerRuleArgs = {
   customerContributionSettlement: v.optional(customerContributionSettlementValidator),
   feesDeductedFromSettlement: v.optional(v.boolean()),
   feeTemplates: v.optional(v.array(financeFeeTemplateValidator)),
-  requiredDocumentNames: v.optional(v.array(v.string())),
 } as const;
 
 type DealerRuleArgs = {
@@ -67,6 +66,19 @@ function assertDealerRulesValid(rules: DealerRuleArgs): void {
     [rules.lowerAppraisalTolerancePercent, "Lower-appraisal tolerance"],
   ] as const) {
     if (value !== undefined) assertPercent(value, label);
+  }
+
+  // assertPercent allows zero, which is right for a tolerance and wrong for an
+  // LTV: resolveAppliedLtv rejects anything <= 0, so a company saved with a
+  // zero default or maximum passes validation here and then fails every single
+  // quote later, with an error naming the deal instead of the setting.
+  for (const [value, label] of [
+    [rules.defaultLtvPercent, "Default LTV"],
+    [rules.maxFinancingLTV, "Maximum LTV"],
+  ] as const) {
+    if (value !== undefined && value <= 0) {
+      throw new ConvexError(`${label} must be greater than 0 (got ${value}).`);
+    }
   }
 
   const minimum = rules.minimumLtvPercent;
@@ -288,11 +300,23 @@ export const updateCompany = mutation({
     };
     assertDealerRulesValid(effectiveRules);
 
+    // Archive the terms the company operated under BEFORE this edit, when it
+    // has never been versioned. Otherwise the first edit bumps straight to
+    // version 2 and version 1 — the version every application snapshotted in
+    // the meantime points at — is never written, leaving a permanent hole in
+    // the audit chain the table exists to provide.
+    const needsInitialVersion = existing.ruleVersion === undefined;
+
     const rulesChanged = dealerRuleKeys.some(
       (key) =>
         presentDealerRules[key] !== undefined &&
         JSON.stringify(presentDealerRules[key]) !== JSON.stringify(existing[key])
     ) || (updates.maxFinancingLTV !== undefined && updates.maxFinancingLTV !== existing.maxFinancingLTV);
+
+    if (needsInitialVersion) {
+      await ctx.db.patch(id, { ruleVersion: 1 });
+      await writeRuleVersion(ctx, id, orgId, user._id, "Terms in force before dealer purchase rules were first edited");
+    }
 
     await ctx.db.patch(id, {
       ...updates,

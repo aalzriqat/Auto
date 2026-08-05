@@ -415,7 +415,8 @@ export function deriveEconomics(args: {
   feeDeductionsMinor: number;
   customerDirectToDealerMinor: number;
   dealerBorneExpensesMinor: number;
-  vehicleCostMinor: number;
+  /** Only needed for the profit figures, which nothing stores yet. */
+  vehicleCostMinor?: number;
 }) {
   // The snapshotted basis has to reach the arithmetic, not just sit in the
   // snapshot: at 85% on a 12,500 approval against an 11,500 appraisal, an
@@ -426,6 +427,13 @@ export function deriveEconomics(args: {
     submittedQuotationMinor: args.submittedQuotationMinor,
     independentAppraisalMinor: args.independentAppraisalMinor,
   });
+
+  // The company's rule names an amount nobody has recorded. Report that rather
+  // than computing against a substitute — a manual approval with no appraisal,
+  // under a company that lends against the appraisal, would otherwise fund
+  // against the larger approved amount and understate the dealership's own
+  // contribution, with nothing to show the basis had been swapped.
+  if (ltvBaseMinor === undefined) return undefined;
 
   const composition = computeFundingComposition({
     approvedPurchaseAmountMinor: args.approvedDealerPurchaseAmountMinor,
@@ -454,7 +462,7 @@ export function deriveEconomics(args: {
     dealerContributionMinor: composition.dealerContributionMinor,
     customerDirectToDealerMinor: args.customerDirectToDealerMinor,
     dealerBorneExpensesMinor: args.dealerBorneExpensesMinor,
-    vehicleCostMinor: args.vehicleCostMinor,
+    vehicleCostMinor: args.vehicleCostMinor ?? 0,
   });
 
   return { composition, gap, remittance, proceeds };
@@ -534,7 +542,15 @@ export function creditDecisionForStatus(
 
 /** Whether the vehicle can be, or already has been, handed to the customer. */
 export function handoverStatusForFacts(facts: LifecycleFacts): NonNullable<HandoverStatus> {
-  if (facts.vehicleHandoverAt) return "HANDED_OVER";
+  // A closed deal produced a real sale and a vehicle marked SOLD, so the
+  // handover happened whether or not it was timestamped. The timestamp only
+  // exists from the commit that introduced the pre-finalize handover step —
+  // 587 commits back — so every financed deal closed before it carries none,
+  // and reading those as BLOCKED would tell the dealership its entire earlier
+  // history cannot be handed to the customer.
+  if (facts.vehicleHandoverAt || facts.finalizedSaleId || facts.status === "CLOSED") {
+    return "HANDED_OVER";
+  }
   return facts.status === "APPROVED" ? "READY" : "BLOCKED";
 }
 
@@ -548,6 +564,12 @@ export function handoverStatusForFacts(facts: LifecycleFacts): NonNullable<Hando
 export function settlementStatusForFacts(
   facts: LifecycleFacts
 ): NonNullable<SettlementStatus> {
+  // Checked before finalizedSaleId, which cancelApplication deliberately keeps
+  // on a reversed deal. Without this the backfill would read a cancelled,
+  // GL-reversed application as EXPECTED — asserting the finance company still
+  // owes money on a voided deal, and contradicting what cancelApplication
+  // itself writes for the identical facts.
+  if (facts.status === "CANCELLED" || facts.status === "REJECTED") return "NOT_READY";
   if (facts.disbursedAt) return "FULLY_SETTLED";
   if (facts.finalizedSaleId) return "EXPECTED";
   return "NOT_READY";

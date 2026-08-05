@@ -45,9 +45,11 @@ import {
  *
  * ## Idempotency
  *
- * Applications are keyed on `creditDecision` being unset; rows created after
- * this ships always carry one. Companies are keyed on the existence of their
- * rule-version row. Re-running touches nothing already done.
+ * Applications are keyed on `financingBackfilledAt`, a marker no live mutation
+ * writes, and each concern is filled only when unset — so a row a user
+ * advanced mid-migration is completed rather than skipped or reverted.
+ * Companies are keyed on the existence of their rule-version row. Re-running
+ * touches nothing already done.
  */
 
 /** Rows per invocation. Small enough that one page cannot approach the limits. */
@@ -57,6 +59,8 @@ const APPLICATION_BATCH_SIZE = 50;
 type Phase = "companies" | "applications";
 
 type Report = {
+  /** SCHEDULED while pages remain; COMPLETE only on the final one. */
+  status: "SCHEDULED" | "COMPLETE";
   companiesScanned: number;
   companiesVersioned: number;
   applicationsScanned: number;
@@ -67,6 +71,7 @@ type Report = {
 };
 
 const EMPTY_REPORT: Report = {
+  status: "SCHEDULED",
   companiesScanned: 0,
   companiesVersioned: 0,
   applicationsScanned: 0,
@@ -77,6 +82,7 @@ const EMPTY_REPORT: Report = {
 };
 
 const reportValidator = v.object({
+  status: v.union(v.literal("SCHEDULED"), v.literal("COMPLETE")),
   companiesScanned: v.number(),
   companiesVersioned: v.number(),
   applicationsScanned: v.number(),
@@ -177,7 +183,16 @@ export const backfillFinancingEconomics = internalMutation({
 
     for (const app of page.page) {
       report.applicationsScanned += 1;
-      if (app.creditDecision !== undefined) {
+      // Keyed on a marker no live mutation writes. Keying it on `creditDecision`
+      // — a business field that updateStatus, cancelApplication and finalizeDeal
+      // now all set — meant any legacy row a user touched before its page came
+      // up was skipped permanently: no settlement or appraisal dimension, no
+      // rule snapshot (so it kept reading live company rules, the exact hazard
+      // the snapshot exists to prevent), and no reconciliation flag, so nobody
+      // was ever told. The worst case was a legacy deal finalized mid-migration,
+      // which opens a finance-company receivable for the wrong number and then
+      // never enters the queue.
+      if (app.financingBackfilledAt !== undefined) {
         report.applicationsSkipped += 1;
         continue;
       }
@@ -204,22 +219,49 @@ export const backfillFinancingEconomics = internalMutation({
         }
       }
 
+      // An application created under the new code always carries a rule
+      // snapshot (see applications.createFromQuote), and a legacy one never
+      // does until this migration binds it — read before the patch below, that
+      // is a reliable discriminator. Without it, moving the idempotency key off
+      // `creditDecision` meant the backfill started flagging brand-new deals
+      // for reconciliation, filling the human work queue with rows that have
+      // nothing wrong with them.
+      const isModernApplication = app.companyRuleSnapshot !== undefined;
+      if (isModernApplication) {
+        await ctx.db.patch(app._id, { financingBackfilledAt: now });
+        report.applicationsSkipped += 1;
+        continue;
+      }
+
       const reconciliationReason = reconciliationReasonFor(app);
+      // Fill only what is unset. A row a live mutation already advanced holds a
+      // value derived from the same mapping, and overwriting a dimension the
+      // application has genuinely moved past — an appraisalStatus of PENDING,
+      // say — would be a downgrade, not a repair.
       await ctx.db.patch(app._id, {
-        creditDecision: creditDecisionForStatus(app.status),
+        financingBackfilledAt: now,
+        ...(app.creditDecision === undefined
+          ? { creditDecision: creditDecisionForStatus(app.status) }
+          : {}),
         // No appraisal record has ever existed for these. The
         // `underwritingSnapshot.vehicleValuationAtSubmission` beside them is a
         // mutable, dealer-editable valuation with no provider, date or
         // document — promoting it to an appraisal would manufacture evidence.
-        appraisalStatus: "NOT_REQUESTED",
-        settlementStatus: settlementStatusForFacts(app),
-        handoverStatus: handoverStatusForFacts(app),
+        ...(app.appraisalStatus === undefined
+          ? { appraisalStatus: "NOT_REQUESTED" as const }
+          : {}),
+        ...(app.settlementStatus === undefined
+          ? { settlementStatus: settlementStatusForFacts(app) }
+          : {}),
+        ...(app.handoverStatus === undefined
+          ? { handoverStatus: handoverStatusForFacts(app) }
+          : {}),
         // gapResolution is deliberately left unset. NOT_REQUIRED would assert
         // somebody checked there was no appraisal gap, and nobody did — the
         // concept did not exist when these were written.
         ...(companyRuleSnapshot ? { companyRuleSnapshot } : {}),
         ...(companyRuleVersionId ? { companyRuleVersionId } : {}),
-        ...(reconciliationReason
+        ...(reconciliationReason && app.needsFinancingReconciliation === undefined
           ? {
               needsFinancingReconciliation: true,
               financingReconciliationReason: reconciliationReason,
@@ -228,7 +270,9 @@ export const backfillFinancingEconomics = internalMutation({
       });
 
       report.applicationsBackfilled += 1;
-      if (reconciliationReason) report.applicationsFlagged += 1;
+      if (reconciliationReason && app.needsFinancingReconciliation === undefined) {
+        report.applicationsFlagged += 1;
+      }
       if (companyRuleSnapshot) report.applicationsBoundToSnapshot += 1;
     }
 
@@ -241,6 +285,7 @@ export const backfillFinancingEconomics = internalMutation({
       return report;
     }
 
+    report.status = "COMPLETE";
     console.log(
       `[migrateFinancingEconomics] complete: ${report.companiesScanned} companies scanned ` +
         `(${report.companiesVersioned} versioned), ` +

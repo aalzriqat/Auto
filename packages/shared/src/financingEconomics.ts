@@ -179,33 +179,36 @@ export interface LtvBaseAmounts {
  * Companies differ, and the difference is real money: at 85% on an approval of
  * 12,500 against an appraisal of 11,500, an APPROVED_PURCHASE_AMOUNT basis
  * funds 10,625 while an INDEPENDENT_APPRAISAL basis funds 9,775 — an 850
- * swing in what the dealership has to contribute. Storing the basis and then
- * always using the approved amount, as this did, makes the setting decorative.
+ * swing in what the dealership has to contribute.
  *
- * Falls back to the approved purchase amount whenever the configured basis
- * refers to an amount that has not been recorded yet. That is the conservative
- * direction: it is the figure the company has actually committed to.
+ * Returns `undefined` when the configured basis names an amount that has not
+ * been recorded. Substituting the approved amount instead reads as a safe
+ * fallback and is not one: a company configured to lend against the appraisal,
+ * approving manually with no appraisal on file, would silently have its funding
+ * computed against a *different and larger* basis — understating the
+ * dealership's own required contribution. The caller's job is to leave the
+ * economics unwritten until the fact exists, not to compute them from a
+ * substitute.
  */
 export function resolveLtvBaseMinor(
   basis: LtvBasis | undefined,
   amounts: LtvBaseAmounts
-): number {
-  const approved = amounts.approvedPurchaseAmountMinor;
+): number | undefined {
   switch (basis) {
     case "INDEPENDENT_APPRAISAL":
-      return amounts.independentAppraisalMinor ?? approved;
+      return amounts.independentAppraisalMinor;
     case "SUBMITTED_QUOTATION":
-      return amounts.submittedQuotationMinor ?? approved;
-    case "LOWER_OF_APPRAISAL_AND_QUOTATION": {
-      const candidates = [
-        amounts.independentAppraisalMinor,
-        amounts.submittedQuotationMinor,
-      ].filter((value): value is number => value !== undefined);
-      return candidates.length > 0 ? Math.min(...candidates) : approved;
-    }
+      return amounts.submittedQuotationMinor;
+    case "LOWER_OF_APPRAISAL_AND_QUOTATION":
+      // "Lower of two" needs both. With one operand it is not a lower-of rule,
+      // it is whichever happened to be recorded first.
+      return amounts.independentAppraisalMinor !== undefined &&
+        amounts.submittedQuotationMinor !== undefined
+        ? Math.min(amounts.independentAppraisalMinor, amounts.submittedQuotationMinor)
+        : undefined;
     case "APPROVED_PURCHASE_AMOUNT":
     default:
-      return approved;
+      return amounts.approvedPurchaseAmountMinor;
   }
 }
 
@@ -236,6 +239,14 @@ export interface FundingComposition {
   dealerContributionMinor: number;
   /** The theoretical cap before the customer's payment is considered. */
   maximumFundableMinor: number;
+  /**
+   * True when the LTV base produced a figure above the approved amount and was
+   * clamped to it. Surfaced rather than absorbed: a SUBMITTED_QUOTATION basis
+   * on a 20,000 quotation against an 11,500 approval reports a zero dealer
+   * contribution, which is arithmetically right and almost certainly a
+   * misconfiguration worth showing someone.
+   */
+  ltvBaseCapApplied: boolean;
 }
 
 /**
@@ -265,7 +276,9 @@ export function computeFundingComposition(
   // actually buying at (an LTV applied to the submitted quotation after a lower
   // approval, say) would otherwise compute a funded portion exceeding the whole
   // purchase and drive the unfinanced slice negative.
-  const maximumFundableMinor = Math.min(percentOf(ltvBase, input.appliedLtvPercent), approved);
+  const uncappedFundableMinor = percentOf(ltvBase, input.appliedLtvPercent);
+  const maximumFundableMinor = Math.min(uncappedFundableMinor, approved);
+  const ltvBaseCapApplied = uncappedFundableMinor > approved;
   const unfinancedPortionMinor = approved - maximumFundableMinor;
 
   const customerFirstPaymentAppliedMinor = Math.min(input.customerFirstPaymentMinor, approved);
@@ -286,6 +299,7 @@ export function computeFundingComposition(
     customerFirstPaymentSurplusMinor,
     dealerContributionMinor,
     maximumFundableMinor,
+    ltvBaseCapApplied,
   };
 }
 

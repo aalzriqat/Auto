@@ -1529,7 +1529,6 @@ export default defineSchema({
     customerContributionSettlement: v.optional(customerContributionSettlementValidator),
     feesDeductedFromSettlement: v.optional(v.boolean()),
     feeTemplates: v.optional(v.array(financeFeeTemplateValidator)),
-    requiredDocumentNames: v.optional(v.array(v.string())),
   }).index("by_org", ["orgId"]),
 
   /**
@@ -1840,14 +1839,19 @@ export default defineSchema({
     // reinterpreted safely. Reported on, never silently cleared.
     needsFinancingReconciliation: v.optional(v.boolean()),
     financingReconciliationReason: v.optional(v.string()),
+    // Written only by migrateFinancingEconomics. Deliberately not one of the
+    // business dimensions: keying the backfill on `creditDecision` meant the
+    // live mutations that now maintain it also set the migration's own
+    // completion sentinel, so any legacy row a user touched mid-migration was
+    // skipped forever — without its rule snapshot, its remaining dimensions,
+    // or its reconciliation flag.
+    financingBackfilledAt: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
     .index("by_customer", ["customerId"])
     .index("by_vehicle", ["vehicleId"])
     .index("by_status", ["status"])
-    .index("by_org_status", ["orgId", "status"])
-    .index("by_org_credit_decision", ["orgId", "creditDecision"])
-    .index("by_org_reconciliation", ["orgId", "needsFinancingReconciliation"]),
+    .index("by_org_status", ["orgId", "status"]),
 
   /**
    * Every appraisal ever recorded against one application.
@@ -1893,7 +1897,6 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_application", ["applicationId"])
-    .index("by_application_status", ["applicationId", "status"])
     .index("by_vehicle", ["vehicleId"]),
 
   /**

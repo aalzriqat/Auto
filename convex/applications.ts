@@ -600,6 +600,9 @@ export const updateStatus = mutation({
       // a wrong value is harder to find than a missing one.
       creditDecision: creditDecisionForStatus(args.status),
       handoverStatus: handoverStatusForFacts(nextFacts),
+      ...(args.status === "REJECTED" && app.gapResolution === "PENDING_NEGOTIATION"
+        ? { gapResolution: "FAILED" as const }
+        : {}),
     });
 
     await ctx.db.insert("applicationStatusLog", {
@@ -757,8 +760,15 @@ export const cancelApplication = mutation({
           // finance-company receivable, so nothing is expected any more. The
           // handover timestamp is deliberately left alone — the vehicle
           // physically went to the customer and later came back, and erasing
-          // that is not the same as reversing it.
+          // that is not the same as reversing it — but a cancelled deal that
+          // was never handed over must not keep claiming it is READY to be.
           settlementStatus: "NOT_READY",
+          handoverStatus: handoverStatusForFacts({ ...app, status: "CANCELLED" }),
+          // A gap nobody will now negotiate. FAILED is the terminal value the
+          // validator already carries for exactly this.
+          ...(app.gapResolution === "PENDING_NEGOTIATION"
+            ? { gapResolution: "FAILED" as const }
+            : {}),
         });
 
         await ctx.db.insert("applicationStatusLog", {
@@ -838,6 +848,16 @@ export const registerVehicleHandover = mutation({
     if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
     if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before registering handover.");
     if (app.vehicleHandoverAt) throw new ConvexError("Vehicle handover has already been registered.");
+    // A deal running on the dealer-side economics must still have a live
+    // approval. A reappraisal or a reopen clears it, and `status` stays
+    // APPROVED throughout — so without this the vehicle could be handed over
+    // on a purchase amount that no longer exists. Deals with no quotation
+    // recorded are untouched, so nothing in flight is stranded.
+    if (app.submittedQuotationMinor !== undefined && app.approvedDealerPurchaseAmountMinor === undefined) {
+      throw new ConvexError(
+        "The finance company's approved purchase amount is not recorded on this deal. Record it before handing over the vehicle."
+      );
+    }
 
     const now = Date.now();
     await ctx.db.patch(args.applicationId, {
@@ -936,6 +956,14 @@ export const finalizeDeal = mutation({
         if (!app.expectedPaymentMethod || !app.expectedPaymentDate) {
           throw new ConvexError("Register how and when the payment is expected before finalizing the deal.");
         }
+        // Same guard as registerVehicleHandover: an approval cleared by a
+        // reappraisal leaves status APPROVED, so this is the only thing
+        // stopping a sale being completed on economics nothing supports.
+        if (app.submittedQuotationMinor !== undefined && app.approvedDealerPurchaseAmountMinor === undefined) {
+          throw new ConvexError(
+            "The finance company's approved purchase amount is not recorded on this deal. Record it before finalizing."
+          );
+        }
 
         const quote = await ctx.db.get(app.quoteId);
         if (!quote || quote.orgId !== args.orgId) throw new ConvexError("Quote not found");
@@ -990,9 +1018,31 @@ export const finalizeDeal = mutation({
         });
 
         const now = Date.now();
+        // The finance-company receivable below is still opened for
+        // quote.totalFinancedAmount — the customer's principal — while this PR
+        // computes expectedDealerRemittanceMinor from the approved purchase
+        // amount. Reconciling the two is PR 2's job, but shipping the
+        // divergence silently is not acceptable: flag it so the deal enters
+        // the same queue the legacy rows do rather than looking settled.
+        const expectedRemittance = app.expectedDealerRemittanceMinor;
+        const legacyBasisMinor =
+          quote.totalFinancedAmount !== undefined
+            ? toMinorUnits(quote.totalFinancedAmount, await getOrgCurrency(ctx, args.orgId))
+            : undefined;
+        const remittanceDiverges =
+          expectedRemittance !== undefined &&
+          legacyBasisMinor !== undefined &&
+          expectedRemittance !== legacyBasisMinor;
+
         await ctx.db.patch(args.applicationId, {
           status: "CLOSED",
           finalizedSaleId: saleId,
+          ...(remittanceDiverges
+            ? {
+                needsFinancingReconciliation: true,
+                financingReconciliationReason: `The finance-company receivable was opened for the customer's financing principal (${legacyBasisMinor}), but this deal's expected dealer remittance is ${expectedRemittance}. Reconcile the settlement before treating this deal as paid.`,
+              }
+            : {}),
           finalizationIdempotencyKey: args.idempotencyKey,
           updatedAt: now,
           // Credit stays APPROVED — CLOSED is the sale being created, not a

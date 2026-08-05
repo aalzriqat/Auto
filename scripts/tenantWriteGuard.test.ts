@@ -308,13 +308,18 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // else" is the shape that shipped two Criticals.
   //
   // `migrateFinancingEconomics.backfillFinancingEconomics` takes no `orgId` at
-  // all — it paginates `organizations` and walks each org's own indexes — so it
-  // lands in `skippedNoOrgId` (143→144) with no caller-supplied id to point
-  // anywhere.
+  // all — it paginates `financeCompanies` and then `financeApplications`
+  // directly — so it lands in `skippedNoOrgId` (143→144) with no
+  // caller-supplied id to point anywhere.
+  //
+  // Then 443→444 / 290→291 by `financingEconomics.reopenApproval`, which
+  // withdraws an approved purchase amount so a deal can be re-quoted. It takes
+  // an `orgId` and a caller-supplied `applicationId`, so it is held to the
+  // `requireOwnedRow` rule and satisfies it inline like its three siblings.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 443,
-      analysed: 290,
+      totalMutations: 444,
+      analysed: 291,
       skippedNoArgsBlock: 9,
       skippedNoOrgId: 144,
     });

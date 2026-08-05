@@ -618,6 +618,9 @@ describe("appraisal and approval interaction", () => {
   test("re-approval works after the first approval marked the appraisal APPROVED", async () => {
     const { seed, applicationId } = await seedApprovedDeal();
 
+    // The first approval flips the appraisal RECORDED -> APPROVED. Matching only
+    // RECORDED made the auto-selector find nothing, so every re-approval threw
+    // and the explicit appraisalId argument was the sole route through.
     await seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: seed.orgId,
       applicationId,
@@ -625,13 +628,14 @@ describe("appraisal and approval interaction", () => {
       basis: "APPRAISAL",
     });
 
-    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+    // Re-approving at the same amount changed nothing, so it writes no audit
+    // row — a double-clicked Approve should not read as a revision.
+    const unchanged = await seed.asUser.query(api.financingEconomics.getEconomics, {
       orgId: seed.orgId,
       applicationId,
     });
-    expect(economics.overrides.some((o) => o.field === "approvedDealerPurchaseAmountMinor")).toBe(
-      true
-    );
+    expect(unchanged.overrides).toHaveLength(0);
+    expect(unchanged.application.approvedDealerPurchaseAmountMinor).toBe(jod(11_500));
   });
 
   test("a new appraisal clears the approval it invalidated rather than leaving it stale", async () => {
@@ -1246,6 +1250,7 @@ describe("migration", () => {
     expect(app.creditDecision).toBe("APPROVED");
     expect(app.handoverStatus).toBe("HANDED_OVER");
     expect(app.settlementStatus).toBe("FULLY_SETTLED");
+    expect(app.financingBackfilledAt).toBeTypeOf("number");
     expect(app.appraisalStatus).toBe("NOT_REQUESTED");
     // Nothing was guessed from totalFinancedAmount.
     expect(app.approvedDealerPurchaseAmountMinor).toBeUndefined();
@@ -1255,6 +1260,86 @@ describe("migration", () => {
     expect(app.gapResolution).toBeUndefined();
     expect(app.needsFinancingReconciliation).toBe(true);
     expect(app.financingReconciliationReason).toMatch(/customer's financing principal/i);
+  });
+
+  test("treats a legacy deal closed before handover timestamps existed as handed over", async () => {
+    const seed = await seedDealer();
+    // vehicleHandoverAt only exists from the commit that added the pre-finalize
+    // handover step, 587 commits back. Every financed deal closed before it has
+    // a real sale and a SOLD vehicle and no timestamp — reading those as BLOCKED
+    // would declare the dealership's whole earlier history un-handoverable, and
+    // PR 3 gates handover readiness on this dimension.
+    const saleId = await seed.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: seed.orgId,
+        vehicleId: seed.vehicleId,
+        customerId: seed.customerId,
+        salespersonId: seed.userId,
+        salePrice: DEAL.targetSelling,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+      })
+    );
+    const applicationId = await seedLegacyApplication(seed, {
+      status: "CLOSED",
+      finalizedSaleId: saleId,
+    });
+
+    await runMigration(seed.t);
+
+    expect((await readApp(seed, applicationId)).handoverStatus).toBe("HANDED_OVER");
+  });
+
+  test("a cancelled legacy deal is owed nothing, even carrying a finalized sale", async () => {
+    const seed = await seedDealer();
+    const saleId = await seed.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: seed.orgId,
+        vehicleId: seed.vehicleId,
+        customerId: seed.customerId,
+        salespersonId: seed.userId,
+        salePrice: DEAL.targetSelling,
+        saleDate: Date.now(),
+        status: "CANCELLED",
+      })
+    );
+    // cancelApplication keeps finalizedSaleId on a reversed deal and writes
+    // NOT_READY. The backfill has to agree with it for the identical facts.
+    const applicationId = await seedLegacyApplication(seed, {
+      status: "CANCELLED",
+      finalizedSaleId: saleId,
+    });
+
+    await runMigration(seed.t);
+
+    expect((await readApp(seed, applicationId)).settlementStatus).toBe("NOT_READY");
+  });
+
+  test("completes a legacy row a live mutation touched mid-migration", async () => {
+    const seed = await seedDealer();
+    const applicationId = await seedLegacyApplication(seed, { status: "PENDING_DOCS" });
+
+    // A salesperson advances the deal before the backfill reaches its page.
+    // updateStatus writes creditDecision — which used to be the migration's own
+    // completion sentinel, so the row was then skipped forever: no rule
+    // snapshot, no settlement dimension, no reconciliation flag.
+    await seed.asUser.mutation(api.applications.updateStatus, {
+      orgId: seed.orgId,
+      applicationId,
+      status: "UNDER_REVIEW",
+    });
+    expect((await readApp(seed, applicationId)).creditDecision).toBe("UNDER_REVIEW");
+
+    await runMigration(seed.t);
+
+    const app = await readApp(seed, applicationId);
+    // The live value is kept — it is more current than the derived one — while
+    // everything the migration owns is filled in.
+    expect(app.creditDecision).toBe("UNDER_REVIEW");
+    expect(app.settlementStatus).toBe("NOT_READY");
+    expect(app.appraisalStatus).toBe("NOT_REQUESTED");
+    expect(app.companyRuleSnapshot).toBeDefined();
+    expect(app.needsFinancingReconciliation).toBe(true);
   });
 
   test("maps each legacy status to the right credit decision and handover state", async () => {

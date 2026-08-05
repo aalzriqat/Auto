@@ -6,7 +6,6 @@ import { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { getOrgCurrency } from "./accounting/workflowHooks";
-import { scaleForCurrency } from "./utils/money";
 import { computeSubmittedQuotation } from "../lib/financingEconomics";
 import {
   assertMinorAmount,
@@ -61,20 +60,6 @@ async function resolveRuleSnapshot(
     throw new ConvexError("Finance company not found in this organization.");
   }
   return buildRuleSnapshot(company);
-}
-
-/** The vehicle's capitalized cost, in minor units, for the profit figures. */
-async function vehicleCostMinor(
-  ctx: QueryCtx | MutationCtx,
-  app: Doc<"financeApplications">,
-  currency: string
-): Promise<number> {
-  if (app.vehiclePurchaseCostMinor !== undefined) return app.vehiclePurchaseCostMinor;
-  const vehicle = await ctx.db.get(app.vehicleId);
-  if (!vehicle || vehicle.orgId !== app.orgId) return 0;
-  const cost = vehicle.sourceType === "SOURCED" ? vehicle.sourceCost : vehicle.purchasePrice;
-  if (cost === undefined || !Number.isFinite(cost) || cost < 0) return 0;
-  return Math.round(cost * Math.pow(10, scaleForCurrency(currency)));
 }
 
 /**
@@ -146,15 +131,48 @@ async function recomputeAndPatchEconomics(
     customerDirectToDealerMinor: customerGapToDealer,
     dealerBorneExpensesMinor:
       app.actualClosingExpensesMinor ?? app.estimatedClosingExpensesMinor ?? 0,
-    vehicleCostMinor: await vehicleCostMinor(ctx, app, currency),
+    // The profit figures are not stored yet, so the vehicle's cost is not read
+    // here — it cost a ctx.db.get on every quotation and approval write to
+    // compute a number nothing consumed.
   });
+
+  // The company's LTV rule names an amount nobody has recorded — commonly a
+  // manual approval under a company that lends against the appraisal. Leave
+  // every derived figure unset rather than storing one computed against a
+  // substitute basis, and say so.
+  if (!derived) {
+    await ctx.db.patch(app._id, {
+      economicsCurrency: currency,
+      financeCompanyFundedPortionMinor: undefined,
+      unfinancedPortionMinor: undefined,
+      dealerContributionMinor: undefined,
+      expectedDealerRemittanceMinor: undefined,
+      rawAppraisalGapMinor: undefined,
+      needsFinancingReconciliation: true,
+      financingReconciliationReason: `This finance company applies its LTV to the ${(snapshot.ltvBasis ?? "APPROVED_PURCHASE_AMOUNT").toLowerCase().replace(/_/g, " ")}, which has not been recorded on this deal. Record it before relying on the funding split.`,
+      updatedAt: Date.now(),
+    });
+    return;
+  }
+
+  // Only meaningful once somebody has recorded where the customer's money
+  // actually went. For a company that retains customer funds, assuming it
+  // retained nothing overstates the remittance by the whole first payment —
+  // the mirror of the assumption this stopped making in the other direction.
+  const remittanceIsKnowable =
+    (app.customerContributionSettlement ??
+      snapshot.customerContributionSettlement ??
+      "PASSED_THROUGH") === "PASSED_THROUGH" ||
+    app.customerContributionToFinanceCompanyMinor !== undefined;
 
   await ctx.db.patch(app._id, {
     economicsCurrency: currency,
     financeCompanyFundedPortionMinor: derived.composition.financeCompanyFundedPortionMinor,
     unfinancedPortionMinor: derived.composition.unfinancedPortionMinor,
     dealerContributionMinor: derived.composition.dealerContributionMinor,
-    expectedDealerRemittanceMinor: derived.remittance.expectedDealerRemittanceMinor,
+    expectedDealerRemittanceMinor: remittanceIsKnowable
+      ? derived.remittance.expectedDealerRemittanceMinor
+      : undefined,
     rawAppraisalGapMinor: derived.gap.rawAppraisalGapMinor,
     updatedAt: Date.now(),
   });
@@ -544,6 +562,15 @@ export const recordAppraisal = mutation({
     // approval and reopen the deal instead, on the record.
     const supersedesApproval =
       !isDealerEstimate && app.approvedDealerPurchaseAmountMinor !== undefined;
+    if (supersedesApproval && app.vehicleHandoverAt) {
+      // The vehicle is already with the customer. Silently voiding the
+      // approval here would leave a handed-over deal with no approved purchase
+      // amount and no signal, and finalizeDeal only checks status === APPROVED
+      // so the sale could still be completed on economics nothing supports.
+      throw new ConvexError(
+        "The vehicle has already been handed over on this deal. Cancel the application to reverse it before recording a new appraisal."
+      );
+    }
     if (supersedesApproval) {
       await recordOverride(ctx, {
         orgId: args.orgId,
@@ -627,6 +654,13 @@ export const recordAppraisal = mutation({
             customerGapToFinanceCompanyMinor: undefined,
             gapResolvedAt: undefined,
             gapResolvedBy: undefined,
+            // The note says things like "customer agreed to absorb the full
+            // 1,000" — it cannot outlive the 1,000.
+            gapResolutionNotes: undefined,
+            // Out of READY: nothing may be handed over against an approval that
+            // no longer exists. finalizeDeal's own guard (below) is the other
+            // half of this.
+            handoverStatus: "BLOCKED" as const,
           }
         : {}),
     });
@@ -780,7 +814,10 @@ export const approveDealerPurchaseAmount = mutation({
 
     const now = Date.now();
     const previousRawGapMinor = app.rawAppraisalGapMinor ?? 0;
-    if (app.approvedDealerPurchaseAmountMinor !== undefined) {
+    if (
+      app.approvedDealerPurchaseAmountMinor !== undefined &&
+      app.approvedDealerPurchaseAmountMinor !== args.approvedAmountMinor
+    ) {
       await recordOverride(ctx, {
         orgId: args.orgId,
         applicationId: args.applicationId,
@@ -842,6 +879,7 @@ export const approveDealerPurchaseAmount = mutation({
               customerGapToFinanceCompanyMinor: undefined,
               gapResolvedAt: undefined,
               gapResolvedBy: undefined,
+              gapResolutionNotes: undefined,
             }
           : {}),
       });
@@ -860,10 +898,99 @@ export const approveDealerPurchaseAmount = mutation({
               customerGapToFinanceCompanyMinor: undefined,
               gapResolvedAt: undefined,
               gapResolvedBy: undefined,
+              gapResolutionNotes: undefined,
             }
           : {}),
       });
     }
+
+    return args.applicationId;
+  },
+});
+
+/**
+ * Withdraws an approved purchase amount so the deal can be re-quoted.
+ *
+ * `recordSubmittedQuotation` refuses to change a quotation the company has
+ * already approved against, and told the user to "reopen the approval" — an
+ * action that did not exist. The only way to clear an approval was to record a
+ * fresh appraisal, so a dealership wanting to withdraw and resubmit at a
+ * different figure — an ordinary commercial move — had to manufacture
+ * appraisal evidence to do it. That is exactly the dealer-controlled-number
+ * problem the rest of this module is built to prevent.
+ *
+ * Clears the same field set a superseding appraisal does, on the record.
+ */
+export const reopenApproval = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    reason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.APPROVE_FINANCE_APPLICATION,
+    ]);
+    const reason = args.reason.trim();
+    if (!reason) {
+      throw new ConvexError("Reopening an approval must record why.");
+    }
+
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId,
+      APPLICATION_NOT_FOUND
+    );
+    if (app.status === "CLOSED" || app.status === "CANCELLED") {
+      throw new ConvexError("This application is closed. Its approval can no longer be reopened.");
+    }
+    if (app.approvedDealerPurchaseAmountMinor === undefined) {
+      throw new ConvexError("This application has no approved purchase amount to reopen.");
+    }
+    if (app.vehicleHandoverAt) {
+      throw new ConvexError(
+        "The vehicle has already been handed over on this deal. Cancel the application to reverse it instead."
+      );
+    }
+
+    await recordOverride(ctx, {
+      orgId: args.orgId,
+      applicationId: args.applicationId,
+      field: "approvedDealerPurchaseAmountMinor",
+      previousValue: app.approvedDealerPurchaseAmountMinor,
+      newValue: "reopened",
+      reason,
+      changedBy: user._id,
+    });
+
+    await ctx.db.patch(args.applicationId, {
+      approvedDealerPurchaseAmountMinor: undefined,
+      approvedPurchaseBasis: undefined,
+      approvedPurchaseAppraisalId: undefined,
+      approvedPurchaseExceptionRuleVersion: undefined,
+      approvedPurchaseApprovedBy: undefined,
+      approvedPurchaseApprovedAt: undefined,
+      approvedPurchaseNotes: undefined,
+      financeCompanyFundedPortionMinor: undefined,
+      unfinancedPortionMinor: undefined,
+      dealerContributionMinor: undefined,
+      expectedDealerRemittanceMinor: undefined,
+      rawAppraisalGapMinor: undefined,
+      gapResolution: undefined,
+      customerGapShareMinor: undefined,
+      dealerGapShareMinor: undefined,
+      customerGapCashToDealerMinor: undefined,
+      customerGapInstallmentToDealerMinor: undefined,
+      customerGapToFinanceCompanyMinor: undefined,
+      gapResolvedAt: undefined,
+      gapResolvedBy: undefined,
+      gapResolutionNotes: undefined,
+      appraisalStatus: "COMPLETED",
+      handoverStatus: "BLOCKED",
+      updatedAt: Date.now(),
+    });
 
     return args.applicationId;
   },

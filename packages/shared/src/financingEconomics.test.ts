@@ -248,11 +248,37 @@ describe("resolveLtvBaseMinor", () => {
     ).toBe(jod(12_500));
   });
 
-  it("falls back to the approved amount when the named amount is missing", () => {
+  it("reports the base as unknown rather than substituting the approved amount", () => {
+    // Substituting reads as a safe fallback and is not one. A company that
+    // lends against the appraisal, approving manually with none on file, would
+    // have its funding computed against a larger basis — understating the
+    // dealership's own contribution with nothing to show the swap.
     const partial = { approvedPurchaseAmountMinor: jod(12_500) };
-    expect(resolveLtvBaseMinor("INDEPENDENT_APPRAISAL", partial)).toBe(jod(12_500));
-    expect(resolveLtvBaseMinor("LOWER_OF_APPRAISAL_AND_QUOTATION", partial)).toBe(jod(12_500));
+    expect(resolveLtvBaseMinor("INDEPENDENT_APPRAISAL", partial)).toBeUndefined();
+    expect(resolveLtvBaseMinor("SUBMITTED_QUOTATION", partial)).toBeUndefined();
+    // "Lower of two" needs both; with one it is whichever was recorded first.
+    expect(
+      resolveLtvBaseMinor("LOWER_OF_APPRAISAL_AND_QUOTATION", {
+        ...partial,
+        submittedQuotationMinor: jod(12_500),
+      })
+    ).toBeUndefined();
+    // The default basis needs nothing beyond the approved amount.
     expect(resolveLtvBaseMinor(undefined, partial)).toBe(jod(12_500));
+    expect(resolveLtvBaseMinor("APPROVED_PURCHASE_AMOUNT", partial)).toBe(jod(12_500));
+  });
+
+  it("flags when the LTV base exceeds what the company is buying at", () => {
+    const composition = computeFundingComposition({
+      approvedPurchaseAmountMinor: jod(11_500),
+      appliedLtvPercent: 100,
+      customerFirstPaymentMinor: 0,
+      ltvBaseMinor: jod(20_000),
+    });
+    // Arithmetically right, and almost certainly a misconfiguration worth
+    // showing someone rather than absorbing into a zero dealer contribution.
+    expect(composition.ltvBaseCapApplied).toBe(true);
+    expect(composition.dealerContributionMinor).toBe(0);
   });
 
   it("never funds more than the company is actually buying at", () => {
