@@ -178,7 +178,7 @@ export const backfillCommissionAccruals = internalMutation({
             amountMinor,
             currency,
             actorId,
-            occurredAt: await commissionAccountingDate(ctx, org._id, sale._id, sale.saleDate, now),
+            occurredAt: await commissionAccountingDate(ctx, org._id, sale._id, sale.saleDate),
           });
         }
       }

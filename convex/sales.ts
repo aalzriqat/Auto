@@ -1216,7 +1216,7 @@ export const markCommissionPaid = mutation({
           amountMinor,
           currency,
           actorId: user._id,
-          occurredAt: await commissionAccountingDate(ctx, args.orgId, args.saleId, sale.saleDate, now),
+          occurredAt: await commissionAccountingDate(ctx, args.orgId, args.saleId, sale.saleDate),
         });
         // The payment clears the payable, so everything that built it must
         // already be on the books. Without this the direct path could pay
@@ -1338,13 +1338,7 @@ export const setCommissionAmount = mutation({
         sale.commissionAmount == null ? 0 : toMinorUnits(sale.commissionAmount, currency);
       const nextMinor = toMinorUnits(args.commissionAmount, currency);
       const alreadyAccrued = await hasCommissionAccrual(ctx, args.orgId, args.saleId);
-      const accountingDate = await commissionAccountingDate(
-        ctx,
-        args.orgId,
-        args.saleId,
-        sale.saleDate,
-        Date.now()
-      );
+      const accountingDate = await commissionAccountingDate(ctx, args.orgId, args.saleId, sale.saleDate);
 
       const patch: {
         commissionAmount: number;
@@ -1549,13 +1543,7 @@ export const recalculateCommission = mutation({
       if (commissionAmount > 0) {
         const currency = await getOrgCurrency(ctx, args.orgId);
         const now = Date.now();
-        const accountingDate = await commissionAccountingDate(
-          ctx,
-          args.orgId,
-          args.saleId,
-          sale.saleDate,
-          now
-        );
+        const accountingDate = await commissionAccountingDate(ctx, args.orgId, args.saleId, sale.saleDate);
         // Same dependency as every other accrual path.
         await assertCommissionEntriesPosted(
           ctx,

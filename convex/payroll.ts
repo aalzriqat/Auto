@@ -1052,13 +1052,7 @@ export const approveRun = mutation({
             amountMinor: toMinorUnits(sale.commissionAmount, item.currency),
             currency: item.currency,
             actorId: user._id,
-            occurredAt: await commissionAccountingDate(
-              ctx,
-              args.orgId,
-              saleId,
-              sale.saleDate,
-              accrualDate
-            ),
+            occurredAt: await commissionAccountingDate(ctx, args.orgId, saleId, sale.saleDate),
           });
           commissionMinor += toMinorUnits(sale.commissionAmount, item.currency);
           liveSaleIds.push(saleId);

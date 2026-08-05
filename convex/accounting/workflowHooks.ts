@@ -16,7 +16,7 @@ import { postAccountingEvent, PostCommand } from "./postingEngine";
 import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
-import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts } from "../chartOfAccounts";
+import { isChartInitialized, ensureCommissionAccounts, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
   enqueuePendingReversal,
@@ -756,12 +756,28 @@ type CommissionHookArgs = {
   occurredAt: number;
 };
 
+/**
+ * Maps the commission accounts before a commission entry tries to resolve them.
+ * Scoped to the commission hooks (like ensurePayrollAccountsIfChartReady) rather
+ * than added to the shared choke point, since only these events touch them.
+ */
+async function ensureCommissionAccountsIfChartReady(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  if (await isChartInitialized(ctx, orgId)) {
+    await ensureCommissionAccounts(ctx, orgId, actorId);
+  }
+}
+
 function makeCommissionHook(
   eventType: "COMMISSION_ACCRUED" | "COMMISSION_PAID",
   sourceIdPrefix: string,
   keyPrefix: string
 ) {
   return async (ctx: MutationCtx, args: CommissionHookArgs) => {
+    await ensureCommissionAccountsIfChartReady(ctx, args.orgId, args.actorId);
     const payload: Record<string, unknown> = {
       saleId: args.saleId.toString(),
       amountMinor: args.amountMinor,
@@ -811,6 +827,7 @@ export async function hookCommissionAdjusted(
     occurredAt: number;
   }
 ) {
+  await ensureCommissionAccountsIfChartReady(ctx, args.orgId, args.actorId);
   await postDomainEvent(ctx, {
     orgId: args.orgId,
     eventType: "COMMISSION_ADJUSTED",
@@ -860,26 +877,35 @@ export async function commissionAccountingDate(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
   saleId: Id<"sales">,
-  saleDate: number,
-  now: number
+  saleDate: number
 ): Promise<number> {
-  if (!(await isChartInitialized(ctx, orgId))) return saleDate;
-  // Third exception, and the one the outbox cannot cover on its own: while the
-  // SALE'S OWN entry is still unposted, the commission must share its date so
-  // the two travel together. The sale is dated at saleDate with no fallback, so
-  // moving only the commission forward posts expense into an open period while
-  // the revenue and COGS behind it sit in a closed one — or dead-letter. The
-  // drain guard refuses that ordering, but only for entries that go through the
-  // queue; an entry that posts immediately never reaches it.
-  const salePosting = await ctx.db
-    .query("pendingAccountingEvents")
-    .withIndex("by_org_idempotency", (q) =>
-      q.eq("orgId", orgId).eq("idempotencyKey", `sale_completed_${saleId}`)
-    )
-    .filter((q) => q.neq(q.field("status"), "POSTED"))
-    .first();
-  if (salePosting) return salePosting.accountingDate;
-  return (await getOpenPeriodForDate(ctx, orgId, saleDate)) ? saleDate : now;
+  // The sale's date, unconditionally — and that is the whole rule.
+  //
+  // This began as "sale date, or today if the sale's period is closed", to stop
+  // an accrual stranding in the outbox. Two things retired that fallback:
+  //
+  // 1. It was wrong. A commission belongs in the period that recognized the
+  //    revenue it was earned against, and SALE_COMPLETED has no such fallback —
+  //    so falling back moved the expense to a month the sale was not in, and
+  //    separated it from its own revenue. payroll.test.ts has asserted since
+  //    before this work that a commission for a closed month must wait for that
+  //    month rather than be recognized in a later one.
+  // 2. It was the last place callers could disagree. Payroll approval passed the
+  //    run's period end and the backfill passed wall-clock time, so a backlog
+  //    sale was recognized in whichever period first claimed the shared
+  //    idempotency key. Making every caller route through one function is not
+  //    enough while the function still takes an answer from them.
+  //
+  // The hazard the fallback guarded against is now covered where it belongs: the
+  // drain-side guards refuse to settle a commission whose accrual has not posted,
+  // so a queued accrual can no longer drive Commission Payable negative, and an
+  // unposted entry is a period-close blocker an accountant is shown rather than a
+  // silent stall. Queuing until the month opens is the designed behaviour, not a
+  // failure — it is exactly what the sale's own entry does.
+  //
+  // Kept as a function, and every caller kept on it, so the rule has one home
+  // if it ever needs to be conditional again.
+  return saleDate;
 }
 
 /** True while an entry for this key is still queued (captured but not posted). */
@@ -1277,6 +1303,7 @@ export const hookCommissionReversed = makeReversalHook<{ saleId: Id<"sales"> }>(
  * accrued at 100 and corrected to 150 would still owe 50 after cancellation.
  * Callers reverse sequences 1..commissionAdjustmentSeq; see reverseCommissionForSale.
  */
+/** Corrections resolve the same two accounts, so they self-heal them too. */
 export const hookCommissionAdjustmentReversed = makeReversalHook<{ saleId: Id<"sales">; sequence: number }>({
   eventType: "COMMISSION_ADJUSTED",
   sourceType: "sales",

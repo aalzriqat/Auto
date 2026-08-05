@@ -335,34 +335,55 @@ export async function drainPendingForOrg(
 
 // ─── Internal mutation (scheduler target) ─────────────────────────────────────
 
-/** Continuation passes, so a backlog larger than one batch cannot stall silently. */
+/** Pages per sweep, so a backlog larger than one batch cannot stall silently. */
 const MAX_DRAIN_PASSES = 40;
 
+/**
+ * Drains one PAGE and continues with a cursor until the org's PENDING rows are
+ * exhausted or the sweep budget runs out.
+ *
+ * Cursor, not "did we make progress". `drainPendingForOrg` always reads the
+ * OLDEST PENDING rows, and a held row stays PENDING — so a first batch that is
+ * entirely held meant no progress, no continuation, and every postable row
+ * behind it went unexamined however long it waited. Paging past them fixes
+ * that. It also fixes the mirror-image problem: counting failures as progress
+ * re-read the same rows on the next pass, so a batch of genuinely failing
+ * entries burned through MAX_ATTEMPTS in seconds and dead-lettered entries that
+ * a later retry would have posted. A cursor visits each row at most once per
+ * sweep, so one sweep costs each row exactly one attempt.
+ */
 export const drainPendingAccountingEvents = internalMutation({
   args: {
     orgId: v.id("organizations"),
     limit: v.optional(v.number()),
+    cursor: v.optional(v.string()),
     pass: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const limit = args.limit ?? 50;
-    const result = await drainPendingForOrg(ctx, args.orgId, limit);
+    const limit = Math.min(args.limit ?? 50, 200);
+    const page = await ctx.db
+      .query("pendingAccountingEvents")
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
+      .paginate({ cursor: args.cursor ?? null, numItems: limit });
 
-    // Reschedule while this pass did real work and filled its batch. A single
-    // drain read only the first 50 rows and stopped, so an organization whose
-    // backlog exceeded that — now ordinary, since every commission enqueues
-    // before a chart exists — needed an operator to press redrive repeatedly,
-    // with nothing telling them to. Held rows are excluded from "real work" on
-    // purpose: they are waiting on something else, so re-reading them would
-    // spin without progress.
+    const result = await drainEntries(ctx, page.page);
     const pass = args.pass ?? 0;
-    const progressed = result.posted + result.failed > 0;
-    if (progressed && result.posted + result.failed + result.held >= limit && pass < MAX_DRAIN_PASSES) {
+
+    console.log(
+      `[outbox-drain] org ${args.orgId} pass ${pass}: posted ${result.posted}, failed ${result.failed}, held ${result.held}`
+    );
+
+    if (!page.isDone && pass < MAX_DRAIN_PASSES) {
       await ctx.scheduler.runAfter(0, internal.accountingOutbox.drainPendingAccountingEvents, {
         orgId: args.orgId,
         limit,
+        cursor: page.continueCursor,
         pass: pass + 1,
       });
+    } else if (!page.isDone) {
+      console.warn(
+        `[outbox-drain] org ${args.orgId}: stopped after ${MAX_DRAIN_PASSES} passes with rows remaining`
+      );
     }
     return result;
   },
@@ -401,7 +422,14 @@ export const redrive = mutation({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
-    return drainPendingForOrg(ctx, args.orgId);
+    // Routed through the continuing drain, not a single batch: the operator
+    // pressing this button is the one case where "it stopped after 50 rows and
+    // said nothing" is least excusable.
+    const result = await drainPendingForOrg(ctx, args.orgId);
+    await ctx.scheduler.runAfter(0, internal.accountingOutbox.drainPendingAccountingEvents, {
+      orgId: args.orgId,
+    });
+    return result;
   },
 });
 

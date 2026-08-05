@@ -608,47 +608,41 @@ describe("the Commission Payable reconciliation follows the entries, not the liv
     expect(recon.isReconciled).toBe(true);
   });
 
-  test("a correction that posts into a later period is not counted against the earlier one", async () => {
-    // The regression this guards: the subledger side used to add the sale's
-    // CURRENT commissionAmount whenever its accrual was in the window. Once a
-    // correction can land in a later period than the accrual it corrects — which
-    // is exactly what happens when the sale's own period has since closed — that
-    // charges the whole corrected figure against a window whose GL holds only
-    // part of it, and reports a difference on books that are right. Closing a
-    // period requires acknowledging every warning verbatim, so a warning that
-    // fires on correct books is how people learn to click through real ones.
-    // Last year and this year, rather than two months of this one: whichever
-    // month the suite happens to run in, the older period never contains today,
-    // so closing it can never shut the period the correction has to post into.
+  test("a correction is always dated with the accrual it corrects, so no window can split them", async () => {
+    // Commission entries take the SALE's date, with no fallback — the same rule
+    // the sale's own entry uses. That is what makes the reconciliation's job
+    // possible: a correction can never land in a period its accrual is not in,
+    // so no reporting window can hold part of a commission and miss the rest.
+    //
+    // An earlier version of this rule moved an entry to the current period when
+    // the sale's own period had closed, which is exactly how a window came to
+    // hold 250 of a 400 commission. Both are now dated at the sale.
     const d = await seedDealer("recon_split", "MANUAL", { priorYearPeriod: true });
     const priorYear = new Date().getUTCFullYear() - 1;
+    const saleDate = Date.UTC(priorYear, 5, 15);
 
-    const oldSale = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    const oldSale = await completedSale(d, saleDate);
     await d.asAdmin.mutation(api.sales.setCommissionAmount, {
       orgId: d.orgId,
       saleId: oldSale,
       commissionAmount: 250,
     });
-    // The accrual landed in last year's period and posted.
-    expect(await commissionPayableMinor(d)).toBe(25_000);
-
-    await closePriorYearPeriod(d, priorYear);
-
-    // That period is shut, so the correction is recognized in the current open
-    // one instead of queueing behind a closed period forever.
     await d.asAdmin.mutation(api.sales.setCommissionAmount, {
       orgId: d.orgId,
       saleId: oldSale,
       commissionAmount: 400,
     });
-    expect(await commissionPayableMinor(d)).toBe(40_000);
 
+    const [accrual] = await accountingEventsFor(d, "COMMISSION_ACCRUED");
+    const [adjustment] = await accountingEventsFor(d, "COMMISSION_ADJUSTED");
+    expect(accrual?.accountingDate).toBe(saleDate);
+    expect(adjustment?.accountingDate).toBe(saleDate);
+
+    // Both sit in the prior year, so every window sees the whole 400 or none.
     const asOfPriorYear = await d.asAdmin.query(
       api.accountingReports.commissionPayableReconciliation,
       { orgId: d.orgId, toDate: Date.UTC(priorYear, 11, 31, 23, 59, 59, 999) }
     );
-    // That year's GL holds 250, and so must its subledger. Reading the live 400
-    // here reported a phantom 150 difference.
     expect(asOfPriorYear.isReconciled).toBe(true);
 
     const asOfNow = await d.asAdmin.query(
@@ -656,6 +650,7 @@ describe("the Commission Payable reconciliation follows the entries, not the liv
       { orgId: d.orgId }
     );
     expect(asOfNow.isReconciled).toBe(true);
+    expect(await commissionPayableMinor(d)).toBe(40_000);
   });
 });
 
@@ -869,18 +864,51 @@ describe("no commission entry may overtake the entries it depends on", () => {
     expect(sale?.commissionPaidAt ?? null).toBeNull();
   });
 
-  test("a correction refuses while the accrual it corrects is still queued", async () => {
-    const { d, saleId } = await accrualQueuedBehindAClosedPeriod("adjust_ahead");
+  test("a correction refuses while the accrual it corrects has dead-lettered", async () => {
+    // Since every commission entry now takes the sale's own date, a correction
+    // can no longer land in a period its accrual is not in — that whole class is
+    // closed by construction. What remains reachable is an accrual that has
+    // exhausted its retries: the period is open, so the correction WOULD post,
+    // while the accrual it reduces will never drain on its own. A downward
+    // correction alone is a naked debit to Commission Payable.
+    const d = await seedDealer("adjust_ahead");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 250,
+    });
+    // Replace the posted accrual with a dead-lettered one.
+    await d.t.run(async (ctx) => {
+      const accrual = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", d.orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first();
+      const lines = await ctx.db
+        .query("journalLines")
+        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", accrual!.journalEntryId!))
+        .collect();
+      for (const line of lines) await ctx.db.delete(line._id);
+      await ctx.db.delete(accrual!.journalEntryId!);
+      await ctx.db.delete(accrual!._id);
+      await ctx.db.insert("pendingAccountingEvents", {
+        orgId: d.orgId, kind: "POST", status: "FAILED",
+        idempotencyKey: `commission_accrued_${saleId}`,
+        accountingDate: Date.now(), actorId: d.userId, attempts: 10,
+        createdAt: Date.now(), eventType: "COMMISSION_ACCRUED", sourceType: "sales",
+        sourceId: `commission_${saleId}`, eventVersion: 1, occurredAt: Date.now(),
+        currency: "USD",
+        payload: { saleId, amountMinor: 25_000, currency: "USD", salespersonId: d.userId },
+      });
+    });
 
-    // A downward correction posting alone is a naked debit to Commission
-    // Payable — the accrual it reduces is not on the books yet.
     await expect(
       d.asAdmin.mutation(api.sales.setCommissionAmount, {
         orgId: d.orgId,
         saleId,
         commissionAmount: 100,
       })
-    ).rejects.toThrow(/hasn't posted to the ledger yet/i);
+    ).rejects.toThrow(/failed and needs to be retried/i);
 
     expect(await commissionPayableMinor(d)).toBe(0);
     expect(await d.t.run((ctx) => ctx.db.get(saleId))).toMatchObject({ commissionAmount: 250 });
