@@ -7,9 +7,11 @@ import {
   computeExpectedRemittance,
   computeFundingComposition,
   evaluateQuotationException,
+  resolveLtvBaseMinor,
   validateGapShares,
   type CustomerContributionSettlement,
   type DealerContributionSettlement,
+  type LtvBasis,
 } from "../../lib/financingEconomics";
 
 /**
@@ -306,7 +308,13 @@ export function buildRuleSnapshot(
   return {
     ruleVersion: company.ruleVersion ?? 1,
     companyName: company.name,
-    defaultLtvPercent: company.defaultLtvPercent ?? company.maxFinancingLTV,
+    // Deliberately NOT falling back to maxFinancingLTV. That reads as helpful
+    // and is fail-open: `FinanceCompanyDialog` writes `maxFinancingLTV: 100`
+    // for any company that never had one, so a company whose real rate is 85%
+    // would be quoted at 100% — funding the whole purchase and reporting a
+    // dealer contribution of zero where the confirmed deal needs 1,375.
+    // `resolveAppliedLtv` throws a clear, actionable error instead.
+    defaultLtvPercent: company.defaultLtvPercent,
     minimumLtvPercent: company.minimumLtvPercent,
     maximumLtvPercent: company.maxFinancingLTV,
     ltvBasis: company.ltvBasis ?? RULE_DEFAULTS.ltvBasis,
@@ -397,6 +405,10 @@ export function deriveEconomics(args: {
   appliedLtvPercent: number;
   customerFirstPaymentMinor: number;
   submittedQuotationMinor: number;
+  /** The company's rule for what its LTV multiplies. */
+  ltvBasis?: LtvBasis;
+  /** The approved appraisal, when the basis names it. */
+  independentAppraisalMinor?: number;
   dealerContributionSettlement: DealerContributionSettlement;
   customerContributionSettlement: CustomerContributionSettlement;
   customerContributionToFinanceCompanyMinor: number;
@@ -405,10 +417,21 @@ export function deriveEconomics(args: {
   dealerBorneExpensesMinor: number;
   vehicleCostMinor: number;
 }) {
+  // The snapshotted basis has to reach the arithmetic, not just sit in the
+  // snapshot: at 85% on a 12,500 approval against an 11,500 appraisal, an
+  // appraisal basis funds 9,775 where an approved-amount basis funds 10,625 —
+  // an 850 difference in what the dealership has to put in.
+  const ltvBaseMinor = resolveLtvBaseMinor(args.ltvBasis, {
+    approvedPurchaseAmountMinor: args.approvedDealerPurchaseAmountMinor,
+    submittedQuotationMinor: args.submittedQuotationMinor,
+    independentAppraisalMinor: args.independentAppraisalMinor,
+  });
+
   const composition = computeFundingComposition({
     approvedPurchaseAmountMinor: args.approvedDealerPurchaseAmountMinor,
     appliedLtvPercent: args.appliedLtvPercent,
     customerFirstPaymentMinor: args.customerFirstPaymentMinor,
+    ltvBaseMinor,
   });
 
   const gap = computeAppraisalGap({
@@ -460,6 +483,75 @@ export function assertGapResolutionValid(
 }
 
 export { classifyGapResolution, evaluateQuotationException };
+
+// ---------------------------------------------------------------------------
+// Keeping the dimensions in step with the legacy status
+// ---------------------------------------------------------------------------
+
+/**
+ * The shape the dimension derivations need — a real application row, or the
+ * fields the migration is about to write.
+ */
+export interface LifecycleFacts {
+  status: Doc<"financeApplications">["status"];
+  vehicleHandoverAt?: number;
+  finalizedSaleId?: unknown;
+  disbursedAt?: number;
+}
+
+/**
+ * The credit decision a legacy status is really carrying.
+ *
+ * One source of truth for the mapping, shared by the migration and by every
+ * mutation that moves `status`. Duplicating it would guarantee the two drift,
+ * and a dimension that disagrees with the status it was derived from is worse
+ * than no dimension at all.
+ *
+ * CLOSED maps to APPROVED rather than a terminal value of its own: closing is
+ * what `finalizeDeal` does *after* credit was approved, so the credit
+ * dimension's value is APPROVED and it is settlement and handover that record
+ * the deal completing.
+ */
+export function creditDecisionForStatus(
+  status: Doc<"financeApplications">["status"]
+): NonNullable<CreditDecision> {
+  switch (status) {
+    case "DRAFT":
+      return "DRAFT";
+    case "PENDING_DOCS":
+      return "SUBMITTED";
+    case "UNDER_REVIEW":
+      return "UNDER_REVIEW";
+    case "APPROVED":
+    case "CLOSED":
+      return "APPROVED";
+    case "REJECTED":
+      return "REJECTED";
+    case "CANCELLED":
+      return "CANCELLED";
+  }
+}
+
+/** Whether the vehicle can be, or already has been, handed to the customer. */
+export function handoverStatusForFacts(facts: LifecycleFacts): NonNullable<HandoverStatus> {
+  if (facts.vehicleHandoverAt) return "HANDED_OVER";
+  return facts.status === "APPROVED" ? "READY" : "BLOCKED";
+}
+
+/**
+ * How far the money has got.
+ *
+ * `FULLY_SETTLED` records that a disbursement was confirmed — a real event with
+ * a real timestamp. It asserts nothing about the amount being right, which is
+ * why the migration also flags legacy disbursed rows for reconciliation.
+ */
+export function settlementStatusForFacts(
+  facts: LifecycleFacts
+): NonNullable<SettlementStatus> {
+  if (facts.disbursedAt) return "FULLY_SETTLED";
+  if (facts.finalizedSaleId) return "EXPECTED";
+  return "NOT_READY";
+}
 
 /**
  * Who ends up bearing the appraisal fee when a deal dies.

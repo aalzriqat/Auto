@@ -18,6 +18,7 @@ export {
   computeExpectedRemittance,
   computeDealerProceeds,
   evaluateQuotationException,
+  resolveLtvBaseMinor,
   reconcileEmployeeCustody,
   reconcileSettlement,
 } from "@autoflow/shared/financingEconomics";
@@ -39,6 +40,8 @@ export type {
   DealerProceeds,
   QuotationExceptionInput,
   QuotationExceptionEvaluation,
+  LtvBasis,
+  LtvBaseAmounts,
   CustodyReconciliationInput,
   CustodyReconciliation,
   SettlementReconciliationInput,

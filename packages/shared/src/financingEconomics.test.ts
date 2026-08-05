@@ -8,6 +8,7 @@ import {
   computeFundingComposition,
   computeSubmittedQuotation,
   evaluateQuotationException,
+  resolveLtvBaseMinor,
   reconcileEmployeeCustody,
   reconcileSettlement,
   validateGapShares,
@@ -94,6 +95,31 @@ describe("computeFundingComposition", () => {
     expect(composition.dealerContributionMinor).toBe(0);
   });
 
+  it("rounds a fractional LTV exactly half-up, not through binary floating point", () => {
+    // 250 × 64.6% is exactly 161.5, so half-up is 162. The float product is
+    // 16149.999999999998, and the previous `Math.floor(x / 100 + 0.5)` returned
+    // 161 — with the lost unit silently reappearing in the dealer's
+    // contribution, so the sum invariant still held and nothing failed loudly.
+    const composition = computeFundingComposition({
+      approvedPurchaseAmountMinor: 250,
+      appliedLtvPercent: 64.6,
+      customerFirstPaymentMinor: 0,
+    });
+    expect(composition.financeCompanyFundedPortionMinor).toBe(162);
+    expect(composition.dealerContributionMinor).toBe(88);
+  });
+
+  it("does not round an exact product up", () => {
+    // 12,500 at 85% is exactly 10,625 — half-up must leave it alone.
+    expect(
+      computeFundingComposition({
+        approvedPurchaseAmountMinor: jod(12_500),
+        appliedLtvPercent: 85,
+        customerFirstPaymentMinor: 0,
+      }).financeCompanyFundedPortionMinor
+    ).toBe(jod(10_625));
+  });
+
   it("rejects decimal major-unit amounts rather than silently rounding them", () => {
     expect(() =>
       computeFundingComposition({
@@ -152,6 +178,19 @@ describe("computeSubmittedQuotation", () => {
     }
   });
 
+  it("does not quote a minor unit more than the division exactly requires", () => {
+    // 82 ÷ 65.6% is exactly 125. The float quotient is 125.00000000000001 and
+    // the previous Math.ceil returned 126, quoting the finance company one
+    // minor unit above what the dealership actually needed.
+    const suggestion = computeSubmittedQuotation({
+      targetNetProceedsMinor: 82,
+      estimatedExpensesMinor: 0,
+      customerFirstPaymentMinor: 0,
+      appliedLtvPercent: 65.6,
+    });
+    expect(suggestion.submittedQuotationMinor).toBe(125);
+  });
+
   it("quotes target plus expenses when the customer already covers the unfinanced slice", () => {
     const suggestion = computeSubmittedQuotation({
       targetNetProceedsMinor: jod(10_000),
@@ -164,6 +203,70 @@ describe("computeSubmittedQuotation", () => {
     expect(suggestion.submittedQuotationMinor).toBe(jod(10_500));
     expect(suggestion.composition.dealerContributionMinor).toBe(0);
     expect(suggestion.projectedNetProceedsMinor).toBe(jod(10_000));
+  });
+});
+
+describe("resolveLtvBaseMinor", () => {
+  const amounts = {
+    approvedPurchaseAmountMinor: jod(12_500),
+    submittedQuotationMinor: jod(12_500),
+    independentAppraisalMinor: jod(11_500),
+  };
+
+  it("applies the LTV to what the company's rule actually names", () => {
+    expect(resolveLtvBaseMinor("APPROVED_PURCHASE_AMOUNT", amounts)).toBe(jod(12_500));
+    expect(resolveLtvBaseMinor("INDEPENDENT_APPRAISAL", amounts)).toBe(jod(11_500));
+    expect(resolveLtvBaseMinor("SUBMITTED_QUOTATION", amounts)).toBe(jod(12_500));
+    expect(resolveLtvBaseMinor("LOWER_OF_APPRAISAL_AND_QUOTATION", amounts)).toBe(jod(11_500));
+  });
+
+  it("changes the dealer contribution by the full 850 the basis is worth", () => {
+    // The whole reason the basis cannot be stored and ignored: an appraisal
+    // basis funds 9,775 where an approved-amount basis funds 10,625.
+    const onApproved = computeFundingComposition({
+      approvedPurchaseAmountMinor: jod(12_500),
+      appliedLtvPercent: 85,
+      customerFirstPaymentMinor: jod(500),
+      ltvBaseMinor: resolveLtvBaseMinor("APPROVED_PURCHASE_AMOUNT", amounts),
+    });
+    const onAppraisal = computeFundingComposition({
+      approvedPurchaseAmountMinor: jod(12_500),
+      appliedLtvPercent: 85,
+      customerFirstPaymentMinor: jod(500),
+      ltvBaseMinor: resolveLtvBaseMinor("INDEPENDENT_APPRAISAL", amounts),
+    });
+
+    expect(onApproved.financeCompanyFundedPortionMinor).toBe(jod(10_625));
+    expect(onAppraisal.financeCompanyFundedPortionMinor).toBe(jod(9_775));
+    expect(onAppraisal.dealerContributionMinor - onApproved.dealerContributionMinor).toBe(
+      jod(850)
+    );
+    expect(
+      onAppraisal.financeCompanyFundedPortionMinor +
+        onAppraisal.customerFirstPaymentAppliedMinor +
+        onAppraisal.dealerContributionMinor
+    ).toBe(jod(12_500));
+  });
+
+  it("falls back to the approved amount when the named amount is missing", () => {
+    const partial = { approvedPurchaseAmountMinor: jod(12_500) };
+    expect(resolveLtvBaseMinor("INDEPENDENT_APPRAISAL", partial)).toBe(jod(12_500));
+    expect(resolveLtvBaseMinor("LOWER_OF_APPRAISAL_AND_QUOTATION", partial)).toBe(jod(12_500));
+    expect(resolveLtvBaseMinor(undefined, partial)).toBe(jod(12_500));
+  });
+
+  it("never funds more than the company is actually buying at", () => {
+    // Quotation basis after a lower approval: 12,500 × 100% exceeds the 11,500
+    // the company is paying, which would drive the unfinanced slice negative.
+    const composition = computeFundingComposition({
+      approvedPurchaseAmountMinor: jod(11_500),
+      appliedLtvPercent: 100,
+      customerFirstPaymentMinor: 0,
+      ltvBaseMinor: jod(12_500),
+    });
+    expect(composition.financeCompanyFundedPortionMinor).toBe(jod(11_500));
+    expect(composition.unfinancedPortionMinor).toBe(0);
+    expect(composition.dealerContributionMinor).toBe(0);
   });
 });
 

@@ -21,7 +21,12 @@ import {
 } from "./accounting/workflowHooks";
 import { toMinorUnits, assertValidMinorAmount } from "./utils/money";
 import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
-import { buildRuleSnapshot, type FinanceCompanyRuleSnapshot } from "./utils/financingEconomics";
+import {
+  buildRuleSnapshot,
+  creditDecisionForStatus,
+  handoverStatusForFacts,
+  type FinanceCompanyRuleSnapshot,
+} from "./utils/financingEconomics";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
@@ -582,11 +587,19 @@ export const updateStatus = mutation({
     }
 
     const patchedAt = Date.now();
+    const nextFacts = { ...app, status: args.status };
     await ctx.db.patch(args.applicationId, {
       status: args.status,
       updatedAt: patchedAt,
       approvedBy,
       approvedAt,
+      // The dimensions have to move with the status that drives them. Setting
+      // them once at creation and never again left a normally-completed deal
+      // reading creditDecision=SUBMITTED and handoverStatus=BLOCKED forever,
+      // with the backfill skipping it because creditDecision was already set —
+      // a wrong value is harder to find than a missing one.
+      creditDecision: creditDecisionForStatus(args.status),
+      handoverStatus: handoverStatusForFacts(nextFacts),
     });
 
     await ctx.db.insert("applicationStatusLog", {
@@ -739,6 +752,13 @@ export const cancelApplication = mutation({
           cancelledBy: auth.user._id,
           cancelledAt: now,
           cancellationReason: args.reason,
+          creditDecision: "CANCELLED",
+          // This branch has already reversed the sale and voided the
+          // finance-company receivable, so nothing is expected any more. The
+          // handover timestamp is deliberately left alone — the vehicle
+          // physically went to the customer and later came back, and erasing
+          // that is not the same as reversing it.
+          settlementStatus: "NOT_READY",
         });
 
         await ctx.db.insert("applicationStatusLog", {
@@ -824,6 +844,7 @@ export const registerVehicleHandover = mutation({
       vehicleHandoverAt: now,
       vehicleHandoverBy: user._id,
       vehicleHandoverNotes: args.notes,
+      handoverStatus: "HANDED_OVER",
       updatedAt: now,
     });
     return now;
@@ -974,6 +995,11 @@ export const finalizeDeal = mutation({
           finalizedSaleId: saleId,
           finalizationIdempotencyKey: args.idempotencyKey,
           updatedAt: now,
+          // Credit stays APPROVED — CLOSED is the sale being created, not a
+          // change of decision. What moves is settlement: from here the
+          // finance company owes the dealership money.
+          creditDecision: "APPROVED",
+          settlementStatus: "EXPECTED",
         });
 
         // Post the finance receivable transfer when a finance company is on the deal
@@ -1102,6 +1128,11 @@ export const confirmDisbursement = mutation({
           disbursedAmountMinor: args.disbursedAmountMinor,
           disbursementIdempotencyKey: args.idempotencyKey,
           updatedAt: now,
+          // This mutation still accepts a single full receipt only, so
+          // confirming it settles the deal outright. Partial and repeated
+          // receipts, and the actualDealerReceiptTotalMinor they roll up into,
+          // arrive with the settlement-line work.
+          settlementStatus: "FULLY_SETTLED",
         });
 
         if (chequeToClear) {

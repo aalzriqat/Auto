@@ -78,33 +78,136 @@ function assertLtvPercent(ltvPercent: number): void {
 }
 
 /**
- * Half-up rounding on a non-negative rational, in minor units.
+ * Decimal places kept when a percentage is pinned to an exact integer.
  *
- * Deliberately not `Math.round`, which is half-away-from-zero on positives but
- * half-*up* on negatives (`Math.round(-0.5) === -0`), and not banker's rounding.
- * Every amount here is non-negative, and half-up is what a dealership expects
- * when it checks the arithmetic by hand.
+ * Six is far beyond any real LTV or tolerance a finance company quotes, and
+ * small enough that the products below stay well inside BigInt's comfortable
+ * range.
  */
-function roundHalfUp(numerator: number, denominator: number): number {
-  const result = Math.floor(numerator / denominator + 0.5);
-  if (!Number.isSafeInteger(result)) {
-    throw new FinancingEconomicsError("Rounded amount overflows safe integer range.");
+const PERCENT_SCALE = BigInt(1_000_000);
+/** Denominator for `amount × percent`: 100 (the percent) × PERCENT_SCALE. */
+const PERCENT_DENOMINATOR = BigInt(100) * PERCENT_SCALE;
+// Written as calls rather than `0n`/`1n`/`2n`: the app's root tsconfig targets
+// ES2017, where BigInt *literals* are a syntax error, while the BigInt global
+// itself is typed through `lib: esnext` and available everywhere this runs.
+const ZERO = BigInt(0);
+const ONE = BigInt(1);
+const TWO = BigInt(2);
+
+/**
+ * Pins a human percentage to an exact scaled integer.
+ *
+ * `85` and `64.6` are decimal quantities a person typed, but neither survives
+ * binary floating point intact — `250 * 64.6` evaluates to 16149.999999999998,
+ * not 16150. Rounding the float to six decimals recovers the value that was
+ * actually meant, once, at the boundary; every calculation downstream is exact
+ * integer arithmetic on the result.
+ */
+function toScaledPercent(percent: number): bigint {
+  const scaled = Math.round(percent * Number(PERCENT_SCALE));
+  if (!Number.isSafeInteger(scaled)) {
+    throw new FinancingEconomicsError(`Percentage ${percent} cannot be represented exactly.`);
   }
-  return result;
+  return BigInt(scaled);
 }
 
-/** Ceiling division on non-negative integers, in minor units. */
-function divideCeil(numerator: number, denominator: number): number {
-  const result = Math.ceil(numerator / denominator);
-  if (!Number.isSafeInteger(result)) {
-    throw new FinancingEconomicsError("Computed amount overflows safe integer range.");
+function fromBigInt(value: bigint, label: string): number {
+  if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(-Number.MAX_SAFE_INTEGER)) {
+    throw new FinancingEconomicsError(`${label} overflows safe integer range.`);
   }
-  return result;
+  return Number(value);
+}
+
+/**
+ * `amount × percent`, rounded half-up, exactly.
+ *
+ * Deliberately not `Math.floor(x / y + 0.5)` on floating-point operands, which
+ * is what this used to be: for 250 minor units at 64.6% the true product is
+ * 161.5 and half-up gives 162, but the float product lands a hair below 16150
+ * and the result came out 161. The composition still summed to the approved
+ * amount — the lost unit silently moved to the dealer's contribution — so
+ * nothing failed loudly. That is the worst shape a money bug can have.
+ *
+ * Half-up rather than banker's rounding, and every operand here is
+ * non-negative, so `floor((2n + d) / 2d)` is the whole rule.
+ */
+function percentOf(amountMinor: number, percent: number): number {
+  const numerator = BigInt(amountMinor) * toScaledPercent(percent);
+  const rounded = (TWO * numerator + PERCENT_DENOMINATOR) / (TWO * PERCENT_DENOMINATOR);
+  return fromBigInt(rounded, "Rounded amount");
+}
+
+/**
+ * The smallest amount whose `percent` share covers `amountMinor`, exactly.
+ *
+ * Same floating-point hazard in the other direction: 82 ÷ 65.6% is exactly 125,
+ * but the float quotient is 125.00000000000001 and `Math.ceil` returned 126 —
+ * quoting the finance company one minor unit more than the dealership needed,
+ * every time the division happened to land just above an integer.
+ */
+function divideByPercentCeil(amountMinor: number, percent: number): number {
+  const scaledPercent = toScaledPercent(percent);
+  if (scaledPercent <= ZERO) {
+    throw new FinancingEconomicsError("Cannot divide by a non-positive percentage.");
+  }
+  const numerator = BigInt(amountMinor) * PERCENT_DENOMINATOR;
+  // Ceiling division on non-negative integers.
+  const result = (numerator + scaledPercent - ONE) / scaledPercent;
+  return fromBigInt(result, "Computed amount");
 }
 
 // ---------------------------------------------------------------------------
 // Funding composition
 // ---------------------------------------------------------------------------
+
+/** What a finance company's LTV percentage is applied to. */
+export type LtvBasis =
+  | "INDEPENDENT_APPRAISAL"
+  | "SUBMITTED_QUOTATION"
+  | "APPROVED_PURCHASE_AMOUNT"
+  | "LOWER_OF_APPRAISAL_AND_QUOTATION";
+
+export interface LtvBaseAmounts {
+  approvedPurchaseAmountMinor: number;
+  submittedQuotationMinor?: number;
+  independentAppraisalMinor?: number;
+}
+
+/**
+ * The amount a company's LTV percentage actually multiplies.
+ *
+ * Companies differ, and the difference is real money: at 85% on an approval of
+ * 12,500 against an appraisal of 11,500, an APPROVED_PURCHASE_AMOUNT basis
+ * funds 10,625 while an INDEPENDENT_APPRAISAL basis funds 9,775 — an 850
+ * swing in what the dealership has to contribute. Storing the basis and then
+ * always using the approved amount, as this did, makes the setting decorative.
+ *
+ * Falls back to the approved purchase amount whenever the configured basis
+ * refers to an amount that has not been recorded yet. That is the conservative
+ * direction: it is the figure the company has actually committed to.
+ */
+export function resolveLtvBaseMinor(
+  basis: LtvBasis | undefined,
+  amounts: LtvBaseAmounts
+): number {
+  const approved = amounts.approvedPurchaseAmountMinor;
+  switch (basis) {
+    case "INDEPENDENT_APPRAISAL":
+      return amounts.independentAppraisalMinor ?? approved;
+    case "SUBMITTED_QUOTATION":
+      return amounts.submittedQuotationMinor ?? approved;
+    case "LOWER_OF_APPRAISAL_AND_QUOTATION": {
+      const candidates = [
+        amounts.independentAppraisalMinor,
+        amounts.submittedQuotationMinor,
+      ].filter((value): value is number => value !== undefined);
+      return candidates.length > 0 ? Math.min(...candidates) : approved;
+    }
+    case "APPROVED_PURCHASE_AMOUNT":
+    default:
+      return approved;
+  }
+}
 
 export interface FundingCompositionInput {
   /** What the financing company will actually buy the vehicle at. */
@@ -113,6 +216,11 @@ export interface FundingCompositionInput {
   appliedLtvPercent: number;
   /** What the customer pays toward the purchase amount, whoever receives it. */
   customerFirstPaymentMinor: number;
+  /**
+   * What the LTV multiplies, when the company's rule is not "the approved
+   * purchase amount". Defaults to the approved amount.
+   */
+  ltvBaseMinor?: number;
 }
 
 export interface FundingComposition {
@@ -147,9 +255,17 @@ export function computeFundingComposition(
   assertNonNegativeMinor(input.approvedPurchaseAmountMinor, "Approved purchase amount");
   assertNonNegativeMinor(input.customerFirstPaymentMinor, "Customer first payment");
   assertLtvPercent(input.appliedLtvPercent);
+  if (input.ltvBaseMinor !== undefined) {
+    assertNonNegativeMinor(input.ltvBaseMinor, "LTV base amount");
+  }
 
   const approved = input.approvedPurchaseAmountMinor;
-  const maximumFundableMinor = roundHalfUp(approved * input.appliedLtvPercent, 100);
+  const ltvBase = input.ltvBaseMinor ?? approved;
+  // Capped at the approved amount: a base larger than what the company is
+  // actually buying at (an LTV applied to the submitted quotation after a lower
+  // approval, say) would otherwise compute a funded portion exceeding the whole
+  // purchase and drive the unfinanced slice negative.
+  const maximumFundableMinor = Math.min(percentOf(ltvBase, input.appliedLtvPercent), approved);
   const unfinancedPortionMinor = approved - maximumFundableMinor;
 
   const customerFirstPaymentAppliedMinor = Math.min(input.customerFirstPaymentMinor, approved);
@@ -251,7 +367,7 @@ export function computeSubmittedQuotation(
   // (Still routed through the composition below, which will show the customer
   // covering the unfinanced slice outright.)
   const financedCase =
-    required > 0 ? divideCeil(required * 100, input.appliedLtvPercent) : 0;
+    required > 0 ? divideByPercentCeil(required, input.appliedLtvPercent) : 0;
   const cashCase = input.targetNetProceedsMinor + input.estimatedExpensesMinor;
 
   // Pick the branch whose own precondition holds. In the financed branch the
@@ -340,8 +456,8 @@ export function computeAppraisalGap(input: AppraisalGapInput): AppraisalGap {
   );
 
   const fundingReductionMinor =
-    roundHalfUp(input.submittedQuotationMinor * input.appliedLtvPercent, 100) -
-    roundHalfUp(input.approvedDealerPurchaseAmountMinor * input.appliedLtvPercent, 100);
+    percentOf(input.submittedQuotationMinor, input.appliedLtvPercent) -
+    percentOf(input.approvedDealerPurchaseAmountMinor, input.appliedLtvPercent);
 
   return {
     rawAppraisalGapMinor,
@@ -627,12 +743,21 @@ export function evaluateQuotationException(
     return { shortfallPercent: 0, eligible: false, reason: "NO_SHORTFALL" };
   }
 
+  // Reported for display, so a float is fine here.
   const shortfallPercent = (shortfallMinor * 100) / input.submittedQuotationMinor;
 
   if (!input.allowsQuotationAboveAppraisal) {
     return { shortfallPercent, eligible: false, reason: "NOT_ALLOWED" };
   }
-  if (shortfallPercent > input.lowerAppraisalTolerancePercent) {
+  // The decision, though, is exact. Comparing the float percentage against the
+  // tolerance would let an appraisal exactly on the boundary fall either side
+  // depending on which decimals happened to survive the division — and that
+  // boundary is the difference between a deal the company will fund and one it
+  // will not. Cross-multiplied: shortfall/quotation > tolerance/100.
+  const outsideTolerance =
+    BigInt(shortfallMinor) * PERCENT_DENOMINATOR >
+    BigInt(input.submittedQuotationMinor) * toScaledPercent(input.lowerAppraisalTolerancePercent);
+  if (outsideTolerance) {
     return { shortfallPercent, eligible: false, reason: "OUTSIDE_TOLERANCE" };
   }
   return { shortfallPercent, eligible: true };

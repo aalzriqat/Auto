@@ -142,6 +142,35 @@ An advance that does not reconcile cannot be closed.
 Integer minor units everywhere new. `convex/utils/money.ts` already scales JOD/
 KWD/BHD/OMR at 3 and the rest at 2 — do not hardcode ×1000.
 
+## Migration runbook
+
+`backfillFinancingEconomics` is an `internalMutation` with no cron — it must be
+run by hand, once per deployment, **immediately after the deploy**:
+
+```bash
+npx convex run --prod migrateFinancingEconomics:backfillFinancingEconomics '{}'
+```
+
+It self-schedules: companies first (so every one has a rule version to point
+at), then applications, 50 rows a page. Re-running is safe — applications are
+keyed on `creditDecision` being unset and companies on their version row
+existing.
+
+Until it runs, existing finance companies have no `financeCompanyRuleVersions`
+row, so `applications.createFromQuote` leaves `companyRuleVersionId` undefined
+on new applications. The inline `companyRuleSnapshot` still carries the terms,
+so nothing is lost, but the audit link back to the immutable version is missing.
+
+Afterwards, work the queue:
+
+```bash
+npx convex data --prod financeApplications | grep needsFinancingReconciliation
+```
+
+Every flagged row needs its approved purchase amount, applied LTV and actual
+receipt re-entered by someone who knows the deal. The flag is never cleared
+automatically.
+
 ## PR breakdown
 
 1. **Domain model and calculations** — shared pure calc module, rule versioning

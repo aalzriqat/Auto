@@ -237,7 +237,6 @@ export const updateCompany = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireOwner(ctx, args.orgId);
-    assertDealerRulesValid(args);
     const { id, orgId, ...updates } = args;
 
     const existing = await ctx.db.get(id);
@@ -266,6 +265,28 @@ export const updateCompany = mutation({
         .map((key) => [key, updates[key]])
     );
     for (const key of dealerRuleKeys) delete updates[key];
+
+    // Validate the EFFECTIVE merged rules, not the caller's arguments.
+    // Validating the arguments alone let a partial update persist an
+    // impossible company: lowering maxFinancingLTV to 70 while an existing
+    // minimum of 80 was preserved passed every check on the way in, then
+    // produced a snapshot no LTV could ever satisfy — and every subsequent
+    // quote for that company failed with an error about the deal.
+    // Read from `args` rather than the erased `presentDealerRules` record so
+    // each field keeps its own type instead of the union of all of them.
+    const effectiveRules: DealerRuleArgs = {
+      defaultLtvPercent: args.defaultLtvPercent ?? existing.defaultLtvPercent,
+      minimumLtvPercent: args.minimumLtvPercent ?? existing.minimumLtvPercent,
+      maxFinancingLTV: args.maxFinancingLTV ?? existing.maxFinancingLTV,
+      minimumCustomerFirstPaymentMinor:
+        args.minimumCustomerFirstPaymentMinor ?? existing.minimumCustomerFirstPaymentMinor,
+      allowedAppraisalVariancePercent:
+        args.allowedAppraisalVariancePercent ?? existing.allowedAppraisalVariancePercent,
+      lowerAppraisalTolerancePercent:
+        args.lowerAppraisalTolerancePercent ?? existing.lowerAppraisalTolerancePercent,
+      feeTemplates: args.feeTemplates ?? existing.feeTemplates,
+    };
+    assertDealerRulesValid(effectiveRules);
 
     const rulesChanged = dealerRuleKeys.some(
       (key) =>
