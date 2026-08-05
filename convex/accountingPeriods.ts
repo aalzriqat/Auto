@@ -15,6 +15,7 @@ import {
   computeSupplierPayablesReconciliation,
   computeCustomerDepositsReconciliation,
   computeCommissionPayableReconciliation,
+  computeCommissionRecognitionDivergence,
   computePrepaidRecognitionShortfall,
   GlVsSubledgerResult,
 } from "./accountingReports";
@@ -363,7 +364,7 @@ async function computeCloseChecklist(
   // on them produced false close-blockers, so they are surfaced as warnings the
   // accountant reviews, not blockers. Independent read-only computations, so
   // run them concurrently rather than five sequential round-trips.
-  const [arReconciliation, vehicleInventoryRecon, supplierPayablesRecon, customerDepositsRecon, commissionPayableRecon, prepaidRecognitionShortfall] =
+  const [arReconciliation, vehicleInventoryRecon, supplierPayablesRecon, customerDepositsRecon, commissionPayableRecon, prepaidRecognitionShortfall, commissionRecognitionDivergence] =
     await Promise.all([
       computeSubledgerReconciliation(ctx, orgId, period.endDate),
       computeVehicleInventoryReconciliation(ctx, orgId, period.endDate),
@@ -371,6 +372,7 @@ async function computeCloseChecklist(
       computeCustomerDepositsReconciliation(ctx, orgId, period.endDate),
       computeCommissionPayableReconciliation(ctx, orgId, period.endDate),
       computePrepaidRecognitionShortfall(ctx, orgId, period.endDate),
+      computeCommissionRecognitionDivergence(ctx, orgId),
     ]);
 
   const blockers: string[] = [];
@@ -431,6 +433,17 @@ async function computeCloseChecklist(
     // acknowledging every warning verbatim, and a line that fires on every
     // close teaches people to click through the ones that matter.
     warnings.push(`Commission payable subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
+  }
+  if (commissionRecognitionDivergence.saleCount > 0) {
+    // The reconciliation above compares the GL against amounts derived from the
+    // same posted entries, so it cannot see a commission recognized at the
+    // wrong figure — both sides would be wrong together and agree. This is the
+    // independent check: what the ledger recognized versus what was actually
+    // decided on the sale. Sales with an entry still in the outbox are excluded,
+    // since unposted events are already a blocker above.
+    warnings.push(
+      `${commissionRecognitionDivergence.saleCount} unpaid commission(s) are recognized in the ledger at a different amount than the sale records. Review before closing.`
+    );
   }
 
   return {

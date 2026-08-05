@@ -296,12 +296,20 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // reached by walking `financeCompanies.by_org` from that same `orgId`, so no
   // document id is caller-supplied and there is nothing for a caller to point
   // elsewhere.
+  // Then 439→440 / skippedNoOrgId 143→144 by one mutation, with `analysed`
+  // deliberately unchanged at 287:
+  //
+  // `migrateCommissionAccruals.backfillCommissionAccruals` accrues the
+  // commission backlog left by the move to earned-time recognition. It is an
+  // internalMutation that walks every organization by pagination and takes no
+  // `orgId` at all — there is no caller and no caller-supplied id — so it is
+  // correctly outside the analysed surface rather than exempted from it.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 439,
+      totalMutations: 440,
       analysed: 287,
       skippedNoArgsBlock: 9,
-      skippedNoOrgId: 143,
+      skippedNoOrgId: 144,
     });
   });
 });

@@ -655,19 +655,18 @@ export const cancelApplication = mutation({
                   actorId: auth.user._id,
                   reversalDate: now,
                 });
-                if (sale.commissionAmount != null && sale.commissionAmount > 0) {
-                  // Accrual plus every correction posted against it — the same
-                  // entry point sales.update's cancellation uses, so the two
-                  // void paths cannot drift apart.
-                  await reverseCommissionForSale(ctx, {
-                    orgId: args.orgId,
-                    saleId: sale._id,
-                    adjustmentSeq: sale.commissionAdjustmentSeq ?? 0,
-                    reason,
-                    actorId: auth.user._id,
-                    reversalDate: now,
-                  });
-                }
+                // Accrual plus every correction posted against it, called
+                // unconditionally for the same reason sales.update's
+                // cancellation does — it is the same entry point, so the two
+                // void paths cannot drift apart.
+                await reverseCommissionForSale(ctx, {
+                  orgId: args.orgId,
+                  saleId: sale._id,
+                  adjustmentSeq: sale.commissionAdjustmentSeq ?? 0,
+                  reason,
+                  actorId: auth.user._id,
+                  reversalDate: now,
+                });
               }
             }
           }

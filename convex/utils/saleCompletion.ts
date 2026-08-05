@@ -17,6 +17,7 @@ import {
   hookDepositApplied,
   hookTradeInAccepted,
   getOrgCurrency,
+  commissionAccountingDate,
 } from "../accounting/workflowHooks";
 import { computeResoldProductMargin } from "../accounting/postingRules";
 import { toMinorUnits } from "./money";
@@ -505,7 +506,11 @@ async function applySaleCompletionSideEffects(
       amountMinor: toMinorUnits(prepared.commissionAmount, prepared.currency),
       currency: prepared.currency,
       actorId: args.actorId,
-      occurredAt: args.saleDate,
+      // The same rule every other commission entry uses. Dating this one at the
+      // raw saleDate let a backdated completion queue its accrual behind a
+      // closed period while a later correction or payment — which DO use the
+      // rule — posted into an open one, leaving Commission Payable negative.
+      occurredAt: await commissionAccountingDate(ctx, args.orgId, args.saleDate, Date.now()),
     });
   }
 

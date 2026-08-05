@@ -815,6 +815,78 @@ export function commissionAdjustmentSourceId(saleId: Id<"sales">, sequence: numb
   return `commission_adj_${saleId}_${sequence}`;
 }
 
+/**
+ * The accounting date every commission entry for a sale must use — accrual,
+ * correction and the payment fallback alike. Living here rather than in each
+ * caller is the point: when the accrual used a different rule from the
+ * correction, a correction could post into an open period while the accrual it
+ * corrected was still queued behind a closed one, leaving a naked delta in
+ * Commission Payable.
+ *
+ * The sale's own date, so the expense matches the revenue it was earned
+ * against. Two exceptions:
+ *
+ *  - The sale's period is CLOSED. An entry dated there never posts; it waits in
+ *    the outbox indefinitely, blocking payroll payment and stranding the
+ *    liability. Recognize it in the current period instead, as a prior-period
+ *    item found late.
+ *  - The org has NO chart of accounts yet. Nothing posts in that state — every
+ *    entry queues and replays with the date frozen at enqueue time — so falling
+ *    back here would buy nothing and permanently misdate the accrual: the sale
+ *    itself queues at its own saleDate, so its commission must too, or an org
+ *    that initializes its chart later books revenue and commission in different
+ *    months with no way to correct it.
+ */
+export async function commissionAccountingDate(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  saleDate: number,
+  now: number
+): Promise<number> {
+  if (!(await isChartInitialized(ctx, orgId))) return saleDate;
+  return (await getOpenPeriodForDate(ctx, orgId, saleDate)) ? saleDate : now;
+}
+
+/** True while an entry for this key is still queued (captured but not posted). */
+export async function isEventQueued(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  idempotencyKey: string
+): Promise<boolean> {
+  const pending = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
+    .filter((q) => q.neq(q.field("status"), "POSTED"))
+    .first();
+  return pending !== null;
+}
+
+/**
+ * A correction credits Commission Payable exactly as the accrual does, so any
+ * settlement that clears the payable must wait for the CORRECTIONS to post too,
+ * not just the accrual. Checking only the accrual let a payment debit the full
+ * corrected amount against a GL that held only the original — see the payroll
+ * and direct-payment guards, which both call this so they cannot drift apart.
+ *
+ * The loop is clamped: commissionAdjustmentSeq is a plain number field and
+ * `sales` rows are editable through the admin raw-JSON editor, so an implausible
+ * value must not be able to make settlement unrunnable.
+ */
+export const MAX_COMMISSION_ADJUSTMENTS = 1000;
+
+export async function commissionEntriesStillQueued(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  sale: { _id: Id<"sales">; commissionAdjustmentSeq?: number }
+): Promise<boolean> {
+  if (await isEventQueued(ctx, orgId, `commission_accrued_${sale._id}`)) return true;
+  const seq = Math.min(sale.commissionAdjustmentSeq ?? 0, MAX_COMMISSION_ADJUSTMENTS);
+  for (let sequence = 1; sequence <= seq; sequence++) {
+    if (await isEventQueued(ctx, orgId, `commission_adjusted_${sale._id}_${sequence}`)) return true;
+  }
+  return false;
+}
+
 // ─── Payroll hooks ─────────────────────────────────────────────────────────────
 // Scoped self-heal (like ensureVatReceivableAccountIfChartReady): only payroll
 // events touch the salaries/employee-advance accounts, so don't add them to the
@@ -1072,7 +1144,8 @@ export async function reverseCommissionForSale(
     actorId: args.actorId,
     reversalDate: args.reversalDate,
   });
-  for (let sequence = 1; sequence <= args.adjustmentSeq; sequence++) {
+  const seq = Math.min(args.adjustmentSeq, MAX_COMMISSION_ADJUSTMENTS);
+  for (let sequence = 1; sequence <= seq; sequence++) {
     await hookCommissionAdjustmentReversed(ctx, {
       orgId: args.orgId,
       saleId: args.saleId,

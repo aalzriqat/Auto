@@ -12,6 +12,7 @@ import {
   hookPayrollPaid,
   hookCommissionAccrued,
   isPostableNow,
+  commissionEntriesStillQueued,
 } from "./accounting/workflowHooks";
 import { toMinorUnits, fromMinorUnits } from "./utils/money";
 import { paymentMethodValidator, normalizePaymentMethod, PaymentMethod } from "./utils/paymentMethods";
@@ -557,9 +558,14 @@ async function assertAccrualsPosted(
     for (const saleId of item.commissionSaleIds) {
       const sale = await ctx.db.get(saleId);
       if (!sale || sale.commissionPaidAt != null || !sale.commissionAmount || sale.commissionAmount <= 0) continue;
-      if (await accrualStillQueued(ctx, orgId, `commission_accrued_${saleId}`)) {
+      // Corrections credit Commission Payable exactly as the accrual does, so
+      // checking the accrual alone was not enough: payment debits the full
+      // CORRECTED amount (settleItemCommissions re-derives it from the live
+      // sale), and a queued correction means the GL only holds the original —
+      // the difference comes straight out of the payable as a negative.
+      if (await commissionEntriesStillQueued(ctx, orgId, sale)) {
         throw new ConvexError(
-          "A commission accrual for this run hasn't posted to the ledger yet (its accounting period may be closed). Open the period so the accrual posts, then pay."
+          "A commission entry for this run hasn't posted to the ledger yet (its accounting period may be closed). Open the period so it posts, then pay."
         );
       }
     }

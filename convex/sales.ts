@@ -18,7 +18,7 @@ import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation"
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
-import { getOrgCurrency, hookCommissionAccrued, hookCommissionAdjusted, hookCommissionPaid, hookSaleCancelled, isPostableNow, reverseCommissionForSale } from "./accounting/workflowHooks";
+import { getOrgCurrency, hookCommissionAccrued, hookCommissionAdjusted, hookCommissionPaid, hookSaleCancelled, isPostableNow, reverseCommissionForSale, commissionAccountingDate, commissionEntriesStillQueued } from "./accounting/workflowHooks";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 import { toMinorUnits, fromMinorUnits, assertFiniteNumber } from "./utils/money";
 
@@ -595,19 +595,20 @@ export const update = mutation({
           actorId: user._id,
           reversalDate: cancellationDate,
         });
-        if (sale.commissionAmount != null && sale.commissionAmount > 0) {
-          // Backs out the accrual AND every correction posted against it.
-          // Reversing the accrual alone left each adjustment's delta stranded in
-          // Commission Payable.
-          await reverseCommissionForSale(ctx, {
-            orgId: args.orgId,
-            saleId: args.saleId,
-            adjustmentSeq: sale.commissionAdjustmentSeq ?? 0,
-            reason: "Sale cancelled",
-            actorId: user._id,
-            reversalDate: cancellationDate,
-          });
-        }
+        // Unconditional: reverseEventIfPosted no-ops when there is nothing on
+        // the books and cancels anything still queued, so gating on the live
+        // amount only created holes. A commission accrued and then corrected to
+        // zero nets out in the GL but still owns real events — the old
+        // `> 0` gate skipped it, leaving those events POSTED on a cancelled
+        // sale and any queued entry free to post afterwards.
+        await reverseCommissionForSale(ctx, {
+          orgId: args.orgId,
+          saleId: args.saleId,
+          adjustmentSeq: sale.commissionAdjustmentSeq ?? 0,
+          reason: "Sale cancelled",
+          actorId: user._id,
+          reversalDate: cancellationDate,
+        });
       }
     }
 
@@ -866,10 +867,12 @@ async function commissionPage(
         const salesperson = await getUser(sale.salespersonId);
         const paidBy = sale.commissionPaidBy ? await getUser(sale.commissionPaidBy) : null;
         // Whether an edit is worth OFFERING — not a guarantee that it will be
-        // accepted. setCommissionAmount also refuses once the amount is on the
-        // books, and no query result can be authoritative about that: another
-        // manager's payroll approval can land between this render and the
-        // click. The mutation is the authority; the client surfaces its reason.
+        // accepted. An amount already on the books is no longer refused (it is
+        // corrected with an adjusting entry), but setCommissionAmount still
+        // rejects a change whose entries have not posted yet, and no query
+        // result can be authoritative about that: the outbox can drain, or a
+        // period close can land, between this render and the click. The
+        // mutation is the authority; the client surfaces its reason.
         const canSetAmount =
           isManualMode && sale.status === "COMPLETED" && sale.commissionPaidAt == null;
         return {
@@ -1065,24 +1068,36 @@ async function hasCommissionAccrual(
 }
 
 /**
- * The date a commission entry should carry: the sale's own date, so the expense
- * matches the revenue it was earned against — unless that period is already
- * closed, in which case the current date, recognizing it as a prior-period item
- * found late.
+ * Refuses to post a commission entry that would overtake its own prerequisites.
  *
- * Falling back matters for more than tidiness. An entry dated into a closed
- * period does not post; it sits in the outbox until someone reopens the month.
- * A commission accrual stuck there blocks payroll payment outright
- * (assertAccrualsPosted) and, if a correction or a payment for the same sale
- * DID post meanwhile, drives Commission Payable negative in the interim.
+ * Every entry that CLEARS Commission Payable (a payment) must land after the
+ * entries that CREATED it (the accrual and any corrections). Those can be
+ * sitting in the outbox — dated into a period that was closed when they were
+ * raised — in which case posting the payment now debits a liability the GL does
+ * not yet carry and drives Commission Payable negative until someone reopens
+ * the month. Re-raising the accrual does not help: postOrEnqueue treats an
+ * existing queued entry as the source of truth and returns without doing
+ * anything, so the caller cannot tell by trying.
+ *
+ * Only enforced when this entry would ACTUALLY post now. If it would queue too,
+ * it lands behind its prerequisites and the order takes care of itself — which
+ * is what keeps an org with no chart of accounts, where everything queues,
+ * from being blocked. Same shape as payroll's assertAccrualsPosted.
  */
-async function commissionAccountingDate(
+async function assertCommissionEntriesPosted(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
-  saleDate: number,
-  now: number
-): Promise<number> {
-  return (await isPostableNow(ctx, orgId, saleDate)) ? saleDate : now;
+  sale: Doc<"sales">,
+  entryDate: number,
+  action: string
+): Promise<void> {
+  if (!(await isPostableNow(ctx, orgId, entryDate))) return;
+  if (await commissionEntriesStillQueued(ctx, orgId, sale)) {
+    throwAppError(
+      AppErrorCode.VALIDATION_FAILED,
+      `This commission hasn't posted to the ledger yet (its accounting period may be closed). Open the period so it posts, then ${action}.`
+    );
+  }
 }
 
 export const markCommissionPaid = mutation({
@@ -1144,6 +1159,11 @@ export const markCommissionPaid = mutation({
           actorId: user._id,
           occurredAt: await commissionAccountingDate(ctx, args.orgId, sale.saleDate, now),
         });
+        // The payment clears the payable, so everything that built it must
+        // already be on the books. Without this the direct path could pay
+        // against a queued accrual — payroll has guarded this for a while;
+        // this path did not.
+        await assertCommissionEntriesPosted(ctx, args.orgId, sale, now, "pay it");
         await hookCommissionPaid(ctx, {
           orgId: args.orgId,
           saleId: args.saleId,
@@ -1276,6 +1296,16 @@ export const setCommissionAmount = mutation({
         // information, and burning a sequence number on it would make the
         // adjustment count overstate how many real corrections happened.
         if (deltaMinor !== 0) {
+          // A correction must not post ahead of the accrual it corrects: a
+          // downward delta landing alone in an open period, while the accrual
+          // waits behind a closed one, is a naked debit to Commission Payable.
+          await assertCommissionEntriesPosted(
+            ctx,
+            args.orgId,
+            sale,
+            accountingDate,
+            "change the amount"
+          );
           const sequence = (sale.commissionAdjustmentSeq ?? 0) + 1;
           patch.commissionAdjustmentSeq = sequence;
           await hookCommissionAdjusted(ctx, {
@@ -1319,7 +1349,15 @@ export const setCommissionAmount = mutation({
             ? `Commission set to ${args.commissionAmount}`
             : `Commission changed from ${sale.commissionAmount} to ${args.commissionAmount}`,
         before: { commissionAmount: sale.commissionAmount ?? null },
-        after: { commissionAmount: args.commissionAmount },
+        // The journalled delta and its sequence, not just the new amount: an
+        // auditor reconciling the GL against the decision trail needs the
+        // number that actually posted, and the sequence is what identifies the
+        // entry it posted as.
+        after: {
+          commissionAmount: args.commissionAmount,
+          adjustmentSeq: patch.commissionAdjustmentSeq ?? null,
+          adjustmentDeltaMinor: patch.commissionAdjustmentSeq ? nextMinor - previousMinor : null,
+        },
       });
     } catch (error) {
       // Routine validation rejections are ConvexErrors — re-throw them without

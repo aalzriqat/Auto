@@ -6,7 +6,7 @@
  */
 import { v } from "convex/values";
 import { query } from "./_generated/server";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { QueryCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -923,85 +923,164 @@ export async function computeCommissionPayableReconciliation(
     .query("sales")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
     .collect();
-  // isCommissionOwed is the shared definition (convex/utils/commission.ts) used
-  // by the commissions page and the payroll sweep too, so this reconciliation
-  // and the screens a manager compares it against cannot drift apart. It is
-  // what excludes cancelled sales: cancellation reverses the GL accrual
-  // (hookCommissionReversed) but never clears commissionAmount on the sale row,
-  // so counting the amount alone would leave the subledger side permanently
-  // above a GL liability that is already zero.
-  const owed = sales.filter(isCommissionOwed);
 
-  // A reconciliation compares the GL against what the GL OUGHT to contain, and
-  // an unrecognized commission belongs in neither. Recognition now happens as
-  // soon as the amount is measurable on a completed sale, so this gap is much
-  // narrower than it was — but it still exists whenever an entry is queued
-  // behind a closed period, and counting one of those reports a difference
-  // against a liability the books have correctly not created yet.
+  // BOTH SIDES ARE EVALUATED AS OF `toDate`. The GL side always was
+  // (getPostedLines filters accountingDate <= toDate); the subledger side used
+  // to read current state, and mixing the two is what made correct books look
+  // wrong. A commission accrued on 28 July and paid on 2 August, reconciled at
+  // 31 July: the GL correctly still carries the liability, while current state
+  // says the sale is paid and drops it — a difference reported on books that
+  // are right. Paying a month's commissions before closing that month is the
+  // normal workflow, so that fired on most closes. It matters because closing
+  // requires acknowledging every warning verbatim (accountingPeriods.close),
+  // and a warning that cries wolf is how a real one later gets clicked through.
   //
-  // That is not a harmless false positive: closing a period requires
-  // acknowledging every warning verbatim (accountingPeriods.close), so a
-  // warning that fires on every close for every MANUAL organization is a
-  // permanent click-through — and the habit of clicking through it is how a
-  // genuinely missing or duplicated posting later gets acknowledged too.
-  //
-  // Two indexed reads of the org's commission events rather than a lookup per
-  // sale. Only POSTED counts, matching the GL side, which is built from posted
-  // journal lines: a queued entry is not in the GL either, and a REVERSED one
-  // has been backed out.
-  //
-  // Scoped to `toDate` for the same reason the GL side is: an entry posted
-  // after the reporting date has no journal lines inside the window either, so
-  // counting it here would report a discrepancy for a period that is correct —
-  // a false positive on a check whose whole remaining value is that it fires
-  // only on real ones.
-  //
-  // The recognized amount is summed from the ENTRIES, not from the sale's
-  // current commissionAmount. A correction posts a COMMISSION_ADJUSTED delta
-  // that can land in a later period than the accrual it corrects (when the
-  // sale's own period has since closed), so reading the live amount would
-  // charge the whole corrected figure against a window whose GL only contains
-  // part of it — a difference reported on books that are right.
-  const postedInWindow = (eventType: "COMMISSION_ACCRUED" | "COMMISSION_ADJUSTED") =>
-    ctx.db
-      .query("accountingEvents")
-      .withIndex("by_org_eventType", (q) => q.eq("orgId", orgId).eq("eventType", eventType))
-      .filter((q) =>
-        toDate === undefined
-          ? q.eq(q.field("status"), "POSTED")
-          : q.and(
-              q.eq(q.field("status"), "POSTED"),
-              q.lte(q.field("accountingDate"), toDate)
-            )
-      )
-      .collect();
-
-  const recognizedBySale = new Map<string, number>();
-  const addRecognized = (saleId: unknown, minor: unknown) => {
-    if (typeof saleId !== "string" || typeof minor !== "number" || !Number.isFinite(minor)) return;
-    recognizedBySale.set(saleId, (recognizedBySale.get(saleId) ?? 0) + minor);
-  };
-  for (const e of await postedInWindow("COMMISSION_ACCRUED")) {
-    addRecognized(e.payload?.saleId, e.payload?.amountMinor);
-  }
-  for (const e of await postedInWindow("COMMISSION_ADJUSTED")) {
-    addRecognized(e.payload?.saleId, e.payload?.deltaMinor);
-  }
+  // Deliberately NOT isCommissionOwed (convex/utils/commission.ts): that is the
+  // shared CURRENT-state rule the commissions page and the payroll sweep use,
+  // and it is right for them. A point-in-time report cannot use it — it would
+  // have to ask "was this owed then", which the predicate cannot express.
+  const recognizedBySale = await computeRecognizedCommissionAsOf(ctx, orgId, toDate);
 
   let subledgerMinor = 0;
-  for (const sale of owed) {
-    // No recognized entry at all — the books have correctly not created the
-    // liability yet, so it belongs on neither side.
+  for (const sale of sales) {
+    if (sale.isDeleted === true) continue;
+    // What the GL had recognized for this sale as of the reporting date. Summed
+    // from the ENTRIES, not the sale's live commissionAmount: a correction can
+    // land in a later period than the accrual it corrects (when the sale's own
+    // period has since closed), so the live amount would charge the whole
+    // corrected figure against a window whose GL holds only part of it.
+    //
+    // Absent means nothing was recognized by then — the liability did not exist
+    // yet, so it belongs on neither side. A cancelled sale lands here too: its
+    // reversal removes the recognition as of the reversal date.
     const recognized = recognizedBySale.get(sale._id);
     if (recognized === undefined) continue;
+    // Settled at or before the reporting date, so the GL had already cleared it.
+    if (sale.commissionPaidAt != null && (toDate === undefined || sale.commissionPaidAt <= toDate)) {
+      continue;
+    }
     subledgerMinor += recognized;
   }
 
   const subByCurrency = new Map<string, number>();
-  if (subledgerMinor > 0) subByCurrency.set(orgCurrency, subledgerMinor);
+  // `!== 0`, not `> 0`: a negative total is exactly the kind of discrepancy this
+  // report exists to surface, and suppressing it reported a clean zero instead.
+  if (subledgerMinor !== 0) subByCurrency.set(orgCurrency, subledgerMinor);
 
   const glByCurrency = await computeGlBalanceByCurrency(ctx, orgId, SYSTEM_KEYS.COMMISSION_PAYABLE, toDate);
   return combineGlAndSubledger(glByCurrency, subByCurrency);
+}
+
+/**
+ * Commission recognized in the GL per sale, as of `toDate` — accrual plus every
+ * correction, minus anything a reversal had already backed out by then.
+ *
+ * An entry counts when it was dated at or before the reporting date and was
+ * still live at that moment. "Still live" is not the same as `status ===
+ * "POSTED"` today: a July accrual reversed in August was POSTED throughout
+ * July, and dropping it because the row now reads REVERSED would understate
+ * July against a GL that still carries it. So a REVERSED entry counts too,
+ * unless its reversal itself landed at or before the reporting date.
+ */
+async function computeRecognizedCommissionAsOf(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined
+): Promise<Map<string, number>> {
+  const inWindow = async (eventType: "COMMISSION_ACCRUED" | "COMMISSION_ADJUSTED") => {
+    const rows = await ctx.db
+      .query("accountingEvents")
+      .withIndex("by_org_eventType", (q) => q.eq("orgId", orgId).eq("eventType", eventType))
+      .filter((q) =>
+        q.or(q.eq(q.field("status"), "POSTED"), q.eq(q.field("status"), "REVERSED"))
+      )
+      .collect();
+    return toDate === undefined ? rows : rows.filter((r) => r.accountingDate <= toDate);
+  };
+
+  const recognized = new Map<string, number>();
+  const add = (saleId: unknown, minor: unknown) => {
+    if (typeof saleId !== "string" || typeof minor !== "number" || !Number.isFinite(minor)) return;
+    recognized.set(saleId, (recognized.get(saleId) ?? 0) + minor);
+  };
+
+  const wasLiveAt = async (event: Doc<"accountingEvents">): Promise<boolean> => {
+    if (event.status !== "REVERSED") return true;
+    if (!event.reversedByEventId) return false;
+    const reversal = await ctx.db.get(event.reversedByEventId);
+    if (!reversal || reversal.orgId !== orgId) return false;
+    return toDate !== undefined && reversal.accountingDate > toDate;
+  };
+
+  for (const e of await inWindow("COMMISSION_ACCRUED")) {
+    if (await wasLiveAt(e)) add(e.payload?.saleId, e.payload?.amountMinor);
+  }
+  for (const e of await inWindow("COMMISSION_ADJUSTED")) {
+    if (await wasLiveAt(e)) add(e.payload?.saleId, e.payload?.deltaMinor);
+  }
+  return recognized;
+}
+
+/**
+ * Sales that owe a commission whose RECOGNIZED total does not equal the amount
+ * decided on the sale row — the independent control the reconciliation above
+ * cannot be.
+ *
+ * That reconciliation compares the GL against amounts derived from the same
+ * posted events, which makes it strong on settlement and reversal drift but
+ * blind to the one thing this change introduces: signed-delta arithmetic. If a
+ * delta were ever computed against the wrong base — a stale amount, an
+ * interrupted sequence, or an amount edited straight through the admin
+ * raw-JSON editor, which can write `sales` rows — the GL and that subledger
+ * would be wrong by the same amount and reconcile perfectly.
+ *
+ * Comparing recognition against the DECIDED amount closes that hole, and also
+ * catches a commission that was never recognized at all.
+ *
+ * Sales with an entry still in the outbox are excluded: recognition there is
+ * pending rather than wrong, and the close checklist already reports unposted
+ * events as a blocker in its own right.
+ */
+export async function computeCommissionRecognitionDivergence(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">
+): Promise<{ saleCount: number; currency: string }> {
+  const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
+  const sales = await ctx.db
+    .query("sales")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  const owed = sales.filter(isCommissionOwed);
+  if (owed.length === 0) return { saleCount: 0, currency: orgCurrency };
+
+  const recognized = await computeRecognizedCommissionAsOf(ctx, orgId, undefined);
+  const queuedKeys = new Set(
+    (
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+        .collect()
+    )
+      .concat(
+        await ctx.db
+          .query("pendingAccountingEvents")
+          .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "FAILED"))
+          .collect()
+      )
+      .map((p) => p.idempotencyKey)
+  );
+
+  let saleCount = 0;
+  for (const sale of owed) {
+    const hasQueuedEntry =
+      queuedKeys.has(`commission_accrued_${sale._id}`) ||
+      [...queuedKeys].some((k) => k.startsWith(`commission_adjusted_${sale._id}_`));
+    if (hasQueuedEntry) continue;
+    if ((recognized.get(sale._id) ?? 0) !== toMinorUnits(sale.commissionAmount, orgCurrency)) {
+      saleCount++;
+    }
+  }
+  return { saleCount, currency: orgCurrency };
 }
 
 export const commissionPayableReconciliation = query({
