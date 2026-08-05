@@ -128,7 +128,6 @@ export default function CommissionsPage() {
     sortDir,
     toggleSort,
     rows: sortedCommissions,
-    autoLoadCapped,
     isAutoLoading,
   } = useTableControls({
     data: commissions,
@@ -146,7 +145,6 @@ export default function CommissionsPage() {
       loadMore,
       pagesMayBeEmpty: true,
       exhaustWhen: filterStatus !== "all" || filterSalesperson !== "all",
-      resetKey: `${filterStatus}|${filterSalesperson}`,
     },
     searchFields: (c: CommissionSale) => [c.salespersonName, c.vehicleSummary, c.customerName],
     sortAccessors: {
@@ -408,11 +406,7 @@ export default function CommissionsPage() {
         {hasMore && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
             <AlertTriangle className="h-4 w-4 shrink-0" />
-            <p>
-              {autoLoadCapped
-                ? t("CommissionListPartial" as any)
-                : t("CommissionListTruncated" as any)}
-            </p>
+            <p>{t("CommissionListTruncated" as any)}</p>
             {/* A manual button beside an automatic walk reads as a stalled UI,
                 so it only appears once the automatic walk has stopped. */}
             {!isAutoLoading && (
@@ -463,15 +457,13 @@ export default function CommissionsPage() {
                         The original copy ("set a commission rate on team
                         members") only makes sense in an automatic mode —
                         MANUAL has no rates by definition. */}
-                    {isAutoLoading || (hasMore && !autoLoadCapped)
+                    {isAutoLoading
                       ? t("Loading" as any)
-                      : autoLoadCapped
-                        ? t("NoMatchesInLoadedRows" as any)
-                        : hasActiveFilter
-                          ? t("NoCommissionRecordsForFilter" as any)
-                          : isManualMode
-                            ? t("NoCompletedSalesYet" as any)
-                            : t("NoCommissionRecords" as any)}
+                      : hasActiveFilter
+                        ? t("NoCommissionRecordsForFilter" as any)
+                        : isManualMode
+                          ? t("NoCompletedSalesYet" as any)
+                          : t("NoCommissionRecords" as any)}
                   </TableCell>
                 </TableRow>
               ) : (
