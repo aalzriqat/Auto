@@ -604,7 +604,16 @@ describe("Phase 5 — commission payable reconciliation", () => {
         occurredAt: now,
         accountingDate: now,
         currency: "JOD",
-        payload: {},
+        // The payload production writes (makeCommissionHook). The subledger
+        // side sums the amount each entry actually recognized, so an empty
+        // payload models an event the app cannot emit — and one the
+        // reconciliation would rightly decline to count.
+        payload: {
+          saleId: reconSaleId,
+          amountMinor: 500_000,
+          currency: "JOD",
+          salespersonId: userId,
+        },
         status: "POSTED",
         createdBy: userId,
         createdAt: now,
@@ -699,7 +708,9 @@ describe("Phase 5 — commission payable reconciliation", () => {
         orgId, eventType: "COMMISSION_ACCRUED", sourceType: "sales",
         sourceId: `commission_${saleId}`, eventVersion: 1,
         idempotencyKey: `commission_accrued_${saleId}`, occurredAt: now, accountingDate: now,
-        currency: "JOD", payload: {}, status: "POSTED", createdBy: userId, createdAt: now,
+        currency: "JOD",
+        payload: { saleId, amountMinor: 500_000, currency: "JOD", salespersonId: userId },
+        status: "POSTED", createdBy: userId, createdAt: now,
         journalEntryId,
       });
     });

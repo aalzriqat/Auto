@@ -1015,6 +1015,12 @@ export default defineSchema({
     leadId: v.optional(v.id("leads")),
     canonicalReceivableDocumentId: v.optional(v.id("receivableDocuments")),
     commissionAmount: v.optional(v.number()), // Calculated at sale time
+    // How many COMMISSION_ADJUSTED corrections have been posted against this
+    // sale's accrual. Monotonic, never reset — it discriminates each
+    // correction's idempotency key (see hookCommissionAdjusted), so reusing a
+    // number would make the ledger silently drop a real correction. Absent on
+    // rows that predate corrections, and on any commission never corrected.
+    commissionAdjustmentSeq: v.optional(v.number()),
     commissionPaidAt: v.optional(v.number()),
     commissionPaidBy: v.optional(v.id("users")),
     commissionPaymentMethod: v.optional(paymentMethodValidator),

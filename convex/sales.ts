@@ -18,7 +18,7 @@ import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation"
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
-import { getOrgCurrency, hookCommissionAccrued, hookCommissionPaid, hookCommissionReversed, hookSaleCancelled } from "./accounting/workflowHooks";
+import { getOrgCurrency, hookCommissionAccrued, hookCommissionAdjusted, hookCommissionPaid, hookSaleCancelled, isPostableNow, reverseCommissionForSale } from "./accounting/workflowHooks";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 import { toMinorUnits, fromMinorUnits, assertFiniteNumber } from "./utils/money";
 
@@ -596,9 +596,13 @@ export const update = mutation({
           reversalDate: cancellationDate,
         });
         if (sale.commissionAmount != null && sale.commissionAmount > 0) {
-          await hookCommissionReversed(ctx, {
+          // Backs out the accrual AND every correction posted against it.
+          // Reversing the accrual alone left each adjustment's delta stranded in
+          // Commission Payable.
+          await reverseCommissionForSale(ctx, {
             orgId: args.orgId,
             saleId: args.saleId,
+            adjustmentSeq: sale.commissionAdjustmentSeq ?? 0,
             reason: "Sale cancelled",
             actorId: user._id,
             reversalDate: cancellationDate,
@@ -1024,8 +1028,10 @@ export const listCommissions = query({
 /**
  * True once this sale's commission has been recognized in the ledger — either a
  * posted COMMISSION_ACCRUED journal entry or a still-queued accrual in the
- * outbox. AUTO modes accrue at completion; MANUAL accrues at payment. Used to
- * keep a MANUAL amount editable only while it hasn't yet hit the books.
+ * outbox. Both AUTO and MANUAL accrue as soon as the amount is measurable on a
+ * completed sale, so this decides whether a new amount is a FIRST accrual or a
+ * correction to one already on the books (setCommissionAmount), and whether
+ * recalculateCommission's one-shot fix-up still applies.
  */
 async function hasCommissionAccrual(
   ctx: QueryCtx,
@@ -1056,6 +1062,27 @@ async function hasCommissionAccrual(
     .filter((q) => q.neq(q.field("status"), "POSTED"))
     .first();
   return pending !== null;
+}
+
+/**
+ * The date a commission entry should carry: the sale's own date, so the expense
+ * matches the revenue it was earned against — unless that period is already
+ * closed, in which case the current date, recognizing it as a prior-period item
+ * found late.
+ *
+ * Falling back matters for more than tidiness. An entry dated into a closed
+ * period does not post; it sits in the outbox until someone reopens the month.
+ * A commission accrual stuck there blocks payroll payment outright
+ * (assertAccrualsPosted) and, if a correction or a payment for the same sale
+ * DID post meanwhile, drives Commission Payable negative in the interim.
+ */
+async function commissionAccountingDate(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  saleDate: number,
+  now: number
+): Promise<number> {
+  return (await isPostableNow(ctx, orgId, saleDate)) ? saleDate : now;
 }
 
 export const markCommissionPaid = mutation({
@@ -1102,10 +1129,12 @@ export const markCommissionPaid = mutation({
         });
         const currency = await getOrgCurrency(ctx, args.orgId);
         const amountMinor = toMinorUnits(sale.commissionAmount, currency);
-        // Recognize the expense before paying it. AUTO modes already accrued at
-        // completion (this is an idempotent no-op — same idempotency key);
-        // MANUAL accrues here for the first time, so the payment always clears a
-        // real Commission Payable instead of pushing it negative (fixes C1).
+        // Recognize the expense before paying it. Both modes now accrue as soon
+        // as the amount is measurable, so for anything created since that change
+        // this is an idempotent no-op on the same key. It stays as the safety
+        // net for rows that predate it — a commission entered while MANUAL still
+        // deferred accrual to payment — so the payment always clears a real
+        // Commission Payable instead of pushing it negative (fixes C1).
         await hookCommissionAccrued(ctx, {
           orgId: args.orgId,
           saleId: args.saleId,
@@ -1113,7 +1142,7 @@ export const markCommissionPaid = mutation({
           amountMinor,
           currency,
           actorId: user._id,
-          occurredAt: now,
+          occurredAt: await commissionAccountingDate(ctx, args.orgId, sale.saleDate, now),
         });
         await hookCommissionPaid(ctx, {
           orgId: args.orgId,
@@ -1201,27 +1230,78 @@ export const setCommissionAmount = mutation({
         .unique();
       const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
 
-      // AUTO-mode commissions are derived and accrued at completion, so they
-      // stay locked afterwards. MANUAL commissions are entered by hand and
-      // accrue only at payment, so they remain editable on a completed sale
-      // until they're paid or otherwise recorded in the ledger (fixes C1/C2 for
-      // MANUAL).
+      // AUTO-mode commissions are derived from the org's rules, so a completed
+      // sale's amount is not hand-editable — changing it would silently diverge
+      // from the rule that produced it. MANUAL amounts are a human decision and
+      // stay editable until paid; a change after accrual posts an adjusting
+      // entry (below) rather than being refused.
       if (sale.status === "COMPLETED" && mode !== "MANUAL") {
         throwAppError(
           AppErrorCode.SALE_ALREADY_COMPLETED,
           "Completed sale commission amounts are locked. Use a correction workflow."
         );
       }
-      if (await hasCommissionAccrual(ctx, args.orgId, args.saleId)) {
-        throwAppError(
-          AppErrorCode.VALIDATION_FAILED,
-          "This commission is already recorded in the ledger. Reverse it before changing the amount."
-        );
+      // Recognition follows measurability: a completed sale whose commission
+      // amount is now known owes it, so it accrues here rather than waiting for
+      // payment. A later correction posts a signed adjusting entry instead of
+      // being refused — the previous behavior sent the user to a "correction
+      // workflow" that does not exist, so a commission accrued at the wrong
+      // amount was permanently unfixable.
+      //
+      // The accrual and every adjustment share one accounting date — the sale's
+      // own, or today if the sale's period has closed (commissionAccountingDate).
+      // Deriving both from the same rule is what stops a correction from posting
+      // into an open period while the accrual it corrects is still queued behind
+      // a closed one, which would drive Commission Payable negative.
+      const currency = await getOrgCurrency(ctx, args.orgId);
+      const previousMinor =
+        sale.commissionAmount == null ? 0 : toMinorUnits(sale.commissionAmount, currency);
+      const nextMinor = toMinorUnits(args.commissionAmount, currency);
+      const alreadyAccrued = await hasCommissionAccrual(ctx, args.orgId, args.saleId);
+      const accountingDate = await commissionAccountingDate(
+        ctx,
+        args.orgId,
+        sale.saleDate,
+        Date.now()
+      );
+
+      const patch: {
+        commissionAmount: number;
+        commissionAdjustmentSeq?: number;
+      } = { commissionAmount: args.commissionAmount };
+
+      if (alreadyAccrued) {
+        const deltaMinor = nextMinor - previousMinor;
+        // A no-op edit posts nothing: an empty journal entry carries no
+        // information, and burning a sequence number on it would make the
+        // adjustment count overstate how many real corrections happened.
+        if (deltaMinor !== 0) {
+          const sequence = (sale.commissionAdjustmentSeq ?? 0) + 1;
+          patch.commissionAdjustmentSeq = sequence;
+          await hookCommissionAdjusted(ctx, {
+            orgId: args.orgId,
+            saleId: args.saleId,
+            salespersonId: sale.salespersonId,
+            sequence,
+            deltaMinor,
+            currency,
+            actorId: user._id,
+            occurredAt: accountingDate,
+          });
+        }
+      } else if (sale.status === "COMPLETED" && nextMinor > 0) {
+        await hookCommissionAccrued(ctx, {
+          orgId: args.orgId,
+          saleId: args.saleId,
+          salespersonId: sale.salespersonId,
+          amountMinor: nextMinor,
+          currency,
+          actorId: user._id,
+          occurredAt: accountingDate,
+        });
       }
 
-      await ctx.db.patch(args.saleId, {
-        commissionAmount: args.commissionAmount,
-      });
+      await ctx.db.patch(args.saleId, patch);
 
       // This is now the entry point for a payout figure, so who decided it,
       // when, and what it was before all have to survive. The sale row keeps

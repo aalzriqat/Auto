@@ -16,7 +16,7 @@ import {
   hookFinanceCashReceived,
   hookFinanceDisbursementCancelled,
   hookSaleCancelled,
-  hookCommissionReversed,
+  reverseCommissionForSale,
   getOrgCurrency,
 } from "./accounting/workflowHooks";
 import { toMinorUnits, assertValidMinorAmount } from "./utils/money";
@@ -656,9 +656,13 @@ export const cancelApplication = mutation({
                   reversalDate: now,
                 });
                 if (sale.commissionAmount != null && sale.commissionAmount > 0) {
-                  await hookCommissionReversed(ctx, {
+                  // Accrual plus every correction posted against it — the same
+                  // entry point sales.update's cancellation uses, so the two
+                  // void paths cannot drift apart.
+                  await reverseCommissionForSale(ctx, {
                     orgId: args.orgId,
                     saleId: sale._id,
+                    adjustmentSeq: sale.commissionAdjustmentSeq ?? 0,
                     reason,
                     actorId: auth.user._id,
                     reversalDate: now,

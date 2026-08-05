@@ -767,6 +767,54 @@ function makeCommissionHook(
 export const hookCommissionAccrued = makeCommissionHook("COMMISSION_ACCRUED", "commission", "commission_accrued");
 export const hookCommissionPaid = makeCommissionHook("COMMISSION_PAID", "commission_paid", "commission_paid");
 
+/**
+ * Corrects an already-recognized commission by a SIGNED delta. Each correction
+ * is its own economic event, so — like hookVehicleLandedCostCapitalized's
+ * editToken — the source and idempotency keys carry a `sequence` discriminator
+ * rather than being derived from saleId alone, which would collide on the
+ * second correction and silently drop it.
+ *
+ * The sequence is the sale's monotonically-incremented commissionAdjustmentSeq,
+ * assigned inside the same mutation as the amount change. Convex mutations are
+ * serializable, so two concurrent corrections cannot be handed the same number.
+ */
+export async function hookCommissionAdjusted(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    saleId: Id<"sales">;
+    salespersonId: Id<"users">;
+    sequence: number;
+    /** New amount minus the amount currently on the books. Never the new amount. */
+    deltaMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "COMMISSION_ADJUSTED",
+    sourceType: "sales",
+    sourceId: commissionAdjustmentSourceId(args.saleId, args.sequence),
+    idempotencyKey: `commission_adjusted_${args.saleId}_${args.sequence}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      saleId: args.saleId.toString(),
+      deltaMinor: args.deltaMinor,
+      currency: args.currency,
+      salespersonId: args.salespersonId.toString(),
+    },
+  });
+}
+
+/** Shared so the forward hook and its reversal can never disagree on the key. */
+export function commissionAdjustmentSourceId(saleId: Id<"sales">, sequence: number): string {
+  return `commission_adj_${saleId}_${sequence}`;
+}
+
 // ─── Payroll hooks ─────────────────────────────────────────────────────────────
 // Scoped self-heal (like ensureVatReceivableAccountIfChartReady): only payroll
 // events touch the salaries/employee-advance accounts, so don't add them to the
@@ -985,6 +1033,56 @@ export const hookCommissionReversed = makeReversalHook<{ saleId: Id<"sales"> }>(
   reversalKey: (a) => `commission_reversed_${a.saleId}`,
   pendingPostKey: (a) => `commission_accrued_${a.saleId}`,
 });
+
+/**
+ * Reverses ONE COMMISSION_ADJUSTED entry. A voided sale must back out every
+ * correction as well as the original accrual — reversing only the accrual
+ * leaves each adjustment's delta stranded in Commission Payable, so a sale
+ * accrued at 100 and corrected to 150 would still owe 50 after cancellation.
+ * Callers reverse sequences 1..commissionAdjustmentSeq; see reverseCommissionForSale.
+ */
+export const hookCommissionAdjustmentReversed = makeReversalHook<{ saleId: Id<"sales">; sequence: number }>({
+  eventType: "COMMISSION_ADJUSTED",
+  sourceType: "sales",
+  sourceId: (a) => commissionAdjustmentSourceId(a.saleId, a.sequence),
+  reversalKey: (a) => `commission_adj_reversed_${a.saleId}_${a.sequence}`,
+  pendingPostKey: (a) => `commission_adjusted_${a.saleId}_${a.sequence}`,
+});
+
+/**
+ * Backs a sale's commission out of the ledger completely: the original accrual
+ * plus every correction posted against it. The single entry point for voiding a
+ * commission, so no caller can reverse the accrual and forget the adjustments.
+ */
+export async function reverseCommissionForSale(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    saleId: Id<"sales">;
+    adjustmentSeq: number;
+    reason: string;
+    actorId: Id<"users">;
+    reversalDate: number;
+  }
+): Promise<void> {
+  await hookCommissionReversed(ctx, {
+    orgId: args.orgId,
+    saleId: args.saleId,
+    reason: args.reason,
+    actorId: args.actorId,
+    reversalDate: args.reversalDate,
+  });
+  for (let sequence = 1; sequence <= args.adjustmentSeq; sequence++) {
+    await hookCommissionAdjustmentReversed(ctx, {
+      orgId: args.orgId,
+      saleId: args.saleId,
+      sequence,
+      reason: args.reason,
+      actorId: args.actorId,
+      reversalDate: args.reversalDate,
+    });
+  }
+}
 
 /** Reverses a DEPOSIT_APPLIED entry when an applied deposit is reinstated as an active hold (e.g. the sale it was applied to gets voided). */
 export const hookDepositApplicationReversed = makeReversalHook<{ depositId: Id<"deposits"> }>({

@@ -423,9 +423,10 @@ async function computeCloseChecklist(
   }
   if (!commissionPayableRecon.isReconciled) {
     const badCurrencies = commissionPayableRecon.currencies.filter((c) => !commissionPayableRecon.byCurrency[c].isReconciled);
-    // The subledger side counts only commissions actually recognized in the GL
-    // (see computeCommissionPayableReconciliation), so a decided-but-unaccrued
-    // manual commission no longer shows up here as a difference. What remains
+    // The subledger side sums only what the commission ENTRIES actually
+    // recognized in the GL (see computeCommissionPayableReconciliation), so
+    // neither a commission still queued behind a closed period nor a correction
+    // that posted into a later one shows up here as a difference. What remains
     // is a real one — which matters, because closing a period requires
     // acknowledging every warning verbatim, and a line that fires on every
     // close teaches people to click through the ones that matter.

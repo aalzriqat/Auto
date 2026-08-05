@@ -143,13 +143,21 @@ async function prepareSaleCompletion(
   const commissionMode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
 
   let commissionAmount: number | undefined;
-  // AUTO modes derive the amount now and accrue it to the GL at completion.
-  // MANUAL mode carries the manager-entered amount through untouched and defers
-  // its GL accrual to payment time, so it stays editable until paid (see
-  // sales.ts markCommissionPaid / setCommissionAmount).
+  // Commission expense is recognized once the obligation is both probable (the
+  // sale completed) and measurable (an amount exists) — dated to the sale, so it
+  // lands in the same period as the revenue it was earned against.
+  //
+  // AUTO modes derive the amount here, so they are measurable at completion.
+  // MANUAL is measurable at completion only when a manager already entered an
+  // amount on the draft; otherwise nothing accrues until one is set, and
+  // sales.setCommissionAmount accrues it then. Deferring MANUAL accrual to
+  // PAYMENT (the previous behavior) recognized the expense on a cash basis
+  // inside an accrual ledger: a car sold in July with its commission paid in
+  // August showed full margin in July and a naked expense in August.
   let accrueAtCompletion = false;
   if (commissionMode === "MANUAL") {
     commissionAmount = args.existingCommissionAmount;
+    accrueAtCompletion = commissionAmount != null;
   } else {
     commissionAmount = await computeAutoCommissionAmount(ctx, {
       salePrice: args.salePrice,

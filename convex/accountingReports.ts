@@ -933,10 +933,11 @@ export async function computeCommissionPayableReconciliation(
   const owed = sales.filter(isCommissionOwed);
 
   // A reconciliation compares the GL against what the GL OUGHT to contain, and
-  // an unrecognized commission belongs in neither. In MANUAL mode the expense
-  // is recognized at payment (or at payroll approval), not when the amount is
-  // decided — so counting a decided-but-unaccrued commission here reports a
-  // difference against a liability the books have correctly not created yet.
+  // an unrecognized commission belongs in neither. Recognition now happens as
+  // soon as the amount is measurable on a completed sale, so this gap is much
+  // narrower than it was — but it still exists whenever an entry is queued
+  // behind a closed period, and counting one of those reports a difference
+  // against a liability the books have correctly not created yet.
   //
   // That is not a harmless false positive: closing a period requires
   // acknowledging every warning verbatim (accountingPeriods.close), so a
@@ -944,39 +945,56 @@ export async function computeCommissionPayableReconciliation(
   // permanent click-through — and the habit of clicking through it is how a
   // genuinely missing or duplicated posting later gets acknowledged too.
   //
-  // One indexed read of the org's COMMISSION_ACCRUED events rather than a
-  // lookup per sale. Only POSTED counts, matching the GL side, which is built
-  // from posted journal lines: a queued accrual is not in the GL either, and a
-  // REVERSED one has been backed out.
+  // Two indexed reads of the org's commission events rather than a lookup per
+  // sale. Only POSTED counts, matching the GL side, which is built from posted
+  // journal lines: a queued entry is not in the GL either, and a REVERSED one
+  // has been backed out.
   //
-  // Scoped to `toDate` for the same reason the GL side is: an accrual posted
+  // Scoped to `toDate` for the same reason the GL side is: an entry posted
   // after the reporting date has no journal lines inside the window either, so
-  // counting its sale here would report a discrepancy for a period that is
-  // correct — a false positive on a check whose whole remaining value is that
-  // it fires only on real ones.
-  const accruedSaleIds = new Set(
-    (
-      await ctx.db
-        .query("accountingEvents")
-        .withIndex("by_org_eventType", (q) =>
-          q.eq("orgId", orgId).eq("eventType", "COMMISSION_ACCRUED")
-        )
-        .filter((q) =>
-          toDate === undefined
-            ? q.eq(q.field("status"), "POSTED")
-            : q.and(
-                q.eq(q.field("status"), "POSTED"),
-                q.lte(q.field("accountingDate"), toDate)
-              )
-        )
-        .collect()
-    ).map((e) => e.sourceId)
-  );
+  // counting it here would report a discrepancy for a period that is correct —
+  // a false positive on a check whose whole remaining value is that it fires
+  // only on real ones.
+  //
+  // The recognized amount is summed from the ENTRIES, not from the sale's
+  // current commissionAmount. A correction posts a COMMISSION_ADJUSTED delta
+  // that can land in a later period than the accrual it corrects (when the
+  // sale's own period has since closed), so reading the live amount would
+  // charge the whole corrected figure against a window whose GL only contains
+  // part of it — a difference reported on books that are right.
+  const postedInWindow = (eventType: "COMMISSION_ACCRUED" | "COMMISSION_ADJUSTED") =>
+    ctx.db
+      .query("accountingEvents")
+      .withIndex("by_org_eventType", (q) => q.eq("orgId", orgId).eq("eventType", eventType))
+      .filter((q) =>
+        toDate === undefined
+          ? q.eq(q.field("status"), "POSTED")
+          : q.and(
+              q.eq(q.field("status"), "POSTED"),
+              q.lte(q.field("accountingDate"), toDate)
+            )
+      )
+      .collect();
+
+  const recognizedBySale = new Map<string, number>();
+  const addRecognized = (saleId: unknown, minor: unknown) => {
+    if (typeof saleId !== "string" || typeof minor !== "number" || !Number.isFinite(minor)) return;
+    recognizedBySale.set(saleId, (recognizedBySale.get(saleId) ?? 0) + minor);
+  };
+  for (const e of await postedInWindow("COMMISSION_ACCRUED")) {
+    addRecognized(e.payload?.saleId, e.payload?.amountMinor);
+  }
+  for (const e of await postedInWindow("COMMISSION_ADJUSTED")) {
+    addRecognized(e.payload?.saleId, e.payload?.deltaMinor);
+  }
 
   let subledgerMinor = 0;
   for (const sale of owed) {
-    if (!accruedSaleIds.has(`commission_${sale._id}`)) continue;
-    subledgerMinor += toMinorUnits(sale.commissionAmount!, orgCurrency);
+    // No recognized entry at all — the books have correctly not created the
+    // liability yet, so it belongs on neither side.
+    const recognized = recognizedBySale.get(sale._id);
+    if (recognized === undefined) continue;
+    subledgerMinor += recognized;
   }
 
   const subByCurrency = new Map<string, number>();
