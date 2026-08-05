@@ -9,6 +9,14 @@ interface UseTableControlsPagination {
   loadMore: (numItems: number) => void;
   /** Page size for each auto-load-more call while searching. Defaults to 200. */
   batchSize?: number;
+  /**
+   * Keep loading until exhausted while this is true, for the same reason
+   * searching does. Set it when a SERVER-side filter is active: the server
+   * pages by documents read, so a filtered page routinely comes back short or
+   * empty while matches remain further back, and a table that stopped at the
+   * first page would report "nothing matches" over real rows.
+   */
+  exhaustWhen?: boolean;
 }
 
 interface UseTableControlsOptions<T> {
@@ -46,14 +54,15 @@ export function useTableControls<T>({
 
   const isSearching = search.trim().length > 0;
   const paginationStatus = pagination?.status;
+  const shouldExhaust = isSearching || pagination?.exhaustWhen === true;
   useEffect(() => {
-    if (isSearching && paginationStatus === "CanLoadMore") {
+    if (shouldExhaust && paginationStatus === "CanLoadMore") {
       pagination?.loadMore(pagination.batchSize ?? 200);
     }
-    // Only re-run when search starts or a page finishes loading — not on
+    // Only re-run when the condition flips or a page finishes loading — not on
     // every render, since `pagination` is a fresh object each render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSearching, paginationStatus]);
+  }, [shouldExhaust, paginationStatus]);
 
   function toggleSort(key: string) {
     if (sortKey !== key) {

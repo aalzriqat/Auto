@@ -391,9 +391,10 @@ export interface MobileSale {
   commissionAmount?: number;
   commissionPaidAt?: number;
   // Only present on sales.listCommissions rows — the plain sales list does not
-  // derive them. See the CommissionStatus doc comment in convex/sales.ts.
-  commissionStatus?: "NOT_SET" | "NO_COMMISSION" | "UNPAID" | "PAID";
+  // derive them. See the CommissionStatus doc comment in convex/utils/commission.ts.
+  commissionStatus?: "NOT_SET" | "NO_COMMISSION" | "UNPAID" | "PAID" | "VOID" | "PENDING_SALE";
   canSetAmount?: boolean;
+  salespersonOffboarded?: boolean;
   vehicleSummary: string;
   vehicleVin: string;
   customerName: string;
@@ -1431,6 +1432,12 @@ type VehicleListArgs = OrgScopedArgs & {
   paginationOpts: PaginationOpts;
 };
 
+type CommissionListArgs = OrgScopedArgs & {
+  salespersonId?: string;
+  paidStatus?: "paid" | "unpaid" | "not_set";
+  paginationOpts: PaginationOpts;
+};
+
 type VehicleScopedArgs = OrgScopedArgs & {
   vehicleId: string;
 };
@@ -2195,8 +2202,8 @@ export const api = {
     ),
     listCommissions: makeFunctionReference<
       "query",
-      OrgScopedArgs & { salespersonId?: string; paidStatus?: "paid" | "unpaid" | "not_set" },
-      MobileSale[]
+      CommissionListArgs,
+      MobilePageResult<MobileSale>
     >("sales:listCommissions"),
     markCommissionPaid: makeFunctionReference<
       "mutation",
@@ -2974,8 +2981,8 @@ export const api = {
     listCommissions: FunctionReference<
       "query",
       "public",
-      OrgScopedArgs & { salespersonId?: string; paidStatus?: "paid" | "unpaid" | "not_set" },
-      MobileSale[]
+      CommissionListArgs,
+      MobilePageResult<MobileSale>
     >;
     markCommissionPaid: FunctionReference<
       "mutation",

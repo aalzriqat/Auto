@@ -673,16 +673,6 @@ export const softDelete = mutation({
 // ─── Commission Queries & Mutations ──────────────────────────────────────────
 
 /**
- * How many commission rows a single page load may hydrate. Each row costs a
- * vehicle, a customer and a salesperson read, and every Convex function has a
- * hard ceiling on database calls — so an unbounded list does not degrade
- * gracefully at scale, it fails outright once a dealership has enough history.
- * The newest sales win the budget; older ones are reached with the filters.
- */
-const COMMISSION_PAGE_DEFAULT = 300;
-const COMMISSION_PAGE_MAX = 1000;
-
-/**
  * Caches the in-flight promise rather than the resolved document. The hydration
  * loop runs its rows concurrently, so a cache that only records the value after
  * its own `await` is populated too late to prevent any of the duplicate reads it
@@ -709,7 +699,7 @@ export const listCommissions = query({
     paidStatus: v.optional(
       v.union(v.literal("paid"), v.literal("unpaid"), v.literal("not_set"))
     ),
-    limit: v.optional(v.number()),
+    paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
     const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_COMMISSIONS]);
@@ -736,34 +726,27 @@ export const listCommissions = query({
     // queue rather than an absence of records.
     const isManualMode = mode === "MANUAL";
 
-    // Convex accepts NaN and ±Infinity for a v.number(), and every comparison
-    // against NaN is false — so `candidates.length >= limit` would never break
-    // the walk below and the page would read every sale in the org, which is
-    // exactly the failure the bound exists to prevent. Anything not finite
-    // falls back to the default rather than silently disabling the cap.
-    const requested = args.limit;
-    const limit = Number.isFinite(requested)
-      ? Math.min(Math.max(Math.floor(requested as number), 1), COMMISSION_PAGE_MAX)
-      : COMMISSION_PAGE_DEFAULT;
-
-    // Walk the index newest-first and stop once the page is full, so the number
-    // of documents this query touches is bounded by `limit` rather than by how
-    // long the dealership has been trading. A sale can only make the list if it
-    // already carries a commission, it's a completed sale in MANUAL mode
-    // (decided or not), or (auto mode) it's a completed sale that might be
-    // flagged for a missing cost basis. Everything else — drafts, cancelled
-    // sales with no commission — is skipped before any vehicle read.
+    // Paginated on the sale-date index, newest first. A page reads a fixed
+    // number of DOCUMENTS, not "however many it takes to find N matches" — the
+    // difference matters most in the steady state a diligent manager creates,
+    // where the review queue is empty and a match-counting scan would read the
+    // dealership's entire history every time they open the page.
+    //
+    // The candidate rules run in JS rather than through `.filter()` so the page
+    // size stays the read budget. A page may therefore come back short, or
+    // empty, while more pages remain; that is what `isDone` is for.
     const salesQuery = salespersonId
       ? ctx.db
           .query("sales")
-          .withIndex("by_org_salesperson", (q) =>
+          .withIndex("by_org_salesperson_saleDate", (q) =>
             q.eq("orgId", args.orgId).eq("salespersonId", salespersonId)
           )
       : ctx.db.query("sales").withIndex("by_org_saleDate", (q) => q.eq("orgId", args.orgId));
 
-    const candidates: Doc<"sales">[] = [];
-    for await (const sale of salesQuery.order("desc")) {
-      if (sale.isDeleted) continue;
+    const pageResult = await salesQuery.order("desc").paginate(args.paginationOpts);
+
+    const candidates = pageResult.page.filter((sale) => {
+      if (sale.isDeleted) return false;
       const isVoid = sale.status === "CANCELLED" && (sale.commissionAmount ?? 0) > 0;
       const isCandidate =
         isCommissionOwed(sale) ||
@@ -774,24 +757,19 @@ export const listCommissions = query({
         isVoid ||
         (isAutoMode && sale.status === "COMPLETED" && sale.commissionAmount == null) ||
         (isManualMode && sale.status === "COMPLETED");
-      if (!isCandidate) continue;
-      // The status filter reads only stored fields, so applying it here instead
-      // of after hydration means the page budget is spent entirely on rows the
-      // caller actually asked for — the review queue in particular must never
-      // be emptied just because the newest sales happen to be decided.
+      if (!isCandidate) return false;
       // "unpaid" means still settleable and not yet settled; "not_set" narrows
       // that to the rows awaiting a decision.
-      if (args.paidStatus === "paid" && sale.commissionPaidAt == null) continue;
-      if (args.paidStatus === "unpaid" && (sale.commissionPaidAt != null || isVoid)) continue;
+      if (args.paidStatus === "paid" && sale.commissionPaidAt == null) return false;
+      if (args.paidStatus === "unpaid" && (sale.commissionPaidAt != null || isVoid)) return false;
       if (
         args.paidStatus === "not_set" &&
         (sale.commissionPaidAt != null || sale.commissionAmount != null || isVoid)
       ) {
-        continue;
+        return false;
       }
-      candidates.push(sale);
-      if (candidates.length >= limit) break;
-    }
+      return true;
+    });
 
     const getVehicle = makeDocCache<"vehicles">(ctx);
     const getCustomer = makeDocCache<"customers">(ctx);
@@ -838,24 +816,30 @@ export const listCommissions = query({
         (isManualMode && h.sale.status === "COMPLETED")
     );
 
-    // Payroll only ever sweeps commissions for members who are still active
+    // Payroll only ever sweeps commissions for members who are still ACTIVE
     // (collectUnpaidCommissions), and approval hard-rejects a run containing an
     // offboarded one. Opening the manual entry point makes it possible to enter
     // an amount for someone who has left, which would then sit as "pending"
-    // forever with no error anywhere. Team size is small, so one collect here
-    // buys an honest warning on the row. See PR 3 for actually settling them.
-    const offboardedMemberIds = new Set(
+    // forever with no error anywhere.
+    //
+    // Built as the set payroll actually uses rather than "memberships carrying
+    // an offboardingStatus": finalizeMembershipOffboardingJob DELETES the
+    // membership once removal succeeds, so testing for the in-progress flag
+    // would report a fully-departed salesperson as fine — precisely the case
+    // where payroll will never pay them. Absent from the set is the condition.
+    // See PR 3 for actually settling them.
+    const activeMemberIds = new Set(
       (
         await ctx.db
           .query("memberships")
           .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
           .collect()
       )
-        .filter((m) => m.offboardingStatus)
+        .filter((m) => !m.offboardingStatus)
         .map((m) => m.userId as string)
     );
 
-    return await Promise.all(
+    const page = await Promise.all(
       listed.map(async ({ sale, vehicle, missingPurchaseCost, needsRecalculation }) => {
         const customer = await getCustomer(sale.customerId);
         const salesperson = await getUser(sale.salespersonId);
@@ -877,10 +861,12 @@ export const listCommissions = query({
           needsRecalculation,
           commissionStatus: deriveCommissionStatus(sale),
           canSetAmount,
-          salespersonOffboarded: offboardedMemberIds.has(sale.salespersonId),
+          salespersonOffboarded: !activeMemberIds.has(sale.salespersonId),
         };
       })
     );
+
+    return { ...pageResult, page };
   },
 });
 

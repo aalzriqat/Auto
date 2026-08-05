@@ -1024,6 +1024,12 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_salesperson", ["orgId", "salespersonId"])
+    // Same ordering guarantee as by_org_saleDate, but scoped to one
+    // salesperson. by_org_salesperson orders by _creationTime, so paging a
+    // single rep's commissions through it would order by when the row was
+    // created rather than the sale date the UI sorts and displays — a draft
+    // created early but completed later would land in the wrong page.
+    .index("by_org_salesperson_saleDate", ["orgId", "salespersonId", "saleDate"])
     .index("by_org_saleDate", ["orgId", "saleDate"])
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_quote", ["quoteId"])

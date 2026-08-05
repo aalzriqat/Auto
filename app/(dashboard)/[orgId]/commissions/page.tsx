@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -33,10 +33,10 @@ import { Doc, Id } from "@/convex/_generated/dataModel";
 import { CommissionPaymentDialog } from "@/components/commissions/CommissionPaymentDialog";
 import { type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { useTableControls } from "@/hooks/useTableControls";
-import { getErrorMessage } from "@/lib/errors";
+import { getErrorMessage, GENERIC_ERROR_MESSAGE } from "@/lib/errors";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 
-type CommissionStatus = "NOT_SET" | "NO_COMMISSION" | "UNPAID" | "PAID" | "VOID";
+type CommissionStatus = "NOT_SET" | "NO_COMMISSION" | "UNPAID" | "PAID" | "VOID" | "PENDING_SALE";
 
 type CommissionSale = Doc<"sales"> & {
   vehicleSummary: string;
@@ -52,11 +52,28 @@ type CommissionSale = Doc<"sales"> & {
 
 type StatusFilter = "all" | "paid" | "unpaid" | "not_set";
 
-/** Must stay at or below COMMISSION_PAGE_MAX in convex/sales.ts. */
-const PAGE_LIMIT = 300;
+/**
+ * Rows fetched per page. The server reads this many sale DOCUMENTS and returns
+ * only the ones that belong on this page, so a page can come back short — or
+ * empty — while more remain. That is deliberate: it makes the read cost of one
+ * request fixed instead of proportional to how long the dealership has traded.
+ */
+const PAGE_SIZE = 100;
 
 function formatCurrency(amount: number) {
   return amount.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
+
+/**
+ * The server's own words when it has something specific to say ("this
+ * commission is already recorded in the ledger", "a cancelled sale cannot be
+ * given a commission"), and the caller's translated string when it does not.
+ * `getErrorMessage` falls back to an English sentence for unexpected failures,
+ * which would be the one untranslated line on an Arabic screen.
+ */
+function errorToast(error: unknown, fallback: string): string {
+  const message = getErrorMessage(error);
+  return message === GENERIC_ERROR_MESSAGE ? fallback : message;
 }
 
 export default function CommissionsPage() {
@@ -73,19 +90,26 @@ export default function CommissionsPage() {
   const [filterSalesperson, setFilterSalesperson] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<StatusFilter>("all");
 
-  const commissions = useQuery(
+  const {
+    results: loadedCommissions,
+    status: pageStatus,
+    loadMore,
+  } = usePaginatedQuery(
     api.sales.listCommissions,
     activeOrgId ? {
       orgId: activeOrgId,
       salespersonId: filterSalesperson !== "all" ? (filterSalesperson as Id<"users">) : undefined,
       paidStatus: filterStatus !== "all" ? filterStatus : undefined,
-      limit: PAGE_LIMIT,
-    } : "skip"
+    } : "skip",
+    { initialNumItems: PAGE_SIZE }
   );
-  // The server bounds how many rows one load may hydrate. Receiving a full page
-  // means older sales exist beyond it — say so rather than quietly presenting a
-  // partial list (and partial totals) as the whole picture.
-  const isTruncated = (commissions?.length ?? 0) >= PAGE_LIMIT;
+  const isLoadingFirstPage = pageStatus === "LoadingFirstPage";
+  const commissions = isLoadingFirstPage ? undefined : loadedCommissions;
+  // Everything below the cards is summed over the rows that have been loaded.
+  // While more remain, the totals are a running subtotal, not the year's
+  // figures — a currency amount that quietly means something narrower than its
+  // label is worse than one that admits it.
+  const hasMore = pageStatus === "CanLoadMore" || pageStatus === "LoadingMore";
 
   const {
     search,
@@ -96,6 +120,12 @@ export default function CommissionsPage() {
     rows: sortedCommissions,
   } = useTableControls({
     data: commissions,
+    // The server pages by documents read, not by matches found, so a filtered
+    // page routinely comes back short or empty while matching rows sit further
+    // back. Without this the review queue would report "nothing to review" over
+    // real work — the closed loop this whole page exists to open, in a new
+    // disguise. Searching already exhausts for exactly the same reason.
+    pagination: { status: pageStatus, loadMore, exhaustWhen: filterStatus !== "all" },
     searchFields: (c: CommissionSale) => [c.salespersonName, c.vehicleSummary, c.customerName],
     sortAccessors: {
       saleDate: (c: CommissionSale) => c.saleDate,
@@ -162,7 +192,7 @@ export default function CommissionsPage() {
       setCommissionToPay(null);
       setPaymentMethod("CASH");
     } catch (e) {
-      toast.error(getErrorMessage(e));
+      toast.error(errorToast(e, t("CommissionPaymentFailed" as any)));
     } finally {
       setIsPayingCommission(false);
     }
@@ -176,8 +206,8 @@ export default function CommissionsPage() {
     } catch (e) {
       // `e.message` here is Convex's transport wrapper — it carries the request
       // id, the stack and the convex/ source path straight to the screen.
-      // getErrorMessage strips all of that and falls back to a generic string.
-      toast.error(getErrorMessage(e));
+      // getErrorMessage strips all of that.
+      toast.error(errorToast(e, t("CommissionUpdateFailed" as any)));
     }
   }
 
@@ -200,7 +230,7 @@ export default function CommissionsPage() {
       // amounts cannot be changed" and "cancelled sale" — each tells the
       // manager something different about what to do next. Collapsing them
       // into one generic string sends them to support instead.
-      toast.error(getErrorMessage(e));
+      toast.error(errorToast(e, t("CommissionUpdateFailed" as any)));
     }
   }
 
@@ -332,13 +362,22 @@ export default function CommissionsPage() {
           </Select>
         </div>
 
-        {/* The totals above sum only the rows that arrived. Once the server has
-            capped the page they cover a recent slice, not the whole ledger —
+        {/* The totals above sum only what has been loaded. While older sales
+            remain unfetched they are a running subtotal, not the whole ledger —
             an unqualified currency figure would be quietly wrong. */}
-        {isTruncated && (
-          <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+        {hasMore && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
             <p>{t("CommissionListTruncated" as any)}</p>
+            <Button
+              variant="link"
+              size="sm"
+              className="h-auto p-0 text-sm text-amber-900 dark:text-amber-200"
+              disabled={pageStatus !== "CanLoadMore"}
+              onClick={() => loadMore(PAGE_SIZE)}
+            >
+              {pageStatus === "LoadingMore" ? t("Loading" as any) : t("LoadMore" as any)}
+            </Button>
           </div>
         )}
 
@@ -367,17 +406,22 @@ export default function CommissionsPage() {
               ) : filtered.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={canManage ? 8 : 7} className="text-center py-8 text-muted-foreground">
-                    {/* Three different empty states. With a filter on, nothing
-                        is wrong — the filter just excluded everything. With no
-                        filter in MANUAL mode there are simply no completed
-                        sales yet. The original copy ("set a commission rate on
-                        team members") only makes sense in an automatic mode;
+                    {/* "Nothing matches" is a claim about the whole dataset, so
+                        it must not be made while pages are still unread — that
+                        would put a definitive denial directly above a banner
+                        offering to load more. With a filter on, nothing is
+                        wrong; the filter simply excluded everything. With no
+                        filter in MANUAL mode there are no completed sales yet.
+                        The original copy ("set a commission rate on team
+                        members") only makes sense in an automatic mode —
                         MANUAL has no rates by definition. */}
-                    {hasActiveFilter
-                      ? t("NoCommissionRecordsForFilter" as any)
-                      : isManualMode
-                        ? t("NoCompletedSalesYet" as any)
-                        : t("NoCommissionRecords" as any)}
+                    {hasMore
+                      ? t("Loading" as any)
+                      : hasActiveFilter
+                        ? t("NoCommissionRecordsForFilter" as any)
+                        : isManualMode
+                          ? t("NoCompletedSalesYet" as any)
+                          : t("NoCommissionRecords" as any)}
                   </TableCell>
                 </TableRow>
               ) : (

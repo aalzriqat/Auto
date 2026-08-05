@@ -26,6 +26,33 @@ vi.mock("./rateLimit", () => ({
 
 type Ids = Awaited<ReturnType<typeof seedCommissionOrg>>;
 
+/**
+ * Reads every page, so an assertion covers the whole result set rather than
+ * whichever rows happened to land on page one — and, because the deliberately
+ * tiny default page size means most of these tests span several pages, it also
+ * exercises the cursor on every single call.
+ */
+async function listAll(
+  caller: { query: (fn: any, args: any) => Promise<any> },
+  args: Record<string, unknown>,
+  numItems = 3
+): Promise<any[]> {
+  const rows: any[] = [];
+  let cursor: string | null = null;
+  // Guard rather than `while (true)`: a cursor that stops advancing would
+  // otherwise hang the suite instead of failing it.
+  for (let page = 0; page < 200; page++) {
+    const result = await caller.query(api.sales.listCommissions, {
+      ...args,
+      paginationOpts: { numItems, cursor },
+    });
+    rows.push(...result.page);
+    if (result.isDone) return rows;
+    cursor = result.continueCursor;
+  }
+  throw new Error("listAll: pagination did not terminate");
+}
+
 async function seedCommissionOrg(
   t: ReturnType<typeof convexTestWithComponents>,
   suffix: string,
@@ -154,7 +181,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
 
     const saleId = await completedSale(ids);
 
-    const rows = await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId });
+    const rows = await listAll(ids.asAdmin, { orgId: ids.orgId });
     const row = rows.find((r) => r._id === saleId);
     // Pre-fix this was `undefined` — the sale was simply absent from the page,
     // which is why the first amount could never be entered.
@@ -176,7 +203,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
       commissionAmount: 250,
     });
 
-    const rows = await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId });
+    const rows = await listAll(ids.asAdmin, { orgId: ids.orgId });
     const row = rows.find((r) => r._id === saleId);
     expect(row?.commissionAmount).toBe(250);
     expect(row?.commissionStatus).toBe("UNPAID");
@@ -194,10 +221,10 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
       commissionAmount: 0,
     });
 
-    const all = await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId });
+    const all = await listAll(ids.asAdmin, { orgId: ids.orgId });
     expect(all.find((r) => r._id === saleId)?.commissionStatus).toBe("NO_COMMISSION");
 
-    const notSet = await ids.asAdmin.query(api.sales.listCommissions, {
+    const notSet = await listAll(ids.asAdmin, {
       orgId: ids.orgId,
       paidStatus: "not_set",
     });
@@ -218,7 +245,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
       commissionAmount: 300,
     });
 
-    const notSet = await ids.asAdmin.query(api.sales.listCommissions, {
+    const notSet = await listAll(ids.asAdmin, {
       orgId: ids.orgId,
       paidStatus: "not_set",
     });
@@ -226,13 +253,13 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
 
     // "unpaid" keeps its original meaning — everything not yet settled — so an
     // existing saved view does not silently lose rows.
-    const unpaid = await ids.asAdmin.query(api.sales.listCommissions, {
+    const unpaid = await listAll(ids.asAdmin, {
       orgId: ids.orgId,
       paidStatus: "unpaid",
     });
     expect([...unpaid.map((r) => r._id)].sort()).toEqual([undecided, decided].sort());
 
-    const paid = await ids.asAdmin.query(api.sales.listCommissions, {
+    const paid = await listAll(ids.asAdmin, {
       orgId: ids.orgId,
       paidStatus: "paid",
     });
@@ -254,7 +281,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
       financingType: "CASH",
     });
 
-    const rows = await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId });
+    const rows = await listAll(ids.asAdmin, { orgId: ids.orgId });
     expect(rows.find((r) => r._id === draftId)).toBeUndefined();
   });
 
@@ -271,7 +298,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
     const sale = await t.run((ctx) => ctx.db.get(saleId));
     expect(sale?.commissionAmount).toBe(0);
 
-    const rows = await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId });
+    const rows = await listAll(ids.asAdmin, { orgId: ids.orgId });
     expect(rows.find((r) => r._id === saleId)).toBeUndefined();
   });
 
@@ -285,7 +312,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
     const theirSale = await completedSale(theirs);
     const mySale = await completedSale(mine);
 
-    const rows = await mine.asAdmin.query(api.sales.listCommissions, { orgId: mine.orgId });
+    const rows = await listAll(mine.asAdmin, { orgId: mine.orgId });
     expect(rows.map((r) => r._id)).toEqual([mySale]);
 
     // And the cross-tenant write is refused, not silently applied.
@@ -327,7 +354,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
 
     // The rep asks for somebody else's rows; the server forces the scope back
     // to their own, which is empty.
-    const rows = await asRep.query(api.sales.listCommissions, {
+    const rows = await listAll(asRep, {
       orgId: ids.orgId,
       salespersonId: ids.userId,
     });
@@ -360,7 +387,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
       })
     ).rejects.toThrow(/cancelled sale/i);
 
-    const rows = await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId });
+    const rows = await listAll(ids.asAdmin, { orgId: ids.orgId });
     expect(rows.find((r) => r._id === saleId)).toBeUndefined();
   });
 
@@ -381,21 +408,21 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
     await t.run((ctx) => ctx.db.patch(saleId, { status: "CANCELLED" }));
     expect(await t.run((ctx) => ctx.db.get(saleId))).toMatchObject({ commissionAmount: 500 });
 
-    const rows = await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId });
+    const rows = await listAll(ids.asAdmin, { orgId: ids.orgId });
     const row = rows.find((r) => r._id === saleId);
     expect(row?.commissionStatus).toBe("VOID");
     expect(row?.canSetAmount).toBe(false);
 
     // And the page's "unpaid" view — the one a manager reads as money owed —
     // must not contain it at all.
-    const unpaid = await ids.asAdmin.query(api.sales.listCommissions, {
+    const unpaid = await listAll(ids.asAdmin, {
       orgId: ids.orgId,
       paidStatus: "unpaid",
     });
     expect(unpaid.find((r) => r._id === saleId)).toBeUndefined();
 
     // Nor the review queue: it is not awaiting a decision, it is finished.
-    const notSet = await ids.asAdmin.query(api.sales.listCommissions, {
+    const notSet = await listAll(ids.asAdmin, {
       orgId: ids.orgId,
       paidStatus: "not_set",
     });
@@ -421,7 +448,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
 
     // The commissions page and the reconciliation must agree on what is owed:
     // one live commission of 500, not two.
-    const rows = await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId });
+    const rows = await listAll(ids.asAdmin, { orgId: ids.orgId });
     const owed = rows.filter((r) => r.commissionStatus === "UNPAID");
     expect(owed.map((r) => r._id)).toEqual([live]);
     expect(owed.reduce((sum, r) => sum + (r.commissionAmount ?? 0), 0)).toBe(500);
@@ -527,7 +554,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
       commissionAmount: 250,
     });
 
-    const before = await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId });
+    const before = await listAll(ids.asAdmin, { orgId: ids.orgId });
     expect(before.find((r) => r._id === saleId)?.salespersonOffboarded).toBe(false);
 
     await t.run((ctx) =>
@@ -537,82 +564,18 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
     // collectUnpaidCommissions skips non-active members, so without this flag
     // the amount would sit as "pending payout" forever with no run ever
     // picking it up and no error raised anywhere.
-    const after = await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId });
+    const after = await listAll(ids.asAdmin, { orgId: ids.orgId });
     expect(after.find((r) => r._id === saleId)?.salespersonOffboarded).toBe(true);
   });
 
-  test("the page is bounded: a limit caps the rows returned, newest first", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
-    const ids = await seedCommissionOrg(t, "manual_limit");
-    await setMode(t, ids.orgId, "MANUAL");
-
-    // Five completed sales, one day apart, oldest first.
-    const base = Date.UTC(2026, 0, 1);
-    const saleIds: string[] = [];
-    for (let i = 0; i < 5; i++) {
-      const extra = await extraVehicleAndCustomer(t, ids.orgId, `manual_limit_${i}`);
-      saleIds.push(
-        await ids.asAdmin.mutation(api.sales.create, {
-          orgId: ids.orgId,
-          vehicleId: extra.vehicleId,
-          customerId: extra.customerId,
-          salespersonId: ids.userId,
-          salePrice: 15000,
-          saleDate: base + i * 86_400_000,
-          status: "COMPLETED",
-          financingType: "CASH",
-        })
-      );
-    }
-
-    const all = await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId });
-    expect(all).toHaveLength(5);
-
-    // An unbounded query is what fails outright once a dealership has enough
-    // history, so the cap must actually bind — and keep the NEWEST sales, which
-    // are the ones still awaiting a decision.
-    const capped = await ids.asAdmin.query(api.sales.listCommissions, {
-      orgId: ids.orgId,
-      limit: 2,
-    });
-    expect(capped).toHaveLength(2);
-    expect([...capped.map((r) => r._id)].sort()).toEqual([saleIds[3], saleIds[4]].sort());
-  });
-
-  test("a non-finite limit falls back to the default instead of disabling the cap", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
-    const ids = await seedCommissionOrg(t, "manual_nan");
-    await setMode(t, ids.orgId, "MANUAL");
-    await completedSale(ids);
-
-    // Convex accepts NaN for a v.number(), and `n >= NaN` is false forever — so
-    // an unguarded cap would never break its walk and would read every sale in
-    // the org. The query must still work, and still be bounded.
-    for (const limit of [NaN, Infinity, -Infinity]) {
-      const rows = await ids.asAdmin.query(api.sales.listCommissions, {
-        orgId: ids.orgId,
-        limit,
-      });
-      expect(rows).toHaveLength(1);
-    }
-
-    // A fractional or out-of-range limit is clamped, not rejected.
-    expect(
-      await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId, limit: 0 })
-    ).toHaveLength(1);
-    expect(
-      await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId, limit: 1.9 })
-    ).toHaveLength(1);
-  });
-
-  test("the not_set filter is applied before the cap, so the review queue is never lossy", async () => {
+  test("an older undecided sale is still reachable behind pages of decided ones", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const ids = await seedCommissionOrg(t, "manual_queue");
     await setMode(t, ids.orgId, "MANUAL");
 
     const base = Date.UTC(2026, 0, 1);
     const saleIds: string[] = [];
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 6; i++) {
       const extra = await extraVehicleAndCustomer(t, ids.orgId, `manual_queue_${i}`);
       saleIds.push(
         await ids.asAdmin.mutation(api.sales.create, {
@@ -627,8 +590,12 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
         })
       );
     }
-    // The two NEWEST are decided; the two oldest are still awaiting review.
-    for (const saleId of [saleIds[2], saleIds[3]]) {
+    // Everything except the OLDEST is decided, so with a page size of 2 the
+    // first two pages of the review queue come back completely empty. A query
+    // that stopped at the first empty page — or that counted matches instead of
+    // documents and gave up — would report an empty queue while real work sits
+    // underneath it. That is the original closed loop in a new disguise.
+    for (const saleId of saleIds.slice(1)) {
       await ids.asAdmin.mutation(api.sales.setCommissionAmount, {
         orgId: ids.orgId,
         saleId: saleId as any,
@@ -636,15 +603,183 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
       });
     }
 
-    // Capping candidates BEFORE filtering would return an empty review queue
-    // here — the newest two fill the page and both are decided. That would be
-    // the original closed loop in a new disguise.
-    const queue = await ids.asAdmin.query(api.sales.listCommissions, {
+    const queue = await listAll(ids.asAdmin, { orgId: ids.orgId, paidStatus: "not_set" }, 2);
+    expect(queue.map((r) => r._id)).toEqual([saleIds[0]]);
+  });
+
+  test("a page reads a fixed number of documents, not 'as many as it takes to find a match'", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const ids = await seedCommissionOrg(t, "manual_sparse");
+    await setMode(t, ids.orgId, "MANUAL");
+
+    // Ten completed sales, none of them paid. Asking for "paid" matches
+    // nothing at all — the steady state a diligent manager creates, and the
+    // case where a match-counting scan reads the dealership's entire history
+    // on every page load.
+    for (let i = 0; i < 10; i++) {
+      const extra = await extraVehicleAndCustomer(t, ids.orgId, `manual_sparse_${i}`);
+      await ids.asAdmin.mutation(api.sales.create, {
+        orgId: ids.orgId,
+        vehicleId: extra.vehicleId,
+        customerId: extra.customerId,
+        salespersonId: ids.userId,
+        salePrice: 15000,
+        saleDate: Date.UTC(2026, 0, 1) + i * 86_400_000,
+        status: "COMPLETED",
+        financingType: "CASH",
+      });
+    }
+
+    // A page of 3 documents that matches nothing must still come back — short,
+    // not done, with a cursor — rather than scanning on until it finds three.
+    const firstPage = await ids.asAdmin.query(api.sales.listCommissions, {
       orgId: ids.orgId,
-      paidStatus: "not_set",
-      limit: 2,
+      paidStatus: "paid",
+      paginationOpts: { numItems: 3, cursor: null },
     });
-    expect([...queue.map((r) => r._id)].sort()).toEqual([saleIds[0], saleIds[1]].sort());
+    expect(firstPage.page).toHaveLength(0);
+    expect(firstPage.isDone).toBe(false);
+    expect(typeof firstPage.continueCursor).toBe("string");
+
+    // And walking the cursor to the end still finds nothing, without hanging.
+    expect(await listAll(ids.asAdmin, { orgId: ids.orgId, paidStatus: "paid" }, 3)).toHaveLength(0);
+  });
+
+  test("a positive commission on a DRAFT is not owed by anyone", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const ids = await seedCommissionOrg(t, "manual_draftamt");
+    await setMode(t, ids.orgId, "MANUAL");
+
+    // Setting an amount on a draft is supported — it survives completion by
+    // design. But until the sale completes nothing is earned and nothing is
+    // accrued, so it must not appear as a payable on any surface.
+    const draftId = await ids.asAdmin.mutation(api.sales.createDraft, {
+      orgId: ids.orgId,
+      vehicleId: ids.vehicleId,
+      customerId: ids.customerId,
+      salespersonId: ids.userId,
+      salePrice: 15000,
+      saleDate: Date.now(),
+      financingType: "CASH",
+    });
+    await ids.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: ids.orgId,
+      saleId: draftId,
+      commissionAmount: 400,
+    });
+
+    expect(
+      (await listAll(ids.asAdmin, { orgId: ids.orgId })).find((r) => r._id === draftId)
+    ).toBeUndefined();
+    expect(
+      (await listAll(ids.asAdmin, { orgId: ids.orgId, paidStatus: "unpaid" })).find(
+        (r) => r._id === draftId
+      )
+    ).toBeUndefined();
+
+    // Completing it is what makes the money real — and the amount survives.
+    await ids.asAdmin.mutation(api.sales.completeDraft, {
+      orgId: ids.orgId,
+      saleId: draftId,
+      idempotencyKey: "draft-amount-completes",
+    });
+    const after = (await listAll(ids.asAdmin, { orgId: ids.orgId })).find(
+      (r) => r._id === draftId
+    );
+    expect(after?.commissionStatus).toBe("UNPAID");
+    expect(after?.commissionAmount).toBe(400);
+  });
+
+  test("a salesperson whose membership was deleted is flagged, not silently fine", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const ids = await seedCommissionOrg(t, "manual_gone");
+    await setMode(t, ids.orgId, "MANUAL");
+
+    const repUserId = await t.run((ctx) =>
+      ctx.db.insert("users", {
+        clerkId: "comm_manual_gone_rep",
+        email: "gone@example.com",
+        name: "Gone Rep",
+      })
+    );
+    const repMembershipId = await t.run(async (ctx) => {
+      const roleId = await ctx.db.insert("roles", {
+        orgId: ids.orgId,
+        name: "Rep",
+        permissions: ["view:commissions"],
+      });
+      return await ctx.db.insert("memberships", { orgId: ids.orgId, userId: repUserId, roleId });
+    });
+
+    const saleId = await ids.asAdmin.mutation(api.sales.create, {
+      orgId: ids.orgId,
+      vehicleId: ids.vehicleId,
+      customerId: ids.customerId,
+      salespersonId: repUserId,
+      salePrice: 15000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+    await ids.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: ids.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+
+    // finalizeMembershipOffboardingJob DELETES the membership once external
+    // removal succeeds. Looking for an in-progress offboardingStatus would find
+    // nothing and report this rep as fine — exactly when payroll's active-member
+    // filter guarantees they will never be paid.
+    await t.run((ctx) => ctx.db.delete(repMembershipId));
+
+    const rows = await listAll(ids.asAdmin, { orgId: ids.orgId });
+    expect(rows.find((r) => r._id === saleId)?.salespersonOffboarded).toBe(true);
+  });
+
+  test("a rep's own page is ordered by sale date, not by when the row was created", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const ids = await seedCommissionOrg(t, "manual_repdate");
+    await setMode(t, ids.orgId, "MANUAL");
+
+    // Created oldest-first but back-dated in the opposite order, so creation
+    // order and sale-date order disagree. by_org_salesperson orders by
+    // _creationTime, which would page these the wrong way round.
+    const dates = [Date.UTC(2026, 5, 1), Date.UTC(2026, 3, 1), Date.UTC(2026, 7, 1)];
+    const saleIds: string[] = [];
+    for (let i = 0; i < dates.length; i++) {
+      const extra = await extraVehicleAndCustomer(t, ids.orgId, `manual_repdate_${i}`);
+      saleIds.push(
+        await ids.asAdmin.mutation(api.sales.create, {
+          orgId: ids.orgId,
+          vehicleId: extra.vehicleId,
+          customerId: extra.customerId,
+          salespersonId: ids.userId,
+          salePrice: 15000,
+          saleDate: dates[i],
+          status: "COMPLETED",
+          financingType: "CASH",
+        })
+      );
+    }
+
+    const firstPage = await ids.asAdmin.query(api.sales.listCommissions, {
+      orgId: ids.orgId,
+      salespersonId: ids.userId,
+      paginationOpts: { numItems: 1, cursor: null },
+    });
+    // Newest BY SALE DATE is the third one created (August).
+    expect(firstPage.page.map((r: { _id: string }) => r._id)).toEqual([saleIds[2]]);
+
+    // Same assertion on the org-wide index, so neither ordering key can be
+    // reverted without a failure. Both tests deliberately make creation order
+    // and sale-date order disagree — if they agreed, the assertion would hold
+    // for a _creationTime index too and would be pinning nothing.
+    const orgWide = await ids.asAdmin.query(api.sales.listCommissions, {
+      orgId: ids.orgId,
+      paginationOpts: { numItems: 1, cursor: null },
+    });
+    expect(orgWide.page.map((r: { _id: string }) => r._id)).toEqual([saleIds[2]]);
   });
 
   test("a negative amount is rejected instead of being silently clamped to zero", async () => {
@@ -684,7 +819,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
       paymentMethod: "CASH",
     });
 
-    const rows = await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId });
+    const rows = await listAll(ids.asAdmin, { orgId: ids.orgId });
     const row = rows.find((r) => r._id === saleId);
     expect(row?.commissionStatus).toBe("PAID");
     expect(row?.canSetAmount).toBe(false);
@@ -723,7 +858,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
     const saleId = await completedSale(ids);
     await t.run((ctx) => ctx.db.patch(saleId, { isDeleted: true, deletedAt: Date.now() }));
 
-    const rows = await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId });
+    const rows = await listAll(ids.asAdmin, { orgId: ids.orgId });
     expect(rows.find((r) => r._id === saleId)).toBeUndefined();
   });
 });
@@ -786,7 +921,7 @@ describe("MANUAL entry point through to payroll settlement", () => {
     });
 
     // Before the amount is decided, payroll has nothing to sweep.
-    const beforeRows = await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId });
+    const beforeRows = await listAll(ids.asAdmin, { orgId: ids.orgId });
     expect(beforeRows.find((r) => r._id === saleId)?.commissionStatus).toBe("NOT_SET");
     await expect(
       ids.asAdmin.mutation(api.payroll.createRun, {
@@ -822,7 +957,7 @@ describe("MANUAL entry point through to payroll settlement", () => {
     expect(paid?.commissionPaidAt).toBeTypeOf("number");
     expect(paid?.commissionAmount).toBe(250);
 
-    const afterRows = await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId });
+    const afterRows = await listAll(ids.asAdmin, { orgId: ids.orgId });
     expect(afterRows.find((r) => r._id === saleId)?.commissionStatus).toBe("PAID");
 
     // The next period must not find it again — a settled commission is gone
