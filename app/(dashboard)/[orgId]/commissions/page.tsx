@@ -147,6 +147,10 @@ export default function CommissionsPage() {
       map.set(c.salespersonId, existing);
     }
     return Array.from(map.entries()).map(([id, v]) => ({ id, ...v }));
+    // `settleable` is derived from `filtered` on every render, so `filtered` is
+    // the real dependency — keying on the derived array would rebuild the map
+    // each render and defeat the memo.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtered]);
 
   async function handleConfirmMarkPaid() {
@@ -453,7 +457,10 @@ export default function CommissionsPage() {
                           ) : (
                             formatCurrency(c.commissionAmount)
                           )}
-                          {c.canSetAmount && canManage && (
+                          {/* An undecided row already carries a full "Set
+                              commission" button in Actions; a pencil beside the
+                              dash would be a second control for the same thing. */}
+                          {c.canSetAmount && canManage && c.commissionAmount != null && (
                             <button
                               onClick={() => startEditing(c._id, c.commissionAmount)}
                               className="text-muted-foreground hover:text-foreground transition-colors"
@@ -472,7 +479,7 @@ export default function CommissionsPage() {
                           both stay neutral — otherwise the page reads as a
                           backlog of debt that does not exist. */}
                       {c.commissionStatus === "PAID" && c.commissionPaidAt ? (
-                        <Badge variant="outline" className="text-green-600 border-green-600 text-xs">
+                        <Badge variant="outline" className="text-green-600 border-green-600 text-xs whitespace-nowrap">
                           <CheckCircle2 className="h-3 w-3 me-1" />
                           {t("Paid" as any)} {new Date(c.commissionPaidAt).toLocaleDateString()}
                           <span className="ms-1 text-muted-foreground">
@@ -482,7 +489,7 @@ export default function CommissionsPage() {
                       ) : c.commissionStatus === "NOT_SET" ? (
                         <Badge
                           variant="outline"
-                          className="text-muted-foreground text-xs"
+                          className="text-muted-foreground text-xs whitespace-nowrap"
                           title={t("CommissionNotSetHint" as any)}
                         >
                           <CircleDashed className="h-3 w-3 me-1" />
@@ -491,7 +498,7 @@ export default function CommissionsPage() {
                       ) : c.commissionStatus === "NO_COMMISSION" ? (
                         <Badge
                           variant="outline"
-                          className="text-muted-foreground text-xs"
+                          className="text-muted-foreground text-xs whitespace-nowrap"
                           title={t("NoCommissionOwedHint" as any)}
                         >
                           <MinusCircle className="h-3 w-3 me-1" />
@@ -500,14 +507,14 @@ export default function CommissionsPage() {
                       ) : c.commissionStatus === "VOID" ? (
                         <Badge
                           variant="outline"
-                          className="text-muted-foreground text-xs line-through decoration-1"
+                          className="text-muted-foreground text-xs whitespace-nowrap line-through decoration-1"
                           title={t("CommissionVoidHint" as any)}
                         >
                           <Ban className="h-3 w-3 me-1" />
                           {t("CommissionVoid" as any)}
                         </Badge>
                       ) : (
-                        <Badge variant="outline" className="text-orange-600 border-orange-300 text-xs">
+                        <Badge variant="outline" className="text-orange-600 border-orange-300 text-xs whitespace-nowrap">
                           <Clock className="h-3 w-3 me-1" />
                           {t("Unpaid" as any)}
                         </Badge>

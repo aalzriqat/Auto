@@ -241,7 +241,7 @@ export const commonEn = {
   ReviewCommissions: "Review them",
   NoCompletedSalesYet: "No completed sales yet. Once a sale is completed it appears here for its commission decision.",
   NoCommissionRecordsForFilter: "No commissions match these filters.",
-  CommissionListTruncated: "Showing the most recent 300 sales only — the totals above cover just these. Use the filters to reach older ones.",
+  CommissionListTruncated: "Showing the most recent sales only — the totals above cover just these. Use the filters to reach older ones.",
   SalespersonOffboarded: "Offboarded",
   SalespersonOffboardedHint: "This salesperson has been offboarded, so a payroll run will not pick this commission up. Settle it directly.",
 
@@ -1108,7 +1108,7 @@ export const commonAr = {
   ReviewCommissions: "مراجعتها",
   NoCompletedSalesYet: "لا توجد مبيعات مكتملة بعد. بمجرد إتمام أي عملية بيع ستظهر هنا لتحديد عمولتها.",
   NoCommissionRecordsForFilter: "لا توجد عمولات مطابقة لعوامل التصفية.",
-  CommissionListTruncated: "يتم عرض أحدث ٣٠٠ عملية بيع فقط — والإجماليات أعلاه تشمل هذه العمليات وحدها. استخدم عوامل التصفية للوصول إلى الأقدم.",
+  CommissionListTruncated: "يتم عرض أحدث المبيعات فقط — والإجماليات أعلاه تشمل هذه العمليات وحدها. استخدم عوامل التصفية للوصول إلى الأقدم.",
   SalespersonOffboarded: "منتهية خدمته",
   SalespersonOffboardedHint: "تمت إنهاء خدمة هذا الموظف، لذلك لن تلتقط مسيرات الرواتب هذه العمولة. قم بتسويتها مباشرة.",
 
