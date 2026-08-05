@@ -379,7 +379,6 @@ async function computeCloseChecklist(
       computePrepaidRecognitionShortfall(ctx, orgId, period.endDate),
       computeCommissionRecognitionDivergence(ctx, orgId, {
         pendingEvents: [...allPendingOutbox, ...allFailedOutbox],
-        toDate: period.endDate,
       }),
     ]);
 

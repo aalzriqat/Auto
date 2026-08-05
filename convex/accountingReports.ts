@@ -16,7 +16,6 @@ import { requireFeature } from "./subscriptions";
 import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { recognizedDueThroughDateMinor } from "./utils/expenseAmortization";
-import { isCommissionOwed } from "./utils/commission";
 
 /**
  * GL Phase 14 note on aggregation: every aggregate below keys on
@@ -918,7 +917,8 @@ export async function computeCommissionPayableReconciliation(
   orgId: Id<"organizations">,
   toDate: number | undefined
 ): Promise<GlVsSubledgerResult> {
-  const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
+  // No org-currency read here: the subledger side is keyed by the currency each
+  // entry was POSTED in, so today's org currency plays no part.
   const sales = await ctx.db
     .query("sales")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
@@ -1080,8 +1080,6 @@ export async function computeCommissionRecognitionDivergence(
   // override meant to be the escape hatch is never reached.
   provided?: {
     pendingEvents?: Doc<"pendingAccountingEvents">[];
-    /** Bounds the recognition read, as every other checklist input is bounded. */
-    toDate?: number;
   }
 ): Promise<{ unrecognizedCount: number; divergentCount: number; currency: string }> {
   const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
@@ -1108,7 +1106,21 @@ export async function computeCommissionRecognitionDivergence(
     return { unrecognizedCount: 0, divergentCount: 0, currency: orgCurrency };
   }
 
-  const recognized = await computeRecognizedCommissionAsOf(ctx, orgId, provided?.toDate);
+  // CURRENT state on both sides, deliberately — unlike the payable
+  // reconciliation above, which is point-in-time on both sides.
+  //
+  // Bounding recognition at the period end while comparing it against the
+  // sale's CURRENT amount mixes two bases: a sale completed after the period
+  // reads as "never recognized", and a correction posted after the period makes
+  // the period read as divergent. Neither can be cleared by anything — the
+  // events exist, so re-running the backfill changes nothing — and both land on
+  // a warning that must be acknowledged verbatim at every close.
+  //
+  // This control asks "does what the ledger recognized match what was decided",
+  // which is a question about now, not about a date. Its cost is one bounded
+  // read of the org's commission events; the duplicate outbox reads that made
+  // the checklist expensive are threaded in above.
+  const recognized = await computeRecognizedCommissionAsOf(ctx, orgId, undefined);
   const outbox =
     provided?.pendingEvents ??
     (

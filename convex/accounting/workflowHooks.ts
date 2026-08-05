@@ -9,6 +9,7 @@
  * operationally final without a captured, retryable GL record. The queue is
  * re-driven idempotently when a chart is initialized or a period is opened.
  */
+import { ConvexError } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import { postAccountingEvent, PostCommand } from "./postingEngine";
@@ -78,6 +79,24 @@ async function postOrEnqueue(ctx: MutationCtx, cmd: PostCommand): Promise<void> 
     .filter((q) => q.and(q.eq(q.field("kind"), "POST"), q.neq(q.field("status"), "POSTED")))
     .first();
   if (queued) return;
+
+  // Already on the books? Then there is nothing to queue. postAccountingEvent
+  // dedupes on this key, so the enqueued row could never post anything — it
+  // would sit PENDING forever, count as an unposted event against every future
+  // period close, burn an attempt on each drain and finally dead-letter.
+  //
+  // Reachable through ordinary use now that MANUAL accrues at the sale: a July
+  // commission posts in July, July closes, and August's payroll run for July
+  // re-hooks the same accrual at the period-end date — which no longer posts,
+  // so it queued a phantom for an accrual that is already recognized.
+  const alreadyPosted = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", cmd.orgId).eq("idempotencyKey", cmd.idempotencyKey)
+    )
+    .filter((q) => q.eq(q.field("status"), "POSTED"))
+    .first();
+  if (alreadyPosted) return;
 
   // Self-heal: make sure the GENERAL_EXPENSE system account is mapped for this
   // org before the engine tries to resolve it (older charts lack the key).
@@ -891,6 +910,23 @@ export async function isEventQueued(
 export const MAX_COMMISSION_ADJUSTMENTS = 1000;
 
 /**
+ * The correction count, or null when it cannot be trusted.
+ *
+ * `Math.min(NaN, MAX)` is NaN and `1 <= NaN` is false, so clamping a corrupt
+ * counter makes every walk over it quietly do nothing — the settlement guard
+ * sees no corrections, the reversal leaves their deltas on the books, and both
+ * report success. `sales` rows are writable through the admin raw-JSON editor,
+ * so this is the threat model the ceiling exists for. Every caller that walks
+ * the counter uses this, and each decides for itself whether null means refuse
+ * or fail closed.
+ */
+export function safeAdjustmentSeq(adjustmentSeq: number | undefined): number | null {
+  const seq = adjustmentSeq ?? 0;
+  if (!Number.isSafeInteger(seq) || seq < 0 || seq > MAX_COMMISSION_ADJUSTMENTS) return null;
+  return seq;
+}
+
+/**
  * What the ledger has actually recognized for this sale's commission — the
  * posted accrual plus every posted correction, in minor units.
  *
@@ -926,7 +962,11 @@ export async function recognizedCommissionMinor(
   // legitimate settlement gets refused after an org changes its currency.
   // `null` means "recognized, but not in this currency", which is a different
   // problem from a wrong amount and deserves its own message.
-  const seq = Math.min(sale.commissionAdjustmentSeq ?? 0, MAX_COMMISSION_ADJUSTMENTS);
+  // Unreadable counter ⇒ recognition cannot be computed. Returning a partial
+  // total would let a settlement compare against a number that silently omits
+  // corrections, which is the same failure as not checking at all.
+  const seq = safeAdjustmentSeq(sale.commissionAdjustmentSeq);
+  if (seq === null) return null;
   let total = 0;
   let sawAny = false;
   let sawCurrency = false;
@@ -961,7 +1001,11 @@ export async function commissionEntriesStillQueued(
   // covers entries that queue; nothing covered entries that post directly.
   if (await isEventQueued(ctx, orgId, `sale_completed_${sale._id}`)) return true;
   if (await isEventQueued(ctx, orgId, `commission_accrued_${sale._id}`)) return true;
-  const seq = Math.min(sale.commissionAdjustmentSeq ?? 0, MAX_COMMISSION_ADJUSTMENTS);
+  const seq = safeAdjustmentSeq(sale.commissionAdjustmentSeq);
+  // A counter this code cannot read is treated as "something is outstanding".
+  // Reporting "nothing queued" on unreadable evidence is an ALLOW, and what it
+  // would allow is a settlement clearing corrections nobody could enumerate.
+  if (seq === null) return true;
   for (let sequence = 1; sequence <= seq; sequence++) {
     if (await isEventQueued(ctx, orgId, `commission_adjusted_${sale._id}_${sequence}`)) return true;
   }
@@ -1225,7 +1269,19 @@ export async function reverseCommissionForSale(
     actorId: args.actorId,
     reversalDate: args.reversalDate,
   });
-  const seq = Math.min(args.adjustmentSeq, MAX_COMMISSION_ADJUSTMENTS);
+  // Validated, not clamped. `Math.min(NaN, MAX)` is NaN and `1 <= NaN` is
+  // false, so a NaN or negative counter silently reversed the accrual alone and
+  // left every correction's expense and payable posted against a sale that no
+  // longer exists — the cancellation reporting success either way. A counter
+  // this code cannot trust is a reason to refuse the cancellation, not to
+  // reverse part of it: setCommissionAmount refuses to issue a sequence past
+  // the ceiling, so a valid row can never be in this state.
+  const seq = safeAdjustmentSeq(args.adjustmentSeq);
+  if (seq === null) {
+    throw new ConvexError(
+      "This sale's commission correction count is not a usable number, so its ledger entries cannot be reversed safely. Have accounting review it before cancelling."
+    );
+  }
   for (let sequence = 1; sequence <= seq; sequence++) {
     await hookCommissionAdjustmentReversed(ctx, {
       orgId: args.orgId,

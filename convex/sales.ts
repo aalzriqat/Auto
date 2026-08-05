@@ -18,7 +18,7 @@ import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation"
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
-import { getOrgCurrency, hookCommissionAccrued, hookCommissionAdjusted, hookCommissionPaid, hookSaleCancelled, isPostableNow, reverseCommissionForSale, commissionAccountingDate, commissionEntriesStillQueued, recognizedCommissionMinor, MAX_COMMISSION_ADJUSTMENTS } from "./accounting/workflowHooks";
+import { getOrgCurrency, hookCommissionAccrued, hookCommissionAdjusted, hookCommissionPaid, hookSaleCancelled, isPostableNow, reverseCommissionForSale, commissionAccountingDate, commissionEntriesStillQueued, recognizedCommissionMinor, safeAdjustmentSeq, MAX_COMMISSION_ADJUSTMENTS } from "./accounting/workflowHooks";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 import { toMinorUnits, fromMinorUnits, assertFiniteNumber } from "./utils/money";
 
@@ -1342,6 +1342,20 @@ export const setCommissionAmount = mutation({
         // information, and burning a sequence number on it would make the
         // adjustment count overstate how many real corrections happened.
         if (deltaMinor !== 0) {
+          // Validated FIRST, so an unusable counter is reported as what it is.
+          // `NaN + 1` is NaN and `NaN > MAX` is false, so a corrupt counter
+          // sailed past the ceiling and minted the key
+          // `commission_adjusted_<saleId>_NaN` — the first correction posted,
+          // and the SECOND collided on that same key and was silently dropped
+          // while the sale row moved anyway.
+          const previousSeq = safeAdjustmentSeq(sale.commissionAdjustmentSeq);
+          const sequence = previousSeq === null ? null : previousSeq + 1;
+          if (sequence === null || sequence > MAX_COMMISSION_ADJUSTMENTS) {
+            throwAppError(
+              AppErrorCode.VALIDATION_FAILED,
+              "This commission's correction history cannot be extended safely. Have accounting review it, or raise a manual journal."
+            );
+          }
           // A correction must not post ahead of the accrual it corrects: a
           // downward delta landing alone in an open period, while the accrual
           // waits behind a closed one, is a naked debit to Commission Payable.
@@ -1352,15 +1366,19 @@ export const setCommissionAmount = mutation({
             accountingDate,
             "change the amount"
           );
-          const sequence = (sale.commissionAdjustmentSeq ?? 0) + 1;
-          // Refused rather than clamped. The reversal walk and the queued-entry
-          // check both stop at MAX_COMMISSION_ADJUSTMENTS, so an entry past it
-          // could never be reversed on cancellation and would never be seen by
-          // the settlement guards — silently, and permanently.
-          if (sequence > MAX_COMMISSION_ADJUSTMENTS) {
+          // A correction computes its delta from the sale row, so correcting a
+          // row that has already drifted from the ledger does not close the gap
+          // — it inverts and widens it. Refuse, and leave the divergence for the
+          // control that reports it.
+          // Zero means nothing has POSTED yet — the accrual is still queued,
+          // which is ordinary for an org without a chart or an open period, and
+          // is the ordering guard's business rather than a divergence. Only a
+          // ledger that recognized something DIFFERENT is drift.
+          const recognizedNow = await recognizedCommissionMinor(ctx, args.orgId, sale, currency);
+          if (recognizedNow !== null && recognizedNow !== 0 && recognizedNow !== previousMinor) {
             throwAppError(
               AppErrorCode.VALIDATION_FAILED,
-              "This commission has been corrected too many times to record another change. Cancel and re-enter the sale, or raise a manual journal."
+              "This commission's amount no longer matches what the ledger recognized for it, so it cannot be corrected here. Have accounting reconcile it first."
             );
           }
           patch.commissionAdjustmentSeq = sequence;
@@ -1376,6 +1394,18 @@ export const setCommissionAmount = mutation({
           });
         }
       } else if (sale.status === "COMPLETED" && nextMinor > 0) {
+        // The FIRST accrual needs the same dependency check as a correction.
+        // Inheriting the sale posting's date keeps them in one period, but once
+        // that period opens while the sale's entry is still queued — or has
+        // dead-lettered and will never drain — this posts immediately, ahead of
+        // the revenue that earned it, and the drain-side guard never sees it.
+        await assertCommissionEntriesPosted(
+          ctx,
+          args.orgId,
+          sale,
+          accountingDate,
+          "set the amount"
+        );
         await hookCommissionAccrued(ctx, {
           orgId: args.orgId,
           saleId: args.saleId,
@@ -1504,6 +1534,21 @@ export const recalculateCommission = mutation({
       if (commissionAmount > 0) {
         const currency = await getOrgCurrency(ctx, args.orgId);
         const now = Date.now();
+        const accountingDate = await commissionAccountingDate(
+          ctx,
+          args.orgId,
+          args.saleId,
+          sale.saleDate,
+          now
+        );
+        // Same dependency as every other accrual path.
+        await assertCommissionEntriesPosted(
+          ctx,
+          args.orgId,
+          sale,
+          accountingDate,
+          "recalculate"
+        );
         await hookCommissionAccrued(ctx, {
           orgId: args.orgId,
           saleId: args.saleId,
@@ -1517,7 +1562,7 @@ export const recalculateCommission = mutation({
           // work removes — and, once the mode is switched to MANUAL, let a
           // later correction post into the sale's own open period with no
           // accrual behind it there.
-          occurredAt: await commissionAccountingDate(ctx, args.orgId, args.saleId, sale.saleDate, now),
+          occurredAt: accountingDate,
         });
       }
       return { commissionAmount };

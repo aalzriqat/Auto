@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx } from "./_generated/server";
 import { commissionAccountingDate, getOrgCurrency, hookCommissionAccrued, isEventQueued } from "./accounting/workflowHooks";
+import { isChartInitialized } from "./chartOfAccounts";
 import { isCommissionOwed } from "./utils/commission";
 import { isSystemOwnerRole } from "./utils/permissions";
 import { toMinorUnits } from "./utils/money";
@@ -110,14 +111,21 @@ export const backfillCommissionAccruals = internalMutation({
         console.warn(
           `[commission-backfill] org ${org._id}: ${owed.length} owed commission(s) skipped — no OWNER-role member to attribute the posting to`
         );
-      } else if (!(await commissionAccountsExist(ctx, org._id))) {
-        // An older chart without the commission accounts makes every posting
-        // throw inside resolveSystemAccount. Since a throw rolls back the whole
-        // mutation INCLUDING the self-reschedule, that would silently kill the
-        // walk here and leave every later organization unprocessed.
+      } else if ((await isChartInitialized(ctx, org._id)) && !(await commissionAccountsExist(ctx, org._id))) {
+        // Only skip an org that HAS a chart but is missing the commission
+        // accounts — there, resolveSystemAccount throws, and since a throw
+        // rolls back the self-reschedule with it that would silently end the
+        // walk for every later organization.
+        //
+        // An org with NO chart at all is a normal, supported state and must NOT
+        // be skipped: nothing posts there, so hookCommissionAccrued simply
+        // enqueues, and the accrual drains by itself when the chart is
+        // initialized. Skipping it consumed the migration cursor and left that
+        // dealership's whole backlog unrecognized, with no signal and no second
+        // pass — this is a one-time migration.
         skippedNoAccounts = owed.length;
         console.warn(
-          `[commission-backfill] org ${org._id}: ${owed.length} skipped — chart has no commission accounts`
+          `[commission-backfill] org ${org._id}: ${owed.length} skipped — chart exists but has no commission accounts`
         );
       } else {
         const currency = await getOrgCurrency(ctx, org._id);

@@ -1332,7 +1332,7 @@ describe("round-3 review fixes", () => {
         saleId,
         commissionAmount: 300,
       })
-    ).rejects.toThrow(/corrected too many times/i);
+    ).rejects.toThrow(/correction history cannot be extended safely/i);
   });
 
   test("settlement refuses when the sale's amount no longer matches what was recognized", async () => {
@@ -1515,6 +1515,161 @@ describe("round-3 review fixes", () => {
       periodId: period._id,
     });
     expect(checklist.warnings.join(" ")).toMatch(/at a different amount/i);
+  });
+
+  test("the backfill still accrues for an org that has not set up accounting", async () => {
+    // An org with NO chart is a normal supported state: nothing posts, so the
+    // accrual simply enqueues and drains itself when the chart is initialized.
+    // Skipping it consumed the migration cursor and left that dealership's
+    // entire backlog unrecognized — silently, with no second pass, because this
+    // is a one-time migration.
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "No Chart Yet", createdAt: Date.now() })
+    );
+    const userId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "nc", email: "nc@x.com", name: "Owner" })
+    );
+    const roleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "OWNER", permissions: PERMISSIONS, isSystemOwnerRole: true })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+    await t.run((ctx) =>
+      ctx.db.insert("orgSettings", {
+        orgId, currency: "USD", currencySymbol: "$",
+        enabledPaymentTypes: ["CASH"], commissionMode: "MANUAL",
+      })
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, vin: "VIN-NC", make: "Honda", model: "Accord", year: 2020, color: "Black",
+        fuelType: "Gasoline", transmission: "Automatic", mileage: 1, sellingPrice: 15000,
+        status: "SOLD",
+      })
+    );
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "No", lastName: "Chart" })
+    );
+    const saleId = await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId, salePrice: 15000,
+        saleDate: Date.now(), status: "COMPLETED", commissionAmount: 250,
+      })
+    );
+
+    const run = await t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
+    expect(run.skippedNoAccounts).toBe(0);
+    expect(run.accruedCount).toBe(1);
+
+    // Queued, not lost.
+    const queued = await t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(queued).toBeTruthy();
+  });
+
+  test("cancellation refuses rather than half-reversing when the correction count is unusable", async () => {
+    // Math.min(NaN, MAX) is NaN and `1 <= NaN` is false, so the loop ran zero
+    // times: the accrual was reversed, every correction's expense and payable
+    // stayed posted against a sale that no longer exists, and the cancellation
+    // reported success.
+    const d = await seedDealer("cancel_bad_seq");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 250,
+    });
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 400,
+    });
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAdjustmentSeq: Number.NaN }));
+
+    await expect(
+      d.asManager.mutation(api.sales.update, {
+        orgId: d.orgId, saleId, status: "CANCELLED",
+      })
+    ).rejects.toThrow(/not a usable number/i);
+
+    // The whole mutation rolled back, so the sale is not left cancelled with
+    // live commission entries behind it.
+    expect(await d.t.run((ctx) => ctx.db.get(saleId))).toMatchObject({ status: "COMPLETED" });
+    expect(await commissionPayableMinor(d)).toBe(40_000);
+  });
+
+  test("correcting a diverged commission is refused instead of widening the gap", async () => {
+    // A correction computes its delta from the SALE ROW. Correcting a row that
+    // has already drifted from the ledger does not close the gap — 250 - 900 is
+    // -650, which drives recognition to -400 and puts Commission Payable
+    // negative. The guards elsewhere refuse to SETTLE a diverged commission;
+    // without this the product still invited the operator to make it worse.
+    const d = await seedDealer("repair_footgun");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 250,
+    });
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAmount: 900 }));
+
+    await expect(
+      d.asAdmin.mutation(api.sales.setCommissionAmount, {
+        orgId: d.orgId, saleId, commissionAmount: 250,
+      })
+    ).rejects.toThrow(/no longer matches what the ledger recognized/i);
+
+    // Unchanged, not inverted.
+    expect(await commissionPayableMinor(d)).toBe(25_000);
+  });
+
+  test("a NaN correction count cannot mint a colliding adjustment key", async () => {
+    // `NaN + 1` is NaN and `NaN > MAX` is false, so a corrupt counter sailed
+    // past the ceiling and produced the key commission_adjusted_<id>_NaN. The
+    // first correction posted; the second collided on that same key and was
+    // silently dropped while the sale row moved anyway.
+    const d = await seedDealer("nan_seq");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 250,
+    });
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAdjustmentSeq: Number.NaN }));
+
+    await expect(
+      d.asAdmin.mutation(api.sales.setCommissionAmount, {
+        orgId: d.orgId, saleId, commissionAmount: 400,
+      })
+    ).rejects.toThrow(/correction history cannot be extended safely/i);
+  });
+
+  test("re-accruing an already-posted commission queues no phantom outbox row", async () => {
+    // postAccountingEvent dedupes on the key, so a row enqueued for an accrual
+    // that is already POSTED can never post anything. It would sit PENDING
+    // forever, count as an unposted event against every future period close,
+    // and finally dead-letter. Reachable now that MANUAL accrues at the sale:
+    // payroll re-hooks the same accrual at the run's period-end date.
+    const d = await seedDealer("phantom", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 250,
+    });
+    await closePriorYearPeriod(d, priorYear);
+
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId, periodYear: priorYear, periodMonth: 6,
+    });
+    await d.asAdmin.mutation(api.payroll.approveRun, { orgId: d.orgId, runId });
+
+    const phantom = await d.t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", d.orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(phantom).toBeNull();
   });
 
   test("the backfill skips an org with no owner rather than inventing an actor", async () => {

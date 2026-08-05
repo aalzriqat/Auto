@@ -244,9 +244,12 @@ describe("commissionPostingBlockedReason", () => {
   });
 
   test("blocks a payment recognized in a different currency instead of calling it a mismatch", async () => {
-    // An owner can change the org currency in Settings. Minor units only mean
-    // anything alongside their scale, so a JOD accrual of 100000 compared
-    // against a USD decided amount of 10000 is not a wrong amount — it is a
+    // Defence in depth, not a reachable workflow: orgSettings.upsert hard-locks
+    // the currency once any accountingEvents / pendingAccountingEvents /
+    // transactions / compensation / advance / expense row exists, and a
+    // commission accrual creates one. Only a direct database edit produces this
+    // state. Minor units mean nothing without their scale, so a JOD accrual of
+    // 100000 against a USD amount of 10000 is not a wrong number — it is a
     // different unit, and it needs a different message and a human.
     const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, userId, saleId } = await seed(t, "currency_switch");
