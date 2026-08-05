@@ -853,10 +853,20 @@ export const registerVehicleHandover = mutation({
     // APPROVED throughout — so without this the vehicle could be handed over
     // on a purchase amount that no longer exists. Deals with no quotation
     // recorded are untouched, so nothing in flight is stranded.
-    if (app.submittedQuotationMinor !== undefined && app.approvedDealerPurchaseAmountMinor === undefined) {
-      throw new ConvexError(
-        "The finance company's approved purchase amount is not recorded on this deal. Record it before handing over the vehicle."
-      );
+    if (app.submittedQuotationMinor !== undefined) {
+      if (app.approvedDealerPurchaseAmountMinor === undefined) {
+        throw new ConvexError(
+          "The finance company's approved purchase amount is not recorded on this deal. Record it before handing over the vehicle."
+        );
+      }
+      // An approval whose funding split could not be computed — the company's
+      // LTV basis names an amount nobody recorded — is not something to hand a
+      // vehicle over against. The approval being present is not enough.
+      if (app.financeCompanyFundedPortionMinor === undefined) {
+        throw new ConvexError(
+          "This deal's funding split could not be calculated. Resolve the reconciliation note on it before handing over the vehicle."
+        );
+      }
     }
 
     const now = Date.now();
@@ -959,10 +969,17 @@ export const finalizeDeal = mutation({
         // Same guard as registerVehicleHandover: an approval cleared by a
         // reappraisal leaves status APPROVED, so this is the only thing
         // stopping a sale being completed on economics nothing supports.
-        if (app.submittedQuotationMinor !== undefined && app.approvedDealerPurchaseAmountMinor === undefined) {
-          throw new ConvexError(
-            "The finance company's approved purchase amount is not recorded on this deal. Record it before finalizing."
-          );
+        if (app.submittedQuotationMinor !== undefined) {
+          if (app.approvedDealerPurchaseAmountMinor === undefined) {
+            throw new ConvexError(
+              "The finance company's approved purchase amount is not recorded on this deal. Record it before finalizing."
+            );
+          }
+          if (app.financeCompanyFundedPortionMinor === undefined) {
+            throw new ConvexError(
+              "This deal's funding split could not be calculated. Resolve the reconciliation note on it before finalizing."
+            );
+          }
         }
 
         const quote = await ctx.db.get(app.quoteId);
@@ -1029,10 +1046,35 @@ export const finalizeDeal = mutation({
           quote.totalFinancedAmount !== undefined
             ? toMinorUnits(quote.totalFinancedAmount, await getOrgCurrency(ctx, args.orgId))
             : undefined;
-        const remittanceDiverges =
+
+        // Three ways this deal's receivable can be wrong, and only the first
+        // was being caught. Treating the other two as "no divergence" meant the
+        // silence of an unknown read exactly like the silence of agreement.
+        let reconciliationNote: string | undefined;
+        if (
           expectedRemittance !== undefined &&
           legacyBasisMinor !== undefined &&
-          expectedRemittance !== legacyBasisMinor;
+          expectedRemittance !== legacyBasisMinor
+        ) {
+          reconciliationNote = `The finance-company receivable was opened for the customer's financing principal (${legacyBasisMinor}), but this deal's expected dealer remittance is ${expectedRemittance}. Reconcile the settlement before treating this deal as paid.`;
+        } else if (app.submittedQuotationMinor !== undefined && expectedRemittance === undefined) {
+          // The economics were recorded but the remittance could not be
+          // determined — a company that retains customer funds, with no
+          // destination recorded for them. Nothing writes that destination yet,
+          // so this is reachable on an ordinary deal.
+          reconciliationNote =
+            "This deal's expected dealer remittance could not be determined, because where the customer's payment went has not been recorded. The finance-company receivable was opened for the customer's financing principal instead.";
+        } else if (app.companyId && app.submittedQuotationMinor === undefined) {
+          // Finalized without the dealer-side economics at all. The old path is
+          // deliberately still allowed — the wizard that records them ships with
+          // PR 3, and blocking now would strand every deal in flight — but the
+          // receivable it opens is the customer's principal, not what the
+          // company owes, so the deal belongs in the same queue as the legacy
+          // rows rather than looking settled.
+          reconciliationNote =
+            "Finalized without the dealer-side economics. The finance-company receivable was opened for the customer's financing principal. Record the approved purchase amount and the applied LTV, then reconcile the settlement.";
+        }
+        const remittanceDiverges = reconciliationNote !== undefined;
 
         await ctx.db.patch(args.applicationId, {
           status: "CLOSED",
@@ -1040,7 +1082,7 @@ export const finalizeDeal = mutation({
           ...(remittanceDiverges
             ? {
                 needsFinancingReconciliation: true,
-                financingReconciliationReason: `The finance-company receivable was opened for the customer's financing principal (${legacyBasisMinor}), but this deal's expected dealer remittance is ${expectedRemittance}. Reconcile the settlement before treating this deal as paid.`,
+                financingReconciliationReason: reconciliationNote,
               }
             : {}),
           finalizationIdempotencyKey: args.idempotencyKey,

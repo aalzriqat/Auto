@@ -149,7 +149,10 @@ async function recomputeAndPatchEconomics(
       expectedDealerRemittanceMinor: undefined,
       rawAppraisalGapMinor: undefined,
       needsFinancingReconciliation: true,
-      financingReconciliationReason: `This finance company applies its LTV to the ${(snapshot.ltvBasis ?? "APPROVED_PURCHASE_AMOUNT").toLowerCase().replace(/_/g, " ")}, which has not been recorded on this deal. Record it before relying on the funding split.`,
+      financingReconciliationReason: appendReconciliationReason(
+        app.financingReconciliationReason,
+        `This finance company applies its LTV to the ${(snapshot.ltvBasis ?? "APPROVED_PURCHASE_AMOUNT").toLowerCase().replace(/_/g, " ")}, which has not been recorded on this deal. Record it before relying on the funding split.`
+      ),
       updatedAt: Date.now(),
     });
     return;
@@ -174,8 +177,35 @@ async function recomputeAndPatchEconomics(
       ? derived.remittance.expectedDealerRemittanceMinor
       : undefined,
     rawAppraisalGapMinor: derived.gap.rawAppraisalGapMinor,
+    // Blanking the remittance silently would be worse than the assumption it
+    // replaced. Nothing writes customerContributionToFinanceCompanyMinor yet,
+    // so for a company that retains customer funds this is not a transient
+    // gap — it is every deal, permanently — and an unflagged blank reads
+    // downstream exactly like agreement.
+    ...(remittanceIsKnowable
+      ? {}
+      : {
+          needsFinancingReconciliation: true,
+          financingReconciliationReason: appendReconciliationReason(
+            app.financingReconciliationReason,
+            `${snapshot.companyName} keeps the customer's payment rather than passing it through, and how much reached them has not been recorded. The expected dealer remittance cannot be determined until it is.`
+          ),
+        }),
     updatedAt: Date.now(),
   });
+}
+
+/**
+ * Adds a reason without discarding one already on the row.
+ *
+ * Overwriting lost the earlier note — typically the migration's account of why
+ * a legacy deal needs looking at — and left whoever picks the row up with only
+ * the most recent of several genuine problems.
+ */
+function appendReconciliationReason(existing: string | undefined, addition: string): string {
+  if (!existing) return addition;
+  if (existing.includes(addition)) return existing;
+  return `${existing} ${addition}`;
 }
 
 async function recordOverride(
@@ -723,6 +753,13 @@ export const approveDealerPurchaseAmount = mutation({
         "Record the quotation sent to the finance company before recording what it approved."
       );
     }
+    // Same separation of duties updateStatus already enforces for the credit
+    // decision. This mutation sets the number the dealer contribution derives
+    // from, and the MANUAL basis accepts any amount with only a note, so it is
+    // if anything the more consequential of the two to leave self-serve.
+    if (user._id === app.salespersonId) {
+      throw new ConvexError("You cannot approve the purchase amount on your own application.");
+    }
 
     const snapshot = await resolveRuleSnapshot(ctx, app);
     const appliedLtvPercent = resolveAppliedLtv(
@@ -814,16 +851,24 @@ export const approveDealerPurchaseAmount = mutation({
 
     const now = Date.now();
     const previousRawGapMinor = app.rawAppraisalGapMinor ?? 0;
-    if (
+    // Any material change, not only the amount. Narrowing this to the amount
+    // meant re-approving 11,500 on the MANUAL basis instead of APPRAISAL
+    // silently replaced the basis, the approver, the timestamp and the notes —
+    // and wrote nothing to the table whose whole purpose is that a number
+    // changing without a status changing leaves a trace.
+    const approvalMateriallyChanged =
       app.approvedDealerPurchaseAmountMinor !== undefined &&
-      app.approvedDealerPurchaseAmountMinor !== args.approvedAmountMinor
-    ) {
+      (app.approvedDealerPurchaseAmountMinor !== args.approvedAmountMinor ||
+        app.approvedPurchaseBasis !== args.basis ||
+        app.approvedPurchaseAppraisalId !== appraisal?._id ||
+        (app.approvedPurchaseNotes ?? "") !== (args.notes?.trim() ?? ""));
+    if (approvalMateriallyChanged) {
       await recordOverride(ctx, {
         orgId: args.orgId,
         applicationId: args.applicationId,
         field: "approvedDealerPurchaseAmountMinor",
         previousValue: app.approvedDealerPurchaseAmountMinor,
-        newValue: args.approvedAmountMinor,
+        newValue: `${args.approvedAmountMinor} (${args.basis})`,
         reason: args.notes?.trim() ?? `Re-approved on the ${args.basis} basis.`,
         changedBy: user._id,
       });
@@ -861,6 +906,30 @@ export const approveDealerPurchaseAmount = mutation({
     const refreshed = await ctx.db.get(args.applicationId);
     if (!refreshed) return args.applicationId;
 
+    // `?? 0` would be wrong here. recomputeAndPatchEconomics CLEARS the gap when
+    // the company's LTV basis names an amount nobody recorded — reachable via a
+    // manual approval with no appraisal under an appraisal-based basis — and
+    // reading that absence as zero wrote gapResolution: NOT_REQUIRED, declaring
+    // a deal gap-free on the strength of economics that could not be computed
+    // at all. Unknown is not zero.
+    // Approving restores handover readiness. recordAppraisal and reopenApproval
+    // both drop the deal to BLOCKED when they clear an approval, and nothing
+    // put it back — updateStatus cannot run again because APPROVED is terminal
+    // there — so a reappraised deal stayed permanently un-handoverable in the
+    // dimension PR 3 gates handover on.
+    if (refreshed.handoverStatus === "BLOCKED" && refreshed.status === "APPROVED") {
+      await ctx.db.patch(args.applicationId, { handoverStatus: "READY" });
+    }
+
+    const economicsIncomplete = refreshed.rawAppraisalGapMinor === undefined;
+    if (economicsIncomplete) {
+      // Leave the gap dimension unset: it is genuinely undetermined until the
+      // missing operand is recorded, and the reconciliation flag already set by
+      // the recompute is what carries the problem to a human.
+      await ctx.db.patch(args.applicationId, { gapResolution: undefined });
+      return args.applicationId;
+    }
+
     const rawGapMinor = refreshed.rawAppraisalGapMinor ?? 0;
     const gapChanged = rawGapMinor !== previousRawGapMinor;
 
@@ -883,7 +952,15 @@ export const approveDealerPurchaseAmount = mutation({
             }
           : {}),
       });
-    } else if (gapChanged || refreshed.gapResolution === undefined) {
+    } else if (
+      gapChanged ||
+      refreshed.gapResolution === undefined ||
+      // FAILED is written when a deal is rejected or cancelled with a gap open.
+      // REJECTED -> PENDING_DOCS is a legal transition, so a reopened deal
+      // carried "negotiation failed" against a live shortfall and this branch
+      // never reopened it, because FAILED is neither undefined nor a change.
+      refreshed.gapResolution === "FAILED"
+    ) {
       // The gap moved, so whatever the parties agreed was agreed about a
       // different amount. Reopen the negotiation rather than carrying a stale
       // NOT_REQUIRED (or a stale split) against a live shortfall.
@@ -987,8 +1064,86 @@ export const reopenApproval = mutation({
       gapResolvedAt: undefined,
       gapResolvedBy: undefined,
       gapResolutionNotes: undefined,
-      appraisalStatus: "COMPLETED",
+      // Only when there was one. A MANUAL approval needs no appraisal, and
+      // upgrading PENDING to COMPLETED here asserted a completed appraisal on a
+      // deal with no appraisal rows at all — the same false claim removed from
+      // approveDealerPurchaseAmount last round, through a different door.
+      ...(app.approvedPurchaseAppraisalId ? { appraisalStatus: "COMPLETED" as const } : {}),
       handoverStatus: "BLOCKED",
+      updatedAt: Date.now(),
+    });
+
+    return args.applicationId;
+  },
+});
+
+/**
+ * The deals whose financing figures somebody still has to look at.
+ *
+ * The flag was write-only: three code paths set it and nothing listed or
+ * cleared it, and the documented procedure was to grep a raw table dump. Since
+ * `finalizeDeal` flags essentially every financed deal until PR 2 reconciles
+ * the receivable, a queue with no exit would have been permanent noise.
+ */
+export const listNeedingReconciliation = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
+    return await ctx.db
+      .query("financeApplications")
+      .withIndex("by_org_reconciliation", (q) =>
+        q.eq("orgId", args.orgId).eq("needsFinancingReconciliation", true)
+      )
+      .collect();
+  },
+});
+
+/**
+ * Marks a flagged deal as reviewed.
+ *
+ * Deliberately requires a note saying what was checked: the flag exists because
+ * a figure could not be trusted, and clearing it without a record would leave
+ * no evidence that anyone actually looked.
+ */
+export const resolveFinancingReconciliation = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    note: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+    ]);
+    const note = args.note.trim();
+    if (!note) {
+      throw new ConvexError("Record what was checked before clearing the reconciliation flag.");
+    }
+
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId,
+      APPLICATION_NOT_FOUND
+    );
+    if (!app.needsFinancingReconciliation) {
+      throw new ConvexError("This deal is not flagged for reconciliation.");
+    }
+
+    await recordOverride(ctx, {
+      orgId: args.orgId,
+      applicationId: args.applicationId,
+      field: "needsFinancingReconciliation",
+      previousValue: app.financingReconciliationReason ?? "true",
+      newValue: "resolved",
+      reason: note,
+      changedBy: user._id,
+    });
+
+    await ctx.db.patch(args.applicationId, {
+      needsFinancingReconciliation: false,
+      financingReconciliationReason: undefined,
       updatedAt: Date.now(),
     });
 

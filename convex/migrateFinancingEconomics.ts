@@ -113,9 +113,17 @@ function reconciliationReasonFor(app: Doc<"financeApplications">): string | unde
   return "Created before the dealer-side economics existed. Record the submitted quotation, the appraisal and the approved purchase amount before finalizing.";
 }
 
-/** Whether the deal can still move, and so still needs governing rules. */
+/**
+ * Whether the deal can still move, and so still needs governing rules.
+ *
+ * REJECTED counts. It looks terminal but is not — `REJECTED -> PENDING_DOCS` is
+ * a legal transition — and the same patch stamps `financingBackfilledAt`, so a
+ * rejected row denied a snapshot could never be repaired by re-running. Reopened
+ * weeks later it would read its company's rules live, and an LTV edited in the
+ * meantime would silently rewrite terms the deal was never submitted under.
+ */
 function isInFlight(app: Doc<"financeApplications">): boolean {
-  return app.status !== "CLOSED" && app.status !== "CANCELLED" && app.status !== "REJECTED";
+  return app.status !== "CLOSED" && app.status !== "CANCELLED";
 }
 
 export const backfillFinancingEconomics = internalMutation({
@@ -228,7 +236,25 @@ export const backfillFinancingEconomics = internalMutation({
       // nothing wrong with them.
       const isModernApplication = app.companyRuleSnapshot !== undefined;
       if (isModernApplication) {
-        await ctx.db.patch(app._id, { financingBackfilledAt: now });
+        // An application created between the deploy and this run snapshotted
+        // its rules inline but found no version row to point at, because the
+        // companies phase had not run yet. Link it now — otherwise the audit
+        // reference is permanently missing and the marker below stops any
+        // later run from revisiting it.
+        let backfilledVersionId: Id<"financeCompanyRuleVersions"> | undefined;
+        if (app.companyRuleVersionId === undefined && app.companyId) {
+          const versionRow = await ctx.db
+            .query("financeCompanyRuleVersions")
+            .withIndex("by_company_version", (q) =>
+              q.eq("companyId", app.companyId!).eq("version", app.companyRuleSnapshot!.ruleVersion)
+            )
+            .first();
+          if (versionRow) backfilledVersionId = versionRow._id;
+        }
+        await ctx.db.patch(app._id, {
+          financingBackfilledAt: now,
+          ...(backfilledVersionId ? { companyRuleVersionId: backfilledVersionId } : {}),
+        });
         report.applicationsSkipped += 1;
         continue;
       }

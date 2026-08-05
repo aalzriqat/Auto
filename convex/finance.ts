@@ -76,8 +76,18 @@ function assertDealerRulesValid(rules: DealerRuleArgs): void {
     [rules.defaultLtvPercent, "Default LTV"],
     [rules.maxFinancingLTV, "Maximum LTV"],
   ] as const) {
-    if (value !== undefined && value <= 0) {
+    if (value === undefined) continue;
+    if (value <= 0) {
       throw new ConvexError(`${label} must be greater than 0 (got ${value}).`);
+    }
+    // Validated at the same precision the arithmetic uses. A value like
+    // 0.0000001 is positive and would pass, then round to zero at the engine's
+    // six-decimal scale — so the company saves cleanly and every later
+    // quotation throws on a division by zero instead.
+    if (Math.round(value * 1_000_000) <= 0) {
+      throw new ConvexError(
+        `${label} of ${value}% is too small to be represented; use at least 0.000001%.`
+      );
     }
   }
 

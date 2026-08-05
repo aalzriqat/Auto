@@ -152,9 +152,11 @@ npx convex run --prod migrateFinancingEconomics:backfillFinancingEconomics '{}'
 ```
 
 It self-schedules: companies first (so every one has a rule version to point
-at), then applications, 50 rows a page. Re-running is safe — applications are
-keyed on `creditDecision` being unset and companies on their version row
-existing.
+at), then applications, 50 rows a page. A direct call returns
+`status: "SCHEDULED"` with more pages queued; only the final page reports
+`"COMPLETE"`. Re-running is safe — applications are keyed on a dedicated
+`financingBackfilledAt` marker that no live mutation writes, and companies on
+their version row existing.
 
 Until it runs, existing finance companies have no `financeCompanyRuleVersions`
 row, so `applications.createFromQuote` leaves `companyRuleVersionId` undefined
@@ -163,13 +165,11 @@ so nothing is lost, but the audit link back to the immutable version is missing.
 
 Afterwards, work the queue:
 
-```bash
-npx convex data --prod financeApplications | grep needsFinancingReconciliation
-```
-
-Every flagged row needs its approved purchase amount, applied LTV and actual
-receipt re-entered by someone who knows the deal. The flag is never cleared
-automatically.
+Read it through `financingEconomics.listNeedingReconciliation`, which is what
+the index is for. Every flagged row needs its approved purchase amount, applied
+LTV and actual receipt re-entered by someone who knows the deal; clearing the
+flag goes through `resolveFinancingReconciliation`, which requires a note
+saying what was checked. It is never cleared automatically.
 
 ## PR breakdown
 

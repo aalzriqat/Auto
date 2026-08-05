@@ -542,15 +542,18 @@ export function creditDecisionForStatus(
 
 /** Whether the vehicle can be, or already has been, handed to the customer. */
 export function handoverStatusForFacts(facts: LifecycleFacts): NonNullable<HandoverStatus> {
-  // A closed deal produced a real sale and a vehicle marked SOLD, so the
-  // handover happened whether or not it was timestamped. The timestamp only
-  // exists from the commit that introduced the pre-finalize handover step —
-  // 587 commits back — so every financed deal closed before it carries none,
-  // and reading those as BLOCKED would tell the dealership its entire earlier
-  // history cannot be handed to the customer.
-  if (facts.vehicleHandoverAt || facts.finalizedSaleId || facts.status === "CLOSED") {
-    return "HANDED_OVER";
-  }
+  // A finalized sale means the vehicle was handed over, whether or not it was
+  // timestamped: the timestamp only exists from the commit that introduced the
+  // pre-finalize handover step, 587 commits back, so every financed deal closed
+  // before it carries none, and reading those as BLOCKED would tell the
+  // dealership its entire earlier history cannot be handed to the customer.
+  //
+  // `finalizedSaleId` is the evidence, deliberately NOT `status === "CLOSED"`
+  // on its own. The old updateStatus could set CLOSED without creating a sale,
+  // stranding the application permanently — those rows are a known malformed
+  // state, and inferring a handover from the status alone would make them
+  // indistinguishable from deals that physically completed.
+  if (facts.vehicleHandoverAt || facts.finalizedSaleId) return "HANDED_OVER";
   return facts.status === "APPROVED" ? "READY" : "BLOCKED";
 }
 

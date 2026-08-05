@@ -53,10 +53,13 @@ interface Seed {
   t: TestConvex;
   orgId: Id<"organizations">;
   userId: Id<"users">;
+  approverId: Id<"users">;
   customerId: Id<"customers">;
   vehicleId: Id<"vehicles">;
   companyId: Id<"financeCompanies">;
   asUser: AuthenticatedTestConvex;
+  /** Approving your own application is blocked, as it is for the credit decision. */
+  asApprover: AuthenticatedTestConvex;
 }
 
 async function seedDealer(
@@ -92,6 +95,18 @@ async function seedDealer(
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
   const asUser = t.withIdentity({ subject: `econ_user_${suffix}` });
+
+  const approverId = await t.run((ctx) =>
+    ctx.db.insert("users", {
+      clerkId: `econ_approver_${suffix}`,
+      email: `econ.approver${suffix}@example.com`,
+      name: "Econ Approver",
+    })
+  );
+  await t.run((ctx) =>
+    ctx.db.insert("memberships", { orgId, userId: approverId, roleId })
+  );
+  const asApprover = t.withIdentity({ subject: `econ_approver_${suffix}` });
 
   const vehicleId = await t.run((ctx) =>
     ctx.db.insert("vehicles", {
@@ -136,7 +151,7 @@ async function seedDealer(
       : {}),
   });
 
-  return { t, orgId, userId, customerId, vehicleId, companyId, asUser };
+  return { t, orgId, userId, approverId, customerId, vehicleId, companyId, asUser, asApprover };
 }
 
 /** Creates the quote and the application the economics hang off. */
@@ -247,7 +262,7 @@ describe("base approval — the confirmed deal", () => {
       appraisedAt: Date.now(),
     });
 
-    await seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_500),
@@ -294,7 +309,7 @@ describe("lower appraisal", () => {
       providerType: "FINANCE_COMPANY",
       appraisedAt: Date.now(),
     });
-    await seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
@@ -324,7 +339,7 @@ describe("lower appraisal", () => {
     });
 
     await expect(
-      seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(12_000),
@@ -350,7 +365,7 @@ describe("financing-company exception", () => {
       appraisedAt: Date.now(),
     });
 
-    await seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_500),
@@ -363,7 +378,7 @@ describe("financing-company exception", () => {
     expect(app.approvedPurchaseBasis).toBe("QUOTATION_EXCEPTION");
     // Auditable: which rule version allowed it, who approved and when.
     expect(app.approvedPurchaseExceptionRuleVersion).toBe(1);
-    expect(app.approvedPurchaseApprovedBy).toBe(seed.userId);
+    expect(app.approvedPurchaseApprovedBy).toBe(seed.approverId);
     expect(app.approvedPurchaseApprovedAt).toBeTypeOf("number");
     // Expected remittance follows the approved purchase amount, not the
     // appraisal — the company is buying at 12,500.
@@ -388,7 +403,7 @@ describe("financing-company exception", () => {
     });
 
     await expect(
-      seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(12_500),
@@ -410,7 +425,7 @@ describe("financing-company exception", () => {
     });
 
     await expect(
-      seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(12_500),
@@ -438,7 +453,7 @@ describe("appraisal integrity", () => {
     expect((await readApp(seed, applicationId)).appraisalStatus).toBe("PENDING");
 
     await expect(
-      seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(12_500),
@@ -548,7 +563,7 @@ describe("appraisal and approval interaction", () => {
       providerType: "FINANCE_COMPANY",
       appraisedAt: Date.now(),
     });
-    await seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
@@ -581,7 +596,7 @@ describe("appraisal and approval interaction", () => {
     // APPRAISAL basis rather than being forced onto MANUAL, which skips the
     // rule guards entirely.
     expect((await seed.t.run((ctx) => ctx.db.get(realId)))?.status).toBe("RECORDED");
-    await seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
@@ -621,7 +636,7 @@ describe("appraisal and approval interaction", () => {
     // The first approval flips the appraisal RECORDED -> APPROVED. Matching only
     // RECORDED made the auto-selector find nothing, so every re-approval threw
     // and the explicit appraisalId argument was the sole route through.
-    await seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
@@ -676,7 +691,7 @@ describe("appraisal and approval interaction", () => {
       appraisedAt: Date.now(),
     });
 
-    await seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_500),
@@ -686,7 +701,7 @@ describe("appraisal and approval interaction", () => {
     expect((await readApp(seed, applicationId)).gapResolution).toBe("NOT_REQUIRED");
 
     // The company withdraws the exception and buys at the appraisal instead.
-    await seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_500),
@@ -727,7 +742,7 @@ describe("appraisal and approval interaction", () => {
     // The stale 11,500 sits inside the 10% tolerance where the live 9,000 does
     // not — naming it would buy an exception the current evidence forbids.
     await expect(
-      seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(12_500),
@@ -742,7 +757,7 @@ describe("appraisal and approval interaction", () => {
     const applicationId = await createApplication(seed);
     await recordBaselineQuotation(seed, applicationId);
 
-    await seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(11_800),
@@ -755,6 +770,351 @@ describe("appraisal and approval interaction", () => {
     // FINALIZED would assert an appraisal that never happened, in a dimension
     // handover readiness is gated on.
     expect(app.appraisalStatus).toBe("PENDING");
+  });
+});
+
+describe("incomplete economics", () => {
+  test("an unknown LTV basis is not treated as no gap", async () => {
+    const seed = await seedDealer();
+    // The company lends against the independent appraisal.
+    await seed.asUser.mutation(api.finance.updateCompany, {
+      id: seed.companyId,
+      orgId: seed.orgId,
+      name: "Jordan Finance",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      isActive: true,
+      maxFinancingLTV: 85,
+      defaultLtvPercent: 85,
+      ltvBasis: "INDEPENDENT_APPRAISAL",
+    });
+
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+
+    // A manual approval below the quotation, with no appraisal on file. The
+    // funding cannot be computed at all, so declaring the deal gap-free would
+    // be a claim about economics that do not exist.
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "MANUAL",
+      notes: "Agreed directly with the branch manager.",
+    });
+
+    const app = await readApp(seed, applicationId);
+    expect(app.financeCompanyFundedPortionMinor).toBeUndefined();
+    expect(app.rawAppraisalGapMinor).toBeUndefined();
+    expect(app.gapResolution).toBeUndefined();
+    expect(app.needsFinancingReconciliation).toBe(true);
+    expect(app.financingReconciliationReason).toMatch(/independent appraisal/i);
+  });
+
+  test("a deal whose funding split could not be calculated cannot be handed over", async () => {
+    const seed = await seedDealer();
+    await seed.asUser.mutation(api.finance.updateCompany, {
+      id: seed.companyId,
+      orgId: seed.orgId,
+      name: "Jordan Finance",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      isActive: true,
+      maxFinancingLTV: 85,
+      defaultLtvPercent: 85,
+      ltvBasis: "INDEPENDENT_APPRAISAL",
+    });
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "MANUAL",
+      notes: "Agreed directly with the branch manager.",
+    });
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { status: "APPROVED" }));
+
+    // The approval is present, which used to be the whole gate. It is not
+    // enough: the vehicle would go out against a funding split nobody has.
+    await expect(
+      seed.asUser.mutation(api.applications.registerVehicleHandover, {
+        orgId: seed.orgId,
+        applicationId,
+      })
+    ).rejects.toThrow(/funding split could not be calculated/i);
+  });
+
+  test("rejects an LTV too small to survive the engine's precision", async () => {
+    const seed = await seedDealer();
+    await expect(
+      seed.asUser.mutation(api.finance.updateCompany, {
+        id: seed.companyId,
+        orgId: seed.orgId,
+        name: "Jordan Finance",
+        profitRate: 5,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        isActive: true,
+        maxFinancingLTV: 85,
+        // Positive, so the > 0 check passes; rounds to zero at the engine's
+        // six-decimal scale, so every later quotation would divide by zero.
+        defaultLtvPercent: 0.0000001,
+      })
+    ).rejects.toThrow(/too small to be represented/i);
+  });
+});
+
+describe("reopening an approval", () => {
+  async function seedApproved(): Promise<{ seed: Seed; applicationId: Id<"financeApplications"> }> {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+    });
+    return { seed, applicationId };
+  }
+
+  test("withdraws the approval so the quotation can change, without faking an appraisal", async () => {
+    const { seed, applicationId } = await seedApproved();
+
+    // Before this mutation existed, recordSubmittedQuotation told users to
+    // "reopen the approval" and the only thing that cleared one was recording a
+    // fresh appraisal — forcing manufactured evidence for a legitimate action.
+    await expect(
+      seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(11_800),
+        source: "MANUAL",
+        overrideReason: "Withdrawing and resubmitting lower.",
+      })
+    ).rejects.toThrow(/already approved a purchase amount/i);
+
+    await seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "Company withdrew its offer; resubmitting lower.",
+    });
+
+    const reopened = await readApp(seed, applicationId);
+    expect(reopened.approvedDealerPurchaseAmountMinor).toBeUndefined();
+    expect(reopened.rawAppraisalGapMinor).toBeUndefined();
+    expect(reopened.gapResolution).toBeUndefined();
+    expect(reopened.handoverStatus).toBe("BLOCKED");
+
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(11_800),
+      source: "MANUAL",
+      overrideReason: "Withdrawing and resubmitting lower.",
+    });
+    expect((await readApp(seed, applicationId)).submittedQuotationMinor).toBe(jod(11_800));
+  });
+
+  test("requires a reason, and refuses once the vehicle has gone out", async () => {
+    const { seed, applicationId } = await seedApproved();
+
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+        orgId: seed.orgId,
+        applicationId,
+        reason: "   ",
+      })
+    ).rejects.toThrow(/must record why/i);
+
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { vehicleHandoverAt: Date.now() }));
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+        orgId: seed.orgId,
+        applicationId,
+        reason: "Too late.",
+      })
+    ).rejects.toThrow(/already been handed over/i);
+  });
+
+  test("does not claim a completed appraisal on a deal that never had one", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_800),
+      basis: "MANUAL",
+      notes: "Negotiated directly.",
+    });
+
+    await seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "Reconsidered.",
+    });
+
+    expect((await readApp(seed, applicationId)).appraisalStatus).toBe("PENDING");
+  });
+
+  test("re-approving after a reappraisal restores handover readiness", async () => {
+    const { seed, applicationId } = await seedApproved();
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { status: "APPROVED", handoverStatus: "READY" })
+    );
+
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_000),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+      reappraisalReason: "Company re-inspected.",
+    });
+    expect((await readApp(seed, applicationId)).handoverStatus).toBe("BLOCKED");
+
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_000),
+      basis: "APPRAISAL",
+    });
+
+    // Nothing else could put it back: updateStatus cannot run again because
+    // APPROVED is terminal there, so the deal stayed un-handoverable forever.
+    expect((await readApp(seed, applicationId)).handoverStatus).toBe("READY");
+  });
+
+  test("records an approval that changes only its basis", async () => {
+    const { seed, applicationId } = await seedApproved();
+
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "MANUAL",
+      notes: "Renegotiated verbally with the branch.",
+    });
+
+    // Same amount, different basis, approver and notes — all replaced. Keying
+    // the audit row on the amount alone recorded none of it.
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides).toHaveLength(1);
+    expect(economics.overrides[0]?.newValue).toContain("MANUAL");
+  });
+
+  test("blocks approving your own application", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+
+    await expect(
+      seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: seed.orgId,
+        applicationId,
+        approvedAmountMinor: jod(11_800),
+        basis: "MANUAL",
+        notes: "Approving my own deal.",
+      })
+    ).rejects.toThrow(/your own application/i);
+  });
+});
+
+describe("reconciliation queue", () => {
+  test("a company that keeps the customer payment flags rather than blanking silently", async () => {
+    const seed = await seedDealer();
+    await seed.asUser.mutation(api.finance.updateCompany, {
+      id: seed.companyId,
+      orgId: seed.orgId,
+      name: "Jordan Finance",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      isActive: true,
+      maxFinancingLTV: 85,
+      defaultLtvPercent: 85,
+      customerContributionSettlement: "RETAINED_BY_COMPANY",
+    });
+
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(12_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(12_500),
+      basis: "APPRAISAL",
+    });
+
+    // Nothing records where the customer money went yet, so for such a company
+    // this is every deal, permanently. An unflagged blank reads downstream
+    // exactly like agreement.
+    const app = await readApp(seed, applicationId);
+    expect(app.expectedDealerRemittanceMinor).toBeUndefined();
+    expect(app.needsFinancingReconciliation).toBe(true);
+    expect(app.financingReconciliationReason).toMatch(/keeps the customer/i);
+  });
+
+  test("lists flagged deals, and clears one only with a note", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        needsFinancingReconciliation: true,
+        financingReconciliationReason: "Legacy figures need checking.",
+      })
+    );
+
+    expect(
+      await seed.asUser.query(api.financingEconomics.listNeedingReconciliation, {
+        orgId: seed.orgId,
+      })
+    ).toHaveLength(1);
+
+    await expect(
+      seed.asUser.mutation(api.financingEconomics.resolveFinancingReconciliation, {
+        orgId: seed.orgId,
+        applicationId,
+        note: "  ",
+      })
+    ).rejects.toThrow(/what was checked/i);
+
+    await seed.asUser.mutation(api.financingEconomics.resolveFinancingReconciliation, {
+      orgId: seed.orgId,
+      applicationId,
+      note: "Confirmed the remittance against the bank statement.",
+    });
+
+    expect(
+      await seed.asUser.query(api.financingEconomics.listNeedingReconciliation, {
+        orgId: seed.orgId,
+      })
+    ).toHaveLength(0);
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides.some((o) => o.field === "needsFinancingReconciliation")).toBe(true);
   });
 });
 
@@ -876,7 +1236,7 @@ describe("LTV configuration", () => {
       providerType: "FINANCE_COMPANY",
       appraisedAt: Date.now(),
     });
-    await seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_500),
@@ -970,7 +1330,7 @@ describe("overrides and audit", () => {
       providerType: "FINANCE_COMPANY",
       appraisedAt: Date.now(),
     });
-    await seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_500),
@@ -994,7 +1354,7 @@ describe("overrides and audit", () => {
     await recordBaselineQuotation(seed, applicationId);
 
     await expect(
-      seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
         orgId: seed.orgId,
         applicationId,
         approvedAmountMinor: jod(11_800),
@@ -1036,7 +1396,7 @@ describe("rule snapshots", () => {
     });
 
     // The in-flight deal still runs under the snapshot it was created with.
-    await seed.asUser.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: seed.orgId,
       applicationId,
       approvedAmountMinor: jod(12_500),
@@ -1288,6 +1648,18 @@ describe("migration", () => {
     await runMigration(seed.t);
 
     expect((await readApp(seed, applicationId)).handoverStatus).toBe("HANDED_OVER");
+  });
+
+  test("a legacy CLOSED row with no sale stays blocked rather than faking a handover", async () => {
+    const seed = await seedDealer();
+    // The old updateStatus could set CLOSED without creating a sale, stranding
+    // the application. Inferring a handover from the status alone would make
+    // those malformed rows indistinguishable from deals that completed.
+    const applicationId = await seedLegacyApplication(seed, { status: "CLOSED" });
+
+    await runMigration(seed.t);
+
+    expect((await readApp(seed, applicationId)).handoverStatus).toBe("BLOCKED");
   });
 
   test("a cancelled legacy deal is owed nothing, even carrying a finalized sale", async () => {
