@@ -1,14 +1,11 @@
 import { useMutation, usePaginatedQuery } from "convex/react";
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { Text } from "react-native";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileSale } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { PAGE_SIZE, commissionAmountLabel, commissionStatusLabel, idempotencyKey, useGenericError, PrimaryButton, RecordCard, ModuleList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
-
-/** Ceiling on pages this screen will fetch by itself. See the effect below. */
-const MAX_AUTO_PAGES = 20;
 
 export function CommissionsModule({ orgId }: { orgId: string }) {
   const styles = useStyles();
@@ -29,17 +26,13 @@ export function CommissionsModule({ orgId }: { orgId: string }) {
   // documents and may match none of them, so without this the list would settle
   // on "No commissions found." over rows it simply had not reached yet.
   //
-  // Bounded, for the same reason the web table's walk is: an organization whose
-  // sales produce no commission rows at all would otherwise issue one request
-  // per page of its entire history every time somebody opens this screen. Once
-  // the budget is spent the manual load-more control takes over.
-  const autoPages = useRef(0);
-  const autoLoadCapped = results.length === 0 && autoPages.current >= MAX_AUTO_PAGES;
+  // Deliberately uncapped, matching the web table: a page budget there stalled
+  // the walk after a single page and silently truncated results, and a counter
+  // held across an organization switch would have carried one org's spent
+  // budget into the next. An empty answer that is wrong is worse than a slow
+  // one that is right.
   useEffect(() => {
-    if (results.length === 0 && status === "CanLoadMore" && autoPages.current < MAX_AUTO_PAGES) {
-      autoPages.current += 1;
-      loadMore(PAGE_SIZE);
-    }
+    if (results.length === 0 && status === "CanLoadMore") loadMore(PAGE_SIZE);
   }, [results.length, status, loadMore]);
 
   async function pay(sale: MobileSale) {
@@ -57,15 +50,7 @@ export function CommissionsModule({ orgId }: { orgId: string }) {
   return (
     <ModuleList
       data={results}
-      emptyLabel={
-        autoLoadCapped
-          ? locale === "ar"
-            ? "لم يتم العثور على عمولات ضمن ما تم تحميله. حمّل المزيد للمتابعة."
-            : "No commissions in the sales loaded so far. Load more to keep looking."
-          : locale === "ar"
-            ? "لا توجد عمولات."
-            : "No commissions found."
-      }
+      emptyLabel={locale === "ar" ? "لا توجد عمولات." : "No commissions found."}
       keyExtractor={(sale) => sale._id}
       loadMore={loadMore}
       status={status}

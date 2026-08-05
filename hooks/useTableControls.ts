@@ -138,8 +138,12 @@ export function useTableControls<T>({
 
   /** True while the hook is walking pages by itself, so a caller does not
    *  offer a manual control that would race it — or, worse, re-derive this
-   *  condition and disagree with the hook about it. */
-  const isAutoLoading = shouldExhaust && paginationStatus !== "Exhausted";
+   *  condition and disagree with the hook about it. A table with no pagination
+   *  is never walking: `paginationStatus` is undefined there, which is not
+   *  "Exhausted", so searching one would otherwise claim a load that cannot
+   *  happen. */
+  const isAutoLoading =
+    pagination !== undefined && shouldExhaust && paginationStatus !== "Exhausted";
 
   return { search, setSearch, sortKey, sortDir, toggleSort, rows, isAutoLoading };
 }

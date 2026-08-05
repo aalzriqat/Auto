@@ -948,6 +948,12 @@ export async function computeCommissionPayableReconciliation(
   // lookup per sale. Only POSTED counts, matching the GL side, which is built
   // from posted journal lines: a queued accrual is not in the GL either, and a
   // REVERSED one has been backed out.
+  //
+  // Scoped to `toDate` for the same reason the GL side is: an accrual posted
+  // after the reporting date has no journal lines inside the window either, so
+  // counting its sale here would report a discrepancy for a period that is
+  // correct — a false positive on a check whose whole remaining value is that
+  // it fires only on real ones.
   const accruedSaleIds = new Set(
     (
       await ctx.db
@@ -955,7 +961,14 @@ export async function computeCommissionPayableReconciliation(
         .withIndex("by_org_eventType", (q) =>
           q.eq("orgId", orgId).eq("eventType", "COMMISSION_ACCRUED")
         )
-        .filter((q) => q.eq(q.field("status"), "POSTED"))
+        .filter((q) =>
+          toDate === undefined
+            ? q.eq(q.field("status"), "POSTED")
+            : q.and(
+                q.eq(q.field("status"), "POSTED"),
+                q.lte(q.field("accountingDate"), toDate)
+              )
+        )
         .collect()
     ).map((e) => e.sourceId)
   );

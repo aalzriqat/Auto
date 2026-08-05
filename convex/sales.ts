@@ -834,15 +834,26 @@ async function commissionPage(
     // would report a fully-departed salesperson as fine — precisely the case
     // where payroll will never pay them. Absent from the set is the condition.
     // See PR 3 for actually settling them.
-    const activeMemberIds = new Set(
+    // Looked up per distinct salesperson ON THIS PAGE rather than by collecting
+    // the org's whole membership table: the page itself reads a bounded number
+    // of sale documents, so a full scan here would be the only unbounded read
+    // left on the path — and a caller walking N pages would repeat it N times.
+    const pageSalespersonIds = [...new Set(listed.map((h) => h.sale.salespersonId))];
+    const offboardedSalespersonIds = new Set(
       (
-        await ctx.db
-          .query("memberships")
-          .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-          .collect()
-      )
-        .filter((m) => !m.offboardingStatus)
-        .map((m) => m.userId as string)
+        await Promise.all(
+          pageSalespersonIds.map(async (userId) => {
+            const membership = await ctx.db
+              .query("memberships")
+              .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", userId))
+              .unique();
+            // Absent counts as offboarded: the finalizer DELETES the row once
+            // external removal succeeds, which is exactly when payroll stops
+            // paying them.
+            return membership && !membership.offboardingStatus ? null : (userId as string);
+          })
+        )
+      ).filter((id): id is string => id !== null)
     );
 
     const page = await Promise.all(
@@ -867,7 +878,7 @@ async function commissionPage(
           needsRecalculation,
           commissionStatus: deriveCommissionStatus(sale),
           canSetAmount,
-          salespersonOffboarded: !activeMemberIds.has(sale.salespersonId),
+          salespersonOffboarded: offboardedSalespersonIds.has(sale.salespersonId),
         };
       })
     );

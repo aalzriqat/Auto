@@ -173,12 +173,20 @@ describe("useTableControls auto-continuation", () => {
     expect(idle.result.current.isAutoLoading).toBe(false);
   });
 
-  test("a table with no pagination never tries to load more", async () => {
+  test("a table with no pagination never tries to load more, even while searching", async () => {
     const { result } = renderHook(() =>
-      useTableControls<Row>({ data: [], searchFields: (r) => [r.name] })
+      useTableControls<Row>({ data: [{ id: 1, name: "Alpha" }], searchFields: (r) => [r.name] })
     );
     await act(async () => {});
-    expect(result.current.rows).toEqual([]);
     expect(result.current.isAutoLoading).toBe(false);
+
+    // Searching sets the "keep reading" condition, but there is nothing to read
+    // from — claiming otherwise would have a caller hide its own controls
+    // waiting for a load that can never arrive.
+    await act(async () => {
+      result.current.setSearch("Alpha");
+    });
+    expect(result.current.isAutoLoading).toBe(false);
+    expect(result.current.rows).toEqual([{ id: 1, name: "Alpha" }]);
   });
 });

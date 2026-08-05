@@ -580,16 +580,11 @@ async function settleItemCommissions(
   const saleIdsToSettle: Id<"sales">[] = [];
   for (const saleId of item.commissionSaleIds) {
     const sale = await ctx.db.get(saleId);
-    if (
-      !sale ||
-      sale.isDeleted ||
-      sale.status !== "COMPLETED" ||
-      sale.commissionPaidAt != null ||
-      !sale.commissionAmount ||
-      sale.commissionAmount <= 0
-    ) {
-      continue;
-    }
+    // The same shared rule the sweep uses. These two paths decide what is
+    // accrued and what is paid, so an inline copy here is where a future change
+    // to the rule would silently produce the disagreement the shared predicate
+    // exists to prevent.
+    if (!sale || !isCommissionOwed(sale)) continue;
     commissionMinor += toMinorUnits(sale.commissionAmount, item.currency);
     saleIdsToSettle.push(saleId);
   }
@@ -1010,16 +1005,8 @@ export const approveRun = mutation({
           // A sale can leave the payable population between draft and approval:
           // cancelled/voided sales get their accrual REVERSED by the void hook,
           // so accruing (or later paying) them here would corrupt the payable.
-          if (
-            !sale ||
-            sale.isDeleted ||
-            sale.status !== "COMPLETED" ||
-            sale.commissionPaidAt != null ||
-            !sale.commissionAmount ||
-            sale.commissionAmount <= 0
-          ) {
-            continue;
-          }
+          // Same shared rule as the sweep and the settlement path.
+          if (!sale || !isCommissionOwed(sale)) continue;
           await hookCommissionAccrued(ctx, {
             orgId: args.orgId,
             saleId,

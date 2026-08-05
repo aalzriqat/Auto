@@ -756,10 +756,22 @@ describe("Phase 5 — commission payable reconciliation", () => {
     );
     // Cancellation reverses the GL accrual but deliberately keeps the amount on
     // the row as history, so the subledger side has to exclude it explicitly.
-    await t.run((ctx) =>
+    const cancelledSaleId = await t.run((ctx) =>
       ctx.db.insert("sales", {
         orgId, vehicleId, customerId, salespersonId: userId, salePrice: 30000, saleDate: now,
         status: "CANCELLED", commissionAmount: 500,
+      })
+    );
+    // With a POSTED accrual on file, the accrual gate cannot be what excludes
+    // this row — only the CANCELLED rule in isCommissionOwed can. Without this
+    // the test passed whether or not that rule existed.
+    await t.run((ctx) =>
+      ctx.db.insert("accountingEvents", {
+        orgId, eventType: "COMMISSION_ACCRUED", sourceType: "sales",
+        sourceId: `commission_${cancelledSaleId}`, eventVersion: 1,
+        idempotencyKey: `commission_accrued_${cancelledSaleId}`, occurredAt: now,
+        accountingDate: now, currency: "JOD", payload: {}, status: "POSTED",
+        createdBy: userId, createdAt: now,
       })
     );
 
