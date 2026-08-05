@@ -139,6 +139,7 @@ function buildCommissionSteps(trail: SaleTrail, t: Translate, format: FormatCurr
   // outbox (chart not initialised, period closed) has no journal entry yet and
   // reads as "amount set". Understating a booking is the safe way to be wrong.
   const isAccrued = trail.commissionJournalEntry?.status === "POSTED";
+  const isReversed = trail.commissionJournalEntry?.status === "REVERSED";
 
   const steps: TrailStep[] = [
     {
@@ -148,10 +149,14 @@ function buildCommissionSteps(trail: SaleTrail, t: Translate, format: FormatCurr
     },
   ];
 
-  if (isAccrued && trail.commissionJournalEntry) {
+  // A reversed accrual was still a real posting, so the entry stays on the
+  // trail with its journal number — dropping it would lose an event that
+  // genuinely happened. It is labelled as reversed rather than current, since
+  // the liability it created has since been backed out.
+  if (trail.commissionJournalEntry && (isAccrued || isReversed)) {
     steps.push({
       icon: Receipt,
-      label: t("StepCommissionGLPosted"),
+      label: isReversed ? t("StepCommissionAccrualReversed") : t("StepCommissionGLPosted"),
       detail: `${t("JournalNumberLabel")} #${trail.commissionJournalEntry.journalNumber}`,
       date: trail.commissionJournalEntry.postedAt,
     });

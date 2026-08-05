@@ -12,6 +12,7 @@ import { CreateDraftSaleSchema, CreateSaleSchema, UpdateSaleSchema } from "./val
 import { restoreVehicleFromSale } from "./utils/saleHelpers";
 import { vehicleHasCostBasis } from "./utils/vehicleCost";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
+import { auditLog } from "./financialAudit";
 import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
@@ -1154,7 +1155,7 @@ export const setCommissionAmount = mutation({
   },
   handler: async (ctx, args) => {
     try {
-      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_COMMISSIONS]);
+      const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_COMMISSIONS]);
 
       // `Math.max(0, NaN)` is NaN, so without this the sale's commission is set
       // to NaN permanently: every downstream `> 0` / `<= 0` guard reads false,
@@ -1209,6 +1210,25 @@ export const setCommissionAmount = mutation({
 
       await ctx.db.patch(args.saleId, {
         commissionAmount: args.commissionAmount,
+      });
+
+      // This is now the entry point for a payout figure, so who decided it,
+      // when, and what it was before all have to survive. The sale row keeps
+      // only the current value and, later, whoever paid it — which means
+      // without this there is no record of the decision itself, and a MANUAL
+      // amount stays editable right up until it hits the ledger.
+      await auditLog(ctx, {
+        orgId: args.orgId,
+        actorId: user._id,
+        actionType: "SET_COMMISSION_AMOUNT",
+        resourceType: "sales",
+        resourceId: args.saleId,
+        description:
+          sale.commissionAmount == null
+            ? `Commission set to ${args.commissionAmount}`
+            : `Commission changed from ${sale.commissionAmount} to ${args.commissionAmount}`,
+        before: { commissionAmount: sale.commissionAmount ?? null },
+        after: { commissionAmount: args.commissionAmount },
       });
     } catch (error) {
       // Routine validation rejections are ConvexErrors — re-throw them without

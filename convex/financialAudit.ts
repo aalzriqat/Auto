@@ -37,7 +37,8 @@ type AuditActionType =
   | "APPROVE_PREPAID_CORRECTION"
   | "REJECT_PREPAID_CORRECTION"
   | "RESOLVE_SYSTEM_ACCOUNT_ADOPTION"
-  | "ACKNOWLEDGE_CLOSE_WARNINGS";
+  | "ACKNOWLEDGE_CLOSE_WARNINGS"
+  | "SET_COMMISSION_AMOUNT";
 
 // ─── Internal: write audit entry ─────────────────────────────────────────────
 

@@ -432,6 +432,7 @@ export default defineSchema({
       v.literal("REJECT_PREPAID_CORRECTION"),
       v.literal("RESOLVE_SYSTEM_ACCOUNT_ADOPTION"),
       v.literal("ACKNOWLEDGE_CLOSE_WARNINGS"),
+      v.literal("SET_COMMISSION_AMOUNT"),
     ),
     resourceType: v.string(),
     resourceId: v.string(),

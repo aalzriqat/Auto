@@ -943,6 +943,43 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
     expect(rows.map((r) => r._id)).toEqual([oldest]);
   });
 
+  test("deciding an amount is recorded against the person who decided it", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const ids = await seedCommissionOrg(t, "manual_audit");
+    await setMode(t, ids.orgId, "MANUAL");
+    const saleId = await completedSale(ids);
+
+    await ids.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: ids.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    await ids.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: ids.orgId,
+      saleId,
+      commissionAmount: 300,
+    });
+
+    // The sale row keeps only the current value, plus whoever eventually pays
+    // it — so without an audit entry there is no record of who set a payout
+    // figure, when, or what it was before.
+    const entries = (await t.run((ctx) => ctx.db.query("financialAuditLog").collect()))
+      .filter((e: any) => e.resourceId === saleId)
+      .sort((a: any, b: any) => a._creationTime - b._creationTime);
+
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({
+      actionType: "SET_COMMISSION_AMOUNT",
+      actorId: ids.userId,
+      before: { commissionAmount: null },
+      after: { commissionAmount: 250 },
+    });
+    expect(entries[1]).toMatchObject({
+      before: { commissionAmount: 250 },
+      after: { commissionAmount: 300 },
+    });
+  });
+
   test("a soft-deleted completed sale never enters the review queue", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const ids = await seedCommissionOrg(t, "manual_deleted");
