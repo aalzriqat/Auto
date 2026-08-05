@@ -18,7 +18,7 @@ import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation"
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
-import { getOrgCurrency, hookCommissionAccrued, hookCommissionAdjusted, hookCommissionPaid, hookSaleCancelled, isPostableNow, reverseCommissionForSale, commissionAccountingDate, commissionEntriesStillQueued } from "./accounting/workflowHooks";
+import { getOrgCurrency, hookCommissionAccrued, hookCommissionAdjusted, hookCommissionPaid, hookSaleCancelled, isPostableNow, reverseCommissionForSale, commissionAccountingDate, commissionEntriesStillQueued, recognizedCommissionMinor, MAX_COMMISSION_ADJUSTMENTS } from "./accounting/workflowHooks";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 import { toMinorUnits, fromMinorUnits, assertFiniteNumber } from "./utils/money";
 
@@ -1079,10 +1079,13 @@ async function hasCommissionAccrual(
  * existing queued entry as the source of truth and returns without doing
  * anything, so the caller cannot tell by trying.
  *
- * Only enforced when this entry would ACTUALLY post now. If it would queue too,
- * it lands behind its prerequisites and the order takes care of itself — which
- * is what keeps an org with no chart of accounts, where everything queues,
- * from being blocked. Same shape as payroll's assertAccrualsPosted.
+ * Only enforced when this entry would ACTUALLY post now, which is all a
+ * mutation can police — and it is deliberately NOT the whole defense. An entry
+ * that queues is not thereby safe: the outbox holds each row on its own period
+ * and continues, so a queued payment can still post ahead of a queued accrual
+ * when their periods open in the wrong order. `commissionPostingBlockedReason`
+ * is the drain-side half that covers that; this half exists so the common case
+ * fails immediately, with a message, instead of silently deferring.
  */
 async function assertCommissionEntriesPosted(
   ctx: MutationCtx,
@@ -1096,6 +1099,41 @@ async function assertCommissionEntriesPosted(
     throwAppError(
       AppErrorCode.VALIDATION_FAILED,
       `This commission hasn't posted to the ledger yet (its accounting period may be closed). Open the period so it posts, then ${action}.`
+    );
+  }
+}
+
+/**
+ * Refuses to settle a commission whose ledger recognition does not match the
+ * amount the sale says is owed.
+ *
+ * Settlement debits Commission Payable by the sale's amount; the GL holds what
+ * the entries recognized. Every path that changes the amount posts a matching
+ * delta, so the two agree — unless the row was written outside those paths (the
+ * admin raw-JSON editor writes `sales` directly) or the delta arithmetic itself
+ * is wrong. Paying across that gap puts the payable negative by the difference,
+ * and every later correction computes from the already-wrong row, so nothing in
+ * the normal workflow can bring it back.
+ */
+async function assertCommissionRecognitionMatches(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  sale: Doc<"sales">,
+  currency: string,
+  entryDate: number
+): Promise<void> {
+  // Gated exactly like the ordering check above, and for the same reason: when
+  // nothing can post — no chart of accounts, or no open period — recognition is
+  // legitimately zero while the sale carries a real amount, and the payment
+  // queues behind the accrual rather than racing it. Enforcing here would
+  // refuse every commission an org raises before it sets up its accounting.
+  if (!(await isPostableNow(ctx, orgId, entryDate))) return;
+  const recognized = await recognizedCommissionMinor(ctx, orgId, sale);
+  const decided = toMinorUnits(sale.commissionAmount ?? 0, currency);
+  if (recognized !== decided) {
+    throwAppError(
+      AppErrorCode.VALIDATION_FAILED,
+      "This commission's amount does not match what the ledger recognized for it, so it cannot be paid. Have accounting review it."
     );
   }
 }
@@ -1164,6 +1202,7 @@ export const markCommissionPaid = mutation({
         // against a queued accrual — payroll has guarded this for a while;
         // this path did not.
         await assertCommissionEntriesPosted(ctx, args.orgId, sale, now, "pay it");
+        await assertCommissionRecognitionMatches(ctx, args.orgId, sale, currency, now);
         await hookCommissionPaid(ctx, {
           orgId: args.orgId,
           saleId: args.saleId,
@@ -1307,6 +1346,16 @@ export const setCommissionAmount = mutation({
             "change the amount"
           );
           const sequence = (sale.commissionAdjustmentSeq ?? 0) + 1;
+          // Refused rather than clamped. The reversal walk and the queued-entry
+          // check both stop at MAX_COMMISSION_ADJUSTMENTS, so an entry past it
+          // could never be reversed on cancellation and would never be seen by
+          // the settlement guards — silently, and permanently.
+          if (sequence > MAX_COMMISSION_ADJUSTMENTS) {
+            throwAppError(
+              AppErrorCode.VALIDATION_FAILED,
+              "This commission has been corrected too many times to record another change. Cancel and re-enter the sale, or raise a manual journal."
+            );
+          }
           patch.commissionAdjustmentSeq = sequence;
           await hookCommissionAdjusted(ctx, {
             orgId: args.orgId,
@@ -1455,7 +1504,13 @@ export const recalculateCommission = mutation({
           amountMinor: toMinorUnits(commissionAmount, currency),
           currency,
           actorId: user._id,
-          occurredAt: now,
+          // The same shared rule as every other commission entry. Dating this
+          // at `now` recognized the expense in the month the cost basis was
+          // fixed rather than the month of the sale — the very mismatch this
+          // work removes — and, once the mode is switched to MANUAL, let a
+          // later correction post into the sale's own open period with no
+          // accrual behind it there.
+          occurredAt: await commissionAccountingDate(ctx, args.orgId, sale.saleDate, now),
         });
       }
       return { commissionAmount };

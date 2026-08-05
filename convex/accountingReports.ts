@@ -941,7 +941,7 @@ export async function computeCommissionPayableReconciliation(
   // have to ask "was this owed then", which the predicate cannot express.
   const recognizedBySale = await computeRecognizedCommissionAsOf(ctx, orgId, toDate);
 
-  let subledgerMinor = 0;
+  const subledgerMinor = new Map<string, number>();
   for (const sale of sales) {
     if (sale.isDeleted === true) continue;
     // What the GL had recognized for this sale as of the reporting date. Summed
@@ -959,13 +959,22 @@ export async function computeCommissionPayableReconciliation(
     if (sale.commissionPaidAt != null && (toDate === undefined || sale.commissionPaidAt <= toDate)) {
       continue;
     }
-    subledgerMinor += recognized;
+    // Keyed by the currency each entry was POSTED in, not the org's current
+    // one. The GL side splits by currency, so folding everything into today's
+    // org currency would make the two disagree permanently after a currency
+    // change — and would compare scale-3 minors (JOD/KWD/BHD/OMR) against
+    // scale-2 ones as if they were the same unit.
+    for (const [currency, minor] of recognized) {
+      subledgerMinor.set(currency, (subledgerMinor.get(currency) ?? 0) + minor);
+    }
   }
 
   const subByCurrency = new Map<string, number>();
   // `!== 0`, not `> 0`: a negative total is exactly the kind of discrepancy this
   // report exists to surface, and suppressing it reported a clean zero instead.
-  if (subledgerMinor !== 0) subByCurrency.set(orgCurrency, subledgerMinor);
+  for (const [currency, minor] of subledgerMinor) {
+    if (minor !== 0) subByCurrency.set(currency, minor);
+  }
 
   const glByCurrency = await computeGlBalanceByCurrency(ctx, orgId, SYSTEM_KEYS.COMMISSION_PAYABLE, toDate);
   return combineGlAndSubledger(glByCurrency, subByCurrency);
@@ -986,22 +995,28 @@ async function computeRecognizedCommissionAsOf(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   toDate: number | undefined
-): Promise<Map<string, number>> {
-  const inWindow = async (eventType: "COMMISSION_ACCRUED" | "COMMISSION_ADJUSTED") => {
-    const rows = await ctx.db
+): Promise<Map<string, Map<string, number>>> {
+  // by_org_eventType_date exists for exactly this — it loads one event type for
+  // just its own window instead of the org's whole history. Going through
+  // by_org_eventType and filtering afterwards scanned every commission event a
+  // dealership had ever posted, twice, inside a live query that also runs
+  // inside the close checklist.
+  const inWindow = async (eventType: "COMMISSION_ACCRUED" | "COMMISSION_ADJUSTED") =>
+    await ctx.db
       .query("accountingEvents")
-      .withIndex("by_org_eventType", (q) => q.eq("orgId", orgId).eq("eventType", eventType))
-      .filter((q) =>
-        q.or(q.eq(q.field("status"), "POSTED"), q.eq(q.field("status"), "REVERSED"))
-      )
+      .withIndex("by_org_eventType_date", (q) => {
+        const scoped = q.eq("orgId", orgId).eq("eventType", eventType);
+        return toDate === undefined ? scoped : scoped.lte("accountingDate", toDate);
+      })
+      .filter((q) => q.or(q.eq(q.field("status"), "POSTED"), q.eq(q.field("status"), "REVERSED")))
       .collect();
-    return toDate === undefined ? rows : rows.filter((r) => r.accountingDate <= toDate);
-  };
 
-  const recognized = new Map<string, number>();
-  const add = (saleId: unknown, minor: unknown) => {
+  const recognized = new Map<string, Map<string, number>>();
+  const add = (saleId: unknown, minor: unknown, currency: string) => {
     if (typeof saleId !== "string" || typeof minor !== "number" || !Number.isFinite(minor)) return;
-    recognized.set(saleId, (recognized.get(saleId) ?? 0) + minor);
+    const byCurrency = recognized.get(saleId) ?? new Map<string, number>();
+    byCurrency.set(currency, (byCurrency.get(currency) ?? 0) + minor);
+    recognized.set(saleId, byCurrency);
   };
 
   const wasLiveAt = async (event: Doc<"accountingEvents">): Promise<boolean> => {
@@ -1013,10 +1028,10 @@ async function computeRecognizedCommissionAsOf(
   };
 
   for (const e of await inWindow("COMMISSION_ACCRUED")) {
-    if (await wasLiveAt(e)) add(e.payload?.saleId, e.payload?.amountMinor);
+    if (await wasLiveAt(e)) add(e.payload?.saleId, e.payload?.amountMinor, e.currency);
   }
   for (const e of await inWindow("COMMISSION_ADJUSTED")) {
-    if (await wasLiveAt(e)) add(e.payload?.saleId, e.payload?.deltaMinor);
+    if (await wasLiveAt(e)) add(e.payload?.saleId, e.payload?.deltaMinor, e.currency);
   }
   return recognized;
 }
@@ -1044,43 +1059,71 @@ async function computeRecognizedCommissionAsOf(
 export async function computeCommissionRecognitionDivergence(
   ctx: QueryCtx,
   orgId: Id<"organizations">
-): Promise<{ saleCount: number; currency: string }> {
+): Promise<{ unrecognizedCount: number; divergentCount: number; currency: string }> {
   const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
   const sales = await ctx.db
     .query("sales")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
     .collect();
-  const owed = sales.filter(isCommissionOwed);
-  if (owed.length === 0) return { saleCount: 0, currency: orgCurrency };
+
+  // NOT isCommissionOwed. Payment does not reverse the accrual, so a commission
+  // recognized at the wrong figure is still wrong after it is paid — and the
+  // owed-only filter dropped it the moment it was settled, which is precisely
+  // when nobody would look again. Cancelled sales ARE excluded: their entries
+  // are reversed, so recognition of zero against a surviving commissionAmount
+  // is correct rather than missing. Drafts are excluded because nothing is
+  // owed or recognized on them yet.
+  const candidates = sales.filter(
+    (s) =>
+      s.isDeleted !== true &&
+      s.status === "COMPLETED" &&
+      s.commissionAmount != null &&
+      s.commissionAmount > 0
+  );
+  if (candidates.length === 0) {
+    return { unrecognizedCount: 0, divergentCount: 0, currency: orgCurrency };
+  }
 
   const recognized = await computeRecognizedCommissionAsOf(ctx, orgId, undefined);
-  const queuedKeys = new Set(
-    (
-      await ctx.db
-        .query("pendingAccountingEvents")
-        .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
-        .collect()
-    )
-      .concat(
-        await ctx.db
-          .query("pendingAccountingEvents")
-          .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "FAILED"))
-          .collect()
-      )
-      .map((p) => p.idempotencyKey)
-  );
+  const queued = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+    .collect();
+  const failed = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "FAILED"))
+    .collect();
 
-  let saleCount = 0;
-  for (const sale of owed) {
-    const hasQueuedEntry =
-      queuedKeys.has(`commission_accrued_${sale._id}`) ||
-      [...queuedKeys].some((k) => k.startsWith(`commission_adjusted_${sale._id}_`));
-    if (hasQueuedEntry) continue;
-    if ((recognized.get(sale._id) ?? 0) !== toMinorUnits(sale.commissionAmount, orgCurrency)) {
-      saleCount++;
+  // Parsed once into the set of sale ids with a commission entry still in the
+  // outbox. Scanning every queued key per candidate sale was O(sales × queued)
+  // and rebuilt the key list on each iteration.
+  const salesWithQueuedEntry = new Set<string>();
+  for (const p of [...queued, ...failed]) {
+    const accrual = /^commission_accrued_(.+)$/.exec(p.idempotencyKey);
+    if (accrual) salesWithQueuedEntry.add(accrual[1]);
+    const adjustment = /^commission_adjusted_(.+)_\d+$/.exec(p.idempotencyKey);
+    if (adjustment) salesWithQueuedEntry.add(adjustment[1]);
+  }
+
+  let unrecognizedCount = 0;
+  let divergentCount = 0;
+  for (const sale of candidates) {
+    if (salesWithQueuedEntry.has(sale._id)) continue;
+    const byCurrency = recognized.get(sale._id);
+    const recognizedMinor = byCurrency
+      ? [...byCurrency.values()].reduce((sum, minor) => sum + minor, 0)
+      : 0;
+    // Never recognized at all is a DIFFERENT problem from recognized at the
+    // wrong figure, and reporting them under one message made the deploy-time
+    // backlog read as ledger corruption. One is fixed by running the backfill;
+    // the other needs a human to work out what happened.
+    if (recognizedMinor === 0) {
+      unrecognizedCount++;
+    } else if (recognizedMinor !== toMinorUnits(sale.commissionAmount ?? 0, orgCurrency)) {
+      divergentCount++;
     }
   }
-  return { saleCount, currency: orgCurrency };
+  return { unrecognizedCount, divergentCount, currency: orgCurrency };
 }
 
 export const commissionPayableReconciliation = query({

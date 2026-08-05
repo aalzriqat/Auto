@@ -21,6 +21,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { PostCommand, postAccountingEvent } from "./accounting/postingEngine";
 import { prepaidPostingBlockedReason } from "./utils/prepaidSourceLedger";
 import { payrollPostingBlockedReason } from "./utils/payrollSourceLedger";
+import { commissionPostingBlockedReason } from "./utils/commissionSourceLedger";
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { checkPostingAllowed } from "./accountingPeriods";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -278,7 +279,9 @@ export async function drainEntries(
     // are exempt: they unwind something that already posted.
     if (p.kind === "POST") {
       const blockedReason =
-        (await prepaidPostingBlockedReason(ctx, p)) ?? (await payrollPostingBlockedReason(ctx, p));
+        (await prepaidPostingBlockedReason(ctx, p)) ??
+        (await payrollPostingBlockedReason(ctx, p)) ??
+        (await commissionPostingBlockedReason(ctx, p));
       if (blockedReason) {
         // Held, not failed: this entry is not broken and retrying it is not
         // wrong — it is waiting on something else to post first. Routing it

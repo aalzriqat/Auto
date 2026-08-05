@@ -434,15 +434,28 @@ async function computeCloseChecklist(
     // close teaches people to click through the ones that matter.
     warnings.push(`Commission payable subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
   }
-  if (commissionRecognitionDivergence.saleCount > 0) {
-    // The reconciliation above compares the GL against amounts derived from the
-    // same posted entries, so it cannot see a commission recognized at the
-    // wrong figure — both sides would be wrong together and agree. This is the
-    // independent check: what the ledger recognized versus what was actually
-    // decided on the sale. Sales with an entry still in the outbox are excluded,
-    // since unposted events are already a blocker above.
+  // The reconciliation above compares the GL against amounts derived from the
+  // same posted entries, so it cannot see a commission recognized at the wrong
+  // figure — both sides would be wrong together and agree. These are the
+  // independent checks: what the ledger recognized versus what the sale
+  // actually records. Sales with an entry still in the outbox are excluded,
+  // since unposted events are already a blocker above.
+  //
+  // Reported separately on purpose. "Never recognized" is the expected state of
+  // every commission decided before earned-time recognition shipped, and it is
+  // fixed by running the backfill; "recognized at a different amount" means
+  // something went wrong and needs a person. Reporting both under one message
+  // made an ordinary migration backlog read as ledger corruption — and a
+  // warning that must be acknowledged verbatim on every close is exactly how
+  // people learn to click through the ones that matter.
+  if (commissionRecognitionDivergence.unrecognizedCount > 0) {
     warnings.push(
-      `${commissionRecognitionDivergence.saleCount} unpaid commission(s) are recognized in the ledger at a different amount than the sale records. Review before closing.`
+      `${commissionRecognitionDivergence.unrecognizedCount} completed sale commission(s) are not recognized in the ledger at all. Run the commission accrual backfill.`
+    );
+  }
+  if (commissionRecognitionDivergence.divergentCount > 0) {
+    warnings.push(
+      `${commissionRecognitionDivergence.divergentCount} commission(s) are recognized in the ledger at a different amount than the sale records. Review before closing.`
     );
   }
 

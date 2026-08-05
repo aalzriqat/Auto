@@ -874,6 +874,41 @@ export async function isEventQueued(
  */
 export const MAX_COMMISSION_ADJUSTMENTS = 1000;
 
+/**
+ * What the ledger has actually recognized for this sale's commission — the
+ * posted accrual plus every posted correction, in minor units.
+ *
+ * Settlement debits the payable by the amount the SALE says is owed, while the
+ * GL carries the amount the ENTRIES recognized. Those are normally identical
+ * because every change posts a delta — but `sales` rows are writable through
+ * the admin raw-JSON editor, and a bug in the delta arithmetic would produce
+ * the same split. Paying against the difference drives Commission Payable
+ * negative, and the next correction computes its delta from the already-wrong
+ * row, so the normal workflow cannot repair it.
+ */
+export async function recognizedCommissionMinor(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  sale: { _id: Id<"sales">; commissionAdjustmentSeq?: number }
+): Promise<number> {
+  const postedAmount = async (idempotencyKey: string, field: "amountMinor" | "deltaMinor") => {
+    const event = await ctx.db
+      .query("accountingEvents")
+      .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
+      .filter((q) => q.eq(q.field("status"), "POSTED"))
+      .first();
+    const value = event?.payload?.[field];
+    return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  };
+
+  let total = await postedAmount(`commission_accrued_${sale._id}`, "amountMinor");
+  const seq = Math.min(sale.commissionAdjustmentSeq ?? 0, MAX_COMMISSION_ADJUSTMENTS);
+  for (let sequence = 1; sequence <= seq; sequence++) {
+    total += await postedAmount(`commission_adjusted_${sale._id}_${sequence}`, "deltaMinor");
+  }
+  return total;
+}
+
 export async function commissionEntriesStillQueued(
   ctx: MutationCtx,
   orgId: Id<"organizations">,

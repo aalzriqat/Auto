@@ -1,5 +1,6 @@
 import { Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
+import { commissionPrereqUnpostedReason } from "./commissionSourceLedger";
 
 /**
  * Outbox posting guard for payroll/advance settlement events, mirroring
@@ -90,9 +91,22 @@ async function payrollPaidBlockedReason(
       return "its payslip could not be resolved in this organization, so the commission accruals behind the Commission Payable it clears cannot be verified";
     }
     for (const saleId of item.commissionSaleIds) {
-      if (!(await prereqPosted(ctx, orgId, `commission_accrued_${saleId}`))) {
-        return "a commission accrual behind it has not posted to the ledger yet, so this would clear a Commission Payable that was never accrued";
+      // The accrual alone is not the whole prerequisite: payment debits the
+      // CORRECTED amount (settleItemCommissions re-derives it from the live
+      // sale), so a correction still sitting in the outbox means the GL carries
+      // only the original and the difference comes straight out of the payable.
+      // Shared with the direct-payment path so the two cannot drift.
+      const sale = await ctx.db.get(saleId);
+      if (!sale || sale.orgId !== orgId) {
+        return "a sale behind its commission payment could not be resolved in this organization, so the Commission Payable it clears cannot be verified";
       }
+      const unposted = await commissionPrereqUnpostedReason(
+        ctx,
+        orgId,
+        saleId,
+        sale.commissionAdjustmentSeq ?? 0
+      );
+      if (unposted) return unposted;
     }
   }
   // Advance recovery: the payment credits Employee Advances for every advance

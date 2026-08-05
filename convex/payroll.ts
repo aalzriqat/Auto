@@ -13,6 +13,7 @@ import {
   hookCommissionAccrued,
   isPostableNow,
   commissionEntriesStillQueued,
+  recognizedCommissionMinor,
 } from "./accounting/workflowHooks";
 import { toMinorUnits, fromMinorUnits } from "./utils/money";
 import { paymentMethodValidator, normalizePaymentMethod, PaymentMethod } from "./utils/paymentMethods";
@@ -547,7 +548,12 @@ async function assertAdvanceIssuancesPosted(
 async function assertAccrualsPosted(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
-  items: { _id: Id<"payrollItems">; baseSalaryMinor: number; commissionSaleIds: Id<"sales">[] }[]
+  items: {
+    _id: Id<"payrollItems">;
+    baseSalaryMinor: number;
+    commissionSaleIds: Id<"sales">[];
+    currency: string;
+  }[]
 ): Promise<void> {
   for (const item of items) {
     if (item.baseSalaryMinor > 0 && (await accrualStillQueued(ctx, orgId, `payroll_accrued_${item._id}`))) {
@@ -566,6 +572,18 @@ async function assertAccrualsPosted(
       if (await commissionEntriesStillQueued(ctx, orgId, sale)) {
         throw new ConvexError(
           "A commission entry for this run hasn't posted to the ledger yet (its accounting period may be closed). Open the period so it posts, then pay."
+        );
+      }
+      // Payment debits the payable by the sale's amount while the GL carries
+      // what the entries recognized. Normally identical, because every change
+      // posts a matching delta — but not if the row was written outside those
+      // paths. Paying across the gap drives Commission Payable negative.
+      if (
+        (await recognizedCommissionMinor(ctx, orgId, sale)) !==
+        toMinorUnits(sale.commissionAmount, item.currency)
+      ) {
+        throw new ConvexError(
+          "A commission on this run does not match what the ledger recognized for it, so the run cannot be paid. Have accounting review it."
         );
       }
     }
