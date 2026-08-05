@@ -39,7 +39,12 @@ function makePagination(pages: Row[][]) {
   return state;
 }
 
-type Options = { exhaustWhen?: boolean; maxAutoPages?: number; resetKey?: string };
+type Options = {
+  exhaustWhen?: boolean;
+  maxAutoPages?: number;
+  resetKey?: string;
+  pagesMayBeEmpty?: boolean;
+};
 
 function renderWithPagination(
   pagination: ReturnType<typeof makePagination>,
@@ -60,6 +65,7 @@ function renderWithPagination(
         exhaustWhen: current.exhaustWhen,
         maxAutoPages: current.maxAutoPages,
         resetKey: current.resetKey,
+        pagesMayBeEmpty: current.pagesMayBeEmpty,
       },
     })
   );
@@ -90,13 +96,12 @@ describe("useTableControls auto-continuation", () => {
     expect(result.current.rows).toHaveLength(1);
   });
 
-  test("keeps loading when there is nothing to show, even with no filter", async () => {
-    // The default view of an org whose sales all fail the candidate rules. This
-    // is the case a caller cannot be relied on to opt into, and getting it
-    // wrong renders a permanent loading state where the unpaginated query gave
-    // an immediate answer.
+  test("keeps loading when a post-filtered query has nothing to show, even with no filter", async () => {
+    // The default view of an org whose sales all fail the candidate rules.
+    // Getting this wrong renders a permanent loading state where the
+    // unpaginated query gave an immediate answer.
     const pagination = makePagination([[], [], []]);
-    renderWithPagination(pagination);
+    renderWithPagination(pagination, { pagesMayBeEmpty: true });
 
     for (let i = 0; i < 5; i++) {
       await act(async () => {
@@ -106,6 +111,22 @@ describe("useTableControls auto-continuation", () => {
 
     expect(pagination.calls.length).toBeGreaterThanOrEqual(2);
     expect(pagination.status).toBe("Exhausted");
+  });
+
+  test("an ordinary paginated table does NOT walk on just because it is empty", async () => {
+    // Nine tables share this hook, and only the commissions query post-filters
+    // its pages. Where the server paginates rows directly an empty page IS the
+    // answer, so treating "no rows" as a reason to keep reading would make
+    // every empty table fetch its entire dataset — which is how a change made
+    // for one page broke another page's end-to-end test.
+    const pagination = makePagination([[], [], [{ id: 1, name: "Later" }]]);
+    renderWithPagination(pagination);
+
+    for (let i = 0; i < 5; i++) {
+      await act(async () => {});
+    }
+
+    expect(pagination.calls).toEqual([]);
   });
 
   test("does not load more when there is data and no filter or search", async () => {
@@ -204,7 +225,7 @@ describe("useTableControls auto-continuation", () => {
     const pages = Array.from({ length: 30 }, () => [] as Row[]);
     pages.push([{ id: 9, name: "Deep" }]);
     const capped = makePagination(pages);
-    const walked = renderWithPagination(capped, { exhaustWhen: true, maxAutoPages: 2 });
+    const walked = renderWithPagination(capped, { exhaustWhen: true, maxAutoPages: 2, pagesMayBeEmpty: true });
     for (let i = 0; i < 5; i++) await act(async () => {});
     expect(walked.result.current.isAutoLoading).toBe(false);
     expect(walked.result.current.autoLoadCapped).toBe(true);

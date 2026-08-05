@@ -30,6 +30,18 @@ interface UseTableControlsPagination {
    * the second filter would then get no automatic pages at all.
    */
   resetKey?: string;
+  /**
+   * Declares that the server's pages are post-filtered — it reads a fixed
+   * number of DOCUMENTS and returns only those that qualify — so a page can
+   * come back short, or empty, while matching rows remain further back. For
+   * such a query "no rows yet" is not an answer, and stopping on it renders a
+   * permanent empty/loading state over real data.
+   *
+   * A property of the query, not a preference: a table whose server paginates
+   * rows directly must leave this off, because there an empty page genuinely
+   * means there is nothing to find.
+   */
+  pagesMayBeEmpty?: boolean;
 }
 
 interface UseTableControlsOptions<T> {
@@ -77,12 +89,16 @@ export function useTableControls<T>({
    *
    *  - a search, which is filtered here on the client;
    *  - `exhaustWhen`, for a filter the server applies;
-   *  - and having nothing at all to show, which is the one a caller cannot be
-   *    relied on to remember. It is also the dangerous one: an empty first page
-   *    with more behind it renders as a permanent loading state, where the
-   *    unpaginated query used to give an immediate, actionable answer.
+   *  - and, for a query that declares `pagesMayBeEmpty`, having nothing at all
+   *    to show. An empty first page with more behind it otherwise renders as a
+   *    permanent loading state, where the unpaginated query used to give an
+   *    immediate, actionable answer. Gated on the declaration rather than
+   *    applied to every paginated table: where the server paginates rows
+   *    directly, an empty page IS the answer, and walking on from it would
+   *    make every such table fetch its whole dataset the moment it is empty.
    */
-  const hasNothingToShow = pagination !== undefined && (data?.length ?? 0) === 0;
+  const hasNothingToShow =
+    pagination?.pagesMayBeEmpty === true && (data?.length ?? 0) === 0;
   const wantsExhaust = isSearching || pagination?.exhaustWhen === true || hasNothingToShow;
 
   // Bounded, so a single filter click cannot fan out into one request per page

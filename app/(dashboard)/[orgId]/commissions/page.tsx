@@ -144,6 +144,7 @@ export default function CommissionsPage() {
     pagination: {
       status: pageStatus,
       loadMore,
+      pagesMayBeEmpty: true,
       exhaustWhen: filterStatus !== "all" || filterSalesperson !== "all",
       resetKey: `${filterStatus}|${filterSalesperson}`,
     },
