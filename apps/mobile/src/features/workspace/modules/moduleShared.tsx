@@ -246,6 +246,30 @@ export function money(value: number | undefined | null, locale: "en" | "ar", cur
   }
 }
 
+/**
+ * An undecided commission is not a zero one. `money(undefined)` renders "0.00",
+ * which reads as "this sale earns nothing" — the opposite of the truth. Shared
+ * by the commissions module and the sale-detail card so the two screens cannot
+ * make opposite claims about the same field.
+ */
+export function commissionAmountLabel(
+  sale: { commissionAmount?: number },
+  locale: "en" | "ar"
+): string {
+  if (sale.commissionAmount == null) return locale === "ar" ? "غير محددة" : "Not set";
+  return money(sale.commissionAmount, locale);
+}
+
+export function commissionStatusLabel(
+  sale: { commissionAmount?: number; commissionPaidAt?: number },
+  locale: "en" | "ar"
+): string {
+  if (sale.commissionPaidAt) return dateLabel(sale.commissionPaidAt, locale);
+  if (sale.commissionAmount == null) return locale === "ar" ? "بانتظار المراجعة" : "Awaiting review";
+  if (sale.commissionAmount <= 0) return locale === "ar" ? "لا توجد عمولة" : "No commission";
+  return locale === "ar" ? "غير مدفوعة" : "Unpaid";
+}
+
 export function dateLabel(value: number | undefined, locale: "en" | "ar"): string {
   if (!value) return "-";
   try {

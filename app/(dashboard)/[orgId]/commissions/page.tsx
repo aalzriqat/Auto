@@ -28,14 +28,15 @@ import {
 } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "@/components/ui/sonner";
-import { TrendingUp, CheckCircle2, Clock, DollarSign, Check, Undo2, Pencil, X, AlertTriangle, CircleDashed, MinusCircle, ClipboardList } from "lucide-react";
+import { TrendingUp, CheckCircle2, Clock, DollarSign, Check, Undo2, Pencil, X, AlertTriangle, CircleDashed, MinusCircle, ClipboardList, Ban, UserMinus } from "lucide-react";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { CommissionPaymentDialog } from "@/components/commissions/CommissionPaymentDialog";
 import { type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { useTableControls } from "@/hooks/useTableControls";
+import { getErrorMessage } from "@/lib/errors";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 
-type CommissionStatus = "NOT_SET" | "NO_COMMISSION" | "UNPAID" | "PAID";
+type CommissionStatus = "NOT_SET" | "NO_COMMISSION" | "UNPAID" | "PAID" | "VOID";
 
 type CommissionSale = Doc<"sales"> & {
   vehicleSummary: string;
@@ -46,9 +47,13 @@ type CommissionSale = Doc<"sales"> & {
   needsRecalculation?: boolean;
   commissionStatus: CommissionStatus;
   canSetAmount: boolean;
+  salespersonOffboarded: boolean;
 };
 
 type StatusFilter = "all" | "paid" | "unpaid" | "not_set";
+
+/** Must stay at or below COMMISSION_PAGE_MAX in convex/sales.ts. */
+const PAGE_LIMIT = 300;
 
 function formatCurrency(amount: number) {
   return amount.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -74,8 +79,13 @@ export default function CommissionsPage() {
       orgId: activeOrgId,
       salespersonId: filterSalesperson !== "all" ? (filterSalesperson as Id<"users">) : undefined,
       paidStatus: filterStatus !== "all" ? filterStatus : undefined,
+      limit: PAGE_LIMIT,
     } : "skip"
   );
+  // The server bounds how many rows one load may hydrate. Receiving a full page
+  // means older sales exist beyond it — say so rather than quietly presenting a
+  // partial list (and partial totals) as the whole picture.
+  const isTruncated = (commissions?.length ?? 0) >= PAGE_LIMIT;
 
   const {
     search,
@@ -107,18 +117,29 @@ export default function CommissionsPage() {
 
   const filtered = sortedCommissions ?? [];
 
-  const totalEarned = filtered.reduce((s: number, c: CommissionSale) => s + (c.commissionAmount ?? 0), 0);
-  const totalPaid = filtered.filter((c: CommissionSale) => c.commissionPaidAt).reduce((s: number, c: CommissionSale) => s + (c.commissionAmount ?? 0), 0);
+  // A cancelled sale keeps its commission amount as history, but the accrual
+  // behind it was reversed — so it is not earned, not paid and not pending.
+  // Counting it here is what makes this page disagree with the Commission
+  // Payable reconciliation, which has always excluded it.
+  const settleable = filtered.filter((c: CommissionSale) => c.commissionStatus !== "VOID");
+  const totalEarned = settleable.reduce((s: number, c: CommissionSale) => s + (c.commissionAmount ?? 0), 0);
+  const totalPaid = settleable
+    .filter((c: CommissionSale) => c.commissionStatus === "PAID")
+    .reduce((s: number, c: CommissionSale) => s + (c.commissionAmount ?? 0), 0);
   const totalPending = totalEarned - totalPaid;
   // Only rows that actually carry a decided commission belong in the "deals with
   // commission" count — undecided ones contribute nothing and would inflate it.
-  const decidedCount = filtered.filter((c: CommissionSale) => (c.commissionAmount ?? 0) > 0).length;
+  const decidedCount = settleable.filter((c: CommissionSale) => (c.commissionAmount ?? 0) > 0).length;
+  const paidCount = settleable.filter((c: CommissionSale) => c.commissionStatus === "PAID").length;
+  const unpaidCount = settleable.filter((c: CommissionSale) => c.commissionStatus === "UNPAID").length;
   const notSetCount = filtered.filter((c: CommissionSale) => c.commissionStatus === "NOT_SET").length;
+  const hasActiveFilter =
+    filterStatus !== "all" || filterSalesperson !== "all" || search.trim().length > 0;
 
   // Group by salesperson for summary
   const bySalesperson = useMemo(() => {
     const map = new Map<string, { name: string; earned: number; paid: number; count: number }>();
-    for (const c of filtered) {
+    for (const c of settleable) {
       const existing = map.get(c.salespersonId) ?? { name: c.salespersonName, earned: 0, paid: 0, count: 0 };
       existing.earned += c.commissionAmount ?? 0;
       if (c.commissionPaidAt) existing.paid += c.commissionAmount ?? 0;
@@ -136,8 +157,8 @@ export default function CommissionsPage() {
       toast.success(t("CommissionPaidSuccess" as any));
       setCommissionToPay(null);
       setPaymentMethod("CASH");
-    } catch {
-      toast.error(t("CommissionPaymentFailed" as any));
+    } catch (e) {
+      toast.error(getErrorMessage(e));
     } finally {
       setIsPayingCommission(false);
     }
@@ -149,7 +170,10 @@ export default function CommissionsPage() {
       await recalculateCommission({ orgId: activeOrgId, saleId });
       toast.success(t("CommissionRecalculated" as any));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      // `e.message` here is Convex's transport wrapper — it carries the request
+      // id, the stack and the convex/ source path straight to the screen.
+      // getErrorMessage strips all of that and falls back to a generic string.
+      toast.error(getErrorMessage(e));
     }
   }
 
@@ -167,8 +191,12 @@ export default function CommissionsPage() {
       toast.success(t("CommissionUpdated" as any));
       setEditingId(null);
       setEditingAmount("");
-    } catch {
-      toast.error(t("CommissionUpdateFailed" as any));
+    } catch (e) {
+      // The server distinguishes "already recorded in the ledger", "paid
+      // amounts cannot be changed" and "cancelled sale" — each tells the
+      // manager something different about what to do next. Collapsing them
+      // into one generic string sends them to support instead.
+      toast.error(getErrorMessage(e));
     }
   }
 
@@ -205,7 +233,7 @@ export default function CommissionsPage() {
             </CardHeader>
             <CardContent>
               <p className="text-2xl font-bold text-green-600">{formatCurrency(totalPaid)}</p>
-              <p className="text-xs text-muted-foreground mt-1">{filtered.filter((c: CommissionSale) => c.commissionPaidAt).length} {t("Paid" as any)}</p>
+              <p className="text-xs text-muted-foreground mt-1">{paidCount} {t("Paid" as any)}</p>
             </CardContent>
           </Card>
           <Card>
@@ -215,7 +243,10 @@ export default function CommissionsPage() {
             </CardHeader>
             <CardContent>
               <p className="text-2xl font-bold text-orange-600">{formatCurrency(totalPending)}</p>
-              <p className="text-xs text-muted-foreground mt-1">{filtered.filter((c: CommissionSale) => !c.commissionPaidAt).length} {t("Unpaid" as any)}</p>
+              {/* Only rows that actually owe money. Counting every unsettled row
+                  here would report undecided and deliberately-zero sales as
+                  outstanding obligations that no payout will ever include. */}
+              <p className="text-xs text-muted-foreground mt-1">{unpaidCount} {t("Unpaid" as any)}</p>
             </CardContent>
           </Card>
         </div>
@@ -290,12 +321,22 @@ export default function CommissionsPage() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">{t("AllStatus" as any)}</SelectItem>
-              <SelectItem value="not_set">{t("NotSet" as any)}</SelectItem>
+              <SelectItem value="not_set">{t("CommissionNotSet" as any)}</SelectItem>
               <SelectItem value="unpaid">{t("Unpaid" as any)}</SelectItem>
               <SelectItem value="paid">{t("Paid" as any)}</SelectItem>
             </SelectContent>
           </Select>
         </div>
+
+        {/* The totals above sum only the rows that arrived. Once the server has
+            capped the page they cover a recent slice, not the whole ledger —
+            an unqualified currency figure would be quietly wrong. */}
+        {isTruncated && (
+          <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <p>{t("CommissionListTruncated" as any)}</p>
+          </div>
+        )}
 
         {/* Commission table */}
         <div className="rounded-md border overflow-x-auto">
@@ -322,12 +363,17 @@ export default function CommissionsPage() {
               ) : filtered.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={canManage ? 8 : 7} className="text-center py-8 text-muted-foreground">
-                    {/* In MANUAL mode every completed sale is listed, so an empty
-                        table means there are no completed sales — not that a
-                        commission rate is missing from a team member. */}
-                    {isManualMode && filterStatus === "all" && !search
-                      ? t("NoCompletedSalesYet" as any)
-                      : t("NoCommissionRecords" as any)}
+                    {/* Three different empty states. With a filter on, nothing
+                        is wrong — the filter just excluded everything. With no
+                        filter in MANUAL mode there are simply no completed
+                        sales yet. The original copy ("set a commission rate on
+                        team members") only makes sense in an automatic mode;
+                        MANUAL has no rates by definition. */}
+                    {hasActiveFilter
+                      ? t("NoCommissionRecordsForFilter" as any)
+                      : isManualMode
+                        ? t("NoCompletedSalesYet" as any)
+                        : t("NoCommissionRecords" as any)}
                   </TableCell>
                 </TableRow>
               ) : (
@@ -342,7 +388,24 @@ export default function CommissionsPage() {
                           : undefined
                     }
                   >
-                    <TableCell className="font-medium">{c.salespersonName}</TableCell>
+                    <TableCell className="font-medium">
+                      <span className="inline-flex flex-wrap items-center gap-1.5">
+                        {c.salespersonName}
+                        {/* Payroll skips offboarded members entirely, so an
+                            amount entered here would sit "pending" forever with
+                            no run ever picking it up and no error anywhere. */}
+                        {c.salespersonOffboarded && c.commissionStatus === "UNPAID" && (
+                          <Badge
+                            variant="outline"
+                            className="text-amber-700 border-amber-400 dark:text-amber-300 dark:border-amber-700 text-[10px] font-normal"
+                            title={t("SalespersonOffboardedHint" as any)}
+                          >
+                            <UserMinus className="h-3 w-3 me-1" />
+                            {t("SalespersonOffboarded" as any)}
+                          </Badge>
+                        )}
+                      </span>
+                    </TableCell>
                     <TableCell>{c.vehicleSummary}</TableCell>
                     <TableCell>{c.customerName}</TableCell>
                     <TableCell className="text-muted-foreground text-sm">
@@ -434,6 +497,15 @@ export default function CommissionsPage() {
                           <MinusCircle className="h-3 w-3 me-1" />
                           {t("NoCommissionOwed" as any)}
                         </Badge>
+                      ) : c.commissionStatus === "VOID" ? (
+                        <Badge
+                          variant="outline"
+                          className="text-muted-foreground text-xs line-through decoration-1"
+                          title={t("CommissionVoidHint" as any)}
+                        >
+                          <Ban className="h-3 w-3 me-1" />
+                          {t("CommissionVoid" as any)}
+                        </Badge>
                       ) : (
                         <Badge variant="outline" className="text-orange-600 border-orange-300 text-xs">
                           <Clock className="h-3 w-3 me-1" />
@@ -447,6 +519,10 @@ export default function CommissionsPage() {
                           // Paid commissions are locked server-side (reversing a
                           // paid commission needs an accounting reversal, not a
                           // flag flip) — so no Revert action is offered here.
+                          null
+                        ) : c.commissionStatus === "VOID" ? (
+                          // Nothing to settle on a cancelled sale — its accrual
+                          // is already reversed and every mutation refuses it.
                           null
                         ) : c.missingPurchaseCost ? null : c.needsRecalculation ? (
                           <Button

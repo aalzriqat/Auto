@@ -5,7 +5,7 @@ import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepF
 import { api, type MobileFinancingType, type MobileMyMembership, type MobileSale } from "../../../convexApi";
 import { hapticSuccess } from "../../../haptics";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, type MobileSaleStatusFilter, compactNumber, money, dateLabel, parseOptionalNumber, parseRequiredNumber, idempotencyKey, invalidNumberMessage, requiredSelectionMessage, useFormErrors, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, saleMatchesView, averageSalePrice, saleRemainingBalance, vehicleListPriceLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
+import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, type MobileSaleStatusFilter, compactNumber, money, dateLabel, commissionAmountLabel, commissionStatusLabel, parseOptionalNumber, parseRequiredNumber, idempotencyKey, invalidNumberMessage, requiredSelectionMessage, useFormErrors, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, saleMatchesView, averageSalePrice, saleRemainingBalance, vehicleListPriceLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 export function SalesModule({
@@ -331,7 +331,9 @@ export function SalesModule({
               <MetricCard title={locale === "ar" ? "السعر" : "Sale price"} value={money(detailSale.salePrice, locale)} caption={detailSale.financingType ?? "CASH"} />
               <MetricCard title={locale === "ar" ? "الدفعة" : "Deposit"} value={money(detailSale.downPayment, locale)} caption={locale === "ar" ? "مدفوعة مقدماً" : "up front"} />
               <MetricCard title={locale === "ar" ? "الرصيد" : "Balance"} value={money(saleRemainingBalance(detailSale), locale)} caption={locale === "ar" ? "بعد الدفعة" : "after deposit"} />
-              <MetricCard title={locale === "ar" ? "العمولة" : "Commission"} value={money(detailSale.commissionAmount, locale)} caption={detailSale.commissionPaidAt ? dateLabel(detailSale.commissionPaidAt, locale) : (locale === "ar" ? "غير مدفوعة" : "unpaid")} />
+              {/* An undecided commission must not render as "0.00 · unpaid" —
+                  in MANUAL mode that is every sale until a manager reviews it. */}
+              <MetricCard title={locale === "ar" ? "العمولة" : "Commission"} value={commissionAmountLabel(detailSale, locale)} caption={commissionStatusLabel(detailSale, locale)} />
             </View>
             <SummaryPanel
               title={locale === "ar" ? "ملخص الصفقة" : "Deal summary"}

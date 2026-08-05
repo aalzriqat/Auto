@@ -16,6 +16,7 @@ import {
 import { toMinorUnits, fromMinorUnits } from "./utils/money";
 import { paymentMethodValidator, normalizePaymentMethod, PaymentMethod } from "./utils/paymentMethods";
 import { runWithIdempotency } from "./utils/idempotency";
+import { isCommissionOwed } from "./utils/commission";
 
 // ─── Employee compensation (fixed monthly salary) ──────────────────────────────
 
@@ -435,7 +436,11 @@ async function collectUnpaidCommissions(
     .collect();
   const byUser = new Map<string, { minor: number; saleIds: Id<"sales">[] }>();
   for (const s of sales) {
-    if (!s.commissionAmount || s.commissionAmount <= 0) continue;
+    // The shared "still owes a commission" rule (convex/utils/commission.ts),
+    // so the sweep, the commissions page and the Commission Payable
+    // reconciliation cannot disagree about what is outstanding. The two
+    // conditions below it are payroll's own additions, not part of that rule.
+    if (!isCommissionOwed(s)) continue;
     if (!activeMemberIds.has(s.salespersonId)) continue;
     if (s.saleDate > periodEndMs) continue; // earned after this period
     const entry = byUser.get(s.salespersonId) ?? { minor: 0, saleIds: [] };

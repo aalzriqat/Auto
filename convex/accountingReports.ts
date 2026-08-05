@@ -16,6 +16,7 @@ import { requireFeature } from "./subscriptions";
 import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { recognizedDueThroughDateMinor } from "./utils/expenseAmortization";
+import { isCommissionOwed } from "./utils/commission";
 
 /**
  * GL Phase 14 note on aggregation: every aggregate below keys on
@@ -922,14 +923,14 @@ export async function computeCommissionPayableReconciliation(
     .query("sales")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
     .collect();
-  const owed = sales.filter((s) =>
-    // Cancellation reverses the GL commission accrual (hookCommissionReversed)
-    // but never clears commissionAmount on the sale row — without this
-    // check a cancelled sale would still count in the subledger side while
-    // its GL liability is already zero, permanently unreconciled.
-    !s.isDeleted && s.status !== "CANCELLED" &&
-    s.commissionAmount != null && s.commissionAmount > 0 && s.commissionPaidAt == null
-  );
+  // isCommissionOwed is the shared definition (convex/utils/commission.ts) used
+  // by the commissions page and the payroll sweep too, so this reconciliation
+  // and the screens a manager compares it against cannot drift apart. It is
+  // what excludes cancelled sales: cancellation reverses the GL accrual
+  // (hookCommissionReversed) but never clears commissionAmount on the sale row,
+  // so counting the amount alone would leave the subledger side permanently
+  // above a GL liability that is already zero.
+  const owed = sales.filter(isCommissionOwed);
 
   let subledgerMinor = 0;
   for (const sale of owed) {

@@ -1,7 +1,7 @@
 import { v, ConvexError } from "convex/values";
-import { query, MutationCtx } from "./_generated/server";
+import { query, MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
-import { Doc, Id } from "./_generated/dataModel";
+import { Doc, Id, TableNames } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -11,6 +11,7 @@ import { validateInput } from "./utils/validation";
 import { CreateDraftSaleSchema, CreateSaleSchema, UpdateSaleSchema } from "./validations/sales";
 import { restoreVehicleFromSale } from "./utils/saleHelpers";
 import { vehicleHasCostBasis } from "./utils/vehicleCost";
+import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
@@ -672,23 +673,30 @@ export const softDelete = mutation({
 // ─── Commission Queries & Mutations ──────────────────────────────────────────
 
 /**
- * The commission state of a sale, derived rather than stored so it can never
- * disagree with the underlying fields:
- *  - NOT_SET        — nobody has decided yet (`commissionAmount == null`).
- *  - NO_COMMISSION  — reviewed and deliberately set to zero. Unset is NOT zero:
- *                     one is an open task, the other is a closed decision.
- *  - UNPAID         — a positive amount is owed and not yet settled.
- *  - PAID           — settled (directly or through a payroll run).
+ * How many commission rows a single page load may hydrate. Each row costs a
+ * vehicle, a customer and a salesperson read, and every Convex function has a
+ * hard ceiling on database calls — so an unbounded list does not degrade
+ * gracefully at scale, it fails outright once a dealership has enough history.
+ * The newest sales win the budget; older ones are reached with the filters.
  */
-export type CommissionStatus = "NOT_SET" | "NO_COMMISSION" | "UNPAID" | "PAID";
+const COMMISSION_PAGE_DEFAULT = 300;
+const COMMISSION_PAGE_MAX = 1000;
 
-function deriveCommissionStatus(sale: {
-  commissionAmount?: number;
-  commissionPaidAt?: number;
-}): CommissionStatus {
-  if (sale.commissionPaidAt != null) return "PAID";
-  if (sale.commissionAmount == null) return "NOT_SET";
-  return sale.commissionAmount > 0 ? "UNPAID" : "NO_COMMISSION";
+/**
+ * Caches the in-flight promise rather than the resolved document. The hydration
+ * loop runs its rows concurrently, so a cache that only records the value after
+ * its own `await` is populated too late to prevent any of the duplicate reads it
+ * exists for.
+ */
+function makeDocCache<T extends TableNames>(ctx: QueryCtx) {
+  const cache = new Map<string, Promise<Doc<T> | null>>();
+  return (id: Id<T>): Promise<Doc<T> | null> => {
+    const hit = cache.get(id);
+    if (hit) return hit;
+    const pending = ctx.db.get(id);
+    cache.set(id, pending);
+    return pending;
+  };
 }
 
 export const listCommissions = query({
@@ -701,6 +709,7 @@ export const listCommissions = query({
     paidStatus: v.optional(
       v.union(v.literal("paid"), v.literal("unpaid"), v.literal("not_set"))
     ),
+    limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_COMMISSIONS]);
@@ -710,23 +719,6 @@ export const listCommissions = query({
     // it to the caller, regardless of org-wide view requested via "all".
     const canViewAll = role.permissions.includes(PERMISSIONS.MANAGE_COMMISSIONS);
     const salespersonId = canViewAll ? args.salespersonId : user._id;
-
-    let sales;
-    if (salespersonId) {
-      sales = await ctx.db
-        .query("sales")
-        .withIndex("by_org_salesperson", (q) =>
-          q.eq("orgId", args.orgId).eq("salespersonId", salespersonId)
-        )
-        .filter((q) => q.neq(q.field("isDeleted"), true))
-        .collect();
-    } else {
-      sales = await ctx.db
-        .query("sales")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .filter((q) => q.neq(q.field("isDeleted"), true))
-        .collect();
-    }
 
     // In an automatic mode, a completed sale whose vehicle has no recorded cost
     // basis earns 0 commission (see C3 in saleCompletion). Surface those rows
@@ -744,21 +736,65 @@ export const listCommissions = query({
     // queue rather than an absence of records.
     const isManualMode = mode === "MANUAL";
 
-    // Cheap in-memory narrowing before any vehicle fetch: a sale can only make
-    // the final list if it already carries a commission, it's a completed sale
-    // in MANUAL mode (decided or not), or (auto mode) it's a completed sale
-    // that might be flagged for a missing cost basis. Skip the ctx.db.get for
-    // everything else (drafts, cancelled).
-    const candidates = sales.filter(
-      (sale) =>
-        (sale.commissionAmount != null && sale.commissionAmount > 0) ||
-        (isAutoMode && sale.status === "COMPLETED" && sale.commissionAmount == null) ||
-        (isManualMode && sale.status === "COMPLETED")
+    const limit = Math.min(
+      Math.max(Math.floor(args.limit ?? COMMISSION_PAGE_DEFAULT), 1),
+      COMMISSION_PAGE_MAX
     );
+
+    // Walk the index newest-first and stop once the page is full, so the number
+    // of documents this query touches is bounded by `limit` rather than by how
+    // long the dealership has been trading. A sale can only make the list if it
+    // already carries a commission, it's a completed sale in MANUAL mode
+    // (decided or not), or (auto mode) it's a completed sale that might be
+    // flagged for a missing cost basis. Everything else — drafts, cancelled
+    // sales with no commission — is skipped before any vehicle read.
+    const salesQuery = salespersonId
+      ? ctx.db
+          .query("sales")
+          .withIndex("by_org_salesperson", (q) =>
+            q.eq("orgId", args.orgId).eq("salespersonId", salespersonId)
+          )
+      : ctx.db.query("sales").withIndex("by_org_saleDate", (q) => q.eq("orgId", args.orgId));
+
+    const candidates: Doc<"sales">[] = [];
+    for await (const sale of salesQuery.order("desc")) {
+      if (sale.isDeleted) continue;
+      const isVoid = sale.status === "CANCELLED" && (sale.commissionAmount ?? 0) > 0;
+      const isCandidate =
+        isCommissionOwed(sale) ||
+        (sale.status === "COMPLETED" && sale.commissionPaidAt != null) ||
+        // A cancelled sale keeps its amount as history. It is listed so the
+        // record does not silently vanish, but it owes nothing — every total,
+        // every action and the unpaid filter below exclude it.
+        isVoid ||
+        (isAutoMode && sale.status === "COMPLETED" && sale.commissionAmount == null) ||
+        (isManualMode && sale.status === "COMPLETED");
+      if (!isCandidate) continue;
+      // The status filter reads only stored fields, so applying it here instead
+      // of after hydration means the page budget is spent entirely on rows the
+      // caller actually asked for — the review queue in particular must never
+      // be emptied just because the newest sales happen to be decided.
+      // "unpaid" means still settleable and not yet settled; "not_set" narrows
+      // that to the rows awaiting a decision.
+      if (args.paidStatus === "paid" && sale.commissionPaidAt == null) continue;
+      if (args.paidStatus === "unpaid" && (sale.commissionPaidAt != null || isVoid)) continue;
+      if (
+        args.paidStatus === "not_set" &&
+        (sale.commissionPaidAt != null || sale.commissionAmount != null || isVoid)
+      ) {
+        continue;
+      }
+      candidates.push(sale);
+      if (candidates.length >= limit) break;
+    }
+
+    const getVehicle = makeDocCache<"vehicles">(ctx);
+    const getCustomer = makeDocCache<"customers">(ctx);
+    const getUser = makeDocCache<"users">(ctx);
 
     const hydrated = await Promise.all(
       candidates.map(async (sale) => {
-        const vehicle = await ctx.db.get(sale.vehicleId);
+        const vehicle = await getVehicle(sale.vehicleId);
         // Only ever flag a sale whose commission was NEVER computed
         // (commissionAmount == null). A sale that already carries a real
         // commission — even if the vehicle's cost is later cleared — keeps its
@@ -784,46 +820,48 @@ export const listCommissions = query({
       })
     );
 
-    // Include sales with a real commission, plus the flagged fix-up rows, plus
-    // (MANUAL) every completed sale so the undecided ones are reachable at all.
-    const withCommission = hydrated.filter(
+    // Include sales that still owe a commission, the ones already settled, the
+    // flagged AUTO fix-up rows, and (MANUAL) every completed sale so the
+    // undecided ones are reachable at all.
+    const listed = hydrated.filter(
       (h) =>
-        (h.sale.commissionAmount != null && h.sale.commissionAmount > 0) ||
+        isCommissionOwed(h.sale) ||
+        (h.sale.status === "COMPLETED" && h.sale.commissionPaidAt != null) ||
+        (h.sale.status === "CANCELLED" && (h.sale.commissionAmount ?? 0) > 0) ||
         h.missingPurchaseCost ||
         h.needsRecalculation ||
         (isManualMode && h.sale.status === "COMPLETED")
     );
 
-    // Apply the status filter. "unpaid" is unchanged from before this list grew
-    // — anything not yet settled, missing-cost and undecided rows included —
-    // and "not_set" narrows that to the rows awaiting a decision.
-    const filtered =
-      args.paidStatus === "paid"
-        ? withCommission.filter((h) => h.sale.commissionPaidAt != null)
-        : args.paidStatus === "unpaid"
-          ? withCommission.filter((h) => h.sale.commissionPaidAt == null)
-          : args.paidStatus === "not_set"
-            ? withCommission.filter(
-                (h) => h.sale.commissionPaidAt == null && h.sale.commissionAmount == null
-              )
-            : withCommission;
-
-    // A dealership has few members but many sales, so the salesperson lookup is
-    // the one that repeats — cache it instead of re-fetching per row.
-    const userCache = new Map<string, Doc<"users"> | null>();
-    const getUser = async (id: Id<"users">) => {
-      const cached = userCache.get(id);
-      if (cached !== undefined) return cached;
-      const doc = await ctx.db.get(id);
-      userCache.set(id, doc);
-      return doc;
-    };
+    // Payroll only ever sweeps commissions for members who are still active
+    // (collectUnpaidCommissions), and approval hard-rejects a run containing an
+    // offboarded one. Opening the manual entry point makes it possible to enter
+    // an amount for someone who has left, which would then sit as "pending"
+    // forever with no error anywhere. Team size is small, so one collect here
+    // buys an honest warning on the row. See PR 3 for actually settling them.
+    const offboardedMemberIds = new Set(
+      (
+        await ctx.db
+          .query("memberships")
+          .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+          .collect()
+      )
+        .filter((m) => m.offboardingStatus)
+        .map((m) => m.userId as string)
+    );
 
     return await Promise.all(
-      filtered.map(async ({ sale, vehicle, missingPurchaseCost, needsRecalculation }) => {
-        const customer = await ctx.db.get(sale.customerId);
+      listed.map(async ({ sale, vehicle, missingPurchaseCost, needsRecalculation }) => {
+        const customer = await getCustomer(sale.customerId);
         const salesperson = await getUser(sale.salespersonId);
         const paidBy = sale.commissionPaidBy ? await getUser(sale.commissionPaidBy) : null;
+        // Whether an edit is worth OFFERING — not a guarantee that it will be
+        // accepted. setCommissionAmount also refuses once the amount is on the
+        // books, and no query result can be authoritative about that: another
+        // manager's payroll approval can land between this render and the
+        // click. The mutation is the authority; the client surfaces its reason.
+        const canSetAmount =
+          isManualMode && sale.status === "COMPLETED" && sale.commissionPaidAt == null;
         return {
           ...sale,
           vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
@@ -833,10 +871,8 @@ export const listCommissions = query({
           missingPurchaseCost,
           needsRecalculation,
           commissionStatus: deriveCommissionStatus(sale),
-          // MANUAL amounts stay editable until they hit the ledger; AUTO amounts
-          // are derived at completion and locked. Surfaced so the client shows
-          // the edit affordance exactly where the mutation would succeed.
-          canSetAmount: isManualMode && sale.commissionPaidAt == null,
+          canSetAmount,
+          salespersonOffboarded: offboardedMemberIds.has(sale.salespersonId),
         };
       })
     );
@@ -850,7 +886,7 @@ export const listCommissions = query({
  * keep a MANUAL amount editable only while it hasn't yet hit the books.
  */
 async function hasCommissionAccrual(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   orgId: Id<"organizations">,
   saleId: Id<"sales">
 ): Promise<boolean> {
