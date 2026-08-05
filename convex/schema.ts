@@ -2,6 +2,22 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { paymentMethodValidator, acquisitionPaymentMethodValidator } from "./utils/paymentMethods";
 import { trustPassportFieldValidators } from "./utils/vehicleStatusGuards";
+import {
+  appraisalStatusValidator,
+  approvedPurchaseBasisValidator,
+  creditDecisionValidator,
+  customerContributionSettlementValidator,
+  dealerContributionSettlementValidator,
+  feeResponsibilityValidator,
+  financeCompanyRuleSnapshotValidator,
+  financeFeeTemplateValidator,
+  financingFailureReasonValidator,
+  gapResolutionValidator,
+  handoverStatusValidator,
+  ltvBasisValidator,
+  quotationSourceValidator,
+  settlementStatusValidator,
+} from "./utils/financingEconomics";
 
 const organizationDeletionRequestStatus = v.union(
   v.literal("PENDING_REVIEW"),
@@ -1480,7 +1496,62 @@ export default defineSchema({
     acceptedStatuses: v.optional(v.array(v.id("orgCustomerStatuses"))), // undefined/empty = accepts all
     deactivatedAt: v.optional(v.number()),
     deactivatedBy: v.optional(v.id("users")),
+
+    // --- Dealer-side purchase rules -------------------------------------
+    // The fields above describe the loan the company sells the CUSTOMER. These
+    // describe the purchase it makes from the DEALERSHIP, which is a different
+    // transaction with different terms and was previously unmodelled — only
+    // maxFinancingLTV existed, and nothing server-side ever read it.
+    //
+    // Every one is optional so the 25 existing companies keep working
+    // untouched; `buildRuleSnapshot` supplies conservative defaults.
+    //
+    // Bumped by finance.updateCompany on any rule change, and pointed at by the
+    // immutable financeCompanyRuleVersions row an application snapshots.
+    ruleVersion: v.optional(v.number()),
+    defaultLtvPercent: v.optional(v.number()),
+    minimumLtvPercent: v.optional(v.number()),
+    ltvBasis: v.optional(ltvBasisValidator),
+    minimumCustomerFirstPaymentMinor: v.optional(v.number()),
+    allowedAppraisalVariancePercent: v.optional(v.number()),
+    // Whether the company may buy at the dealer's submitted quotation when the
+    // independent appraisal lands lower, and by how much it may fall short.
+    allowsQuotationAboveAppraisal: v.optional(v.boolean()),
+    lowerAppraisalTolerancePercent: v.optional(v.number()),
+    quotationExceptionApproval: v.optional(
+      v.union(v.literal("AUTOMATIC"), v.literal("MANUAL"))
+    ),
+    // How the company settles: whether the dealer wires its contribution
+    // separately or the company nets it out, and whether customer money the
+    // company collects is passed through to the dealer inside the purchase
+    // price or retained. Both patterns are real; neither can be assumed.
+    dealerContributionSettlement: v.optional(dealerContributionSettlementValidator),
+    customerContributionSettlement: v.optional(customerContributionSettlementValidator),
+    feesDeductedFromSettlement: v.optional(v.boolean()),
+    feeTemplates: v.optional(v.array(financeFeeTemplateValidator)),
+    requiredDocumentNames: v.optional(v.array(v.string())),
   }).index("by_org", ["orgId"]),
+
+  /**
+   * Immutable snapshot of a finance company's dealer-side rules, written once
+   * per version whenever those rules change.
+   *
+   * Applications point at a version and also carry an inline copy, so a
+   * historical deal's terms cannot be rewritten by editing the company later —
+   * which is exactly what would happen if the rules were only ever read live.
+   */
+  financeCompanyRuleVersions: defineTable({
+    orgId: v.id("organizations"),
+    companyId: v.id("financeCompanies"),
+    version: v.number(),
+    snapshot: financeCompanyRuleSnapshotValidator,
+    note: v.optional(v.string()),
+    createdAt: v.number(),
+    createdBy: v.optional(v.id("users")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_company", ["companyId"])
+    .index("by_company_version", ["companyId", "version"]),
 
   vehicleValuations: defineTable({
     orgId: v.id("organizations"),
@@ -1667,15 +1738,183 @@ export default defineSchema({
         relationship: v.optional(v.string()),
       }))),
       customerStatusAtSubmission: v.optional(v.string()),
+      // NOTE: a vehicleValuations row, which is a mutable per-(vehicle, company)
+      // number with no provider, date or document — NOT an independent
+      // appraisal. And ltvAtSubmission is financedAmount ÷ that number, a
+      // derived ratio rather than the company's applied LTV rule. The
+      // financeAppraisals table and appliedLtvPercent below are the real ones;
+      // these two stay for the historical record and are never read as either.
       vehicleValuationAtSubmission: v.optional(v.number()),
       ltvAtSubmission: v.optional(v.number()),
     })),
+
+    // --- Lifecycle dimensions -------------------------------------------
+    // `status` above conflates all five of these. It stays as the legacy
+    // field every existing reader still uses; these carry the real state.
+    creditDecision: v.optional(creditDecisionValidator),
+    appraisalStatus: v.optional(appraisalStatusValidator),
+    gapResolution: v.optional(gapResolutionValidator),
+    settlementStatus: v.optional(settlementStatusValidator),
+    handoverStatus: v.optional(handoverStatusValidator),
+
+    // --- Dealer-side economics ------------------------------------------
+    // All in minor units of `economicsCurrency`. Deliberately NOT reusing
+    // quotes.totalFinancedAmount, which is the customer's Murabaha principal
+    // and was being read as four other things — see the module header on
+    // packages/shared/src/financingEconomics.ts.
+    economicsCurrency: v.optional(v.string()),
+    vehiclePurchaseCostMinor: v.optional(v.number()),
+    targetSellingAmountMinor: v.optional(v.number()),
+
+    // What the dealership actually sent the finance company. Calculated by
+    // default but overridable, because the number sent is a commercial
+    // decision and storing a computed value as if it were the submitted
+    // document would be a lie about a real artefact.
+    submittedQuotationMinor: v.optional(v.number()),
+    submittedQuotationSource: v.optional(quotationSourceValidator),
+    submittedQuotationOverrideReason: v.optional(v.string()),
+    submittedQuotationAt: v.optional(v.number()),
+    submittedQuotationBy: v.optional(v.id("users")),
+    dealerEstimateMinor: v.optional(v.number()),
+
+    // What the company will actually buy at, and on what basis. Stored, never
+    // inferred from the appraisal: a tolerance rule can approve at the
+    // quotation despite a lower appraisal, and a negotiated third figure is
+    // neither of the two.
+    appliedLtvPercent: v.optional(v.number()),
+    approvedDealerPurchaseAmountMinor: v.optional(v.number()),
+    approvedPurchaseBasis: v.optional(approvedPurchaseBasisValidator),
+    approvedPurchaseAppraisalId: v.optional(v.id("financeAppraisals")),
+    approvedPurchaseExceptionRuleVersion: v.optional(v.number()),
+    approvedPurchaseApprovedBy: v.optional(v.id("users")),
+    approvedPurchaseApprovedAt: v.optional(v.number()),
+    approvedPurchaseNotes: v.optional(v.string()),
+
+    // Funding composition. Derived server-side from the three inputs above on
+    // every write, never accepted from a client.
+    financeCompanyFundedPortionMinor: v.optional(v.number()),
+    unfinancedPortionMinor: v.optional(v.number()),
+    customerFirstPaymentMinor: v.optional(v.number()),
+    // Customer money that goes to the FINANCE COMPANY. Must never create a
+    // dealer-side customer receivable.
+    customerContributionToFinanceCompanyMinor: v.optional(v.number()),
+    dealerContributionMinor: v.optional(v.number()),
+    dealerContributionSettlement: v.optional(dealerContributionSettlementValidator),
+    customerContributionSettlement: v.optional(customerContributionSettlementValidator),
+
+    // Settlement. `expected` is what the company owes; `actual` is what turned
+    // up. Keeping them apart is the whole reason confirmDisbursement could not
+    // handle a partial or late remittance.
+    expectedDealerRemittanceMinor: v.optional(v.number()),
+    actualDealerReceiptTotalMinor: v.optional(v.number()),
+    customerFinancingPrincipalMinor: v.optional(v.number()),
+    estimatedClosingExpensesMinor: v.optional(v.number()),
+    actualClosingExpensesMinor: v.optional(v.number()),
+    targetNetProceedsMinor: v.optional(v.number()),
+
+    // Appraisal gap and its negotiated split. The gap negotiated is the RAW
+    // difference against the submitted quotation, not the change in the
+    // company's funded portion.
+    rawAppraisalGapMinor: v.optional(v.number()),
+    customerGapShareMinor: v.optional(v.number()),
+    dealerGapShareMinor: v.optional(v.number()),
+    customerGapCashToDealerMinor: v.optional(v.number()),
+    customerGapInstallmentToDealerMinor: v.optional(v.number()),
+    customerGapToFinanceCompanyMinor: v.optional(v.number()),
+    gapResolvedAt: v.optional(v.number()),
+    gapResolvedBy: v.optional(v.id("users")),
+    gapResolutionNotes: v.optional(v.string()),
+
+    // Failure. The appraisal-fee treatment keys off the reason, not the status.
+    failureReason: v.optional(financingFailureReasonValidator),
+    failureNotes: v.optional(v.string()),
+    failedAt: v.optional(v.number()),
+    failedBy: v.optional(v.id("users")),
+    appraisalFeeResponsibility: v.optional(feeResponsibilityValidator),
+    appraisalFeeResponsibilityReason: v.optional(v.string()),
+
+    companyRuleSnapshot: v.optional(financeCompanyRuleSnapshotValidator),
+    companyRuleVersionId: v.optional(v.id("financeCompanyRuleVersions")),
+
+    // Set by the migration on rows whose pre-existing figures cannot be
+    // reinterpreted safely. Reported on, never silently cleared.
+    needsFinancingReconciliation: v.optional(v.boolean()),
+    financingReconciliationReason: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
     .index("by_customer", ["customerId"])
     .index("by_vehicle", ["vehicleId"])
     .index("by_status", ["status"])
-    .index("by_org_status", ["orgId", "status"]),
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_credit_decision", ["orgId", "creditDecision"])
+    .index("by_org_reconciliation", ["orgId", "needsFinancingReconciliation"]),
+
+  /**
+   * Every appraisal ever recorded against one application.
+   *
+   * Deliberately per-application rather than per-(vehicle, company) like
+   * `vehicleValuations`: that table holds one mutable number shared by every
+   * deal the vehicle appears in, so re-using a vehicle in a later application
+   * silently overwrote the basis the earlier deal was approved on. History here
+   * is append-only — a reappraisal supersedes its predecessor rather than
+   * replacing it.
+   */
+  financeAppraisals: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    vehicleId: v.id("vehicles"),
+    companyId: v.optional(v.id("financeCompanies")),
+    appraisalAmountMinor: v.number(),
+    currency: v.string(),
+    // Who performed it. The independent appraisal is performed or approved by
+    // the financing company; a dealer estimate is not an appraisal and is
+    // marked as such so it can never be mistaken for one.
+    providerType: v.union(
+      v.literal("FINANCE_COMPANY"),
+      v.literal("INDEPENDENT"),
+      v.literal("DEALER_ESTIMATE")
+    ),
+    providerName: v.optional(v.string()),
+    appraisedAt: v.number(),
+    documentStorageIds: v.optional(v.array(v.id("_storage"))),
+    isReappraisal: v.boolean(),
+    reappraisalReason: v.optional(v.string()),
+    status: v.union(
+      v.literal("RECORDED"),
+      v.literal("APPROVED"),
+      v.literal("SUPERSEDED"),
+      v.literal("REJECTED")
+    ),
+    supersededAt: v.optional(v.number()),
+    supersededByAppraisalId: v.optional(v.id("financeAppraisals")),
+    notes: v.optional(v.string()),
+    recordedBy: v.id("users"),
+    recordedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_application", ["applicationId"])
+    .index("by_application_status", ["applicationId", "status"])
+    .index("by_vehicle", ["vehicleId"]),
+
+  /**
+   * Audit trail for every manual override of a financing figure.
+   *
+   * Separate from `applicationStatusLog`, which records status transitions
+   * only. An override that changed a number without changing a status left no
+   * trace at all before this.
+   */
+  financeApplicationOverrides: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    field: v.string(),
+    previousValue: v.optional(v.string()),
+    newValue: v.string(),
+    reason: v.string(),
+    changedBy: v.id("users"),
+    changedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_application", ["applicationId"]),
 
   deposits: defineTable({
     orgId: v.id("organizations"),

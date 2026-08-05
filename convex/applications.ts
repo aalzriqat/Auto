@@ -21,6 +21,7 @@ import {
 } from "./accounting/workflowHooks";
 import { toMinorUnits, assertValidMinorAmount } from "./utils/money";
 import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
+import { buildRuleSnapshot, type FinanceCompanyRuleSnapshot } from "./utils/financingEconomics";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
@@ -428,6 +429,26 @@ export const createFromQuote = mutation({
           }
         : undefined;
 
+    // Snapshot the finance company's dealer-purchase rules onto the
+    // application, and point at the immutable version row they came from.
+    // Read live, these would let an edit to the company next month
+    // retroactively change the terms this deal was approved under.
+    let companyRuleSnapshot: FinanceCompanyRuleSnapshot | undefined;
+    let companyRuleVersionId: Id<"financeCompanyRuleVersions"> | undefined;
+    if (quote.companyId) {
+      const company = await ctx.db.get(quote.companyId);
+      if (company && company.orgId === args.orgId) {
+        companyRuleSnapshot = buildRuleSnapshot(company);
+        const versionRow = await ctx.db
+          .query("financeCompanyRuleVersions")
+          .withIndex("by_company_version", (q) =>
+            q.eq("companyId", company._id).eq("version", companyRuleSnapshot!.ruleVersion)
+          )
+          .first();
+        if (versionRow) companyRuleVersionId = versionRow._id;
+      }
+    }
+
     const appId = await ctx.db.insert("financeApplications", {
       orgId: args.orgId,
       quoteId: quote._id,
@@ -437,6 +458,15 @@ export const createFromQuote = mutation({
       companyId: quote.companyId,
       salespersonId: auth.user._id,
       status: "PENDING_DOCS",
+      // The legacy `status` above stays the field every existing reader uses.
+      // These carry the five dimensions it conflates; a new application has
+      // been submitted for credit and nothing else has happened yet.
+      creditDecision: "SUBMITTED",
+      appraisalStatus: "NOT_REQUESTED",
+      settlementStatus: "NOT_READY",
+      handoverStatus: "BLOCKED",
+      ...(companyRuleSnapshot ? { companyRuleSnapshot } : {}),
+      ...(companyRuleVersionId ? { companyRuleVersionId } : {}),
       notes: args.notes,
       createdAt: now,
       updatedAt: now,
