@@ -232,6 +232,69 @@ async function recordOverride(
   });
 }
 
+
+/** Why an exception was refused, phrased for the person who asked for it. */
+function quotationExceptionRefusal(
+  evaluation: ReturnType<typeof evaluateQuotationException>,
+  snapshot: FinanceCompanyRuleSnapshot
+): string {
+  if (evaluation.reason === "NOT_ALLOWED") {
+    return `${snapshot.companyName} does not accept the submitted quotation when the appraisal is lower.`;
+  }
+  if (evaluation.reason === "NO_SHORTFALL") {
+    return "There is no appraisal shortfall, so no exception is needed.";
+  }
+  return `The appraisal is ${evaluation.shortfallPercent.toFixed(2)}% below the quotation, outside ${snapshot.companyName}'s tolerance of ${snapshot.lowerAppraisalTolerancePercent ?? 0}%.`;
+}
+
+/**
+ * Enforces the rule belonging to the basis the caller named.
+ *
+ * Extracted from the approval handler so each basis reads as one rule rather
+ * than a branch inside a function that also loads the application, resolves the
+ * LTV and the appraisal, writes an audit row and patches three times.
+ */
+function assertApprovalBasisValid(args: {
+  basis: "APPRAISAL" | "QUOTATION_EXCEPTION" | "MANUAL";
+  approvedAmountMinor: number;
+  submittedQuotationMinor: number;
+  appraisal: Doc<"financeAppraisals"> | undefined;
+  snapshot: FinanceCompanyRuleSnapshot;
+  notes?: string;
+}): void {
+  if (args.basis === "APPRAISAL") {
+    const appraised = args.appraisal!.appraisalAmountMinor;
+    if (args.approvedAmountMinor !== appraised) {
+      throw new ConvexError(
+        `An approval based on the appraisal must equal it (${appraised}). Use the exception or manual basis to approve a different amount.`
+      );
+    }
+    return;
+  }
+
+  if (args.basis === "QUOTATION_EXCEPTION") {
+    if (args.approvedAmountMinor !== args.submittedQuotationMinor) {
+      throw new ConvexError(
+        "A quotation exception approves at the submitted quotation. Use the manual basis for any other amount."
+      );
+    }
+    const evaluation = evaluateQuotationException({
+      submittedQuotationMinor: args.submittedQuotationMinor,
+      independentAppraisalMinor: args.appraisal!.appraisalAmountMinor,
+      allowsQuotationAboveAppraisal: args.snapshot.allowsQuotationAboveAppraisal ?? false,
+      lowerAppraisalTolerancePercent: args.snapshot.lowerAppraisalTolerancePercent ?? 0,
+    });
+    if (!evaluation.eligible) {
+      throw new ConvexError(quotationExceptionRefusal(evaluation, args.snapshot));
+    }
+    return;
+  }
+
+  if (!args.notes?.trim()) {
+    throw new ConvexError("A manually approved purchase amount must record why.");
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Queries
 // ---------------------------------------------------------------------------
@@ -917,40 +980,14 @@ export const approveDealerPurchaseAmount = mutation({
       );
     }
 
-    if (args.basis === "APPRAISAL") {
-      if (args.approvedAmountMinor !== appraisal!.appraisalAmountMinor) {
-        throw new ConvexError(
-          `An approval based on the appraisal must equal it (${appraisal!.appraisalAmountMinor}). Use the exception or manual basis to approve a different amount.`
-        );
-      }
-    }
-
-    if (args.basis === "QUOTATION_EXCEPTION") {
-      if (args.approvedAmountMinor !== app.submittedQuotationMinor) {
-        throw new ConvexError(
-          "A quotation exception approves at the submitted quotation. Use the manual basis for any other amount."
-        );
-      }
-      const evaluation = evaluateQuotationException({
-        submittedQuotationMinor: app.submittedQuotationMinor,
-        independentAppraisalMinor: appraisal!.appraisalAmountMinor,
-        allowsQuotationAboveAppraisal: snapshot.allowsQuotationAboveAppraisal ?? false,
-        lowerAppraisalTolerancePercent: snapshot.lowerAppraisalTolerancePercent ?? 0,
-      });
-      if (!evaluation.eligible) {
-        throw new ConvexError(
-          evaluation.reason === "NOT_ALLOWED"
-            ? `${snapshot.companyName} does not accept the submitted quotation when the appraisal is lower.`
-            : evaluation.reason === "NO_SHORTFALL"
-              ? "There is no appraisal shortfall, so no exception is needed."
-              : `The appraisal is ${evaluation.shortfallPercent.toFixed(2)}% below the quotation, outside ${snapshot.companyName}'s tolerance of ${snapshot.lowerAppraisalTolerancePercent ?? 0}%.`
-        );
-      }
-    }
-
-    if (args.basis === "MANUAL" && !args.notes?.trim()) {
-      throw new ConvexError("A manually approved purchase amount must record why.");
-    }
+    assertApprovalBasisValid({
+      basis: args.basis,
+      approvedAmountMinor: args.approvedAmountMinor,
+      submittedQuotationMinor: app.submittedQuotationMinor,
+      appraisal,
+      snapshot,
+      notes: args.notes,
+    });
 
     const now = Date.now();
     const previousRawGapMinor = app.rawAppraisalGapMinor ?? 0;

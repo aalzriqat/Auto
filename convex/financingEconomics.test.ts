@@ -1587,6 +1587,14 @@ describe("rule snapshots", () => {
 
     const company = await seed.t.run((ctx) => ctx.db.get(seed.companyId));
     expect(company?.name).toBe("Renamed By Old Client");
+    // maxFinancingLTV is NOT in dealerRuleArgs, so unlike the fields below it
+    // is not explicitly stripped — it survives because Convex omits an absent
+    // optional argument entirely rather than passing it as `undefined`. Pinned
+    // because a review argued the opposite, and because the distinction is
+    // subtle: the `acceptedStatuses` guard further up IS needed, since
+    // `sanitizeAcceptedStatuses` returns a real `undefined` that would delete
+    // the field. Absent and undefined are different things here.
+    expect(company?.maxFinancingLTV).toBe(85);
     expect(company?.defaultLtvPercent).toBe(85);
     expect(company?.allowsQuotationAboveAppraisal).toBe(true);
     expect(company?.lowerAppraisalTolerancePercent).toBe(10);

@@ -1,7 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { Doc } from "../_generated/dataModel";
 import {
-  classifyGapResolution,
   computeAppraisalGap,
   computeDealerProceeds,
   computeExpectedRemittance,
@@ -13,6 +12,10 @@ import {
   type DealerContributionSettlement,
   type LtvBasis,
 } from "../../lib/financingEconomics";
+
+// Pass-throughs, re-exported directly so they do not sit in this module's local
+// scope pretending to be used here.
+export { classifyGapResolution, evaluateQuotationException } from "../../lib/financingEconomics";
 
 /**
  * Server-side vocabulary and invariants for the dealer side of a financed sale.
@@ -536,7 +539,6 @@ export function assertGapResolutionValid(
   }
 }
 
-export { classifyGapResolution, evaluateQuotationException };
 
 // ---------------------------------------------------------------------------
 // Keeping the dimensions in step with the legacy status

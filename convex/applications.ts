@@ -322,9 +322,13 @@ export const createFromQuote = mutation({
         throw new ConvexError("Quote vehicle not found in this organization.");
       }
     }
+    // Kept for the rule snapshot below rather than re-fetched: this handler
+    // already validates the company here, and reading it twice per application
+    // buys nothing.
+    let quoteCompany: Doc<"financeCompanies"> | null = null;
     if (quote.companyId) {
-      const company = await ctx.db.get(quote.companyId);
-      if (!company || company.orgId !== args.orgId) {
+      quoteCompany = await ctx.db.get(quote.companyId);
+      if (!quoteCompany || quoteCompany.orgId !== args.orgId) {
         throw new ConvexError("Quote finance company not found in this organization.");
       }
     }
@@ -440,18 +444,15 @@ export const createFromQuote = mutation({
     // retroactively change the terms this deal was approved under.
     let companyRuleSnapshot: FinanceCompanyRuleSnapshot | undefined;
     let companyRuleVersionId: Id<"financeCompanyRuleVersions"> | undefined;
-    if (quote.companyId) {
-      const company = await ctx.db.get(quote.companyId);
-      if (company && company.orgId === args.orgId) {
-        companyRuleSnapshot = buildRuleSnapshot(company);
-        const versionRow = await ctx.db
-          .query("financeCompanyRuleVersions")
-          .withIndex("by_company_version", (q) =>
-            q.eq("companyId", company._id).eq("version", companyRuleSnapshot!.ruleVersion)
-          )
-          .first();
-        if (versionRow) companyRuleVersionId = versionRow._id;
-      }
+    if (quoteCompany) {
+      companyRuleSnapshot = buildRuleSnapshot(quoteCompany);
+      const versionRow = await ctx.db
+        .query("financeCompanyRuleVersions")
+        .withIndex("by_company_version", (q) =>
+          q.eq("companyId", quoteCompany!._id).eq("version", companyRuleSnapshot!.ruleVersion)
+        )
+        .first();
+      if (versionRow) companyRuleVersionId = versionRow._id;
     }
 
     const appId = await ctx.db.insert("financeApplications", {
