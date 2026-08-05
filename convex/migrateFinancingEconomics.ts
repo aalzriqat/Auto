@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation } from "./functions";
 import { internal } from "./_generated/api";
+import { MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import {
   buildRuleSnapshot,
@@ -67,6 +68,12 @@ type Report = {
   applicationsBackfilled: number;
   applicationsFlagged: number;
   applicationsBoundToSnapshot: number;
+  /**
+   * Modern applications whose inline rule snapshot could not be linked to a
+   * version row. Deliberately left unmarked so a later run retries them, and
+   * flagged so a human is told rather than the count being the only trace.
+   */
+  applicationsUnlinked: number;
   applicationsSkipped: number;
 };
 
@@ -78,6 +85,7 @@ const EMPTY_REPORT: Report = {
   applicationsBackfilled: 0,
   applicationsFlagged: 0,
   applicationsBoundToSnapshot: 0,
+  applicationsUnlinked: 0,
   applicationsSkipped: 0,
 };
 
@@ -89,6 +97,7 @@ const reportValidator = v.object({
   applicationsBackfilled: v.number(),
   applicationsFlagged: v.number(),
   applicationsBoundToSnapshot: v.number(),
+  applicationsUnlinked: v.number(),
   applicationsSkipped: v.number(),
 });
 
@@ -124,6 +133,58 @@ function reconciliationReasonFor(app: Doc<"financeApplications">): string | unde
  */
 function isInFlight(app: Doc<"financeApplications">): boolean {
   return app.status !== "CLOSED" && app.status !== "CANCELLED";
+}
+
+/**
+ * Finds the rule-version row an application's inline snapshot refers to, and
+ * materializes it from that snapshot when it is missing.
+ *
+ * The companies phase writes a row for each company's *current* version only.
+ * So a company edited between an application snapshotting version N and this
+ * migration running gets a row for N+1, and version N — the one the deal is
+ * actually governed by — has no row at all.
+ *
+ * Reconstructing it is exact rather than inferred: `companyRuleSnapshot` is a
+ * verbatim `buildRuleSnapshot(company)` copy taken at the moment the deal was
+ * created, which is precisely what the version row is meant to hold. Nothing is
+ * overwritten — the insert happens only when the lookup found nothing.
+ *
+ * Returns `undefined` when recovery is not defensible: no company on the
+ * application, or a company row that is missing or belongs to another org. The
+ * caller must then leave the row unmarked rather than record a link it does not
+ * have.
+ */
+async function resolveOrRecoverRuleVersion(
+  ctx: MutationCtx,
+  app: Doc<"financeApplications">,
+  now: number
+): Promise<Id<"financeCompanyRuleVersions"> | undefined> {
+  const snapshot = app.companyRuleSnapshot;
+  const companyId = app.companyId;
+  if (!snapshot || !companyId) return undefined;
+
+  const existing = await ctx.db
+    .query("financeCompanyRuleVersions")
+    .withIndex("by_company_version", (q) =>
+      q.eq("companyId", companyId).eq("version", snapshot.ruleVersion)
+    )
+    .first();
+  if (existing) return existing._id;
+
+  // Cross-tenant guard on a table this row will claim to belong to. A dangling
+  // or foreign companyId is exactly the case where inventing a version row
+  // would be manufacturing history.
+  const company = await ctx.db.get(companyId);
+  if (!company || company.orgId !== app.orgId) return undefined;
+
+  return await ctx.db.insert("financeCompanyRuleVersions", {
+    orgId: app.orgId,
+    companyId,
+    version: snapshot.ruleVersion,
+    snapshot,
+    note: "Recovered from an application's inline rule snapshot during the financing backfill; the company had been edited past this version before the migration ran.",
+    createdAt: now,
+  });
 }
 
 export const backfillFinancingEconomics = internalMutation({
@@ -242,14 +303,26 @@ export const backfillFinancingEconomics = internalMutation({
         // reference is permanently missing and the marker below stops any
         // later run from revisiting it.
         let backfilledVersionId: Id<"financeCompanyRuleVersions"> | undefined;
+        let linkUnresolved = false;
         if (app.companyRuleVersionId === undefined && app.companyId) {
-          const versionRow = await ctx.db
-            .query("financeCompanyRuleVersions")
-            .withIndex("by_company_version", (q) =>
-              q.eq("companyId", app.companyId!).eq("version", app.companyRuleSnapshot!.ruleVersion)
-            )
-            .first();
-          if (versionRow) backfilledVersionId = versionRow._id;
+          backfilledVersionId = await resolveOrRecoverRuleVersion(ctx, app, now);
+          linkUnresolved = backfilledVersionId === undefined;
+        }
+        // Writing the marker without the link is what made this permanent: the
+        // next run reads `financingBackfilledAt` and skips the row before it
+        // ever reaches this branch again, so an application that failed to bind
+        // once stays unbound forever and silently falls back to reading its
+        // company's rules live. Leave the marker off and it is simply retried.
+        if (linkUnresolved) {
+          if (app.needsFinancingReconciliation === undefined) {
+            await ctx.db.patch(app._id, {
+              needsFinancingReconciliation: true,
+              financingReconciliationReason:
+                "This deal's rule snapshot names a company rule version with no stored record. Re-save the finance company to publish its current rules, then re-run the financing backfill.",
+            });
+          }
+          report.applicationsUnlinked += 1;
+          continue;
         }
         await ctx.db.patch(app._id, {
           financingBackfilledAt: now,
@@ -319,6 +392,7 @@ export const backfillFinancingEconomics = internalMutation({
         `(${report.applicationsBackfilled} backfilled, ` +
         `${report.applicationsBoundToSnapshot} bound to a rule snapshot, ` +
         `${report.applicationsFlagged} flagged for reconciliation, ` +
+        `${report.applicationsUnlinked} left unmarked pending a rule-version link, ` +
         `${report.applicationsSkipped} already current).`
     );
     return report;

@@ -88,6 +88,39 @@ async function getActiveReceivableAllocations(
     .collect();
 }
 
+/**
+ * Refuses to advance a deal whose dealer-side economics are not actually there.
+ *
+ * A reappraisal or a reopened approval clears the approved purchase amount
+ * while `status` stays APPROVED throughout, so status alone cannot be the gate.
+ * Deals with no quotation recorded predate this model entirely and are let
+ * through, so nothing in flight is stranded.
+ *
+ * One copy, two callers: handover and finalization applied the same two checks
+ * in the same order and differed only in the closing verb. Two copies of a
+ * money-path gate drift, and the drift shows up as the stricter one being
+ * quietly bypassed through the other door.
+ */
+function assertDealerEconomicsRecorded(
+  app: Doc<"financeApplications">,
+  action: "handing over the vehicle" | "finalizing"
+): void {
+  if (app.submittedQuotationMinor === undefined) return;
+  if (app.approvedDealerPurchaseAmountMinor === undefined) {
+    throw new ConvexError(
+      `The finance company's approved purchase amount is not recorded on this deal. Record it before ${action}.`
+    );
+  }
+  // An approval whose funding split could not be computed — the company's LTV
+  // basis names an amount nobody recorded — is not something to hand a vehicle
+  // over against, or to sell on. The approval being present is not enough.
+  if (app.financeCompanyFundedPortionMinor === undefined) {
+    throw new ConvexError(
+      `This deal's funding split could not be calculated. Resolve the reconciliation note on it before ${action}.`
+    );
+  }
+}
+
 async function hasHeldQuoteDeposit(ctx: QueryCtx, quoteId: Id<"quotes">): Promise<boolean> {
   for await (const deposit of ctx.db
     .query("deposits")
@@ -849,26 +882,7 @@ export const registerVehicleHandover = mutation({
     if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
     if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before registering handover.");
     if (app.vehicleHandoverAt) throw new ConvexError("Vehicle handover has already been registered.");
-    // A deal running on the dealer-side economics must still have a live
-    // approval. A reappraisal or a reopen clears it, and `status` stays
-    // APPROVED throughout — so without this the vehicle could be handed over
-    // on a purchase amount that no longer exists. Deals with no quotation
-    // recorded are untouched, so nothing in flight is stranded.
-    if (app.submittedQuotationMinor !== undefined) {
-      if (app.approvedDealerPurchaseAmountMinor === undefined) {
-        throw new ConvexError(
-          "The finance company's approved purchase amount is not recorded on this deal. Record it before handing over the vehicle."
-        );
-      }
-      // An approval whose funding split could not be computed — the company's
-      // LTV basis names an amount nobody recorded — is not something to hand a
-      // vehicle over against. The approval being present is not enough.
-      if (app.financeCompanyFundedPortionMinor === undefined) {
-        throw new ConvexError(
-          "This deal's funding split could not be calculated. Resolve the reconciliation note on it before handing over the vehicle."
-        );
-      }
-    }
+    assertDealerEconomicsRecorded(app, "handing over the vehicle");
 
     const now = Date.now();
     await ctx.db.patch(args.applicationId, {
@@ -970,18 +984,7 @@ export const finalizeDeal = mutation({
         // Same guard as registerVehicleHandover: an approval cleared by a
         // reappraisal leaves status APPROVED, so this is the only thing
         // stopping a sale being completed on economics nothing supports.
-        if (app.submittedQuotationMinor !== undefined) {
-          if (app.approvedDealerPurchaseAmountMinor === undefined) {
-            throw new ConvexError(
-              "The finance company's approved purchase amount is not recorded on this deal. Record it before finalizing."
-            );
-          }
-          if (app.financeCompanyFundedPortionMinor === undefined) {
-            throw new ConvexError(
-              "This deal's funding split could not be calculated. Resolve the reconciliation note on it before finalizing."
-            );
-          }
-        }
+        assertDealerEconomicsRecorded(app, "finalizing");
 
         const quote = await ctx.db.get(app.quoteId);
         if (!quote || quote.orgId !== args.orgId) throw new ConvexError("Quote not found");

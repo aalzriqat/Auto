@@ -1,4 +1,5 @@
 import { ConvexError, v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
@@ -603,6 +604,31 @@ export const recordSubmittedQuotation = mutation({
           })
         : undefined;
 
+    // SYSTEM_CALCULATED is a claim about provenance, and the snapshot records
+    // `calculatedQuotationMinor` and `finalQuotationMinor` independently — so
+    // without this the label could sit on an amount the solver never produced,
+    // or never ran to produce. That is the mode a later reader trusts *because*
+    // it says no human touched it. A departure from the calculated figure is a
+    // legitimate act; it just has to be called CALCULATED_WITH_OVERRIDE and say
+    // why.
+    if (args.source === "SYSTEM_CALCULATED") {
+      if (!solverResult) {
+        throw new ConvexError(
+          "This quotation is recorded as calculated by the system, but no target selling amount is set, so the calculator never ran. Record the target, or submit it as a manual entry."
+        );
+      }
+      if (!solverResult.available) {
+        throw new ConvexError(
+          `This quotation is recorded as calculated by the system, but the calculator could not run (${solverResult.reason}). Submit it as a manual entry instead.`
+        );
+      }
+      if (solverResult.submittedQuotationMinor !== args.submittedQuotationMinor) {
+        throw new ConvexError(
+          `This quotation is recorded as calculated by the system, but the calculator produced ${solverResult.submittedQuotationMinor} minor units, not ${args.submittedQuotationMinor}. Record it as a calculated quotation with an override and say why it differs.`
+        );
+      }
+    }
+
     await ctx.db.patch(args.applicationId, {
       economicsCurrency: app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId)),
       submittedQuotationMinor: args.submittedQuotationMinor,
@@ -996,19 +1022,32 @@ export const approveDealerPurchaseAmount = mutation({
     // silently replaced the basis, the approver, the timestamp and the notes —
     // and wrote nothing to the table whose whole purpose is that a number
     // changing without a status changing leaves a trace.
+    // The LTV belongs in this set as much as the amount does. It is patched
+    // unconditionally below and recomputeAndPatchEconomics derives the funded
+    // portion, the dealer contribution and the expected remittance from it — so
+    // a re-approval passing a different LTV with an identical amount, basis,
+    // appraisal and notes moved every funding figure on the deal and left the
+    // override table, whose entire purpose is that a number cannot change
+    // without a trace, completely empty.
     const approvalMateriallyChanged =
       app.approvedDealerPurchaseAmountMinor !== undefined &&
       (app.approvedDealerPurchaseAmountMinor !== args.approvedAmountMinor ||
         app.approvedPurchaseBasis !== args.basis ||
         app.approvedPurchaseAppraisalId !== appraisal?._id ||
+        app.appliedLtvPercent !== appliedLtvPercent ||
         (app.approvedPurchaseNotes ?? "") !== (args.notes?.trim() ?? ""));
     if (approvalMateriallyChanged) {
       await recordOverride(ctx, {
         orgId: args.orgId,
         applicationId: args.applicationId,
         field: "approvedDealerPurchaseAmountMinor",
-        previousValue: app.approvedDealerPurchaseAmountMinor,
-        newValue: `${args.approvedAmountMinor} (${args.basis})`,
+        // Both money-determining inputs, so the row says which one moved
+        // rather than only that something did.
+        previousValue:
+          app.approvedDealerPurchaseAmountMinor === undefined
+            ? undefined
+            : `${app.approvedDealerPurchaseAmountMinor} (${app.approvedPurchaseBasis ?? "unknown basis"} @ ${app.appliedLtvPercent ?? "unknown"}% LTV)`,
+        newValue: `${args.approvedAmountMinor} (${args.basis} @ ${appliedLtvPercent}% LTV)`,
         reason: args.notes?.trim() ?? `Re-approved on the ${args.basis} basis.`,
         changedBy: user._id,
       });
@@ -1224,17 +1263,51 @@ export const reopenApproval = mutation({
  * cleared it, and the documented procedure was to grep a raw table dump. Since
  * `finalizeDeal` flags essentially every financed deal until PR 2 reconciles
  * the receivable, a queue with no exit would have been permanent noise.
+ *
+ * Paginated because that same breadth is what makes `.collect()` wrong here:
+ * the backfill flags legacy deals per organization, so for an established
+ * dealership this is closer to "every financed deal ever" than to a short list,
+ * and a single unbounded read would exceed the query's limit and make the queue
+ * unreadable exactly where it matters most. The projection is deliberate too —
+ * the queue renders an identity and the figures a triager decides on, and
+ * returning whole application documents would ship underwriting snapshots and
+ * document payloads to a screen that shows none of it.
  */
 export const listNeedingReconciliation = query({
-  args: { orgId: v.id("organizations") },
+  args: {
+    orgId: v.id("organizations"),
+    paginationOpts: paginationOptsValidator,
+  },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
-    return await ctx.db
+    const page = await ctx.db
       .query("financeApplications")
       .withIndex("by_org_reconciliation", (q) =>
         q.eq("orgId", args.orgId).eq("needsFinancingReconciliation", true)
       )
-      .collect();
+      .paginate(args.paginationOpts);
+
+    return {
+      ...page,
+      page: page.page.map((app) => ({
+        _id: app._id,
+        _creationTime: app._creationTime,
+        customerId: app.customerId,
+        vehicleId: app.vehicleId,
+        companyId: app.companyId,
+        status: app.status,
+        financingReconciliationReason: app.financingReconciliationReason,
+        economicsCurrency: app.economicsCurrency,
+        submittedQuotationMinor: app.submittedQuotationMinor,
+        approvedDealerPurchaseAmountMinor: app.approvedDealerPurchaseAmountMinor,
+        appliedLtvPercent: app.appliedLtvPercent,
+        financeCompanyFundedPortionMinor: app.financeCompanyFundedPortionMinor,
+        expectedDealerRemittanceMinor: app.expectedDealerRemittanceMinor,
+        disbursedAt: app.disbursedAt,
+        finalizedSaleId: app.finalizedSaleId,
+        updatedAt: app.updatedAt,
+      })),
+    };
   },
 });
 

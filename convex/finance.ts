@@ -13,6 +13,7 @@ import {
   financeFeeTemplateValidator,
   ltvBasisValidator,
 } from "./utils/financingEconomics";
+import { PERCENT_DECIMAL_PLACES, percentRoundsToZero } from "../lib/financingEconomics";
 
 /**
  * The dealer-side purchase rules, as create/update accept them.
@@ -81,13 +82,14 @@ function assertDealerRulesValid(rules: DealerRuleArgs): void {
     if (value <= 0) {
       throw new ConvexError(`${label} must be greater than 0 (got ${value}).`);
     }
-    // Validated at the same precision the arithmetic uses. A value like
-    // 0.0000001 is positive and would pass, then round to zero at the engine's
-    // six-decimal scale — so the company saves cleanly and every later
-    // quotation throws on a division by zero instead.
-    if (Math.round(value * 1_000_000) <= 0) {
+    // Validated at the same precision the arithmetic uses, by asking the engine
+    // rather than restating its scale here. A value like 0.0000001 is positive
+    // and would pass, then round to zero at the engine's scale — so the company
+    // saves cleanly and every later quotation throws on a division by zero
+    // instead.
+    if (percentRoundsToZero(value)) {
       throw new ConvexError(
-        `${label} of ${value}% is too small to be represented; use at least 0.000001%.`
+        `${label} of ${value}% rounds to zero at the ${PERCENT_DECIMAL_PLACES} decimal places the financing calculations keep, so it cannot be used.`
       );
     }
   }

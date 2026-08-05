@@ -10,6 +10,8 @@
  */
 export {
   FinancingEconomicsError,
+  PERCENT_DECIMAL_PLACES,
+  percentRoundsToZero,
   computeFundingComposition,
   computeSubmittedQuotation,
   computeAppraisalGap,

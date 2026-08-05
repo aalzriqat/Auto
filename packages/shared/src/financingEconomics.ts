@@ -84,7 +84,8 @@ function assertLtvPercent(ltvPercent: number): void {
  * small enough that the products below stay well inside BigInt's comfortable
  * range.
  */
-const PERCENT_SCALE = BigInt(1_000_000);
+export const PERCENT_DECIMAL_PLACES = 6;
+const PERCENT_SCALE = BigInt(10 ** PERCENT_DECIMAL_PLACES);
 /** Denominator for `amount × percent`: 100 (the percent) × PERCENT_SCALE. */
 const PERCENT_DENOMINATOR = BigInt(100) * PERCENT_SCALE;
 // Written as calls rather than `0n`/`1n`/`2n`: the app's root tsconfig targets
@@ -109,6 +110,19 @@ function toScaledPercent(percent: number): bigint {
     throw new FinancingEconomicsError(`Percentage ${percent} cannot be represented exactly.`);
   }
   return BigInt(scaled);
+}
+
+/**
+ * Whether a positive percentage vanishes at the scale the engine keeps.
+ *
+ * Exported so a caller validating a stored setting tests the same boundary the
+ * arithmetic will later apply, instead of restating the scale. Restating it is
+ * how the settings form came to promise `0.000001%` as the minimum when the
+ * rounding actually admits half of that — a value that saved cleanly and then
+ * divided by zero on every quotation.
+ */
+export function percentRoundsToZero(percent: number): boolean {
+  return Math.round(percent * Number(PERCENT_SCALE)) === 0;
 }
 
 function fromBigInt(value: bigint, label: string): number {
