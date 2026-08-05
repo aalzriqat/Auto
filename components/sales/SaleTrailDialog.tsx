@@ -128,18 +128,35 @@ function buildCommissionSteps(trail: SaleTrail, t: Translate, format: FormatCurr
   const { sale, salespersonName } = trail;
   if (!sale.commissionAmount) return [];
 
+  // A manually entered amount is a decision, not yet a liability: MANUAL mode
+  // recognizes the expense at payment (or at payroll approval), so until a
+  // POSTED journal entry exists nothing has been accrued. Calling it "accrued"
+  // here would have the audit trail assert a booking the ledger never made.
+  // REVERSED is checked too — a cancelled sale keeps its accrual entry on file
+  // with the liability already backed out, and that is not an accrual either.
+  //
+  // Deliberately conservative in one direction: an accrual still sitting in the
+  // outbox (chart not initialised, period closed) has no journal entry yet and
+  // reads as "amount set". Understating a booking is the safe way to be wrong.
+  const isAccrued = trail.commissionJournalEntry?.status === "POSTED";
+  const isReversed = trail.commissionJournalEntry?.status === "REVERSED";
+
   const steps: TrailStep[] = [
     {
       icon: TrendingUp,
-      label: t("StepCommissionAccrued"),
+      label: isAccrued ? t("StepCommissionAccrued") : t("StepCommissionAmountSet"),
       detail: `${salespersonName} — ${format(sale.commissionAmount)}`,
     },
   ];
 
-  if (trail.commissionJournalEntry) {
+  // A reversed accrual was still a real posting, so the entry stays on the
+  // trail with its journal number — dropping it would lose an event that
+  // genuinely happened. It is labelled as reversed rather than current, since
+  // the liability it created has since been backed out.
+  if (trail.commissionJournalEntry && (isAccrued || isReversed)) {
     steps.push({
       icon: Receipt,
-      label: t("StepCommissionGLPosted"),
+      label: isReversed ? t("StepCommissionAccrualReversed") : t("StepCommissionGLPosted"),
       detail: `${t("JournalNumberLabel")} #${trail.commissionJournalEntry.journalNumber}`,
       date: trail.commissionJournalEntry.postedAt,
     });

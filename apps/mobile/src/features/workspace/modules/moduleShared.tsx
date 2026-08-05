@@ -246,6 +246,46 @@ export function money(value: number | undefined | null, locale: "en" | "ar", cur
   }
 }
 
+/**
+ * An undecided commission is not a zero one. `money(undefined)` renders "0.00",
+ * which reads as "this sale earns nothing" — the opposite of the truth. Shared
+ * by the commissions module and the sale-detail card so the two screens cannot
+ * make opposite claims about the same field.
+ */
+export function commissionAmountLabel(
+  sale: { commissionAmount?: number },
+  locale: "en" | "ar"
+): string {
+  if (sale.commissionAmount == null) return locale === "ar" ? "غير محددة" : "Not set";
+  return money(sale.commissionAmount, locale);
+}
+
+export function commissionStatusLabel(
+  sale: {
+    status?: string;
+    commissionAmount?: number;
+    commissionPaidAt?: number;
+    commissionStatus?: "NOT_SET" | "NO_COMMISSION" | "UNPAID" | "PAID" | "VOID" | "PENDING_SALE";
+  },
+  locale: "en" | "ar"
+): string {
+  // A cancelled sale keeps its amount as history with the GL accrual already
+  // reversed. Reading only the amount and the paid date would label it
+  // "Unpaid" — money the dealership does not owe. `commissionStatus` is only
+  // present on listCommissions rows, so the sale's own status is the fallback
+  // for the sale-detail card, which is fed by the plain sales list.
+  if (sale.commissionStatus === "VOID" || sale.status === "CANCELLED") {
+    return locale === "ar" ? "بيع ملغى" : "Sale cancelled";
+  }
+  if (sale.commissionPaidAt) return dateLabel(sale.commissionPaidAt, locale);
+  if (sale.commissionStatus === "PENDING_SALE" || (sale.status === "PENDING" && (sale.commissionAmount ?? 0) > 0)) {
+    return locale === "ar" ? "بانتظار إتمام البيع" : "Awaiting sale completion";
+  }
+  if (sale.commissionAmount == null) return locale === "ar" ? "بانتظار المراجعة" : "Awaiting review";
+  if (sale.commissionAmount <= 0) return locale === "ar" ? "لا توجد عمولة" : "No commission";
+  return locale === "ar" ? "غير مدفوعة" : "Unpaid";
+}
+
 export function dateLabel(value: number | undefined, locale: "en" | "ar"): string {
   if (!value) return "-";
   try {

@@ -507,12 +507,20 @@ describe("C3: automatic commission requires a recorded purchase cost", () => {
       status: "COMPLETED",
       financingType: "CASH",
     });
-    let rows = await asAdmin.query(api.sales.listCommissions, { orgId });
+    const listCommissions = async () =>
+      (
+        await asAdmin.query(api.sales.listCommissionsPaginated, {
+          orgId,
+          paginationOpts: { numItems: 50, cursor: null },
+        })
+      ).page;
+
+    let rows = await listCommissions();
     expect(rows.find((r) => r._id === saleId)?.missingPurchaseCost).toBe(true);
 
     // Manager fixes the vehicle cost → the row flips to "needs recalculation".
     await t.run((ctx) => ctx.db.patch(vehicleId, { purchasePrice: 10000 }));
-    rows = await asAdmin.query(api.sales.listCommissions, { orgId });
+    rows = await listCommissions();
     const flagged = rows.find((r) => r._id === saleId);
     expect(flagged?.missingPurchaseCost).toBe(false);
     expect(flagged?.needsRecalculation).toBe(true);

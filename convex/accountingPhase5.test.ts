@@ -570,7 +570,7 @@ describe("Phase 5 — commission payable reconciliation", () => {
         fuelType: "PETROL", transmission: "AUTOMATIC", sellingPrice: 30000, status: "SOLD",
       })
     );
-    await t.run((ctx) =>
+    const reconSaleId = await t.run((ctx) =>
       ctx.db.insert("sales", {
         orgId, vehicleId, customerId, salespersonId: userId, salePrice: 30000, saleDate: now,
         status: "COMPLETED", commissionAmount: 500,
@@ -589,6 +589,26 @@ describe("Phase 5 — commission payable reconciliation", () => {
       await ctx.db.insert("journalLines", {
         orgId, journalEntryId, lineNumber: 1, accountId: payableAccount!._id, debitMinor: 0, creditMinor: 500_000,
         currency: "JOD", scale: 3, accountingDate: now,
+      });
+      // The accrual event that production always writes alongside the journal
+      // entry (postAccountingEvent). The subledger side counts recognized
+      // commissions, so a fixture that posts the GL half without it is
+      // modelling a state the app cannot produce.
+      await ctx.db.insert("accountingEvents", {
+        orgId,
+        eventType: "COMMISSION_ACCRUED",
+        sourceType: "sales",
+        sourceId: `commission_${reconSaleId}`,
+        eventVersion: 1,
+        idempotencyKey: `commission_accrued_${reconSaleId}`,
+        occurredAt: now,
+        accountingDate: now,
+        currency: "JOD",
+        payload: {},
+        status: "POSTED",
+        createdBy: userId,
+        createdAt: now,
+        journalEntryId,
       });
     });
 
@@ -614,6 +634,144 @@ describe("Phase 5 — commission payable reconciliation", () => {
       ctx.db.insert("sales", {
         orgId, vehicleId, customerId, salespersonId: userId, salePrice: 30000, saleDate: now,
         status: "COMPLETED", commissionAmount: 500, commissionPaidAt: now,
+      })
+    );
+
+    const recon = await asUser.query(api.accountingReports.commissionPayableReconciliation, { orgId });
+    expect(recon.currencies).toEqual([]);
+  });
+
+  test("a commission on a sale that has not completed is not part of the subledger", async () => {
+    const { t, orgId, userId, asUser } = await seedReportingDealer();
+    const now = Date.now();
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Draft", lastName: "Customer" })
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, make: "Test", model: "Draft", year: 2024, mileage: 0, color: "Black",
+        fuelType: "PETROL", transmission: "AUTOMATIC", sellingPrice: 30000, status: "AVAILABLE",
+      })
+    );
+    // An amount may be entered on a draft — it survives completion by design.
+    // But a PENDING sale has no COMMISSION_ACCRUED event, so counting it here
+    // pushed the subledger above a GL liability of exactly zero, leaving the
+    // reconciliation permanently and inexplicably out.
+    const saleId = await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId, salePrice: 30000, saleDate: now,
+        status: "PENDING", commissionAmount: 500,
+      })
+    );
+
+    expect(
+      (await asUser.query(api.accountingReports.commissionPayableReconciliation, { orgId }))
+        .currencies
+    ).toEqual([]);
+
+    // Completing it is necessary but not sufficient — the subledger tracks what
+    // the GL has recognized, and nothing is recognized until the commission is
+    // accrued.
+    await t.run((ctx) => ctx.db.patch(saleId, { status: "COMPLETED" }));
+    expect(
+      (await asUser.query(api.accountingReports.commissionPayableReconciliation, { orgId }))
+        .currencies
+    ).toEqual([]);
+
+    // Once it is accrued, both sides move together.
+    await t.run(async (ctx) => {
+      const payableAccount = await ctx.db
+        .query("chartOfAccounts")
+        .withIndex("by_org_systemKey", (q) =>
+          q.eq("orgId", orgId).eq("systemKey", "COMMISSION_PAYABLE")
+        )
+        .unique();
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId, journalNumber: "JRN-COMM-ACCR", accountingDate: now, sourceType: "sales",
+        sourceId: saleId, category: "SYSTEM", memo: "Commission accrued", status: "POSTED",
+        currency: "JOD", postedBy: userId, postedAt: now, createdAt: now,
+      });
+      await ctx.db.insert("journalLines", {
+        orgId, journalEntryId, lineNumber: 1, accountId: payableAccount!._id,
+        debitMinor: 0, creditMinor: 500_000, currency: "JOD", scale: 3, accountingDate: now,
+      });
+      await ctx.db.insert("accountingEvents", {
+        orgId, eventType: "COMMISSION_ACCRUED", sourceType: "sales",
+        sourceId: `commission_${saleId}`, eventVersion: 1,
+        idempotencyKey: `commission_accrued_${saleId}`, occurredAt: now, accountingDate: now,
+        currency: "JOD", payload: {}, status: "POSTED", createdBy: userId, createdAt: now,
+        journalEntryId,
+      });
+    });
+
+    const afterAccrual = await asUser.query(
+      api.accountingReports.commissionPayableReconciliation,
+      { orgId }
+    );
+    expect(afterAccrual.byCurrency.JOD.subledgerBalanceMinor).toBe(500_000);
+    expect(afterAccrual.byCurrency.JOD.glBalanceMinor).toBe(500_000);
+    expect(afterAccrual.isReconciled).toBe(true);
+  });
+
+  test("a decided-but-unaccrued manual commission does not make the books look wrong", async () => {
+    const { t, orgId, userId, asUser } = await seedReportingDealer();
+    const now = Date.now();
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Manual", lastName: "Customer" })
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, make: "Test", model: "Manual", year: 2024, mileage: 0, color: "Black",
+        fuelType: "PETROL", transmission: "AUTOMATIC", sellingPrice: 30000, status: "SOLD",
+      })
+    );
+    // MANUAL mode recognizes the expense at payment, so this commission has no
+    // GL liability behind it yet — correctly. Counting it on the subledger side
+    // would report a difference against books that are right, on every close,
+    // for every manual dealership. And closing requires acknowledging every
+    // warning, so that is a permanent click-through rather than a note.
+    await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId, salePrice: 30000, saleDate: now,
+        status: "COMPLETED", commissionAmount: 500,
+      })
+    );
+
+    const recon = await asUser.query(api.accountingReports.commissionPayableReconciliation, { orgId });
+    expect(recon.currencies).toEqual([]);
+    expect(recon.isReconciled).toBe(true);
+  });
+
+  test("a cancelled sale's commission is not part of the subledger either", async () => {
+    const { t, orgId, userId, asUser } = await seedReportingDealer();
+    const now = Date.now();
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Void", lastName: "Customer" })
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, make: "Test", model: "Void", year: 2024, mileage: 0, color: "Black",
+        fuelType: "PETROL", transmission: "AUTOMATIC", sellingPrice: 30000, status: "AVAILABLE",
+      })
+    );
+    // Cancellation reverses the GL accrual but deliberately keeps the amount on
+    // the row as history, so the subledger side has to exclude it explicitly.
+    const cancelledSaleId = await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId, salePrice: 30000, saleDate: now,
+        status: "CANCELLED", commissionAmount: 500,
+      })
+    );
+    // With a POSTED accrual on file, the accrual gate cannot be what excludes
+    // this row — only the CANCELLED rule in isCommissionOwed can. Without this
+    // the test passed whether or not that rule existed.
+    await t.run((ctx) =>
+      ctx.db.insert("accountingEvents", {
+        orgId, eventType: "COMMISSION_ACCRUED", sourceType: "sales",
+        sourceId: `commission_${cancelledSaleId}`, eventVersion: 1,
+        idempotencyKey: `commission_accrued_${cancelledSaleId}`, occurredAt: now,
+        accountingDate: now, currency: "JOD", payload: {}, status: "POSTED",
+        createdBy: userId, createdAt: now,
       })
     );
 

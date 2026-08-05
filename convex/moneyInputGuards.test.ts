@@ -275,6 +275,17 @@ describe("money entry points reject NaN", () => {
       })
     ).rejects.toThrow(/commission/i);
 
+    // `v.number()` accepts Infinity as readily as NaN, and it passes every
+    // `> 0` guard downstream instead of failing them — a commission of
+    // Infinity would sweep into payroll and overflow the payslip total.
+    await expect(
+      ids.asOwner.mutation(api.sales.setCommissionAmount, {
+        orgId: ids.orgId,
+        saleId,
+        commissionAmount: Infinity,
+      })
+    ).rejects.toThrow(/commission/i);
+
     // `Math.max(0, NaN)` is NaN, so the clamp that looks like a floor is not one.
     const sale: any = await t.run((ctx: any) => ctx.db.get(saleId));
     expect(sale.commissionAmount).toBeUndefined();

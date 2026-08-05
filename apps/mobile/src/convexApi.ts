@@ -390,6 +390,11 @@ export interface MobileSale {
   financingType?: MobileFinancingType;
   commissionAmount?: number;
   commissionPaidAt?: number;
+  // Only present on sales.listCommissions rows — the plain sales list does not
+  // derive them. See the CommissionStatus doc comment in convex/utils/commission.ts.
+  commissionStatus?: "NOT_SET" | "NO_COMMISSION" | "UNPAID" | "PAID" | "VOID" | "PENDING_SALE";
+  canSetAmount?: boolean;
+  salespersonOffboarded?: boolean;
   vehicleSummary: string;
   vehicleVin: string;
   customerName: string;
@@ -1427,6 +1432,12 @@ type VehicleListArgs = OrgScopedArgs & {
   paginationOpts: PaginationOpts;
 };
 
+type CommissionListArgs = OrgScopedArgs & {
+  salespersonId?: string;
+  paidStatus?: "paid" | "unpaid" | "not_set";
+  paginationOpts: PaginationOpts;
+};
+
 type VehicleScopedArgs = OrgScopedArgs & {
   vehicleId: string;
 };
@@ -2189,11 +2200,11 @@ export const api = {
     softDelete: makeFunctionReference<"mutation", OrgScopedArgs & { saleId: string }, null>(
       "sales:softDelete",
     ),
-    listCommissions: makeFunctionReference<
+    listCommissionsPaginated: makeFunctionReference<
       "query",
-      OrgScopedArgs & { salespersonId?: string; paidStatus?: "paid" | "unpaid" },
-      MobileSale[]
-    >("sales:listCommissions"),
+      CommissionListArgs,
+      MobilePageResult<MobileSale>
+    >("sales:listCommissionsPaginated"),
     markCommissionPaid: makeFunctionReference<
       "mutation",
       OrgScopedArgs & { saleId: string; paymentMethod?: MobilePaymentMethod; idempotencyKey?: string },
@@ -2967,11 +2978,11 @@ export const api = {
     >;
     update: FunctionReference<"mutation", "public", SaleUpdateArgs, null>;
     softDelete: FunctionReference<"mutation", "public", OrgScopedArgs & { saleId: string }, null>;
-    listCommissions: FunctionReference<
+    listCommissionsPaginated: FunctionReference<
       "query",
       "public",
-      OrgScopedArgs & { salespersonId?: string; paidStatus?: "paid" | "unpaid" },
-      MobileSale[]
+      CommissionListArgs,
+      MobilePageResult<MobileSale>
     >;
     markCommissionPaid: FunctionReference<
       "mutation",

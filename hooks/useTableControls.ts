@@ -9,6 +9,25 @@ interface UseTableControlsPagination {
   loadMore: (numItems: number) => void;
   /** Page size for each auto-load-more call while searching. Defaults to 200. */
   batchSize?: number;
+  /**
+   * Keep loading until exhausted while this is true, for the same reason
+   * searching does. Set it when a SERVER-side filter is active: the server
+   * decides which rows qualify, so a page can come back short or empty while
+   * matching rows remain further back.
+   */
+  exhaustWhen?: boolean;
+  /**
+   * Declares that the server's pages are post-filtered — it reads a fixed
+   * number of DOCUMENTS and returns only those that qualify — so a page can
+   * come back short, or empty, while matching rows remain further back. For
+   * such a query "no rows yet" is not an answer, and stopping on it renders a
+   * permanent empty/loading state over real data.
+   *
+   * A property of the query, not a preference: a table whose server paginates
+   * rows directly must leave this off, because there an empty page genuinely
+   * means there is nothing to find.
+   */
+  pagesMayBeEmpty?: boolean;
 }
 
 interface UseTableControlsOptions<T> {
@@ -46,14 +65,32 @@ export function useTableControls<T>({
 
   const isSearching = search.trim().length > 0;
   const paginationStatus = pagination?.status;
+  /**
+   * Three reasons the table must not stop at the page boundary, all of them
+   * the same underlying problem — the rows on screen are not the answer:
+   *
+   *  - a search, which is filtered here on the client;
+   *  - `exhaustWhen`, for a filter the server applies;
+   *  - and, for a query that declares `pagesMayBeEmpty`, having nothing at all
+   *    to show. An empty first page with more behind it otherwise renders as a
+   *    permanent loading state. Gated on the declaration rather than applied
+   *    to every paginated table: where the server paginates rows directly, an
+   *    empty page IS the answer.
+   */
+  const shouldExhaust =
+    isSearching ||
+    pagination?.exhaustWhen === true ||
+    (pagination?.pagesMayBeEmpty === true && (data?.length ?? 0) === 0);
   useEffect(() => {
-    if (isSearching && paginationStatus === "CanLoadMore") {
+    if (shouldExhaust && paginationStatus === "CanLoadMore") {
       pagination?.loadMore(pagination.batchSize ?? 200);
     }
-    // Only re-run when search starts or a page finishes loading — not on
-    // every render, since `pagination` is a fresh object each render.
+    // Deliberately only these two. The walk is driven by the status cycling
+    // CanLoadMore → LoadingMore → CanLoadMore as each page resolves; adding
+    // `loadMore` or a page counter here stalled it after a single page, which
+    // silently truncated search results on every paginated table in the app.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSearching, paginationStatus]);
+  }, [shouldExhaust, paginationStatus]);
 
   function toggleSort(key: string) {
     if (sortKey !== key) {
@@ -99,5 +136,14 @@ export function useTableControls<T>({
     return result;
   }, [data, search, searchFields, sortAccessors, sortKey, sortDir]);
 
-  return { search, setSearch, sortKey, sortDir, toggleSort, rows };
+  /** True while the hook is walking pages by itself, so a caller does not
+   *  offer a manual control that would race it — or, worse, re-derive this
+   *  condition and disagree with the hook about it. A table with no pagination
+   *  is never walking: `paginationStatus` is undefined there, which is not
+   *  "Exhausted", so searching one would otherwise claim a load that cannot
+   *  happen. */
+  const isAutoLoading =
+    pagination !== undefined && shouldExhaust && paginationStatus !== "Exhausted";
+
+  return { search, setSearch, sortKey, sortDir, toggleSort, rows, isAutoLoading };
 }
