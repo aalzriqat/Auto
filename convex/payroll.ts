@@ -21,6 +21,7 @@ import { toMinorUnits, fromMinorUnits } from "./utils/money";
 import { paymentMethodValidator, normalizePaymentMethod, PaymentMethod } from "./utils/paymentMethods";
 import { runWithIdempotency } from "./utils/idempotency";
 import { isCommissionOwed } from "./utils/commission";
+import { checkPostingAllowed } from "./accountingPeriods";
 
 // ─── Employee compensation (fixed monthly salary) ──────────────────────────────
 
@@ -1049,19 +1050,32 @@ export const approveRun = mutation({
           // A backlog sale that never accrued, whose own period is CLOSED or
           // LOCKED, cannot be recognized at all: the entry below would queue,
           // burn every retry and dead-letter into a row that blocks payment and
-          // every future close. Approving the run anyway left that wreckage
-          // behind an APPROVED record that can no longer take the draft
-          // cancellation path. Refuse the run instead, naming the sale, so an
-          // accountant reopens the period (or corrects the sale) first.
+          // every future close. So it is skipped, exactly like the cancelled
+          // sale above — dropped from commissionMinor and liveSaleIds, so this
+          // run neither accrues nor pays it.
+          //
+          // Skipped, NOT refused. Throwing here aborts approveRun for every
+          // payslip in the run, and the sweep that builds a run
+          // (collectUnpaidCommissions) filters on isCommissionOwed, active
+          // membership and saleDate only — it has no period filter — so the same
+          // stranded sale returns in every future draft. Cancelling the draft
+          // does not break that loop. One sale in a LOCKED period, which cannot
+          // be reopened, would have held the whole organization's salaries
+          // hostage with no in-product way out.
+          //
+          // The commission is not lost or hidden: the sale still reads as owed
+          // on the commissions page, and the recognition-divergence control
+          // counts it under unrecognizedCount at every period close.
           //
           // Already-accrued sales are unaffected — the hook is a no-op for them,
           // and so is this check.
           if (
             (await commissionAccrualStrandedReason(ctx, args.orgId, saleId, sale.saleDate)) !== null
           ) {
-            throw new ConvexError(
-              `Sale ${saleId} has an unrecognized commission dated into a closed accounting period, so it cannot be approved for payroll. Reopen that period so the commission can be recognized, then approve this run.`
+            console.warn(
+              `[payroll] org ${args.orgId}: skipping sale ${saleId} — commission unrecognized and its accounting period is closed`
             );
+            continue;
           }
           await hookCommissionAccrued(ctx, {
             orgId: args.orgId,
@@ -1193,6 +1207,19 @@ export const payRun = mutation({
       // to a closed period), driving Salaries/Commission Payable negative until
       // the old period is opened. When the payment would itself queue (no open
       // period now), it drains after the accrual, so no guard is needed.
+      // ...but "would itself queue" is only harmless when NO period covers today
+      // yet: that entry waits, burns no attempts, and posts when the month opens.
+      // A CLOSED or LOCKED current period is the opposite — the payment burns
+      // every retry and dead-letters, leaving the run marked PAID with the
+      // payable never cleared and a FAILED row blocking every future close.
+      // Refuse before anything is written rather than pay into a ledger that can
+      // never record it.
+      const todayCheck = await checkPostingAllowed(ctx, args.orgId, now);
+      if (!todayCheck.ok && !todayCheck.waiting) {
+        throw new ConvexError(
+          "Today's accounting period is closed, so this payroll payment could never post. Reopen the period before paying this run."
+        );
+      }
       if (await isPostableNow(ctx, args.orgId, now)) {
         await assertAccrualsPosted(ctx, args.orgId, items);
         await assertAdvanceIssuancesPosted(ctx, args.orgId, items);

@@ -1070,14 +1070,22 @@ export const listCommissions = query({
 async function assertSalePeriodAcceptsPostings(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
-  saleDate: number,
-  action: string
+  date: number,
+  action: string,
+  /**
+   * Which period the message means. This is called for two different dates:
+   * entries dated at the SALE (the accrual and every correction) pass
+   * `sale.saleDate`, while the PAYMENT is dated today and passes `now`. Both
+   * need checking, and telling someone "this sale's period is closed" when it is
+   * actually the current month sends them to reopen the wrong one.
+   */
+  periodLabel: "This sale's" | "Today's" = "This sale's"
 ): Promise<void> {
-  const check = await checkPostingAllowed(ctx, orgId, saleDate);
+  const check = await checkPostingAllowed(ctx, orgId, date);
   if (!check.ok && !check.waiting) {
     throwAppError(
       AppErrorCode.VALIDATION_FAILED,
-      `This sale's accounting period is closed, so a commission entry for it could never post. Reopen the period before you ${action}.`
+      `${periodLabel} accounting period is closed, so a commission entry for it could never post. Reopen the period before you ${action}.`
     );
   }
 }
@@ -1212,6 +1220,15 @@ export const markCommissionPaid = mutation({
         }
 
         const now = Date.now();
+        // The payment is dated TODAY, so today's period is the one that has to
+        // accept it — and nothing checked that. Both guards below are gated on
+        // isPostableNow(now), which is false when the current period is closed,
+        // so both returned early: the sale was patched paid, the payment
+        // enqueued into a closed period, burned every retry and dead-lettered.
+        // Cash recorded as paid, Commission Payable never debited, and a FAILED
+        // row blocking every future close — with markCommissionUnpaid refusing
+        // to reverse a paid commission, leaving only a manual journal.
+        await assertSalePeriodAcceptsPostings(ctx, args.orgId, now, "pay it", "Today's");
         await ctx.db.patch(args.saleId, {
           commissionPaidAt: now,
           commissionPaidBy: user._id,
@@ -1346,21 +1363,18 @@ export const setCommissionAmount = mutation({
       // amount was permanently unfixable.
       //
       // The accrual and every adjustment share one accounting date — the sale's
-      // own, or today if the sale's period has closed (commissionAccountingDate).
-      // Deriving both from the same rule is what stops a correction from posting
-      // into an open period while the accrual it corrects is still queued behind
-      // a closed one, which would drive Commission Payable negative.
-      // Refused before anything is written: an entry dated into a closed period
-      // can never post, and the guards further down are gated on isPostableNow,
-      // which is false there — so without this the amount saved and the manager
-      // was told it worked.
-      await assertSalePeriodAcceptsPostings(
-        ctx,
-        args.orgId,
-        sale.saleDate,
-        "set the commission"
-      );
-
+      // own (commissionAccountingDate). Deriving both from the same rule is what
+      // stops a correction from posting into an open period while the accrual it
+      // corrects is still queued behind a closed one, which would drive
+      // Commission Payable negative.
+      //
+      // The closed-period refusal lives inside each posting branch below, not
+      // here. Hoisted to the top it also refused three cases that write nothing
+      // to the ledger: a PENDING draft (only a COMPLETED sale accrues), a
+      // completed sale being set to zero, and a no-op re-save of the same
+      // amount. Recording "this sale earns no commission" is exactly the repair
+      // an accountant reaches for on a stranded row, and a guard protecting a
+      // journal entry that would never be written was blocking it.
       const currency = await getOrgCurrency(ctx, args.orgId);
       const previousMinor =
         sale.commissionAmount == null ? 0 : toMinorUnits(sale.commissionAmount, currency);
@@ -1418,6 +1432,16 @@ export const setCommissionAmount = mutation({
               "This commission's amount no longer matches what the ledger recognized for it, so it cannot be corrected here. Have accounting reconcile it first."
             );
           }
+          // Now that a real adjusting entry IS about to be written, dated at the
+          // sale: an entry into a closed period can never post, and the guards
+          // above are gated on isPostableNow, which is false there — so without
+          // this the amount saved and the manager was told it worked.
+          await assertSalePeriodAcceptsPostings(
+            ctx,
+            args.orgId,
+            sale.saleDate,
+            "change the amount"
+          );
           patch.commissionAdjustmentSeq = sequence;
           await hookCommissionAdjusted(ctx, {
             orgId: args.orgId,
@@ -1442,6 +1466,14 @@ export const setCommissionAmount = mutation({
           sale,
           accountingDate,
           "set the amount"
+        );
+        // Same reason as the correction branch: this is the point at which an
+        // entry dated at the sale actually gets written.
+        await assertSalePeriodAcceptsPostings(
+          ctx,
+          args.orgId,
+          sale.saleDate,
+          "set the commission"
         );
         await hookCommissionAccrued(ctx, {
           orgId: args.orgId,
@@ -1576,7 +1608,6 @@ export const recalculateCommission = mutation({
           "recalculate the commission"
         );
         const currency = await getOrgCurrency(ctx, args.orgId);
-        const now = Date.now();
         const accountingDate = await commissionAccountingDate(ctx, args.orgId, args.saleId, sale.saleDate);
         // Same dependency as every other accrual path.
         await assertCommissionEntriesPosted(

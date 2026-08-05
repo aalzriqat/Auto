@@ -2003,16 +2003,57 @@ describe("a closed period blocks a commission only when something must post into
     expect(queued).toBeNull();
   });
 
-  test("payroll approval refuses a backlog sale whose month is closed", async () => {
-    // approveRun was the last accrual path with no period check at all. For a
-    // legacy unrecognized commission in a closed month it approved the run and
-    // left the accrual to burn every retry and dead-letter — wreckage behind an
-    // APPROVED record that can no longer take the draft cancellation path.
+  test("payroll approval SKIPS a stranded sale instead of failing the whole run", async () => {
+    // approveRun was the last accrual path with no period check at all: a
+    // legacy unrecognized commission in a closed month approved the run and left
+    // the accrual to burn every retry and dead-letter.
+    //
+    // The first attempt at a fix threw, which was worse. The throw sits inside
+    // the per-payslip loop with no boundary, so it aborted approval for EVERY
+    // employee in the run — and collectUnpaidCommissions has no period filter,
+    // so the same stranded sale returns in every future draft. Cancelling the
+    // draft does not break that loop, and a LOCKED period cannot be reopened.
+    // One old sale would have held the whole organization's salaries hostage.
     const d = await seedDealer("payroll_backlog_closed", "MANUAL", { priorYearPeriod: true });
     const priorYear = new Date().getUTCFullYear() - 1;
     const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    // Straight to the row: never accrued, the shape of a legacy sale.
     await d.t.run(async (ctx) => {
       await ctx.db.patch(saleId, { commissionAmount: 250 });
+    });
+    // A second sale in a period that is still OPEN, for the same rep, so the run
+    // has something it legitimately must still pay. Its own vehicle — the first
+    // one is already sold.
+    const liveVehicleId = await d.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: d.orgId,
+        vin: "VIN-payroll_backlog_closed-live",
+        make: "Honda",
+        model: "Civic",
+        year: 2021,
+        color: "White",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 1000,
+        purchasePrice: 9000,
+        sellingPrice: 14000,
+        status: "AVAILABLE",
+      })
+    );
+    const liveSaleId = await d.asAdmin.mutation(api.sales.create, {
+      orgId: d.orgId,
+      vehicleId: liveVehicleId,
+      customerId: d.customerId,
+      salespersonId: d.userId,
+      salePrice: 14000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId: liveSaleId,
+      commissionAmount: 100,
     });
     await closePriorYearPeriod(d, priorYear);
 
@@ -2022,13 +2063,41 @@ describe("a closed period blocks a commission only when something must post into
       periodMonth: new Date().getUTCMonth() + 1,
     });
 
-    await expect(
-      d.asAdmin.mutation(api.payroll.approveRun, { orgId: d.orgId, runId })
-    ).rejects.toThrow(/closed accounting period/i);
-
-    // The run stays a DRAFT, so it can still be cancelled or corrected.
+    // Approval succeeds. Salaries and the payable commission are not held
+    // hostage by the stranded one.
+    await d.asAdmin.mutation(api.payroll.approveRun, { orgId: d.orgId, runId });
     const run = await d.t.run(async (ctx) => await ctx.db.get(runId));
-    expect(run?.status).toBe("DRAFT");
+    expect(run?.status).toBe("APPROVED");
+
+    // The stranded sale is excluded from what was approved...
+    const items = await d.t.run(async (ctx) =>
+      await ctx.db
+        .query("payrollItems")
+        .withIndex("by_run", (q) => q.eq("runId", runId))
+        .collect()
+    );
+    const allSaleIds = items.flatMap((i) => i.commissionSaleIds ?? []);
+    expect(allSaleIds).toContain(liveSaleId);
+    expect(allSaleIds).not.toContain(saleId);
+    // ...only the live 100 was approved, not 350.
+    expect(items.reduce((sum, i) => sum + (i.commissionMinor ?? 0), 0)).toBe(10000);
+
+    // ...and no dead-on-arrival accrual was enqueued for it.
+    const queued = await d.t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", d.orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(queued).toBeNull();
+
+    // The commission is not lost: the sale still reads as owed, so it stays
+    // visible on the commissions page and in the divergence control.
+    const stranded = await d.t.run(async (ctx) => await ctx.db.get(saleId));
+    expect(stranded?.commissionAmount).toBe(250);
+    expect(stranded?.commissionPaidAt ?? null).toBeNull();
   });
 
   test("payroll approval is unaffected when the accrual already posted", async () => {
@@ -2052,6 +2121,131 @@ describe("a closed period blocks a commission only when something must post into
     const run = await d.t.run(async (ctx) => await ctx.db.get(runId));
     expect(run?.status).toBe("APPROVED");
     // Still exactly one accrual, still dated to the sale's own month.
+    expect(await commissionPayableMinor(d)).toBe(25000);
+  });
+});
+
+/**
+ * Round 10. The closed-period rule was enforced on the dates entries are
+ * RECOGNIZED at, and not on the date they are PAID at — even though the whole
+ * safety argument for allowing payment after a close is "the payment is dated
+ * today". Nothing checked that today could take it.
+ */
+describe("the period that must accept a payment is today's, not the sale's", () => {
+  test("paying a commission is refused when TODAY's period is closed", async () => {
+    const d = await seedDealer("pay_today_closed");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    expect(await commissionPayableMinor(d)).toBe(25000);
+
+    // Close the period covering today. `close` has no "period must have ended"
+    // precondition, so this is reachable in the product.
+    await closePriorYearPeriod(d, new Date().getUTCFullYear());
+
+    await expect(
+      d.asAdmin.mutation(api.sales.markCommissionPaid, {
+        orgId: d.orgId,
+        saleId,
+        paymentMethod: "CASH",
+      })
+    ).rejects.toThrow(/today's accounting period is closed/i);
+
+    // Nothing was written: not marked paid, and no payment queued to
+    // dead-letter. Previously the sale was patched paid, the payment burned all
+    // ten attempts, and Commission Payable was never debited — with
+    // markCommissionUnpaid refusing to reverse a paid commission.
+    const sale = await d.t.run(async (ctx) => await ctx.db.get(saleId));
+    expect(sale?.commissionPaidAt ?? null).toBeNull();
+    expect(await commissionPayableMinor(d)).toBe(25000);
+  });
+});
+
+/**
+ * Round 10. The closed-period refusal in setCommissionAmount was hoisted above
+ * the branches that actually post, so it also refused three cases that write
+ * nothing to the ledger. Zeroing a commission is the repair an accountant
+ * reaches for on a stranded row, and it was blocked by a guard protecting a
+ * journal entry that would never have been written.
+ */
+describe("a closed period does not block commission edits that post nothing", () => {
+  test("a commission can be set to zero on a sale whose month is closed", async () => {
+    const d = await seedDealer("zero_in_closed", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { commissionAmount: 250 });
+    });
+    await closePriorYearPeriod(d, priorYear);
+
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 0,
+    });
+
+    const sale = await d.t.run(async (ctx) => await ctx.db.get(saleId));
+    expect(sale?.commissionAmount).toBe(0);
+    // Nothing posted and nothing queued — which is exactly why refusing it was
+    // wrong.
+    expect(await commissionPayableMinor(d)).toBe(0);
+    const queued = await d.t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", d.orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(queued).toBeNull();
+  });
+
+  test("re-saving the same amount on an accrued sale in a closed month is a no-op, not a refusal", async () => {
+    const d = await seedDealer("noop_in_closed", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    await closePriorYearPeriod(d, priorYear);
+
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+
+    // No adjustment was minted for a zero delta, so the correction count is
+    // untouched and the payable is unchanged.
+    expect(await commissionPayableMinor(d)).toBe(25000);
+    expect(await adjustmentSeq(d, saleId)).toBe(0);
+  });
+
+  test("changing the amount in a closed month IS still refused", async () => {
+    // The other side of the same rule: a real delta writes a real adjusting
+    // entry dated at the sale, so the closed period genuinely blocks it.
+    const d = await seedDealer("change_in_closed", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    await closePriorYearPeriod(d, priorYear);
+
+    await expect(
+      d.asAdmin.mutation(api.sales.setCommissionAmount, {
+        orgId: d.orgId,
+        saleId,
+        commissionAmount: 300,
+      })
+    ).rejects.toThrow(/this sale's accounting period is closed/i);
     expect(await commissionPayableMinor(d)).toBe(25000);
   });
 });
