@@ -736,10 +736,15 @@ export const listCommissions = query({
     // queue rather than an absence of records.
     const isManualMode = mode === "MANUAL";
 
-    const limit = Math.min(
-      Math.max(Math.floor(args.limit ?? COMMISSION_PAGE_DEFAULT), 1),
-      COMMISSION_PAGE_MAX
-    );
+    // Convex accepts NaN and ±Infinity for a v.number(), and every comparison
+    // against NaN is false — so `candidates.length >= limit` would never break
+    // the walk below and the page would read every sale in the org, which is
+    // exactly the failure the bound exists to prevent. Anything not finite
+    // falls back to the default rather than silently disabling the cap.
+    const requested = args.limit;
+    const limit = Number.isFinite(requested)
+      ? Math.min(Math.max(Math.floor(requested as number), 1), COMMISSION_PAGE_MAX)
+      : COMMISSION_PAGE_DEFAULT;
 
     // Walk the index newest-first and stop once the page is full, so the number
     // of documents this query touches is bounded by `limit` rather than by how

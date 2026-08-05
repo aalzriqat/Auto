@@ -579,6 +579,32 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
     expect([...capped.map((r) => r._id)].sort()).toEqual([saleIds[3], saleIds[4]].sort());
   });
 
+  test("a non-finite limit falls back to the default instead of disabling the cap", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const ids = await seedCommissionOrg(t, "manual_nan");
+    await setMode(t, ids.orgId, "MANUAL");
+    await completedSale(ids);
+
+    // Convex accepts NaN for a v.number(), and `n >= NaN` is false forever — so
+    // an unguarded cap would never break its walk and would read every sale in
+    // the org. The query must still work, and still be bounded.
+    for (const limit of [NaN, Infinity, -Infinity]) {
+      const rows = await ids.asAdmin.query(api.sales.listCommissions, {
+        orgId: ids.orgId,
+        limit,
+      });
+      expect(rows).toHaveLength(1);
+    }
+
+    // A fractional or out-of-range limit is clamped, not rejected.
+    expect(
+      await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId, limit: 0 })
+    ).toHaveLength(1);
+    expect(
+      await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId, limit: 1.9 })
+    ).toHaveLength(1);
+  });
+
   test("the not_set filter is applied before the cap, so the review queue is never lossy", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const ids = await seedCommissionOrg(t, "manual_queue");
