@@ -932,8 +932,37 @@ export async function computeCommissionPayableReconciliation(
   // above a GL liability that is already zero.
   const owed = sales.filter(isCommissionOwed);
 
+  // A reconciliation compares the GL against what the GL OUGHT to contain, and
+  // an unrecognized commission belongs in neither. In MANUAL mode the expense
+  // is recognized at payment (or at payroll approval), not when the amount is
+  // decided — so counting a decided-but-unaccrued commission here reports a
+  // difference against a liability the books have correctly not created yet.
+  //
+  // That is not a harmless false positive: closing a period requires
+  // acknowledging every warning verbatim (accountingPeriods.close), so a
+  // warning that fires on every close for every MANUAL organization is a
+  // permanent click-through — and the habit of clicking through it is how a
+  // genuinely missing or duplicated posting later gets acknowledged too.
+  //
+  // One indexed read of the org's COMMISSION_ACCRUED events rather than a
+  // lookup per sale. Only POSTED counts, matching the GL side, which is built
+  // from posted journal lines: a queued accrual is not in the GL either, and a
+  // REVERSED one has been backed out.
+  const accruedSaleIds = new Set(
+    (
+      await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_eventType", (q) =>
+          q.eq("orgId", orgId).eq("eventType", "COMMISSION_ACCRUED")
+        )
+        .filter((q) => q.eq(q.field("status"), "POSTED"))
+        .collect()
+    ).map((e) => e.sourceId)
+  );
+
   let subledgerMinor = 0;
   for (const sale of owed) {
+    if (!accruedSaleIds.has(`commission_${sale._id}`)) continue;
     subledgerMinor += toMinorUnits(sale.commissionAmount!, orgCurrency);
   }
 

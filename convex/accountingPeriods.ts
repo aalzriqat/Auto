@@ -423,22 +423,13 @@ async function computeCloseChecklist(
   }
   if (!commissionPayableRecon.isReconciled) {
     const badCurrencies = commissionPayableRecon.currencies.filter((c) => !commissionPayableRecon.byCurrency[c].isReconciled);
-    // In MANUAL mode the expense is recognized when the commission is PAID (or
-    // when a payroll run approves it), not when the amount is decided — so a
-    // decided-but-unpaid commission sits above the GL balance by design and
-    // this warning fires on every close until it settles. Naming that cause
-    // keeps the warning readable as a signal: an accountant can tell the
-    // expected timing gap from a genuinely missing or duplicated posting,
-    // instead of learning to ignore a line that is always present.
-    const orgSettings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_org", (q) => q.eq("orgId", orgId))
-      .unique();
-    const manualCause =
-      orgSettings?.commissionMode === "MANUAL"
-        ? " This organization sets commissions manually, and a manual commission is recognized at payment — decided-but-unpaid amounts are expected to sit above the GL balance."
-        : "";
-    warnings.push(`Commission payable subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).${manualCause}`);
+    // The subledger side counts only commissions actually recognized in the GL
+    // (see computeCommissionPayableReconciliation), so a decided-but-unaccrued
+    // manual commission no longer shows up here as a difference. What remains
+    // is a real one — which matters, because closing a period requires
+    // acknowledging every warning verbatim, and a line that fires on every
+    // close teaches people to click through the ones that matter.
+    warnings.push(`Commission payable subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
   }
 
   return {

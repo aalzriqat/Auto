@@ -698,16 +698,6 @@ const commissionStatusFilter = v.optional(
   v.union(v.literal("paid"), v.literal("unpaid"), v.literal("not_set"))
 );
 
-/**
- * How many rows the legacy array-shaped `listCommissions` returns. It exists
- * only for mobile bundles that shipped before pagination; an installed app
- * cannot be updated atomically with the backend, so the old contract has to
- * keep working. Bounded rather than unbounded, because the whole point of the
- * new contract is that reading a tenant's entire sales history in one function
- * eventually fails outright.
- */
-const LEGACY_COMMISSION_PAGE = 200;
-
 async function commissionPage(
   ctx: QueryCtx,
   args: {
@@ -715,18 +705,7 @@ async function commissionPage(
     salespersonId?: Id<"users">;
     paidStatus?: "paid" | "unpaid" | "not_set";
   },
-  paginationOpts: { numItems: number; cursor: string | null },
-  /**
-   * Restricts the result to the rows the pre-pagination endpoint returned. A
-   * shipped mobile bundle renders whatever it is given with its own shipped
-   * code: it has never heard of `commissionStatus`, so it shows an undecided
-   * commission as "0.00 · Unpaid" with a Mark-paid button the server then
-   * refuses, and a cancelled one the same way. Handing those rows to a client
-   * that cannot be patched would replace the empty screen this PR fixes with a
-   * fabricated backlog — worse than the bug. The row set is as much a contract
-   * as the shape.
-   */
-  legacyRowSet = false
+  paginationOpts: { numItems: number; cursor: string | null }
 ) {
   const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_COMMISSIONS]);
 
@@ -780,9 +759,9 @@ async function commissionPage(
         // A cancelled sale keeps its amount as history. It is listed so the
         // record does not silently vanish, but it owes nothing — every total,
         // every action and the unpaid filter below exclude it.
-        (isVoid && !legacyRowSet) ||
+        isVoid ||
         (isAutoMode && sale.status === "COMPLETED" && sale.commissionAmount == null) ||
-        (isManualMode && sale.status === "COMPLETED" && !legacyRowSet);
+        (isManualMode && sale.status === "COMPLETED");
       if (!isCandidate) return false;
       // "unpaid" means still settleable and not yet settled; "not_set" narrows
       // that to the rows awaiting a decision.
@@ -836,10 +815,10 @@ async function commissionPage(
       (h) =>
         isCommissionOwed(h.sale) ||
         (h.sale.status === "COMPLETED" && h.sale.commissionPaidAt != null) ||
-        (!legacyRowSet && h.sale.status === "CANCELLED" && (h.sale.commissionAmount ?? 0) > 0) ||
+        (h.sale.status === "CANCELLED" && (h.sale.commissionAmount ?? 0) > 0) ||
         h.missingPurchaseCost ||
         h.needsRecalculation ||
-        (!legacyRowSet && isManualMode && h.sale.status === "COMPLETED")
+        (isManualMode && h.sale.status === "COMPLETED")
     );
 
     // Payroll only ever sweeps commissions for members who are still ACTIVE
@@ -927,13 +906,106 @@ export const listCommissions = query({
     paidStatus: commissionStatusFilter,
   },
   handler: async (ctx, args) => {
-    const result = await commissionPage(
-      ctx,
-      args,
-      { numItems: LEGACY_COMMISSION_PAGE, cursor: null },
-      true
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_COMMISSIONS]);
+    const canViewAll = role.permissions.includes(PERMISSIONS.MANAGE_COMMISSIONS);
+    const salespersonId = canViewAll ? args.salespersonId : user._id;
+
+    // Unbounded, exactly as it was. Bounding it looked like an improvement and
+    // is the opposite one: this reads DOCUMENTS, so a cap turns "200 recent
+    // sales with no commission, then an older commissioned one" into an empty
+    // answer — and a shipped bundle has no cursor to look past it. A slow
+    // response is what these clients already had; a silently incomplete one is
+    // new, invisible, and unfixable from their side.
+    const sales = salespersonId
+      ? await ctx.db
+          .query("sales")
+          .withIndex("by_org_salesperson", (q) =>
+            q.eq("orgId", args.orgId).eq("salespersonId", salespersonId)
+          )
+          .filter((q) => q.neq(q.field("isDeleted"), true))
+          .collect()
+      : await ctx.db
+          .query("sales")
+          .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+          .filter((q) => q.neq(q.field("isDeleted"), true))
+          .collect();
+
+    const orgSettings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+    const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
+    const isAutoMode = mode === "AUTO_MEMBER" || mode === "AUTO_TIERS";
+
+    // The pre-pagination predicate, unchanged: a positive commission, or an
+    // AUTO completed sale whose commission was never computed.
+    const candidates = sales.filter(
+      (sale) =>
+        (sale.commissionAmount != null && sale.commissionAmount > 0) ||
+        (isAutoMode && sale.status === "COMPLETED" && sale.commissionAmount == null)
     );
-    return result.page;
+
+    const getVehicle = makeDocCache<"vehicles">(ctx);
+    const getCustomer = makeDocCache<"customers">(ctx);
+    const getUser = makeDocCache<"users">(ctx);
+
+    const hydrated = await Promise.all(
+      candidates.map(async (sale) => {
+        const vehicle = await getVehicle(sale.vehicleId);
+        const missingPurchaseCost =
+          isAutoMode &&
+          sale.status === "COMPLETED" &&
+          sale.commissionAmount == null &&
+          (!vehicle || !vehicleHasCostBasis(vehicle));
+        const needsRecalculation =
+          isAutoMode &&
+          sale.status === "COMPLETED" &&
+          sale.commissionPaidAt == null &&
+          sale.commissionAmount == null &&
+          vehicle != null &&
+          vehicleHasCostBasis(vehicle);
+        return { sale, vehicle, missingPurchaseCost, needsRecalculation };
+      })
+    );
+
+    const withCommission = hydrated.filter(
+      (h) =>
+        (h.sale.commissionAmount != null && h.sale.commissionAmount > 0) ||
+        h.missingPurchaseCost ||
+        h.needsRecalculation
+    );
+
+    const filtered =
+      args.paidStatus === "paid"
+        ? withCommission.filter((h) => h.sale.commissionPaidAt != null)
+        : args.paidStatus === "unpaid"
+          ? withCommission.filter((h) => h.sale.commissionPaidAt == null)
+          : args.paidStatus === "not_set"
+            ? withCommission.filter(
+                (h) => h.sale.commissionPaidAt == null && h.sale.commissionAmount == null
+              )
+            : withCommission;
+
+    return await Promise.all(
+      filtered.map(async ({ sale, vehicle, missingPurchaseCost, needsRecalculation }) => {
+        const customer = await getCustomer(sale.customerId);
+        const salesperson = await getUser(sale.salespersonId);
+        const paidBy = sale.commissionPaidBy ? await getUser(sale.commissionPaidBy) : null;
+        return {
+          ...sale,
+          vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
+          customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
+          salespersonName: salesperson?.name ?? salesperson?.email ?? "Unknown",
+          paidByName: paidBy?.name ?? paidBy?.email ?? null,
+          missingPurchaseCost,
+          needsRecalculation,
+          // Present so a bundle built against the new shape still works if it
+          // somehow reaches this endpoint; the old bundles simply ignore them.
+          commissionStatus: deriveCommissionStatus(sale),
+          canSetAmount: false,
+        };
+      })
+    );
   },
 });
 

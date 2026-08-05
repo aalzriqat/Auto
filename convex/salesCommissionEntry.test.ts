@@ -886,13 +886,61 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
     // clients that cannot be patched would be worse than the bug being fixed.
     const rows = await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId });
     expect(Array.isArray(rows)).toBe(true);
-    expect(rows.map((r) => r._id)).toEqual([decided]);
+    // Exactly the old predicate: any positive commission, whatever the sale's
+    // status. That includes the cancelled one — old bundles have always
+    // mislabelled those as "Unpaid", and correcting it here would be the same
+    // kind of semantic drift as adding rows. The row that must NOT appear is
+    // the undecided one, because that state did not exist before this PR.
+    expect([...rows.map((r) => r._id)].sort()).toEqual([decided, cancelled].sort());
+    expect(rows.find((r) => r._id === undecided)).toBeUndefined();
 
     // The new endpoint is the one that shows the full picture.
     const paginated = await listAll(ids.asAdmin, { orgId: ids.orgId });
     expect([...paginated.map((r) => r._id)].sort()).toEqual(
       [undecided, decided, cancelled].sort()
     );
+  });
+
+  test("the legacy endpoint still finds a commission buried under a long run of uncommissioned sales", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const ids = await seedCommissionOrg(t, "manual_deep");
+    await setMode(t, ids.orgId, "AUTO_MEMBER");
+
+    // One old commissioned sale, then 220 newer ones with no commission. A
+    // legacy endpoint that read a bounded number of DOCUMENTS would return an
+    // empty array here, and a shipped bundle has no cursor to look past it —
+    // the commission would be permanently invisible rather than merely slow.
+    const oldest = await t.run(async (ctx) =>
+      ctx.db.insert("sales", {
+        orgId: ids.orgId,
+        vehicleId: ids.vehicleId,
+        customerId: ids.customerId,
+        salespersonId: ids.userId,
+        salePrice: 15000,
+        saleDate: Date.UTC(2020, 0, 1),
+        status: "COMPLETED",
+        commissionAmount: 750,
+      })
+    );
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 220; i++) {
+        await ctx.db.insert("sales", {
+          orgId: ids.orgId,
+          vehicleId: ids.vehicleId,
+          customerId: ids.customerId,
+          salespersonId: ids.userId,
+          salePrice: 15000,
+          saleDate: Date.UTC(2026, 0, 1) + i * 3_600_000,
+          status: "COMPLETED",
+          // AUTO mode with a computed zero: not a candidate under either the
+          // old predicate or the new one, so these are pure filler.
+          commissionAmount: 0,
+        });
+      }
+    });
+
+    const rows = await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId });
+    expect(rows.map((r) => r._id)).toEqual([oldest]);
   });
 
   test("a soft-deleted completed sale never enters the review queue", async () => {
