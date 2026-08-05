@@ -129,6 +129,7 @@ export default function CommissionsPage() {
     toggleSort,
     rows: sortedCommissions,
     autoLoadCapped,
+    isAutoLoading,
   } = useTableControls({
     data: commissions,
     // The server pages by documents read, not by matches found, so a filtered
@@ -136,7 +137,16 @@ export default function CommissionsPage() {
     // back. Without this the review queue would report "nothing to review" over
     // real work — the closed loop this whole page exists to open, in a new
     // disguise. Searching already exhausts for exactly the same reason.
-    pagination: { status: pageStatus, loadMore, exhaustWhen: filterStatus !== "all" },
+    //
+    // Both server-side filters count. Leaving the salesperson filter out left
+    // the per-rep view unable to reach its own older rows: the hook was not
+    // walking, and the page thought it was, so no control was offered either.
+    pagination: {
+      status: pageStatus,
+      loadMore,
+      exhaustWhen: filterStatus !== "all" || filterSalesperson !== "all",
+      resetKey: `${filterStatus}|${filterSalesperson}`,
+    },
     searchFields: (c: CommissionSale) => [c.salespersonName, c.vehicleSummary, c.customerName],
     sortAccessors: {
       saleDate: (c: CommissionSale) => c.saleDate,
@@ -181,8 +191,6 @@ export default function CommissionsPage() {
   // The count is only a fact once every page has been read; until then it is
   // "how many are on the pages we happen to have", which is not the same claim.
   const queueCountIsComplete = pageStatus === "Exhausted" && !hasActiveFilter;
-  // The hook is walking pages by itself; a manual button here would race it.
-  const isAutoLoading = hasMore && !autoLoadCapped && (hasActiveFilter || filtered.length === 0);
 
   // Group by salesperson for summary
   const bySalesperson = useMemo(() => {
@@ -454,13 +462,15 @@ export default function CommissionsPage() {
                         The original copy ("set a commission rate on team
                         members") only makes sense in an automatic mode —
                         MANUAL has no rates by definition. */}
-                    {hasMore
+                    {isAutoLoading || (hasMore && !autoLoadCapped)
                       ? t("Loading" as any)
-                      : hasActiveFilter
-                        ? t("NoCommissionRecordsForFilter" as any)
-                        : isManualMode
-                          ? t("NoCompletedSalesYet" as any)
-                          : t("NoCommissionRecords" as any)}
+                      : autoLoadCapped
+                        ? t("NoMatchesInLoadedRows" as any)
+                        : hasActiveFilter
+                          ? t("NoCommissionRecordsForFilter" as any)
+                          : isManualMode
+                            ? t("NoCompletedSalesYet" as any)
+                            : t("NoCommissionRecords" as any)}
                   </TableCell>
                 </TableRow>
               ) : (

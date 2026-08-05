@@ -39,11 +39,16 @@ function makePagination(pages: Row[][]) {
   return state;
 }
 
+type Options = { exhaustWhen?: boolean; maxAutoPages?: number; resetKey?: string };
+
 function renderWithPagination(
   pagination: ReturnType<typeof makePagination>,
-  options: { exhaustWhen?: boolean; maxAutoPages?: number } = {}
+  options: Options = {}
 ) {
-  return renderHook(() =>
+  // Held outside the render callback so a bare `rerender()` keeps the current
+  // options, and `setOptions` can change the query identity mid-test.
+  let current = options;
+  const utils = renderHook(() =>
     useTableControls<Row>({
       data: pagination.data,
       searchFields: (r) => [r.name],
@@ -52,11 +57,19 @@ function renderWithPagination(
         // A new function identity per render, mirroring Convex.
         loadMore: (n: number) => pagination.loadMore(n),
         batchSize: 10,
-        exhaustWhen: options.exhaustWhen,
-        maxAutoPages: options.maxAutoPages,
+        exhaustWhen: current.exhaustWhen,
+        maxAutoPages: current.maxAutoPages,
+        resetKey: current.resetKey,
       },
     })
   );
+  return {
+    ...utils,
+    setOptions(next: Options) {
+      current = next;
+      utils.rerender();
+    },
+  };
 }
 
 describe("useTableControls auto-continuation", () => {
@@ -139,6 +152,70 @@ describe("useTableControls auto-continuation", () => {
     }
 
     expect(result.current.rows).toEqual([{ id: 3, name: "Needle" }]);
+  });
+
+  test("the page budget resets when the query changes, not just when filtering starts", async () => {
+    // Switching between two filters leaves "is a filter active" true the whole
+    // time. Keying the reset on that boolean means the SECOND filter inherits
+    // the first one's spent budget and gets no automatic pages at all — so the
+    // review queue would come back empty on a query that never looked.
+    const pages = Array.from({ length: 12 }, () => [] as Row[]);
+    pages.push([{ id: 7, name: "Found" }]);
+    const pagination = makePagination(pages);
+    const { rerender, setOptions } = renderWithPagination(pagination, {
+      exhaustWhen: true,
+      maxAutoPages: 2,
+      resetKey: "paid",
+    });
+
+    for (let i = 0; i < 6; i++) {
+      await act(async () => {
+        rerender();
+      });
+    }
+    expect(pagination.calls.length).toBe(2);
+
+    // Same boolean, different query.
+    for (let i = 0; i < 6; i++) {
+      await act(async () => {
+        setOptions({ exhaustWhen: true, maxAutoPages: 2, resetKey: "not_set" });
+      });
+    }
+    expect(pagination.calls.length).toBe(4);
+  });
+
+  test("never reports itself idle AND capped-out silently — the caller can always offer a way forward", async () => {
+    // A caller that re-derives "is it walking?" will eventually disagree with
+    // the hook, and the disagreement renders as a hidden load-more button
+    // beside a banner saying rows are missing: a dead end. So the contract is
+    // that whenever the hook is NOT walking and pages remain, the caller is
+    // told, and can show its own control.
+
+    // Rows on screen, no filter, no search — nothing to walk for, more pages
+    // exist, so the caller must offer the button.
+    const withRows = makePagination([[{ id: 1, name: "One" }], [{ id: 2, name: "Two" }]]);
+    const idle = renderWithPagination(withRows);
+    await act(async () => {});
+    expect(idle.result.current.isAutoLoading).toBe(false);
+    expect(withRows.status).toBe("CanLoadMore");
+
+    // Walked as far as it is allowed and gave up with pages remaining: also not
+    // loading, and flagged, so the caller shows the button and partial copy.
+    const pages = Array.from({ length: 30 }, () => [] as Row[]);
+    pages.push([{ id: 9, name: "Deep" }]);
+    const capped = makePagination(pages);
+    const walked = renderWithPagination(capped, { exhaustWhen: true, maxAutoPages: 2 });
+    for (let i = 0; i < 5; i++) await act(async () => {});
+    expect(walked.result.current.isAutoLoading).toBe(false);
+    expect(walked.result.current.autoLoadCapped).toBe(true);
+    expect(capped.calls.length).toBe(2);
+
+    // And when it has genuinely finished, neither flag is set.
+    const done = makePagination([[{ id: 1, name: "Only" }]]);
+    const finished = renderWithPagination(done, { exhaustWhen: true });
+    await act(async () => {});
+    expect(finished.result.current.isAutoLoading).toBe(false);
+    expect(finished.result.current.autoLoadCapped).toBe(false);
   });
 
   test("a table with no pagination never tries to load more", async () => {

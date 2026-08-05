@@ -715,7 +715,18 @@ async function commissionPage(
     salespersonId?: Id<"users">;
     paidStatus?: "paid" | "unpaid" | "not_set";
   },
-  paginationOpts: { numItems: number; cursor: string | null }
+  paginationOpts: { numItems: number; cursor: string | null },
+  /**
+   * Restricts the result to the rows the pre-pagination endpoint returned. A
+   * shipped mobile bundle renders whatever it is given with its own shipped
+   * code: it has never heard of `commissionStatus`, so it shows an undecided
+   * commission as "0.00 · Unpaid" with a Mark-paid button the server then
+   * refuses, and a cancelled one the same way. Handing those rows to a client
+   * that cannot be patched would replace the empty screen this PR fixes with a
+   * fabricated backlog — worse than the bug. The row set is as much a contract
+   * as the shape.
+   */
+  legacyRowSet = false
 ) {
   const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_COMMISSIONS]);
 
@@ -769,9 +780,9 @@ async function commissionPage(
         // A cancelled sale keeps its amount as history. It is listed so the
         // record does not silently vanish, but it owes nothing — every total,
         // every action and the unpaid filter below exclude it.
-        isVoid ||
+        (isVoid && !legacyRowSet) ||
         (isAutoMode && sale.status === "COMPLETED" && sale.commissionAmount == null) ||
-        (isManualMode && sale.status === "COMPLETED");
+        (isManualMode && sale.status === "COMPLETED" && !legacyRowSet);
       if (!isCandidate) return false;
       // "unpaid" means still settleable and not yet settled; "not_set" narrows
       // that to the rows awaiting a decision.
@@ -825,10 +836,10 @@ async function commissionPage(
       (h) =>
         isCommissionOwed(h.sale) ||
         (h.sale.status === "COMPLETED" && h.sale.commissionPaidAt != null) ||
-        (h.sale.status === "CANCELLED" && (h.sale.commissionAmount ?? 0) > 0) ||
+        (!legacyRowSet && h.sale.status === "CANCELLED" && (h.sale.commissionAmount ?? 0) > 0) ||
         h.missingPurchaseCost ||
         h.needsRecalculation ||
-        (isManualMode && h.sale.status === "COMPLETED")
+        (!legacyRowSet && isManualMode && h.sale.status === "COMPLETED")
     );
 
     // Payroll only ever sweeps commissions for members who are still ACTIVE
@@ -916,10 +927,12 @@ export const listCommissions = query({
     paidStatus: commissionStatusFilter,
   },
   handler: async (ctx, args) => {
-    const result = await commissionPage(ctx, args, {
-      numItems: LEGACY_COMMISSION_PAGE,
-      cursor: null,
-    });
+    const result = await commissionPage(
+      ctx,
+      args,
+      { numItems: LEGACY_COMMISSION_PAGE, cursor: null },
+      true
+    );
     return result.page;
   },
 });

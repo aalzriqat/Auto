@@ -22,6 +22,14 @@ interface UseTableControlsPagination {
    * present them as complete. Defaults to 20.
    */
   maxAutoPages?: number;
+  /**
+   * Identifies the current query. The page budget resets when it changes, so
+   * switching from one filter to another starts a fresh walk instead of
+   * inheriting the previous one's spent budget. A boolean like "is a filter
+   * active" cannot do this job: moving between two filters leaves it true, and
+   * the second filter would then get no automatic pages at all.
+   */
+  resetKey?: string;
 }
 
 interface UseTableControlsOptions<T> {
@@ -82,10 +90,11 @@ export function useTableControls<T>({
   // changes, which is what makes a fresh filter or search start from zero
   // rather than inheriting the previous walk's budget.
   const maxAutoPages = pagination?.maxAutoPages ?? 20;
+  const resetKey = pagination?.resetKey;
   const [autoPages, setAutoPages] = useState(0);
   useEffect(() => {
     setAutoPages(0);
-  }, [isSearching, pagination?.exhaustWhen]);
+  }, [isSearching, pagination?.exhaustWhen, resetKey]);
 
   const shouldExhaust = wantsExhaust && autoPages < maxAutoPages;
   useEffect(() => {
@@ -108,6 +117,15 @@ export function useTableControls<T>({
    * has not established.
    */
   const autoLoadCapped = wantsExhaust && !shouldExhaust && paginationStatus === "CanLoadMore";
+
+  /**
+   * Whether the hook is walking pages by itself right now. Returned rather than
+   * left for callers to re-derive: a caller reconstructing this condition will
+   * eventually disagree with the hook, and the disagreement shows up as a
+   * hidden load-more button beside a banner saying rows are missing — a dead
+   * end with no way forward.
+   */
+  const isAutoLoading = shouldExhaust && paginationStatus === "CanLoadMore";
 
   function toggleSort(key: string) {
     if (sortKey !== key) {
@@ -153,5 +171,5 @@ export function useTableControls<T>({
     return result;
   }, [data, search, searchFields, sortAccessors, sortKey, sortDir]);
 
-  return { search, setSearch, sortKey, sortDir, toggleSort, rows, autoLoadCapped };
+  return { search, setSearch, sortKey, sortDir, toggleSort, rows, autoLoadCapped, isAutoLoading };
 }

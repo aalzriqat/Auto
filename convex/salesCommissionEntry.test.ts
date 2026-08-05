@@ -854,18 +854,45 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
     expect(sale?.commissionPaidAt).toBeUndefined();
   });
 
-  test("the legacy array contract still works for mobile bundles that predate pagination", async () => {
+  test("the legacy endpoint returns the rows an old bundle can actually render", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const ids = await seedCommissionOrg(t, "manual_legacy");
     await setMode(t, ids.orgId, "MANUAL");
-    const saleId = await completedSale(ids);
 
-    // A published app updates on its own schedule, so an installed bundle will
-    // keep calling this shape after the backend deploys. It must not start
-    // failing argument validation, and it must still return an array.
+    const undecided = await completedSale(ids);
+    const extraA = await extraVehicleAndCustomer(t, ids.orgId, "manual_legacy_a");
+    const decided = await completedSale({ ...ids, ...extraA });
+    await ids.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: ids.orgId,
+      saleId: decided,
+      commissionAmount: 300,
+    });
+    const extraB = await extraVehicleAndCustomer(t, ids.orgId, "manual_legacy_b");
+    const cancelled = await completedSale({ ...ids, ...extraB });
+    await ids.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: ids.orgId,
+      saleId: cancelled,
+      commissionAmount: 400,
+    });
+    await t.run((ctx) => ctx.db.patch(cancelled, { status: "CANCELLED" }));
+
+    // A published app updates on its own schedule, so an installed bundle keeps
+    // calling this after the backend deploys. The SHAPE has to keep working —
+    // and so does the row set, because that bundle renders whatever it is given
+    // with its own shipped code: it has never heard of commissionStatus, so an
+    // undecided row would show as "0.00 · Unpaid" with a Mark-paid button the
+    // server refuses, and a cancelled one the same way. Before this PR that
+    // screen was merely empty; a fabricated backlog of failing buttons on
+    // clients that cannot be patched would be worse than the bug being fixed.
     const rows = await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId });
     expect(Array.isArray(rows)).toBe(true);
-    expect(rows.find((r) => r._id === saleId)?.commissionStatus).toBe("NOT_SET");
+    expect(rows.map((r) => r._id)).toEqual([decided]);
+
+    // The new endpoint is the one that shows the full picture.
+    const paginated = await listAll(ids.asAdmin, { orgId: ids.orgId });
+    expect([...paginated.map((r) => r._id)].sort()).toEqual(
+      [undecided, decided, cancelled].sort()
+    );
   });
 
   test("a soft-deleted completed sale never enters the review queue", async () => {

@@ -248,6 +248,7 @@ export const commonEn = {
   CommissionPendingSale: "Sale not completed",
   CommissionPendingSaleHint: "An amount has been entered, but the sale has not been completed — nothing is earned or owed until it is.",
   CommissionListPartial: "Only part of the history was loaded. Load more before treating the totals or this list as complete.",
+  NoMatchesInLoadedRows: "Nothing matches in the sales loaded so far. Load more to keep looking.",
 
   // Onboarding wizard
   WelcomeToAutoFlow: "Welcome to AutoFlow",
@@ -1119,6 +1120,7 @@ export const commonAr = {
   CommissionPendingSale: "البيع غير مكتمل",
   CommissionPendingSaleHint: "تم إدخال مبلغ، لكن عملية البيع لم تكتمل بعد — ولا شيء مستحق حتى تكتمل.",
   CommissionListPartial: "تم تحميل جزء من السجل فقط. حمّل المزيد قبل اعتبار الإجماليات أو هذه القائمة مكتملة.",
+  NoMatchesInLoadedRows: "لا توجد نتائج مطابقة ضمن ما تم تحميله. حمّل المزيد للمتابعة.",
 
   // Onboarding wizard
   WelcomeToAutoFlow: "مرحباً بك في أوتو فلو",
