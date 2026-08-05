@@ -296,12 +296,27 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // reached by walking `financeCompanies.by_org` from that same `orgId`, so no
   // document id is caller-supplied and there is nothing for a caller to point
   // elsewhere.
+  // Then 439→443 by the four mutations that model the dealer side of a
+  // financed sale:
+  //
+  // `financingEconomics.recordSubmittedQuotation`, `.recordAppraisal` and
+  // `.approveDealerPurchaseAmount` each take an `orgId` and a caller-supplied
+  // `applicationId`, so all three land in `analysed` (287→290) and are held to
+  // the `requireOwnedRow` rule. Each satisfies it inline — the ownership check
+  // is written out in the handler rather than behind a shared loader, since
+  // this analyzer only accepts proof it can see and "the check is somewhere
+  // else" is the shape that shipped two Criticals.
+  //
+  // `migrateFinancingEconomics.backfillFinancingEconomics` takes no `orgId` at
+  // all — it paginates `organizations` and walks each org's own indexes — so it
+  // lands in `skippedNoOrgId` (143→144) with no caller-supplied id to point
+  // anywhere.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 439,
-      analysed: 287,
+      totalMutations: 443,
+      analysed: 290,
       skippedNoArgsBlock: 9,
-      skippedNoOrgId: 143,
+      skippedNoOrgId: 144,
     });
   });
 });

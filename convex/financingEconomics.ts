@@ -10,7 +10,6 @@ import { scaleForCurrency } from "./utils/money";
 import { computeSubmittedQuotation } from "../lib/financingEconomics";
 import {
   assertMinorAmount,
-  assertPercent,
   buildRuleSnapshot,
   deriveEconomics,
   evaluateQuotationException,
@@ -36,19 +35,7 @@ import {
 // Shared loading and derivation
 // ---------------------------------------------------------------------------
 
-async function loadApplicationForEconomics(
-  ctx: QueryCtx | MutationCtx,
-  orgId: Id<"organizations">,
-  applicationId: Id<"financeApplications">
-): Promise<Doc<"financeApplications">> {
-  return await requireOwnedRow(
-    ctx,
-    orgId,
-    "financeApplications",
-    applicationId,
-    "Finance application not found in this organization."
-  );
-}
+const APPLICATION_NOT_FOUND = "Finance application not found in this organization.";
 
 /**
  * The rule snapshot governing a deal.
@@ -256,7 +243,16 @@ export const getEconomics = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
-    const app = await loadApplicationForEconomics(ctx, args.orgId, args.applicationId);
+    // Inline rather than behind a helper on purpose: scripts/tenantWriteGuard
+    // only accepts proof it can see inside the handler, and "the ownership
+    // check is somewhere else" is the exact shape that shipped two Criticals.
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId,
+      APPLICATION_NOT_FOUND
+    );
 
     const appraisals = await ctx.db
       .query("financeAppraisals")
@@ -325,7 +321,16 @@ export const recordSubmittedQuotation = mutation({
       );
     }
 
-    const app = await loadApplicationForEconomics(ctx, args.orgId, args.applicationId);
+    // Inline rather than behind a helper on purpose: scripts/tenantWriteGuard
+    // only accepts proof it can see inside the handler, and "the ownership
+    // check is somewhere else" is the exact shape that shipped two Criticals.
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId,
+      APPLICATION_NOT_FOUND
+    );
     if (app.status === "CLOSED" || app.status === "CANCELLED") {
       throw new ConvexError(
         "This application is closed. Its submitted quotation can no longer be changed."
@@ -436,7 +441,16 @@ export const recordAppraisal = mutation({
       throw new ConvexError("The appraisal date must be a valid timestamp.");
     }
 
-    const app = await loadApplicationForEconomics(ctx, args.orgId, args.applicationId);
+    // Inline rather than behind a helper on purpose: scripts/tenantWriteGuard
+    // only accepts proof it can see inside the handler, and "the ownership
+    // check is somewhere else" is the exact shape that shipped two Criticals.
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId,
+      APPLICATION_NOT_FOUND
+    );
     if (app.status === "CLOSED" || app.status === "CANCELLED") {
       throw new ConvexError("This application is closed. No further appraisal can be recorded.");
     }
@@ -539,7 +553,16 @@ export const approveDealerPurchaseAmount = mutation({
       throw new ConvexError("The approved purchase amount must be greater than zero.");
     }
 
-    const app = await loadApplicationForEconomics(ctx, args.orgId, args.applicationId);
+    // Inline rather than behind a helper on purpose: scripts/tenantWriteGuard
+    // only accepts proof it can see inside the handler, and "the ownership
+    // check is somewhere else" is the exact shape that shipped two Criticals.
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId,
+      APPLICATION_NOT_FOUND
+    );
     if (app.status === "CLOSED" || app.status === "CANCELLED") {
       throw new ConvexError("This application is closed. Its approval can no longer be changed.");
     }
