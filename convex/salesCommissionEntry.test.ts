@@ -42,7 +42,7 @@ async function listAll(
   // Guard rather than `while (true)`: a cursor that stops advancing would
   // otherwise hang the suite instead of failing it.
   for (let page = 0; page < 200; page++) {
-    const result = await caller.query(api.sales.listCommissions, {
+    const result = await caller.query(api.sales.listCommissionsPaginated, {
       ...args,
       paginationOpts: { numItems, cursor },
     });
@@ -635,7 +635,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
 
     // A page of 3 documents that matches nothing must still come back — short,
     // not done, with a cursor — rather than scanning on until it finds three.
-    const firstPage = await ids.asAdmin.query(api.sales.listCommissions, {
+    const firstPage = await ids.asAdmin.query(api.sales.listCommissionsPaginated, {
       orgId: ids.orgId,
       paidStatus: "paid",
       paginationOpts: { numItems: 3, cursor: null },
@@ -766,7 +766,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
       );
     }
 
-    const firstPage = await ids.asAdmin.query(api.sales.listCommissions, {
+    const firstPage = await ids.asAdmin.query(api.sales.listCommissionsPaginated, {
       orgId: ids.orgId,
       salespersonId: ids.userId,
       paginationOpts: { numItems: 1, cursor: null },
@@ -778,7 +778,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
     // reverted without a failure. Both tests deliberately make creation order
     // and sale-date order disagree — if they agreed, the assertion would hold
     // for a _creationTime index too and would be pinning nothing.
-    const orgWide = await ids.asAdmin.query(api.sales.listCommissions, {
+    const orgWide = await ids.asAdmin.query(api.sales.listCommissionsPaginated, {
       orgId: ids.orgId,
       paginationOpts: { numItems: 1, cursor: null },
     });
@@ -852,6 +852,20 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
 
     const sale = await t.run((ctx) => ctx.db.get(saleId));
     expect(sale?.commissionPaidAt).toBeUndefined();
+  });
+
+  test("the legacy array contract still works for mobile bundles that predate pagination", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const ids = await seedCommissionOrg(t, "manual_legacy");
+    await setMode(t, ids.orgId, "MANUAL");
+    const saleId = await completedSale(ids);
+
+    // A published app updates on its own schedule, so an installed bundle will
+    // keep calling this shape after the backend deploys. It must not start
+    // failing argument validation, and it must still return an array.
+    const rows = await ids.asAdmin.query(api.sales.listCommissions, { orgId: ids.orgId });
+    expect(Array.isArray(rows)).toBe(true);
+    expect(rows.find((r) => r._id === saleId)?.commissionStatus).toBe("NOT_SET");
   });
 
   test("a soft-deleted completed sale never enters the review queue", async () => {

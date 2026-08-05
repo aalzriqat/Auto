@@ -10,13 +10,18 @@ interface UseTableControlsPagination {
   /** Page size for each auto-load-more call while searching. Defaults to 200. */
   batchSize?: number;
   /**
-   * Keep loading until exhausted while this is true, for the same reason
-   * searching does. Set it when a SERVER-side filter is active: the server
-   * pages by documents read, so a filtered page routinely comes back short or
-   * empty while matches remain further back, and a table that stopped at the
-   * first page would report "nothing matches" over real rows.
+   * Keep loading until exhausted while this is true, on top of the two rules
+   * below. Set it when a SERVER-side filter is active.
    */
   exhaustWhen?: boolean;
+  /**
+   * Ceiling on automatic pages, so a filter click cannot fan out into an
+   * unbounded request cascade over a long-lived tenant's whole history. Once
+   * reached, automatic loading stops and the caller's own load-more affordance
+   * takes over — the results are partial, but the UI must say so rather than
+   * present them as complete. Defaults to 20.
+   */
+  maxAutoPages?: number;
 }
 
 interface UseTableControlsOptions<T> {
@@ -54,15 +59,55 @@ export function useTableControls<T>({
 
   const isSearching = search.trim().length > 0;
   const paginationStatus = pagination?.status;
-  const shouldExhaust = isSearching || pagination?.exhaustWhen === true;
+  const loadMore = pagination?.loadMore;
+  const batchSize = pagination?.batchSize ?? 200;
+  /**
+   * A server that pages by documents read — rather than by matches found —
+   * hands back pages that are routinely short, and often empty, while matching
+   * rows remain further back. Three situations therefore must not stop at the
+   * page boundary:
+   *
+   *  - a search, which is filtered here on the client;
+   *  - `exhaustWhen`, for a filter the server applies;
+   *  - and having nothing at all to show, which is the one a caller cannot be
+   *    relied on to remember. It is also the dangerous one: an empty first page
+   *    with more behind it renders as a permanent loading state, where the
+   *    unpaginated query used to give an immediate, actionable answer.
+   */
+  const hasNothingToShow = pagination !== undefined && (data?.length ?? 0) === 0;
+  const wantsExhaust = isSearching || pagination?.exhaustWhen === true || hasNothingToShow;
+
+  // Bounded, so a single filter click cannot fan out into one request per page
+  // of a decade's sales. `autoPages` resets whenever the reason for walking
+  // changes, which is what makes a fresh filter or search start from zero
+  // rather than inheriting the previous walk's budget.
+  const maxAutoPages = pagination?.maxAutoPages ?? 20;
+  const [autoPages, setAutoPages] = useState(0);
+  useEffect(() => {
+    setAutoPages(0);
+  }, [isSearching, pagination?.exhaustWhen]);
+
+  const shouldExhaust = wantsExhaust && autoPages < maxAutoPages;
   useEffect(() => {
     if (shouldExhaust && paginationStatus === "CanLoadMore") {
-      pagination?.loadMore(pagination.batchSize ?? 200);
+      setAutoPages((n) => n + 1);
+      loadMore?.(batchSize);
     }
-    // Only re-run when the condition flips or a page finishes loading — not on
-    // every render, since `pagination` is a fresh object each render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shouldExhaust, paginationStatus]);
+    // `loadMore`'s identity changes on every call (usePaginatedQuery rebuilds
+    // its status object per page), which is what actually drives the walk:
+    // status can go CanLoadMore → CanLoadMore with no intermediate state when
+    // the next page is already in the client store, and keying only on the
+    // status would stall there. Its own in-flight guard makes a repeat call
+    // against the same page a no-op, so this cannot thrash.
+  }, [shouldExhaust, paginationStatus, loadMore, batchSize]);
+
+  /**
+   * True when automatic loading gave up before the query was exhausted. The
+   * rows on screen are a prefix, not the whole answer, and a caller that renders
+   * "nothing matches" or a total in this state would be asserting something it
+   * has not established.
+   */
+  const autoLoadCapped = wantsExhaust && !shouldExhaust && paginationStatus === "CanLoadMore";
 
   function toggleSort(key: string) {
     if (sortKey !== key) {
@@ -108,5 +153,5 @@ export function useTableControls<T>({
     return result;
   }, [data, search, searchFields, sortAccessors, sortKey, sortDir]);
 
-  return { search, setSearch, sortKey, sortDir, toggleSort, rows };
+  return { search, setSearch, sortKey, sortDir, toggleSort, rows, autoLoadCapped };
 }

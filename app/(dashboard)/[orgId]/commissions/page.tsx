@@ -60,6 +60,16 @@ type StatusFilter = "all" | "paid" | "unpaid" | "not_set";
  */
 const PAGE_SIZE = 100;
 
+/** Sorting the Status column: most in need of attention first. */
+const STATUS_SORT_RANK: Record<CommissionStatus, number> = {
+  NOT_SET: 0,
+  UNPAID: 1,
+  PENDING_SALE: 2,
+  NO_COMMISSION: 3,
+  PAID: 4,
+  VOID: 5,
+};
+
 function formatCurrency(amount: number) {
   return amount.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 }
@@ -95,7 +105,7 @@ export default function CommissionsPage() {
     status: pageStatus,
     loadMore,
   } = usePaginatedQuery(
-    api.sales.listCommissions,
+    api.sales.listCommissionsPaginated,
     activeOrgId ? {
       orgId: activeOrgId,
       salespersonId: filterSalesperson !== "all" ? (filterSalesperson as Id<"users">) : undefined,
@@ -118,6 +128,7 @@ export default function CommissionsPage() {
     sortDir,
     toggleSort,
     rows: sortedCommissions,
+    autoLoadCapped,
   } = useTableControls({
     data: commissions,
     // The server pages by documents read, not by matches found, so a filtered
@@ -131,7 +142,9 @@ export default function CommissionsPage() {
       saleDate: (c: CommissionSale) => c.saleDate,
       salePrice: (c: CommissionSale) => c.salePrice,
       commissionAmount: (c: CommissionSale) => c.commissionAmount ?? 0,
-      status: (c: CommissionSale) => (c.commissionPaidAt ? 1 : 0),
+      // Five distinct states, ordered by how much they want attention — a
+      // paid/unpaid boolean would sort a cancelled sale next to money owed.
+      status: (c: CommissionSale) => STATUS_SORT_RANK[c.commissionStatus] ?? 99,
     },
   });
 
@@ -165,6 +178,11 @@ export default function CommissionsPage() {
   const notSetCount = filtered.filter((c: CommissionSale) => c.commissionStatus === "NOT_SET").length;
   const hasActiveFilter =
     filterStatus !== "all" || filterSalesperson !== "all" || search.trim().length > 0;
+  // The count is only a fact once every page has been read; until then it is
+  // "how many are on the pages we happen to have", which is not the same claim.
+  const queueCountIsComplete = pageStatus === "Exhausted" && !hasActiveFilter;
+  // The hook is walking pages by itself; a manual button here would race it.
+  const isAutoLoading = hasMore && !autoLoadCapped && (hasActiveFilter || filtered.length === 0);
 
   // Group by salesperson for summary
   const bySalesperson = useMemo(() => {
@@ -287,13 +305,26 @@ export default function CommissionsPage() {
 
         {/* The entry point into the manual workflow. Before this existed a sale
             with no commission was simply absent from the page, so the first
-            amount could never be entered — the queue has to announce itself. */}
-        {canManage && notSetCount > 0 && filterStatus !== "not_set" && (
+            amount could never be entered — the queue has to announce itself.
+
+            It must not announce itself from the loaded rows alone: in the very
+            state this page is designed for — a manager who has decided every
+            recent sale — the count on page one is zero while older undecided
+            sales remain, and a count-gated banner would disappear exactly when
+            it is still needed. So in MANUAL mode the way in is always offered,
+            and the number appears only once it is actually known. */}
+        {canManage && isManualMode && filterStatus !== "not_set" && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-s-4 border-s-primary bg-muted/40 px-4 py-3">
             <ClipboardList className="h-4 w-4 shrink-0 text-primary" />
             <p className="text-sm">
-              <span className="font-semibold tabular-nums">{notSetCount}</span>{" "}
-              {t("CommissionsAwaitingReview" as any)}
+              {queueCountIsComplete ? (
+                <>
+                  <span className="font-semibold tabular-nums">{notSetCount}</span>{" "}
+                  {t("CommissionsAwaitingReview" as any)}
+                </>
+              ) : (
+                t("ReviewUndecidedCommissions" as any)
+              )}
             </p>
             <Button
               variant="link"
@@ -368,16 +399,24 @@ export default function CommissionsPage() {
         {hasMore && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
             <AlertTriangle className="h-4 w-4 shrink-0" />
-            <p>{t("CommissionListTruncated" as any)}</p>
-            <Button
-              variant="link"
-              size="sm"
-              className="h-auto p-0 text-sm text-amber-900 dark:text-amber-200"
-              disabled={pageStatus !== "CanLoadMore"}
-              onClick={() => loadMore(PAGE_SIZE)}
-            >
-              {pageStatus === "LoadingMore" ? t("Loading" as any) : t("LoadMore" as any)}
-            </Button>
+            <p>
+              {autoLoadCapped
+                ? t("CommissionListPartial" as any)
+                : t("CommissionListTruncated" as any)}
+            </p>
+            {/* A manual button beside an automatic walk reads as a stalled UI,
+                so it only appears once the automatic walk has stopped. */}
+            {!isAutoLoading && (
+              <Button
+                variant="link"
+                size="sm"
+                className="h-auto p-0 text-sm text-amber-900 dark:text-amber-200"
+                disabled={pageStatus !== "CanLoadMore"}
+                onClick={() => loadMore(PAGE_SIZE)}
+              >
+                {pageStatus === "LoadingMore" ? t("Loading" as any) : t("LoadMore" as any)}
+              </Button>
+            )}
           </div>
         )}
 
@@ -547,6 +586,18 @@ export default function CommissionsPage() {
                         >
                           <MinusCircle className="h-3 w-3 me-1" />
                           {t("NoCommissionOwed" as any)}
+                        </Badge>
+                      ) : c.commissionStatus === "PENDING_SALE" ? (
+                        // Not reachable from the current listing rules, but the
+                        // default arm below is the orange "money owed" badge —
+                        // the worst place for an unhandled status to land.
+                        <Badge
+                          variant="outline"
+                          className="text-muted-foreground text-xs whitespace-nowrap"
+                          title={t("CommissionPendingSaleHint" as any)}
+                        >
+                          <Clock className="h-3 w-3 me-1" />
+                          {t("CommissionPendingSale" as any)}
                         </Badge>
                       ) : c.commissionStatus === "VOID" ? (
                         <Badge

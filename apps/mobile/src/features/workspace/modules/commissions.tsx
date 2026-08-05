@@ -15,7 +15,7 @@ export function CommissionsModule({ orgId }: { orgId: string }) {
   // rendering the first response as the complete list would hide every older
   // commission with no way to reach it.
   const { loadMore, results, status } = usePaginatedQuery(
-    api.sales.listCommissions,
+    api.sales.listCommissionsPaginated,
     { orgId },
     { initialNumItems: PAGE_SIZE }
   );

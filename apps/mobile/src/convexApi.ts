@@ -2200,11 +2200,11 @@ export const api = {
     softDelete: makeFunctionReference<"mutation", OrgScopedArgs & { saleId: string }, null>(
       "sales:softDelete",
     ),
-    listCommissions: makeFunctionReference<
+    listCommissionsPaginated: makeFunctionReference<
       "query",
       CommissionListArgs,
       MobilePageResult<MobileSale>
-    >("sales:listCommissions"),
+    >("sales:listCommissionsPaginated"),
     markCommissionPaid: makeFunctionReference<
       "mutation",
       OrgScopedArgs & { saleId: string; paymentMethod?: MobilePaymentMethod; idempotencyKey?: string },
@@ -2978,7 +2978,7 @@ export const api = {
     >;
     update: FunctionReference<"mutation", "public", SaleUpdateArgs, null>;
     softDelete: FunctionReference<"mutation", "public", OrgScopedArgs & { saleId: string }, null>;
-    listCommissions: FunctionReference<
+    listCommissionsPaginated: FunctionReference<
       "query",
       "public",
       CommissionListArgs,

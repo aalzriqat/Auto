@@ -244,6 +244,10 @@ export const commonEn = {
   CommissionListTruncated: "Older sales have not been loaded yet, and the totals above cover only the ones that have.",
   SalespersonOffboarded: "Offboarded",
   SalespersonOffboardedHint: "This salesperson has been offboarded, so a payroll run will not pick this commission up. Settle it directly.",
+  ReviewUndecidedCommissions: "Some sales may still be waiting for a commission decision.",
+  CommissionPendingSale: "Sale not completed",
+  CommissionPendingSaleHint: "An amount has been entered, but the sale has not been completed — nothing is earned or owed until it is.",
+  CommissionListPartial: "Only part of the history was loaded. Load more before treating the totals or this list as complete.",
 
   // Onboarding wizard
   WelcomeToAutoFlow: "Welcome to AutoFlow",
@@ -1111,6 +1115,10 @@ export const commonAr = {
   CommissionListTruncated: "لم يتم تحميل المبيعات الأقدم بعد، والإجماليات أعلاه تشمل ما تم تحميله فقط.",
   SalespersonOffboarded: "منتهية خدمته",
   SalespersonOffboardedHint: "تمت إنهاء خدمة هذا الموظف، لذلك لن تلتقط مسيرات الرواتب هذه العمولة. قم بتسويتها مباشرة.",
+  ReviewUndecidedCommissions: "قد تكون هناك مبيعات ما زالت بانتظار تحديد العمولة.",
+  CommissionPendingSale: "البيع غير مكتمل",
+  CommissionPendingSaleHint: "تم إدخال مبلغ، لكن عملية البيع لم تكتمل بعد — ولا شيء مستحق حتى تكتمل.",
+  CommissionListPartial: "تم تحميل جزء من السجل فقط. حمّل المزيد قبل اعتبار الإجماليات أو هذه القائمة مكتملة.",
 
   // Onboarding wizard
   WelcomeToAutoFlow: "مرحباً بك في أوتو فلو",

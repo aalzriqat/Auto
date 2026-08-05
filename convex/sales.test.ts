@@ -509,7 +509,7 @@ describe("C3: automatic commission requires a recorded purchase cost", () => {
     });
     const listCommissions = async () =>
       (
-        await asAdmin.query(api.sales.listCommissions, {
+        await asAdmin.query(api.sales.listCommissionsPaginated, {
           orgId,
           paginationOpts: { numItems: 50, cursor: null },
         })

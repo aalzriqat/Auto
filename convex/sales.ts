@@ -689,20 +689,35 @@ function makeDocCache<T extends TableNames>(ctx: QueryCtx) {
   };
 }
 
-export const listCommissions = query({
+/**
+ * "unpaid" keeps its original meaning — everything not yet settled, which
+ * includes the not-yet-decided rows. "not_set" is a strictly narrower view of
+ * the same set (the manager's review queue), not a replacement for it.
+ */
+const commissionStatusFilter = v.optional(
+  v.union(v.literal("paid"), v.literal("unpaid"), v.literal("not_set"))
+);
+
+/**
+ * How many rows the legacy array-shaped `listCommissions` returns. It exists
+ * only for mobile bundles that shipped before pagination; an installed app
+ * cannot be updated atomically with the backend, so the old contract has to
+ * keep working. Bounded rather than unbounded, because the whole point of the
+ * new contract is that reading a tenant's entire sales history in one function
+ * eventually fails outright.
+ */
+const LEGACY_COMMISSION_PAGE = 200;
+
+async function commissionPage(
+  ctx: QueryCtx,
   args: {
-    orgId: v.id("organizations"),
-    salespersonId: v.optional(v.id("users")),
-    // "unpaid" keeps its original meaning — everything not yet settled, which
-    // includes the not-yet-decided rows. "not_set" is a strictly narrower view
-    // of the same set (the manager's review queue), not a replacement for it.
-    paidStatus: v.optional(
-      v.union(v.literal("paid"), v.literal("unpaid"), v.literal("not_set"))
-    ),
-    paginationOpts: paginationOptsValidator,
+    orgId: Id<"organizations">;
+    salespersonId?: Id<"users">;
+    paidStatus?: "paid" | "unpaid" | "not_set";
   },
-  handler: async (ctx, args) => {
-    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_COMMISSIONS]);
+  paginationOpts: { numItems: number; cursor: string | null }
+) {
+  const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_COMMISSIONS]);
 
     // Without MANAGE_COMMISSIONS, a salesperson can only see their own
     // commissions — ignore whatever salespersonId was requested and force
@@ -743,7 +758,7 @@ export const listCommissions = query({
           )
       : ctx.db.query("sales").withIndex("by_org_saleDate", (q) => q.eq("orgId", args.orgId));
 
-    const pageResult = await salesQuery.order("desc").paginate(args.paginationOpts);
+    const pageResult = await salesQuery.order("desc").paginate(paginationOpts);
 
     const candidates = pageResult.page.filter((sale) => {
       if (sale.isDeleted) return false;
@@ -866,7 +881,46 @@ export const listCommissions = query({
       })
     );
 
-    return { ...pageResult, page };
+  return { ...pageResult, page };
+}
+
+/**
+ * The paginated contract. A page reads a fixed number of sale DOCUMENTS and
+ * returns only those that belong on this screen, so it may come back short —
+ * or empty — while more remain. Callers must walk `isDone`; see
+ * `useTableControls` on the web and the load-more effect on mobile.
+ */
+export const listCommissionsPaginated = query({
+  args: {
+    orgId: v.id("organizations"),
+    salespersonId: v.optional(v.id("users")),
+    paidStatus: commissionStatusFilter,
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => commissionPage(ctx, args, args.paginationOpts),
+});
+
+/**
+ * DEPRECATED, and kept alive only for mobile bundles that shipped before
+ * `listCommissionsPaginated` existed. A published app updates on its own
+ * schedule, so removing this at the same time as the backend deploy would break
+ * the commissions screen for anyone who had not relaunched yet — there is no
+ * deployment order that makes a breaking change to a live public query safe.
+ *
+ * Remove it once the OTA channel's adoption is complete.
+ */
+export const listCommissions = query({
+  args: {
+    orgId: v.id("organizations"),
+    salespersonId: v.optional(v.id("users")),
+    paidStatus: commissionStatusFilter,
+  },
+  handler: async (ctx, args) => {
+    const result = await commissionPage(ctx, args, {
+      numItems: LEGACY_COMMISSION_PAGE,
+      cursor: null,
+    });
+    return result.page;
   },
 });
 
