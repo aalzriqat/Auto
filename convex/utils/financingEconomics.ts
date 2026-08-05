@@ -1,6 +1,8 @@
 import { ConvexError, v } from "convex/values";
 import { Doc } from "../_generated/dataModel";
 import {
+  PERCENT_DECIMAL_PLACES,
+  percentRoundsToZero,
   computeAppraisalGap,
   computeDealerProceeds,
   computeExpectedRemittance,
@@ -405,6 +407,18 @@ export function resolveAppliedLtv(
   }
   if (candidate <= 0 || candidate > 100) {
     throw new ConvexError(`LTV must be greater than 0 and at most 100 (got ${candidate}).`);
+  }
+  // The same boundary `assertDealerRulesValid` applies to a company's stored
+  // rules, applied to the per-deal LTV a caller passes. Without it, 0.0000004
+  // is positive, passes every check here, and then scales to zero inside the
+  // engine — so `financeCompanyFundedPortionMinor` becomes 0 and the dealer
+  // contribution silently becomes the ENTIRE approved purchase amount, with no
+  // throw and no reconciliation flag. On the quotation path the same value
+  // instead reaches a division and surfaces as an opaque engine error.
+  if (percentRoundsToZero(candidate)) {
+    throw new ConvexError(
+      `An LTV of ${candidate}% rounds to zero at the ${PERCENT_DECIMAL_PLACES} decimal places the financing calculations keep, so it cannot be used.`
+    );
   }
   const minimum = snapshot.minimumLtvPercent;
   const maximum = snapshot.maximumLtvPercent;

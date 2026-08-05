@@ -296,6 +296,93 @@ function assertApprovalBasisValid(args: {
   }
 }
 
+/** The solver inputs a caller may override; anything omitted comes off the deal. */
+interface QuotationSolverOverrides {
+  targetSellingAmountMinor?: number;
+  estimatedDealerBorneExpensesMinor?: number;
+  quotationBufferMinor?: number;
+  customerFirstPaymentMinor?: number;
+  ltvPercent?: number;
+}
+
+/**
+ * Runs the solver for an EXISTING application, under the rules that govern it.
+ *
+ * One function, two callers — `suggestQuotationForApplication` and
+ * `recordSubmittedQuotation` — because the mutation now demands exact equality
+ * with the solver's figure, and the only query that solved anything took a
+ * `companyId` and built its snapshot from the LIVE company row. A deal created
+ * under v1 whose company was since edited to v2 would therefore be shown a v2
+ * figure and have it rejected against v1, with the error naming a number the
+ * screen never displayed. Sharing the resolution makes "what you were shown is
+ * what will be accepted" structural rather than a coincidence maintained by
+ * hand in two places.
+ *
+ * Returns `result: undefined` when no target is recorded anywhere, which is a
+ * different state from the solver running and being unavailable.
+ */
+async function solveQuotationForApplication(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">,
+  overrides: QuotationSolverOverrides
+): Promise<{
+  snapshot: FinanceCompanyRuleSnapshot;
+  appliedLtvPercent: number;
+  customerFirstPaymentMinor: number;
+  targetForSolver: number | undefined;
+  expensesForSolver: number | undefined;
+  bufferForSolver: number | undefined;
+  result: ReturnType<typeof computeSubmittedQuotation> | undefined;
+}> {
+  const snapshot = await resolveRuleSnapshot(ctx, app);
+  const appliedLtvPercent = resolveAppliedLtv(
+    snapshot,
+    overrides.ltvPercent ?? app.appliedLtvPercent
+  );
+
+  const customerFirstPaymentMinor =
+    overrides.customerFirstPaymentMinor ?? app.customerFirstPaymentMinor ?? 0;
+  if (
+    snapshot.minimumCustomerFirstPaymentMinor !== undefined &&
+    customerFirstPaymentMinor < snapshot.minimumCustomerFirstPaymentMinor
+  ) {
+    throw new ConvexError(
+      `${snapshot.companyName} requires a customer first payment of at least ${snapshot.minimumCustomerFirstPaymentMinor} minor units.`
+    );
+  }
+
+  const targetForSolver = overrides.targetSellingAmountMinor ?? app.targetNetProceedsMinor;
+  const expensesForSolver =
+    overrides.estimatedDealerBorneExpensesMinor ?? app.estimatedDealerBorneExpensesMinor;
+  const bufferForSolver = overrides.quotationBufferMinor ?? app.quotationBufferMinor;
+
+  const result =
+    targetForSolver !== undefined
+      ? computeSubmittedQuotation({
+          targetNetProceedsMinor: targetForSolver,
+          // Never back-solved from the quotation: with nothing itemized this is
+          // zero and the suggestion is correspondingly lower, which is the
+          // honest figure rather than a fabricated allowance.
+          estimatedDealerBorneExpensesMinor: expensesForSolver ?? 0,
+          quotationBufferMinor: bufferForSolver,
+          customerFirstPaymentMinor,
+          appliedLtvPercent,
+          customerFirstPaymentOffsetsUnfinancedShare:
+            snapshot.customerFirstPaymentOffsetsUnfinancedShare,
+        })
+      : undefined;
+
+  return {
+    snapshot,
+    appliedLtvPercent,
+    customerFirstPaymentMinor,
+    targetForSolver,
+    expensesForSolver,
+    bufferForSolver,
+    result,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Queries
 // ---------------------------------------------------------------------------
@@ -395,6 +482,79 @@ export const suggestQuotation = query({
       customerFirstPaymentSurplusMinor:
         result.composition.customerFirstPaymentSurplusMinor,
       ltvBaseCapApplied: result.composition.ltvBaseCapApplied,
+    };
+  },
+});
+
+/**
+ * The quotation to send the finance company for a deal that already exists.
+ *
+ * The counterpart of `suggestQuotation`, and not a convenience wrapper over it:
+ * that one resolves rules from the LIVE company row, which is right for a deal
+ * nobody has created yet and wrong for one already in flight. This resolves
+ * them from the application's own snapshot — the rules the deal is actually
+ * governed by — so the figure it returns is the figure
+ * `recordSubmittedQuotation` will accept as SYSTEM_CALCULATED.
+ */
+export const suggestQuotationForApplication = query({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    targetSellingAmountMinor: v.optional(v.number()),
+    estimatedDealerBorneExpensesMinor: v.optional(v.number()),
+    quotationBufferMinor: v.optional(v.number()),
+    customerFirstPaymentMinor: v.optional(v.number()),
+    ltvPercent: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
+    for (const [value, label] of [
+      [args.targetSellingAmountMinor, "Target selling amount"],
+      [args.estimatedDealerBorneExpensesMinor, "Estimated dealer-borne expenses"],
+      [args.quotationBufferMinor, "Quotation buffer"],
+      [args.customerFirstPaymentMinor, "Customer first payment"],
+    ] as const) {
+      if (value !== undefined) assertMinorAmount(value, label);
+    }
+
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId,
+      APPLICATION_NOT_FOUND
+    );
+
+    const solved = await solveQuotationForApplication(ctx, app, args);
+    const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
+    const base = {
+      appliedLtvPercent: solved.appliedLtvPercent,
+      currency,
+      ruleVersion: solved.snapshot.ruleVersion,
+    };
+
+    // No target recorded anywhere is a different state from the solver running
+    // and declining, and collapsing the two would tell the user their finance
+    // company's rules are the problem when the missing input is theirs.
+    if (!solved.result) {
+      return { ...base, available: false as const, reason: "NO_TARGET_RECORDED" as const };
+    }
+    if (!solved.result.available) {
+      return { ...base, available: false as const, reason: solved.result.reason };
+    }
+    return {
+      ...base,
+      available: true as const,
+      submittedQuotationMinor: solved.result.submittedQuotationMinor,
+      projectedNetProceedsMinor: solved.result.projectedNetProceedsMinor,
+      customerCoversUnfinancedPortion: solved.result.customerCoversUnfinancedPortion,
+      financeCompanyFundedPortionMinor:
+        solved.result.composition.financeCompanyFundedPortionMinor,
+      unfinancedPortionMinor: solved.result.composition.unfinancedPortionMinor,
+      dealerContributionMinor: solved.result.composition.dealerContributionMinor,
+      customerFirstPaymentSurplusMinor:
+        solved.result.composition.customerFirstPaymentSurplusMinor,
+      ltvBaseCapApplied: solved.result.composition.ltvBaseCapApplied,
     };
   },
 });
@@ -545,22 +705,18 @@ export const recordSubmittedQuotation = mutation({
       );
     }
 
-    const snapshot = await resolveRuleSnapshot(ctx, app);
-    const appliedLtvPercent = resolveAppliedLtv(
+    // The same resolution `suggestQuotationForApplication` runs, so the figure
+    // the user was shown is the figure the guard below accepts. Two copies of
+    // this would drift the moment either gained an input.
+    const {
       snapshot,
-      args.ltvPercent ?? app.appliedLtvPercent
-    );
-
-    const customerFirstPaymentMinor =
-      args.customerFirstPaymentMinor ?? app.customerFirstPaymentMinor ?? 0;
-    if (
-      snapshot.minimumCustomerFirstPaymentMinor !== undefined &&
-      customerFirstPaymentMinor < snapshot.minimumCustomerFirstPaymentMinor
-    ) {
-      throw new ConvexError(
-        `${snapshot.companyName} requires a customer first payment of at least ${snapshot.minimumCustomerFirstPaymentMinor} minor units.`
-      );
-    }
+      appliedLtvPercent,
+      customerFirstPaymentMinor,
+      targetForSolver,
+      expensesForSolver,
+      bufferForSolver,
+      result: solverResult,
+    } = await solveQuotationForApplication(ctx, app, args);
 
     const now = Date.now();
     // Audit any change to an already-recorded quotation, whatever the source.
@@ -568,42 +724,52 @@ export const recordSubmittedQuotation = mutation({
     // 12,500 to 9,000 with no trace — the exact hole this table exists to
     // close, reopened for the one figure the module calls a real external
     // document.
-    if (
-      app.submittedQuotationMinor !== undefined &&
-      app.submittedQuotationMinor !== args.submittedQuotationMinor
-    ) {
+    //
+    // The amount is not the only thing worth a trace. The patch below rewrites
+    // the source label, the recorder, the timestamp, the override reason and
+    // the whole calculation snapshot unconditionally, and there is no history
+    // table for any of them. Keying the audit on the amount alone therefore let
+    // a re-record at the SAME figure erase why an override existed: submit
+    // 13,000 as CALCULATED_WITH_OVERRIDE with a reason, re-submit 13,000 as
+    // MANUAL_ENTRY with none, and the reason is deleted (an explicit undefined
+    // in a patch removes the field), the mode flips, the prior calculated
+    // figure vanishes with the snapshot — and the override table gets nothing,
+    // because the number did not move.
+    const quotationPreviouslyRecorded = app.submittedQuotationMinor !== undefined;
+    const amountChanged = app.submittedQuotationMinor !== args.submittedQuotationMinor;
+    const sourceChanged = app.submittedQuotationSource !== args.source;
+    const reasonChanged = (app.submittedQuotationOverrideReason ?? "") !== (reason ?? "");
+    if (quotationPreviouslyRecorded && (amountChanged || sourceChanged || reasonChanged)) {
+      const describe = (
+        amountMinor: number | undefined,
+        source: string | undefined,
+        why: string | undefined
+      ): string =>
+        `${amountMinor ?? "unset"} (${source ?? "unknown source"}${why ? `: ${why}` : ""})`;
       await recordOverride(ctx, {
         orgId: args.orgId,
         applicationId: args.applicationId,
         field: "submittedQuotationMinor",
-        previousValue: app.submittedQuotationMinor,
-        newValue: args.submittedQuotationMinor,
-        reason: reason ?? "Recalculated from updated deal inputs.",
+        previousValue: describe(
+          app.submittedQuotationMinor,
+          app.submittedQuotationSource,
+          app.submittedQuotationOverrideReason
+        ),
+        newValue: describe(args.submittedQuotationMinor, args.source, reason),
+        reason:
+          reason ??
+          (amountChanged
+            ? "Recalculated from updated deal inputs."
+            : "Re-recorded with a different source or reason at the same amount."),
         changedBy: user._id,
       });
     }
 
-    // Re-run the solver purely to record what it would have said, so an
-    // override is auditable against the figure it departed from. Never used to
-    // fill in a missing input: when expenses or the buffer have not been
-    // entered they are zero, not back-solved from the quotation.
-    const targetForSolver = args.targetSellingAmountMinor ?? app.targetNetProceedsMinor;
-    const expensesForSolver =
-      args.estimatedDealerBorneExpensesMinor ?? app.estimatedDealerBorneExpensesMinor;
-    const bufferForSolver = args.quotationBufferMinor ?? app.quotationBufferMinor;
-    const solverResult =
-      targetForSolver !== undefined
-        ? computeSubmittedQuotation({
-            targetNetProceedsMinor: targetForSolver,
-            estimatedDealerBorneExpensesMinor: expensesForSolver ?? 0,
-            quotationBufferMinor: bufferForSolver,
-            customerFirstPaymentMinor,
-            appliedLtvPercent,
-            customerFirstPaymentOffsetsUnfinancedShare:
-              snapshot.customerFirstPaymentOffsetsUnfinancedShare,
-          })
-        : undefined;
-
+    // The solver figure is recorded alongside the submitted one so an override
+    // is auditable against what it departed from. It is never used to fill in a
+    // missing input: when expenses or the buffer have not been entered they are
+    // zero, not back-solved from the quotation.
+    //
     // Both calculated modes are claims about provenance, and the snapshot
     // records `calculatedQuotationMinor` and `finalQuotationMinor`
     // independently — so unchecked, either label could sit on an amount the
@@ -1048,12 +1214,20 @@ export const approveDealerPurchaseAmount = mutation({
     // appraisal and notes moved every funding figure on the deal and left the
     // override table, whose entire purpose is that a number cannot change
     // without a trace, completely empty.
+    // The approver is in this set for the same reason the LTV is: it is patched
+    // unconditionally below. Without it, a second person re-submitting a
+    // byte-identical approval — a double-click, a retry after a dropped
+    // connection, a colleague confirming — silently became the approver of
+    // record, with a new timestamp, and no row anywhere saying so. That is the
+    // separation-of-duties evidence for a money decision being rewritten by an
+    // action that changed nothing else.
     const approvalMateriallyChanged =
       app.approvedDealerPurchaseAmountMinor !== undefined &&
       (app.approvedDealerPurchaseAmountMinor !== args.approvedAmountMinor ||
         app.approvedPurchaseBasis !== args.basis ||
         app.approvedPurchaseAppraisalId !== appraisal?._id ||
         app.appliedLtvPercent !== appliedLtvPercent ||
+        app.approvedPurchaseApprovedBy !== user._id ||
         (app.approvedPurchaseNotes ?? "") !== (args.notes?.trim() ?? ""));
     if (approvalMateriallyChanged) {
       await recordOverride(ctx, {
@@ -1087,8 +1261,14 @@ export const approveDealerPurchaseAmount = mutation({
       approvedPurchaseAppraisalId: appraisal?._id,
       approvedPurchaseExceptionRuleVersion:
         args.basis === "QUOTATION_EXCEPTION" ? snapshot.ruleVersion : undefined,
-      approvedPurchaseApprovedBy: user._id,
-      approvedPurchaseApprovedAt: now,
+      // Only re-stamp when something actually moved. A byte-identical
+      // re-submission by the same person is a retry, not a new decision, and
+      // advancing the timestamp made "when was this approved" answer the retry
+      // rather than the approval. A DIFFERENT approver counts as a material
+      // change above, so that case still re-stamps — and now leaves a row.
+      ...(approvalMateriallyChanged || app.approvedPurchaseApprovedAt === undefined
+        ? { approvedPurchaseApprovedBy: user._id, approvedPurchaseApprovedAt: now }
+        : {}),
       approvedPurchaseNotes: args.notes?.trim(),
       appliedLtvPercent,
       // Only claim a finalized appraisal when one exists. A MANUAL approval
@@ -1321,8 +1501,16 @@ export const listNeedingReconciliation = query({
         approvedDealerPurchaseAmountMinor: app.approvedDealerPurchaseAmountMinor,
         appliedLtvPercent: app.appliedLtvPercent,
         financeCompanyFundedPortionMinor: app.financeCompanyFundedPortionMinor,
+        dealerContributionMinor: app.dealerContributionMinor,
+        rawAppraisalGapMinor: app.rawAppraisalGapMinor,
         expectedDealerRemittanceMinor: app.expectedDealerRemittanceMinor,
+        // The migration's own note for a disbursed row says "re-enter the
+        // approved purchase amount, the applied LTV and the actual receipt".
+        // Carrying `disbursedAt` but not the amount told a triager THAT money
+        // moved and not how much — so working the queue meant opening every row.
         disbursedAt: app.disbursedAt,
+        disbursedAmountMinor: app.disbursedAmountMinor,
+        actualDealerReceiptTotalMinor: app.actualDealerReceiptTotalMinor,
         finalizedSaleId: app.finalizedSaleId,
         updatedAt: app.updatedAt,
       })),

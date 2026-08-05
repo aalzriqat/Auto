@@ -161,14 +161,25 @@ function isInFlight(app: Doc<"financeApplications">): boolean {
  * caller must then leave the row unmarked rather than record a link it does not
  * have.
  */
+type RuleVersionResolution =
+  | { status: "LINKED"; versionId: Id<"financeCompanyRuleVersions"> }
+  /** Cannot link, and the reason says what a person would actually have to do. */
+  | { status: "UNRESOLVED"; reason: string };
+
 async function resolveOrRecoverRuleVersion(
   ctx: MutationCtx,
   app: Doc<"financeApplications">,
   now: number
-): Promise<Id<"financeCompanyRuleVersions"> | undefined> {
+): Promise<RuleVersionResolution> {
   const snapshot = app.companyRuleSnapshot;
   const companyId = app.companyId;
-  if (!snapshot || !companyId) return undefined;
+  if (!snapshot || !companyId) {
+    return {
+      status: "UNRESOLVED",
+      reason:
+        "This deal has no finance company on it, so there are no dealer-purchase rules to bind it to. Attach the finance company, or close the deal.",
+    };
+  }
 
   const existing = await ctx.db
     .query("financeCompanyRuleVersions")
@@ -176,15 +187,44 @@ async function resolveOrRecoverRuleVersion(
       q.eq("companyId", companyId).eq("version", snapshot.ruleVersion)
     )
     .first();
-  if (existing) return existing._id;
+  if (existing) return { status: "LINKED", versionId: existing._id };
 
   // Cross-tenant guard on a table this row will claim to belong to. A dangling
   // or foreign companyId is exactly the case where inventing a version row
   // would be manufacturing history.
   const company = await ctx.db.get(companyId);
-  if (!company || company.orgId !== app.orgId) return undefined;
+  if (!company || company.orgId !== app.orgId) {
+    // The old text here told the reader to "re-save the finance company", which
+    // is impossible in the only state that produces this: the company row is
+    // gone, or belongs to another organization. An instruction that cannot be
+    // carried out is worse than none — it reads as actionable and wastes the
+    // one person who looked.
+    return {
+      status: "UNRESOLVED",
+      reason:
+        "This deal's finance company record no longer exists in this organization, so its dealer-purchase rules cannot be restored. Re-attach a finance company to the deal, or close it.",
+    };
+  }
 
-  return await ctx.db.insert("financeCompanyRuleVersions", {
+  // Only ever fill in a version the company has already passed through.
+  //
+  // `by_company_version` is a plain index with no uniqueness constraint and
+  // every reader takes `.first()`, so a row written for a version the company
+  // has NOT reached is a landmine: when `finance.updateCompany` eventually
+  // bumps the company to that version it inserts its own row unconditionally,
+  // and from then on `.first()` may hand a brand-new application this old
+  // application's terms instead of the company's real ones. Recovering
+  // backwards is reconstruction — the company demonstrably held those rules at
+  // that version. Recovering forwards is invention.
+  const currentVersion = company.ruleVersion ?? 1;
+  if (snapshot.ruleVersion > currentVersion) {
+    return {
+      status: "UNRESOLVED",
+      reason: `This deal was snapshotted under rule version ${snapshot.ruleVersion}, which is ahead of ${company.name}'s current version ${currentVersion} — so the rules it was quoted under cannot be confirmed against the company. Check the deal's terms against the company's settings before relying on its figures.`,
+    };
+  }
+
+  const versionId = await ctx.db.insert("financeCompanyRuleVersions", {
     orgId: app.orgId,
     companyId,
     version: snapshot.ruleVersion,
@@ -192,6 +232,7 @@ async function resolveOrRecoverRuleVersion(
     note: "Recovered from an application's inline rule snapshot during the financing backfill; the company had been edited past this version before the migration ran.",
     createdAt: now,
   });
+  return { status: "LINKED", versionId };
 }
 
 export const backfillFinancingEconomics = internalMutation({
@@ -319,22 +360,30 @@ export const backfillFinancingEconomics = internalMutation({
         // reference is permanently missing and the marker below stops any
         // later run from revisiting it.
         let backfilledVersionId: Id<"financeCompanyRuleVersions"> | undefined;
-        let linkUnresolved = false;
+        let unresolvedReason: string | undefined;
         if (app.companyRuleVersionId === undefined && app.companyId) {
-          backfilledVersionId = await resolveOrRecoverRuleVersion(ctx, app, now);
-          linkUnresolved = backfilledVersionId === undefined;
+          const resolution = await resolveOrRecoverRuleVersion(ctx, app, now);
+          if (resolution.status === "LINKED") backfilledVersionId = resolution.versionId;
+          else unresolvedReason = resolution.reason;
         }
         // Writing the marker without the link is what made this permanent: the
         // next run reads `financingBackfilledAt` and skips the row before it
         // ever reaches this branch again, so an application that failed to bind
         // once stays unbound forever and silently falls back to reading its
         // company's rules live. Leave the marker off and it is simply retried.
-        if (linkUnresolved) {
-          if (app.needsFinancingReconciliation === undefined) {
+        if (unresolvedReason) {
+          // Re-raise whenever the flag is not currently up — NOT only when it
+          // has never been set. `resolveFinancingReconciliation` clears it to
+          // `false`, so testing for `undefined` meant one triager clearing an
+          // item they could not action silenced it for good: permanently
+          // unlinked AND invisible, which is the exact outcome this branch
+          // exists to prevent, reached through the queue instead of the marker.
+          // The condition is genuinely still true, so the row belongs back in
+          // the queue until somebody changes the deal.
+          if (app.needsFinancingReconciliation !== true) {
             await ctx.db.patch(app._id, {
               needsFinancingReconciliation: true,
-              financingReconciliationReason:
-                "This deal's rule snapshot names a company rule version with no stored record. Re-save the finance company to publish its current rules, then re-run the financing backfill.",
+              financingReconciliationReason: unresolvedReason,
             });
           }
           report.applicationsUnlinked += 1;
@@ -411,6 +460,16 @@ export const backfillFinancingEconomics = internalMutation({
         `${report.applicationsUnlinked} left unmarked pending a rule-version link, ` +
         `${report.applicationsSkipped} already current).`
     );
+    // COMPLETE means the walk finished, not that every row landed. Saying so at
+    // warn level keeps an operator from reading a clean "complete" and closing
+    // the ticket over deals that are still unbound.
+    if (report.applicationsUnlinked > 0) {
+      console.warn(
+        `[migrateFinancingEconomics] ${report.applicationsUnlinked} application(s) could not be bound ` +
+          `to a rule version and are flagged for reconciliation. They are re-scanned on every run and ` +
+          `will stay flagged until the underlying deal is corrected.`
+      );
+    }
     return report;
   },
 });

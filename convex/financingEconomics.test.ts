@@ -872,6 +872,37 @@ describe("incomplete economics", () => {
     ).rejects.toThrow(/rounds to zero/i);
   });
 
+  test("rejects a per-deal LTV too small to survive the engine's precision", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(12_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+
+    // The settings door was closed; this is the per-deal door. Positive, so it
+    // passes the > 0 check, then scales to zero inside the engine — which would
+    // fund nothing and silently make the dealer contribution the ENTIRE
+    // approved purchase amount, with no throw and no reconciliation flag.
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: seed.orgId,
+        applicationId,
+        approvedAmountMinor: jod(12_500),
+        basis: "APPRAISAL",
+        appliedLtvPercent: 0.0000004,
+      })
+    ).rejects.toThrow(/rounds to zero/i);
+
+    const app = await readApp(seed, applicationId);
+    expect(app.approvedDealerPurchaseAmountMinor).toBeUndefined();
+    expect(app.dealerContributionMinor).toBeUndefined();
+  });
+
   test("accepts the smallest percentage the engine can still represent", async () => {
     const seed = await seedDealer();
     // 0.0000005 is the boundary: it rounds UP to 1 at six decimals, so it
@@ -1075,6 +1106,75 @@ describe("reopening an approval", () => {
     // The row has to say which input moved. "11500 → 11500" reads as a no-op.
     expect(economics.overrides[0]?.previousValue).toContain("85% LTV");
     expect(economics.overrides[0]?.newValue).toContain("80% LTV");
+  });
+
+  test("a second approver re-submitting an identical approval leaves a trace", async () => {
+    const { seed, applicationId } = await seedApproved();
+    const first = await readApp(seed, applicationId);
+    expect(first.approvedPurchaseApprovedBy).toBe(seed.approverId);
+
+    // A third member re-submits byte-identical arguments — a double-submit, a
+    // retry after a dropped connection, or a colleague confirming.
+    const secondApproverId = await seed.t.run((ctx) =>
+      ctx.db.insert("users", {
+        clerkId: "econ_approver2_1",
+        email: "econ.approver2@example.com",
+        name: "Second Approver",
+      })
+    );
+    const roleId = await seed.t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org", (q) => q.eq("orgId", seed.orgId))
+        .first();
+      return membership!.roleId;
+    });
+    await seed.t.run((ctx) =>
+      ctx.db.insert("memberships", { orgId: seed.orgId, userId: secondApproverId, roleId })
+    );
+
+    await seed.t
+      .withIdentity({ subject: "econ_approver2_1" })
+      .mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: seed.orgId,
+        applicationId,
+        approvedAmountMinor: jod(11_500),
+        basis: "APPRAISAL",
+      });
+
+    // The approver of record moved, so the separation-of-duties evidence for a
+    // money decision changed. Keying the audit on the compared values alone
+    // recorded none of it.
+    const after = await readApp(seed, applicationId);
+    expect(after.approvedPurchaseApprovedBy).toBe(secondApproverId);
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides).toHaveLength(1);
+  });
+
+  test("the same approver re-submitting does not advance the approval timestamp", async () => {
+    const { seed, applicationId } = await seedApproved();
+    const first = await readApp(seed, applicationId);
+
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+    });
+
+    // A retry is not a new decision. Advancing the stamp made "when was this
+    // approved" answer the retry instead of the approval.
+    const after = await readApp(seed, applicationId);
+    expect(after.approvedPurchaseApprovedAt).toBe(first.approvedPurchaseApprovedAt);
+    expect(after.approvedPurchaseApprovedBy).toBe(first.approvedPurchaseApprovedBy);
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides).toHaveLength(0);
   });
 
   test("blocks approving your own application", async () => {
@@ -1572,6 +1672,76 @@ describe("overrides and audit", () => {
     expect((await readApp(seed, applicationId)).submittedQuotationMinor).toBeUndefined();
   });
 
+  test("the suggestion for an existing deal is the figure the guard accepts, after the company moves on", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+
+    // The company is edited after the deal snapshotted its rules — a new LTV,
+    // a new rule version. The deal is still governed by the old snapshot.
+    await seed.asUser.mutation(api.finance.updateCompany, {
+      id: seed.companyId,
+      orgId: seed.orgId,
+      name: "Jordan Finance",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      isActive: true,
+      maxFinancingLTV: 90,
+      defaultLtvPercent: 90,
+      customerFirstPaymentOffsetsUnfinancedShare: true,
+    });
+
+    const inputs = {
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+    };
+
+    // The company-scoped query answers under the LIVE company — 90% now.
+    const liveSuggestion = await seed.asUser.query(api.financingEconomics.suggestQuotation, {
+      orgId: seed.orgId,
+      companyId: seed.companyId,
+      ...inputs,
+    });
+    // The application-scoped one answers under the deal's own snapshot — 85%.
+    const dealSuggestion = await seed.asUser.query(
+      api.financingEconomics.suggestQuotationForApplication,
+      { orgId: seed.orgId, applicationId, ...inputs }
+    );
+    if (!liveSuggestion.available || !dealSuggestion.available) {
+      throw new Error("expected both suggestions to be available");
+    }
+    expect(dealSuggestion.appliedLtvPercent).toBe(DEAL.ltvPercent);
+    expect(liveSuggestion.submittedQuotationMinor).not.toBe(
+      dealSuggestion.submittedQuotationMinor
+    );
+
+    // Posting the LIVE figure as SYSTEM_CALCULATED is refused — the wizard
+    // showing it was reading the wrong rules.
+    await expect(
+      seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: liveSuggestion.submittedQuotationMinor,
+        source: "SYSTEM_CALCULATED",
+        ...inputs,
+      })
+    ).rejects.toThrow(/calculator produced/i);
+
+    // The application-scoped figure is accepted. That is the property worth
+    // pinning: what the user is shown is what the guard takes.
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: dealSuggestion.submittedQuotationMinor,
+      source: "SYSTEM_CALCULATED",
+      ...inputs,
+    });
+    expect((await readApp(seed, applicationId)).submittedQuotationMinor).toBe(
+      dealSuggestion.submittedQuotationMinor
+    );
+  });
+
   test("an override that matches the calculated figure is not an override", async () => {
     const seed = await seedDealer();
     const applicationId = await createApplication(seed);
@@ -1634,11 +1804,55 @@ describe("overrides and audit", () => {
     expect(economics.overrides).toHaveLength(1);
     expect(economics.overrides[0]).toMatchObject({
       field: "submittedQuotationMinor",
-      previousValue: String(jod(12_500)),
-      newValue: String(jod(13_000)),
       changedBy: seed.userId,
     });
+    // The row names the mode alongside the figure, because the mode is rewritten
+    // by the same patch and has no history of its own.
+    expect(economics.overrides[0]?.previousValue).toContain(String(jod(12_500)));
+    expect(economics.overrides[0]?.newValue).toContain(String(jod(13_000)));
     expect(economics.overrides[0]?.reason).toMatch(/revised quotation/);
+  });
+
+  test("audits a same-amount re-record that changes only the source and reason", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+
+    // An override at 13,200 with a reason on the record.
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(13_200),
+      source: "CALCULATED_WITH_OVERRIDE",
+      overrideReason: "The company asked for a higher figure to cover its own fee.",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+    });
+
+    // Re-recorded at the SAME amount as a plain manual entry with no reason.
+    // Convex deletes a field patched to an explicit undefined, so this erases
+    // submittedQuotationOverrideReason, flips the mode, rewrites the recorder
+    // and timestamp, and replaces the calculation snapshot — none of which has
+    // a history table. Keying the audit on the amount alone recorded none of it.
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(13_200),
+      source: "MANUAL_ENTRY",
+    });
+
+    const app = await readApp(seed, applicationId);
+    expect(app.submittedQuotationOverrideReason).toBeUndefined();
+    expect(app.submittedQuotationSource).toBe("MANUAL_ENTRY");
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides).toHaveLength(1);
+    expect(economics.overrides[0]?.previousValue).toContain("CALCULATED_WITH_OVERRIDE");
+    expect(economics.overrides[0]?.previousValue).toContain("cover its own fee");
+    expect(economics.overrides[0]?.newValue).toContain("MANUAL_ENTRY");
   });
 
   test("audits a recalculated quotation even when no reason is given", async () => {
@@ -1663,11 +1877,9 @@ describe("overrides and audit", () => {
       applicationId,
     });
     expect(economics.overrides).toHaveLength(1);
-    expect(economics.overrides[0]).toMatchObject({
-      field: "submittedQuotationMinor",
-      previousValue: String(jod(12_500)),
-      newValue: String(jod(9_000)),
-    });
+    expect(economics.overrides[0]?.field).toBe("submittedQuotationMinor");
+    expect(economics.overrides[0]?.previousValue).toContain(String(jod(12_500)));
+    expect(economics.overrides[0]?.newValue).toContain(String(jod(9_000)));
   });
 
   test("the quotation cannot be changed after the company has approved an amount", async () => {
@@ -2183,6 +2395,10 @@ describe("migration", () => {
         companyRuleSnapshot: { ...app.companyRuleSnapshot!, ruleVersion: orphanVersion },
       })
     );
+    // The company must actually have passed through that version. Orphaning an
+    // application at a version AHEAD of its company is a different case, and
+    // one the migration deliberately refuses — see the test below.
+    await seed.t.run((ctx) => ctx.db.patch(seed.companyId, { ruleVersion: orphanVersion }));
   }
 
   test("accepts a continuation scheduled by the previous revision", async () => {
@@ -2259,10 +2475,86 @@ describe("migration", () => {
     expect(first.financingBackfilledAt).toBeUndefined();
     expect(first.companyRuleVersionId).toBeUndefined();
     expect(first.needsFinancingReconciliation).toBe(true);
-    expect(first.financingReconciliationReason).toMatch(/no stored record/i);
+    expect(first.financingReconciliationReason).toMatch(/no longer exists in this organization/i);
 
     // Still eligible on the next run rather than skipped forever.
     await runMigration(seed.t);
     expect((await readApp(seed, applicationId)).financingBackfilledAt).toBeUndefined();
+  });
+
+  test("clearing the queue item does not make an unlinkable deal invisible", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await orphanTheRuleVersion(seed, applicationId);
+    await seed.t.run((ctx) => ctx.db.delete(seed.companyId));
+    await runMigration(seed.t);
+
+    // A triager works the queue and clears the item, because the note asks for
+    // something they cannot do. That writes `false`, not `undefined`.
+    await seed.asUser.mutation(api.financingEconomics.resolveFinancingReconciliation, {
+      orgId: seed.orgId,
+      applicationId,
+      note: "The finance company record is gone; nothing to re-save.",
+    });
+    expect((await readApp(seed, applicationId)).needsFinancingReconciliation).toBe(false);
+
+    // Testing the flag for `undefined` meant that single click hid a
+    // permanently unlinkable deal for good — unbound AND invisible, the exact
+    // outcome this branch exists to prevent, reached through the queue rather
+    // than the marker.
+    await runMigration(seed.t);
+    const after = await readApp(seed, applicationId);
+    expect(after.needsFinancingReconciliation).toBe(true);
+    expect(after.financingBackfilledAt).toBeUndefined();
+  });
+
+  test("tells the triager something they can actually do", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await orphanTheRuleVersion(seed, applicationId);
+    await seed.t.run((ctx) => ctx.db.delete(seed.companyId));
+
+    await runMigration(seed.t);
+
+    // "Re-save the finance company" was impossible in the only state that
+    // produces this: the company row is gone. An instruction that cannot be
+    // carried out reads as actionable and wastes the one person who looked.
+    const reason = (await readApp(seed, applicationId)).financingReconciliationReason ?? "";
+    expect(reason).toMatch(/no longer exists in this organization/i);
+    expect(reason).not.toMatch(/re-save the finance company/i);
+  });
+
+  test("refuses to manufacture a rule version the company never reached", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    const app = await readApp(seed, applicationId);
+    // Version 7 on the deal, company still at 1 — the company never held these
+    // rules at that version.
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        companyRuleVersionId: undefined,
+        companyRuleSnapshot: { ...app.companyRuleSnapshot!, ruleVersion: 7 },
+      })
+    );
+
+    await runMigration(seed.t);
+
+    // Inserting one would be a landmine: by_company_version has no uniqueness
+    // constraint and every reader takes .first(), so when updateCompany
+    // eventually bumps the company to 7 it writes its own row and a brand-new
+    // application could be handed THIS deal's historical terms instead.
+    const manufactured = await seed.t.run((ctx) =>
+      ctx.db
+        .query("financeCompanyRuleVersions")
+        .withIndex("by_company_version", (q) =>
+          q.eq("companyId", seed.companyId).eq("version", 7)
+        )
+        .collect()
+    );
+    expect(manufactured).toHaveLength(0);
+    const after = await readApp(seed, applicationId);
+    expect(after.companyRuleVersionId).toBeUndefined();
+    expect(after.needsFinancingReconciliation).toBe(true);
+    expect(after.financingReconciliationReason).toMatch(/ahead of/i);
   });
 });

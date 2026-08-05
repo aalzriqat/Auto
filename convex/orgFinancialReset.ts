@@ -62,7 +62,10 @@ const RESET_TABLES = [
   // Sales
   "sales",
   "quotes",
-  // Finance applications
+  // Finance applications, children first so a run that stops between batches
+  // never leaves a row whose application is already gone.
+  "financeAppraisals",
+  "financeApplicationOverrides",
   "financeApplications",
   "applicationStatusLog",
 ] as const;

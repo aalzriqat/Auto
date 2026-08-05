@@ -27,6 +27,7 @@ type StorageDeletionStep =
   | { kind: "vehiclesWithStorage" }
   | { kind: "vehicleEditsWithStorage" }
   | { kind: "applicationDocumentsWithStorage" }
+  | { kind: "financeAppraisalsWithStorage" }
   | { kind: "orgSettingsWithStorage" }
   | { kind: "socialPostsWithStorage" };
 type SpecialDeletionStep = StorageDeletionStep | { kind: "dmConversations" } | { kind: "liveChatThreads" };
@@ -38,7 +39,7 @@ const ACTIVE_DELETION_STATUSES: DeletionRequestStatus[] = ["PENDING_REVIEW", "AP
 // cleanup steps for org-scoped conversations whose child rows are keyed by the
 // conversation/thread id rather than orgId. adminAuditLog is intentionally
 // retained as the platform deletion trail.
-const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
+export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "commandIdempotency", index: "by_org_createdAt" },
   { kind: "orgRows", table: "chartOfAccounts", index: "by_org" },
   { kind: "orgRows", table: "accountingPeriods", index: "by_org" },
@@ -73,7 +74,12 @@ const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "guarantors", index: "by_org" },
   { kind: "orgRows", table: "quotes", index: "by_org" },
   { kind: "orgRows", table: "applicationStatusLog", index: "by_org" },
+  // The application's children go before the application itself, so a run that
+  // stops between batches never leaves rows whose parent is already gone.
+  { kind: "financeAppraisalsWithStorage" },
+  { kind: "orgRows", table: "financeApplicationOverrides", index: "by_org" },
   { kind: "orgRows", table: "financeApplications", index: "by_org" },
+  { kind: "orgRows", table: "financeCompanyRuleVersions", index: "by_org" },
   { kind: "orgRows", table: "deposits", index: "by_org" },
   { kind: "orgRows", table: "receivables", index: "by_org" },
   { kind: "orgRows", table: "collectionPayments", index: "by_org" },
@@ -245,6 +251,31 @@ async function deleteApplicationDocumentsWithStorageBatch(ctx: MutationCtx, orgI
   return counts;
 }
 
+/**
+ * Appraisals carry the finance company's own valuation documents, so deleting
+ * the rows alone would leave the PDFs in storage with nothing left pointing at
+ * them — unreachable, unbilled to no one, and still holding the appraiser's
+ * report on a customer's vehicle.
+ */
+async function deleteFinanceAppraisalsWithStorageBatch(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">
+) {
+  const appraisals = await ctx.db
+    .query("financeAppraisals")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .take(ORG_DELETION_BATCH_SIZE);
+  const counts: DeletedCounts = {};
+  for (const appraisal of appraisals) {
+    addStorageCount(counts, await deleteStorageIds(ctx, appraisal.documentStorageIds ?? []));
+    await ctx.db.delete(appraisal._id);
+  }
+  if (appraisals.length > 0) {
+    counts.financeAppraisals = appraisals.length;
+  }
+  return counts;
+}
+
 async function deleteOrgSettingsWithStorageBatch(ctx: MutationCtx, orgId: Id<"organizations">) {
   const settingsRows = await ctx.db
     .query("orgSettings")
@@ -382,6 +413,9 @@ async function runDeletionStep(ctx: MutationCtx, step: DeletionStep, orgId: Id<"
   }
   if (step.kind === "applicationDocumentsWithStorage") {
     return await deleteApplicationDocumentsWithStorageBatch(ctx, orgId);
+  }
+  if (step.kind === "financeAppraisalsWithStorage") {
+    return await deleteFinanceAppraisalsWithStorageBatch(ctx, orgId);
   }
   if (step.kind === "orgSettingsWithStorage") {
     return await deleteOrgSettingsWithStorageBatch(ctx, orgId);

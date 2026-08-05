@@ -195,6 +195,14 @@ describe("resetOrgFinancialData", () => {
     for (const table of forbidden) {
       expect(RESET_TABLES_FOR_TEST).not.toContain(table);
     }
-    expect(RESET_TABLES_FOR_TEST).toHaveLength(26);
+    // 26 -> 28: `financeAppraisals` and `financeApplicationOverrides` were added
+    // deliberately. They are children of `financeApplications`, which the reset
+    // already clears, so leaving them out orphaned every appraisal and every
+    // money-change audit row against an application id that no longer resolves
+    // — and, for appraisals, left `_storage` blobs with nothing referencing
+    // them. They are listed immediately before their parent so a run that stops
+    // between batches never leaves a child without one. The financeCompanies
+    // row itself is still deliberately out of scope, as `forbidden` pins above.
+    expect(RESET_TABLES_FOR_TEST).toHaveLength(28);
   });
 });
