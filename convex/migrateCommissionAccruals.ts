@@ -5,6 +5,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx } from "./_generated/server";
 import { commissionAccountingDate, getOrgCurrency, hookCommissionAccrued, isEventQueued } from "./accounting/workflowHooks";
 import { isChartInitialized } from "./chartOfAccounts";
+import { checkPostingAllowed } from "./accountingPeriods";
 import { isCommissionOwed } from "./utils/commission";
 import { isSystemOwnerRole } from "./utils/permissions";
 import { toMinorUnits } from "./utils/money";
@@ -45,11 +46,13 @@ const MAX_ACCRUALS_PER_INVOCATION = 25;
  * accrual existed, or one whose accrual was skipped for a missing cost basis
  * and later filled in by hand, is the same backlog and needs the same fix.
  *
- * Dated by the shared commissionAccountingDate rule, so a sale whose own period
- * has closed is recognized in the current one as a prior-period item rather
- * than queued behind a closed month forever. Expect prior-period movement in
- * Commission Expense and Commission Payable for any org with a backlog — that
- * is the correction, not a side effect.
+ * Dated by the shared rule: the SALE's own date, always. A sale whose period is
+ * merely not created yet queues harmlessly and posts when that month is opened.
+ * A sale whose period is CLOSED or LOCKED is REPORTED AND SKIPPED, not accrued —
+ * an entry dated there can never post, and enqueueing one would burn its retries
+ * and dead-letter into a row that blocks payment for that sale and every future
+ * period close. Reopen those periods and re-run; the count is in the log line
+ * and in `skippedClosedPeriod`.
  *
  * Idempotent twice over: it skips any sale that already has a posted or queued
  * accrual, and `hookCommissionAccrued` dedupes on `commission_accrued_<saleId>`
@@ -95,6 +98,7 @@ export const backfillCommissionAccruals = internalMutation({
     let skippedNoAccounts = 0;
     let skippedInvalidAmount = 0;
     let skippedReversed = 0;
+    let skippedClosedPeriod = 0;
     let capped = false;
     const now = Date.now();
 
@@ -111,25 +115,27 @@ export const backfillCommissionAccruals = internalMutation({
         console.warn(
           `[commission-backfill] org ${org._id}: ${owed.length} owed commission(s) skipped — no OWNER-role member to attribute the posting to`
         );
-      } else if ((await isChartInitialized(ctx, org._id)) && !(await commissionAccountsExist(ctx, org._id))) {
-        // Only skip an org that HAS a chart but is missing the commission
-        // accounts — there, resolveSystemAccount throws, and since a throw
-        // rolls back the self-reschedule with it that would silently end the
-        // walk for every later organization.
+      } else if (
+        (await isChartInitialized(ctx, org._id)) &&
+        !(await commissionAccountsExist(ctx, org._id)) &&
+        !(await commissionAccountCodesAreFree(ctx, org._id))
+      ) {
+        // The commission hooks now self-heal these two accounts, so a chart
+        // merely missing them is no longer a reason to skip — skipping it was
+        // making the self-heal unreachable for exactly the legacy charts it was
+        // written for, and this migration runs once, so that backlog would have
+        // stayed unrecognized with only a console line to say so.
         //
-        // An org with NO chart at all is a normal, supported state and must NOT
-        // be skipped: nothing posts there, so hookCommissionAccrued simply
-        // enqueues, and initializing the chart drains the queue. Skipping it
-        // consumed the migration cursor and left that dealership's whole
-        // backlog unrecognized, with no signal and no second pass — this is a
-        // one-time migration.
+        // What still warrants a skip is a chart where the accounts are missing
+        // AND their codes are taken by something else: ensureSystemAccount
+        // throws on that conflict, and a throw rolls back the self-reschedule
+        // with it, silently ending the walk for every later organization.
         //
-        // The drain reschedules itself while a batch stays full, so a backlog
-        // larger than one 50-row pass does finish on its own. Watch the
-        // `[commission-backfill]` and drain logs rather than assuming it.
+        // An org with NO chart at all is never skipped: nothing posts there, so
+        // the accrual simply enqueues and drains when the chart is initialized.
         skippedNoAccounts = owed.length;
         console.warn(
-          `[commission-backfill] org ${org._id}: ${owed.length} skipped — chart exists but has no commission accounts`
+          `[commission-backfill] org ${org._id}: ${owed.length} skipped — commission accounts unmapped and their codes are in use; map them by hand, then re-run`
         );
       } else {
         const currency = await getOrgCurrency(ctx, org._id);
@@ -160,6 +166,15 @@ export const backfillCommissionAccruals = internalMutation({
           // than useless: the rolled-back writes it had already made would
           // still commit with the surrounding transaction. Skipping the row
           // leaves it visible in the close checklist as unrecognized.
+          // An entry dated into a closed or locked period cannot post, and the
+          // outbox treats that as a deliberate refusal rather than something to
+          // wait for — so it burns attempts and dead-letters. Report it instead
+          // of manufacturing a row that will do that.
+          const periodCheck = await checkPostingAllowed(ctx, org._id, sale.saleDate);
+          if (!periodCheck.ok && !periodCheck.waiting) {
+            skippedClosedPeriod++;
+            continue;
+          }
           if (!isConvertibleAmount(sale.commissionAmount, currency)) {
             skippedInvalidAmount++;
             console.warn(
@@ -185,7 +200,7 @@ export const backfillCommissionAccruals = internalMutation({
     }
 
     console.log(
-      `[commission-backfill] org ${org._id}: scanned ${salePage.page.length}, owed ${owed.length}, accrued ${accruedCount}, alreadyRecognized ${skippedAlreadyRecognized}, noOwner ${skippedNoOwner}, noAccounts ${skippedNoAccounts}, invalidAmount ${skippedInvalidAmount}, reversed ${skippedReversed}${args.dryRun ? " (dry run)" : ""}`
+      `[commission-backfill] org ${org._id}: scanned ${salePage.page.length}, owed ${owed.length}, accrued ${accruedCount}, alreadyRecognized ${skippedAlreadyRecognized}, noOwner ${skippedNoOwner}, noAccounts ${skippedNoAccounts}, invalidAmount ${skippedInvalidAmount}, reversed ${skippedReversed}, closedPeriod ${skippedClosedPeriod}${args.dryRun ? " (dry run)" : ""}`
     );
 
     // Advance within the org until its sales are exhausted, then move on to the
@@ -224,6 +239,7 @@ export const backfillCommissionAccruals = internalMutation({
       skippedNoAccounts,
       skippedInvalidAmount,
       skippedReversed,
+      skippedClosedPeriod,
     };
   },
 });
@@ -241,6 +257,26 @@ function isConvertibleAmount(amount: number, currency: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether the default commission codes are free for the self-heal to claim.
+ * `ensureSystemAccount` throws when a code is already taken by another account,
+ * and that throw would take the whole migration chain down with it.
+ */
+async function commissionAccountCodesAreFree(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">
+): Promise<boolean> {
+  for (const code of ["6100", "2300"]) {
+    const clash = await ctx.db
+      .query("chartOfAccounts")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .filter((q) => q.eq(q.field("code"), code))
+      .first();
+    if (clash) return false;
+  }
+  return true;
 }
 
 /** Whether the org's chart carries the accounts a commission posting resolves. */

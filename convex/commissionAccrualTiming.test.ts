@@ -844,19 +844,26 @@ describe("no commission entry may overtake the entries it depends on", () => {
     return { d, saleId };
   }
 
-  test("a direct payment refuses while the accrual is still queued", async () => {
+  test("a direct payment refuses when the sale's period cannot take the entry", async () => {
     const { d, saleId } = await accrualQueuedBehindAClosedPeriod("pay_ahead");
 
     // Previously this posted the payment on its own: the re-raised accrual is a
     // no-op while an outbox row exists, so Commission Payable went to -25,000
     // and stayed there until someone reopened the closed month.
+    //
+    // Two guards now stand in front of that, and the OUTER one fires here: a
+    // closed period cannot take the accrual at all, so the payment is refused
+    // at the point of action with the period named, rather than being allowed
+    // to queue an entry that could never post. The inner ordering guard still
+    // covers the case where a period simply does not exist yet, which queues
+    // harmlessly instead of dead-lettering.
     await expect(
       d.asAdmin.mutation(api.sales.markCommissionPaid, {
         orgId: d.orgId,
         saleId,
         paymentMethod: "CASH",
       })
-    ).rejects.toThrow(/hasn't posted to the ledger yet/i);
+    ).rejects.toThrow(/accounting period is closed/i);
 
     expect(await commissionPayableMinor(d)).toBe(0);
     // The whole mutation rolled back, so the sale is not left marked paid.
@@ -1758,6 +1765,108 @@ describe("round-3 review fixes", () => {
 
     expect(await commissionPayableMinor(d)).toBe(0);
     expect(await commissionExpenseMinor(d)).toBe(0);
+  });
+
+  test("recording a commission is refused when the sale's period is closed", async () => {
+    // The write used to SUCCEED here. Both downstream guards are gated on
+    // isPostableNow, which is false for a closed period, so both were skipped,
+    // the amount was saved, and the manager was told it worked — while the
+    // entry it enqueued was dated into a month that can never accept it, would
+    // burn its ten retries, and would dead-letter into a row blocking payment
+    // for that sale and every future close.
+    const d = await seedDealer("closed_period_refusal", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await closePriorYearPeriod(d, priorYear);
+
+    await expect(
+      d.asAdmin.mutation(api.sales.setCommissionAmount, {
+        orgId: d.orgId, saleId, commissionAmount: 250,
+      })
+    ).rejects.toThrow(/accounting period is closed/i);
+
+    // Nothing written, and nothing queued that could never post.
+    const untouched = await d.t.run((ctx) => ctx.db.get(saleId));
+    expect(untouched?.commissionAmount ?? null).toBeNull();
+    const queued = await d.t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", d.orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(queued).toBeNull();
+  });
+
+  test("a sale whose period merely does not exist yet still records and queues", async () => {
+    // The other half of the same rule: "no period yet" is a wait, not a
+    // refusal. It burns no retries and posts by itself once the month is
+    // opened, so refusing here would block ordinary use.
+    const d = await seedDealer("no_period_yet");
+    const farFuture = Date.UTC(new Date().getUTCFullYear() + 2, 3, 10);
+    const saleId = await completedSale(d, farFuture);
+
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 250,
+    });
+
+    const queued = await d.t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", d.orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(queued?.accountingDate).toBe(farFuture);
+    expect(queued?.attempts).toBe(0);
+  });
+
+  test("the backfill reports closed-period sales instead of queueing entries that cannot post", async () => {
+    const d = await seedDealer("backfill_closed", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    // A legacy amount, set before the period closed.
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAmount: 250 }));
+    await closePriorYearPeriod(d, priorYear);
+
+    const run = await d.t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
+    expect(run.skippedClosedPeriod).toBe(1);
+    expect(run.accruedCount).toBe(0);
+
+    const queued = await d.t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", d.orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(queued).toBeNull();
+  });
+
+  test("the backfill self-heals a chart missing the commission accounts", async () => {
+    // The hooks gained a self-heal for these two accounts; the backfill was
+    // still skipping exactly the legacy charts it was written for, and this
+    // migration runs once.
+    const d = await seedDealer("backfill_selfheal");
+    const saleId = await completedSale(d);
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAmount: 250 }));
+    await d.t.run(async (ctx) => {
+      for (const key of ["COMMISSION_EXPENSE", "COMMISSION_PAYABLE"] as const) {
+        const account = await ctx.db
+          .query("chartOfAccounts")
+          .withIndex("by_org_systemKey", (q) => q.eq("orgId", d.orgId).eq("systemKey", key))
+          .unique();
+        if (account) await ctx.db.delete(account._id);
+      }
+    });
+
+    const run = await d.t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
+    expect(run.skippedNoAccounts).toBe(0);
+    expect(run.accruedCount).toBe(1);
+    expect(await commissionPayableMinor(d)).toBe(25_000);
   });
 
   test("the backfill skips an org with no owner rather than inventing an actor", async () => {

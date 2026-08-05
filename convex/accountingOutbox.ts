@@ -352,6 +352,39 @@ const MAX_DRAIN_PASSES = 40;
  * a later retry would have posted. A cursor visits each row at most once per
  * sweep, so one sweep costs each row exactly one attempt.
  */
+async function drainPageAndContinue(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  limit: number,
+  cursor: string | null,
+  pass: number
+): Promise<{ posted: number; failed: number; held: number }> {
+  const page = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+    .paginate({ cursor, numItems: Math.min(limit, 200) });
+
+  const result = await drainEntries(ctx, page.page);
+
+  console.log(
+    `[outbox-drain] org ${orgId} pass ${pass}: posted ${result.posted}, failed ${result.failed}, held ${result.held}`
+  );
+
+  if (!page.isDone && pass < MAX_DRAIN_PASSES) {
+    await ctx.scheduler.runAfter(0, internal.accountingOutbox.drainPendingAccountingEvents, {
+      orgId,
+      limit,
+      cursor: page.continueCursor,
+      pass: pass + 1,
+    });
+  } else if (!page.isDone) {
+    console.warn(
+      `[outbox-drain] org ${orgId}: stopped after ${MAX_DRAIN_PASSES} passes with rows remaining`
+    );
+  }
+  return result;
+}
+
 export const drainPendingAccountingEvents = internalMutation({
   args: {
     orgId: v.id("organizations"),
@@ -359,34 +392,8 @@ export const drainPendingAccountingEvents = internalMutation({
     cursor: v.optional(v.string()),
     pass: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
-    const limit = Math.min(args.limit ?? 50, 200);
-    const page = await ctx.db
-      .query("pendingAccountingEvents")
-      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
-      .paginate({ cursor: args.cursor ?? null, numItems: limit });
-
-    const result = await drainEntries(ctx, page.page);
-    const pass = args.pass ?? 0;
-
-    console.log(
-      `[outbox-drain] org ${args.orgId} pass ${pass}: posted ${result.posted}, failed ${result.failed}, held ${result.held}`
-    );
-
-    if (!page.isDone && pass < MAX_DRAIN_PASSES) {
-      await ctx.scheduler.runAfter(0, internal.accountingOutbox.drainPendingAccountingEvents, {
-        orgId: args.orgId,
-        limit,
-        cursor: page.continueCursor,
-        pass: pass + 1,
-      });
-    } else if (!page.isDone) {
-      console.warn(
-        `[outbox-drain] org ${args.orgId}: stopped after ${MAX_DRAIN_PASSES} passes with rows remaining`
-      );
-    }
-    return result;
-  },
+  handler: async (ctx, args) =>
+    drainPageAndContinue(ctx, args.orgId, args.limit ?? 50, args.cursor ?? null, args.pass ?? 0),
 });
 
 // ─── Visibility query ─────────────────────────────────────────────────────────
@@ -422,14 +429,13 @@ export const redrive = mutation({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
-    // Routed through the continuing drain, not a single batch: the operator
-    // pressing this button is the one case where "it stopped after 50 rows and
-    // said nothing" is least excusable.
-    const result = await drainPendingForOrg(ctx, args.orgId);
-    await ctx.scheduler.runAfter(0, internal.accountingOutbox.drainPendingAccountingEvents, {
-      orgId: args.orgId,
-    });
-    return result;
+    // Drains the first PAGE and continues from that page's cursor. Draining
+    // inline and then scheduling a cursorless sweep charged a failing row two
+    // attempts per button press — the inline call left it PENDING and the sweep
+    // selected it again immediately — so a row on its eighth attempt
+    // dead-lettered on one click, spending the retry budget the operator was
+    // trying to give it. The caller still gets this page's counts to show.
+    return drainPageAndContinue(ctx, args.orgId, 50, null, 0);
   },
 });
 

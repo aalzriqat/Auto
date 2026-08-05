@@ -21,6 +21,7 @@ import { throwAppError, AppErrorCode } from "./utils/errors";
 import { getOrgCurrency, hookCommissionAccrued, hookCommissionAdjusted, hookCommissionPaid, hookSaleCancelled, isPostableNow, reverseCommissionForSale, commissionAccountingDate, commissionEntriesOutstandingStatus, recognizedCommissionMinor, safeAdjustmentSeq, MAX_COMMISSION_ADJUSTMENTS } from "./accounting/workflowHooks";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 import { toMinorUnits, fromMinorUnits, assertFiniteNumber } from "./utils/money";
+import { checkPostingAllowed } from "./accountingPeriods";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -1087,6 +1088,39 @@ async function hasCommissionAccrual(
  * is the drain-side half that covers that; this half exists so the common case
  * fails immediately, with a message, instead of silently deferring.
  */
+/**
+ * Refuses to record a commission whose entry could never post.
+ *
+ * Commission entries carry the SALE's date. `checkPostingAllowed` separates two
+ * states that look identical from the outside:
+ *  - no period exists for that date yet → `waiting`. The entry queues, burns no
+ *    retries, and posts by itself the month someone opens it. Fine.
+ *  - the period exists and is CLOSED or LOCKED → a deliberate refusal that will
+ *    not resolve on its own. The entry queues, every drain burns an attempt,
+ *    and after ten it dead-letters — where it blocks payment for that sale and
+ *    every future period close, and a LOCKED period cannot even be reopened.
+ *
+ * Without this the write SUCCEEDS: the guards below are gated on
+ * `isPostableNow`, which is false for a closed period, so both are skipped, the
+ * amount is saved, and the manager is told it worked. Every neighbouring guard
+ * in this file fails closed with a message at the point of action; this one was
+ * the only path that failed silently.
+ */
+async function assertSalePeriodAcceptsPostings(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  saleDate: number,
+  action: string
+): Promise<void> {
+  const check = await checkPostingAllowed(ctx, orgId, saleDate);
+  if (!check.ok && !check.waiting) {
+    throwAppError(
+      AppErrorCode.VALIDATION_FAILED,
+      `This sale's accounting period is closed, so a commission entry for it could never post. Reopen the period before you ${action}.`
+    );
+  }
+}
+
 async function assertCommissionEntriesPosted(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
@@ -1193,6 +1227,10 @@ export const markCommissionPaid = mutation({
         if (sale.commissionAmount == null || sale.commissionAmount <= 0) {
           throwAppError(AppErrorCode.VALIDATION_FAILED, "This sale has no commission amount to pay.");
         }
+        // The safety-net accrual below is dated to the sale, so a closed period
+        // would leave it unpostable while the payment itself posts — the exact
+        // ordering split the drain guards exist to prevent, created here.
+        await assertSalePeriodAcceptsPostings(ctx, args.orgId, sale.saleDate, "pay it");
 
         const now = Date.now();
         await ctx.db.patch(args.saleId, {
@@ -1333,6 +1371,17 @@ export const setCommissionAmount = mutation({
       // Deriving both from the same rule is what stops a correction from posting
       // into an open period while the accrual it corrects is still queued behind
       // a closed one, which would drive Commission Payable negative.
+      // Refused before anything is written: an entry dated into a closed period
+      // can never post, and the guards further down are gated on isPostableNow,
+      // which is false there — so without this the amount saved and the manager
+      // was told it worked.
+      await assertSalePeriodAcceptsPostings(
+        ctx,
+        args.orgId,
+        sale.saleDate,
+        "set the commission"
+      );
+
       const currency = await getOrgCurrency(ctx, args.orgId);
       const previousMinor =
         sale.commissionAmount == null ? 0 : toMinorUnits(sale.commissionAmount, currency);
@@ -1541,6 +1590,12 @@ export const recalculateCommission = mutation({
       await ctx.db.patch(args.saleId, { commissionAmount });
 
       if (commissionAmount > 0) {
+        await assertSalePeriodAcceptsPostings(
+          ctx,
+          args.orgId,
+          sale.saleDate,
+          "recalculate the commission"
+        );
         const currency = await getOrgCurrency(ctx, args.orgId);
         const now = Date.now();
         const accountingDate = await commissionAccountingDate(ctx, args.orgId, args.saleId, sale.saleDate);
