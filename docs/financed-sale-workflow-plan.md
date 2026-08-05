@@ -28,6 +28,54 @@ The dealer contribution is **1,375**, not 1,350. It is the residue of the
 unfinanced slice after the customer's first payment, not a percentage of
 anything.
 
+### What links 10,500 to 12,500 is NOT confirmed
+
+The dealership supplied the inputs and the 12,500 quotation, but not the
+relationship between them. Structurally the deal nets 11,125 before expenses
+(12,500 less the 1,375 contribution), which is 625 above the 10,500 target.
+
+That 625 is an **unreconciled residual**, nothing more. It could be closing
+expenses, negotiation headroom, a company commission, or simply what falls out
+of a negotiated round number. The system reports it — see
+`describeQuotationResidual` — and deliberately refuses to classify it.
+
+**625 is not a default anywhere.** It appears only as a named example fixture in
+tests. `computeSubmittedQuotation` takes expenses and buffer as explicit inputs
+that default to zero, and quotes lower when nothing has been itemized rather
+than inventing an allowance.
+
+## The quotation solver is optional
+
+Three modes are supported, and the dealership is never forced through the
+calculator:
+
+1. **SYSTEM_CALCULATED** — the solver's figure, sent as-is.
+2. **MANUAL_ENTRY** — a negotiated figure. No solver involved, no reason needed.
+3. **CALCULATED_WITH_OVERRIDE** — the solver ran and a person departed from it.
+   Requires a reason.
+
+The solver's inputs are separate on purpose: target net proceeds, itemized
+estimated **dealer-borne expenses**, an optional **quotation buffer**, the
+customer first payment, the applicable LTV, and the company's rounding rules.
+Expenses are a cost; a buffer is headroom the dealership keeps. They behave
+identically in the arithmetic and mean entirely different things, and merging
+them is how a buffer silently becomes money the books believe was spent.
+
+```
+Suggested quotation =
+  (target net proceeds
+   + estimated dealer-borne expenses
+   + optional quotation buffer
+   − applicable customer contribution)
+  ÷ LTV
+```
+
+This applies **only** when the selected company's rules confirm the customer
+first payment offsets the unfinanced share
+(`customerFirstPaymentOffsetsUnfinancedShare`). Unset or false, the solver
+declines and the user enters the figure they negotiated. Mode, inputs, solver
+result, rule version and override are all snapshotted onto the application.
+
 ## The concepts that must stay distinct
 
 `quotes.totalFinancedAmount` is the customer's Murabaha principal
@@ -80,6 +128,29 @@ Funding change              850      ← displayed, never negotiated
 ```
 
 Invariant: `customerGapShare + dealerGapShare = rawAppraisalGap`.
+
+### The allocation is never adjusted to flatten the outcome
+
+A customer absorbing the whole 1,000 can leave the dealership **better off than
+the original target** — 10,650 against 10,500 — because its own contribution
+falls from 1,375 to 1,225 at the same time. That is an arithmetic consequence
+of the confirmed rule, not a defect, and the shares must **not** be quietly
+rebalanced to remove it.
+
+Instead `computeGapOutcome` returns every component separately, and flags the
+variance for a person to look at:
+
+```
+Raw appraisal gap                        1,000
+Reduction in funded portion                850
+Original dealer contribution             1,375
+Recalculated dealer contribution         1,225
+Customer gap payment to dealer           1,000
+Dealer gap share                             0
+Final projected dealer net proceeds     10,650
+Variance from target net proceeds         +150   ← warned, never redistributed
+Final projected profit                   1,150
+```
 
 The customer's share has a destination. Only the portion owed to the dealership
 creates dealer-side AR:
@@ -170,6 +241,27 @@ the index is for. Every flagged row needs its approved purchase amount, applied
 LTV and actual receipt re-entered by someone who knows the deal; clearing the
 flag goes through `resolveFinancingReconciliation`, which requires a note
 saying what was checked. It is never cleared automatically.
+
+## Merge gate: PR 1 is behaviorally dormant
+
+`finalizeDeal` still opens the finance-company receivable from
+`quote.totalFinancedAmount` — the customer's financing principal, which is not
+what the company owes the dealership. **PR 2 replaces that posting.**
+
+Until it does, PR 1 changes nothing on the money path:
+
+- No posting rule, receivable or settlement behaviour is modified.
+- Nothing raises a reconciliation flag on a **new** deal. Flagging every
+  financed sale as knowingly wrong would make that a normal operating state,
+  and a queue nobody can act on is worse than a defect nobody has been told
+  about twice.
+- The economics mutations are inert until a caller uses them, and no UI does
+  until PR 3.
+- The migration still flags **legacy** rows. That is diagnosis of state that
+  already exists, not a new deal created wrong.
+
+Consequently PR 1 must either merge together with PR 2's accounting
+correction, or merge in this dormant state — never in between.
 
 ## PR breakdown
 

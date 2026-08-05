@@ -37,6 +37,7 @@ const dealerRuleArgs = {
   dealerContributionSettlement: v.optional(dealerContributionSettlementValidator),
   customerContributionSettlement: v.optional(customerContributionSettlementValidator),
   feesDeductedFromSettlement: v.optional(v.boolean()),
+  customerFirstPaymentOffsetsUnfinancedShare: v.optional(v.boolean()),
   feeTemplates: v.optional(v.array(financeFeeTemplateValidator)),
 } as const;
 

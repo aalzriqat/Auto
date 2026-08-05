@@ -1041,50 +1041,24 @@ export const finalizeDeal = mutation({
         // amount. Reconciling the two is PR 2's job, but shipping the
         // divergence silently is not acceptable: flag it so the deal enters
         // the same queue the legacy rows do rather than looking settled.
-        const expectedRemittance = app.expectedDealerRemittanceMinor;
-        const legacyBasisMinor =
-          quote.totalFinancedAmount !== undefined
-            ? toMinorUnits(quote.totalFinancedAmount, await getOrgCurrency(ctx, args.orgId))
-            : undefined;
 
-        // Three ways this deal's receivable can be wrong, and only the first
-        // was being caught. Treating the other two as "no divergence" meant the
-        // silence of an unknown read exactly like the silence of agreement.
-        let reconciliationNote: string | undefined;
-        if (
-          expectedRemittance !== undefined &&
-          legacyBasisMinor !== undefined &&
-          expectedRemittance !== legacyBasisMinor
-        ) {
-          reconciliationNote = `The finance-company receivable was opened for the customer's financing principal (${legacyBasisMinor}), but this deal's expected dealer remittance is ${expectedRemittance}. Reconcile the settlement before treating this deal as paid.`;
-        } else if (app.submittedQuotationMinor !== undefined && expectedRemittance === undefined) {
-          // The economics were recorded but the remittance could not be
-          // determined — a company that retains customer funds, with no
-          // destination recorded for them. Nothing writes that destination yet,
-          // so this is reachable on an ordinary deal.
-          reconciliationNote =
-            "This deal's expected dealer remittance could not be determined, because where the customer's payment went has not been recorded. The finance-company receivable was opened for the customer's financing principal instead.";
-        } else if (app.companyId && app.submittedQuotationMinor === undefined) {
-          // Finalized without the dealer-side economics at all. The old path is
-          // deliberately still allowed — the wizard that records them ships with
-          // PR 3, and blocking now would strand every deal in flight — but the
-          // receivable it opens is the customer's principal, not what the
-          // company owes, so the deal belongs in the same queue as the legacy
-          // rows rather than looking settled.
-          reconciliationNote =
-            "Finalized without the dealer-side economics. The finance-company receivable was opened for the customer's financing principal. Record the approved purchase amount and the applied LTV, then reconcile the settlement.";
-        }
-        const remittanceDiverges = reconciliationNote !== undefined;
+        // NOTE: no reconciliation flag is raised here, deliberately.
+        //
+        // This module still opens the finance-company receivable from
+        // quote.totalFinancedAmount — the customer's financing principal, which
+        // is not what the company owes the dealership. PR 2 replaces that
+        // posting. Flagging every new financed deal in the meantime would make
+        // "we know this is wrong" a normal operating state, and a queue nobody
+        // can act on is worse than a defect nobody has been told about twice.
+        //
+        // So this PR stays behaviorally dormant on the money path: it adds the
+        // model and the arithmetic, and changes no posting. The migration still
+        // flags LEGACY rows, which is diagnosis of state that already exists
+        // rather than a new deal knowingly created wrong.
 
         await ctx.db.patch(args.applicationId, {
           status: "CLOSED",
           finalizedSaleId: saleId,
-          ...(remittanceDiverges
-            ? {
-                needsFinancingReconciliation: true,
-                financingReconciliationReason: reconciliationNote,
-              }
-            : {}),
           finalizationIdempotencyKey: args.idempotencyKey,
           updatedAt: now,
           // Credit stays APPROVED — CLOSED is the sale being created, not a

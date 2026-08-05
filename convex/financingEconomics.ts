@@ -248,14 +248,28 @@ export const suggestQuotation = query({
     orgId: v.id("organizations"),
     companyId: v.id("financeCompanies"),
     targetSellingAmountMinor: v.number(),
-    estimatedExpensesMinor: v.number(),
+    /**
+     * Sum of the itemized costs the dealership expects to bear. Required, and
+     * never inferred: with no fees itemized this is 0 and the suggestion is
+     * correspondingly lower, which is the honest figure rather than a
+     * fabricated allowance.
+     */
+    estimatedDealerBorneExpensesMinor: v.number(),
+    /** Optional negotiation headroom. A commercial choice, not a cost. */
+    quotationBufferMinor: v.optional(v.number()),
     customerFirstPaymentMinor: v.number(),
     ltvPercent: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
     assertMinorAmount(args.targetSellingAmountMinor, "Target selling amount");
-    assertMinorAmount(args.estimatedExpensesMinor, "Estimated expenses");
+    assertMinorAmount(
+      args.estimatedDealerBorneExpensesMinor,
+      "Estimated dealer-borne expenses"
+    );
+    if (args.quotationBufferMinor !== undefined) {
+      assertMinorAmount(args.quotationBufferMinor, "Quotation buffer");
+    }
     assertMinorAmount(args.customerFirstPaymentMinor, "Customer first payment");
 
     const company = await requireOwnedRow(
@@ -277,25 +291,46 @@ export const suggestQuotation = query({
       );
     }
 
-    const suggestion = computeSubmittedQuotation({
+    const currency = await getOrgCurrency(ctx, args.orgId);
+    const result = computeSubmittedQuotation({
       targetNetProceedsMinor: args.targetSellingAmountMinor,
-      estimatedExpensesMinor: args.estimatedExpensesMinor,
+      estimatedDealerBorneExpensesMinor: args.estimatedDealerBorneExpensesMinor,
+      quotationBufferMinor: args.quotationBufferMinor,
       customerFirstPaymentMinor: args.customerFirstPaymentMinor,
       appliedLtvPercent,
+      customerFirstPaymentOffsetsUnfinancedShare:
+        snapshot.customerFirstPaymentOffsetsUnfinancedShare,
     });
 
+    // The solver is optional. When the company's rules do not establish that it
+    // applies, say so and let the user enter the quotation they negotiated —
+    // returning a figure anyway would present one dealership's arrangement as
+    // every company's rule.
+    if (!result.available) {
+      return {
+        available: false as const,
+        reason: result.reason,
+        appliedLtvPercent,
+        currency,
+        ruleVersion: snapshot.ruleVersion,
+      };
+    }
+
     return {
+      available: true as const,
       appliedLtvPercent,
-      currency: await getOrgCurrency(ctx, args.orgId),
-      submittedQuotationMinor: suggestion.submittedQuotationMinor,
-      projectedNetProceedsMinor: suggestion.projectedNetProceedsMinor,
-      customerCoversUnfinancedPortion: suggestion.customerCoversUnfinancedPortion,
+      currency,
+      ruleVersion: snapshot.ruleVersion,
+      submittedQuotationMinor: result.submittedQuotationMinor,
+      projectedNetProceedsMinor: result.projectedNetProceedsMinor,
+      customerCoversUnfinancedPortion: result.customerCoversUnfinancedPortion,
       financeCompanyFundedPortionMinor:
-        suggestion.composition.financeCompanyFundedPortionMinor,
-      unfinancedPortionMinor: suggestion.composition.unfinancedPortionMinor,
-      dealerContributionMinor: suggestion.composition.dealerContributionMinor,
+        result.composition.financeCompanyFundedPortionMinor,
+      unfinancedPortionMinor: result.composition.unfinancedPortionMinor,
+      dealerContributionMinor: result.composition.dealerContributionMinor,
       customerFirstPaymentSurplusMinor:
-        suggestion.composition.customerFirstPaymentSurplusMinor,
+        result.composition.customerFirstPaymentSurplusMinor,
+      ltvBaseCapApplied: result.composition.ltvBaseCapApplied,
     };
   },
 });
@@ -373,10 +408,24 @@ export const recordSubmittedQuotation = mutation({
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),
     submittedQuotationMinor: v.number(),
-    source: v.union(v.literal("CALCULATED"), v.literal("MANUAL")),
+    /**
+     * Three supported modes:
+     *  - SYSTEM_CALCULATED: the solver's figure, sent as-is.
+     *  - MANUAL_ENTRY: a figure the dealership negotiated. No solver involved.
+     *  - CALCULATED_WITH_OVERRIDE: the solver ran and a person departed from
+     *    it, which requires a reason.
+     */
+    source: v.union(
+      v.literal("SYSTEM_CALCULATED"),
+      v.literal("MANUAL_ENTRY"),
+      v.literal("CALCULATED_WITH_OVERRIDE")
+    ),
     overrideReason: v.optional(v.string()),
     targetSellingAmountMinor: v.optional(v.number()),
-    estimatedExpensesMinor: v.optional(v.number()),
+    /** Itemized costs the dealership bears. Never inferred from the quotation. */
+    estimatedDealerBorneExpensesMinor: v.optional(v.number()),
+    /** Negotiation headroom. Never inferred from the quotation. */
+    quotationBufferMinor: v.optional(v.number()),
     customerFirstPaymentMinor: v.optional(v.number()),
     ltvPercent: v.optional(v.number()),
   },
@@ -388,8 +437,14 @@ export const recordSubmittedQuotation = mutation({
     if (args.targetSellingAmountMinor !== undefined) {
       assertMinorAmount(args.targetSellingAmountMinor, "Target selling amount");
     }
-    if (args.estimatedExpensesMinor !== undefined) {
-      assertMinorAmount(args.estimatedExpensesMinor, "Estimated expenses");
+    if (args.estimatedDealerBorneExpensesMinor !== undefined) {
+      assertMinorAmount(
+        args.estimatedDealerBorneExpensesMinor,
+        "Estimated dealer-borne expenses"
+      );
+    }
+    if (args.quotationBufferMinor !== undefined) {
+      assertMinorAmount(args.quotationBufferMinor, "Quotation buffer");
     }
     if (args.customerFirstPaymentMinor !== undefined) {
       assertMinorAmount(args.customerFirstPaymentMinor, "Customer first payment");
@@ -399,9 +454,9 @@ export const recordSubmittedQuotation = mutation({
     }
 
     const reason = args.overrideReason?.trim();
-    if (args.source === "MANUAL" && !reason) {
+    if (args.source === "CALCULATED_WITH_OVERRIDE" && !reason) {
       throw new ConvexError(
-        "A manually entered quotation must record why it differs from the calculated amount."
+        "Departing from the calculated quotation must record why."
       );
     }
 
@@ -464,6 +519,27 @@ export const recordSubmittedQuotation = mutation({
       });
     }
 
+    // Re-run the solver purely to record what it would have said, so an
+    // override is auditable against the figure it departed from. Never used to
+    // fill in a missing input: when expenses or the buffer have not been
+    // entered they are zero, not back-solved from the quotation.
+    const targetForSolver = args.targetSellingAmountMinor ?? app.targetNetProceedsMinor;
+    const expensesForSolver =
+      args.estimatedDealerBorneExpensesMinor ?? app.estimatedDealerBorneExpensesMinor;
+    const bufferForSolver = args.quotationBufferMinor ?? app.quotationBufferMinor;
+    const solverResult =
+      targetForSolver !== undefined
+        ? computeSubmittedQuotation({
+            targetNetProceedsMinor: targetForSolver,
+            estimatedDealerBorneExpensesMinor: expensesForSolver ?? 0,
+            quotationBufferMinor: bufferForSolver,
+            customerFirstPaymentMinor,
+            appliedLtvPercent,
+            customerFirstPaymentOffsetsUnfinancedShare:
+              snapshot.customerFirstPaymentOffsetsUnfinancedShare,
+          })
+        : undefined;
+
     await ctx.db.patch(args.applicationId, {
       economicsCurrency: app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId)),
       submittedQuotationMinor: args.submittedQuotationMinor,
@@ -473,14 +549,41 @@ export const recordSubmittedQuotation = mutation({
       submittedQuotationBy: user._id,
       appliedLtvPercent,
       customerFirstPaymentMinor,
+      quotationCalculationSnapshot: {
+        mode: args.source,
+        targetNetProceedsMinor: targetForSolver,
+        estimatedDealerBorneExpensesMinor: expensesForSolver,
+        quotationBufferMinor: bufferForSolver,
+        customerFirstPaymentMinor,
+        appliedLtvPercent,
+        customerFirstPaymentOffsetsUnfinancedShare:
+          snapshot.customerFirstPaymentOffsetsUnfinancedShare,
+        ...(solverResult?.available
+          ? { calculatedQuotationMinor: solverResult.submittedQuotationMinor }
+          : {}),
+        ...(solverResult && !solverResult.available
+          ? { solverUnavailableReason: solverResult.reason }
+          : {}),
+        finalQuotationMinor: args.submittedQuotationMinor,
+        ...(reason ? { overrideReason: reason } : {}),
+        ruleVersion: snapshot.ruleVersion,
+        recordedBy: user._id,
+        recordedAt: now,
+      },
       ...(args.targetSellingAmountMinor !== undefined
         ? {
             targetSellingAmountMinor: args.targetSellingAmountMinor,
             targetNetProceedsMinor: args.targetSellingAmountMinor,
           }
         : {}),
-      ...(args.estimatedExpensesMinor !== undefined
-        ? { estimatedClosingExpensesMinor: args.estimatedExpensesMinor }
+      ...(args.estimatedDealerBorneExpensesMinor !== undefined
+        ? {
+            estimatedDealerBorneExpensesMinor: args.estimatedDealerBorneExpensesMinor,
+            estimatedClosingExpensesMinor: args.estimatedDealerBorneExpensesMinor,
+          }
+        : {}),
+      ...(args.quotationBufferMinor !== undefined
+        ? { quotationBufferMinor: args.quotationBufferMinor }
         : {}),
       // Sending the quotation is what puts the appraisal in play. Covers
       // NOT_REQUESTED as well as unset: createFromQuote seeds the former, so

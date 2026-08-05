@@ -7,6 +7,8 @@ import {
   computeExpectedRemittance,
   computeFundingComposition,
   computeSubmittedQuotation,
+  computeGapOutcome,
+  describeQuotationResidual,
   evaluateQuotationException,
   resolveLtvBaseMinor,
   reconcileEmployeeCustody,
@@ -27,9 +29,33 @@ const BASE = {
   targetSellingAmount: jod(10_500),
   customerFirstPayment: jod(500),
   submittedQuotation: jod(12_500),
-  estimatedExpenses: jod(625),
   ltvPercent: 85,
 };
+
+/**
+ * The dealer-borne expense figure that makes the supplied example reproduce.
+ *
+ * INFERRED, not supplied. The dealership gave cost, target, first payment, LTV
+ * and the 12,500 quotation, but never the link between the target and the
+ * quotation. 625 is purely the residual that makes the solver's algebra land on
+ * 12,500 — it could equally be negotiation headroom, a company commission, or
+ * nothing at all if the quotation was simply negotiated.
+ *
+ * It is a fixture for reproducing THIS scenario and nothing else. It is not a
+ * production default, not a domain rule, and appears in no production code
+ * path: `computeSubmittedQuotation` takes expenses as a caller-supplied input
+ * that defaults to nothing.
+ */
+const exampleEstimatedDealerBorneExpensesMinor = jod(625);
+
+/** Narrows the solver's result, failing loudly if it declined to produce one. */
+function solve(input: Parameters<typeof computeSubmittedQuotation>[0]) {
+  const result = computeSubmittedQuotation(input);
+  if (!result.available) {
+    throw new Error(`solver unavailable: ${result.reason}`);
+  }
+  return result;
+}
 
 describe("computeFundingComposition", () => {
   it("splits the dealer's confirmed 12,500 approval into 10,625 / 500 / 1,375", () => {
@@ -145,17 +171,18 @@ describe("computeFundingComposition", () => {
 
 describe("computeSubmittedQuotation", () => {
   it("reproduces the dealer's 12,500 from target 10,500, expenses 625, first payment 500 at 85%", () => {
-    const suggestion = computeSubmittedQuotation({
+    const result = solve({
       targetNetProceedsMinor: BASE.targetSellingAmount,
-      estimatedExpensesMinor: BASE.estimatedExpenses,
+      estimatedDealerBorneExpensesMinor: exampleEstimatedDealerBorneExpensesMinor,
       customerFirstPaymentMinor: BASE.customerFirstPayment,
       appliedLtvPercent: BASE.ltvPercent,
+      customerFirstPaymentOffsetsUnfinancedShare: true,
     });
 
-    expect(suggestion.submittedQuotationMinor).toBe(jod(12_500));
-    expect(suggestion.composition.financeCompanyFundedPortionMinor).toBe(jod(10_625));
-    expect(suggestion.composition.dealerContributionMinor).toBe(jod(1_375));
-    expect(suggestion.customerCoversUnfinancedPortion).toBe(false);
+    expect(result.submittedQuotationMinor).toBe(jod(12_500));
+    expect(result.composition.financeCompanyFundedPortionMinor).toBe(jod(10_625));
+    expect(result.composition.dealerContributionMinor).toBe(jod(1_375));
+    expect(result.customerCoversUnfinancedPortion).toBe(false);
   });
 
   it("lands the dealership on its target net proceeds, never below", () => {
@@ -163,15 +190,16 @@ describe("computeSubmittedQuotation", () => {
       for (const expenses of [0, jod(150), jod(625), jod(1_234)]) {
         for (const firstPayment of [0, jod(500), jod(2_000)]) {
           for (const ltv of [85, 80, 70, 90, 66.6]) {
-            const suggestion = computeSubmittedQuotation({
+            const result = solve({
               targetNetProceedsMinor: target,
-              estimatedExpensesMinor: expenses,
+              estimatedDealerBorneExpensesMinor: expenses,
               customerFirstPaymentMinor: firstPayment,
               appliedLtvPercent: ltv,
+              customerFirstPaymentOffsetsUnfinancedShare: true,
             });
             // Rounding is upward on purpose, so the projection may exceed the
             // target by a minor unit or two but must never fall short of it.
-            expect(suggestion.projectedNetProceedsMinor).toBeGreaterThanOrEqual(target);
+            expect(result.projectedNetProceedsMinor).toBeGreaterThanOrEqual(target);
           }
         }
       }
@@ -182,27 +210,210 @@ describe("computeSubmittedQuotation", () => {
     // 82 ÷ 65.6% is exactly 125. The float quotient is 125.00000000000001 and
     // the previous Math.ceil returned 126, quoting the finance company one
     // minor unit above what the dealership actually needed.
-    const suggestion = computeSubmittedQuotation({
+    const result = solve({
       targetNetProceedsMinor: 82,
-      estimatedExpensesMinor: 0,
+      estimatedDealerBorneExpensesMinor: 0,
       customerFirstPaymentMinor: 0,
       appliedLtvPercent: 65.6,
+      customerFirstPaymentOffsetsUnfinancedShare: true,
     });
-    expect(suggestion.submittedQuotationMinor).toBe(125);
+    expect(result.submittedQuotationMinor).toBe(125);
   });
 
   it("quotes target plus expenses when the customer already covers the unfinanced slice", () => {
-    const suggestion = computeSubmittedQuotation({
+    const result = solve({
       targetNetProceedsMinor: jod(10_000),
-      estimatedExpensesMinor: jod(500),
+      estimatedDealerBorneExpensesMinor: jod(500),
       customerFirstPaymentMinor: jod(9_000),
       appliedLtvPercent: 85,
+      customerFirstPaymentOffsetsUnfinancedShare: true,
     });
 
-    expect(suggestion.customerCoversUnfinancedPortion).toBe(true);
-    expect(suggestion.submittedQuotationMinor).toBe(jod(10_500));
-    expect(suggestion.composition.dealerContributionMinor).toBe(0);
-    expect(suggestion.projectedNetProceedsMinor).toBe(jod(10_000));
+    expect(result.customerCoversUnfinancedPortion).toBe(true);
+    expect(result.submittedQuotationMinor).toBe(jod(10_500));
+    expect(result.composition.dealerContributionMinor).toBe(0);
+    expect(result.projectedNetProceedsMinor).toBe(jod(10_000));
+  });
+});
+
+describe("the solver is optional, not the domain rule", () => {
+  const baseInput = {
+    targetNetProceedsMinor: BASE.targetSellingAmount,
+    estimatedDealerBorneExpensesMinor: exampleEstimatedDealerBorneExpensesMinor,
+    customerFirstPaymentMinor: BASE.customerFirstPayment,
+    appliedLtvPercent: BASE.ltvPercent,
+  };
+
+  it("declines when the company's offset rule has not been recorded", () => {
+    // The algebra only describes a company whose customer first payment offsets
+    // the unfinanced share. Assuming that universally is what turned one
+    // dealership's arrangement into everyone's rule.
+    const result = computeSubmittedQuotation({
+      ...baseInput,
+      customerFirstPaymentOffsetsUnfinancedShare: undefined,
+    });
+    expect(result.available).toBe(false);
+    if (result.available) throw new Error("expected unavailable");
+    expect(result.reason).toBe("OFFSET_RULE_UNKNOWN");
+  });
+
+  it("declines when the company's rule says the payment does not offset", () => {
+    const result = computeSubmittedQuotation({
+      ...baseInput,
+      customerFirstPaymentOffsetsUnfinancedShare: false,
+    });
+    expect(result.available).toBe(false);
+    if (result.available) throw new Error("expected unavailable");
+    expect(result.reason).toBe("OFFSET_RULE_DOES_NOT_APPLY");
+  });
+
+  it("treats a buffer as headroom the dealership keeps, not a cost it bears", () => {
+    // Same total added to the quotation either way — and completely different
+    // meanings, which is why they are separate inputs.
+    const asExpense = solve({
+      ...baseInput,
+      estimatedDealerBorneExpensesMinor: jod(625),
+      quotationBufferMinor: 0,
+      customerFirstPaymentOffsetsUnfinancedShare: true,
+    });
+    const asBuffer = solve({
+      ...baseInput,
+      estimatedDealerBorneExpensesMinor: 0,
+      quotationBufferMinor: jod(625),
+      customerFirstPaymentOffsetsUnfinancedShare: true,
+    });
+
+    expect(asBuffer.submittedQuotationMinor).toBe(asExpense.submittedQuotationMinor);
+    // The buffer is not spent, so it lands in proceeds instead of vanishing.
+    expect(asExpense.projectedNetProceedsMinor).toBe(BASE.targetSellingAmount);
+    expect(asBuffer.projectedNetProceedsMinor).toBe(BASE.targetSellingAmount + jod(625));
+  });
+
+  it("quotes lower when no expenses have been itemized, rather than inventing an allowance", () => {
+    const noExpenses = solve({
+      ...baseInput,
+      estimatedDealerBorneExpensesMinor: 0,
+      customerFirstPaymentOffsetsUnfinancedShare: true,
+    });
+    // (10,500 + 0 − 500) ÷ 0.85 = 11,764.706 → 11,764.706 rounded up.
+    expect(noExpenses.submittedQuotationMinor).toBeLessThan(jod(12_500));
+    expect(noExpenses.projectedNetProceedsMinor).toBeGreaterThanOrEqual(
+      BASE.targetSellingAmount
+    );
+  });
+});
+
+describe("describeQuotationResidual", () => {
+  it("reports the example's 625 residual without saying what it is", () => {
+    // Working backwards from the supplied scenario. The number is real; what it
+    // represents — expenses, headroom, a commission, or nothing — is not
+    // something the system can determine, so it names none of them.
+    const residual = describeQuotationResidual({
+      submittedQuotationMinor: BASE.submittedQuotation,
+      targetNetProceedsMinor: BASE.targetSellingAmount,
+      dealerContributionMinor: jod(1_375),
+    });
+
+    expect(residual.proceedsBeforeExpensesMinor).toBe(jod(11_125));
+    expect(residual.unreconciledResidualMinor).toBe(jod(625));
+    // No classification field exists to check — that is the point.
+    expect(Object.keys(residual).sort()).toEqual([
+      "proceedsBeforeExpensesMinor",
+      "unreconciledResidualMinor",
+    ]);
+  });
+
+  it("reports zero when the quotation nets exactly the target", () => {
+    expect(
+      describeQuotationResidual({
+        submittedQuotationMinor: jod(11_875),
+        targetNetProceedsMinor: jod(10_500),
+        dealerContributionMinor: jod(1_375),
+      }).unreconciledResidualMinor
+    ).toBe(0);
+  });
+});
+
+describe("computeGapOutcome", () => {
+  const lowerApproval = {
+    submittedQuotationMinor: jod(12_500),
+    approvedDealerPurchaseAmountMinor: jod(11_500),
+    appliedLtvPercent: 85,
+    customerFirstPaymentMinor: jod(500),
+    targetNetProceedsMinor: jod(10_500),
+    dealerBorneExpensesMinor: exampleEstimatedDealerBorneExpensesMinor,
+    vehicleCostMinor: BASE.vehiclePurchaseCost,
+  };
+
+  it("shows the confirmed 150 upside instead of neutralising it", () => {
+    // Customer absorbs the whole raw 1,000 and pays it to the dealership. The
+    // dealership ends 150 ahead of target because its own contribution fell
+    // from 1,375 to 1,225 at the same time. That is a consequence of the
+    // confirmed rule, and the allocation must NOT be adjusted to hide it.
+    const outcome = computeGapOutcome({
+      ...lowerApproval,
+      customerGapShareMinor: jod(1_000),
+      dealerGapShareMinor: 0,
+      customerGapPaymentToDealerMinor: jod(1_000),
+    });
+
+    expect(outcome.rawAppraisalGapMinor).toBe(jod(1_000));
+    expect(outcome.fundedPortionReductionMinor).toBe(jod(850));
+    expect(outcome.originalDealerContributionMinor).toBe(jod(1_375));
+    expect(outcome.recalculatedDealerContributionMinor).toBe(jod(1_225));
+    expect(outcome.customerGapPaymentToDealerMinor).toBe(jod(1_000));
+    expect(outcome.dealerGapShareMinor).toBe(0);
+    expect(outcome.finalProjectedDealerNetProceedsMinor).toBe(jod(10_650));
+    expect(outcome.varianceFromTargetNetProceedsMinor).toBe(jod(150));
+    expect(outcome.finalProjectedProfitMinor).toBe(jod(1_150));
+    expect(outcome.proceedsDifferFromTarget).toBe(true);
+  });
+
+  it("shows the shortfall when the dealership absorbs the whole gap", () => {
+    const outcome = computeGapOutcome({
+      ...lowerApproval,
+      customerGapShareMinor: 0,
+      dealerGapShareMinor: jod(1_000),
+      customerGapPaymentToDealerMinor: 0,
+    });
+
+    expect(outcome.finalProjectedDealerNetProceedsMinor).toBe(jod(9_650));
+    expect(outcome.varianceFromTargetNetProceedsMinor).toBe(jod(-850));
+    expect(outcome.finalProjectedProfitMinor).toBe(jod(150));
+    expect(outcome.proceedsDifferFromTarget).toBe(true);
+  });
+
+  it("shows the confirmed 700/300 split, with the shares still summing to 1,000", () => {
+    const outcome = computeGapOutcome({
+      ...lowerApproval,
+      customerGapShareMinor: jod(700),
+      dealerGapShareMinor: jod(300),
+      // 300 cash + 400 installments, both payable to the dealership.
+      customerGapPaymentToDealerMinor: jod(700),
+    });
+
+    expect(
+      validateGapShares(outcome.rawAppraisalGapMinor, {
+        customerGapShareMinor: jod(700),
+        dealerGapShareMinor: jod(300),
+        customerGapCashToDealerMinor: jod(300),
+        customerGapInstallmentToDealerMinor: jod(400),
+        customerGapToFinanceCompanyMinor: 0,
+      })
+    ).toEqual([]);
+    expect(outcome.finalProjectedDealerNetProceedsMinor).toBe(jod(10_350));
+    expect(outcome.varianceFromTargetNetProceedsMinor).toBe(jod(-150));
+  });
+
+  it("does not flag a variance when the outcome lands exactly on target", () => {
+    const outcome = computeGapOutcome({
+      ...lowerApproval,
+      customerGapShareMinor: jod(850),
+      dealerGapShareMinor: jod(150),
+      customerGapPaymentToDealerMinor: jod(850),
+    });
+    expect(outcome.varianceFromTargetNetProceedsMinor).toBe(0);
+    expect(outcome.proceedsDifferFromTarget).toBe(false);
   });
 });
 
@@ -531,7 +742,7 @@ describe("computeDealerProceeds", () => {
       approvedDealerPurchaseAmountMinor: jod(12_500),
       dealerContributionMinor: jod(1_375),
       customerDirectToDealerMinor: 0,
-      dealerBorneExpensesMinor: BASE.estimatedExpenses,
+      dealerBorneExpensesMinor: exampleEstimatedDealerBorneExpensesMinor,
       vehicleCostMinor: BASE.vehiclePurchaseCost,
     });
 
@@ -554,7 +765,7 @@ describe("computeDealerProceeds", () => {
       approvedDealerPurchaseAmountMinor: jod(11_500),
       dealerContributionMinor: composition.dealerContributionMinor,
       customerDirectToDealerMinor: 0,
-      dealerBorneExpensesMinor: BASE.estimatedExpenses,
+      dealerBorneExpensesMinor: exampleEstimatedDealerBorneExpensesMinor,
       vehicleCostMinor: BASE.vehiclePurchaseCost,
     });
 
@@ -567,7 +778,7 @@ describe("computeDealerProceeds", () => {
       approvedDealerPurchaseAmountMinor: jod(11_500),
       dealerContributionMinor: jod(1_225),
       customerDirectToDealerMinor: jod(1_000),
-      dealerBorneExpensesMinor: BASE.estimatedExpenses,
+      dealerBorneExpensesMinor: exampleEstimatedDealerBorneExpensesMinor,
       vehicleCostMinor: BASE.vehiclePurchaseCost,
     });
 
@@ -582,7 +793,7 @@ describe("computeDealerProceeds", () => {
       approvedDealerPurchaseAmountMinor: jod(11_500),
       dealerContributionMinor: jod(1_225),
       customerDirectToDealerMinor: 0,
-      dealerBorneExpensesMinor: BASE.estimatedExpenses,
+      dealerBorneExpensesMinor: exampleEstimatedDealerBorneExpensesMinor,
       vehicleCostMinor: BASE.vehiclePurchaseCost,
     });
     expect(proceeds.netProceedsMinor).toBe(jod(9_650));

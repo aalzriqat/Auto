@@ -15,6 +15,7 @@ import {
   gapResolutionValidator,
   handoverStatusValidator,
   ltvBasisValidator,
+  quotationCalculationSnapshotValidator,
   quotationSourceValidator,
   settlementStatusValidator,
 } from "./utils/financingEconomics";
@@ -1528,6 +1529,10 @@ export default defineSchema({
     dealerContributionSettlement: v.optional(dealerContributionSettlementValidator),
     customerContributionSettlement: v.optional(customerContributionSettlementValidator),
     feesDeductedFromSettlement: v.optional(v.boolean()),
+    // Whether the customer's first payment offsets the unfinanced share. The
+    // quotation solver only applies when it does; unset makes the solver
+    // decline rather than assume.
+    customerFirstPaymentOffsetsUnfinancedShare: v.optional(v.boolean()),
     feeTemplates: v.optional(v.array(financeFeeTemplateValidator)),
   }).index("by_org", ["orgId"]),
 
@@ -1772,6 +1777,11 @@ export default defineSchema({
     submittedQuotationMinor: v.optional(v.number()),
     submittedQuotationSource: v.optional(quotationSourceValidator),
     submittedQuotationOverrideReason: v.optional(v.string()),
+    // Mode, inputs, solver result, rule version and override, frozen at the
+    // moment the quotation was recorded.
+    quotationCalculationSnapshot: v.optional(quotationCalculationSnapshotValidator),
+    estimatedDealerBorneExpensesMinor: v.optional(v.number()),
+    quotationBufferMinor: v.optional(v.number()),
     submittedQuotationAt: v.optional(v.number()),
     submittedQuotationBy: v.optional(v.id("users")),
     dealerEstimateMinor: v.optional(v.number()),

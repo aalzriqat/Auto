@@ -310,79 +310,132 @@ export function computeFundingComposition(
 export interface SubmittedQuotationInput {
   /** The dealership's desired net proceeds — its normal target selling amount. */
   targetNetProceedsMinor: number;
-  /** Estimated closing expenses the dealership expects to bear. Dynamic, itemized elsewhere. */
-  estimatedExpensesMinor: number;
+  /**
+   * Sum of the itemized closing costs the dealership expects to BEAR.
+   *
+   * A real cost. Never inferred: if nobody has itemized the fees, this is zero
+   * and the suggested quotation is correspondingly lower, which is the honest
+   * answer rather than a fabricated allowance.
+   */
+  estimatedDealerBorneExpensesMinor: number;
+  /**
+   * Optional negotiation headroom — a commercial choice, not a cost.
+   *
+   * Deliberately separate from expenses even though the arithmetic treats them
+   * alike, because the books must not learn to believe a buffer is money spent.
+   */
+  quotationBufferMinor?: number;
   /** What the customer can put down. */
   customerFirstPaymentMinor: number;
   /** The LTV the financing company is expected to apply. */
   appliedLtvPercent: number;
+  /**
+   * The company's rule: does the customer's first payment offset the unfinanced
+   * share? The solver's algebra depends on it and it is not universal, so an
+   * unrecorded rule makes the solver unavailable rather than assumed.
+   */
+  customerFirstPaymentOffsetsUnfinancedShare: boolean | undefined;
 }
+
+/** Why the solver cannot produce a figure. */
+export type QuotationSolverUnavailableReason =
+  /** The company's rule on whether the customer's payment offsets the unfinanced share is unrecorded. */
+  | "OFFSET_RULE_UNKNOWN"
+  /** The company's rule says it does not, so this algebra does not describe the deal. */
+  | "OFFSET_RULE_DOES_NOT_APPLY";
 
 export interface SubmittedQuotationSuggestion {
   submittedQuotationMinor: number;
   /** The composition that quotation implies, if approved in full. */
   composition: FundingComposition;
-  /** Net proceeds the quotation actually yields — may exceed target by a rounding minor unit. */
+  /** Net proceeds the quotation actually yields — may exceed target by rounding. */
   projectedNetProceedsMinor: number;
   /**
    * True when the customer's payment already covers the whole unfinanced slice,
-   * so the quotation is simply target + expenses and no dealer contribution arises.
+   * so the quotation is simply target + expenses + buffer and no dealer
+   * contribution arises.
    */
   customerCoversUnfinancedPortion: boolean;
+  /** Echoed back so the caller can snapshot exactly what produced this figure. */
+  inputs: SubmittedQuotationInput;
 }
 
+export type SubmittedQuotationResult =
+  | ({ available: true } & SubmittedQuotationSuggestion)
+  | { available: false; reason: QuotationSolverUnavailableReason };
+
 /**
- * Suggests the quotation to send the financing company so the dealership lands
- * on its target net proceeds after its own contribution and closing expenses.
+ * An OPTIONAL solver for the quotation to send the financing company.
  *
- * ## Where the formula comes from
+ * ## What this is, and is not
  *
- * The dealership receives the approved purchase amount `Q` and pays back its own
- * contribution, then bears the closing expenses:
+ * It is one way to pick a quotation, available when the selected company's
+ * rules confirm it applies. It is **not** the domain rule, and a dealership is
+ * free to type a figure it negotiated instead — see the three calculation modes
+ * the caller must support.
+ *
+ * ## The algebra, and its precondition
+ *
+ * When the customer's first payment offsets the unfinanced share, the
+ * dealership receives the approved purchase amount `Q`, pays in its own
+ * contribution, and bears its expenses:
  *
  * ```
- * net = Q − dealerContribution(Q) − expenses
- *     = Q − (Q × (1 − LTV) − firstPayment) − expenses
- *     = Q × LTV + firstPayment − expenses
+ * net = Q − dealerContribution(Q) − expenses − buffer
+ *     = Q − (Q × (1 − LTV) − customerContribution) − expenses − buffer
+ *     = Q × LTV + customerContribution − expenses − buffer
  * ```
  *
  * Setting that equal to the target and solving:
  *
  * ```
- * Q = (target + expenses − firstPayment) ÷ LTV
+ * Q = (target + expenses + buffer − applicable customer contribution) ÷ LTV
  * ```
  *
- * Which is the dealer's confirmed example exactly: (10,500 + 625 − 500) ÷ 0.85
- * = 12,500, whose funded portion 10,625 is precisely the target plus expenses
- * less the customer's payment. The identity worth remembering is that **the
- * financing company's funded portion carries the dealership's target proceeds
- * and its closing expenses, less whatever the customer puts in.**
+ * That precondition is a real per-company fact, not a universal truth, so it is
+ * passed in explicitly and the solver refuses rather than guessing when it is
+ * unrecorded. Different companies structure the unfinanced share differently.
+ *
+ * ## The inputs are separate on purpose
+ *
+ * `estimatedDealerBorneExpensesMinor` is the sum of itemized costs the
+ * dealership actually expects to bear. `quotationBufferMinor` is negotiation
+ * headroom — a commercial choice, not a cost. They behave identically in the
+ * arithmetic and mean entirely different things, and collapsing them into one
+ * "expenses" figure is how a buffer silently becomes a cost the books believe
+ * in. Both default to zero; neither is ever inferred.
  *
  * Rounded *up*, so rounding never lands the dealership below its target.
- *
- * This is a suggestion. The caller is expected to let a user override it and to
- * record why — the number the dealership actually sends is a commercial
- * decision, and pretending otherwise would make the stored quotation a
- * calculated artefact rather than a real submitted document.
  */
 export function computeSubmittedQuotation(
   input: SubmittedQuotationInput
-): SubmittedQuotationSuggestion {
+): SubmittedQuotationResult {
+  if (input.customerFirstPaymentOffsetsUnfinancedShare === undefined) {
+    return { available: false, reason: "OFFSET_RULE_UNKNOWN" };
+  }
+  if (!input.customerFirstPaymentOffsetsUnfinancedShare) {
+    return { available: false, reason: "OFFSET_RULE_DOES_NOT_APPLY" };
+  }
+
   assertNonNegativeMinor(input.targetNetProceedsMinor, "Target net proceeds");
-  assertNonNegativeMinor(input.estimatedExpensesMinor, "Estimated expenses");
+  assertNonNegativeMinor(
+    input.estimatedDealerBorneExpensesMinor,
+    "Estimated dealer-borne expenses"
+  );
+  assertNonNegativeMinor(input.quotationBufferMinor ?? 0, "Quotation buffer");
   assertNonNegativeMinor(input.customerFirstPaymentMinor, "Customer first payment");
   assertLtvPercent(input.appliedLtvPercent);
 
-  const required =
-    input.targetNetProceedsMinor + input.estimatedExpensesMinor - input.customerFirstPaymentMinor;
+  const buffer = input.quotationBufferMinor ?? 0;
+  const dealerSideTotal =
+    input.targetNetProceedsMinor + input.estimatedDealerBorneExpensesMinor + buffer;
+  const required = dealerSideTotal - input.customerFirstPaymentMinor;
 
-  // The customer's payment alone already meets the target and expenses: no
+  // The customer's payment alone already meets the dealer-side total: no
   // financing-company funding is needed to reach it, so quote the plain sum.
-  // (Still routed through the composition below, which will show the customer
-  // covering the unfinanced slice outright.)
   const financedCase =
     required > 0 ? divideByPercentCeil(required, input.appliedLtvPercent) : 0;
-  const cashCase = input.targetNetProceedsMinor + input.estimatedExpensesMinor;
+  const cashCase = dealerSideTotal;
 
   // Pick the branch whose own precondition holds. In the financed branch the
   // dealership must actually have something to contribute — otherwise the
@@ -409,16 +462,62 @@ export function computeSubmittedQuotation(
     customerFirstPaymentMinor: input.customerFirstPaymentMinor,
   });
 
+  // The buffer is headroom the dealership expects to keep, so it is NOT
+  // subtracted here — only real expenses reduce proceeds. That is precisely the
+  // distinction collapsing the two inputs would destroy.
   const projectedNetProceedsMinor =
     submittedQuotationMinor -
     composition.dealerContributionMinor -
-    input.estimatedExpensesMinor;
+    input.estimatedDealerBorneExpensesMinor;
 
   return {
+    available: true,
     submittedQuotationMinor,
     composition,
     projectedNetProceedsMinor,
     customerCoversUnfinancedPortion,
+    inputs: input,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Residual reporting
+// ---------------------------------------------------------------------------
+
+export interface QuotationResidual {
+  /** What the structure nets the dealership before any expense is deducted. */
+  proceedsBeforeExpensesMinor: number;
+  /**
+   * Proceeds-before-expenses less the target.
+   *
+   * Deliberately unclassified. It may be closing expenses, negotiation
+   * headroom, a company commission, or simply that the quotation was a
+   * negotiated round number and this is what falls out. The system cannot tell
+   * which, so it reports the number and names none of them.
+   */
+  unreconciledResidualMinor: number;
+}
+
+/**
+ * Reports the gap between what a quotation actually nets and the stated target,
+ * without deciding what the gap is.
+ *
+ * Exists because the temptation to classify it is exactly the mistake to avoid.
+ * Working backwards from a quotation of 12,500 against a target of 10,500
+ * yields a residual of 625 — and calling that "closing expenses" would turn an
+ * arithmetic leftover into a business fact nobody stated. Show it; let a person
+ * say what it is.
+ */
+export function describeQuotationResidual(args: {
+  submittedQuotationMinor: number;
+  targetNetProceedsMinor: number;
+  dealerContributionMinor: number;
+}): QuotationResidual {
+  const proceedsBeforeExpensesMinor =
+    args.submittedQuotationMinor - args.dealerContributionMinor;
+  return {
+    proceedsBeforeExpensesMinor,
+    unreconciledResidualMinor: proceedsBeforeExpensesMinor - args.targetNetProceedsMinor,
   };
 }
 
@@ -558,6 +657,105 @@ export function validateGapShares(
   }
 
   return violations;
+}
+
+export interface GapOutcomeInput {
+  submittedQuotationMinor: number;
+  approvedDealerPurchaseAmountMinor: number;
+  appliedLtvPercent: number;
+  customerFirstPaymentMinor: number;
+  /** The dealership's original target, to measure the outcome against. */
+  targetNetProceedsMinor: number;
+  /** Itemized costs the dealership bears. Never inferred. */
+  dealerBorneExpensesMinor: number;
+  vehicleCostMinor: number;
+  /** The negotiated split of the RAW gap. */
+  customerGapShareMinor: number;
+  dealerGapShareMinor: number;
+  /** The part of the customer's share actually payable to the dealership. */
+  customerGapPaymentToDealerMinor: number;
+}
+
+/**
+ * Every figure the dealership needs to see side by side when an appraisal comes
+ * in low — reported separately, never netted into one headline.
+ */
+export interface GapOutcome {
+  /** What the parties negotiate: quotation − approved amount. */
+  rawAppraisalGapMinor: number;
+  /** How much less the company funds. Context only, never the negotiated figure. */
+  fundedPortionReductionMinor: number;
+  /** What the dealership would have contributed at the original quotation. */
+  originalDealerContributionMinor: number;
+  /** What it contributes at the approved amount — lower, because the purchase is lower. */
+  recalculatedDealerContributionMinor: number;
+  /** The customer's share actually reaching the dealership. */
+  customerGapPaymentToDealerMinor: number;
+  dealerGapShareMinor: number;
+  finalProjectedDealerNetProceedsMinor: number;
+  /** Signed: positive means the outcome beats the original target. */
+  varianceFromTargetNetProceedsMinor: number;
+  finalProjectedProfitMinor: number;
+  /** Set whenever the outcome differs from target in either direction. */
+  proceedsDifferFromTarget: boolean;
+}
+
+/**
+ * The full picture of a lower approval, with nothing reallocated.
+ *
+ * A customer who absorbs the whole raw gap can leave the dealership *better
+ * off* than the original deal — in the confirmed example, 10,650 against a
+ * 10,500 target — because the dealership's own required contribution falls from
+ * 1,375 to 1,225 at the same time as the customer pays the full 1,000. That is
+ * an arithmetic consequence of the confirmed commercial rule, not a defect, and
+ * it must NOT be smoothed away by quietly adjusting the shares: the customer's
+ * obligation is the raw gap, and the split is what the parties agreed.
+ *
+ * So every component is returned separately and the variance is flagged for a
+ * human to look at. Netting them into a single "profit" figure is what hides
+ * the 150 and makes the allocation look wrong.
+ */
+export function computeGapOutcome(input: GapOutcomeInput): GapOutcome {
+  const originalComposition = computeFundingComposition({
+    approvedPurchaseAmountMinor: input.submittedQuotationMinor,
+    appliedLtvPercent: input.appliedLtvPercent,
+    customerFirstPaymentMinor: input.customerFirstPaymentMinor,
+  });
+  const recalculatedComposition = computeFundingComposition({
+    approvedPurchaseAmountMinor: input.approvedDealerPurchaseAmountMinor,
+    appliedLtvPercent: input.appliedLtvPercent,
+    customerFirstPaymentMinor: input.customerFirstPaymentMinor,
+  });
+
+  const gap = computeAppraisalGap({
+    submittedQuotationMinor: input.submittedQuotationMinor,
+    approvedDealerPurchaseAmountMinor: input.approvedDealerPurchaseAmountMinor,
+    appliedLtvPercent: input.appliedLtvPercent,
+  });
+
+  const proceeds = computeDealerProceeds({
+    approvedDealerPurchaseAmountMinor: input.approvedDealerPurchaseAmountMinor,
+    dealerContributionMinor: recalculatedComposition.dealerContributionMinor,
+    customerDirectToDealerMinor: input.customerGapPaymentToDealerMinor,
+    dealerBorneExpensesMinor: input.dealerBorneExpensesMinor,
+    vehicleCostMinor: input.vehicleCostMinor,
+  });
+
+  const varianceFromTargetNetProceedsMinor =
+    proceeds.netProceedsMinor - input.targetNetProceedsMinor;
+
+  return {
+    rawAppraisalGapMinor: gap.rawAppraisalGapMinor,
+    fundedPortionReductionMinor: gap.fundingReductionMinor,
+    originalDealerContributionMinor: originalComposition.dealerContributionMinor,
+    recalculatedDealerContributionMinor: recalculatedComposition.dealerContributionMinor,
+    customerGapPaymentToDealerMinor: input.customerGapPaymentToDealerMinor,
+    dealerGapShareMinor: input.dealerGapShareMinor,
+    finalProjectedDealerNetProceedsMinor: proceeds.netProceedsMinor,
+    varianceFromTargetNetProceedsMinor,
+    finalProjectedProfitMinor: proceeds.profitMinor,
+    proceedsDifferFromTarget: varianceFromTargetNetProceedsMinor !== 0,
+  };
 }
 
 /** The gap outcome implied by a share split. Derived, never stored as the source of truth. */

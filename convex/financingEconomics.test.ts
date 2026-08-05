@@ -44,9 +44,14 @@ const DEAL = {
   vehicleCost: 9_500,
   targetSelling: 10_500,
   customerFirstPayment: 500,
-  estimatedExpenses: 625,
   quotation: 12_500,
   ltvPercent: 85,
+  /**
+   * INFERRED, not supplied — the residual that makes the solver reproduce the
+   * example's 12,500. Not a production default and not a domain rule; it exists
+   * here only so this scenario is reproducible.
+   */
+  exampleDealerBorneExpenses: 625,
 };
 
 interface Seed {
@@ -137,6 +142,7 @@ async function seedDealer(
     isActive: true,
     maxFinancingLTV: companyRules.maxFinancingLTV ?? 85,
     defaultLtvPercent: companyRules.defaultLtvPercent ?? DEAL.ltvPercent,
+    customerFirstPaymentOffsetsUnfinancedShare: true,
     ...(companyRules.minimumLtvPercent !== undefined
       ? { minimumLtvPercent: companyRules.minimumLtvPercent }
       : {}),
@@ -182,9 +188,9 @@ async function recordBaselineQuotation(
     orgId: seed.orgId,
     applicationId,
     submittedQuotationMinor: jod(quotationMajor),
-    source: "CALCULATED",
+    source: "SYSTEM_CALCULATED",
     targetSellingAmountMinor: jod(DEAL.targetSelling),
-    estimatedExpensesMinor: jod(DEAL.estimatedExpenses),
+    estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
     customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
   });
 }
@@ -205,7 +211,7 @@ describe("suggested quotation", () => {
       orgId: seed.orgId,
       companyId: seed.companyId,
       targetSellingAmountMinor: jod(DEAL.targetSelling),
-      estimatedExpensesMinor: jod(DEAL.estimatedExpenses),
+      estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
       customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
     });
 
@@ -225,7 +231,7 @@ describe("suggested quotation", () => {
         orgId: seed.orgId,
         companyId: seed.companyId,
         targetSellingAmountMinor: jod(DEAL.targetSelling),
-        estimatedExpensesMinor: jod(DEAL.estimatedExpenses),
+        estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
         customerFirstPaymentMinor: jod(500),
       })
     ).rejects.toThrow(/first payment of at least/i);
@@ -239,7 +245,7 @@ describe("suggested quotation", () => {
         orgId: seed.orgId,
         companyId: seed.companyId,
         targetSellingAmountMinor: jod(DEAL.targetSelling),
-        estimatedExpensesMinor: jod(DEAL.estimatedExpenses),
+        estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
         customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
         ltvPercent: 95,
       })
@@ -899,7 +905,7 @@ describe("reopening an approval", () => {
         orgId: seed.orgId,
         applicationId,
         submittedQuotationMinor: jod(11_800),
-        source: "MANUAL",
+        source: "MANUAL_ENTRY",
         overrideReason: "Withdrawing and resubmitting lower.",
       })
     ).rejects.toThrow(/already approved a purchase amount/i);
@@ -920,7 +926,7 @@ describe("reopening an approval", () => {
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(11_800),
-      source: "MANUAL",
+      source: "MANUAL_ENTRY",
       overrideReason: "Withdrawing and resubmitting lower.",
     });
     expect((await readApp(seed, applicationId)).submittedQuotationMinor).toBe(jod(11_800));
@@ -1204,7 +1210,7 @@ describe("LTV configuration", () => {
         orgId: seed.orgId,
         companyId: bareCompanyId,
         targetSellingAmountMinor: jod(DEAL.targetSelling),
-        estimatedExpensesMinor: jod(DEAL.estimatedExpenses),
+        estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
         customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
       })
     ).rejects.toThrow(/No LTV is configured/i);
@@ -1254,7 +1260,29 @@ describe("LTV configuration", () => {
 });
 
 describe("overrides and audit", () => {
-  test("a manually entered quotation must record why", async () => {
+  test("accepts a negotiated quotation with no solver involved", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+
+    // MANUAL_ENTRY is a first-class mode, not a deviation: the dealership
+    // negotiated a figure and the solver was never consulted, so there is
+    // nothing for it to explain a departure from.
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(13_000),
+      source: "MANUAL_ENTRY",
+    });
+
+    const app = await readApp(seed, applicationId);
+    expect(app.submittedQuotationMinor).toBe(jod(13_000));
+    expect(app.quotationCalculationSnapshot?.mode).toBe("MANUAL_ENTRY");
+    // Nothing was back-solved to fill the blanks.
+    expect(app.estimatedDealerBorneExpensesMinor).toBeUndefined();
+    expect(app.quotationBufferMinor).toBeUndefined();
+  });
+
+  test("departing from a calculated quotation must record why", async () => {
     const seed = await seedDealer();
     const applicationId = await createApplication(seed);
 
@@ -1263,9 +1291,86 @@ describe("overrides and audit", () => {
         orgId: seed.orgId,
         applicationId,
         submittedQuotationMinor: jod(13_000),
-        source: "MANUAL",
+        source: "CALCULATED_WITH_OVERRIDE",
+        targetSellingAmountMinor: jod(DEAL.targetSelling),
+        estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+        customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
       })
     ).rejects.toThrow(/must record why/i);
+  });
+
+  test("snapshots the mode, inputs, solver figure and override together", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(13_000),
+      source: "CALCULATED_WITH_OVERRIDE",
+      overrideReason: "Company asked for a higher figure to cover its own fee.",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+      quotationBufferMinor: 0,
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+    });
+
+    const snapshot = (await readApp(seed, applicationId)).quotationCalculationSnapshot;
+    expect(snapshot?.mode).toBe("CALCULATED_WITH_OVERRIDE");
+    expect(snapshot?.targetNetProceedsMinor).toBe(jod(DEAL.targetSelling));
+    expect(snapshot?.estimatedDealerBorneExpensesMinor).toBe(
+      jod(DEAL.exampleDealerBorneExpenses)
+    );
+    expect(snapshot?.quotationBufferMinor).toBe(0);
+    expect(snapshot?.appliedLtvPercent).toBe(85);
+    expect(snapshot?.ruleVersion).toBe(1);
+    // Both figures kept, so the departure is auditable against what the solver
+    // would have sent.
+    expect(snapshot?.calculatedQuotationMinor).toBe(jod(12_500));
+    expect(snapshot?.finalQuotationMinor).toBe(jod(13_000));
+    expect(snapshot?.overrideReason).toMatch(/its own fee/);
+  });
+
+  test("records why the solver was unavailable rather than quoting anyway", async () => {
+    const seed = await seedDealer();
+    // A company that has not told us whether the customer's first payment
+    // offsets the unfinanced share.
+    await seed.asUser.mutation(api.finance.updateCompany, {
+      id: seed.companyId,
+      orgId: seed.orgId,
+      name: "Jordan Finance",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      isActive: true,
+      maxFinancingLTV: 85,
+      defaultLtvPercent: 85,
+      customerFirstPaymentOffsetsUnfinancedShare: false,
+    });
+
+    const applicationId = await createApplication(seed);
+    const suggestion = await seed.asUser.query(api.financingEconomics.suggestQuotation, {
+      orgId: seed.orgId,
+      companyId: seed.companyId,
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+    });
+    expect(suggestion.available).toBe(false);
+
+    // The dealership types what it negotiated instead, and the snapshot records
+    // that no calculated figure existed to depart from.
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(12_500),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+    });
+
+    const snapshot = (await readApp(seed, applicationId)).quotationCalculationSnapshot;
+    expect(snapshot?.calculatedQuotationMinor).toBeUndefined();
+    expect(snapshot?.solverUnavailableReason).toBe("OFFSET_RULE_DOES_NOT_APPLY");
   });
 
   test("changing a recorded quotation logs the previous value, reason and user", async () => {
@@ -1277,7 +1382,7 @@ describe("overrides and audit", () => {
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(13_000),
-      source: "MANUAL",
+      source: "MANUAL_ENTRY",
       overrideReason: "Company asked for a revised quotation after the inspection.",
     });
 
@@ -1304,7 +1409,7 @@ describe("overrides and audit", () => {
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(9_000),
-      source: "CALCULATED",
+      source: "SYSTEM_CALCULATED",
     });
 
     const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
@@ -1342,7 +1447,7 @@ describe("overrides and audit", () => {
         orgId: seed.orgId,
         applicationId,
         submittedQuotationMinor: jod(13_000),
-        source: "MANUAL",
+        source: "MANUAL_ENTRY",
         overrideReason: "Too late.",
       })
     ).rejects.toThrow(/already approved a purchase amount/i);
@@ -1524,7 +1629,7 @@ describe("tenancy", () => {
         orgId: seedA.orgId,
         applicationId: applicationB,
         submittedQuotationMinor: jod(12_500),
-        source: "CALCULATED",
+        source: "SYSTEM_CALCULATED",
       })
     ).rejects.toThrow(/not found in this organization/i);
   });
@@ -1541,7 +1646,7 @@ describe("input validation", () => {
           orgId: seed.orgId,
           applicationId,
           submittedQuotationMinor: amount,
-          source: "CALCULATED",
+          source: "SYSTEM_CALCULATED",
         })
       ).rejects.toThrow(/whole number of minor units/i);
     }

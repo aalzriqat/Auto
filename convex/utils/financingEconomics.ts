@@ -99,10 +99,46 @@ export const approvedPurchaseBasisValidator = v.union(
   v.literal("MANUAL")
 );
 
+/**
+ * How the stored quotation was arrived at.
+ *
+ * Three modes, kept distinct because they carry different evidentiary weight:
+ * a figure the solver produced, a figure a person typed, and a solver figure a
+ * person deliberately departed from. The third must record why.
+ */
 export const quotationSourceValidator = v.union(
-  v.literal("CALCULATED"),
-  v.literal("MANUAL")
+  v.literal("SYSTEM_CALCULATED"),
+  v.literal("MANUAL_ENTRY"),
+  v.literal("CALCULATED_WITH_OVERRIDE")
 );
+
+/**
+ * Everything that produced a stored quotation, frozen at the moment it was
+ * recorded.
+ *
+ * Snapshotted rather than recomputed so the figure sent to the financing
+ * company stays explainable after the company's rules, the vehicle's target or
+ * the itemized fees have all moved on.
+ */
+export const quotationCalculationSnapshotValidator = v.object({
+  mode: quotationSourceValidator,
+  targetNetProceedsMinor: v.optional(v.number()),
+  estimatedDealerBorneExpensesMinor: v.optional(v.number()),
+  quotationBufferMinor: v.optional(v.number()),
+  customerFirstPaymentMinor: v.optional(v.number()),
+  appliedLtvPercent: v.optional(v.number()),
+  customerFirstPaymentOffsetsUnfinancedShare: v.optional(v.boolean()),
+  /** What the solver produced, when it was available. */
+  calculatedQuotationMinor: v.optional(v.number()),
+  /** Why the solver produced nothing, when it did not. */
+  solverUnavailableReason: v.optional(v.string()),
+  /** What was actually recorded — the same as calculated unless overridden. */
+  finalQuotationMinor: v.number(),
+  overrideReason: v.optional(v.string()),
+  ruleVersion: v.optional(v.number()),
+  recordedBy: v.id("users"),
+  recordedAt: v.number(),
+});
 
 /**
  * Why a financing transaction failed.
@@ -239,6 +275,11 @@ export const financeCompanyRuleSnapshotValidator = v.object({
   dealerContributionSettlement: v.optional(dealerContributionSettlementValidator),
   customerContributionSettlement: v.optional(customerContributionSettlementValidator),
   feesDeductedFromSettlement: v.optional(v.boolean()),
+  // Whether the customer's first payment offsets the unfinanced share. The
+  // quotation solver's algebra depends on it and it is not universal, so it is
+  // recorded per company and the solver declines when it is unset rather than
+  // generalising one dealership's arrangement to every company.
+  customerFirstPaymentOffsetsUnfinancedShare: v.optional(v.boolean()),
   feeTemplates: v.optional(v.array(financeFeeTemplateValidator)),
 });
 
@@ -332,6 +373,11 @@ export function buildRuleSnapshot(
       company.customerContributionSettlement ?? RULE_DEFAULTS.customerContributionSettlement,
     feesDeductedFromSettlement:
       company.feesDeductedFromSettlement ?? RULE_DEFAULTS.feesDeductedFromSettlement,
+    // Deliberately no default. Unset means "nobody has told us", which makes
+    // the solver decline — the correct outcome, since guessing either way
+    // invents a commercial arrangement.
+    customerFirstPaymentOffsetsUnfinancedShare:
+      company.customerFirstPaymentOffsetsUnfinancedShare,
     feeTemplates: company.feeTemplates,
   };
 }
