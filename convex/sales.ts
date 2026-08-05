@@ -18,7 +18,7 @@ import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation"
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
-import { getOrgCurrency, hookCommissionAccrued, hookCommissionAdjusted, hookCommissionPaid, hookSaleCancelled, isPostableNow, reverseCommissionForSale, commissionAccountingDate, commissionEntriesOutstandingStatus, recognizedCommissionMinor, safeAdjustmentSeq, MAX_COMMISSION_ADJUSTMENTS } from "./accounting/workflowHooks";
+import { getOrgCurrency, hookCommissionAccrued, hookCommissionAdjusted, hookCommissionPaid, hookSaleCancelled, isPostableNow, reverseCommissionForSale, commissionAccountingDate, commissionAccrualStrandedReason, commissionEntriesOutstandingStatus, hasCommissionAccrual, recognizedCommissionMinor, safeAdjustmentSeq, MAX_COMMISSION_ADJUSTMENTS } from "./accounting/workflowHooks";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 import { toMinorUnits, fromMinorUnits, assertFiniteNumber } from "./utils/money";
 import { checkPostingAllowed } from "./accountingPeriods";
@@ -1030,45 +1030,6 @@ export const listCommissions = query({
 });
 
 /**
- * True once this sale's commission has been recognized in the ledger — either a
- * posted COMMISSION_ACCRUED journal entry or a still-queued accrual in the
- * outbox. Both AUTO and MANUAL accrue as soon as the amount is measurable on a
- * completed sale, so this decides whether a new amount is a FIRST accrual or a
- * correction to one already on the books (setCommissionAmount), and whether
- * recalculateCommission's one-shot fix-up still applies.
- */
-async function hasCommissionAccrual(
-  ctx: QueryCtx,
-  orgId: Id<"organizations">,
-  saleId: Id<"sales">
-): Promise<boolean> {
-  // Only an ACTIVE accrual locks the amount. A REVERSED event means the
-  // accrual was backed out (e.g. the sale was voided) — the error message's
-  // "reverse it before changing the amount" promise must actually unlock then.
-  const posted = await ctx.db
-    .query("accountingEvents")
-    .withIndex("by_org_source", (q) =>
-      q.eq("orgId", orgId).eq("sourceType", "sales").eq("sourceId", `commission_${saleId}`)
-    )
-    .filter((q) =>
-      q.and(q.eq(q.field("eventType"), "COMMISSION_ACCRUED"), q.neq(q.field("status"), "REVERSED"))
-    )
-    .first();
-  if (posted) return true;
-  // Outbox rows persist after being processed (status POSTED) — a processed
-  // row's accrual is already covered by the accountingEvents check above, so
-  // only a still-queued (PENDING/FAILED) row counts as an accrual here.
-  const pending = await ctx.db
-    .query("pendingAccountingEvents")
-    .withIndex("by_org_idempotency", (q) =>
-      q.eq("orgId", orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
-    )
-    .filter((q) => q.neq(q.field("status"), "POSTED"))
-    .first();
-  return pending !== null;
-}
-
-/**
  * Refuses to post a commission entry that would overtake its own prerequisites.
  *
  * Every entry that CLEARS Commission Payable (a payment) must land after the
@@ -1227,10 +1188,28 @@ export const markCommissionPaid = mutation({
         if (sale.commissionAmount == null || sale.commissionAmount <= 0) {
           throwAppError(AppErrorCode.VALIDATION_FAILED, "This sale has no commission amount to pay.");
         }
-        // The safety-net accrual below is dated to the sale, so a closed period
-        // would leave it unpostable while the payment itself posts — the exact
-        // ordering split the drain guards exist to prevent, created here.
-        await assertSalePeriodAcceptsPostings(ctx, args.orgId, sale.saleDate, "pay it");
+        // Only when the accrual is genuinely absent. The safety-net accrual
+        // below is dated to the sale, so for a sale that never accrued, a closed
+        // period would leave that entry unpostable while the payment itself
+        // posts — the exact ordering split the drain guards exist to prevent,
+        // created right here. But when the accrual is already on the books that
+        // hook is an idempotent no-op: nothing is dated into the closed period at
+        // all, and the payment is dated today. Checking unconditionally refused
+        // the ordinary "close the month, then pay the commissions earned in it"
+        // flow, and left a commission in a LOCKED period permanently unpayable.
+        //
+        // An accrual that exists but is still QUEUED falls through to
+        // assertCommissionEntriesPosted below, which refuses with a message that
+        // actually describes that state.
+        if (
+          (await commissionAccrualStrandedReason(ctx, args.orgId, args.saleId, sale.saleDate)) !==
+          null
+        ) {
+          throwAppError(
+            AppErrorCode.VALIDATION_FAILED,
+            "This sale's commission was never recognized and its accounting period is closed, so the entry could never post. Reopen the period before you pay it."
+          );
+        }
 
         const now = Date.now();
         await ctx.db.patch(args.saleId, {

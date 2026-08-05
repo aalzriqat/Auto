@@ -15,6 +15,7 @@ import {
   commissionEntriesStillQueued,
   recognizedCommissionMinor,
   commissionAccountingDate,
+  commissionAccrualStrandedReason,
 } from "./accounting/workflowHooks";
 import { toMinorUnits, fromMinorUnits } from "./utils/money";
 import { paymentMethodValidator, normalizePaymentMethod, PaymentMethod } from "./utils/paymentMethods";
@@ -1045,6 +1046,23 @@ export const approveRun = mutation({
           // whole point of earned-time recognition for exactly the population
           // the backfill exists to fix. Whichever runs first wins the key, so
           // approval racing the backfill decided the date.
+          // A backlog sale that never accrued, whose own period is CLOSED or
+          // LOCKED, cannot be recognized at all: the entry below would queue,
+          // burn every retry and dead-letter into a row that blocks payment and
+          // every future close. Approving the run anyway left that wreckage
+          // behind an APPROVED record that can no longer take the draft
+          // cancellation path. Refuse the run instead, naming the sale, so an
+          // accountant reopens the period (or corrects the sale) first.
+          //
+          // Already-accrued sales are unaffected — the hook is a no-op for them,
+          // and so is this check.
+          if (
+            (await commissionAccrualStrandedReason(ctx, args.orgId, saleId, sale.saleDate)) !== null
+          ) {
+            throw new ConvexError(
+              `Sale ${saleId} has an unrecognized commission dated into a closed accounting period, so it cannot be approved for payroll. Reopen that period so the commission can be recognized, then approve this run.`
+            );
+          }
           await hookCommissionAccrued(ctx, {
             orgId: args.orgId,
             saleId,

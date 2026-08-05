@@ -15,7 +15,7 @@ import { MutationCtx, QueryCtx } from "../_generated/server";
 import { postAccountingEvent, PostCommand } from "./postingEngine";
 import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
-import { getOpenPeriodForDate } from "../accountingPeriods";
+import { getOpenPeriodForDate, checkPostingAllowed } from "../accountingPeriods";
 import { isChartInitialized, ensureCommissionAccounts, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
@@ -852,26 +852,21 @@ export function commissionAdjustmentSourceId(saleId: Id<"sales">, sequence: numb
 }
 
 /**
- * The accounting date every commission entry for a sale must use — accrual,
- * correction and the payment fallback alike. Living here rather than in each
- * caller is the point: when the accrual used a different rule from the
- * correction, a correction could post into an open period while the accrual it
- * corrected was still queued behind a closed one, leaving a naked delta in
- * Commission Payable.
+ * The accounting date every commission entry for a sale must use — accrual and
+ * correction alike. Living here rather than in each caller is the point: when
+ * the accrual used a different rule from the correction, a correction could post
+ * into an open period while the accrual it corrected was still queued behind a
+ * closed one, leaving a naked delta in Commission Payable.
  *
- * The sale's own date, so the expense matches the revenue it was earned
- * against. Two exceptions:
+ * The rule is the sale's own date, unconditionally, so the expense lands in the
+ * period that recognized the revenue it was earned against. There are no
+ * exceptions; the body records the two that used to exist and why both were
+ * retired.
  *
- *  - The sale's period is CLOSED. An entry dated there never posts; it waits in
- *    the outbox indefinitely, blocking payroll payment and stranding the
- *    liability. Recognize it in the current period instead, as a prior-period
- *    item found late.
- *  - The org has NO chart of accounts yet. Nothing posts in that state — every
- *    entry queues and replays with the date frozen at enqueue time — so falling
- *    back here would buy nothing and permanently misdate the accrual: the sale
- *    itself queues at its own saleDate, so its commission must too, or an org
- *    that initializes its chart later books revenue and commission in different
- *    months with no way to correct it.
+ * This is the date for RECOGNITION only. A PAYMENT is dated when the cash
+ * actually moves, not at the sale — see `hookCommissionPaid`'s callers. Reading
+ * this docstring as if it covered payment too is what produced a regression
+ * that blocked paying any commission whose month had since closed.
  */
 export async function commissionAccountingDate(
   ctx: MutationCtx,
@@ -906,6 +901,83 @@ export async function commissionAccountingDate(
   // Kept as a function, and every caller kept on it, so the rule has one home
   // if it ever needs to be conditional again.
   return saleDate;
+}
+
+/**
+ * True once this sale's commission has been recognized in the ledger — either a
+ * posted COMMISSION_ACCRUED journal entry or a still-queued accrual in the
+ * outbox. Both AUTO and MANUAL accrue as soon as the amount is measurable on a
+ * completed sale, so this decides whether a new amount is a FIRST accrual or a
+ * correction to one already on the books (setCommissionAmount), whether
+ * recalculateCommission's one-shot fix-up still applies, and — via
+ * `commissionAccrualStrandedReason` below — whether a closed sale period is
+ * actually an obstacle or an irrelevance.
+ */
+export async function hasCommissionAccrual(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  saleId: Id<"sales">
+): Promise<boolean> {
+  // Only an ACTIVE accrual counts. A REVERSED event means the accrual was
+  // backed out (e.g. the sale was voided), which must genuinely unlock the
+  // amount again.
+  const posted = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", orgId).eq("sourceType", "sales").eq("sourceId", `commission_${saleId}`)
+    )
+    .filter((q) =>
+      q.and(q.eq(q.field("eventType"), "COMMISSION_ACCRUED"), q.neq(q.field("status"), "REVERSED"))
+    )
+    .first();
+  if (posted) return true;
+  // Outbox rows persist after being processed (status POSTED) — a processed
+  // row's accrual is already covered by the accountingEvents check above, so
+  // only a still-queued (PENDING/FAILED) row counts as an accrual here.
+  const pending = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+    )
+    .filter((q) => q.neq(q.field("status"), "POSTED"))
+    .first();
+  return pending !== null;
+}
+
+/**
+ * Non-null when raising a commission accrual for this sale RIGHT NOW would
+ * produce an entry the ledger can never accept — a new accrual dated into a
+ * CLOSED or LOCKED period. Such an entry is not merely delayed: it burns every
+ * retry and dead-letters into a row that blocks both payment and every future
+ * period close, and a LOCKED period cannot be reopened to rescue it.
+ *
+ * The condition that matters is whether a NEW accrual has to be created, not
+ * whether the sale's period happens to be closed. Getting that backwards is a
+ * real regression this branch shipped and had to withdraw: the guard was applied
+ * unconditionally in `markCommissionPaid`, which refused the ordinary flow of
+ * closing a month and then paying the commissions earned in it. When the accrual
+ * is already on the books the accrual hook is an idempotent no-op, nothing is
+ * dated into the closed period at all, and the payment is dated today — so the
+ * closed period is simply irrelevant to that operation.
+ *
+ * `waiting: true` (no period exists yet) is deliberately allowed through. That
+ * entry queues harmlessly, burns no attempts, and posts when the month opens —
+ * which is exactly what the sale's own entry does, and what an org that has not
+ * set up its accounting yet depends on.
+ *
+ * Callers that ALWAYS write an entry dated at the sale (setCommissionAmount and
+ * recalculateCommission, which post a correction) must check the period
+ * unconditionally instead; for them there is no no-op case.
+ */
+export async function commissionAccrualStrandedReason(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  saleId: Id<"sales">,
+  saleDate: number
+): Promise<"CLOSED_PERIOD" | null> {
+  if (await hasCommissionAccrual(ctx, orgId, saleId)) return null;
+  const check = await checkPostingAllowed(ctx, orgId, saleDate);
+  return !check.ok && !check.waiting ? "CLOSED_PERIOD" : null;
 }
 
 /** True while an entry for this key is still queued (captured but not posted). */

@@ -165,4 +165,76 @@ describe("the outbox drain sweeps past held rows", () => {
     expect(row?.attempts).toBe(1);
     expect(row?.status).toBe("PENDING");
   });
+
+  test("spending the pass budget schedules a resume FROM THE CURSOR, not a restart", async () => {
+    // Round 9. The cursor removed starvation only BELOW the pass budget. On
+    // exhausting it the code logged and dropped the cursor, and every later
+    // trigger — cron or redrive — restarts at `null`. So with a full budget the
+    // oldest 2,050 rows are all any sweep ever examines: if those are held,
+    // nothing behind them is ever attempted again. That is the same permanent
+    // starvation, only moved further out.
+    //
+    // This asserts on the scheduled continuation rather than on rows posted at
+    // the far end of the chain. Driving the chain would prove nothing here: the
+    // period fixtures below schedule their own cursorless redrives, and those
+    // alone will post the trailing row — so a row-counting version of this test
+    // passes just as happily with the fix reverted.
+    const { t, orgId, userId, asAdmin } = await seedOrgWithChart("budget");
+    const year = new Date().getUTCFullYear();
+
+    // Three held rows at the head — dated into a year with no period at all.
+    const noPeriodDate = Date.UTC(year + 5, 0, 15);
+    for (let i = 0; i < 3; i++) {
+      await queueExpense(t, orgId, userId, noPeriodDate, i);
+    }
+    await asAdmin.mutation(api.accountingPeriods.create, {
+      orgId,
+      startDate: Date.UTC(year, 0, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+      fiscalYear: year,
+      periodNumber: 1,
+    });
+    const period = (await asAdmin.query(api.accountingPeriods.list, { orgId }))[0];
+    await asAdmin.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+    // One postable row behind them.
+    await queueExpense(t, orgId, userId, Date.UTC(year, 5, 10), 100);
+
+    // One row per page, entered with the budget already spent, so the boundary
+    // is exercised directly rather than by seeding two thousand rows.
+    const before = Date.now();
+    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, {
+      orgId,
+      limit: 1,
+      pass: 40,
+    });
+
+    const scheduled = await t.run(async (ctx: any) =>
+      await ctx.db.system.query("_scheduled_functions").collect()
+    );
+    const resumes = scheduled.filter(
+      (s: any) =>
+        s.name.includes("drainPendingAccountingEvents") && s.args?.[0]?.cursor != null
+    );
+    // Before the fix this was 0 — the sweep logged and gave up, and the held
+    // row it stopped on became a permanent wall.
+    expect(resumes).toHaveLength(1);
+    expect(resumes[0].args[0].limit).toBe(1);
+    // The budget is refreshed, so the sweep keeps advancing rather than
+    // re-entering already spent.
+    expect(resumes[0].args[0].pass).toBe(0);
+    // ...and it yields first, so a large backlog cannot monopolize the scheduler.
+    expect(resumes[0].scheduledTime).toBeGreaterThan(before);
+
+    // The held row it stopped on burned no attempt.
+    const head = await t.run(async (ctx: any) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q: any) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", "expense_posted_sweep_0")
+        )
+        .first()
+    );
+    expect(head?.status).toBe("PENDING");
+    expect(head?.attempts).toBe(0);
+  });
 });

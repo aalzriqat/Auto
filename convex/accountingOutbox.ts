@@ -335,8 +335,15 @@ export async function drainPendingForOrg(
 
 // ─── Internal mutation (scheduler target) ─────────────────────────────────────
 
-/** Pages per sweep, so a backlog larger than one batch cannot stall silently. */
+/** Pages per uninterrupted scheduler chain, before the sweep yields and resumes. */
 const MAX_DRAIN_PASSES = 40;
+
+/**
+ * How long a sweep waits before resuming from its cursor once the pass budget is
+ * spent. Long enough that a large backlog cannot monopolize the scheduler, short
+ * enough that draining it stays a matter of minutes rather than days.
+ */
+const DRAIN_RESUME_DELAY_MS = 60_000;
 
 /**
  * Drains one PAGE and continues with a cursor until the org's PENDING rows are
@@ -370,16 +377,36 @@ async function drainPageAndContinue(
     `[outbox-drain] org ${orgId} pass ${pass}: posted ${result.posted}, failed ${result.failed}, held ${result.held}`
   );
 
-  if (!page.isDone && pass < MAX_DRAIN_PASSES) {
-    await ctx.scheduler.runAfter(0, internal.accountingOutbox.drainPendingAccountingEvents, {
-      orgId,
-      limit,
-      cursor: page.continueCursor,
-      pass: pass + 1,
-    });
-  } else if (!page.isDone) {
-    console.warn(
-      `[outbox-drain] org ${orgId}: stopped after ${MAX_DRAIN_PASSES} passes with rows remaining`
+  if (!page.isDone) {
+    // Always continue FROM THE CURSOR, even when the pass budget is spent.
+    //
+    // Stopping here used to drop the cursor, and every later trigger — cron or
+    // redrive — restarts at `null`. That reinstated the very starvation the
+    // cursor was added to remove, just further out: with a full budget the
+    // oldest 2,050 rows are all any sweep ever examines, so if those are held,
+    // nothing behind them is ever attempted again. Moving a permanent boundary
+    // is not removing it.
+    //
+    // The budget still does its real job of bounding one uninterrupted
+    // scheduler chain; it just yields instead of giving up. The delayed
+    // continuation resets the counter, so the sweep advances monotonically
+    // through the cursor and terminates on `isDone` regardless of backlog size,
+    // while capping how much work any one org can demand per minute.
+    const budgetSpent = pass >= MAX_DRAIN_PASSES;
+    if (budgetSpent) {
+      console.warn(
+        `[outbox-drain] org ${orgId}: pass budget spent with rows remaining — resuming from the cursor in ${DRAIN_RESUME_DELAY_MS}ms`
+      );
+    }
+    await ctx.scheduler.runAfter(
+      budgetSpent ? DRAIN_RESUME_DELAY_MS : 0,
+      internal.accountingOutbox.drainPendingAccountingEvents,
+      {
+        orgId,
+        limit,
+        cursor: page.continueCursor,
+        pass: budgetSpent ? 0 : pass + 1,
+      }
     );
   }
   return result;

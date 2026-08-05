@@ -851,19 +851,24 @@ describe("no commission entry may overtake the entries it depends on", () => {
     // no-op while an outbox row exists, so Commission Payable went to -25,000
     // and stayed there until someone reopened the closed month.
     //
-    // Two guards now stand in front of that, and the OUTER one fires here: a
-    // closed period cannot take the accrual at all, so the payment is refused
-    // at the point of action with the period named, rather than being allowed
-    // to queue an entry that could never post. The inner ordering guard still
-    // covers the case where a period simply does not exist yet, which queues
-    // harmlessly instead of dead-lettering.
+    // Two guards now stand in front of that. The INNER ordering guard is the one
+    // that fires here, because this sale's accrual does exist — it is sitting in
+    // the outbox, queued behind the closed month — so the message names that
+    // state rather than claiming the commission was never recognized.
+    //
+    // The outer guard deliberately does NOT fire for a queued accrual. It only
+    // refuses when a NEW entry dated at the sale would have to be created, which
+    // is the case covered separately in "a commission that never accrued is
+    // still refused once its month is closed". Applying it unconditionally was a
+    // regression: it also refused paying a commission that had already posted
+    // before its month closed, which is the ordinary month-end flow.
     await expect(
       d.asAdmin.mutation(api.sales.markCommissionPaid, {
         orgId: d.orgId,
         saleId,
         paymentMethod: "CASH",
       })
-    ).rejects.toThrow(/accounting period is closed/i);
+    ).rejects.toThrow(/hasn't posted to the ledger yet/i);
 
     expect(await commissionPayableMinor(d)).toBe(0);
     // The whole mutation rolled back, so the sale is not left marked paid.
@@ -1919,3 +1924,134 @@ describe("ruleCommissionAdjusted", () => {
   });
 });
 
+
+/**
+ * Round 9. The closed-period refusal added in round 8 was applied
+ * unconditionally, and that was a regression: it refused the ordinary flow of
+ * closing a month and then paying the commissions earned in it.
+ *
+ * The condition that matters is whether a NEW entry dated at the sale actually
+ * has to be created. When the accrual is already on the books the safety-net
+ * hook is an idempotent no-op, nothing is dated into the closed period at all,
+ * and the payment carries today's date — so the closed period is irrelevant.
+ * When the accrual is absent, the entry really would be dead on arrival and the
+ * refusal is right.
+ */
+describe("a closed period blocks a commission only when something must post into it", () => {
+  test("a commission accrued before its month closed can still be paid afterwards", async () => {
+    const d = await seedDealer("pay_after_close", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    // Recognized in the month it was earned.
+    expect(await commissionPayableMinor(d)).toBe(25000);
+
+    // Month-end: the period closes with the liability outstanding. This is the
+    // normal course of business, not an edge case.
+    await closePriorYearPeriod(d, priorYear);
+
+    await d.asAdmin.mutation(api.sales.markCommissionPaid, {
+      orgId: d.orgId,
+      saleId,
+      paymentMethod: "CASH",
+    });
+
+    // The payable is cleared by a payment dated today, in the OPEN period. The
+    // closed month is untouched — nothing new was ever dated into it.
+    expect(await commissionPayableMinor(d)).toBe(0);
+  });
+
+  test("a commission that never accrued is still refused once its month is closed", async () => {
+    // The other half of the same rule: here the safety-net accrual really would
+    // create a new entry dated into the closed period, so it must be refused
+    // rather than queued to dead-letter.
+    const d = await seedDealer("pay_never_accrued", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+
+    // Straight to the row, so no accrual is ever raised — the shape of a legacy
+    // sale that predates earned-time recognition.
+    await d.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { commissionAmount: 250 });
+    });
+    expect(await commissionPayableMinor(d)).toBe(0);
+
+    await closePriorYearPeriod(d, priorYear);
+
+    await expect(
+      d.asAdmin.mutation(api.sales.markCommissionPaid, {
+        orgId: d.orgId,
+        saleId,
+        paymentMethod: "CASH",
+      })
+    ).rejects.toThrow(/never recognized|period is closed/i);
+
+    // And nothing was queued behind the refusal.
+    const queued = await d.t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", d.orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(queued).toBeNull();
+  });
+
+  test("payroll approval refuses a backlog sale whose month is closed", async () => {
+    // approveRun was the last accrual path with no period check at all. For a
+    // legacy unrecognized commission in a closed month it approved the run and
+    // left the accrual to burn every retry and dead-letter — wreckage behind an
+    // APPROVED record that can no longer take the draft cancellation path.
+    const d = await seedDealer("payroll_backlog_closed", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { commissionAmount: 250 });
+    });
+    await closePriorYearPeriod(d, priorYear);
+
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId,
+      periodYear: new Date().getUTCFullYear(),
+      periodMonth: new Date().getUTCMonth() + 1,
+    });
+
+    await expect(
+      d.asAdmin.mutation(api.payroll.approveRun, { orgId: d.orgId, runId })
+    ).rejects.toThrow(/closed accounting period/i);
+
+    // The run stays a DRAFT, so it can still be cancelled or corrected.
+    const run = await d.t.run(async (ctx) => await ctx.db.get(runId));
+    expect(run?.status).toBe("DRAFT");
+  });
+
+  test("payroll approval is unaffected when the accrual already posted", async () => {
+    const d = await seedDealer("payroll_accrued_closed", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    await closePriorYearPeriod(d, priorYear);
+
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId,
+      periodYear: new Date().getUTCFullYear(),
+      periodMonth: new Date().getUTCMonth() + 1,
+    });
+    await d.asAdmin.mutation(api.payroll.approveRun, { orgId: d.orgId, runId });
+
+    const run = await d.t.run(async (ctx) => await ctx.db.get(runId));
+    expect(run?.status).toBe("APPROVED");
+    // Still exactly one accrual, still dated to the sale's own month.
+    expect(await commissionPayableMinor(d)).toBe(25000);
+  });
+});
