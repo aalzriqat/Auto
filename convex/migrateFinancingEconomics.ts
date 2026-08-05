@@ -97,7 +97,14 @@ const reportValidator = v.object({
   applicationsBackfilled: v.number(),
   applicationsFlagged: v.number(),
   applicationsBoundToSnapshot: v.number(),
-  applicationsUnlinked: v.number(),
+  // Optional purely for deployment compatibility, not because the counter is.
+  // A continuation scheduled by the previous revision carries a report without
+  // this field, and Convex runs scheduled functions against the code deployed
+  // at the time they fire — so requiring it would fail argument validation
+  // before EMPTY_REPORT could supply the default, breaking the chain mid-run
+  // and leaving the remaining applications unbackfilled. The spread below
+  // normalizes it to 0.
+  applicationsUnlinked: v.optional(v.number()),
   applicationsSkipped: v.number(),
 });
 
@@ -199,7 +206,16 @@ export const backfillFinancingEconomics = internalMutation({
   // generated api — hundreds of errors nowhere near the cause.
   handler: async (ctx, args): Promise<Report> => {
     const phase: Phase = args.phase ?? "companies";
-    const report: Report = { ...EMPTY_REPORT, ...args.report };
+    // The explicit `?? 0` is not redundant with the spread. Convex omits an
+    // absent optional argument, in which case the spread does keep
+    // EMPTY_REPORT's zero — but a caller that passes the key with an explicit
+    // undefined would overwrite it, and this value is only ever read back to be
+    // incremented, so NaN would propagate silently through every later page.
+    const report: Report = {
+      ...EMPTY_REPORT,
+      ...args.report,
+      applicationsUnlinked: args.report?.applicationsUnlinked ?? 0,
+    };
     const now = Date.now();
 
     if (phase === "companies") {

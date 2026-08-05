@@ -1527,6 +1527,71 @@ describe("overrides and audit", () => {
     ).rejects.toThrow(/no target selling amount/i);
   });
 
+  test("CALCULATED_WITH_OVERRIDE cannot claim a departure from a calculation that never ran", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+
+    // Guarding only SYSTEM_CALCULATED left this door open: supply any reason
+    // and the snapshot records a calculated departure with no calculated
+    // figure to have departed from.
+    await expect(
+      seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(13_200),
+        source: "CALCULATED_WITH_OVERRIDE",
+        overrideReason: "The company asked for more.",
+      })
+    ).rejects.toThrow(/no target selling amount/i);
+
+    // And when the solver ran but could not produce a figure. Patched on the
+    // application's own rule snapshot, not the company: the snapshot is what
+    // governs a deal in flight, which is the whole reason it is taken.
+    const app = await readApp(seed, applicationId);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        companyRuleSnapshot: {
+          ...app.companyRuleSnapshot!,
+          customerFirstPaymentOffsetsUnfinancedShare: undefined,
+        },
+      })
+    );
+    await expect(
+      seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(13_200),
+        source: "CALCULATED_WITH_OVERRIDE",
+        overrideReason: "The company asked for more.",
+        targetSellingAmountMinor: jod(DEAL.targetSelling),
+        estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+        customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+      })
+    ).rejects.toThrow(/OFFSET_RULE_UNKNOWN/);
+
+    expect((await readApp(seed, applicationId)).submittedQuotationMinor).toBeUndefined();
+  });
+
+  test("an override that matches the calculated figure is not an override", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+
+    // A reason explaining a difference that does not exist is worse than no
+    // reason: it puts a departure on the record that never happened.
+    await expect(
+      seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(DEAL.quotation),
+        source: "CALCULATED_WITH_OVERRIDE",
+        overrideReason: "Rounded up for the company.",
+        targetSellingAmountMinor: jod(DEAL.targetSelling),
+        estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+        customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+      })
+    ).rejects.toThrow(/matches the calculated figure/i);
+  });
+
   test("SYSTEM_CALCULATED is refused when the company's offset rule is unrecorded", async () => {
     const seed = await seedDealer();
     await seed.t.run((ctx) =>
@@ -2119,6 +2184,42 @@ describe("migration", () => {
       })
     );
   }
+
+  test("accepts a continuation scheduled by the previous revision", async () => {
+    const seed = await seedDealer();
+    await seedLegacyApplication(seed, { status: "APPROVED" });
+
+    // Exactly the report shape the previous deploy's scheduler would carry:
+    // every counter it knew about, and none it did not. Convex runs a scheduled
+    // function against whatever code is deployed when it fires, so a newly
+    // required field here would fail argument validation and stop the chain
+    // mid-migration — leaving the remaining applications unbackfilled and
+    // still reading their company's rules live.
+    vi.useFakeTimers();
+    await seed.t.mutation(internal.migrateFinancingEconomics.backfillFinancingEconomics, {
+      phase: "applications",
+      report: {
+        status: "SCHEDULED",
+        companiesScanned: 3,
+        companiesVersioned: 1,
+        applicationsScanned: 2,
+        applicationsBackfilled: 1,
+        applicationsFlagged: 1,
+        applicationsBoundToSnapshot: 1,
+        applicationsSkipped: 0,
+      },
+    });
+    await seed.t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    // The counter it did not carry is normalized rather than propagating NaN
+    // through every later page.
+    const report = await seed.t.mutation(
+      internal.migrateFinancingEconomics.backfillFinancingEconomics,
+      { phase: "applications" }
+    );
+    await seed.t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(Number.isFinite(report.applicationsUnlinked)).toBe(true);
+  });
 
   test("recovers a rule version the company has already been edited past", async () => {
     const seed = await seedDealer();

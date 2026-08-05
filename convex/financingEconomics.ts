@@ -604,27 +604,46 @@ export const recordSubmittedQuotation = mutation({
           })
         : undefined;
 
-    // SYSTEM_CALCULATED is a claim about provenance, and the snapshot records
-    // `calculatedQuotationMinor` and `finalQuotationMinor` independently — so
-    // without this the label could sit on an amount the solver never produced,
-    // or never ran to produce. That is the mode a later reader trusts *because*
-    // it says no human touched it. A departure from the calculated figure is a
-    // legitimate act; it just has to be called CALCULATED_WITH_OVERRIDE and say
-    // why.
-    if (args.source === "SYSTEM_CALCULATED") {
+    // Both calculated modes are claims about provenance, and the snapshot
+    // records `calculatedQuotationMinor` and `finalQuotationMinor`
+    // independently — so unchecked, either label could sit on an amount the
+    // solver never produced, or never ran to produce. SYSTEM_CALCULATED is the
+    // mode a later reader trusts *because* it says no human touched it;
+    // CALCULATED_WITH_OVERRIDE is the one they trust to name a real departure
+    // from a real calculation. Guarding only the first left the second as an
+    // open door to the same forgery, reached by supplying any reason at all.
+    //
+    // MANUAL_ENTRY is the honest label whenever no calculation stands behind
+    // the figure, and it is always available — nothing here blocks recording a
+    // negotiated number.
+    if (args.source === "SYSTEM_CALCULATED" || args.source === "CALCULATED_WITH_OVERRIDE") {
+      const modeLabel =
+        args.source === "SYSTEM_CALCULATED"
+          ? "calculated by the system"
+          : "calculated with an override";
       if (!solverResult) {
         throw new ConvexError(
-          "This quotation is recorded as calculated by the system, but no target selling amount is set, so the calculator never ran. Record the target, or submit it as a manual entry."
+          `This quotation is recorded as ${modeLabel}, but no target selling amount is set, so the calculator never ran. Record the target, or submit it as a manual entry.`
         );
       }
       if (!solverResult.available) {
         throw new ConvexError(
-          `This quotation is recorded as calculated by the system, but the calculator could not run (${solverResult.reason}). Submit it as a manual entry instead.`
+          `This quotation is recorded as ${modeLabel}, but the calculator could not run (${solverResult.reason}). Submit it as a manual entry instead.`
         );
       }
-      if (solverResult.submittedQuotationMinor !== args.submittedQuotationMinor) {
+      const matchesSolver =
+        solverResult.submittedQuotationMinor === args.submittedQuotationMinor;
+      if (args.source === "SYSTEM_CALCULATED" && !matchesSolver) {
         throw new ConvexError(
           `This quotation is recorded as calculated by the system, but the calculator produced ${solverResult.submittedQuotationMinor} minor units, not ${args.submittedQuotationMinor}. Record it as a calculated quotation with an override and say why it differs.`
+        );
+      }
+      // An "override" that departs from nothing is not an override. Letting it
+      // through would put a departure on the record, complete with a reason
+      // explaining a difference that does not exist.
+      if (args.source === "CALCULATED_WITH_OVERRIDE" && matchesSolver) {
+        throw new ConvexError(
+          `This quotation is recorded as an override, but it matches the calculated figure of ${solverResult.submittedQuotationMinor} minor units exactly. Record it as calculated by the system instead.`
         );
       }
     }
