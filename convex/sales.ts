@@ -1,7 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query, MutationCtx } from "./_generated/server";
 import { mutation } from "./functions";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -671,11 +671,36 @@ export const softDelete = mutation({
 
 // ─── Commission Queries & Mutations ──────────────────────────────────────────
 
+/**
+ * The commission state of a sale, derived rather than stored so it can never
+ * disagree with the underlying fields:
+ *  - NOT_SET        — nobody has decided yet (`commissionAmount == null`).
+ *  - NO_COMMISSION  — reviewed and deliberately set to zero. Unset is NOT zero:
+ *                     one is an open task, the other is a closed decision.
+ *  - UNPAID         — a positive amount is owed and not yet settled.
+ *  - PAID           — settled (directly or through a payroll run).
+ */
+export type CommissionStatus = "NOT_SET" | "NO_COMMISSION" | "UNPAID" | "PAID";
+
+function deriveCommissionStatus(sale: {
+  commissionAmount?: number;
+  commissionPaidAt?: number;
+}): CommissionStatus {
+  if (sale.commissionPaidAt != null) return "PAID";
+  if (sale.commissionAmount == null) return "NOT_SET";
+  return sale.commissionAmount > 0 ? "UNPAID" : "NO_COMMISSION";
+}
+
 export const listCommissions = query({
   args: {
     orgId: v.id("organizations"),
     salespersonId: v.optional(v.id("users")),
-    paidStatus: v.optional(v.union(v.literal("paid"), v.literal("unpaid"))),
+    // "unpaid" keeps its original meaning — everything not yet settled, which
+    // includes the not-yet-decided rows. "not_set" is a strictly narrower view
+    // of the same set (the manager's review queue), not a replacement for it.
+    paidStatus: v.optional(
+      v.union(v.literal("paid"), v.literal("unpaid"), v.literal("not_set"))
+    ),
   },
   handler: async (ctx, args) => {
     const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_COMMISSIONS]);
@@ -712,15 +737,23 @@ export const listCommissions = query({
       .unique();
     const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
     const isAutoMode = mode === "AUTO_MEMBER" || mode === "AUTO_TIERS";
+    // MANUAL mode has no calculator: an amount only ever exists because somebody
+    // typed it on this page. Listing only sales that already carry one is a
+    // closed loop — the first amount can never be entered. So in MANUAL mode
+    // every completed sale is listed, and the ones still undecided are the work
+    // queue rather than an absence of records.
+    const isManualMode = mode === "MANUAL";
 
     // Cheap in-memory narrowing before any vehicle fetch: a sale can only make
-    // the final list if it already carries a commission, or (auto mode) it's a
-    // completed sale that might be flagged for a missing cost basis. Skip the
-    // ctx.db.get for everything else (drafts, cancelled, zero-commission).
+    // the final list if it already carries a commission, it's a completed sale
+    // in MANUAL mode (decided or not), or (auto mode) it's a completed sale
+    // that might be flagged for a missing cost basis. Skip the ctx.db.get for
+    // everything else (drafts, cancelled).
     const candidates = sales.filter(
       (sale) =>
         (sale.commissionAmount != null && sale.commissionAmount > 0) ||
-        (isAutoMode && sale.status === "COMPLETED" && sale.commissionAmount == null)
+        (isAutoMode && sale.status === "COMPLETED" && sale.commissionAmount == null) ||
+        (isManualMode && sale.status === "COMPLETED")
     );
 
     const hydrated = await Promise.all(
@@ -751,26 +784,46 @@ export const listCommissions = query({
       })
     );
 
-    // Include sales with a real commission, plus the flagged fix-up rows.
+    // Include sales with a real commission, plus the flagged fix-up rows, plus
+    // (MANUAL) every completed sale so the undecided ones are reachable at all.
     const withCommission = hydrated.filter(
       (h) =>
         (h.sale.commissionAmount != null && h.sale.commissionAmount > 0) ||
         h.missingPurchaseCost ||
-        h.needsRecalculation
+        h.needsRecalculation ||
+        (isManualMode && h.sale.status === "COMPLETED")
     );
 
-    // Apply paid/unpaid filter (missing-cost rows are unpaid by definition)
-    const filtered = args.paidStatus === "paid"
-      ? withCommission.filter((h) => h.sale.commissionPaidAt != null)
-      : args.paidStatus === "unpaid"
-        ? withCommission.filter((h) => h.sale.commissionPaidAt == null)
-        : withCommission;
+    // Apply the status filter. "unpaid" is unchanged from before this list grew
+    // — anything not yet settled, missing-cost and undecided rows included —
+    // and "not_set" narrows that to the rows awaiting a decision.
+    const filtered =
+      args.paidStatus === "paid"
+        ? withCommission.filter((h) => h.sale.commissionPaidAt != null)
+        : args.paidStatus === "unpaid"
+          ? withCommission.filter((h) => h.sale.commissionPaidAt == null)
+          : args.paidStatus === "not_set"
+            ? withCommission.filter(
+                (h) => h.sale.commissionPaidAt == null && h.sale.commissionAmount == null
+              )
+            : withCommission;
+
+    // A dealership has few members but many sales, so the salesperson lookup is
+    // the one that repeats — cache it instead of re-fetching per row.
+    const userCache = new Map<string, Doc<"users"> | null>();
+    const getUser = async (id: Id<"users">) => {
+      const cached = userCache.get(id);
+      if (cached !== undefined) return cached;
+      const doc = await ctx.db.get(id);
+      userCache.set(id, doc);
+      return doc;
+    };
 
     return await Promise.all(
       filtered.map(async ({ sale, vehicle, missingPurchaseCost, needsRecalculation }) => {
         const customer = await ctx.db.get(sale.customerId);
-        const salesperson = await ctx.db.get(sale.salespersonId);
-        const paidBy = sale.commissionPaidBy ? await ctx.db.get(sale.commissionPaidBy) : null;
+        const salesperson = await getUser(sale.salespersonId);
+        const paidBy = sale.commissionPaidBy ? await getUser(sale.commissionPaidBy) : null;
         return {
           ...sale,
           vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
@@ -779,6 +832,11 @@ export const listCommissions = query({
           paidByName: paidBy?.name ?? paidBy?.email ?? null,
           missingPurchaseCost,
           needsRecalculation,
+          commissionStatus: deriveCommissionStatus(sale),
+          // MANUAL amounts stay editable until they hit the ledger; AUTO amounts
+          // are derived at completion and locked. Surfaced so the client shows
+          // the edit affordance exactly where the mutation would succeed.
+          canSetAmount: isManualMode && sale.commissionPaidAt == null,
         };
       })
     );
@@ -929,47 +987,70 @@ export const setCommissionAmount = mutation({
     commissionAmount: v.number(),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_COMMISSIONS]);
+    try {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_COMMISSIONS]);
 
-    // `Math.max(0, NaN)` is NaN, so without this the sale's commission is set to
-    // NaN permanently: every downstream `> 0` / `<= 0` guard reads false, so it
-    // is never accrued, never paid, and never reported as outstanding.
-    assertFiniteNumber(args.commissionAmount, "commission amount");
+      // `Math.max(0, NaN)` is NaN, so without this the sale's commission is set
+      // to NaN permanently: every downstream `> 0` / `<= 0` guard reads false,
+      // so it is never accrued, never paid, and never reported as outstanding.
+      assertFiniteNumber(args.commissionAmount, "commission amount");
+      // Clamping a negative to zero would silently record a different decision
+      // than the one that was made. Reject it so the mistake is visible.
+      if (args.commissionAmount < 0) {
+        throwAppError(AppErrorCode.VALIDATION_FAILED, "Commission amount cannot be negative.");
+      }
 
-    const sale = await ctx.db.get(args.saleId);
-    if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
-      throw new ConvexError("Sale not found.");
+      const sale = await ctx.db.get(args.saleId);
+      if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
+        throw new ConvexError("Sale not found.");
+      }
+      if (sale.commissionPaidAt != null) {
+        throwAppError(AppErrorCode.VALIDATION_FAILED, "Paid commission amounts cannot be changed.");
+      }
+      // A cancelled sale earns nothing. Its accrual is reversed at cancellation
+      // and no settlement path (payroll or direct) will ever pick it up, so an
+      // amount set here would be an unpayable number sitting on the books.
+      if (sale.status === "CANCELLED") {
+        throwAppError(
+          AppErrorCode.VALIDATION_FAILED,
+          "A cancelled sale cannot be given a commission."
+        );
+      }
+
+      const orgSettings = await ctx.db
+        .query("orgSettings")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .unique();
+      const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
+
+      // AUTO-mode commissions are derived and accrued at completion, so they
+      // stay locked afterwards. MANUAL commissions are entered by hand and
+      // accrue only at payment, so they remain editable on a completed sale
+      // until they're paid or otherwise recorded in the ledger (fixes C1/C2 for
+      // MANUAL).
+      if (sale.status === "COMPLETED" && mode !== "MANUAL") {
+        throwAppError(
+          AppErrorCode.SALE_ALREADY_COMPLETED,
+          "Completed sale commission amounts are locked. Use a correction workflow."
+        );
+      }
+      if (await hasCommissionAccrual(ctx, args.orgId, args.saleId)) {
+        throwAppError(
+          AppErrorCode.VALIDATION_FAILED,
+          "This commission is already recorded in the ledger. Reverse it before changing the amount."
+        );
+      }
+
+      await ctx.db.patch(args.saleId, {
+        commissionAmount: args.commissionAmount,
+      });
+    } catch (error) {
+      // Routine validation rejections are ConvexErrors — re-throw them without
+      // logging so only genuinely unexpected failures hit error monitoring.
+      if (error instanceof ConvexError) throw error;
+      console.error("sales.setCommissionAmount failed", error);
+      throw new ConvexError("An unexpected error occurred. Please try again later.");
     }
-    if (sale.commissionPaidAt != null) {
-      throwAppError(AppErrorCode.VALIDATION_FAILED, "Paid commission amounts cannot be changed.");
-    }
-
-    const orgSettings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .unique();
-    const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
-
-    // AUTO-mode commissions are derived and accrued at completion, so they stay
-    // locked afterwards. MANUAL commissions are entered by hand and accrue only
-    // at payment, so they remain editable on a completed sale until they're
-    // paid or otherwise recorded in the ledger (fixes C1/C2 for MANUAL).
-    if (sale.status === "COMPLETED" && mode !== "MANUAL") {
-      throwAppError(
-        AppErrorCode.SALE_ALREADY_COMPLETED,
-        "Completed sale commission amounts are locked. Use a correction workflow."
-      );
-    }
-    if (await hasCommissionAccrual(ctx, args.orgId, args.saleId)) {
-      throwAppError(
-        AppErrorCode.VALIDATION_FAILED,
-        "This commission is already recorded in the ledger. Reverse it before changing the amount."
-      );
-    }
-
-    await ctx.db.patch(args.saleId, {
-      commissionAmount: Math.max(0, args.commissionAmount),
-    });
   },
 });
 

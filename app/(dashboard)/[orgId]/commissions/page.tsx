@@ -28,12 +28,14 @@ import {
 } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "@/components/ui/sonner";
-import { TrendingUp, CheckCircle2, Clock, DollarSign, Check, Undo2, Pencil, X, AlertTriangle } from "lucide-react";
+import { TrendingUp, CheckCircle2, Clock, DollarSign, Check, Undo2, Pencil, X, AlertTriangle, CircleDashed, MinusCircle, ClipboardList } from "lucide-react";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { CommissionPaymentDialog } from "@/components/commissions/CommissionPaymentDialog";
 import { type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { useTableControls } from "@/hooks/useTableControls";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
+
+type CommissionStatus = "NOT_SET" | "NO_COMMISSION" | "UNPAID" | "PAID";
 
 type CommissionSale = Doc<"sales"> & {
   vehicleSummary: string;
@@ -42,7 +44,11 @@ type CommissionSale = Doc<"sales"> & {
   paidByName: string | null;
   missingPurchaseCost?: boolean;
   needsRecalculation?: boolean;
+  commissionStatus: CommissionStatus;
+  canSetAmount: boolean;
 };
+
+type StatusFilter = "all" | "paid" | "unpaid" | "not_set";
 
 function formatCurrency(amount: number) {
   return amount.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -60,7 +66,7 @@ export default function CommissionsPage() {
   const members = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId, paginationOpts: { numItems: 100, cursor: null } } : "skip");
 
   const [filterSalesperson, setFilterSalesperson] = useState<string>("all");
-  const [filterStatus, setFilterStatus] = useState<"all" | "paid" | "unpaid">("all");
+  const [filterStatus, setFilterStatus] = useState<StatusFilter>("all");
 
   const commissions = useQuery(
     api.sales.listCommissions,
@@ -104,6 +110,10 @@ export default function CommissionsPage() {
   const totalEarned = filtered.reduce((s: number, c: CommissionSale) => s + (c.commissionAmount ?? 0), 0);
   const totalPaid = filtered.filter((c: CommissionSale) => c.commissionPaidAt).reduce((s: number, c: CommissionSale) => s + (c.commissionAmount ?? 0), 0);
   const totalPending = totalEarned - totalPaid;
+  // Only rows that actually carry a decided commission belong in the "deals with
+  // commission" count — undecided ones contribute nothing and would inflate it.
+  const decidedCount = filtered.filter((c: CommissionSale) => (c.commissionAmount ?? 0) > 0).length;
+  const notSetCount = filtered.filter((c: CommissionSale) => c.commissionStatus === "NOT_SET").length;
 
   // Group by salesperson for summary
   const bySalesperson = useMemo(() => {
@@ -146,7 +156,12 @@ export default function CommissionsPage() {
   async function handleSaveCommission(saleId: Id<"sales">) {
     if (!activeOrgId) return;
     const amount = parseFloat(editingAmount);
-    if (isNaN(amount) || amount < 0) return;
+    // Previously this returned silently, so an empty or negative entry looked
+    // like a save that simply did nothing. Say why instead.
+    if (isNaN(amount) || amount < 0) {
+      toast.error(t("CommissionUpdateFailed" as any));
+      return;
+    }
     try {
       await setCommissionAmount({ orgId: activeOrgId, saleId, commissionAmount: amount });
       toast.success(t("CommissionUpdated" as any));
@@ -157,9 +172,11 @@ export default function CommissionsPage() {
     }
   }
 
-  function startEditing(saleId: Id<"sales">, current: number) {
+  // An undecided commission opens with an empty field, not "0" — pre-filling a
+  // zero invites confirming a decision nobody made.
+  function startEditing(saleId: Id<"sales">, current: number | undefined) {
     setEditingId(saleId);
-    setEditingAmount(String(current));
+    setEditingAmount(current == null ? "" : String(current));
   }
 
   return (
@@ -178,7 +195,7 @@ export default function CommissionsPage() {
             </CardHeader>
             <CardContent>
               <p className="text-2xl font-bold">{formatCurrency(totalEarned)}</p>
-              <p className="text-xs text-muted-foreground mt-1">{filtered.length} {t("DealsWithCommission" as any)}</p>
+              <p className="text-xs text-muted-foreground mt-1">{decidedCount} {t("DealsWithCommission" as any)}</p>
             </CardContent>
           </Card>
           <Card>
@@ -202,6 +219,27 @@ export default function CommissionsPage() {
             </CardContent>
           </Card>
         </div>
+
+        {/* The entry point into the manual workflow. Before this existed a sale
+            with no commission was simply absent from the page, so the first
+            amount could never be entered — the queue has to announce itself. */}
+        {canManage && notSetCount > 0 && filterStatus !== "not_set" && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-s-4 border-s-primary bg-muted/40 px-4 py-3">
+            <ClipboardList className="h-4 w-4 shrink-0 text-primary" />
+            <p className="text-sm">
+              <span className="font-semibold tabular-nums">{notSetCount}</span>{" "}
+              {t("CommissionsAwaitingReview" as any)}
+            </p>
+            <Button
+              variant="link"
+              size="sm"
+              className="h-auto p-0 text-sm"
+              onClick={() => setFilterStatus("not_set")}
+            >
+              {t("ReviewCommissions" as any)}
+            </Button>
+          </div>
+        )}
 
         {/* Salesperson summary strip */}
         {canManage && bySalesperson.length > 1 && (
@@ -246,12 +284,13 @@ export default function CommissionsPage() {
               ]}
             />
           )}
-          <Select value={filterStatus} onValueChange={v => setFilterStatus(v as any)}>
+          <Select value={filterStatus} onValueChange={v => setFilterStatus(v as StatusFilter)}>
             <SelectTrigger className="w-[140px]">
               <SelectValue placeholder={t("AllStatus" as any)} />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">{t("AllStatus" as any)}</SelectItem>
+              <SelectItem value="not_set">{t("NotSet" as any)}</SelectItem>
               <SelectItem value="unpaid">{t("Unpaid" as any)}</SelectItem>
               <SelectItem value="paid">{t("Paid" as any)}</SelectItem>
             </SelectContent>
@@ -283,7 +322,12 @@ export default function CommissionsPage() {
               ) : filtered.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={canManage ? 8 : 7} className="text-center py-8 text-muted-foreground">
-                    {t("NoCommissionRecords" as any)}
+                    {/* In MANUAL mode every completed sale is listed, so an empty
+                        table means there are no completed sales — not that a
+                        commission rate is missing from a team member. */}
+                    {isManualMode && filterStatus === "all" && !search
+                      ? t("NoCompletedSalesYet" as any)
+                      : t("NoCommissionRecords" as any)}
                   </TableCell>
                 </TableRow>
               ) : (
@@ -314,7 +358,7 @@ export default function CommissionsPage() {
                           <AlertTriangle className="h-3.5 w-3.5" />
                           {t("MissingPurchaseCost" as any)}
                         </span>
-                      ) : isManualMode && canManage && editingId === c._id ? (
+                      ) : c.canSetAmount && canManage && editingId === c._id ? (
                         <div className="flex items-center justify-end gap-1">
                           <Input
                             type="number"
@@ -323,27 +367,35 @@ export default function CommissionsPage() {
                             value={editingAmount}
                             onChange={(e) => setEditingAmount(e.target.value)}
                             className="h-7 w-24 text-sm text-end"
+                            aria-label={t("CommissionAmount" as any)}
                             autoFocus
                             onKeyDown={(e) => {
                               if (e.key === "Enter") handleSaveCommission(c._id);
                               if (e.key === "Escape") { setEditingId(null); setEditingAmount(""); }
                             }}
                           />
-                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => handleSaveCommission(c._id)}>
+                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => handleSaveCommission(c._id)} aria-label={t("Save" as any)}>
                             <Check className="h-3.5 w-3.5 text-green-600" />
                           </Button>
-                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setEditingId(null); setEditingAmount(""); }}>
+                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setEditingId(null); setEditingAmount(""); }} aria-label={t("Cancel" as any)}>
                             <X className="h-3.5 w-3.5" />
                           </Button>
                         </div>
                       ) : (
                         <div className="flex items-center justify-end gap-1.5">
-                          {formatCurrency(c.commissionAmount ?? 0)}
-                          {isManualMode && canManage && !c.commissionPaidAt && (
+                          {/* An undecided commission is not zero. Showing "0"
+                              here reads as a real decision that was never made. */}
+                          {c.commissionAmount == null ? (
+                            <span className="text-muted-foreground">—</span>
+                          ) : (
+                            formatCurrency(c.commissionAmount)
+                          )}
+                          {c.canSetAmount && canManage && (
                             <button
-                              onClick={() => startEditing(c._id, c.commissionAmount ?? 0)}
+                              onClick={() => startEditing(c._id, c.commissionAmount)}
                               className="text-muted-foreground hover:text-foreground transition-colors"
                               title={t("EditCommission" as any)}
+                              aria-label={t("EditCommission" as any)}
                             >
                               <Pencil className="h-3 w-3" />
                             </button>
@@ -352,13 +404,35 @@ export default function CommissionsPage() {
                       )}
                     </TableCell>
                     <TableCell>
-                      {c.commissionPaidAt ? (
+                      {/* Orange is reserved for money actually owed. An
+                          undecided or deliberately-zero row owes nothing yet, so
+                          both stay neutral — otherwise the page reads as a
+                          backlog of debt that does not exist. */}
+                      {c.commissionStatus === "PAID" && c.commissionPaidAt ? (
                         <Badge variant="outline" className="text-green-600 border-green-600 text-xs">
                           <CheckCircle2 className="h-3 w-3 me-1" />
                           {t("Paid" as any)} {new Date(c.commissionPaidAt).toLocaleDateString()}
                           <span className="ms-1 text-muted-foreground">
                             {t(`PaymentMethod_${c.commissionPaymentMethod ?? "CASH"}` as any)}
                           </span>
+                        </Badge>
+                      ) : c.commissionStatus === "NOT_SET" ? (
+                        <Badge
+                          variant="outline"
+                          className="text-muted-foreground text-xs"
+                          title={t("CommissionNotSetHint" as any)}
+                        >
+                          <CircleDashed className="h-3 w-3 me-1" />
+                          {t("CommissionNotSet" as any)}
+                        </Badge>
+                      ) : c.commissionStatus === "NO_COMMISSION" ? (
+                        <Badge
+                          variant="outline"
+                          className="text-muted-foreground text-xs"
+                          title={t("NoCommissionOwedHint" as any)}
+                        >
+                          <MinusCircle className="h-3 w-3 me-1" />
+                          {t("NoCommissionOwed" as any)}
                         </Badge>
                       ) : (
                         <Badge variant="outline" className="text-orange-600 border-orange-300 text-xs">
@@ -384,6 +458,19 @@ export default function CommissionsPage() {
                           >
                             <Undo2 className="h-3.5 w-3.5 me-1" /> {t("RecalculateCommission" as any)}
                           </Button>
+                        ) : (c.commissionAmount ?? 0) <= 0 ? (
+                          // Nothing to pay yet. Offering "Mark paid" here would
+                          // only produce a server rejection, so the action that
+                          // is actually available is the one that's shown.
+                          c.canSetAmount && editingId !== c._id ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => startEditing(c._id, c.commissionAmount)}
+                            >
+                              <Pencil className="h-3.5 w-3.5 me-1" /> {t("SetCommission" as any)}
+                            </Button>
+                          ) : null
                         ) : (
                           <Button
                             variant="outline"

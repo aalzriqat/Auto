@@ -390,6 +390,10 @@ export interface MobileSale {
   financingType?: MobileFinancingType;
   commissionAmount?: number;
   commissionPaidAt?: number;
+  // Only present on sales.listCommissions rows — the plain sales list does not
+  // derive them. See the CommissionStatus doc comment in convex/sales.ts.
+  commissionStatus?: "NOT_SET" | "NO_COMMISSION" | "UNPAID" | "PAID";
+  canSetAmount?: boolean;
   vehicleSummary: string;
   vehicleVin: string;
   customerName: string;
@@ -2191,7 +2195,7 @@ export const api = {
     ),
     listCommissions: makeFunctionReference<
       "query",
-      OrgScopedArgs & { salespersonId?: string; paidStatus?: "paid" | "unpaid" },
+      OrgScopedArgs & { salespersonId?: string; paidStatus?: "paid" | "unpaid" | "not_set" },
       MobileSale[]
     >("sales:listCommissions"),
     markCommissionPaid: makeFunctionReference<
@@ -2970,7 +2974,7 @@ export const api = {
     listCommissions: FunctionReference<
       "query",
       "public",
-      OrgScopedArgs & { salespersonId?: string; paidStatus?: "paid" | "unpaid" },
+      OrgScopedArgs & { salespersonId?: string; paidStatus?: "paid" | "unpaid" | "not_set" },
       MobileSale[]
     >;
     markCommissionPaid: FunctionReference<
