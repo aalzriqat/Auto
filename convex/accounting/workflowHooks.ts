@@ -905,23 +905,46 @@ export const MAX_COMMISSION_ADJUSTMENTS = 1000;
 export async function recognizedCommissionMinor(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
-  sale: { _id: Id<"sales">; commissionAdjustmentSeq?: number }
-): Promise<number> {
+  sale: { _id: Id<"sales">; commissionAdjustmentSeq?: number },
+  currency: string
+): Promise<number | null> {
   const postedAmount = async (idempotencyKey: string, field: "amountMinor" | "deltaMinor") => {
     const event = await ctx.db
       .query("accountingEvents")
       .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
       .filter((q) => q.eq(q.field("status"), "POSTED"))
       .first();
-    const value = event?.payload?.[field];
-    return typeof value === "number" && Number.isFinite(value) ? value : 0;
+    if (!event) return null;
+    const value = event.payload?.[field];
+    if (typeof value !== "number" || !Number.isFinite(value)) return null;
+    return { minor: value, currency: event.currency };
   };
 
-  let total = await postedAmount(`commission_accrued_${sale._id}`, "amountMinor");
+  // Only entries posted in the currency being settled. Minor units are
+  // meaningless without their scale — JOD/KWD/BHD/OMR are scale 3 against USD's
+  // 2 — so summing across currencies and comparing to one number is how a
+  // legitimate settlement gets refused after an org changes its currency.
+  // `null` means "recognized, but not in this currency", which is a different
+  // problem from a wrong amount and deserves its own message.
   const seq = Math.min(sale.commissionAdjustmentSeq ?? 0, MAX_COMMISSION_ADJUSTMENTS);
-  for (let sequence = 1; sequence <= seq; sequence++) {
-    total += await postedAmount(`commission_adjusted_${sale._id}_${sequence}`, "deltaMinor");
+  let total = 0;
+  let sawAny = false;
+  let sawCurrency = false;
+  for (const key of [
+    { k: `commission_accrued_${sale._id}`, f: "amountMinor" as const },
+    ...Array.from({ length: seq }, (_, i) => ({
+      k: `commission_adjusted_${sale._id}_${i + 1}`,
+      f: "deltaMinor" as const,
+    })),
+  ]) {
+    const entry = await postedAmount(key.k, key.f);
+    if (!entry) continue;
+    sawAny = true;
+    if (entry.currency !== currency) continue;
+    sawCurrency = true;
+    total += entry.minor;
   }
+  if (sawAny && !sawCurrency) return null;
   return total;
 }
 
@@ -930,6 +953,13 @@ export async function commissionEntriesStillQueued(
   orgId: Id<"organizations">,
   sale: { _id: Id<"sales">; commissionAdjustmentSeq?: number }
 ): Promise<boolean> {
+  // The sale's own posting counts. Inheriting its accounting date keeps the two
+  // in the same PERIOD, but that is not the same as enforcing the order: once
+  // that period opens while the sale's entry is still sitting in the outbox —
+  // or has dead-lettered to FAILED and will never drain — a commission raised
+  // now posts immediately, ahead of the revenue that earned it. The drain guard
+  // covers entries that queue; nothing covered entries that post directly.
+  if (await isEventQueued(ctx, orgId, `sale_completed_${sale._id}`)) return true;
   if (await isEventQueued(ctx, orgId, `commission_accrued_${sale._id}`)) return true;
   const seq = Math.min(sale.commissionAdjustmentSeq ?? 0, MAX_COMMISSION_ADJUSTMENTS);
   for (let sequence = 1; sequence <= seq; sequence++) {

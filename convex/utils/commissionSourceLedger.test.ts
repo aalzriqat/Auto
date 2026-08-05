@@ -222,6 +222,85 @@ describe("commissionPostingBlockedReason", () => {
     expect(reason).toMatch(/carries no amount/i);
   });
 
+  test("blocks rather than iterating when the correction count is implausible", async () => {
+    // commissionAdjustmentSeq is a plain number on a row the admin raw-JSON
+    // editor can write, and this guard runs on the outbox's hot path. Walking
+    // it unbounded turns one queued entry into a multi-million-read loop that
+    // blows the transaction — taking every unrelated entry in the org with it.
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, userId, saleId } = await seed(t, "huge_seq");
+    await t.run((ctx: any) => ctx.db.patch(saleId, { commissionAdjustmentSeq: 5_000_000 }));
+    await postEvent(t, orgId, userId, "COMMISSION_ACCRUED", `commission_accrued_${saleId}`, `commission_${saleId}`, { saleId, amountMinor: 25000 });
+
+    const reason = await t.run((ctx: any) =>
+      commissionPostingBlockedReason(
+        ctx,
+        entry(orgId, "COMMISSION_PAID", `commission_paid_${saleId}`, {
+          saleId, amountMinor: 25000, currency: "USD",
+        })
+      )
+    );
+    expect(reason).toMatch(/not a usable number/i);
+  });
+
+  test("blocks a payment recognized in a different currency instead of calling it a mismatch", async () => {
+    // An owner can change the org currency in Settings. Minor units only mean
+    // anything alongside their scale, so a JOD accrual of 100000 compared
+    // against a USD decided amount of 10000 is not a wrong amount — it is a
+    // different unit, and it needs a different message and a human.
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, userId, saleId } = await seed(t, "currency_switch");
+    await t.run(async (ctx: any) => {
+      await ctx.db.insert("accountingEvents", {
+        orgId, eventType: "COMMISSION_ACCRUED", sourceType: "sales",
+        sourceId: `commission_${saleId}`, eventVersion: 1,
+        idempotencyKey: `commission_accrued_${saleId}`,
+        occurredAt: Date.now(), accountingDate: Date.now(), currency: "JOD",
+        payload: { saleId, amountMinor: 100000, currency: "JOD" },
+        status: "POSTED", createdBy: userId, createdAt: Date.now(),
+      });
+    });
+
+    const reason = await t.run((ctx: any) =>
+      commissionPostingBlockedReason(
+        ctx,
+        entry(orgId, "COMMISSION_PAID", `commission_paid_${saleId}`, {
+          saleId, amountMinor: 10000, currency: "USD",
+        })
+      )
+    );
+    expect(reason).toMatch(/different currency/i);
+  });
+
+  test("blocks a correction whose sequence cannot be read from its key", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, userId, saleId } = await seed(t, "bad_key");
+    await postEvent(t, orgId, userId, "COMMISSION_ACCRUED", `commission_accrued_${saleId}`, `commission_${saleId}`, { saleId, amountMinor: 25000 });
+
+    const reason = await t.run((ctx: any) =>
+      commissionPostingBlockedReason(
+        ctx,
+        entry(orgId, "COMMISSION_ADJUSTED", "commission_adjusted_malformed", {
+          saleId, deltaMinor: 5000, currency: "USD",
+        })
+      )
+    );
+    expect(reason).toMatch(/sequence could not be read/i);
+  });
+
+  test("blocks an entry carrying no sale reference", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId } = await seed(t, "no_sale_ref");
+
+    const reason = await t.run((ctx: any) =>
+      commissionPostingBlockedReason(
+        ctx,
+        entry(orgId, "COMMISSION_PAID", "commission_paid_x", { amountMinor: 1, currency: "USD" })
+      )
+    );
+    expect(reason).toMatch(/carries no sale reference/i);
+  });
+
   test("ignores events that are not commission events", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, saleId } = await seed(t, "other");

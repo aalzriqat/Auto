@@ -1076,6 +1076,30 @@ describe("the outbox will not drain a settlement ahead of its own accrual", () =
     expect(stillQueued.map((q) => q.eventType)).toContain("COMMISSION_ADJUSTED");
   });
 
+  test("a malformed row fails itself instead of aborting the whole drain", async () => {
+    // The guards walk data the admin raw-JSON editor can write, and they ran
+    // before drainEntries' per-entry try. A throw there aborted the whole
+    // mutation — and since every drain starts from the same query, that row was
+    // hit first every time, silently stopping all GL posting for the org.
+    const { t, orgId, saleId, asAdmin, year } = await queuedAccrualAndPayment("drain_isolation");
+    await t.run((ctx) => ctx.db.patch(saleId, { commissionAdjustmentSeq: 5_000_000 }));
+
+    await asAdmin.mutation(api.accountingPeriods.create, {
+      orgId,
+      startDate: Date.UTC(year, 0, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+      fiscalYear: year,
+      periodNumber: 1,
+    });
+    const period = (await asAdmin.query(api.accountingPeriods.list, { orgId }))[0];
+    await asAdmin.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+
+    // Returns rather than throwing, and never leaves the payable negative.
+    const result = await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    expect(result).toBeTruthy();
+    expect(await commissionPayableMinor({ t, orgId })).toBeGreaterThanOrEqual(0);
+  });
+
   test("once the accrual's period opens too, both post and net to zero", async () => {
     const { t, orgId, asAdmin, year } = await queuedAccrualAndPayment("both_open");
 
@@ -1435,6 +1459,62 @@ describe("round-3 review fixes", () => {
     // The good one still accrued rather than being lost with the bad one.
     expect(await commissionPayableMinor(d)).toBe(10_000);
     expect(good).toBeTruthy();
+  });
+
+  test("the backfill skips a sale whose accrual was reversed instead of dying on it", async () => {
+    // Re-accruing on a reversed key throws "already been reversed and cannot be
+    // reposted", and that throw rolls back the self-reschedule with it — ending
+    // the walk for every later organization, silently.
+    const d = await seedDealer("backfill_reversed");
+    const reversed = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId: reversed, commissionAmount: 250,
+    });
+    await d.t.run(async (ctx) => {
+      const accrual = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", d.orgId).eq("sourceType", "sales").eq("sourceId", `commission_${reversed}`)
+        )
+        .first();
+      await ctx.db.patch(accrual!._id, { status: "REVERSED" });
+    });
+
+    const good = await d.t.run(async (ctx) => {
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId: d.orgId, vin: "VIN-REV-GOOD", make: "Kia", model: "K5", year: 2024,
+        color: "White", fuelType: "Gasoline", transmission: "Automatic",
+        mileage: 1, purchasePrice: 9000, sellingPrice: 15000, status: "AVAILABLE",
+      });
+      return await ctx.db.insert("sales", {
+        orgId: d.orgId, vehicleId, customerId: d.customerId, salespersonId: d.userId,
+        salePrice: 15000, saleDate: Date.now(), status: "COMPLETED", commissionAmount: 100,
+      });
+    });
+
+    const run = await d.t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
+    expect(run.skippedReversed).toBe(1);
+    expect(run.accruedCount).toBe(1);
+    expect(good).toBeTruthy();
+  });
+
+  test("the close checklist survives a commission amount that cannot be converted", async () => {
+    // The control exists to REPORT corrupt amounts; throwing on one takes down
+    // closeChecklist and, with it, `close` — before the blockers it builds and
+    // the owner override that is meant to be the escape hatch.
+    const d = await seedDealer("checklist_infinity");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 250,
+    });
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAmount: Number.POSITIVE_INFINITY }));
+
+    const period = (await d.asAdmin.query(api.accountingPeriods.list, { orgId: d.orgId }))[0];
+    const checklist = await d.asAdmin.query(api.accountingPeriods.closeChecklist, {
+      orgId: d.orgId,
+      periodId: period._id,
+    });
+    expect(checklist.warnings.join(" ")).toMatch(/at a different amount/i);
   });
 
   test("the backfill skips an org with no owner rather than inventing an actor", async () => {

@@ -1128,7 +1128,13 @@ async function assertCommissionRecognitionMatches(
   // queues behind the accrual rather than racing it. Enforcing here would
   // refuse every commission an org raises before it sets up its accounting.
   if (!(await isPostableNow(ctx, orgId, entryDate))) return;
-  const recognized = await recognizedCommissionMinor(ctx, orgId, sale);
+  const recognized = await recognizedCommissionMinor(ctx, orgId, sale, currency);
+  if (recognized === null) {
+    throwAppError(
+      AppErrorCode.VALIDATION_FAILED,
+      "This commission was recognized in a different currency than it would be paid in. Have accounting reconcile it before settling."
+    );
+  }
   const decided = toMinorUnits(sale.commissionAmount ?? 0, currency);
   if (recognized !== decided) {
     throwAppError(

@@ -278,10 +278,23 @@ export async function drainEntries(
     // negative balance that guard prevents, with no operator action. Reversals
     // are exempt: they unwind something that already posted.
     if (p.kind === "POST") {
-      const blockedReason =
-        (await prepaidPostingBlockedReason(ctx, p)) ??
-        (await payrollPostingBlockedReason(ctx, p)) ??
-        (await commissionPostingBlockedReason(ctx, p));
+      let blockedReason: string | null;
+      try {
+        blockedReason =
+          (await prepaidPostingBlockedReason(ctx, p)) ??
+          (await payrollPostingBlockedReason(ctx, p)) ??
+          (await commissionPostingBlockedReason(ctx, p));
+      } catch (err) {
+        // A guard that THROWS must fail this one entry, not the drain. These
+        // guards walk data the admin raw-JSON editor can write, so a single
+        // malformed row could otherwise abort the whole mutation — and because
+        // every drain starts from the same query, that row would be hit first
+        // every time, silently stopping all GL posting for the organization.
+        const message = err instanceof Error ? err.message : String(err);
+        await markEntryFailed(ctx, p, `posting guard failed: ${message}`);
+        failed++;
+        continue;
+      }
       if (blockedReason) {
         // Held, not failed: this entry is not broken and retrying it is not
         // wrong — it is waiting on something else to post first. Routing it

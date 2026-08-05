@@ -1056,9 +1056,33 @@ async function computeRecognizedCommissionAsOf(
  * pending rather than wrong, and the close checklist already reports unposted
  * events as a blocker in its own right.
  */
+/** Minor units, or null when the value cannot be expressed as such. */
+function safeToMinorUnits(amount: number | undefined, currency: string): number | null {
+  if (amount == null || !Number.isFinite(amount)) return null;
+  try {
+    const minor = toMinorUnits(amount, currency);
+    return Number.isSafeInteger(minor) ? minor : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function computeCommissionRecognitionDivergence(
   ctx: QueryCtx,
-  orgId: Id<"organizations">
+  orgId: Id<"organizations">,
+  // Threaded in by computeCloseChecklist, which has already collected all three
+  // in the same transaction. Re-reading them there meant the org's whole sales
+  // table twice, its entire commission-event history twice (the second copy
+  // with no date bound at all), and both outbox statuses twice — on top of six
+  // other full-table reconciliations. Crossing Convex's read limit does not
+  // just drop this warning: `close` recomputes the checklist before it builds
+  // its blockers, so the period could not be closed at all, and the owner
+  // override meant to be the escape hatch is never reached.
+  provided?: {
+    pendingEvents?: Doc<"pendingAccountingEvents">[];
+    /** Bounds the recognition read, as every other checklist input is bounded. */
+    toDate?: number;
+  }
 ): Promise<{ unrecognizedCount: number; divergentCount: number; currency: string }> {
   const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
   const sales = await ctx.db
@@ -1084,21 +1108,26 @@ export async function computeCommissionRecognitionDivergence(
     return { unrecognizedCount: 0, divergentCount: 0, currency: orgCurrency };
   }
 
-  const recognized = await computeRecognizedCommissionAsOf(ctx, orgId, undefined);
-  const queued = await ctx.db
-    .query("pendingAccountingEvents")
-    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
-    .collect();
-  const failed = await ctx.db
-    .query("pendingAccountingEvents")
-    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "FAILED"))
-    .collect();
+  const recognized = await computeRecognizedCommissionAsOf(ctx, orgId, provided?.toDate);
+  const outbox =
+    provided?.pendingEvents ??
+    (
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+        .collect()
+    ).concat(
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "FAILED"))
+        .collect()
+    );
 
   // Parsed once into the set of sale ids with a commission entry still in the
   // outbox. Scanning every queued key per candidate sale was O(sales × queued)
   // and rebuilt the key list on each iteration.
   const salesWithQueuedEntry = new Set<string>();
-  for (const p of [...queued, ...failed]) {
+  for (const p of outbox) {
     const accrual = /^commission_accrued_(.+)$/.exec(p.idempotencyKey);
     if (accrual) salesWithQueuedEntry.add(accrual[1]);
     const adjustment = /^commission_adjusted_(.+)_\d+$/.exec(p.idempotencyKey);
@@ -1125,7 +1154,17 @@ export async function computeCommissionRecognitionDivergence(
       // named a remedy that provably cannot clear the warning, on a line that
       // must be acknowledged verbatim at every close, forever.
       if (sale.commissionPaidAt == null) unrecognizedCount++;
-    } else if (recognizedMinor !== toMinorUnits(sale.commissionAmount ?? 0, orgCurrency)) {
+      continue;
+    }
+    // Converted defensively. `commissionAmount > 0` admits Infinity, which
+    // toMinorUnits throws on — and this runs inside computeCloseChecklist,
+    // which the `close` mutation recomputes before it builds its blockers. A
+    // throw here would take down the close path entirely, ahead of the owner
+    // override that is supposed to be the escape hatch, and hide which control
+    // failed. An amount that cannot be expressed in the ledger's own units is
+    // itself a divergence, so report it as one.
+    const decided = safeToMinorUnits(sale.commissionAmount, orgCurrency);
+    if (decided === null || recognizedMinor !== decided) {
       divergentCount++;
     }
   }

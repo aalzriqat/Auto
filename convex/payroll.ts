@@ -578,10 +578,13 @@ async function assertAccrualsPosted(
       // what the entries recognized. Normally identical, because every change
       // posts a matching delta — but not if the row was written outside those
       // paths. Paying across the gap drives Commission Payable negative.
-      if (
-        (await recognizedCommissionMinor(ctx, orgId, sale)) !==
-        toMinorUnits(sale.commissionAmount, item.currency)
-      ) {
+      const recognized = await recognizedCommissionMinor(ctx, orgId, sale, item.currency);
+      if (recognized === null) {
+        throw new ConvexError(
+          "A commission on this run was recognized in a different currency than the run pays. Have accounting reconcile it before paying."
+        );
+      }
+      if (recognized !== toMinorUnits(sale.commissionAmount, item.currency)) {
         throw new ConvexError(
           "A commission on this run does not match what the ledger recognized for it, so the run cannot be paid. Have accounting review it."
         );

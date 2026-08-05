@@ -93,6 +93,7 @@ export const backfillCommissionAccruals = internalMutation({
     let skippedNoOwner = 0;
     let skippedNoAccounts = 0;
     let skippedInvalidAmount = 0;
+    let skippedReversed = 0;
     let capped = false;
     const now = Date.now();
 
@@ -128,8 +129,16 @@ export const backfillCommissionAccruals = internalMutation({
             capped = true;
             break;
           }
-          if (await hasCommissionRecognition(ctx, org._id, sale._id)) {
+          const recognition = await hasCommissionRecognition(ctx, org._id, sale._id);
+          if (recognition.recognized) {
             skippedAlreadyRecognized++;
+            continue;
+          }
+          if (recognition.reversed) {
+            skippedReversed++;
+            console.warn(
+              `[commission-backfill] org ${org._id}: sale ${sale._id} skipped — its accrual was reversed, so the key cannot be reposted`
+            );
             continue;
           }
           // Checked BEFORE posting rather than caught after. isCommissionOwed
@@ -164,7 +173,7 @@ export const backfillCommissionAccruals = internalMutation({
     }
 
     console.log(
-      `[commission-backfill] org ${org._id}: scanned ${salePage.page.length}, owed ${owed.length}, accrued ${accruedCount}, alreadyRecognized ${skippedAlreadyRecognized}, noOwner ${skippedNoOwner}, noAccounts ${skippedNoAccounts}, invalidAmount ${skippedInvalidAmount}${args.dryRun ? " (dry run)" : ""}`
+      `[commission-backfill] org ${org._id}: scanned ${salePage.page.length}, owed ${owed.length}, accrued ${accruedCount}, alreadyRecognized ${skippedAlreadyRecognized}, noOwner ${skippedNoOwner}, noAccounts ${skippedNoAccounts}, invalidAmount ${skippedInvalidAmount}, reversed ${skippedReversed}${args.dryRun ? " (dry run)" : ""}`
     );
 
     // Advance within the org until its sales are exhausted, then move on to the
@@ -202,6 +211,7 @@ export const backfillCommissionAccruals = internalMutation({
       skippedNoOwner,
       skippedNoAccounts,
       skippedInvalidAmount,
+      skippedReversed,
     };
   },
 });
@@ -227,32 +237,47 @@ async function commissionAccountsExist(
   orgId: Id<"organizations">
 ): Promise<boolean> {
   for (const systemKey of ["COMMISSION_EXPENSE", "COMMISSION_PAYABLE"] as const) {
-    const account = await ctx.db
+    // collect(), not unique(): resolveSystemAccount documents that legacy
+    // organizations can carry duplicate systemKey rows and deliberately
+    // tolerates them. unique() throws on those — before the self-reschedule is
+    // written, so it would take the rest of the walk down with it. An
+    // inactive-only mapping is treated as missing, which is what the resolver
+    // does when it picks an account to post to.
+    const accounts = await ctx.db
       .query("chartOfAccounts")
       .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", systemKey))
-      .unique();
-    if (!account) return false;
+      .collect();
+    if (!accounts.some((a) => a.active !== false)) return false;
   }
   return true;
 }
 
-/** A posted (non-reversed) or still-queued accrual — either means recognition exists. */
+/**
+ * A posted (non-reversed) or still-queued accrual means recognition exists.
+ * A REVERSED one means the key is spent and cannot be reused.
+ */
 async function hasCommissionRecognition(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
   saleId: Id<"sales">
-): Promise<boolean> {
-  const posted = await ctx.db
+): Promise<{ recognized: boolean; reversed: boolean }> {
+  const events = await ctx.db
     .query("accountingEvents")
     .withIndex("by_org_source", (q) =>
       q.eq("orgId", orgId).eq("sourceType", "sales").eq("sourceId", `commission_${saleId}`)
     )
-    .filter((q) =>
-      q.and(q.eq(q.field("eventType"), "COMMISSION_ACCRUED"), q.neq(q.field("status"), "REVERSED"))
-    )
-    .first();
-  if (posted) return true;
-  return await isEventQueued(ctx, orgId, `commission_accrued_${saleId}`);
+    .filter((q) => q.eq(q.field("eventType"), "COMMISSION_ACCRUED"))
+    .collect();
+  if (events.some((e) => e.status !== "REVERSED")) return { recognized: true, reversed: false };
+  // A REVERSED accrual is not recognition — but re-accruing on the same key
+  // throws ("already been reversed and cannot be reposted"), and that throw
+  // rolls back the self-reschedule with it, silently ending the walk for every
+  // later organization. Report it so the row is skipped and logged instead.
+  if (events.length > 0) return { recognized: false, reversed: true };
+  return {
+    recognized: await isEventQueued(ctx, orgId, `commission_accrued_${saleId}`),
+    reversed: false,
+  };
 }
 
 /**

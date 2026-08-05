@@ -61,16 +61,42 @@ async function prereqPosted(
  * that drift is exactly what left payroll checking the accrual alone while
  * paying the corrected amount.
  */
+/**
+ * How far a correction walk may go.
+ *
+ * `commissionAdjustmentSeq` is a plain number field on a row the admin
+ * raw-JSON editor can write, and this guard runs on the outbox's hot path. An
+ * implausible value would turn one queued entry into a multi-million-read loop
+ * that blows the transaction limit — and because the guards run outside
+ * drainEntries' per-entry failure boundary, that throw would abort the WHOLE
+ * drain, every time, for every unrelated entry in the organization. Silently.
+ *
+ * Kept in step with MAX_COMMISSION_ADJUSTMENTS in workflowHooks, which refuses
+ * to issue a sequence beyond it — so within the product this bound is never
+ * reached, and beyond it we fail closed rather than iterate.
+ */
+const MAX_ADJUSTMENT_WALK = 1000;
+
+function boundedSeq(adjustmentSeq: number): number | null {
+  if (!Number.isSafeInteger(adjustmentSeq) || adjustmentSeq < 0) return null;
+  if (adjustmentSeq > MAX_ADJUSTMENT_WALK) return null;
+  return adjustmentSeq;
+}
+
 export async function commissionPrereqUnpostedReason(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
   saleId: Id<"sales">,
   adjustmentSeq: number
 ): Promise<string | null> {
+  const seq = boundedSeq(adjustmentSeq);
+  if (seq === null) {
+    return "its correction count is not a usable number, so the corrections it must follow cannot be verified";
+  }
   if (!(await prereqPosted(ctx, orgId, `commission_accrued_${saleId}`))) {
     return "the commission accrual behind it has not posted to the ledger yet, so this would clear a Commission Payable that was never accrued";
   }
-  for (let sequence = 1; sequence <= adjustmentSeq; sequence++) {
+  for (let sequence = 1; sequence <= seq; sequence++) {
     if (!(await prereqPosted(ctx, orgId, `commission_adjusted_${saleId}_${sequence}`))) {
       return "a commission correction behind it has not posted to the ledger yet, so this would clear more Commission Payable than was ever accrued";
     }
@@ -199,35 +225,59 @@ export async function commissionPostingBlockedReason(
     resolved.saleId,
     resolved.adjustmentSeq
   );
-  if (paying !== recognized) {
+  // Compared within the payment's OWN currency. Minor units only mean anything
+  // alongside their scale — JOD/KWD/BHD/OMR are scale 3 where USD is scale 2 —
+  // so summing across currencies and comparing to one number is how a
+  // legitimate settlement gets refused after an org changes its currency.
+  const payingCurrency = typeof payload.currency === "string" ? payload.currency : null;
+  if (payingCurrency === null) {
+    return "it carries no currency, so what it clears cannot be checked against what was recognized";
+  }
+  if (!recognized.has(payingCurrency)) {
+    return "this commission was recognized in a different currency than the payment clears, so accounting must reconcile it before it can settle";
+  }
+  if (paying !== recognized.get(payingCurrency)) {
     return "the amount it clears does not match what the ledger recognized for this commission, so it would leave Commission Payable wrong";
   }
   return null;
 }
 
 /**
- * What the ledger has recognized for one sale's commission — posted accrual
- * plus posted corrections. Kept here rather than imported from workflowHooks so
- * the outbox guard does not depend on the hook layer it exists to police.
+ * What the ledger has recognized for one sale's commission, per posted
+ * currency — accrual plus corrections. Kept here rather than imported from
+ * workflowHooks so the outbox guard does not depend on the hook layer it
+ * exists to police.
+ *
+ * Per currency, not a single total: an org can change its currency after
+ * postings exist, and folding scale-3 minors in with scale-2 ones compares
+ * numbers that are not the same unit.
  */
 export async function recognizedCommissionForSale(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
   saleId: Id<"sales">,
   adjustmentSeq: number
-): Promise<number> {
+): Promise<Map<string, number>> {
   const postedAmount = async (idempotencyKey: string, field: "amountMinor" | "deltaMinor") => {
     const event = await ctx.db
       .query("accountingEvents")
       .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
       .filter((q) => q.eq(q.field("status"), "POSTED"))
       .first();
-    const value = event?.payload?.[field];
-    return typeof value === "number" && Number.isFinite(value) ? value : 0;
+    if (!event) return null;
+    const value = event.payload?.[field];
+    if (typeof value !== "number" || !Number.isFinite(value)) return null;
+    return { minor: value, currency: event.currency };
   };
-  let total = await postedAmount(`commission_accrued_${saleId}`, "amountMinor");
-  for (let sequence = 1; sequence <= adjustmentSeq; sequence++) {
-    total += await postedAmount(`commission_adjusted_${saleId}_${sequence}`, "deltaMinor");
+  const seq = boundedSeq(adjustmentSeq) ?? 0;
+  const total = new Map<string, number>();
+  const add = (entry: { minor: number; currency: string } | null) => {
+    if (!entry) return;
+    total.set(entry.currency, (total.get(entry.currency) ?? 0) + entry.minor);
+  };
+  add(await postedAmount(`commission_accrued_${saleId}`, "amountMinor"));
+  for (let sequence = 1; sequence <= seq; sequence++) {
+    add(await postedAmount(`commission_adjusted_${saleId}_${sequence}`, "deltaMinor"));
   }
   return total;
 }

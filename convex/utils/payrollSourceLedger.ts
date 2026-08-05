@@ -91,6 +91,7 @@ async function payrollPaidBlockedReason(
     if (!item) {
       return "its payslip could not be resolved in this organization, so the commission accruals behind the Commission Payable it clears cannot be verified";
     }
+    const runCurrency = item.currency;
     for (const saleId of item.commissionSaleIds) {
       // The accrual alone is not the whole prerequisite: payment debits the
       // CORRECTED amount (settleItemCommissions re-derives it from the live
@@ -108,12 +109,20 @@ async function payrollPaidBlockedReason(
         sale.commissionAdjustmentSeq ?? 0
       );
       if (unposted) return unposted;
-      recognizedTotal += await recognizedCommissionForSale(
+      const perCurrency = await recognizedCommissionForSale(
         ctx,
         orgId,
         saleId,
         sale.commissionAdjustmentSeq ?? 0
       );
+      // The run's own currency, not a sum across currencies: minor units only
+      // mean anything alongside their scale, so folding a scale-3 JOD figure in
+      // with a scale-2 USD one compares numbers that are not the same unit.
+      const inRunCurrency = perCurrency.get(runCurrency);
+      if (perCurrency.size > 0 && inRunCurrency === undefined) {
+        return "a commission on it was recognized in a different currency than the run pays, so accounting must reconcile it before this can settle";
+      }
+      recognizedTotal += inRunCurrency ?? 0;
     }
     // The mutation-side check is skipped whenever the payment would queue, so a
     // run frozen at a divergent commission total replays unchecked and clears

@@ -320,23 +320,28 @@ async function computeCloseChecklist(
   orgId: Id<"organizations">,
   period: Doc<"accountingPeriods">
 ): Promise<CloseChecklistResult> {
-  const pendingOutboxEvents = (
-    await ctx.db
-      .query("pendingAccountingEvents")
-      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
-      .collect()
-  ).filter((e) => e.accountingDate <= period.endDate);
-
+  // Collected once, unfiltered, and shared: the blocker counts below want only
+  // this period's rows, while the commission-recognition control needs every
+  // outstanding row regardless of date (a queued entry dated later still means
+  // that sale's recognition is pending rather than wrong). Reading them twice
+  // is what pushed this checklist toward the transaction read limit — and a
+  // checklist that throws takes `close` down with it, before the owner override
+  // that is supposed to be the escape hatch.
+  const allPendingOutbox = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+    .collect();
   // A dead-lettered event (accountingOutbox.ts's MAX_ATTEMPTS) represents the
   // same unposted GL impact as a pending one — it must block the close just
   // as hard, or a permanently-failed event could silently disappear from
   // every control the moment it stops retrying.
-  const failedOutboxEvents = (
-    await ctx.db
-      .query("pendingAccountingEvents")
-      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "FAILED"))
-      .collect()
-  ).filter((e) => e.accountingDate <= period.endDate);
+  const allFailedOutbox = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "FAILED"))
+    .collect();
+
+  const pendingOutboxEvents = allPendingOutbox.filter((e) => e.accountingDate <= period.endDate);
+  const failedOutboxEvents = allFailedOutbox.filter((e) => e.accountingDate <= period.endDate);
 
   // Not period-scoped by date — manualJournalDrafts have no accountingDate
   // until posted, and an unresolved approval is a control gap regardless of
@@ -372,7 +377,10 @@ async function computeCloseChecklist(
       computeCustomerDepositsReconciliation(ctx, orgId, period.endDate),
       computeCommissionPayableReconciliation(ctx, orgId, period.endDate),
       computePrepaidRecognitionShortfall(ctx, orgId, period.endDate),
-      computeCommissionRecognitionDivergence(ctx, orgId),
+      computeCommissionRecognitionDivergence(ctx, orgId, {
+        pendingEvents: [...allPendingOutbox, ...allFailedOutbox],
+        toDate: period.endDate,
+      }),
     ]);
 
   const blockers: string[] = [];
