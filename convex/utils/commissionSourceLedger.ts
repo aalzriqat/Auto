@@ -22,10 +22,13 @@ import { MutationCtx } from "../_generated/server";
  *  - COMMISSION_PAID must not clear a payable before the accrual that created
  *    it, and before every correction that changed it, are on the books.
  *  - COMMISSION_ACCRUED must not recognize commission expense before the sale
- *    that earned it posts. The sale's own entry is dated at the sale date with
- *    no fallback, while a commission decided later falls back to the current
- *    period, so the commission can otherwise land in an open period while the
- *    revenue and COGS behind it wait in a closed one.
+ *    that earned it posts. Both are dated at the sale date — the "a commission
+ *    decided later falls back to the current period" this used to cite was
+ *    retired when commissionAccountingDate lost its fallback parameter. The
+ *    dependency still holds for a different reason: the sale's own entry can be
+ *    queued, or dead-lettered, while a commission raised afterwards posts
+ *    directly, which puts the expense on the books ahead of the revenue and
+ *    COGS that earned it.
  *
  * Held (not failed) entries stay PENDING and retry once the prerequisite posts.
  */
@@ -234,7 +237,10 @@ export async function commissionPostingBlockedReason(
     return "it carries no currency, so what it clears cannot be checked against what was recognized";
   }
   if (recognized === null) {
-    return "this sale's correction count is not a usable number, so what it clears cannot be checked against what was recognized";
+    // Two causes since the malformed-payload fix: an unusable correction
+    // count, or a POSTED entry whose amount cannot be read. Naming only the
+    // counter sends an accountant to inspect a number that is correct.
+    return "this sale's recognized total cannot be reconstructed — either its correction count is not a usable number, or a posted entry carries an unreadable amount — so what it clears cannot be checked against what was recognized";
   }
   if (!recognized.has(payingCurrency)) {
     return "this commission was recognized in a different currency than the payment clears, so accounting must reconcile it before it can settle";

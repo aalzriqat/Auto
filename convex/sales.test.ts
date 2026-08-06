@@ -687,7 +687,11 @@ describe("correcting a commission already in the ledger", () => {
         occurredAt: Date.now(),
         accountingDate: Date.now(),
         currency: "USD",
-        payload: {},
+        // The real amount, not `{}`. A POSTED accrual always carries
+        // amountMinor (hookCommissionAccrued writes it), and an empty payload
+        // is now correctly read as an unreadable amount and refused — so the
+        // shortcut was simulating a state that cannot occur.
+        payload: { saleId, amountMinor: 30_000, currency: "USD", salespersonId: userId },
         status: "POSTED",
         createdBy: userId,
         createdAt: Date.now(),

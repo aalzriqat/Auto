@@ -1296,12 +1296,22 @@ export const payRun = mutation({
       // never record it.
       const todayCheck = await checkPostingAllowed(ctx, args.orgId, now);
       if (!todayCheck.ok && !todayCheck.waiting) {
-        // CLOSED and LOCKED both land here, and they need different actions:
-        // a locked period cannot be reopened through the normal mutation at all
-        // (accountingPeriods.reopen refuses it), so "reopen the period" is an
-        // instruction that cannot be carried out. Say which one it is.
+        // CLOSED and LOCKED both land here and need different actions: a
+        // locked period cannot be reopened through the normal mutation at all
+        // (accountingPeriods.reopen refuses it). Listing both remedies and
+        // leaving the operator to work out which applies is only half the fix —
+        // checkPostingAllowed does not report the status, so read the period.
+        const todayPeriod = await ctx.db
+          .query("accountingPeriods")
+          .withIndex("by_org_startDate", (q) => q.eq("orgId", args.orgId))
+          .filter((q) =>
+            q.and(q.lte(q.field("startDate"), now), q.gte(q.field("endDate"), now))
+          )
+          .first();
         throw new ConvexError(
-          "Today's accounting period is closed or locked, so this payroll payment could never post. Reopen it if it is closed, or use the authorized break-glass process if it is locked, before paying this run."
+          todayPeriod?.status === "LOCKED"
+            ? "Today's accounting period is LOCKED, so this payroll payment could never post. A locked period cannot be reopened normally — use the authorized break-glass process before paying this run."
+            : "Today's accounting period is CLOSED, so this payroll payment could never post. Reopen it before paying this run."
         );
       }
       if (await isPostableNow(ctx, args.orgId, now)) {

@@ -119,7 +119,9 @@ async function payrollPaidBlockedReason(
       // mean anything alongside their scale, so folding a scale-3 JOD figure in
       // with a scale-2 USD one compares numbers that are not the same unit.
       if (perCurrency === null) {
-        return "a sale on it has an unusable correction count, so the Commission Payable it clears cannot be verified";
+        // Same two causes as the commission ledger's own message: an unusable
+        // correction count, or a posted entry with an unreadable amount.
+        return "a sale on it has a recognized total that cannot be reconstructed — either an unusable correction count, or a posted entry with an unreadable amount — so the Commission Payable it clears cannot be verified";
       }
       const inRunCurrency = perCurrency.get(runCurrency);
       if (perCurrency.size > 0 && inRunCurrency === undefined) {

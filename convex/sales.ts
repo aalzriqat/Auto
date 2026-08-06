@@ -1426,7 +1426,28 @@ export const setCommissionAmount = mutation({
           // is the ordering guard's business rather than a divergence. Only a
           // ledger that recognized something DIFFERENT is drift.
           const recognizedNow = await recognizedCommissionMinor(ctx, args.orgId, sale, currency);
-          if (recognizedNow !== null && recognizedNow !== 0 && recognizedNow !== previousMinor) {
+          if (recognizedNow === null) {
+            // The unreadable-counter cause is already refused above, so null
+            // here means the ledger side cannot be reconstructed at all: either
+            // recognition sits in another currency, or a POSTED entry carries an
+            // amount that cannot be read. Correcting from the sale row against a
+            // ledger total nobody can compute is the drift this branch exists to
+            // stop — and the payment path has always refused it. This one
+            // treated null as permission to post the delta anyway.
+            throwAppError(
+              AppErrorCode.VALIDATION_FAILED,
+              "This commission's recognized total cannot be read — it was either recognized in a different currency, or a posted entry carries an unreadable amount. Have accounting reconcile it before correcting it."
+            );
+          }
+          // Only when the ledger is actually caught up. Recognition counts
+          // POSTED entries alone, so an org whose earlier correction is still
+          // queued — ordinary before a chart exists — legitimately shows a
+          // recognized total behind the sale row. That is a lag, not drift, and
+          // comparing across it refused the second correction every time.
+          // (When the entries COULD post, assertCommissionEntriesPosted above
+          // has already refused, so nothing slips through here.)
+          const outstandingNow = await commissionEntriesOutstandingStatus(ctx, args.orgId, sale);
+          if (outstandingNow === null && recognizedNow !== 0 && recognizedNow !== previousMinor) {
             throwAppError(
               AppErrorCode.VALIDATION_FAILED,
               "This commission's amount no longer matches what the ledger recognized for it, so it cannot be corrected here. Have accounting reconcile it first."
