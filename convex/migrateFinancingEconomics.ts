@@ -74,6 +74,13 @@ type Report = {
    * flagged so a human is told rather than the count being the only trace.
    */
   applicationsUnlinked: number;
+  /**
+   * Terminal deals abandoned unlinked because there was nothing left to
+   * reconcile. Counted apart from `applicationsSkipped`, which also means
+   * "already current" and "linked fine" — an operator could not otherwise tell
+   * from the output how many deals were permanently given up on.
+   */
+  applicationsClosedUnlinked: number;
   applicationsSkipped: number;
 };
 
@@ -86,6 +93,7 @@ const EMPTY_REPORT: Report = {
   applicationsFlagged: 0,
   applicationsBoundToSnapshot: 0,
   applicationsUnlinked: 0,
+  applicationsClosedUnlinked: 0,
   applicationsSkipped: 0,
 };
 
@@ -105,6 +113,7 @@ const reportValidator = v.object({
   // and leaving the remaining applications unbackfilled. The spread below
   // normalizes it to 0.
   applicationsUnlinked: v.optional(v.number()),
+  applicationsClosedUnlinked: v.optional(v.number()),
   applicationsSkipped: v.number(),
 });
 
@@ -256,6 +265,7 @@ export const backfillFinancingEconomics = internalMutation({
       ...EMPTY_REPORT,
       ...args.report,
       applicationsUnlinked: args.report?.applicationsUnlinked ?? 0,
+      applicationsClosedUnlinked: args.report?.applicationsClosedUnlinked ?? 0,
     };
     const now = Date.now();
 
@@ -371,18 +381,56 @@ export const backfillFinancingEconomics = internalMutation({
         // ever reaches this branch again, so an application that failed to bind
         // once stays unbound forever and silently falls back to reading its
         // company's rules live. Leave the marker off and it is simply retried.
-        // A deal that has been closed or cancelled has no future decision left
-        // for rules to govern, so telling somebody to fix its rule binding is
-        // noise they cannot clear — the same reasoning `reconciliationReasonFor`
-        // applies to terminal legacy rows. Without this, "or close it" in the
-        // reasons below was false: closing changed nothing, the flag stayed up,
-        // and the next run re-raised anything a triager had cleared.
-        if (unresolvedReason && !isInFlight(app)) {
-          await ctx.db.patch(app._id, { financingBackfilledAt: now });
-          report.applicationsSkipped += 1;
+        // A deal that is terminal AND never moved money has no future decision
+        // for rules to govern and no history worth reconciling, so asking about
+        // its rule binding is noise nobody can clear. This is the exact test
+        // `reconciliationReasonFor` applies to terminal legacy rows — matched
+        // deliberately, because exempting every CLOSED row regardless of money
+        // would abandon a deal that disbursed and finalized, which is the one
+        // kind of closed deal whose unresolved rules a person still needs told
+        // about. Without any exemption, "or close it" in the reasons below was
+        // simply false: closing changed nothing, the flag stayed up, and the
+        // next run re-raised whatever a triager had cleared.
+        const terminalWithoutMoney =
+          !isInFlight(app) && !app.disbursedAt && !app.finalizedSaleId;
+        if (unresolvedReason && terminalWithoutMoney) {
+          // Clearing the flag is what makes "close it" an exit rather than a
+          // two-step one described as one — the triager who closes the deal
+          // should not have to come back and clear a note that is now false.
+          // Cleared with a row, never silently: the flag's documented contract
+          // is that it is reported on and never quietly dropped.
+          if (app.needsFinancingReconciliation === true) {
+            await ctx.db.insert("financeApplicationOverrides", {
+              orgId: app.orgId,
+              applicationId: app._id,
+              field: "needsFinancingReconciliation",
+              previousValue: app.financingReconciliationReason ?? "true",
+              newValue: "cleared",
+              reason: `The deal reached ${app.status} without disbursement or a finalized sale, so there is nothing left to reconcile.`,
+              changedBy: app.salespersonId,
+              changedAt: now,
+            });
+          }
+          await ctx.db.patch(app._id, {
+            financingBackfilledAt: now,
+            ...(app.needsFinancingReconciliation === true
+              ? {
+                  needsFinancingReconciliation: false,
+                  financingReconciliationReason: undefined,
+                }
+              : {}),
+          });
+          report.applicationsClosedUnlinked += 1;
           continue;
         }
         if (unresolvedReason) {
+          // Terminal but money moved: the deal cannot be re-bound and closing it
+          // is not an exit, so say that rather than leaving an instruction the
+          // reader cannot follow. It stays flagged because it is a real
+          // unresolved state on a deal that actually paid out.
+          const reasonForRow = isInFlight(app)
+            ? unresolvedReason
+            : `${unresolvedReason} This deal is already ${app.status.toLowerCase()} and money moved on it, so it cannot be re-bound — it stays flagged as a historical record.`;
           // Re-raise whenever the flag is not currently up — NOT only when it
           // has never been set. `resolveFinancingReconciliation` clears it to
           // `false`, so testing for `undefined` meant one triager clearing an
@@ -394,7 +442,7 @@ export const backfillFinancingEconomics = internalMutation({
           if (app.needsFinancingReconciliation !== true) {
             await ctx.db.patch(app._id, {
               needsFinancingReconciliation: true,
-              financingReconciliationReason: unresolvedReason,
+              financingReconciliationReason: reasonForRow,
             });
           }
           report.applicationsUnlinked += 1;
@@ -469,6 +517,7 @@ export const backfillFinancingEconomics = internalMutation({
         `${report.applicationsBoundToSnapshot} bound to a rule snapshot, ` +
         `${report.applicationsFlagged} flagged for reconciliation, ` +
         `${report.applicationsUnlinked} left unmarked pending a rule-version link, ` +
+        `${report.applicationsClosedUnlinked} terminal and abandoned unlinked, ` +
         `${report.applicationsSkipped} already current).`
     );
     // COMPLETE means the walk finished, not that every row landed. Saying so at

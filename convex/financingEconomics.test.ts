@@ -2550,6 +2550,67 @@ describe("migration", () => {
     expect(after.financingBackfilledAt).toBeDefined();
   });
 
+  test("closing clears the queue item itself, without a second trip", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await orphanTheRuleVersion(seed, applicationId);
+    await seed.t.run((ctx) => ctx.db.delete(seed.companyId));
+    await runMigration(seed.t);
+    expect((await readApp(seed, applicationId)).needsFinancingReconciliation).toBe(true);
+
+    // The triager does exactly what the note says — closes the deal — and
+    // nothing else. Leaving the flag up made "or close it" a two-step exit
+    // described as one: the row stayed in the queue carrying a reason that was
+    // no longer true.
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { status: "CANCELLED" }));
+
+    await runMigration(seed.t);
+
+    const after = await readApp(seed, applicationId);
+    expect(after.needsFinancingReconciliation).toBe(false);
+    expect(after.financingReconciliationReason).toBeUndefined();
+    const queue = await seed.asUser.query(
+      api.financingEconomics.listNeedingReconciliation,
+      { orgId: seed.orgId, paginationOpts: { cursor: null, numItems: 20 } }
+    );
+    expect(queue.page).toHaveLength(0);
+
+    // Cleared with a row, never silently — the flag's contract is that it is
+    // reported on and not quietly dropped.
+    const overrides = await seed.t.run((ctx) =>
+      ctx.db
+        .query("financeApplicationOverrides")
+        .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+        .collect()
+    );
+    expect(
+      overrides.some((o) => o.field === "needsFinancingReconciliation")
+    ).toBe(true);
+  });
+
+  test("a closed deal that moved money stays flagged rather than being abandoned", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await orphanTheRuleVersion(seed, applicationId);
+    await seed.t.run((ctx) => ctx.db.delete(seed.companyId));
+
+    // Terminal, but it disbursed and finalized. Exempting every CLOSED row
+    // regardless of money would abandon exactly the deal whose unresolved rules
+    // somebody still needs told about — so the exemption matches
+    // reconciliationReasonFor's test rather than status alone.
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { status: "CLOSED", disbursedAt: Date.now() })
+    );
+
+    await runMigration(seed.t);
+
+    const after = await readApp(seed, applicationId);
+    expect(after.needsFinancingReconciliation).toBe(true);
+    expect(after.financingBackfilledAt).toBeUndefined();
+    // And the note does not tell them to close a deal that is already closed.
+    expect(after.financingReconciliationReason).toMatch(/historical record/i);
+  });
+
   test("tells the triager something they can actually do", async () => {
     const seed = await seedDealer();
     const applicationId = await createApplication(seed);

@@ -168,10 +168,53 @@ describe("organization hard-delete coverage", () => {
     expect(vanished, "listed tables that no longer exist in the schema").toEqual([]);
   });
 
+  test("a retained-by-design table is never added to the deletion steps", () => {
+    // The other direction, and the one that bites hardest. Adding
+    // `{ kind: "orgRows", table: "organizationDeletionRequests", index: "by_org" }`
+    // passes every other test in this file and kills the deletion chain at that
+    // step: the next tick finds no request, returns early, and the run stops
+    // with no reschedule, no FAILED status and no audit — leaving the
+    // organization half-deleted. Same shape for `adminAuditLog`, which would
+    // erase the record that the deletion happened.
+    const covered = tablesCoveredByDeletion();
+    const wronglyCovered = Object.keys(RETAINED_BY_DESIGN).filter((t) => covered.has(t));
+    expect(
+      wronglyCovered,
+      `These must OUTLIVE the org but a deletion step now removes them:\n` +
+        wronglyCovered.map((t) => `  - ${t}: ${RETAINED_BY_DESIGN[t]}`).join("\n")
+    ).toEqual([]);
+  });
+
   test("the deletion steps only name tables that exist", () => {
     const schemaTables = new Set(Object.keys(schema.tables));
     const unknown = [...tablesCoveredByDeletion()].filter((table) => !schemaTables.has(table));
     expect(unknown).toEqual([]);
+  });
+
+  test("the financial reset knows about every storage field it has to delete", () => {
+    // The reset sweeps blobs by a hardcoded field name. `expenses`,
+    // `paymentVouchers`, `receivableDocuments` and `postDatedCheques` are all in
+    // its table list and are plausible attachment carriers — the day one gains a
+    // storage id under any other name, the orphan defect this branch just fixed
+    // returns silently. Same thesis as the deletion guard above: fixing the
+    // instance does not stop the next one.
+    const schemaTables = schema.tables as Record<
+      string,
+      { validator: { fields?: Record<string, unknown> } }
+    >;
+    const found: Record<string, string[]> = {};
+    for (const table of RESET_TABLES_FOR_TEST) {
+      const fields = schemaTables[table]?.validator.fields ?? {};
+      const storageFields = Object.entries(fields)
+        .filter(([, validator]) => JSON.stringify(validator).includes('"_storage"'))
+        .map(([name]) => name);
+      if (storageFields.length > 0) found[table] = storageFields.sort();
+    }
+    expect(
+      found,
+      `A table in RESET_TABLES carries storage ids the reset does not sweep. ` +
+        `Add it to the blob-deletion branch in convex/orgFinancialReset.ts, then update this expectation.`
+    ).toEqual({ financeAppraisals: ["documentStorageIds"] });
   });
 
   test("the financial reset clears an application's children, not just the application", () => {
