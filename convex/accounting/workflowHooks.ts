@@ -973,10 +973,24 @@ export async function commissionAccrualStrandedReason(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
   saleId: Id<"sales">,
-  saleDate: number
+  saleDate: number,
 ): Promise<"CLOSED_PERIOD" | null> {
   if (await hasCommissionAccrual(ctx, orgId, saleId)) return null;
   const check = await checkPostingAllowed(ctx, orgId, saleDate);
+  // Only a CLOSED or LOCKED period. `waiting: true` — no period covers the sale
+  // yet — deliberately passes: that accrual queues at the sale's own date and
+  // posts when someone creates and opens the month, which is the whole of
+  // earned-time recognition for an org still setting up its books.
+  //
+  // A round-11 review proposed refusing that case too, because payroll can
+  // approve a run whose accrual is queued and then payRun refuses it. Rejected:
+  // payroll.test.ts "#2 re-accruing a queued commission does not recognize it in
+  // a later period" pins the opposite as a deliberate invariant, and refusing
+  // would silently drop the commission out of payroll rather than defer it —
+  // recognising it late in the wrong month is exactly what this branch exists to
+  // stop. That situation has a real exit (create and open the period covering
+  // the sale); it needed to be SAID, not prevented, so the close checklist now
+  // reports those sales separately and payRun names the remedy.
   return !check.ok && !check.waiting ? "CLOSED_PERIOD" : null;
 }
 

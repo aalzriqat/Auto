@@ -468,6 +468,16 @@ async function computeCloseChecklist(
       `${commissionRecognitionDivergence.unrecognizedCount} completed sale commission(s) are not recognized in the ledger at all. Run the commission accrual backfill.`
     );
   }
+  if (commissionRecognitionDivergence.strandedCount > 0) {
+    warnings.push(
+      `${commissionRecognitionDivergence.strandedCount} completed sale commission(s) are not recognized and sit in a closed or locked period, so the backfill cannot post them. Reopen the period covering them (or set the commission to zero) first.`
+    );
+  }
+  if (commissionRecognitionDivergence.noPeriodCount > 0) {
+    warnings.push(
+      `${commissionRecognitionDivergence.noPeriodCount} completed sale commission(s) fall on dates no accounting period covers, so they can never post and will block future closes. Create a period covering those sale dates.`
+    );
+  }
   if (commissionRecognitionDivergence.divergentCount > 0) {
     warnings.push(
       `${commissionRecognitionDivergence.divergentCount} commission(s) are recognized in the ledger at a different amount than the sale records. Review before closing.`

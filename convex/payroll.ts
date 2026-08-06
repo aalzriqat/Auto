@@ -573,8 +573,18 @@ async function assertAccrualsPosted(
       // sale), and a queued correction means the GL only holds the original —
       // the difference comes straight out of the payable as a negative.
       if (await commissionEntriesStillQueued(ctx, orgId, sale)) {
+        // Name the state rather than guessing at it. "Open the period" is the
+        // wrong instruction when no period covers the sale at all — the entry is
+        // then waiting on a month that has to be CREATED first, and an operator
+        // told to open something that does not exist has no way forward. This is
+        // the state a round-11 review reported as an inescapable deadlock; the
+        // escape is real, it just was not being said.
+        const saleCheck = await checkPostingAllowed(ctx, orgId, sale.saleDate);
+        const saleMonth = new Date(sale.saleDate).toISOString().slice(0, 7);
         throw new ConvexError(
-          "A commission entry for this run hasn't posted to the ledger yet (its accounting period may be closed). Open the period so it posts, then pay."
+          !saleCheck.ok && saleCheck.waiting
+            ? `A commission in this run is dated ${saleMonth}, which no open accounting period covers, so it cannot post. Create and open a period covering ${saleMonth}, then pay this run.`
+            : "A commission entry for this run hasn't posted to the ledger yet (its accounting period is closed). Reopen the period so it posts, then pay."
         );
       }
       // Payment debits the payable by the sale's amount while the GL carries
@@ -1013,6 +1023,11 @@ export const approveRun = mutation({
       // between draft and approval accrues, and is approved, at its live value.
       let approvedGross = 0;
       let approvedNet = 0;
+      // Sales dropped from this run because their commission cannot be
+      // recognized yet. Reported back rather than only logged: approval silently
+      // paying less than the draft showed is exactly the kind of change an
+      // approver must be told about.
+      const skippedCommissionSaleIds: Id<"sales">[] = [];
       for (const item of items) {
         // On re-approval the salary was already accrued at the first approval —
         // keep that frozen amount (its accrual key is idempotent, so re-resolving
@@ -1069,12 +1084,17 @@ export const approveRun = mutation({
           //
           // Already-accrued sales are unaffected — the hook is a no-op for them,
           // and so is this check.
-          if (
-            (await commissionAccrualStrandedReason(ctx, args.orgId, saleId, sale.saleDate)) !== null
-          ) {
+          const strandedReason = await commissionAccrualStrandedReason(
+            ctx,
+            args.orgId,
+            saleId,
+            sale.saleDate
+          );
+          if (strandedReason !== null) {
             console.warn(
-              `[payroll] org ${args.orgId}: skipping sale ${saleId} — commission unrecognized and its accounting period is closed`
+              `[payroll] org ${args.orgId}: skipping sale ${saleId} — ${strandedReason}`
             );
+            skippedCommissionSaleIds.push(saleId);
             continue;
           }
           await hookCommissionAccrued(ctx, {
@@ -1118,8 +1138,15 @@ export const approveRun = mutation({
       // already posted and it can no longer be cancelled), and payment safely
       // skips the all-zero journal.
       if (!isReapproval && approvedGross <= 0) {
+        // "Cancel and rebuild" is only honest advice when rebuilding could
+        // produce a different draft. If the run came to zero because every
+        // commission in it was skipped, the sweep will select those same sales
+        // again and the next draft is identical — so the instruction has to name
+        // the actual blocker instead of sending the user round a closed loop.
         throw new ConvexError(
-          "Nothing to approve: no payslip has a positive gross. Cancel this draft and create a fresh run."
+          skippedCommissionSaleIds.length > 0
+            ? `Nothing to approve: the only pay in this run is ${skippedCommissionSaleIds.length} commission(s) that cannot be recognized yet, because no open accounting period covers the sale(s). Create or reopen the period covering them — rebuilding this run will produce the same draft.`
+            : "Nothing to approve: no payslip has a positive gross. Cancel this draft and create a fresh run."
         );
       }
 
@@ -1135,6 +1162,10 @@ export const approveRun = mutation({
         reapprovalReason: undefined,
         updatedAt: now,
       });
+
+      // The caller is told what was left out, so a run that approves for less
+      // than the draft displayed does not do so silently.
+      return { skippedCommissionSaleIds };
     } catch (error) {
       if (error instanceof ConvexError) throw error;
       console.error("payroll.approveRun failed", error);

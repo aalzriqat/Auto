@@ -474,6 +474,36 @@ describe("voiding a sale backs the whole commission out of the ledger", () => {
     expect(await commissionExpenseMinor(d)).toBe(0);
   });
 
+  test("cancellation reverses a commission corrected more than once", async () => {
+    // The single-correction case above exercises the forward probe only to
+    // sequence 1. reverseCommissionForSale walks upward past
+    // commissionAdjustmentSeq rather than trusting it, so the loop itself needs
+    // a sale with several corrections behind it.
+    const d = await seedDealer("cancel_many_adjustments");
+    const saleId = await completedSale(d);
+    for (const amount of [250, 400, 175, 900]) {
+      await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+        orgId: d.orgId,
+        saleId,
+        commissionAmount: amount,
+      });
+    }
+    // One accrual plus three corrections.
+    expect(await adjustmentSeq(d, saleId)).toBe(3);
+    expect(await commissionPayableMinor(d)).toBe(90_000);
+
+    await d.asManager.mutation(api.sales.update, {
+      orgId: d.orgId,
+      saleId,
+      status: "CANCELLED",
+    });
+
+    // Every one of them backed out — both sides of the journal, not just the
+    // payable.
+    expect(await commissionPayableMinor(d)).toBe(0);
+    expect(await commissionExpenseMinor(d)).toBe(0);
+  });
+
   test("cancelling a sale that was never corrected still reverses cleanly", async () => {
     const d = await seedDealer("cancel_plain");
     const saleId = await completedSale(d);
@@ -2247,5 +2277,135 @@ describe("a closed period does not block commission edits that post nothing", ()
       })
     ).rejects.toThrow(/this sale's accounting period is closed/i);
     expect(await commissionPayableMinor(d)).toBe(25000);
+  });
+});
+
+/**
+ * Round 11. The skip added last round fired only for a CLOSED or LOCKED period.
+ * A sale in a month with NO period at all slipped past it, and that is worse:
+ * the accrual queues (nothing can post to a period that does not exist) while
+ * the payment CAN post, so payRun refuses the run — after approval, where
+ * cancelRun no longer works and nobody in the org can be paid.
+ *
+ * This is also a regression against main, where payroll accrued at the run's
+ * own period end (normally open) rather than at the sale.
+ */
+describe("a commission whose month has no period is deferred, never dropped", () => {
+  test("payroll still accrues it, queued at the sale's own date", async () => {
+    // A round-11 review proposed SKIPPING these, because payroll can approve a
+    // run whose accrual is queued and then payRun refuses it. Rejected: that
+    // silently drops the commission, and payroll.test.ts "#2 re-accruing a
+    // queued commission does not recognize it in a later period" pins the
+    // opposite as a deliberate invariant. Recognising it later in whichever
+    // month happens to be open is precisely what this branch exists to prevent.
+    const d = await seedDealer("no_period_deferred");
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { commissionAmount: 250 });
+    });
+
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId,
+      periodYear: new Date().getUTCFullYear(),
+      periodMonth: new Date().getUTCMonth() + 1,
+    });
+    const approval = await d.asAdmin.mutation(api.payroll.approveRun, {
+      orgId: d.orgId,
+      runId,
+    });
+    // Not skipped — deferred.
+    expect(approval?.skippedCommissionSaleIds ?? []).toHaveLength(0);
+
+    // The accrual exists and is queued at the SALE's date, not at the payroll
+    // month, so opening that month later recognises it where it was earned.
+    const queued = await d.t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", d.orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(queued?.accountingDate).toBe(Date.UTC(priorYear, 5, 15));
+  });
+
+  test("paying that run names the month that must be created, not one to open", async () => {
+    // The deferral is only safe if the operator is told what to do. "Open the
+    // period" is the wrong instruction when no period covers the sale at all.
+    const d = await seedDealer("no_period_message");
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { commissionAmount: 250 });
+    });
+
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId,
+      periodYear: new Date().getUTCFullYear(),
+      periodMonth: new Date().getUTCMonth() + 1,
+    });
+    await d.asAdmin.mutation(api.payroll.approveRun, { orgId: d.orgId, runId });
+
+    await expect(
+      d.asAdmin.mutation(api.payroll.payRun, { orgId: d.orgId, runId, method: "CASH" })
+    ).rejects.toThrow(
+      new RegExp(`no open accounting period covers.*${priorYear}-06`, "is")
+    );
+
+    // Recoverable: create and open that month and the run pays. This is the
+    // "inescapable deadlock" — it has an exit, it just had to be said.
+    await d.asAdmin.mutation(api.accountingPeriods.create, {
+      orgId: d.orgId,
+      startDate: Date.UTC(priorYear, 5, 1),
+      endDate: Date.UTC(priorYear, 5, 30, 23, 59, 59, 999),
+      fiscalYear: priorYear,
+      periodNumber: 6,
+    });
+    const created = (await d.asAdmin.query(api.accountingPeriods.list, { orgId: d.orgId })).find(
+      (p) => p.fiscalYear === priorYear && p.periodNumber === 6
+    );
+    await d.asAdmin.mutation(api.accountingPeriods.open, {
+      orgId: d.orgId,
+      periodId: created!._id,
+    });
+    await d.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: d.orgId });
+
+    await d.asAdmin.mutation(api.payroll.payRun, { orgId: d.orgId, runId, method: "CASH" });
+    const run = await d.t.run(async (ctx) => await ctx.db.get(runId));
+    expect(run?.status).toBe("PAID");
+  });
+});
+
+/**
+ * Round 11. The payRun half of the today's-period guard shipped with no test at
+ * all — and it is a new hard throw on the salary-payment path.
+ */
+describe("payroll payment respects today's period", () => {
+  test("payRun is refused when TODAY's period is closed", async () => {
+    const d = await seedDealer("payrun_today_closed");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId,
+      periodYear: new Date().getUTCFullYear(),
+      periodMonth: new Date().getUTCMonth() + 1,
+    });
+    await d.asAdmin.mutation(api.payroll.approveRun, { orgId: d.orgId, runId });
+
+    await closePriorYearPeriod(d, new Date().getUTCFullYear());
+
+    await expect(
+      d.asAdmin.mutation(api.payroll.payRun, { orgId: d.orgId, runId, method: "CASH" })
+    ).rejects.toThrow(/today's accounting period is closed/i);
+
+    // Still APPROVED and unpaid — nothing was written on the way to the throw.
+    const run = await d.t.run(async (ctx) => await ctx.db.get(runId));
+    expect(run?.status).toBe("APPROVED");
+    expect(run?.paidAt ?? null).toBeNull();
   });
 });

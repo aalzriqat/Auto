@@ -1089,7 +1089,15 @@ export async function computeCommissionRecognitionDivergence(
     pendingEvents?: Doc<"pendingAccountingEvents">[];
     sales?: Doc<"sales">[];
   }
-): Promise<{ unrecognizedCount: number; divergentCount: number; currency: string }> {
+): Promise<{
+  unrecognizedCount: number;
+  divergentCount: number;
+  /** Unrecognized AND in a CLOSED/LOCKED period, so the backfill cannot fix them. */
+  strandedCount: number;
+  /** Unrecognized AND no period covers the sale date, so nothing will ever post them. */
+  noPeriodCount: number;
+  currency: string;
+}> {
   const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
   const sales =
     provided?.sales ??
@@ -1113,7 +1121,13 @@ export async function computeCommissionRecognitionDivergence(
       s.commissionAmount > 0
   );
   if (candidates.length === 0) {
-    return { unrecognizedCount: 0, divergentCount: 0, currency: orgCurrency };
+    return {
+      unrecognizedCount: 0,
+      divergentCount: 0,
+      strandedCount: 0,
+      noPeriodCount: 0,
+      currency: orgCurrency,
+    };
   }
 
   // CURRENT state on both sides, deliberately — unlike the payable
@@ -1158,6 +1172,15 @@ export async function computeCommissionRecognitionDivergence(
 
   let unrecognizedCount = 0;
   let divergentCount = 0;
+  let strandedCount = 0;
+  let noPeriodCount = 0;
+  // Loaded once rather than a checkPostingAllowed call per sale: this runs
+  // inside the close checklist, where read count is the constraint that decides
+  // whether a period can be closed at all.
+  const periods = await ctx.db
+    .query("accountingPeriods")
+    .withIndex("by_org_startDate", (q) => q.eq("orgId", orgId))
+    .collect();
   for (const sale of candidates) {
     if (salesWithQueuedEntry.has(sale._id)) continue;
     const byCurrency = recognized.get(sale._id);
@@ -1184,14 +1207,37 @@ export async function computeCommissionRecognitionDivergence(
       // (isCommissionOwed requires an unpaid commission), so counting it here
       // named a remedy that provably cannot clear the warning, on a line that
       // must be acknowledged verbatim at every close, forever.
-      if (sale.commissionPaidAt == null) unrecognizedCount++;
+      if (sale.commissionPaidAt == null) {
+        // Same rule once more, one level deeper. The backfill ALSO skips a sale
+        // whose own period is CLOSED or LOCKED (skippedClosedPeriod), so telling
+        // an accountant to run it would be the third version of that same empty
+        // instruction. These need the period reopened — or the commission zeroed
+        // — before any backfill can touch them, so they are counted apart.
+        const period = periods.find(
+          (p) => p.startDate <= sale.saleDate && p.endDate >= sale.saleDate
+        );
+        if (!period) {
+          // No period covers this sale at all. The backfill does enqueue these
+          // ("queues harmlessly"), but harmless is only true if a period is
+          // eventually created — otherwise the row sits PENDING forever, and an
+          // unposted event dated in the past is a HARD close blocker for every
+          // period after it. An org importing historical sales at go-live hits
+          // exactly this, and nothing in the product tells them the fix is to
+          // create a period covering the old dates.
+          noPeriodCount++;
+        } else if (period.status === "CLOSED" || period.status === "LOCKED") {
+          strandedCount++;
+        } else {
+          unrecognizedCount++;
+        }
+      }
       continue;
     }
     if (recognizedMinor !== decided) {
       divergentCount++;
     }
   }
-  return { unrecognizedCount, divergentCount, currency: orgCurrency };
+  return { unrecognizedCount, divergentCount, strandedCount, noPeriodCount, currency: orgCurrency };
 }
 
 export const commissionPayableReconciliation = query({
