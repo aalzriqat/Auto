@@ -1051,7 +1051,17 @@ describe("reopening an approval", () => {
 
     // Nothing else could put it back: updateStatus cannot run again because
     // APPROVED is terminal there, so the deal stayed un-handoverable forever.
-    expect((await readApp(seed, applicationId)).handoverStatus).toBe("READY");
+    const after = await readApp(seed, applicationId);
+    expect(after.handoverStatus).toBe("READY");
+
+    // A re-approval after the approval was CLEARED must re-stamp. The only
+    // thing that makes it do so is the `approvedPurchaseApprovedAt === undefined`
+    // fallback beside the conditional stamp — so if a later edit preserves the
+    // approver in either clear-list "for history", every subsequent approval
+    // would silently keep the previous approver and timestamp with the whole
+    // suite still green.
+    expect(after.approvedPurchaseApprovedAt).toBeDefined();
+    expect(after.approvedPurchaseApprovedBy).toBe(seed.approverId);
   });
 
   test("records an approval that changes only its basis", async () => {
@@ -1152,6 +1162,11 @@ describe("reopening an approval", () => {
       applicationId,
     });
     expect(economics.overrides).toHaveLength(1);
+    // A row is not a trace. Asserting only its existence passed on a row whose
+    // previousValue and newValue were the identical string, leaving the prior
+    // approver as unrecoverable as before — this table is the only history.
+    expect(economics.overrides[0]?.previousValue).toContain(String(seed.approverId));
+    expect(economics.overrides[0]?.newValue).toContain(String(secondApproverId));
   });
 
   test("the same approver re-submitting does not advance the approval timestamp", async () => {
@@ -2506,6 +2521,33 @@ describe("migration", () => {
     const after = await readApp(seed, applicationId);
     expect(after.needsFinancingReconciliation).toBe(true);
     expect(after.financingBackfilledAt).toBeUndefined();
+  });
+
+  test("a cancelled deal stops being re-flagged, so 'or close it' is true", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await orphanTheRuleVersion(seed, applicationId);
+    await seed.t.run((ctx) => ctx.db.delete(seed.companyId));
+    await runMigration(seed.t);
+    expect((await readApp(seed, applicationId)).needsFinancingReconciliation).toBe(true);
+
+    // The reason offers "or close it" as the way out. Without a terminal-state
+    // guard that was false: closing changed nothing, the flag stayed up, and
+    // every later run re-raised anything a triager cleared — the closed loop
+    // relocated rather than broken.
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        status: "CANCELLED",
+        needsFinancingReconciliation: false,
+        financingReconciliationReason: undefined,
+      })
+    );
+
+    await runMigration(seed.t);
+
+    const after = await readApp(seed, applicationId);
+    expect(after.needsFinancingReconciliation).toBe(false);
+    expect(after.financingBackfilledAt).toBeDefined();
   });
 
   test("tells the triager something they can actually do", async () => {

@@ -28,6 +28,12 @@ const RETAINED_BY_DESIGN: Record<string, string> = {
   // record that the deletion happened, which is the one row that must outlive
   // it.
   adminAuditLog: "platform deletion trail, retained on purpose",
+  // The deletion driver's own state row. `runDeletionRequestBatch` patches it
+  // on every tick, so deleting it mid-run makes the next tick find no request,
+  // return early, and stop the chain — with no reschedule, no FAILED status and
+  // no audit, leaving the organization half-deleted. It must outlive the org it
+  // is deleting.
+  organizationDeletionRequests: "the deletion driver's own state row",
 };
 
 /**
@@ -71,7 +77,6 @@ const KNOWN_UNCOVERED_PRE_EXISTING: readonly string[] = [
   "marketplaceWhatsAppFlows",
   "membershipOffboardingJobs",
   "openingBalanceDrafts",
-  "organizationDeletionRequests",
   "partnerEquityTransactions",
   "paymentVouchers",
   "payrollItems",

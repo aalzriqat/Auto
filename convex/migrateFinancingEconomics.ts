@@ -371,6 +371,17 @@ export const backfillFinancingEconomics = internalMutation({
         // ever reaches this branch again, so an application that failed to bind
         // once stays unbound forever and silently falls back to reading its
         // company's rules live. Leave the marker off and it is simply retried.
+        // A deal that has been closed or cancelled has no future decision left
+        // for rules to govern, so telling somebody to fix its rule binding is
+        // noise they cannot clear — the same reasoning `reconciliationReasonFor`
+        // applies to terminal legacy rows. Without this, "or close it" in the
+        // reasons below was false: closing changed nothing, the flag stayed up,
+        // and the next run re-raised anything a triager had cleared.
+        if (unresolvedReason && !isInFlight(app)) {
+          await ctx.db.patch(app._id, { financingBackfilledAt: now });
+          report.applicationsSkipped += 1;
+          continue;
+        }
         if (unresolvedReason) {
           // Re-raise whenever the flag is not currently up — NOT only when it
           // has never been set. `resolveFinancingReconciliation` clears it to

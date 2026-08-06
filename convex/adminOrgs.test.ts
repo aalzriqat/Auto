@@ -239,6 +239,76 @@ describe("adminOrgs", () => {
     expect(org).toBeNull();
   });
 
+  test("hardDeleteOrg removes a financed deal's appraisals, overrides, rule versions and appraisal blobs", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, ownerId } = await seedOrgWithOwner(t);
+    await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "dev_1", email: "admin@autoflow.dev" }));
+    const asAdmin = t.withIdentity({ subject: "dev_1" });
+
+    // The appraisal report itself. Deleting the row without this leaves the
+    // finance company's valuation of a customer's vehicle in storage with
+    // nothing referencing it — unreachable and undeletable.
+    const appraisalBlobId = await t.run((ctx) => ctx.storage.store(new Blob(["appraisal.pdf"])));
+
+    const ids = await t.run(async (ctx) => {
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, vin: "VINFIN1", make: "Toyota", model: "Camry", year: 2024, mileage: 10,
+        color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: 20000,
+        status: "AVAILABLE",
+      });
+      const customerId = await ctx.db.insert("customers", {
+        orgId, firstName: "Fin", lastName: "Customer",
+      });
+      const companyId = await ctx.db.insert("financeCompanies", {
+        orgId, name: "Jordan Finance", profitRate: 5, maxTermMonths: 60,
+        gracePeriodMonths: 0, isActive: true, ruleVersion: 1,
+      });
+      const quoteId = await ctx.db.insert("quotes", {
+        orgId, customerId, vehicleId, companyId, vehiclePrice: 20000,
+        downPayment: 2000, termMonths: 48, status: "ACCEPTED",
+        createdBy: ownerId, createdAt: Date.now(),
+      });
+      const applicationId = await ctx.db.insert("financeApplications", {
+        orgId, quoteId, customerId, vehicleId, companyId,
+        salespersonId: ownerId, status: "APPROVED",
+        createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      const appraisalId = await ctx.db.insert("financeAppraisals", {
+        orgId, applicationId, vehicleId, companyId,
+        appraisalAmountMinor: 12_500_000, currency: "JOD",
+        providerType: "FINANCE_COMPANY", appraisedAt: Date.now(),
+        documentStorageIds: [appraisalBlobId], isReappraisal: false,
+        status: "APPROVED", recordedBy: ownerId, recordedAt: Date.now(),
+      });
+      const overrideId = await ctx.db.insert("financeApplicationOverrides", {
+        orgId, applicationId, field: "approvedDealerPurchaseAmountMinor",
+        previousValue: "12500000", newValue: "11500000",
+        reason: "Renegotiated.", changedBy: ownerId, changedAt: Date.now(),
+      });
+      const versionId = await ctx.db.insert("financeCompanyRuleVersions", {
+        orgId, companyId, version: 1,
+        snapshot: { ruleVersion: 1, companyName: "Jordan Finance" },
+        createdAt: Date.now(),
+      });
+      return { applicationId, appraisalId, overrideId, versionId };
+    });
+
+    const result = await asAdmin.mutation(api.adminOrgs.hardDeleteOrg, {
+      orgId, confirmName: "Acme Motors",
+    });
+    expect((await runDeletionToCompletion(t, result.requestId))?.status).toBe("COMPLETED");
+
+    // All three were invisible to the cascade: hardDeleteOrg reported success
+    // and left them behind forever, in tables nothing else scopes.
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(ids.applicationId)).toBeNull();
+      expect(await ctx.db.get(ids.appraisalId)).toBeNull();
+      expect(await ctx.db.get(ids.overrideId)).toBeNull();
+      expect(await ctx.db.get(ids.versionId)).toBeNull();
+    });
+    expect(await t.run(async (ctx) => ctx.storage.getUrl(appraisalBlobId))).toBeNull();
+  });
+
   test("hardDeleteOrg cascades site-visitor analytics but leaves platform-scoped rows untouched", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithOwner(t);

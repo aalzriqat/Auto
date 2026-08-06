@@ -74,11 +74,16 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "guarantors", index: "by_org" },
   { kind: "orgRows", table: "quotes", index: "by_org" },
   { kind: "orgRows", table: "applicationStatusLog", index: "by_org" },
-  // The application's children go before the application itself, so a run that
-  // stops between batches never leaves rows whose parent is already gone.
+  // Appraisals and overrides go before the application they belong to, so a run
+  // that FAILs between steps never leaves rows whose parent is already gone.
   { kind: "financeAppraisalsWithStorage" },
   { kind: "orgRows", table: "financeApplicationOverrides", index: "by_org" },
   { kind: "orgRows", table: "financeApplications", index: "by_org" },
+  // Deliberately AFTER the applications, which hold `companyRuleVersionId` —
+  // so this one outlives its referents rather than preceding them. It sits
+  // after `financeCompanies` (above) for the same reason that ordering already
+  // existed: on a FAILED run the surviving rows reference a deleted company,
+  // which is the lesser of the two dangling directions.
   { kind: "orgRows", table: "financeCompanyRuleVersions", index: "by_org" },
   { kind: "orgRows", table: "deposits", index: "by_org" },
   { kind: "orgRows", table: "receivables", index: "by_org" },

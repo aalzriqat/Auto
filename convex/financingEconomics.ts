@@ -1234,13 +1234,18 @@ export const approveDealerPurchaseAmount = mutation({
         orgId: args.orgId,
         applicationId: args.applicationId,
         field: "approvedDealerPurchaseAmountMinor",
-        // Both money-determining inputs, so the row says which one moved
-        // rather than only that something did.
+        // EVERY input in the change condition above, on both sides — not just
+        // the money ones. Recording the approver in the condition but not in
+        // the payload wrote a row whose two value fields were the identical
+        // string, so a second approver replacing the first left a trace that
+        // said a change happened and not what it was. The prior approver was
+        // still unrecoverable: this table is the only history, and
+        // applicationStatusLog records status transitions only.
         previousValue:
           app.approvedDealerPurchaseAmountMinor === undefined
             ? undefined
-            : `${app.approvedDealerPurchaseAmountMinor} (${app.approvedPurchaseBasis ?? "unknown basis"} @ ${app.appliedLtvPercent ?? "unknown"}% LTV)`,
-        newValue: `${args.approvedAmountMinor} (${args.basis} @ ${appliedLtvPercent}% LTV)`,
+            : `${app.approvedDealerPurchaseAmountMinor} (${app.approvedPurchaseBasis ?? "unknown basis"} @ ${app.appliedLtvPercent ?? "unknown"}% LTV, approved by ${app.approvedPurchaseApprovedBy ?? "unrecorded"})`,
+        newValue: `${args.approvedAmountMinor} (${args.basis} @ ${appliedLtvPercent}% LTV, approved by ${user._id})`,
         reason: args.notes?.trim() ?? `Re-approved on the ${args.basis} basis.`,
         changedBy: user._id,
       });

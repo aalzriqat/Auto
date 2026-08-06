@@ -62,8 +62,11 @@ const RESET_TABLES = [
   // Sales
   "sales",
   "quotes",
-  // Finance applications, children first so a run that stops between batches
-  // never leaves a row whose application is already gone.
+  // Finance applications and their children. The whole loop runs inside one
+  // mutation and commits atomically, so ordering here is presentational rather
+  // than a safety property — the children are listed beside their parent so a
+  // reader can see the set is complete. Appraisals carry storage ids and are
+  // handled accordingly below.
   "financeAppraisals",
   "financeApplicationOverrides",
   "financeApplications",
@@ -136,6 +139,18 @@ export const resetOrgFinancialData = internalMutation({
 
       if (!dryRun) {
         for (const row of batch) {
+          // `financeAppraisals` is the first table in this list that carries
+          // storage ids. Deleting the row alone would leave the finance
+          // company's appraisal report on a customer's vehicle in storage with
+          // nothing referencing it — not enumerable, not deletable by any code
+          // path, and billed indefinitely. An orphaned row is recoverable; an
+          // unreferenced blob is not.
+          const storageIds =
+            "documentStorageIds" in row ? (row.documentStorageIds ?? []) : [];
+          for (const storageId of storageIds) {
+            const metadata = await ctx.db.system.get("_storage", storageId);
+            if (metadata) await ctx.storage.delete(storageId);
+          }
           await ctx.db.delete(row._id);
         }
       }
