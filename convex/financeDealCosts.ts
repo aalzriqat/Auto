@@ -274,6 +274,130 @@ async function custodyActualExpensesMinor(
  * that stays visible, rather than overwriting a figure and losing the fact that
  * it ever differed.
  */
+/**
+ * Resolves the custody record a fee line may be charged against.
+ *
+ * Shared by `recordDealFee` and `recordActualFeeAmount`, which had the same
+ * four checks written out twice — and a divergence between two copies of a
+ * money guard is the kind that survives review because both copies look right
+ * on their own.
+ */
+async function resolveFeeCustody(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  applicationId: Id<"financeApplications">,
+  custodyId: Id<"financeDealCustody">,
+  paidBy: Doc<"financeDealFees">["paidBy"]
+): Promise<Id<"financeDealCustody">> {
+  const custody = await requireOwnedRow(
+    ctx, orgId, "financeDealCustody", custodyId, CUSTODY_NOT_FOUND
+  );
+  if (custody.applicationId !== applicationId) {
+    throw new ConvexError("That custody record belongs to a different deal.");
+  }
+  assertCustodyOpen(custody);
+  // The custody balance is "what this person spent of the money they hold".
+  // Charging it for a cost somebody ELSE paid drives that balance to zero while
+  // the cash is still in their pocket, and the record then reconciles and
+  // closes clean. An obvious mis-click once a UI offers the deal's custody in a
+  // dropdown.
+  if (paidBy !== "EMPLOYEE") {
+    throw new ConvexError(
+      "A cost charged to an employee's custody must be recorded as paid by that employee. Remove the custody link, or record who actually paid."
+    );
+  }
+  return custody._id;
+}
+
+/**
+ * Deletes the blobs a replacement attachment list drops.
+ *
+ * Replacing the attachments wholesale left the old blobs referenced by nothing
+ * — and both deletion paths enumerate ROWS, so an orphan survives the org
+ * hard-delete and the financial reset alike. `financeAppraisals`, the only
+ * other storage carrier here, is append-only and never hit this.
+ */
+async function deleteDroppedAttachments(
+  ctx: MutationCtx,
+  previous: Array<Id<"_storage">> | undefined,
+  next: Array<Id<"_storage">> | undefined
+): Promise<void> {
+  if (!next) return;
+  for (const storageId of (previous ?? []).filter((id) => !next.includes(id))) {
+    const metadata = await ctx.db.system.get("_storage", storageId);
+    if (metadata) await ctx.storage.delete(storageId);
+  }
+}
+
+/**
+ * Whether a reversal may cancel the movement it names.
+ *
+ * Seven checks that all have to hold before an entry is admitted, lifted out of
+ * the handler so the handler reads as: authorize, validate the amount, validate
+ * the kind, insert.
+ */
+async function assertReversalAllowed(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  custodyId: Id<"financeDealCustody">,
+  reversesEntryId: Id<"financeDealCustodyEntries"> | undefined,
+  amountMinor: number
+): Promise<void> {
+  if (!reversesEntryId) {
+    throw new ConvexError("Say which movement this reverses.");
+  }
+  const target = await requireOwnedRow(
+    ctx, orgId, "financeDealCustodyEntries", reversesEntryId,
+    "That movement was not found in this organization."
+  );
+  if (target.custodyId !== custodyId) {
+    throw new ConvexError("That movement belongs to a different custody record.");
+  }
+  if (target.kind === "REVERSAL") {
+    throw new ConvexError("A reversal cannot itself be reversed. Record the movement again.");
+  }
+  if (target.amountMinor !== amountMinor) {
+    throw new ConvexError(
+      `A reversal must cancel the whole movement. That one was ${target.amountMinor} minor units.`
+    );
+  }
+  const already = await ctx.db
+    .query("financeDealCustodyEntries")
+    .withIndex("by_custody", (q) => q.eq("custodyId", custodyId))
+    .collect();
+  if (already.some((row) => row.reversesEntryId === reversesEntryId)) {
+    throw new ConvexError("That movement has already been reversed.");
+  }
+
+  // A reimbursement is calculated against what the person was given: they spent
+  // more than the advance, so the difference was paid back to them. Retracting
+  // the issuance afterwards leaves that payment standing on a baseline that no
+  // longer exists, and the outstanding figure silently re-derives the entire
+  // advance as a fresh debt — a settled record turning into "700 still owed"
+  // with nobody having moved any money.
+  //
+  // This is not the totals invariant and cannot be enforced there: zero issued
+  // alongside a reimbursement is a perfectly true state on its own, it is what
+  // paying out of pocket looks like. What is not true is reaching it by
+  // withdrawing the issuance the reimbursement was measured from, so the guard
+  // belongs on that dependency.
+  if (target.kind !== "ISSUED") return;
+  const reversed = new Set(
+    already
+      .filter((row) => row.kind === "REVERSAL" && row.reversesEntryId)
+      .map((row) => row.reversesEntryId!)
+  );
+  const settledAgainst = already.filter(
+    (row) => row.kind === "REIMBURSED" && !reversed.has(row._id)
+  );
+  if (settledAgainst.length > 0) {
+    const paidMinor = settledAgainst.reduce((sum, row) => sum + row.amountMinor, 0);
+    throw new ConvexError(
+      `A reimbursement of ${paidMinor} minor units was already paid against this handover. Reverse that reimbursement first, otherwise the payment stays on the record measured against an issuance that no longer exists.`
+    );
+  }
+}
+
 async function recomputeCustodyTotals(
   ctx: MutationCtx,
   custodyId: Id<"financeDealCustody">
@@ -449,28 +573,9 @@ export const recordDealFee = mutation({
 
     let custodyId: Id<"financeDealCustody"> | undefined;
     if (args.custodyId) {
-      const custody = await requireOwnedRow(
-        ctx,
-        args.orgId,
-        "financeDealCustody",
-        args.custodyId,
-        CUSTODY_NOT_FOUND
+      custodyId = await resolveFeeCustody(
+        ctx, args.orgId, args.applicationId, args.custodyId, args.paidBy
       );
-      if (custody.applicationId !== args.applicationId) {
-        throw new ConvexError("That custody record belongs to a different deal.");
-      }
-      assertCustodyOpen(custody);
-      // F3: the custody balance is "what this person spent of the money they
-      // hold". Charging it for a cost somebody ELSE paid drives that balance to
-      // zero while the cash is still in their pocket, and the record then
-      // reconciles and closes clean. An obvious mis-click once a UI offers the
-      // deal's custody in a dropdown.
-      if (args.paidBy !== "EMPLOYEE") {
-        throw new ConvexError(
-          "A cost charged to an employee's custody must be recorded as paid by that employee. Remove the custody link, or record who actually paid."
-        );
-      }
-      custodyId = custody._id;
     }
 
     // A cost line is additive: a retried submit does not overwrite anything, it
@@ -592,26 +697,9 @@ export const recordActualFeeAmount = mutation({
       });
     }
 
-    let custodyId = fee.custodyId;
-    if (args.custodyId) {
-      const custody = await requireOwnedRow(
-        ctx,
-        args.orgId,
-        "financeDealCustody",
-        args.custodyId,
-        CUSTODY_NOT_FOUND
-      );
-      if (custody.applicationId !== fee.applicationId) {
-        throw new ConvexError("That custody record belongs to a different deal.");
-      }
-      assertCustodyOpen(custody);
-      if (fee.paidBy !== "EMPLOYEE") {
-        throw new ConvexError(
-          "A cost charged to an employee's custody must be recorded as paid by that employee."
-        );
-      }
-      custodyId = custody._id;
-    }
+    const custodyId = args.custodyId
+      ? await resolveFeeCustody(ctx, args.orgId, fee.applicationId, args.custodyId, fee.paidBy)
+      : fee.custodyId;
     // Editing the amount on a line that a CLOSED custody record was balanced
     // against would leave that record permanently wrong with no way to correct
     // it — `recordCustodyMovement` refuses once it is closed.
@@ -620,20 +708,8 @@ export const recordActualFeeAmount = mutation({
       if (existing) assertCustodyOpen(existing);
     }
 
-    // Replacing the attachments wholesale left the old blobs referenced by
-    // nothing — and both deletion paths enumerate ROWS, so an orphan survives
-    // the org hard-delete and the financial reset alike. `financeAppraisals`,
-    // the only other storage carrier here, is append-only and never hit this.
     const nextStorageIds = args.documentStorageIds ?? fee.documentStorageIds;
-    if (args.documentStorageIds) {
-      const dropped = (fee.documentStorageIds ?? []).filter(
-        (id) => !args.documentStorageIds!.includes(id)
-      );
-      for (const storageId of dropped) {
-        const metadata = await ctx.db.system.get("_storage", storageId);
-        if (metadata) await ctx.storage.delete(storageId);
-      }
-    }
+    await deleteDroppedAttachments(ctx, fee.documentStorageIds, args.documentStorageIds);
 
     const parent = await ctx.db.get(fee.applicationId);
     if (parent) {
@@ -841,19 +917,17 @@ export const openDealCustody = mutation({
       );
     }
 
-    const existing = (await custodyFor(ctx, args.applicationId)).find(
-      (row) => row.userId === args.userId && row.status === "OPEN"
-    );
-    if (existing) {
-      throw new ConvexError(
-        "This person already holds an open custody record on this deal. Record the money against that one."
-      );
-    }
-
-    // The one-open-record rule above already stops a retry creating a second
-    // custody, so the key is not what protects the money here — it is what
-    // makes the retry return the record instead of an error about a record the
-    // caller's own first attempt created.
+    // The one-open-record rule stops a retry creating a second custody, so the
+    // key is not what protects the money here — it is what makes the retry
+    // return the record instead of an error about a record the caller's own
+    // first attempt created.
+    //
+    // Which is why the rule lives INSIDE the callback. Checked before the
+    // wrapper it ran on every replay, found the row the first attempt had just
+    // inserted, and threw the exact error the key exists to prevent — the
+    // comment here described behaviour the ordering made impossible. A replay
+    // never reaches the callback, so it returns the stored id; a genuine second
+    // request does reach it, and still fails.
     return await runWithIdempotency(
       ctx,
       {
@@ -871,6 +945,15 @@ export const openDealCustody = mutation({
         }),
       },
       async () => {
+        const existing = (await custodyFor(ctx, args.applicationId)).find(
+          (row) => row.userId === args.userId && row.status === "OPEN"
+        );
+        if (existing) {
+          throw new ConvexError(
+            "This person already holds an open custody record on this deal. Record the money against that one."
+          );
+        }
+
         await invalidateClassification(
           ctx, app, user._id,
           "Custody was opened on the deal after its accounting was classified."
@@ -966,63 +1049,7 @@ export const recordCustodyMovement = mutation({
     }
 
     if (args.kind === "REVERSAL") {
-      if (!args.reversesEntryId) {
-        throw new ConvexError("Say which movement this reverses.");
-      }
-      const target = await requireOwnedRow(
-        ctx,
-        args.orgId,
-        "financeDealCustodyEntries",
-        args.reversesEntryId,
-        "That movement was not found in this organization."
-      );
-      if (target.custodyId !== args.custodyId) {
-        throw new ConvexError("That movement belongs to a different custody record.");
-      }
-      if (target.kind === "REVERSAL") {
-        throw new ConvexError("A reversal cannot itself be reversed. Record the movement again.");
-      }
-      if (target.amountMinor !== args.amountMinor) {
-        throw new ConvexError(
-          `A reversal must cancel the whole movement. That one was ${target.amountMinor} minor units.`
-        );
-      }
-      const already = await ctx.db
-        .query("financeDealCustodyEntries")
-        .withIndex("by_custody", (q) => q.eq("custodyId", args.custodyId))
-        .collect();
-      if (already.some((row) => row.reversesEntryId === args.reversesEntryId)) {
-        throw new ConvexError("That movement has already been reversed.");
-      }
-
-      // A reimbursement is calculated against what the person was given: they
-      // spent more than the advance, so the difference was paid back to them.
-      // Retracting the issuance afterwards leaves that payment standing on a
-      // baseline that no longer exists, and the outstanding figure silently
-      // re-derives the entire advance as a fresh debt — a settled record
-      // turning into "700 still owed" with nobody having moved any money.
-      //
-      // This is not the totals invariant and cannot be enforced there: zero
-      // issued alongside a reimbursement is a perfectly true state on its own,
-      // it is what paying out of pocket looks like. What is not true is
-      // reaching it by withdrawing the issuance the reimbursement was measured
-      // from, so the guard belongs on that dependency.
-      if (target.kind === "ISSUED") {
-        const reversed = new Set(
-          already
-            .filter((row) => row.kind === "REVERSAL" && row.reversesEntryId)
-            .map((row) => row.reversesEntryId!)
-        );
-        const settledAgainst = already.filter(
-          (row) => row.kind === "REIMBURSED" && !reversed.has(row._id)
-        );
-        if (settledAgainst.length > 0) {
-          const paidMinor = settledAgainst.reduce((sum, row) => sum + row.amountMinor, 0);
-          throw new ConvexError(
-            `A reimbursement of ${paidMinor} minor units was already paid against this handover. Reverse that reimbursement first, otherwise the payment stays on the record measured against an issuance that no longer exists.`
-          );
-        }
-      }
+      await assertReversalAllowed(ctx, args.orgId, args.custodyId, args.reversesEntryId, args.amountMinor);
     } else if (args.reversesEntryId) {
       throw new ConvexError("Only a reversal may name the movement it cancels.");
     }
@@ -1276,21 +1303,42 @@ export const recordLegalInvoice = mutation({
     }
 
     const now = Date.now();
-    // Any change to a recorded invoice is audited, whatever moved. This figure
-    // is the one revenue may be posted from, so a silent edit to it is the most
-    // consequential silent edit on the deal.
+    // Any change to a recorded invoice is audited, whatever moved — and the
+    // comparison has to cover every field the patch below writes, or the claim
+    // is false for whichever field it forgot. It forgot two: the date, which
+    // decides the period revenue lands in, and the free-text recipient, which
+    // is the counterparty's whole identity when issuedTo is OTHER. Both could
+    // be moved silently while the amount stood still.
+    const nextIssuedToOther = args.issuedTo === "OTHER" ? issuedToOther : undefined;
+    const describe = (
+      amountMinor: number | undefined,
+      number: string | undefined,
+      date: number | undefined,
+      issuedTo: string | undefined,
+      other: string | undefined
+    ): string =>
+      `${amountMinor ?? "unrecorded"} (invoice ${number || "unrecorded"} dated ${date ?? "unrecorded"} to ${issuedTo ?? "unrecorded"}${other ? ` — ${other}` : ""})`;
+
     if (
       app.legalInvoiceAmountMinor !== undefined &&
       (app.legalInvoiceAmountMinor !== args.legalInvoiceAmountMinor ||
         (app.legalInvoiceNumber ?? "") !== invoiceNumber ||
-        app.legalInvoiceIssuedTo !== args.issuedTo)
+        app.legalInvoiceDate !== args.legalInvoiceDate ||
+        app.legalInvoiceIssuedTo !== args.issuedTo ||
+        (app.legalInvoiceIssuedToOther ?? undefined) !== nextIssuedToOther)
     ) {
       await ctx.db.insert("financeApplicationOverrides", {
         orgId: args.orgId,
         applicationId: args.applicationId,
         field: "legalInvoiceAmountMinor",
-        previousValue: `${app.legalInvoiceAmountMinor} (invoice ${app.legalInvoiceNumber ?? "unrecorded"} to ${app.legalInvoiceIssuedTo ?? "unrecorded"})`,
-        newValue: `${args.legalInvoiceAmountMinor} (invoice ${invoiceNumber} to ${args.issuedTo})`,
+        previousValue: describe(
+          app.legalInvoiceAmountMinor, app.legalInvoiceNumber,
+          app.legalInvoiceDate, app.legalInvoiceIssuedTo, app.legalInvoiceIssuedToOther
+        ),
+        newValue: describe(
+          args.legalInvoiceAmountMinor, invoiceNumber,
+          args.legalInvoiceDate, args.issuedTo, nextIssuedToOther
+        ),
         reason: "The recorded legal invoice was replaced.",
         changedBy: user._id,
         changedAt: now,
@@ -1307,7 +1355,7 @@ export const recordLegalInvoice = mutation({
       legalInvoiceNumber: invoiceNumber,
       legalInvoiceDate: args.legalInvoiceDate,
       legalInvoiceIssuedTo: args.issuedTo,
-      legalInvoiceIssuedToOther: args.issuedTo === "OTHER" ? issuedToOther : undefined,
+      legalInvoiceIssuedToOther: nextIssuedToOther,
       legalInvoiceRecordedBy: user._id,
       legalInvoiceRecordedAt: now,
       updatedAt: now,

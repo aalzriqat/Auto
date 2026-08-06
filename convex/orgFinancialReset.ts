@@ -62,19 +62,40 @@ const RESET_TABLES = [
   // Sales
   "sales",
   "quotes",
-  // Finance applications and their children. The whole loop runs inside one
-  // mutation and commits atomically, so ordering here is presentational rather
-  // than a safety property — the children are listed beside their parent so a
-  // reader can see the set is complete. Appraisals carry storage ids and are
-  // handled accordingly below.
+  // Finance applications and their children. Ordering IS a safety property,
+  // contrary to what this comment used to claim: the batch limit applies to
+  // each table separately, so a run that clears one of two fee rows and then
+  // deletes the application leaves the second fee pointing at an applicationId
+  // that no longer resolves. Atomicity does not help — the whole broken state
+  // commits together. Children first, and the parent additionally deferred
+  // while any child still has rows; see CHILD_TABLES.
   "financeAppraisals",
   "financeApplicationOverrides",
   "financeDealCustodyEntries",
   "financeDealFees",
   "financeDealCustody",
-  "financeApplications",
   "applicationStatusLog",
+  "financeApplications",
 ] as const;
+
+/**
+ * Tables whose rows reference a parent, keyed by that parent.
+ *
+ * The parent is skipped for the whole run while any of these still has rows,
+ * so a partial pass can never orphan them. Listing order above already puts
+ * children first; this makes the guarantee independent of that ordering, since
+ * a later edit reshuffling the array would silently remove it otherwise.
+ */
+const CHILD_TABLES: Partial<Record<(typeof RESET_TABLES)[number], readonly string[]>> = {
+  financeApplications: [
+    "financeAppraisals",
+    "financeApplicationOverrides",
+    "financeDealCustodyEntries",
+    "financeDealFees",
+    "financeDealCustody",
+    "applicationStatusLog",
+  ],
+};
 
 /**
  * Rows removed per call.
@@ -127,6 +148,9 @@ export const resetOrgFinancialData = internalMutation({
     let total = 0;
     let remaining = 0;
 
+    // Tables that still hold rows for this org after their own batch ran.
+    const stillPopulated = new Set<string>();
+
     for (const table of RESET_TABLES) {
       // One past the limit, so `remaining` reports honestly whether another
       // run is needed instead of silently stopping at a full batch.
@@ -135,10 +159,29 @@ export const resetOrgFinancialData = internalMutation({
         .filter((q) => q.eq(q.field("orgId"), args.orgId))
         .take(limit + 1);
 
+      // Deleting a parent while a child still has rows leaves those rows
+      // pointing at nothing. Defer the parent entirely — it is reported in
+      // `remaining`, so the operator repeats the command and it clears once the
+      // children are gone.
+      const blockedBy = (CHILD_TABLES[table] ?? []).filter((child) =>
+        stillPopulated.has(child)
+      );
+      if (blockedBy.length > 0) {
+        if (rows.length > 0) remaining += rows.length;
+        continue;
+      }
+
       const batch = rows.slice(0, limit);
       if (batch.length > 0) perTable[table] = batch.length;
       total += batch.length;
-      if (rows.length > limit) remaining += rows.length - batch.length;
+      if (rows.length > limit) {
+        remaining += rows.length - batch.length;
+        stillPopulated.add(table);
+      }
+      // A dry run deletes nothing, so every row it counted is still there when
+      // the parent is considered. Without this the dry run would report the
+      // parent as clearable in the same pass that reports its children as not.
+      if (dryRun && rows.length > 0) stillPopulated.add(table);
 
       if (!dryRun) {
         for (const row of batch) {

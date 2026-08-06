@@ -219,6 +219,66 @@ describe("resetOrgFinancialData", () => {
     expect(await t.run((ctx) => ctx.storage.getUrl(blobId))).toBeNull();
   });
 
+  test("a partial batch never deletes an application out from under its own fee rows", async () => {
+    const t = setup();
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Batch Motors", createdAt: Date.now() })
+    );
+
+    const ids = await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: "reset_u2", email: "u2@x.com" });
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, vin: "VINRESET2", make: "Kia", model: "Rio", year: 2024, mileage: 10,
+        color: "Red", fuelType: "Gas", transmission: "Auto", sellingPrice: 15000,
+        status: "AVAILABLE",
+      });
+      const customerId = await ctx.db.insert("customers", {
+        orgId, firstName: "Batch", lastName: "Customer",
+      });
+      const quoteId = await ctx.db.insert("quotes", {
+        orgId, customerId, vehicleId, vehiclePrice: 15000, downPayment: 1000,
+        termMonths: 48, status: "ACCEPTED", createdBy: userId, createdAt: Date.now(),
+      });
+      const applicationId = await ctx.db.insert("financeApplications", {
+        orgId, quoteId, customerId, vehicleId, salespersonId: userId,
+        status: "APPROVED", createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      const fee = async (n: number) =>
+        await ctx.db.insert("financeDealFees", {
+          orgId, applicationId, feeType: "LICENSING", currency: "JOD",
+          actualAmountMinor: n, paidBy: "DEALER", paidTo: "GOVERNMENT",
+          accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+          includedInQuotation: false, deductedFromSettlement: false, refundable: false,
+          source: "MANUAL", createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+        });
+      return { applicationId, feeA: await fee(1000), feeB: await fee(2000) };
+    });
+
+    // One row per table per run. The batch limit applies to each table
+    // separately, so without the deferral this clears one fee and then deletes
+    // the application in the same pass — leaving the second fee pointing at an
+    // applicationId that no longer resolves. Atomicity is no help: the whole
+    // broken state commits together.
+    const first = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
+      orgId, dryRun: false, batchSize: 1,
+    });
+    expect(first.remaining).toBeGreaterThan(0);
+    expect(await t.run((ctx) => ctx.db.get(ids.applicationId))).not.toBeNull();
+
+    // Repeat until it settles; the parent goes only once the children are gone.
+    for (let pass = 0; pass < 8; pass += 1) {
+      await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
+        orgId, dryRun: false, batchSize: 1,
+      });
+    }
+
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(ids.feeA)).toBeNull();
+      expect(await ctx.db.get(ids.feeB)).toBeNull();
+      expect(await ctx.db.get(ids.applicationId)).toBeNull();
+    });
+  });
+
   test("the signed-off scope excludes inventory, CRM, people and org config", async () => {
     // A guard on the constant itself. Adding a table here is a decision that
     // should fail this test and be made on purpose, not slipped in.

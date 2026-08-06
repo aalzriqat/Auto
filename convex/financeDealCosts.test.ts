@@ -160,6 +160,39 @@ describe("a retried submit does not spend money twice", () => {
     expect(entries.filter((e) => e.kind === "REIMBURSED")).toHaveLength(1);
   });
 
+  test("the same key replays an opened custody instead of erroring about the record it just created", async () => {
+    const seed = await seedDeal();
+    const first = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+      userId: seed.employeeId, issuedMinor: jod(700), idempotencyKey: "custody-retry-1",
+    });
+    // The one-open-record rule used to run BEFORE the idempotency wrapper, so a
+    // retry found the row its own first attempt had inserted and threw the very
+    // error the key exists to prevent.
+    const second = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+      userId: seed.employeeId, issuedMinor: jod(700), idempotencyKey: "custody-retry-1",
+    });
+    expect(second).toBe(first);
+
+    const custodies = await seed.t.run((ctx) =>
+      ctx.db
+        .query("financeDealCustody")
+        .withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId))
+        .collect()
+    );
+    expect(custodies).toHaveLength(1);
+    expect(custodies[0]?.issuedMinor).toBe(jod(700));
+
+    // A genuine second request still fails — the rule is deferred, not removed.
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+        orgId: seed.orgId, applicationId: seed.applicationId,
+        userId: seed.employeeId, issuedMinor: jod(200), idempotencyKey: "custody-different-2",
+      })
+    ).rejects.toThrow(/already holds an open custody record/i);
+  });
+
   test("reusing a key for a different amount is refused rather than replayed", async () => {
     const seed = await seedDeal();
     await seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
@@ -333,7 +366,8 @@ describe("employee custody", () => {
     // record as reconciled. The dealership that documented it most carefully
     // was the one that erased it.
     expect(costs.custody[0]?.summary.reimbursementIncurredMinor).toBe(jod(50));
-    expect(costs.custody[0]?.summary.reimbursementIncurredMinor).toBe(jod(50));
+    // Negative: the balance runs the other way, which is the whole point above.
+    expect(costs.custody[0]?.summary.remainingEmployeeBalanceMinor).toBe(jod(-50));
     expect(costs.custody[0]?.summary.employeeOwesDealerMinor).toBe(0);
     expect(costs.custody[0]?.summary.reimbursementOutstandingMinor).toBe(jod(50));
     expect(costs.custody[0]?.summary.settled).toBe(false);
@@ -1202,6 +1236,67 @@ describe("the legal invoice and accounting classification", () => {
     expect(overrides[0]?.previousValue).toContain("INV-1");
     expect(overrides[0]?.newValue).toContain(String(jod(12_500)));
     expect(overrides[0]?.newValue).toContain("INV-2");
+  });
+
+  test("moving only the invoice date is audited too, because it moves the period", async () => {
+    const seed = await seedDeal();
+    const march = Date.UTC(2026, 2, 15);
+    const april = Date.UTC(2026, 3, 15);
+    const invoice = {
+      orgId: seed.orgId,
+      applicationId: seed.applicationId,
+      legalInvoiceAmountMinor: jod(12_500),
+      legalInvoiceNumber: "INV-9",
+      issuedTo: "FINANCE_COMPANY" as const,
+    };
+    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      ...invoice, legalInvoiceDate: march,
+    });
+    // Amount, number and recipient all stand still. Only the date moves — and
+    // the date decides which period the revenue lands in, so an unaudited edit
+    // shifts income between months with nothing on the record saying it did.
+    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      ...invoice, legalInvoiceDate: april,
+    });
+
+    const overrides = await seed.t.run((ctx) =>
+      ctx.db
+        .query("financeApplicationOverrides")
+        .withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId))
+        .collect()
+    );
+    expect(overrides).toHaveLength(1);
+    expect(overrides[0]?.previousValue).toContain(String(march));
+    expect(overrides[0]?.newValue).toContain(String(april));
+  });
+
+  test("changing only the free-text recipient is audited when issuedTo stays OTHER", async () => {
+    const seed = await seedDeal();
+    const invoice = {
+      orgId: seed.orgId,
+      applicationId: seed.applicationId,
+      legalInvoiceAmountMinor: jod(12_500),
+      legalInvoiceNumber: "INV-10",
+      legalInvoiceDate: Date.UTC(2026, 2, 15),
+      issuedTo: "OTHER" as const,
+    };
+    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      ...invoice, issuedToOther: "Amman Importer Co",
+    });
+    // When issuedTo is OTHER the free text IS the counterparty's identity.
+    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      ...invoice, issuedToOther: "Zarqa Motors LLC",
+    });
+
+    const overrides = await seed.t.run((ctx) =>
+      ctx.db
+        .query("financeApplicationOverrides")
+        .withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId))
+        .collect()
+    );
+    expect(overrides).toHaveLength(1);
+    expect(overrides[0]?.previousValue).toContain("Amman Importer Co");
+    expect(overrides[0]?.newValue).toContain("Zarqa Motors LLC");
   });
 
   test("the invoice amount is never derived from the deal's other figures", async () => {

@@ -895,6 +895,41 @@ describe("reconcileEmployeeCustody", () => {
     expect(reconciliation.reimbursementOutstandingMinor).toBe(jod(50));
   });
 
+  it("reports a return larger than the advance as contradictory, not as a debt owed", () => {
+    // The movement log says more came back than ever went out. Netting that
+    // through the balance produces a negative remainder indistinguishable from
+    // "the employee funded the difference", which the module would then report
+    // as a reimbursement DUE — instructing somebody to pay out on a typo.
+    // `overReturnedMinor` keeps the two apart.
+    const reconciliation = reconcileEmployeeCustody({
+      ...base,
+      advanceIssuedMinor: jod(700),
+      actualExpensesMinor: 0,
+      employeeReturnedMinor: jod(900),
+    });
+
+    expect(reconciliation.overReturnedMinor).toBe(jod(200));
+    expect(reconciliation.reimbursementIncurredMinor).toBe(0);
+    expect(reconciliation.reimbursementOutstandingMinor).toBe(0);
+    expect(reconciliation.employeeOwesDealerMinor).toBe(0);
+    // Never reconciled while the log cannot be true, whatever the totals say.
+    expect(reconciliation.reconciled).toBe(false);
+  });
+
+  it("separates a genuine employee contribution from an over-return in the same record", () => {
+    // Returned 900 against a 700 advance AND spent 750 of their own money. The
+    // 200 over-return must not cancel any part of the 50 genuinely owed.
+    const reconciliation = reconcileEmployeeCustody({
+      ...base,
+      advanceIssuedMinor: jod(700),
+      actualExpensesMinor: jod(750),
+      employeeReturnedMinor: jod(900),
+    });
+
+    expect(reconciliation.overReturnedMinor).toBe(jod(200));
+    expect(reconciliation.reconciled).toBe(false);
+  });
+
   it("shows money still held by the employee as owed back to the dealership", () => {
     const reconciliation = reconcileEmployeeCustody({
       ...base,
