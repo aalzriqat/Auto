@@ -1184,9 +1184,25 @@ export async function computeCommissionRecognitionDivergence(
   for (const sale of candidates) {
     if (salesWithQueuedEntry.has(sale._id)) continue;
     const byCurrency = recognized.get(sale._id);
-    const recognizedMinor = byCurrency
-      ? [...byCurrency.values()].reduce((sum, minor) => sum + minor, 0)
-      : 0;
+    // Read the ORG-CURRENCY total only. Summing across currencies adds scale-3
+    // JOD minor units to scale-2 USD ones, which is not a number — the same
+    // hazard recognizedCommissionMinor, recognizedCommissionForSale and the
+    // payable reconciliation each guard against explicitly. After an org
+    // currency change it manufactured a divergence out of arithmetic, on a
+    // warning that has to be acknowledged verbatim at every close.
+    //
+    // Recognition in some OTHER currency is real and must not be silently
+    // dropped either: it is a genuine divergence, because the sale's decided
+    // amount is expressed in the org currency and the ledger holds something
+    // that cannot be compared with it.
+    const recognizedMinor = byCurrency?.get(orgCurrency) ?? 0;
+    const recognizedInOtherCurrency = byCurrency
+      ? [...byCurrency.entries()].some(([cur, minor]) => cur !== orgCurrency && minor !== 0)
+      : false;
+    if (recognizedInOtherCurrency) {
+      divergentCount++;
+      continue;
+    }
     // Never recognized at all is a DIFFERENT problem from recognized at the
     // wrong figure, and reporting them under one message made the deploy-time
     // backlog read as ledger corruption. One is fixed by running the backfill;

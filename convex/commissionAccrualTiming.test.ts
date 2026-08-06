@@ -2350,7 +2350,7 @@ describe("a commission whose month has no period is deferred, never dropped", ()
     await expect(
       d.asAdmin.mutation(api.payroll.payRun, { orgId: d.orgId, runId, method: "CASH" })
     ).rejects.toThrow(
-      new RegExp(`no open accounting period covers.*${priorYear}-06`, "is")
+      new RegExp(`no accounting period covers.*Create and open a period covering ${priorYear}-06`, "is")
     );
 
     // Recoverable: create and open that month and the run pays. This is the
@@ -2407,5 +2407,191 @@ describe("payroll payment respects today's period", () => {
     const run = await d.t.run(async (ctx) => await ctx.db.get(runId));
     expect(run?.status).toBe("APPROVED");
     expect(run?.paidAt ?? null).toBeNull();
+  });
+});
+
+/**
+ * Round 12. The three-way split of unrecognized commissions, the non-empty
+ * skipped-sales report and the zero-gross refusal all shipped without a test
+ * that reads them directly. In a file whose own comments record three separate
+ * regressions of the "named a remedy that does nothing" kind, new branches
+ * without direct coverage are how the fourth one arrives.
+ */
+describe("the close checklist names the remedy that fits each unrecognized commission", () => {
+  test("a closed-period commission and a no-period commission are reported apart", async () => {
+    const d = await seedDealer("checklist_buckets", "MANUAL", { priorYearPeriod: true });
+    const thisYear = new Date().getUTCFullYear();
+    const priorYear = thisYear - 1;
+
+    // (a) Unrecognized, in a period that exists and will be CLOSED.
+    const closedSaleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.t.run(async (ctx) => {
+      await ctx.db.patch(closedSaleId, { commissionAmount: 250 });
+    });
+    // (b) Unrecognized, on a date NO period covers (two years back).
+    const noPeriodVehicleId = await d.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: d.orgId, vin: "VIN-checklist-noperiod", make: "Kia", model: "Rio",
+        year: 2019, color: "Grey", fuelType: "Gasoline", transmission: "Automatic",
+        mileage: 500, purchasePrice: 8000, sellingPrice: 12000, status: "AVAILABLE",
+      })
+    );
+    const noPeriodSaleId = await d.asAdmin.mutation(api.sales.create, {
+      orgId: d.orgId,
+      vehicleId: noPeriodVehicleId,
+      customerId: d.customerId,
+      salespersonId: d.userId,
+      salePrice: 12000,
+      saleDate: Date.UTC(thisYear - 2, 3, 10),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+    await d.t.run(async (ctx) => {
+      await ctx.db.patch(noPeriodSaleId, { commissionAmount: 100 });
+    });
+
+    await closePriorYearPeriod(d, priorYear);
+
+    const currentPeriod = (
+      await d.asAdmin.query(api.accountingPeriods.list, { orgId: d.orgId })
+    ).find((p) => p.fiscalYear === thisYear)!;
+    const checklist = await d.asAdmin.query(api.accountingPeriods.closeChecklist, {
+      orgId: d.orgId,
+      periodId: currentPeriod._id,
+    });
+
+    // Each lands in its own bucket with its own instruction. Before the split
+    // both said "Run the commission accrual backfill", which skips both.
+    expect(checklist.warnings.some((w) => /closed or locked period/i.test(w))).toBe(true);
+    expect(checklist.warnings.some((w) => /no accounting period covers/i.test(w))).toBe(true);
+    // ...and neither is still being sent to the backfill.
+    expect(checklist.warnings.some((w) => /Run the commission accrual backfill/i.test(w))).toBe(
+      false
+    );
+  });
+});
+
+describe("approval reports the commissions it left out", () => {
+  test("skippedCommissionSaleIds names the stranded sale", async () => {
+    const d = await seedDealer("skipped_reported", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const strandedId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.t.run(async (ctx) => {
+      await ctx.db.patch(strandedId, { commissionAmount: 250 });
+    });
+    // Something payable, so this exercises the skip and not the zero-gross path.
+    const liveVehicleId = await d.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: d.orgId, vin: "VIN-skipped-live", make: "Honda", model: "Civic",
+        year: 2021, color: "White", fuelType: "Gasoline", transmission: "Automatic",
+        mileage: 1000, purchasePrice: 9000, sellingPrice: 14000, status: "AVAILABLE",
+      })
+    );
+    const liveSaleId = await d.asAdmin.mutation(api.sales.create, {
+      orgId: d.orgId, vehicleId: liveVehicleId, customerId: d.customerId,
+      salespersonId: d.userId, salePrice: 14000, saleDate: Date.now(),
+      status: "COMPLETED", financingType: "CASH",
+    });
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId: liveSaleId, commissionAmount: 100,
+    });
+    await closePriorYearPeriod(d, priorYear);
+
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId,
+      periodYear: new Date().getUTCFullYear(),
+      periodMonth: new Date().getUTCMonth() + 1,
+    });
+    const approval = await d.asAdmin.mutation(api.payroll.approveRun, {
+      orgId: d.orgId,
+      runId,
+    });
+
+    // The non-empty case, which nothing read before.
+    expect(approval?.skippedCommissionSaleIds).toEqual([strandedId]);
+  });
+
+  test("a run whose only pay is a stranded commission says so, instead of sending the user in a circle", async () => {
+    // collectUnpaidCommissions has no period filter, so "cancel and create a
+    // fresh run" rebuilds an identical draft. The message has to name the real
+    // blocker or the user loops forever.
+    const d = await seedDealer("zero_gross_stranded", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const strandedId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.t.run(async (ctx) => {
+      await ctx.db.patch(strandedId, { commissionAmount: 250 });
+    });
+    await closePriorYearPeriod(d, priorYear);
+
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId,
+      periodYear: new Date().getUTCFullYear(),
+      periodMonth: new Date().getUTCMonth() + 1,
+    });
+
+    await expect(
+      d.asAdmin.mutation(api.payroll.approveRun, { orgId: d.orgId, runId })
+    ).rejects.toThrow(/rebuilding this run will produce the same draft/i);
+  });
+});
+
+/**
+ * Round 12. payRun told the user to reopen a period for an entry that has
+ * DEAD-LETTERED. No drain reads FAILED rows, so reopening — or creating — a
+ * period does nothing at all for it; only an explicit retry does.
+ * sales.ts:assertCommissionEntriesPosted has branched on this for several
+ * rounds, carrying a comment warning against precisely that instruction.
+ * Payroll was never brought in line.
+ */
+describe("payroll names retry, not the calendar, for a dead-lettered entry", () => {
+  test("a FAILED commission entry asks for a retry instead of reopening a period", async () => {
+    const d = await seedDealer("payroll_failed_entry", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+
+    // A correction that dead-lettered. Its period is OPEN, so every
+    // period-based remedy is powerless — the row is simply skipped by every
+    // drain until someone retries it.
+    await d.t.run(async (ctx) => {
+      await ctx.db.insert("pendingAccountingEvents", {
+        orgId: d.orgId,
+        kind: "POST",
+        status: "FAILED",
+        idempotencyKey: `commission_adjusted_${saleId}_1`,
+        accountingDate: Date.UTC(priorYear, 5, 15),
+        actorId: d.userId,
+        attempts: 10,
+        createdAt: Date.now(),
+        eventType: "COMMISSION_ADJUSTED",
+        sourceType: "sales",
+        sourceId: `commission_adj_${saleId}_1`,
+        eventVersion: 1,
+        occurredAt: Date.UTC(priorYear, 5, 15),
+        currency: "USD",
+        payload: { saleId, deltaMinor: 15_000, currency: "USD", salespersonId: d.userId },
+      });
+      await ctx.db.patch(saleId, { commissionAmount: 400, commissionAdjustmentSeq: 1 });
+    });
+
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId,
+      periodYear: priorYear,
+      periodMonth: 6,
+    });
+    await d.asAdmin.mutation(api.payroll.approveRun, { orgId: d.orgId, runId });
+
+    await expect(
+      d.asAdmin.mutation(api.payroll.payRun, { orgId: d.orgId, runId, method: "CASH" })
+    ).rejects.toThrow(/failed and needs to be retried/i);
+
+    // And explicitly NOT the calendar advice, which would do nothing here.
+    await expect(
+      d.asAdmin.mutation(api.payroll.payRun, { orgId: d.orgId, runId, method: "CASH" })
+    ).rejects.not.toThrow(/reopen|create and open/i);
   });
 });
