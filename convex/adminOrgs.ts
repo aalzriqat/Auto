@@ -28,6 +28,7 @@ type StorageDeletionStep =
   | { kind: "vehicleEditsWithStorage" }
   | { kind: "applicationDocumentsWithStorage" }
   | { kind: "financeAppraisalsWithStorage" }
+  | { kind: "financeDealFeesWithStorage" }
   | { kind: "orgSettingsWithStorage" }
   | { kind: "socialPostsWithStorage" };
 type SpecialDeletionStep = StorageDeletionStep | { kind: "dmConversations" } | { kind: "liveChatThreads" };
@@ -78,6 +79,11 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // that FAILs between steps never leaves rows whose parent is already gone.
   { kind: "financeAppraisalsWithStorage" },
   { kind: "orgRows", table: "financeApplicationOverrides", index: "by_org" },
+  // Deal costs and custody, deepest first: entries reference a custody record,
+  // fee lines reference both a custody record and the application.
+  { kind: "orgRows", table: "financeDealCustodyEntries", index: "by_org" },
+  { kind: "financeDealFeesWithStorage" },
+  { kind: "orgRows", table: "financeDealCustody", index: "by_org" },
   { kind: "orgRows", table: "financeApplications", index: "by_org" },
   // Deliberately AFTER the applications, which hold `companyRuleVersionId` —
   // so this one outlives its referents rather than preceding them. It sits
@@ -281,6 +287,30 @@ async function deleteFinanceAppraisalsWithStorageBatch(
   return counts;
 }
 
+/**
+ * Deal cost lines carry the receipts backing them — the transfer slip, the
+ * licensing payment, the insurance certificate. Deleting the rows alone would
+ * leave those in storage with nothing pointing at them.
+ */
+async function deleteFinanceDealFeesWithStorageBatch(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">
+) {
+  const fees = await ctx.db
+    .query("financeDealFees")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .take(ORG_DELETION_BATCH_SIZE);
+  const counts: DeletedCounts = {};
+  for (const fee of fees) {
+    addStorageCount(counts, await deleteStorageIds(ctx, fee.documentStorageIds ?? []));
+    await ctx.db.delete(fee._id);
+  }
+  if (fees.length > 0) {
+    counts.financeDealFees = fees.length;
+  }
+  return counts;
+}
+
 async function deleteOrgSettingsWithStorageBatch(ctx: MutationCtx, orgId: Id<"organizations">) {
   const settingsRows = await ctx.db
     .query("orgSettings")
@@ -421,6 +451,9 @@ async function runDeletionStep(ctx: MutationCtx, step: DeletionStep, orgId: Id<"
   }
   if (step.kind === "financeAppraisalsWithStorage") {
     return await deleteFinanceAppraisalsWithStorageBatch(ctx, orgId);
+  }
+  if (step.kind === "financeDealFeesWithStorage") {
+    return await deleteFinanceDealFeesWithStorageBatch(ctx, orgId);
   }
   if (step.kind === "orgSettingsWithStorage") {
     return await deleteOrgSettingsWithStorageBatch(ctx, orgId);

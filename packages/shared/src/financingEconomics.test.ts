@@ -863,7 +863,6 @@ describe("reconcileEmployeeCustody", () => {
   it("closes a 700 advance against 650 of expenses with 50 returned", () => {
     const reconciliation = reconcileEmployeeCustody({
       advanceIssuedMinor: jod(700),
-      employeePersonalPaymentMinor: 0,
       actualExpensesMinor: jod(650),
       employeeReturnedMinor: jod(50),
     });
@@ -873,24 +872,28 @@ describe("reconcileEmployeeCustody", () => {
     expect(reconciliation.dealerReimbursementDueMinor).toBe(0);
   });
 
-  it("owes the employee 50 when they spent 750 against a 700 advance", () => {
+  it("does not let the employee's own contribution cancel the debt it creates", () => {
+    // This case used to take `employeePersonalPaymentMinor: jod(50)` and add it
+    // to the same side as the advance, which reported `reconciled: true` and a
+    // reimbursement due of ZERO — so the dealership that recorded its
+    // employee's contribution most carefully was the one that erased it. The
+    // assertions below were literally contradicted by the comment above them.
+    // The contribution is now derived, so it cannot disagree with the balance.
     const reconciliation = reconcileEmployeeCustody({
       advanceIssuedMinor: jod(700),
-      employeePersonalPaymentMinor: jod(50),
       actualExpensesMinor: jod(750),
       employeeReturnedMinor: 0,
     });
 
-    // The identity closes only once the reimbursement is actually paid, so the
-    // advance is not reconciled yet — it is a payable, not a balanced advance.
-    expect(reconciliation.reconciled).toBe(true);
-    expect(reconciliation.remainingEmployeeBalanceMinor).toBe(0);
+    expect(reconciliation.reconciled).toBe(false);
+    expect(reconciliation.remainingEmployeeBalanceMinor).toBe(jod(-50));
+    expect(reconciliation.dealerReimbursementDueMinor).toBe(jod(50));
+    expect(reconciliation.employeeFundedFromOwnPocketMinor).toBe(jod(50));
   });
 
   it("shows a reimbursement owed while the employee's own money is still out", () => {
     const reconciliation = reconcileEmployeeCustody({
       advanceIssuedMinor: jod(700),
-      employeePersonalPaymentMinor: 0,
       actualExpensesMinor: jod(750),
       employeeReturnedMinor: 0,
     });
@@ -904,7 +907,6 @@ describe("reconcileEmployeeCustody", () => {
   it("shows money still held by the employee as owed back to the dealership", () => {
     const reconciliation = reconcileEmployeeCustody({
       advanceIssuedMinor: jod(700),
-      employeePersonalPaymentMinor: 0,
       actualExpensesMinor: jod(650),
       employeeReturnedMinor: 0,
     });
@@ -917,13 +919,11 @@ describe("reconcileEmployeeCustody", () => {
   it("keeps the direction of the imbalance rather than collapsing it to a variance", () => {
     const owed = reconcileEmployeeCustody({
       advanceIssuedMinor: jod(700),
-      employeePersonalPaymentMinor: 0,
       actualExpensesMinor: jod(750),
       employeeReturnedMinor: 0,
     });
     const held = reconcileEmployeeCustody({
       advanceIssuedMinor: jod(700),
-      employeePersonalPaymentMinor: 0,
       actualExpensesMinor: jod(650),
       employeeReturnedMinor: 0,
     });

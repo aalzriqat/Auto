@@ -69,6 +69,9 @@ const RESET_TABLES = [
   // handled accordingly below.
   "financeAppraisals",
   "financeApplicationOverrides",
+  "financeDealCustodyEntries",
+  "financeDealFees",
+  "financeDealCustody",
   "financeApplications",
   "applicationStatusLog",
 ] as const;

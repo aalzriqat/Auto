@@ -240,6 +240,15 @@ describe("resetOrgFinancialData", () => {
     for (const table of forbidden) {
       expect(RESET_TABLES_FOR_TEST).not.toContain(table);
     }
+    // 28 -> 31: `financeDealCustodyEntries`, `financeDealFees` and
+    // `financeDealCustody` — a financed deal's itemized costs and the money an
+    // employee is holding to pay them. All three are per-deal financial records
+    // whose parent `financeApplications` the reset already clears, so leaving
+    // them behind would orphan every cost line and every custody movement
+    // against an application id that no longer resolves. `financeDealFees`
+    // carries receipt attachments, which the storage sweep below handles, and
+    // it is listed before `financeDealCustody` because its rows reference one.
+    //
     // 26 -> 28: `financeAppraisals` and `financeApplicationOverrides` were added
     // deliberately. They are children of `financeApplications`, which the reset
     // already clears, so leaving them out orphaned every appraisal and every
@@ -248,6 +257,6 @@ describe("resetOrgFinancialData", () => {
     // them. They are listed immediately before their parent so a run that stops
     // between batches never leaves a child without one. The financeCompanies
     // row itself is still deliberately out of scope, as `forbidden` pins above.
-    expect(RESET_TABLES_FOR_TEST).toHaveLength(28);
+    expect(RESET_TABLES_FOR_TEST).toHaveLength(31);
   });
 });

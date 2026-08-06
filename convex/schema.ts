@@ -8,9 +8,12 @@ import {
   creditDecisionValidator,
   customerContributionSettlementValidator,
   dealerContributionSettlementValidator,
+  feeAccountingTreatmentValidator,
+  feePartyValidator,
   feeResponsibilityValidator,
   financeCompanyRuleSnapshotValidator,
   financeFeeTemplateValidator,
+  financeFeeTypeValidator,
   financingFailureReasonValidator,
   gapResolutionValidator,
   handoverStatusValidator,
@@ -1821,6 +1824,43 @@ export default defineSchema({
     actualClosingExpensesMinor: v.optional(v.number()),
     targetNetProceedsMinor: v.optional(v.number()),
 
+    // The legally documented transaction price — the invoice and purchase
+    // agreement, not a figure the system worked out.
+    //
+    // This is the ninth of nine amounts the deal keeps SEPARATELY, and the only
+    // one revenue may ever be posted from. Neither the dealer's target selling
+    // amount nor the finance company's approved purchase amount is revenue:
+    // both are real, both are stored, and neither is the invoice. Deriving this
+    // from either of them is the specific thing that is not allowed, because a
+    // financed deal's paperwork is what determines who sold what to whom.
+    //
+    // Unset means nobody has recorded the document yet, which is why
+    // `accountingClassification` exists rather than a default being assumed.
+    legalInvoiceAmountMinor: v.optional(v.number()),
+    legalInvoiceNumber: v.optional(v.string()),
+    legalInvoiceDate: v.optional(v.number()),
+    legalInvoiceRecordedBy: v.optional(v.id("users")),
+    legalInvoiceRecordedAt: v.optional(v.number()),
+    /** Who the invoice was actually issued to, which a financed deal makes a real question. */
+    legalInvoiceIssuedTo: v.optional(
+      v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY"), v.literal("OTHER"))
+    ),
+    legalInvoiceIssuedToOther: v.optional(v.string()),
+
+    // Whether the deal's accounting treatment has actually been established.
+    //
+    // PENDING_CLASSIFICATION is the honest default for a financed deal: until
+    // the invoice, the purchase agreement and the settlement advice say how the
+    // purchase amount and the dealer contribution are documented, there is no
+    // sale amount to post that would not be a guess. CLASSIFIED is set by a
+    // person, never inferred.
+    accountingClassification: v.optional(
+      v.union(v.literal("PENDING_CLASSIFICATION"), v.literal("CLASSIFIED"))
+    ),
+    accountingClassifiedBy: v.optional(v.id("users")),
+    accountingClassifiedAt: v.optional(v.number()),
+    accountingClassificationNotes: v.optional(v.string()),
+
     // Appraisal gap and its negotiated split. The gap negotiated is the RAW
     // difference against the submitted quotation, not the change in the
     // company's funded portion.
@@ -1909,6 +1949,188 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_application", ["applicationId"])
     .index("by_vehicle", ["vehicleId"]),
+
+  /**
+   * One itemized cost on one financed deal, estimated and actual side by side.
+   *
+   * ## Why both, and why neither defaults to the other
+   *
+   * A quotation is prepared days before the costs are known, so the dealership
+   * has to work from estimates — and a deal is not closed on estimates. Storing
+   * one number that starts as an estimate and is later overwritten by the
+   * actual destroys the comparison the whole reconciliation depends on, and
+   * makes "was this ever checked?" unanswerable. `estimatedAmountMinor` and
+   * `actualAmountMinor` are therefore independent, and **an unset actual is not
+   * zero and not the estimate** — it means nobody has paid or recorded it yet.
+   *
+   * ## No plugs
+   *
+   * Nothing here is ever back-solved from a quotation, a target or a residual.
+   * A deal with no fees itemized has no fees, and reports a lower total —
+   * which is the honest figure. The alternative, inferring an allowance from
+   * the difference between two other numbers, turns arithmetic into a business
+   * fact nobody stated.
+   *
+   * ## Accounting treatment is explicit, always
+   *
+   * `accountingTreatment` is required. Defaulting it — say, treating every
+   * dealer-borne amount as a selling expense — is wrong for most of these: an
+   * appraisal fee the dealership swallows is an expense, an amount the customer
+   * still owes is a receivable, and money an employee fronted is a payable to
+   * that employee. The party who paid does not determine the treatment either,
+   * which is why `paidBy` and `accountingTreatment` are separate fields.
+   */
+  financeDealFees: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    feeType: financeFeeTypeValidator,
+    description: v.optional(v.string()),
+    currency: v.string(),
+
+    /** What the deal was quoted on. Usable operationally; never closure evidence. */
+    estimatedAmountMinor: v.optional(v.number()),
+    /** What was actually paid. Unset means unpaid or unrecorded — not zero. */
+    actualAmountMinor: v.optional(v.number()),
+
+    paidBy: feePartyValidator,
+    paidTo: feePartyValidator,
+    /** Required. See the note above — never inferred from `paidBy`. */
+    accountingTreatment: feeAccountingTreatmentValidator,
+    includedInQuotation: v.boolean(),
+    deductedFromSettlement: v.boolean(),
+    refundable: v.boolean(),
+
+    /** Set when an employee holding deal custody laid this out. */
+    custodyId: v.optional(v.id("financeDealCustody")),
+    paidAt: v.optional(v.number()),
+    receiptReference: v.optional(v.string()),
+    documentStorageIds: v.optional(v.array(v.id("_storage"))),
+
+    /** Whether the line came from the company's fee template or was typed. */
+    source: v.union(v.literal("COMPANY_TEMPLATE"), v.literal("MANUAL")),
+
+    /**
+     * Set only when a person has confirmed the actual against its evidence.
+     * Deliberately not derived from `actualAmountMinor` being present: an
+     * amount somebody typed and an amount somebody checked are different
+     * claims, and closure requires the second.
+     */
+    reconciledAt: v.optional(v.number()),
+    reconciledBy: v.optional(v.id("users")),
+    reconciliationNotes: v.optional(v.string()),
+
+    /** Voided rather than deleted, so a removed cost still has a trace. */
+    voidedAt: v.optional(v.number()),
+    voidedBy: v.optional(v.id("users")),
+    voidReason: v.optional(v.string()),
+
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_application", ["applicationId"])
+    .index("by_custody", ["custodyId"]),
+
+  /**
+   * Money handed to an employee to go and pay a financed deal's closing costs.
+   *
+   * ## Why this is NOT `employeeAdvances`
+   *
+   * It looks like one, and putting it there would take money from a person.
+   * `payroll.ts` sweeps **every** `OUTSTANDING` row in `employeeAdvances` for a
+   * user and deducts it from that month's salary. Deal custody is not a salary
+   * advance: the employee is holding the dealership's cash to spend on the
+   * dealership's behalf, settles it by producing receipts and returning the
+   * balance, and is frequently owed money rather than owing it. Recovering it
+   * from their pay would dock them for expenses they have already covered.
+   *
+   * ## The identity it has to close
+   *
+   * ```
+   * issued - returned - actualExpenses = remainingBalance
+   * ```
+   *
+   * `reconcileEmployeeCustody` in the shared engine computes it, and returns a
+   * **signed** balance on purpose: an advance of 700 against 650 of expenses
+   * with 50 returned reconciles to zero, while the same advance against 750 of
+   * expenses leaves the dealership owing the employee 50. Collapsing those into
+   * one unsigned "variance" is how a reimbursement silently becomes a shortage.
+   *
+   * Note what is deliberately NOT stored: the employee's own money. It is not
+   * independent information — it is exactly the amount by which expenses exceed
+   * what they were given and did not return — and holding it as its own figure
+   * let it be added to the advance, cancelling the debt it was recording.
+   * `reimbursedMinor` is different and IS stored, because money owed and money
+   * actually paid back are separate facts and only the second closes the record.
+   */
+  financeDealCustody: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    /** The employee holding the money. */
+    userId: v.id("users"),
+    currency: v.string(),
+
+    /** Cash handed over. The sum of every issuance on this custody record. */
+    issuedMinor: v.number(),
+    /** Unspent cash the employee gave back. */
+    returnedMinor: v.number(),
+    /** Money the dealership has actually paid back to the employee. */
+    reimbursedMinor: v.number(),
+
+    status: v.union(
+      v.literal("OPEN"),
+      v.literal("RECONCILED"),
+      /** Closed with a difference nobody could account for, recorded as such. */
+      v.literal("WRITTEN_OFF")
+    ),
+    reconciledAt: v.optional(v.number()),
+    reconciledBy: v.optional(v.id("users")),
+    reconciliationNotes: v.optional(v.string()),
+    writeOffReason: v.optional(v.string()),
+
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_application", ["applicationId"])
+    .index("by_org_user", ["orgId", "userId"])
+    .index("by_org_status", ["orgId", "status"]),
+
+  /**
+   * Every movement on a custody record, so the totals above are a sum of events
+   * rather than a number somebody patched.
+   *
+   * Without this, correcting a mistyped issuance means overwriting a total and
+   * losing the fact that it ever differed — the same defect the override table
+   * exists to prevent one layer up.
+   */
+  financeDealCustodyEntries: defineTable({
+    orgId: v.id("organizations"),
+    custodyId: v.id("financeDealCustody"),
+    kind: v.union(
+      v.literal("ISSUED"),
+      v.literal("RETURNED"),
+      v.literal("REIMBURSED")
+    ),
+    amountMinor: v.number(),
+    method: v.optional(
+      v.union(
+        v.literal("CASH"),
+        v.literal("BANK_TRANSFER"),
+        v.literal("CHEQUE"),
+        v.literal("CARD")
+      )
+    ),
+    reference: v.optional(v.string()),
+    note: v.optional(v.string()),
+    occurredAt: v.number(),
+    recordedBy: v.id("users"),
+    recordedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_custody", ["custodyId"]),
 
   /**
    * Audit trail for every manual override of a financing figure.

@@ -114,6 +114,7 @@ function tablesCoveredByDeletion(): Set<string> {
     ["vehicleEditsWithStorage", "vehicleEdits"],
     ["applicationDocumentsWithStorage", "applicationDocuments"],
     ["financeAppraisalsWithStorage", "financeAppraisals"],
+    ["financeDealFeesWithStorage", "financeDealFees"],
     ["orgSettingsWithStorage", "orgSettings"],
     ["socialPostsWithStorage", "socialPosts"],
     ["dmConversations", "dmConversations"],
@@ -214,7 +215,10 @@ describe("organization hard-delete coverage", () => {
       found,
       `A table in RESET_TABLES carries storage ids the reset does not sweep. ` +
         `Add it to the blob-deletion branch in convex/orgFinancialReset.ts, then update this expectation.`
-    ).toEqual({ financeAppraisals: ["documentStorageIds"] });
+    ).toEqual({
+      financeAppraisals: ["documentStorageIds"],
+      financeDealFees: ["documentStorageIds"],
+    });
   });
 
   test("the financial reset clears an application's children, not just the application", () => {

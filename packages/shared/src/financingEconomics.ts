@@ -995,7 +995,6 @@ export function evaluateQuotationException(
 
 export interface CustodyReconciliationInput {
   advanceIssuedMinor: number;
-  employeePersonalPaymentMinor: number;
   actualExpensesMinor: number;
   employeeReturnedMinor: number;
 }
@@ -1012,6 +1011,18 @@ export interface CustodyReconciliation {
   dealerReimbursementDueMinor: number;
   /** Still held by the employee and owed back to the dealership. */
   employeeOwesDealerMinor: number;
+  /**
+   * How much of the employee's own money went into the deal, DERIVED.
+   *
+   * Never an input. It is the arithmetic consequence of expenses exceeding the
+   * net advance, and taking it as a separate figure meant a caller who
+   * dutifully recorded "they put in 50 of their own" added it to the same side
+   * as the advance — cancelling the debt, driving
+   * `dealerReimbursementDueMinor` from 50 to zero and flipping `reconciled` to
+   * true. That is the reimbursement silently becoming a shortage that this
+   * function exists to prevent, reached through its own argument list.
+   */
+  employeeFundedFromOwnPocketMinor: number;
   /** True only when nothing is left outstanding in either direction. */
   reconciled: boolean;
 }
@@ -1020,34 +1031,42 @@ export interface CustodyReconciliation {
  * Closes the employee custody identity:
  *
  * ```
- * advanceIssued + employeePersonalPayment
- *   = actualExpenses + employeeReturned + remainingEmployeeBalance
+ * advanceIssued - employeeReturned - actualExpenses = remainingEmployeeBalance
  * ```
  *
  * The balance is signed on purpose. An advance of 700 against 650 of expenses
  * with 50 returned reconciles to zero; the same advance against 750 of expenses
- * with 50 paid personally leaves the dealership owing the employee 50. Collapsing
- * those into one unsigned "variance" is how a reimbursement silently becomes a
- * shortage.
+ * leaves the dealership owing the employee 50, because the employee covered
+ * that 50 themselves. Collapsing those into one unsigned "variance" is how a
+ * reimbursement silently becomes a shortage.
+ *
+ * ## Why the employee's own money is not an input
+ *
+ * It used to be, added on the same side as the advance — and that quietly
+ * cancelled the very debt the signed balance exists to surface. Recording "the
+ * employee put in 50 of their own" against a 700 advance and 750 of expenses
+ * took `dealerReimbursementDueMinor` from 50 to zero and reported
+ * `reconciled: true`, so a dealership that documented its employee's
+ * contribution most carefully was the one that erased it. The contribution is
+ * not independent information: it is exactly the amount by which expenses
+ * exceed what the employee was given and did not return, so it is derived here
+ * and cannot disagree with the balance.
  */
 export function reconcileEmployeeCustody(
   input: CustodyReconciliationInput
 ): CustodyReconciliation {
   assertNonNegativeMinor(input.advanceIssuedMinor, "Advance issued");
-  assertNonNegativeMinor(input.employeePersonalPaymentMinor, "Employee personal payment");
   assertNonNegativeMinor(input.actualExpensesMinor, "Actual expenses");
   assertNonNegativeMinor(input.employeeReturnedMinor, "Amount returned by employee");
 
   const remainingEmployeeBalanceMinor =
-    input.advanceIssuedMinor +
-    input.employeePersonalPaymentMinor -
-    input.actualExpensesMinor -
-    input.employeeReturnedMinor;
+    input.advanceIssuedMinor - input.employeeReturnedMinor - input.actualExpensesMinor;
 
   return {
     remainingEmployeeBalanceMinor,
     dealerReimbursementDueMinor: Math.max(0, -remainingEmployeeBalanceMinor),
     employeeOwesDealerMinor: Math.max(0, remainingEmployeeBalanceMinor),
+    employeeFundedFromOwnPocketMinor: Math.max(0, -remainingEmployeeBalanceMinor),
     reconciled: remainingEmployeeBalanceMinor === 0,
   };
 }

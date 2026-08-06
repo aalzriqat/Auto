@@ -320,10 +320,25 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // which clears the flag marking a deal's financing figures as needing review.
   // It takes an `orgId` and a caller-supplied `applicationId`, so it is held to
   // the `requireOwnedRow` rule and satisfies it inline like its siblings.
+  // Then 445→454 / 292→301 by the nine mutations in `financeDealCosts`, which
+  // records what a financed deal actually cost and who is holding the money:
+  // `recordDealFee`, `recordActualFeeAmount`, `reconcileDealFee`,
+  // `voidDealFee`, `openDealCustody`, `recordCustodyMovement`,
+  // `reconcileDealCustody`, `recordLegalInvoice` and `classifyDealAccounting`.
+  //
+  // Every one takes an `orgId` alongside a caller-supplied id — an
+  // `applicationId`, a `feeId` or a `custodyId` — so all nine land in
+  // `analysed` and are held to the `requireOwnedRow` rule. Each satisfies it
+  // inline, and the four that accept a SECOND id prove ownership of both
+  // separately rather than inferring the child from the parent: a `custodyId`
+  // that belongs to this org can still belong to a different deal, and the
+  // module rejects that explicitly. `analysed` moving up by exactly the number
+  // of new mutations is the signal to check for — it going up by less would
+  // mean one of them slipped into a skipped bucket.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 445,
-      analysed: 292,
+      totalMutations: 454,
+      analysed: 301,
       skippedNoArgsBlock: 9,
       skippedNoOrgId: 144,
     });
