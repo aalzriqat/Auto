@@ -3,7 +3,9 @@ import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
-import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
+import { requireOrgMember, requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
+import { AppErrorCode } from "./utils/errors";
+import { runWithIdempotency } from "./utils/idempotency";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { reconcileEmployeeCustody } from "../lib/financingEconomics";
@@ -418,6 +420,7 @@ export const recordDealFee = mutation({
     receiptReference: v.optional(v.string()),
     documentStorageIds: v.optional(v.array(v.id("_storage"))),
     source: v.optional(v.union(v.literal("COMPANY_TEMPLATE"), v.literal("MANUAL"))),
+    idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [
@@ -470,36 +473,65 @@ export const recordDealFee = mutation({
       custodyId = custody._id;
     }
 
-    await invalidateClassification(
-      ctx, app, user._id,
-      "A new cost was added to the deal after its accounting was classified."
-    );
+    // A cost line is additive: a retried submit does not overwrite anything, it
+    // adds a second real charge, and `actualTotalMinor` rises by an amount
+    // nobody spent. Every other money-recording surface in this codebase
+    // (expenses, deposits, the cash drawer) already takes a key for exactly
+    // this; there is no reason a deal's costs should be the one that does not.
+    // Ownership and permission are checked above, outside the wrapper, so a
+    // replay is still authorized rather than trusting the stored result.
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "financeDealCosts.recordDealFee",
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        fingerprint: JSON.stringify({
+          applicationId: args.applicationId,
+          feeType: args.feeType,
+          estimatedAmountMinor: args.estimatedAmountMinor ?? null,
+          actualAmountMinor: args.actualAmountMinor ?? null,
+          paidBy: args.paidBy,
+          paidTo: args.paidTo,
+          accountingTreatment: args.accountingTreatment,
+          custodyId: args.custodyId ?? null,
+          receiptReference: args.receiptReference?.trim() || null,
+        }),
+      },
+      async () => {
+        await invalidateClassification(
+          ctx, app, user._id,
+          "A new cost was added to the deal after its accounting was classified."
+        );
 
-    const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
-    const now = Date.now();
-    return await ctx.db.insert("financeDealFees", {
-      orgId: args.orgId,
-      applicationId: args.applicationId,
-      feeType: args.feeType,
-      description: args.description?.trim() || undefined,
-      currency,
-      estimatedAmountMinor: args.estimatedAmountMinor,
-      actualAmountMinor: args.actualAmountMinor,
-      paidBy: args.paidBy,
-      paidTo: args.paidTo,
-      accountingTreatment: args.accountingTreatment,
-      includedInQuotation: args.includedInQuotation ?? false,
-      deductedFromSettlement: args.deductedFromSettlement ?? false,
-      refundable: args.refundable ?? false,
-      custodyId,
-      paidAt: args.paidAt,
-      receiptReference: args.receiptReference?.trim() || undefined,
-      documentStorageIds: args.documentStorageIds,
-      source: args.source ?? "MANUAL",
-      createdBy: user._id,
-      createdAt: now,
-      updatedAt: now,
-    });
+        const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
+        const now = Date.now();
+        return await ctx.db.insert("financeDealFees", {
+          orgId: args.orgId,
+          applicationId: args.applicationId,
+          feeType: args.feeType,
+          description: args.description?.trim() || undefined,
+          currency,
+          estimatedAmountMinor: args.estimatedAmountMinor,
+          actualAmountMinor: args.actualAmountMinor,
+          paidBy: args.paidBy,
+          paidTo: args.paidTo,
+          accountingTreatment: args.accountingTreatment,
+          includedInQuotation: args.includedInQuotation ?? false,
+          deductedFromSettlement: args.deductedFromSettlement ?? false,
+          refundable: args.refundable ?? false,
+          custodyId,
+          paidAt: args.paidAt,
+          receiptReference: args.receiptReference?.trim() || undefined,
+          documentStorageIds: args.documentStorageIds,
+          source: args.source ?? "MANUAL",
+          createdBy: user._id,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    );
   },
 });
 
@@ -510,6 +542,11 @@ export const recordDealFee = mutation({
  * survives. Re-recording a different actual is allowed — a receipt can be wrong
  * — but it clears any prior reconciliation, because a figure somebody checked
  * and a figure somebody then changed are not the same claim.
+ *
+ * No idempotency key, unlike its neighbours: this sets a named field on one
+ * identified row to a value the caller supplies, so replaying it converges on
+ * the same state instead of accumulating. The keys belong on the inserts, where
+ * a retry adds a charge or a payment that nobody made.
  */
 export const recordActualFeeAmount = mutation({
   args: {
@@ -761,6 +798,7 @@ export const openDealCustody = mutation({
     reference: v.optional(v.string()),
     note: v.optional(v.string()),
     occurredAt: v.optional(v.number()),
+    idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [
@@ -780,14 +818,18 @@ export const openDealCustody = mutation({
 
     // The recipient must be a member of this organization. Without this a
     // caller could hand custody — and a reimbursement claim — to a user id from
-    // another tenant.
-    const membership = await ctx.db
-      .query("memberships")
-      .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", args.userId))
-      .unique();
-    if (!membership) {
-      throw new ConvexError("That person is not a member of this organization.");
-    }
+    // another tenant. The shared helper rather than a local membership lookup:
+    // it also rejects a membership that is mid-offboarding, which the local
+    // version accepted because a row was present. `requireTenantAuth` refuses
+    // to authenticate that person, so cash handed to them on the way out leaves
+    // a balance they can never return, reconcile or claim against themselves.
+    await requireOrgMember(
+      ctx,
+      args.orgId,
+      args.userId,
+      AppErrorCode.ASSIGNED_USER_NOT_MEMBER,
+      "That person is not a member of this organization."
+    );
 
     // The sole record of cash handed to a person. Letting the same someone
     // issue it to themselves, reimburse themselves and close the record is an
@@ -808,41 +850,64 @@ export const openDealCustody = mutation({
       );
     }
 
-    await invalidateClassification(
-      ctx, app, user._id,
-      "Custody was opened on the deal after its accounting was classified."
+    // The one-open-record rule above already stops a retry creating a second
+    // custody, so the key is not what protects the money here — it is what
+    // makes the retry return the record instead of an error about a record the
+    // caller's own first attempt created.
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "financeDealCosts.openDealCustody",
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        fingerprint: JSON.stringify({
+          applicationId: args.applicationId,
+          userId: args.userId,
+          issuedMinor: args.issuedMinor,
+          method: args.method ?? null,
+          reference: args.reference?.trim() || null,
+          occurredAt: args.occurredAt ?? null,
+        }),
+      },
+      async () => {
+        await invalidateClassification(
+          ctx, app, user._id,
+          "Custody was opened on the deal after its accounting was classified."
+        );
+
+        const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
+        const now = Date.now();
+        const custodyId = await ctx.db.insert("financeDealCustody", {
+          orgId: args.orgId,
+          applicationId: args.applicationId,
+          userId: args.userId,
+          currency,
+          issuedMinor: 0,
+          returnedMinor: 0,
+          reimbursedMinor: 0,
+          status: "OPEN",
+          createdBy: user._id,
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        await ctx.db.insert("financeDealCustodyEntries", {
+          orgId: args.orgId,
+          custodyId,
+          kind: "ISSUED",
+          amountMinor: args.issuedMinor,
+          method: args.method,
+          reference: args.reference?.trim() || undefined,
+          note: args.note?.trim() || undefined,
+          occurredAt: args.occurredAt ?? now,
+          recordedBy: user._id,
+          recordedAt: now,
+        });
+        await recomputeCustodyTotals(ctx, custodyId);
+        return custodyId;
+      }
     );
-
-    const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
-    const now = Date.now();
-    const custodyId = await ctx.db.insert("financeDealCustody", {
-      orgId: args.orgId,
-      applicationId: args.applicationId,
-      userId: args.userId,
-      currency,
-      issuedMinor: 0,
-      returnedMinor: 0,
-      reimbursedMinor: 0,
-      status: "OPEN",
-      createdBy: user._id,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    await ctx.db.insert("financeDealCustodyEntries", {
-      orgId: args.orgId,
-      custodyId,
-      kind: "ISSUED",
-      amountMinor: args.issuedMinor,
-      method: args.method,
-      reference: args.reference?.trim() || undefined,
-      note: args.note?.trim() || undefined,
-      occurredAt: args.occurredAt ?? now,
-      recordedBy: user._id,
-      recordedAt: now,
-    });
-    await recomputeCustodyTotals(ctx, custodyId);
-    return custodyId;
   },
 });
 
@@ -877,6 +942,7 @@ export const recordCustodyMovement = mutation({
     reference: v.optional(v.string()),
     note: v.optional(v.string()),
     occurredAt: v.optional(v.number()),
+    idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [
@@ -928,6 +994,35 @@ export const recordCustodyMovement = mutation({
       if (already.some((row) => row.reversesEntryId === args.reversesEntryId)) {
         throw new ConvexError("That movement has already been reversed.");
       }
+
+      // A reimbursement is calculated against what the person was given: they
+      // spent more than the advance, so the difference was paid back to them.
+      // Retracting the issuance afterwards leaves that payment standing on a
+      // baseline that no longer exists, and the outstanding figure silently
+      // re-derives the entire advance as a fresh debt — a settled record
+      // turning into "700 still owed" with nobody having moved any money.
+      //
+      // This is not the totals invariant and cannot be enforced there: zero
+      // issued alongside a reimbursement is a perfectly true state on its own,
+      // it is what paying out of pocket looks like. What is not true is
+      // reaching it by withdrawing the issuance the reimbursement was measured
+      // from, so the guard belongs on that dependency.
+      if (target.kind === "ISSUED") {
+        const reversed = new Set(
+          already
+            .filter((row) => row.kind === "REVERSAL" && row.reversesEntryId)
+            .map((row) => row.reversesEntryId!)
+        );
+        const settledAgainst = already.filter(
+          (row) => row.kind === "REIMBURSED" && !reversed.has(row._id)
+        );
+        if (settledAgainst.length > 0) {
+          const paidMinor = settledAgainst.reduce((sum, row) => sum + row.amountMinor, 0);
+          throw new ConvexError(
+            `A reimbursement of ${paidMinor} minor units was already paid against this handover. Reverse that reimbursement first, otherwise the payment stays on the record measured against an issuance that no longer exists.`
+          );
+        }
+      }
     } else if (args.reversesEntryId) {
       throw new ConvexError("Only a reversal may name the movement it cancels.");
     }
@@ -944,22 +1039,46 @@ export const recordCustodyMovement = mutation({
       }
     }
 
-    const now = Date.now();
-    await ctx.db.insert("financeDealCustodyEntries", {
-      orgId: args.orgId,
-      custodyId: args.custodyId,
-      kind: args.kind,
-      ...(args.reversesEntryId ? { reversesEntryId: args.reversesEntryId } : {}),
-      amountMinor: args.amountMinor,
-      method: args.method,
-      reference: args.reference?.trim() || undefined,
-      note: args.note?.trim() || undefined,
-      occurredAt: args.occurredAt ?? now,
-      recordedBy: user._id,
-      recordedAt: now,
-    });
-    await recomputeCustodyTotals(ctx, args.custodyId);
-    return args.custodyId;
+    // The one that matters most: a retried REIMBURSED records the dealership
+    // paying the same person twice. The module surfaces that afterwards as
+    // `reimbursementOverpaidMinor` rather than clamping it away, which is right
+    // — but detecting a double payment is a worse outcome than not making one.
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "financeDealCosts.recordCustodyMovement",
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        fingerprint: JSON.stringify({
+          custodyId: args.custodyId,
+          kind: args.kind,
+          reversesEntryId: args.reversesEntryId ?? null,
+          amountMinor: args.amountMinor,
+          method: args.method ?? null,
+          reference: args.reference?.trim() || null,
+          occurredAt: args.occurredAt ?? null,
+        }),
+      },
+      async () => {
+        const now = Date.now();
+        await ctx.db.insert("financeDealCustodyEntries", {
+          orgId: args.orgId,
+          custodyId: args.custodyId,
+          kind: args.kind,
+          ...(args.reversesEntryId ? { reversesEntryId: args.reversesEntryId } : {}),
+          amountMinor: args.amountMinor,
+          method: args.method,
+          reference: args.reference?.trim() || undefined,
+          note: args.note?.trim() || undefined,
+          occurredAt: args.occurredAt ?? now,
+          recordedBy: user._id,
+          recordedAt: now,
+        });
+        await recomputeCustodyTotals(ctx, args.custodyId);
+        return args.custodyId;
+      }
+    );
   },
 });
 

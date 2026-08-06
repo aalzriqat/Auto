@@ -309,6 +309,70 @@ describe("adminOrgs", () => {
     expect(await t.run(async (ctx) => ctx.storage.getUrl(appraisalBlobId))).toBeNull();
   });
 
+  test("hardDeleteOrg removes a deal's itemized costs, custody, movements and receipt blobs", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, ownerId } = await seedOrgWithOwner(t);
+    await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "dev_costs", email: "admin@autoflow.dev" }));
+    const asAdmin = t.withIdentity({ subject: "dev_costs" });
+
+    // The receipt for a cost somebody actually paid. The structural coverage
+    // guard proves the tables are named in the cascade; only running it proves
+    // the blob goes with them.
+    const receiptBlobId = await t.run((ctx) => ctx.storage.store(new Blob(["receipt.pdf"])));
+
+    const ids = await t.run(async (ctx) => {
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, vin: "VINFIN2", make: "Kia", model: "Sportage", year: 2024, mileage: 5,
+        color: "Black", fuelType: "Gas", transmission: "Auto", sellingPrice: 18000,
+        status: "AVAILABLE",
+      });
+      const customerId = await ctx.db.insert("customers", {
+        orgId, firstName: "Cost", lastName: "Customer",
+      });
+      const quoteId = await ctx.db.insert("quotes", {
+        orgId, customerId, vehicleId, vehiclePrice: 18000, downPayment: 1000,
+        termMonths: 48, status: "ACCEPTED", createdBy: ownerId, createdAt: Date.now(),
+      });
+      const applicationId = await ctx.db.insert("financeApplications", {
+        orgId, quoteId, customerId, vehicleId, salespersonId: ownerId,
+        status: "APPROVED", createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      const custodyId = await ctx.db.insert("financeDealCustody", {
+        orgId, applicationId, userId: ownerId, currency: "JOD",
+        issuedMinor: 700_000, returnedMinor: 0, reimbursedMinor: 0,
+        status: "OPEN", createdBy: ownerId,
+        createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      const entryId = await ctx.db.insert("financeDealCustodyEntries", {
+        orgId, custodyId, kind: "ISSUED", amountMinor: 700_000,
+        occurredAt: Date.now(), recordedBy: ownerId, recordedAt: Date.now(),
+      });
+      const feeId = await ctx.db.insert("financeDealFees", {
+        orgId, applicationId, feeType: "LICENSING", currency: "JOD",
+        actualAmountMinor: 120_000, paidBy: "EMPLOYEE", paidTo: "GOVERNMENT",
+        accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+        includedInQuotation: false, deductedFromSettlement: false,
+        refundable: false, custodyId, documentStorageIds: [receiptBlobId],
+        source: "MANUAL", createdBy: ownerId,
+        createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      return { applicationId, custodyId, entryId, feeId };
+    });
+
+    const result = await asAdmin.mutation(api.adminOrgs.hardDeleteOrg, {
+      orgId, confirmName: "Acme Motors",
+    });
+    expect((await runDeletionToCompletion(t, result.requestId))?.status).toBe("COMPLETED");
+
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(ids.applicationId)).toBeNull();
+      expect(await ctx.db.get(ids.feeId)).toBeNull();
+      expect(await ctx.db.get(ids.custodyId)).toBeNull();
+      expect(await ctx.db.get(ids.entryId)).toBeNull();
+    });
+    expect(await t.run(async (ctx) => ctx.storage.getUrl(receiptBlobId))).toBeNull();
+  });
+
   test("hardDeleteOrg cascades site-visitor analytics but leaves platform-scoped rows untouched", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithOwner(t);

@@ -107,6 +107,80 @@ async function readCosts(seed: Seed) {
 
 // ---------------------------------------------------------------------------
 
+describe("a retried submit does not spend money twice", () => {
+  test("the same key replays one cost line instead of adding a second real charge", async () => {
+    const seed = await seedDeal();
+    const first = await seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+      feeType: "LICENSING", paidBy: "DEALER", paidTo: "GOVERNMENT",
+      accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+      actualAmountMinor: jod(120), idempotencyKey: "fee-retry-1",
+    });
+    const second = await seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+      feeType: "LICENSING", paidBy: "DEALER", paidTo: "GOVERNMENT",
+      accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+      actualAmountMinor: jod(120), idempotencyKey: "fee-retry-1",
+    });
+
+    expect(second).toBe(first);
+    const costs = await readCosts(seed);
+    expect(costs.fees).toHaveLength(1);
+    // The figure, not just the row count: a second line would have made the
+    // deal cost 240 without anybody spending the difference.
+    expect(costs.summary.actualTotalMinor).toBe(jod(120));
+  });
+
+  test("the same key replays a reimbursement instead of paying it again", async () => {
+    const seed = await seedDeal();
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+      userId: seed.employeeId, issuedMinor: jod(700),
+    });
+    await addFee(seed, { actualAmountMinor: jod(750), paidBy: "EMPLOYEE", custodyId });
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        orgId: seed.orgId, custodyId, kind: "REIMBURSED",
+        amountMinor: jod(50), idempotencyKey: "reimburse-retry-1",
+      });
+    }
+
+    const costs = await readCosts(seed);
+    // Without the key this is 100 reimbursed against 50 owed, surfaced as an
+    // overpayment — correct detection of a payment that should never have left.
+    expect(costs.custody[0]?.summary.reimbursementOverpaidMinor).toBe(0);
+    expect(costs.custody[0]?.summary.settled).toBe(true);
+    const entries = await seed.t.run((ctx) =>
+      ctx.db
+        .query("financeDealCustodyEntries")
+        .withIndex("by_custody", (q) => q.eq("custodyId", custodyId))
+        .collect()
+    );
+    expect(entries.filter((e) => e.kind === "REIMBURSED")).toHaveLength(1);
+  });
+
+  test("reusing a key for a different amount is refused rather than replayed", async () => {
+    const seed = await seedDeal();
+    await seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+      feeType: "LICENSING", paidBy: "DEALER", paidTo: "GOVERNMENT",
+      accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+      actualAmountMinor: jod(120), idempotencyKey: "fee-reuse-1",
+    });
+
+    // Returning the first result here would silently discard the second charge.
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
+        orgId: seed.orgId, applicationId: seed.applicationId,
+        feeType: "LICENSING", paidBy: "DEALER", paidTo: "GOVERNMENT",
+        accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+        actualAmountMinor: jod(300), idempotencyKey: "fee-reuse-1",
+      })
+    ).rejects.toThrow(/different request content/i);
+  });
+});
+
 describe("itemized deal costs", () => {
   test("keeps the estimate and the actual apart instead of overwriting one with the other", async () => {
     const seed = await seedDeal();
@@ -363,6 +437,34 @@ describe("employee custody", () => {
         orgId: seed.orgId,
         applicationId: seed.applicationId,
         userId: outsider,
+        issuedMinor: jod(700),
+      })
+    ).rejects.toThrow(/not a member of this organization/i);
+  });
+
+  test("custody cannot be handed to somebody who is being offboarded", async () => {
+    const seed = await seedDeal();
+    await seed.t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) =>
+          q.eq("orgId", seed.orgId).eq("userId", seed.employeeId)
+        )
+        .unique();
+      await ctx.db.patch(membership!._id, { offboardingStatus: "PENDING_EXTERNAL_REMOVAL" });
+    });
+
+    // `requireTenantAuth` already refuses to authenticate this person, so they
+    // cannot reconcile, return or claim against the record themselves. Handing
+    // them cash on their way out creates a balance only somebody else can ever
+    // close. The hand-rolled membership lookup here saw a row and accepted it;
+    // the shared helper is the one that knows an offboarding membership is not
+    // an active one.
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+        orgId: seed.orgId,
+        applicationId: seed.applicationId,
+        userId: seed.employeeId,
         issuedMinor: jod(700),
       })
     ).rejects.toThrow(/not a member of this organization/i);
@@ -713,6 +815,45 @@ describe("money can only move in directions that are true", () => {
     const costs = await readCosts(seed);
     expect(costs.custody[0]?.summary.reimbursementOutstandingMinor).toBe(0);
     expect(costs.custody[0]?.summary.overReturnedMinor).toBe(0);
+  });
+
+  test("an issuance already settled against cannot be reversed out from under the settlement", async () => {
+    const seed = await seedDeal();
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+      userId: seed.employeeId, issuedMinor: jod(700),
+    });
+    const entryId = await seed.t.run(async (ctx) => {
+      const rows = await ctx.db
+        .query("financeDealCustodyEntries")
+        .withIndex("by_custody", (q) => q.eq("custodyId", custodyId))
+        .collect();
+      return rows[0]._id;
+    });
+    // Spent 50 of their own money on top of the advance, and was paid it back.
+    await addFee(seed, { actualAmountMinor: jod(750), paidBy: "EMPLOYEE", custodyId });
+    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+      orgId: seed.orgId, custodyId, kind: "REIMBURSED", amountMinor: jod(50),
+    });
+    expect((await readCosts(seed)).custody[0]?.summary.settled).toBe(true);
+
+    // The totals guard passes here — nothing comes back that did not go out —
+    // so it never fires. But that 50 was paid against a 700 baseline, and
+    // retracting the baseline silently re-derives the whole advance as a debt:
+    // a settled record became "700 still owed to this person" with nobody
+    // having moved any money. The guard has to be on the dependency, not the
+    // arithmetic, because issued=0 alongside a reimbursement is a legitimate
+    // state on its own — it is what "paid out of pocket" looks like.
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        orgId: seed.orgId, custodyId, kind: "REVERSAL",
+        reversesEntryId: entryId, amountMinor: jod(700),
+      })
+    ).rejects.toThrow(/reimbursement/i);
+
+    const costs = await readCosts(seed);
+    expect(costs.custody[0]?.summary.reimbursementOutstandingMinor).toBe(0);
+    expect(costs.custody[0]?.summary.settled).toBe(true);
   });
 
   test("a reversal can only cancel a movement on its own custody record", async () => {
