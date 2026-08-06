@@ -340,6 +340,13 @@ async function computeCloseChecklist(
     .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "FAILED"))
     .collect();
 
+  // Same story for the sales table: both commission controls below scan it in
+  // full, so without sharing, one close reads it twice.
+  const allSales = await ctx.db
+    .query("sales")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+
   const pendingOutboxEvents = allPendingOutbox.filter((e) => e.accountingDate <= period.endDate);
   const failedOutboxEvents = allFailedOutbox.filter((e) => e.accountingDate <= period.endDate);
 
@@ -375,10 +382,11 @@ async function computeCloseChecklist(
       computeVehicleInventoryReconciliation(ctx, orgId, period.endDate),
       computeSupplierPayablesReconciliation(ctx, orgId, period.endDate),
       computeCustomerDepositsReconciliation(ctx, orgId, period.endDate),
-      computeCommissionPayableReconciliation(ctx, orgId, period.endDate),
+      computeCommissionPayableReconciliation(ctx, orgId, period.endDate, { sales: allSales }),
       computePrepaidRecognitionShortfall(ctx, orgId, period.endDate),
       computeCommissionRecognitionDivergence(ctx, orgId, {
         pendingEvents: [...allPendingOutbox, ...allFailedOutbox],
+        sales: allSales,
       }),
     ]);
 

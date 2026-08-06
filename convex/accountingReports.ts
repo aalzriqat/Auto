@@ -915,14 +915,18 @@ export const customerDepositsReconciliation = query({
 export async function computeCommissionPayableReconciliation(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
-  toDate: number | undefined
+  toDate: number | undefined,
+  /** See computeCommissionRecognitionDivergence — the same shared read. */
+  provided?: { sales?: Doc<"sales">[] }
 ): Promise<GlVsSubledgerResult> {
   // No org-currency read here: the subledger side is keyed by the currency each
   // entry was POSTED in, so today's org currency plays no part.
-  const sales = await ctx.db
-    .query("sales")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .collect();
+  const sales =
+    provided?.sales ??
+    (await ctx.db
+      .query("sales")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect());
 
   // BOTH SIDES ARE EVALUATED AS OF `toDate`. The GL side always was
   // (getPostedLines filters accountingDate <= toDate); the subledger side used
@@ -1070,23 +1074,29 @@ function safeToMinorUnits(amount: number | undefined, currency: string): number 
 export async function computeCommissionRecognitionDivergence(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
-  // Threaded in by computeCloseChecklist, which has already collected all three
-  // in the same transaction. Re-reading them there meant the org's whole sales
-  // table twice, its entire commission-event history twice (the second copy
-  // with no date bound at all), and both outbox statuses twice — on top of six
-  // other full-table reconciliations. Crossing Convex's read limit does not
-  // just drop this warning: `close` recomputes the checklist before it builds
-  // its blockers, so the period could not be closed at all, and the owner
-  // override meant to be the escape hatch is never reached.
+  // Threaded in by computeCloseChecklist, which has already collected both in
+  // the same transaction. Re-reading them there meant the org's whole sales
+  // table twice and both outbox statuses twice, on top of six other full-table
+  // reconciliations. Crossing Convex's read limit does not just drop this
+  // warning: `close` recomputes the checklist before it builds its blockers, so
+  // the period could not be closed at all, and the owner override meant to be
+  // the escape hatch is never reached.
+  //
+  // The recognition history is deliberately NOT shared. This control reads it
+  // as of now while the reconciliation reads it as of the period end, so one
+  // map cannot serve both without silently giving one of them the wrong answer.
   provided?: {
     pendingEvents?: Doc<"pendingAccountingEvents">[];
+    sales?: Doc<"sales">[];
   }
 ): Promise<{ unrecognizedCount: number; divergentCount: number; currency: string }> {
   const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
-  const sales = await ctx.db
-    .query("sales")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .collect();
+  const sales =
+    provided?.sales ??
+    (await ctx.db
+      .query("sales")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect());
 
   // NOT isCommissionOwed. Payment does not reverse the accrual, so a commission
   // recognized at the wrong figure is still wrong after it is paid — and the
