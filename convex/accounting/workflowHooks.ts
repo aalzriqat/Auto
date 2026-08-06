@@ -1095,15 +1095,23 @@ export async function recognizedCommissionMinor(
   sale: { _id: Id<"sales">; commissionAdjustmentSeq?: number },
   currency: string
 ): Promise<number | null> {
-  const postedAmount = async (idempotencyKey: string, field: "amountMinor" | "deltaMinor") => {
+  const postedAmount = async (
+    idempotencyKey: string,
+    field: "amountMinor" | "deltaMinor"
+  ): Promise<{ minor: number; currency: string } | "ABSENT" | "MALFORMED"> => {
     const event = await ctx.db
       .query("accountingEvents")
       .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
       .filter((q) => q.eq(q.field("status"), "POSTED"))
       .first();
-    if (!event) return null;
+    if (!event) return "ABSENT";
     const value = event.payload?.[field];
-    if (typeof value !== "number" || !Number.isFinite(value)) return null;
+    // ABSENT and MALFORMED are NOT the same answer. Both used to return null
+    // and the caller skipped either one, so a POSTED correction whose payload
+    // could not be read was dropped from the total — while it had really moved
+    // Commission Payable. That is the exact partial total the counter check
+    // below refuses to produce, arrived at by another route.
+    if (typeof value !== "number" || !Number.isFinite(value)) return "MALFORMED";
     return { minor: value, currency: event.currency };
   };
 
@@ -1129,7 +1137,10 @@ export async function recognizedCommissionMinor(
     })),
   ]) {
     const entry = await postedAmount(key.k, key.f);
-    if (!entry) continue;
+    // Refuse, do not omit: this entry posted and moved the payable by an
+    // amount that cannot be read here.
+    if (entry === "MALFORMED") return null;
+    if (entry === "ABSENT") continue;
     sawAny = true;
     if (entry.currency !== currency) continue;
     sawCurrency = true;
@@ -1388,8 +1399,13 @@ export const hookCommissionReversed = makeReversalHook<{ saleId: Id<"sales"> }>(
  * leaves each adjustment's delta stranded in Commission Payable, so a sale
  * accrued at 100 and corrected to 150 would still owe 50 after cancellation.
  * Callers reverse sequences 1..commissionAdjustmentSeq; see reverseCommissionForSale.
+ *
+ * No account self-heal is needed on this path, despite what the comment that
+ * used to sit here claimed: this runs through makeReversalHook, not
+ * makeCommissionHook, so ensureCommissionAccountsIfChartReady is never called.
+ * It is safe anyway — a correction can only be reversed after it posted, which
+ * already resolved both commission accounts — but the stated reason was wrong.
  */
-/** Corrections resolve the same two accounts, so they self-heal them too. */
 export const hookCommissionAdjustmentReversed = makeReversalHook<{ saleId: Id<"sales">; sequence: number }>({
   eventType: "COMMISSION_ADJUSTED",
   sourceType: "sales",

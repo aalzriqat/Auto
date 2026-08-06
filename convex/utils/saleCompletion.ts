@@ -71,8 +71,12 @@ type PreparedSaleCompletion = {
   leadId?: Id<"leads">;
   commissionAmount?: number;
   currency: string;
-  // AUTO modes accrue the commission to the GL at completion; MANUAL defers it
-  // to payment time (so the amount stays editable until paid).
+  // True when the commission amount is already known at completion, in EITHER
+  // mode. MANUAL used to defer accrual to payment time so the amount stayed
+  // editable; it no longer does — recognition follows measurability, and a
+  // wrong amount is corrected by a signed adjusting entry rather than by being
+  // left unposted. Both branches below now set this from `commissionAmount`
+  // alone, so the mode no longer decides it.
   accrueAtCompletion: boolean;
 };
 

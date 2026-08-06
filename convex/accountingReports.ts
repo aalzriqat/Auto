@@ -1216,6 +1216,17 @@ export async function computeCommissionRecognitionDivergence(
       divergentCount++;
       continue;
     }
+    if (recognizedMinor === 0 && byCurrency !== undefined) {
+      // Entries EXIST and net to zero, against a decided amount that is
+      // positive. The backfill finds the posted accrual and skips this sale as
+      // already recognized, so routing it to "run the backfill" would be the
+      // fourth version of an instruction that cannot clear its own warning.
+      // A human has to work out how the sale's amount and its entries parted
+      // company. Absence of the map key — not a zero total — is what actually
+      // means "never recognized".
+      divergentCount++;
+      continue;
+    }
     if (recognizedMinor === 0) {
       // Only counted when the backfill could actually fix it — i.e. the
       // commission is still unpaid. A commission SETTLED before commission GL

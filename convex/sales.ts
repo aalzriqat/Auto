@@ -1149,7 +1149,7 @@ async function assertCommissionRecognitionMatches(
     throwAppError(
       AppErrorCode.VALIDATION_FAILED,
       usableSeq
-        ? "This commission was recognized in a different currency than it would be paid in. Have accounting reconcile it before settling."
+        ? "This commission's recognized total cannot be read — it was either recognized in a different currency than it would be paid in, or a posted entry carries an unreadable amount. Have accounting reconcile it before settling."
         : "This commission's correction history cannot be read, so it cannot be paid. Have accounting review it."
     );
   }

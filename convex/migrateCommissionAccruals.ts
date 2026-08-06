@@ -78,7 +78,22 @@ export const backfillCommissionAccruals = internalMutation({
 
     if (!org) {
       console.log("[commission-backfill] complete: no further organizations");
-      return { done: true as const, salesScanned: 0, accruedCount: 0, accruedMinor: 0, skippedAlreadyRecognized: 0, skippedNoOwner: 0 };
+      // Every counter, including the ones this branch cannot increment. A
+      // partial shape makes the mutation's return a union of two objects, and an
+      // operator reading skippedClosedPeriod off THIS branch gets `undefined`
+      // rather than 0 — which reads as "not reported" instead of "none".
+      return {
+        done: true as const,
+        salesScanned: 0,
+        accruedCount: 0,
+        accruedMinor: 0,
+        skippedAlreadyRecognized: 0,
+        skippedNoOwner: 0,
+        skippedNoAccounts: 0,
+        skippedInvalidAmount: 0,
+        skippedReversed: 0,
+        skippedClosedPeriod: 0,
+      };
     }
 
     const salePage = await ctx.db
@@ -100,7 +115,6 @@ export const backfillCommissionAccruals = internalMutation({
     let skippedReversed = 0;
     let skippedClosedPeriod = 0;
     let capped = false;
-    const now = Date.now();
 
     if (owed.length > 0) {
       const actorId = await resolveOrgOwnerUserId(ctx, org._id);

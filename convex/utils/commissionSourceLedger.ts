@@ -261,15 +261,22 @@ export async function recognizedCommissionForSale(
   saleId: Id<"sales">,
   adjustmentSeq: number
 ): Promise<Map<string, number> | null> {
-  const postedAmount = async (idempotencyKey: string, field: "amountMinor" | "deltaMinor") => {
+  const postedAmount = async (
+    idempotencyKey: string,
+    field: "amountMinor" | "deltaMinor"
+  ): Promise<{ minor: number; currency: string } | "ABSENT" | "MALFORMED"> => {
     const event = await ctx.db
       .query("accountingEvents")
       .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey))
       .filter((q) => q.eq(q.field("status"), "POSTED"))
       .first();
-    if (!event) return null;
+    if (!event) return "ABSENT";
     const value = event.payload?.[field];
-    if (typeof value !== "number" || !Number.isFinite(value)) return null;
+    // "Fails closed" below was only true of the counter. A POSTED entry whose
+    // payload cannot be read also moved the payable, and returning null for it
+    // here made it indistinguishable from an entry that never posted — so the
+    // drain-side guard compared a settlement against an understated total.
+    if (typeof value !== "number" || !Number.isFinite(value)) return "MALFORMED";
     return { minor: value, currency: event.currency };
   };
   // Fails CLOSED, like every other walk over this counter. `?? 0` returned the
@@ -278,13 +285,17 @@ export async function recognizedCommissionForSale(
   const seq = boundedSeq(adjustmentSeq);
   if (seq === null) return null;
   const total = new Map<string, number>();
-  const add = (entry: { minor: number; currency: string } | null) => {
-    if (!entry) return;
+  const add = (entry: { minor: number; currency: string } | "ABSENT" | "MALFORMED") => {
+    if (entry === "MALFORMED") return false;
+    if (entry === "ABSENT") return true;
     total.set(entry.currency, (total.get(entry.currency) ?? 0) + entry.minor);
+    return true;
   };
-  add(await postedAmount(`commission_accrued_${saleId}`, "amountMinor"));
+  if (!add(await postedAmount(`commission_accrued_${saleId}`, "amountMinor"))) return null;
   for (let sequence = 1; sequence <= seq; sequence++) {
-    add(await postedAmount(`commission_adjusted_${saleId}_${sequence}`, "deltaMinor"));
+    if (!add(await postedAmount(`commission_adjusted_${saleId}_${sequence}`, "deltaMinor"))) {
+      return null;
+    }
   }
   return total;
 }

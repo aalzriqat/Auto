@@ -447,7 +447,13 @@ async function computeCloseChecklist(
     // is a real one — which matters, because closing a period requires
     // acknowledging every warning verbatim, and a line that fires on every
     // close teaches people to click through the ones that matter.
-    warnings.push(`Commission payable subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
+    // "(current-state check — review for timing differences)" is what the other
+    // four subledger warnings say, and it was copied here. It is no longer true
+    // of this one: computeCommissionPayableReconciliation is point-in-time on
+    // BOTH sides as of the period end, which is precisely the change that
+    // stopped it firing on every close. Telling an accountant to go looking for
+    // timing differences sends them after a cause that has been designed out.
+    warnings.push(`Commission payable subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (evaluated as of the period end on both sides — this is a real difference, not a timing one).`);
   }
   // The reconciliation above compares the GL against amounts derived from the
   // same posted entries, so it cannot see a commission recognized at the wrong

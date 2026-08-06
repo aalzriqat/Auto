@@ -2595,3 +2595,63 @@ describe("payroll names retry, not the calendar, for a dead-lettered entry", () 
     ).rejects.not.toThrow(/reopen|create and open/i);
   });
 });
+
+/**
+ * CodeRabbit, PR #205. `postedAmount` returned null both for "no such POSTED
+ * event" and for "POSTED but its payload amount is unreadable", and the caller
+ * skipped either — so a correction that really had posted, and really had moved
+ * Commission Payable, was dropped from the recognized total. The settlement
+ * guard then compared against an understated number.
+ *
+ * That is the same partial total the counter check two lines above refuses to
+ * produce, reached by a different route. Both the mutation-side walk
+ * (recognizedCommissionMinor) and the drain-side one
+ * (recognizedCommissionForSale) had it.
+ */
+describe("a posted entry with an unreadable amount fails closed", () => {
+  test("settlement is refused rather than compared against a partial total", async () => {
+    const d = await seedDealer("malformed_payload");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 400,
+    });
+    expect(await commissionPayableMinor(d)).toBe(40_000);
+
+    // The correction posted and moved the payable, but its amount is no longer
+    // readable — the raw-JSON admin editor is the threat model the walk's own
+    // docstring names.
+    await d.t.run(async (ctx) => {
+      const adj = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", d.orgId).eq("idempotencyKey", `commission_adjusted_${saleId}_1`)
+        )
+        .first();
+      expect(adj).toBeTruthy();
+      await ctx.db.patch(adj!._id, {
+        payload: { ...(adj!.payload as Record<string, unknown>), deltaMinor: "oops" },
+      });
+    });
+
+    // Previously the total came back as the accrual alone (25,000), the sale's
+    // 400 did not match it, and the user was told the amounts diverge — a
+    // different and wrong diagnosis. Now recognition is refused outright.
+    await expect(
+      d.asAdmin.mutation(api.sales.markCommissionPaid, {
+        orgId: d.orgId,
+        saleId,
+        paymentMethod: "CASH",
+      })
+    ).rejects.toThrow(/cannot be read/i);
+
+    const sale = await d.t.run(async (ctx) => await ctx.db.get(saleId));
+    expect(sale?.commissionPaidAt ?? null).toBeNull();
+  });
+});

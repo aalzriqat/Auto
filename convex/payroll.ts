@@ -645,7 +645,7 @@ async function assertAccrualsPosted(
         // sales.ts:assertCommissionRecognitionMatches already uses the right test.
         throw new ConvexError(
           safeAdjustmentSeq(sale.commissionAdjustmentSeq) !== null
-            ? "A commission on this run was recognized in a different currency than the run pays. Have accounting reconcile it before paying."
+            ? "A commission on this run has a recognized total that cannot be read — either it was recognized in a different currency than the run pays, or a posted entry carries an unreadable amount. Have accounting reconcile it before paying."
             : "A commission on this run has an unreadable correction history. Have accounting review it before paying."
         );
       }
