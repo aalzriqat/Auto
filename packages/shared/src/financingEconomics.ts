@@ -1043,9 +1043,21 @@ export interface CustodyReconciliation {
   /** Still held by the employee and owed back to the dealership. */
   employeeOwesDealerMinor: number;
   /**
-   * True only when nothing is outstanding in EITHER direction, including an
-   * overpayment. A debt that is owed but unpaid is not settled, and neither is
-   * one that was paid twice.
+   * Returned more than was ever issued — a self-contradictory movement log.
+   *
+   * Surfaced rather than silently folded into the balance, because the two are
+   * not the same claim: money the employee funded themselves is a real debt,
+   * and "these entries cannot both be true" is a data error. Conflating them
+   * makes the module instruct somebody to pay a reimbursement that was never
+   * owed, which is exactly what a reversal of an issuance produced once the
+   * return had already been recorded.
+   */
+  overReturnedMinor: number;
+  /**
+   * True only when nothing is outstanding in ANY direction, including an
+   * overpayment or a contradictory log. A debt that is owed but unpaid is not
+   * settled, one that was paid twice is not settled, and a log that cannot be
+   * true is not something to settle at all.
    */
   reconciled: boolean;
 }
@@ -1083,9 +1095,20 @@ export function reconcileEmployeeCustody(
   assertNonNegativeMinor(input.employeeReturnedMinor, "Amount returned by employee");
   assertNonNegativeMinor(input.alreadyReimbursedMinor, "Amount already reimbursed");
 
+  // Separated BEFORE the balance is computed. Folded in, an over-return looks
+  // identical to the employee having funded the difference themselves — the
+  // engine reports a reimbursement as due, and the caller pays money that was
+  // never owed against a log that cannot be true.
+  const overReturnedMinor = Math.max(
+    0,
+    input.employeeReturnedMinor - input.advanceIssuedMinor
+  );
   const remainingEmployeeBalanceMinor =
     input.advanceIssuedMinor - input.employeeReturnedMinor - input.actualExpensesMinor;
-  const reimbursementIncurredMinor = Math.max(0, -remainingEmployeeBalanceMinor);
+  const reimbursementIncurredMinor = Math.max(
+    0,
+    -remainingEmployeeBalanceMinor - overReturnedMinor
+  );
   const reimbursementOutstandingMinor = Math.max(
     0,
     reimbursementIncurredMinor - input.alreadyReimbursedMinor
@@ -1102,10 +1125,12 @@ export function reconcileEmployeeCustody(
     reimbursementOutstandingMinor,
     reimbursementOverpaidMinor,
     employeeOwesDealerMinor,
+    overReturnedMinor,
     reconciled:
       employeeOwesDealerMinor === 0 &&
       reimbursementOutstandingMinor === 0 &&
-      reimbursementOverpaidMinor === 0,
+      reimbursementOverpaidMinor === 0 &&
+      overReturnedMinor === 0,
   };
 }
 

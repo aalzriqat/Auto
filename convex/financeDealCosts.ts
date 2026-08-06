@@ -4,7 +4,7 @@ import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
+import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { reconcileEmployeeCustody } from "../lib/financingEconomics";
 import {
@@ -99,6 +99,30 @@ async function invalidateClassification(
     accountingClassificationNotes: undefined,
     updatedAt: now,
   });
+}
+
+/**
+ * Refuses to let a CREATE-level caller destroy CONFIRM-level work.
+ *
+ * Reconciling a cost requires `CONFIRM_FINANCE_DISBURSEMENT`, which SALES does
+ * not hold; recording and voting an amount requires only
+ * `CREATE_FINANCE_APPLICATION`, which it does. So without this a salesperson
+ * could overwrite an accountant's checked figure, identity and notes.
+ *
+ * Checked against the role already loaded rather than by calling
+ * `requireTenantAuth` a second time: that helper is not side-effect-free in a
+ * mutation — it writes an impersonation audit row — so re-calling it logged a
+ * second `impersonated-write:` entry naming an operation that never happened.
+ */
+function assertMayUndoReconciliation(
+  auth: { role: Doc<"roles"> },
+  action: string
+): void {
+  if (isSystemOwnerRole(auth.role)) return;
+  if (auth.role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT)) return;
+  throw new ConvexError(
+    `${action} needs the permission to confirm finance disbursements, because somebody has already reconciled it.`
+  );
 }
 
 /** Live cost lines: everything not voided. */
@@ -302,6 +326,19 @@ async function recomputeCustodyTotals(
     add(entry.kind, entry.amountMinor);
   }
 
+  // The invariant, enforced once where every path converges rather than per
+  // movement. Guarding only the RETURNED mutation left the reversal of an
+  // ISSUED entry free to reach the same state from the other side: return the
+  // whole advance, then reverse the issuance, and the log says more came back
+  // than ever went out — after which the module reported a reimbursement due
+  // and instructed somebody to pay it. A throw here rolls the entry insert back
+  // with it, so no path can commit a log that cannot be true.
+  if (returnedMinor > issuedMinor) {
+    throw new ConvexError(
+      `That would leave ${returnedMinor} minor units returned against ${issuedMinor} issued, which cannot both be true. Reverse the return as well, or record the issuance that is missing.`
+    );
+  }
+
   await ctx.db.patch(custodyId, {
     issuedMinor,
     returnedMinor,
@@ -485,9 +522,10 @@ export const recordActualFeeAmount = mutation({
     custodyId: v.optional(v.id("financeDealCustody")),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [
+    const auth = await requireTenantAuth(ctx, args.orgId, [
       PERMISSIONS.CREATE_FINANCE_APPLICATION,
     ]);
+    const user = auth.user;
     const fee = await requireOwnedRow(
       ctx,
       args.orgId,
@@ -499,6 +537,23 @@ export const recordActualFeeAmount = mutation({
       throw new ConvexError("This cost has been voided. Add a new line instead.");
     }
     assertMinorAmount(args.actualAmountMinor, "Actual amount");
+    // The more destructive of the two siblings: voiding preserves the amount
+    // and records a reason, while this replaces the figure, the checker's
+    // identity and their notes outright. Escalating only `voidDealFee` left the
+    // easier route wide open.
+    if (fee.reconciledAt !== undefined) {
+      assertMayUndoReconciliation(auth, "Changing an amount that has been reconciled");
+      await ctx.db.insert("financeApplicationOverrides", {
+        orgId: args.orgId,
+        applicationId: fee.applicationId,
+        field: "financeDealFees.actualAmountMinor",
+        previousValue: `${fee.actualAmountMinor} (reconciled: ${fee.reconciliationNotes ?? "no note"})`,
+        newValue: String(args.actualAmountMinor),
+        reason: "A reconciled cost was re-recorded, withdrawing the reconciliation.",
+        changedBy: user._id,
+        changedAt: Date.now(),
+      });
+    }
 
     let custodyId = fee.custodyId;
     if (args.custodyId) {
@@ -528,6 +583,21 @@ export const recordActualFeeAmount = mutation({
       if (existing) assertCustodyOpen(existing);
     }
 
+    // Replacing the attachments wholesale left the old blobs referenced by
+    // nothing — and both deletion paths enumerate ROWS, so an orphan survives
+    // the org hard-delete and the financial reset alike. `financeAppraisals`,
+    // the only other storage carrier here, is append-only and never hit this.
+    const nextStorageIds = args.documentStorageIds ?? fee.documentStorageIds;
+    if (args.documentStorageIds) {
+      const dropped = (fee.documentStorageIds ?? []).filter(
+        (id) => !args.documentStorageIds!.includes(id)
+      );
+      for (const storageId of dropped) {
+        const metadata = await ctx.db.system.get("_storage", storageId);
+        if (metadata) await ctx.storage.delete(storageId);
+      }
+    }
+
     const parent = await ctx.db.get(fee.applicationId);
     if (parent) {
       await invalidateClassification(
@@ -540,7 +610,7 @@ export const recordActualFeeAmount = mutation({
       actualAmountMinor: args.actualAmountMinor,
       paidAt: args.paidAt ?? fee.paidAt,
       receiptReference: args.receiptReference?.trim() || fee.receiptReference,
-      documentStorageIds: args.documentStorageIds ?? fee.documentStorageIds,
+      documentStorageIds: nextStorageIds,
       custodyId,
       // Changing the amount invalidates the check that was made against the old
       // one. Leaving the reconciliation in place would let an edit slip past
@@ -587,6 +657,14 @@ export const reconcileDealFee = mutation({
         "Record what this cost actually came to before reconciling it. An estimate is not evidence."
       );
     }
+    // Re-reconciling silently replaced the first checker's identity and notes.
+    // Same privilege on both sides, so this is attribution loss rather than
+    // escalation — but the notes are the evidence that anybody looked.
+    if (fee.reconciledAt !== undefined) {
+      throw new ConvexError(
+        "This cost has already been reconciled. Re-record its amount if the figure is wrong; that withdraws the reconciliation."
+      );
+    }
     const notes = args.notes.trim();
     if (!notes) {
       throw new ConvexError("Record what was checked before reconciling this cost.");
@@ -614,9 +692,10 @@ export const voidDealFee = mutation({
     // it removes the amount from every total, which can unbalance a closed
     // custody record and turn a deal that failed the classification gate into
     // one that passes it. CREATE is held by SALES; confirming is not.
-    const { user } = await requireTenantAuth(ctx, args.orgId, [
+    const auth = await requireTenantAuth(ctx, args.orgId, [
       PERMISSIONS.CREATE_FINANCE_APPLICATION,
     ]);
+    const user = auth.user;
     const fee = await requireOwnedRow(
       ctx,
       args.orgId,
@@ -630,7 +709,7 @@ export const voidDealFee = mutation({
     }
     if (fee.voidedAt !== undefined) return args.feeId;
     if (fee.reconciledAt !== undefined) {
-      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
+      assertMayUndoReconciliation(auth, "Removing a cost that has been reconciled");
     }
     if (fee.custodyId) {
       const custody = await ctx.db.get(fee.custodyId);
@@ -997,7 +1076,10 @@ export const reopenDealCustody = mutation({
       orgId: args.orgId,
       applicationId: custody.applicationId,
       field: "financeDealCustody.status",
-      previousValue: custody.status,
+      // The whole of what the patch below erases, not just the status. A
+      // write-off reason is the business justification for a loss the
+      // dealership absorbed; losing it makes that loss unexplainable.
+      previousValue: `${custody.status} (write-off: ${custody.writeOffReason ?? "none"}; notes: ${custody.reconciliationNotes ?? "none"})`,
       newValue: "OPEN",
       reason,
       changedBy: user._id,

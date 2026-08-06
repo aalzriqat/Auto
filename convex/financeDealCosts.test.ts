@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
-import { ALL_PERMISSIONS } from "./utils/permissions";
+import { ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 
 type TestConvex = ConvexTestInstance<typeof schema>;
 type AuthenticatedTestConvex = ReturnType<TestConvex["withIdentity"]>;
@@ -681,6 +681,146 @@ describe("money can only move in directions that are true", () => {
     ).rejects.toThrow(/already been reversed/i);
   });
 
+  test("reversing an issuance cannot leave more returned than was ever issued", async () => {
+    const seed = await seedDeal();
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+      userId: seed.employeeId, issuedMinor: jod(700),
+    });
+    const entryId = await seed.t.run(async (ctx) => {
+      const rows = await ctx.db
+        .query("financeDealCustodyEntries")
+        .withIndex("by_custody", (q) => q.eq("custodyId", custodyId))
+        .collect();
+      return rows[0]._id;
+    });
+    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+      orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: jod(700),
+    });
+
+    // The RETURNED guard is satisfied (700 is not > 700), so reversing the
+    // ISSUED entry reached the same forbidden state from the other side: the
+    // log said more came back than ever went out, and the module then reported
+    // a 700 reimbursement due and instructed somebody to pay it. Guarding one
+    // mutation was not enough; the invariant belongs where the paths converge.
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        orgId: seed.orgId, custodyId, kind: "REVERSAL",
+        reversesEntryId: entryId, amountMinor: jod(700),
+      })
+    ).rejects.toThrow(/cannot both be true/i);
+
+    const costs = await readCosts(seed);
+    expect(costs.custody[0]?.summary.reimbursementOutstandingMinor).toBe(0);
+    expect(costs.custody[0]?.summary.overReturnedMinor).toBe(0);
+  });
+
+  test("a reversal can only cancel a movement on its own custody record", async () => {
+    const seed = await seedDeal();
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+      userId: seed.employeeId, issuedMinor: jod(700),
+    });
+    const otherUserId = await seed.t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "costs_emp2_1", email: "e2@x.com" })
+    );
+    await seed.t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org", (q) => q.eq("orgId", seed.orgId))
+        .first();
+      await ctx.db.insert("memberships", {
+        orgId: seed.orgId, userId: otherUserId, roleId: membership!.roleId,
+      });
+    });
+    const otherCustodyId = await seed.asUser.mutation(
+      api.financeDealCosts.openDealCustody,
+      {
+        orgId: seed.orgId, applicationId: seed.applicationId,
+        userId: otherUserId, issuedMinor: jod(300),
+      }
+    );
+    const otherEntryId = await seed.t.run(async (ctx) => {
+      const rows = await ctx.db
+        .query("financeDealCustodyEntries")
+        .withIndex("by_custody", (q) => q.eq("custodyId", otherCustodyId))
+        .collect();
+      return rows[0]._id;
+    });
+
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        orgId: seed.orgId, custodyId, kind: "REVERSAL",
+        reversesEntryId: otherEntryId, amountMinor: jod(300),
+      })
+    ).rejects.toThrow(/different custody record/i);
+  });
+
+  test("a reversal must cancel the whole movement, and only a reversal may name one", async () => {
+    const seed = await seedDeal();
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+      userId: seed.employeeId, issuedMinor: jod(700),
+    });
+    const entryId = await seed.t.run(async (ctx) => {
+      const rows = await ctx.db
+        .query("financeDealCustodyEntries")
+        .withIndex("by_custody", (q) => q.eq("custodyId", custodyId))
+        .collect();
+      return rows[0]._id;
+    });
+
+    // A partial reversal would leave the record asserting an issuance that
+    // never happened at an amount nobody chose.
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        orgId: seed.orgId, custodyId, kind: "REVERSAL",
+        reversesEntryId: entryId, amountMinor: jod(300),
+      })
+    ).rejects.toThrow(/whole movement/i);
+
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        orgId: seed.orgId, custodyId, kind: "RETURNED",
+        reversesEntryId: entryId, amountMinor: jod(100),
+      })
+    ).rejects.toThrow(/Only a reversal/i);
+
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        orgId: seed.orgId, custodyId, kind: "REVERSAL", amountMinor: jod(700),
+      })
+    ).rejects.toThrow(/which movement this reverses/i);
+  });
+
+  test("replacing a cost's receipts deletes the ones it drops", async () => {
+    const seed = await seedDeal();
+    const first = await seed.t.run((ctx) => ctx.storage.store(new Blob(["receipt-a"])));
+    const second = await seed.t.run((ctx) => ctx.storage.store(new Blob(["receipt-b"])));
+
+    const feeId = await seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
+      orgId: seed.orgId,
+      applicationId: seed.applicationId,
+      feeType: "LICENSING",
+      paidBy: "DEALER",
+      paidTo: "GOVERNMENT",
+      accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+      actualAmountMinor: jod(120),
+      documentStorageIds: [first],
+    });
+
+    // Both deletion paths enumerate ROWS, so a blob dropped from the array is
+    // referenced by nothing and survives the org hard-delete and the financial
+    // reset alike.
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+      orgId: seed.orgId, feeId, actualAmountMinor: jod(137),
+      documentStorageIds: [second],
+    });
+
+    expect(await seed.t.run((ctx) => ctx.storage.getUrl(first))).toBeNull();
+    expect(await seed.t.run((ctx) => ctx.storage.getUrl(second))).not.toBeNull();
+  });
+
   test("custody cannot be issued to yourself", async () => {
     const seed = await seedDeal();
     await expect(
@@ -689,6 +829,125 @@ describe("money can only move in directions that are true", () => {
         userId: seed.userId, issuedMinor: jod(700),
       })
     ).rejects.toThrow(/other than the person receiving it/i);
+  });
+});
+
+describe("reconciled work is not destroyable from below", () => {
+  /** A member holding the SALES template: CREATE but not CONFIRM. */
+  async function addSalesMember(seed: Seed): Promise<AuthenticatedTestConvex> {
+    const template = DEFAULT_ROLE_TEMPLATES.find((r) => r.name === "SALES");
+    if (!template) throw new Error("SALES template missing");
+    await seed.t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", {
+        clerkId: "costs_sales_1",
+        email: "sales@x.com",
+      });
+      const roleId = await ctx.db.insert("roles", {
+        orgId: seed.orgId,
+        name: "SALES",
+        permissions: [...template.permissions],
+      });
+      await ctx.db.insert("memberships", { orgId: seed.orgId, userId, roleId });
+    });
+    return seed.t.withIdentity({ subject: "costs_sales_1" });
+  }
+
+  test("a salesperson cannot overwrite an accountant's reconciled figure", async () => {
+    const seed = await seedDeal();
+    const asSales = await addSalesMember(seed);
+    const feeId = await addFee(seed, { actualAmountMinor: jod(750) });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: seed.orgId, feeId, notes: "Matched receipt #4471.",
+    });
+
+    // Re-recording the amount is the MORE destructive of the two routes:
+    // voiding preserves the figure and records a reason, this replaces the
+    // figure, the checker's identity and their notes outright. Escalating only
+    // the void left the easier door open.
+    await expect(
+      asSales.mutation(api.financeDealCosts.recordActualFeeAmount, {
+        orgId: seed.orgId, feeId, actualAmountMinor: jod(300),
+      })
+    ).rejects.toThrow(/confirm finance disbursements/i);
+    await expect(
+      asSales.mutation(api.financeDealCosts.voidDealFee, {
+        orgId: seed.orgId, feeId, reason: "Not needed.",
+      })
+    ).rejects.toThrow(/confirm finance disbursements/i);
+
+    const costs = await readCosts(seed);
+    expect(costs.fees[0]?.actualAmountMinor).toBe(jod(750));
+    expect(costs.fees[0]?.reconciliationNotes).toBe("Matched receipt #4471.");
+  });
+
+  test("re-recording a reconciled amount is audited, not silent", async () => {
+    const seed = await seedDeal();
+    const feeId = await addFee(seed, { actualAmountMinor: jod(750) });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: seed.orgId, feeId, notes: "Matched receipt #4471.",
+    });
+
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+      orgId: seed.orgId, feeId, actualAmountMinor: jod(770),
+    });
+
+    const overrides = await seed.t.run((ctx) =>
+      ctx.db
+        .query("financeApplicationOverrides")
+        .withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId))
+        .collect()
+    );
+    const row = overrides.find((o) => o.field === "financeDealFees.actualAmountMinor");
+    expect(row?.previousValue).toContain(String(jod(750)));
+    expect(row?.previousValue).toContain("#4471");
+  });
+
+  test("a cost cannot be reconciled twice, erasing who checked it first", async () => {
+    const seed = await seedDeal();
+    const feeId = await addFee(seed, { actualAmountMinor: jod(750) });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: seed.orgId, feeId, notes: "Matched receipt #4471.",
+    });
+
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
+        orgId: seed.orgId, feeId, notes: "ok",
+      })
+    ).rejects.toThrow(/already been reconciled/i);
+    expect((await readCosts(seed)).fees[0]?.reconciliationNotes).toBe(
+      "Matched receipt #4471."
+    );
+  });
+
+  test("reopening a written-off record keeps the reason the loss was accepted for", async () => {
+    const seed = await seedDeal();
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+      userId: seed.employeeId, issuedMinor: jod(700),
+    });
+    await addFee(seed, { actualAmountMinor: jod(600), paidBy: "EMPLOYEE", custodyId });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+      orgId: seed.orgId, custodyId,
+      notes: "Receipts 4471, 4472 checked against the till.",
+      writeOffReason: "100 JOD shortfall absorbed per manager approval.",
+    });
+
+    await seed.asUser.mutation(api.financeDealCosts.reopenDealCustody, {
+      orgId: seed.orgId, custodyId, reason: "A late receipt turned up.",
+    });
+
+    // The patch clears four fields. Without a snapshot, the justification for a
+    // loss the dealership absorbed becomes unrecoverable.
+    const overrides = await seed.t.run((ctx) =>
+      ctx.db
+        .query("financeApplicationOverrides")
+        .withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId))
+        .collect()
+    );
+    const row = overrides.find((o) => o.field === "financeDealCustody.status");
+    expect(row?.previousValue).toContain("WRITTEN_OFF");
+    expect(row?.previousValue).toContain("manager approval");
+    expect(row?.previousValue).toContain("4471");
   });
 });
 
