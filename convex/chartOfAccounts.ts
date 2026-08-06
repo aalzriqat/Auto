@@ -416,6 +416,24 @@ export async function ensureSaleFiAccounts(
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.FI_COMMISSION_REVENUE, "4160");
 }
 
+/**
+ * The three accounts a consigned (agent-basis) sale posts to.
+ *
+ * Self-heal for every org whose chart was initialized before agent accounting
+ * existed — which is all of them. Without this the posting engine would fail to
+ * resolve the system key on the first sourced sale after deploy, and the sale
+ * would be refused for a reason that has nothing to do with the sale.
+ */
+export async function ensureConsignmentAccounts(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, "1230");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.SUPPLIER_PROCEEDS_CLEARING, "2130");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, "4170");
+}
+
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
 export const list = query({

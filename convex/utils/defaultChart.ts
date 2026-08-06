@@ -5,6 +5,9 @@ export const SYSTEM_KEYS = {
   VAT_RECEIVABLE: "VAT_RECEIVABLE",
   ACCOUNTS_RECEIVABLE_CUSTOMERS: "ACCOUNTS_RECEIVABLE_CUSTOMERS",
   ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES",
+  RECEIVABLE_FROM_SUPPLIERS: "RECEIVABLE_FROM_SUPPLIERS",
+  SUPPLIER_PROCEEDS_CLEARING: "SUPPLIER_PROCEEDS_CLEARING",
+  CONSIGNMENT_COMMISSION_REVENUE: "CONSIGNMENT_COMMISSION_REVENUE",
   UNAPPLIED_CUSTOMER_CASH: "UNAPPLIED_CUSTOMER_CASH",
   CUSTOMER_DEPOSITS_LIABILITY: "CUSTOMER_DEPOSITS_LIABILITY",
   CHEQUES_IN_HAND: "CHEQUES_IN_HAND",
@@ -137,6 +140,34 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: true,
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES,
+  },
+  {
+    // What a supplier owes the dealership on a consigned sale he collected in
+    // full. Not AR-Customers: the customer owes nothing here, and not
+    // AP-Suppliers netted down, because a receivable and a payable to the same
+    // party are different balances that happen to face the same person.
+    code: "1230",
+    name: "Receivable from Suppliers",
+    nameAr: "ذمم مدينة - الموردين",
+    type: "ASSET",
+    normalBalance: "DEBIT",
+    isControlAccount: false,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS,
+  },
+  {
+    // Gross proceeds the dealership collects on the supplier's behalf when the
+    // money routes through its account instead of straight to him. Money held
+    // for somebody else is not revenue and not the dealership's cash to spend;
+    // it sits here until it is remitted.
+    code: "2130",
+    name: "Supplier Proceeds Clearing",
+    nameAr: "حساب وسيط - متحصلات الموردين",
+    type: "LIABILITY",
+    normalBalance: "CREDIT",
+    isControlAccount: false,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.SUPPLIER_PROCEEDS_CLEARING,
   },
   {
     code: "1220",
@@ -377,6 +408,22 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: false,
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.FI_COMMISSION_REVENUE,
+  },
+  {
+    // A consigned vehicle is legally the supplier's; the dealership sells it on
+    // his behalf and earns the spread over his entitlement. That spread is the
+    // ONLY revenue such a sale may recognize, and it is kept out of
+    // SALES_REVENUE deliberately: turnover reports must be able to exclude the
+    // gross transaction value of cars the dealership never owned. Posting it to
+    // 4100 would make the two indistinguishable forever.
+    code: "4170",
+    name: "Consignment Commission Revenue",
+    nameAr: "إيرادات عمولة البيع بالأمانة",
+    type: "REVENUE",
+    normalBalance: "CREDIT",
+    isControlAccount: false,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE,
   },
   {
     code: "4200",

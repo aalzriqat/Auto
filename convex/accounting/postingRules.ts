@@ -170,6 +170,22 @@ export interface SaleCompletedPayload {
   taxMinor?: number;
   /** When true the vehicle was sourced from another dealer; credits AP-Suppliers instead of Vehicle Inventory for COGS. */
   isSourced?: boolean;
+  /**
+   * Present when the vehicle is legally the supplier's and the dealership sold
+   * it as his agent. Its presence switches this rule to agent basis entirely:
+   * commission on the spread, no vehicle revenue, no COGS, no inventory.
+   *
+   * `settlementRoute` says where the buyer's money went. DIRECT_TO_SUPPLIER
+   * means the dealership never touched it and simply holds a claim for its
+   * margin. THROUGH_DEALERSHIP means gross landed in the dealership's account
+   * on the supplier's behalf, so the supplier's share is a liability from the
+   * moment it arrives — never revenue in transit.
+   */
+  consignment?: {
+    supplierEntitlementMinor: number;
+    supplierName?: string;
+    settlementRoute: "DIRECT_TO_SUPPLIER" | "THROUGH_DEALERSHIP";
+  };
   /** Documentation/admin fees charged on top of the vehicle price — added to the AR debit, credited to Dealer Fee Income. */
   dealerFeesMinor?: number;
   /**
@@ -396,7 +412,87 @@ function addResoldProductLines(
   }
 }
 
+/**
+ * A consigned vehicle sold as the supplier's agent.
+ *
+ * The dealership never owned the car, never invoiced the buyer for it, and may
+ * recognize only the spread over the supplier's entitlement. Booking the gross
+ * as revenue with the entitlement as COGS reaches the same bottom line — which
+ * is exactly why it survived so long — but it inflates turnover, cost of sales,
+ * receivables and payables by the supplier's share, and puts a car the
+ * dealership never owned through its inventory.
+ */
+function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
+  const consignment = p.consignment!;
+  const entitlementMinor = consignment.supplierEntitlementMinor;
+  const marginMinor = p.saleAmountMinor - entitlementMinor;
+  const dims = { customerId: p.customerId, vehicleId: p.vehicleId, salespersonId: p.salespersonId };
+  const supplier = consignment.supplierName ?? "supplier";
+
+  // Fail closed. A negative margin means the car sold for less than the
+  // supplier is owed, which is a real situation but not one this rule may
+  // guess at — posting a negative commission would misstate revenue and hide
+  // a loss the dealership has to fund. It needs a decision, not a default.
+  if (marginMinor < 0) {
+    throw new Error(
+      `Consigned sale ${p.saleId} is ${Math.abs(marginMinor)} minor units below the supplier's entitlement of ${entitlementMinor}. Record the shortfall against the supplier agreement before completing the sale.`
+    );
+  }
+
+  const lines: LineSpec[] =
+    consignment.settlementRoute === "DIRECT_TO_SUPPLIER"
+      ? [
+          // The buyer paid the supplier. Nothing gross ever reaches these
+          // books; the only asset is the margin he now owes back.
+          line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, marginMinor, 0, `Commission due from ${supplier}`, dims),
+          line(SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, marginMinor, "Consignment commission earned", dims),
+        ]
+      : [
+          // Gross landed here on his behalf: an asset for the whole amount, of
+          // which his share is a liability from the instant it arrives.
+          line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, p.saleAmountMinor, 0, "Consigned sale proceeds receivable", dims),
+          line(SYSTEM_KEYS.SUPPLIER_PROCEEDS_CLEARING, 0, entitlementMinor, `Held for ${supplier}`, dims),
+          line(SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, marginMinor, "Consignment commission earned", dims),
+        ];
+
+  // Dealer fees and F&I products are the dealership's own income on its own
+  // services, not the supplier's car — they are unaffected by who owned it.
+  const dealerFeesMinor = p.dealerFeesMinor && p.dealerFeesMinor > 0 ? p.dealerFeesMinor : 0;
+  if (dealerFeesMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, dealerFeesMinor, 0, "Dealer fees receivable", dims));
+    lines.push(line(SYSTEM_KEYS.DEALER_FEE_INCOME, 0, dealerFeesMinor, "Dealer fee income", dims));
+  }
+  const warrantySoldMinor = p.warrantySoldMinor && p.warrantySoldMinor > 0 ? p.warrantySoldMinor : 0;
+  if (warrantySoldMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, warrantySoldMinor, 0, "Warranty receivable", dims));
+    addResoldProductLines(lines, warrantySoldMinor, p.warrantyCostMinor ?? 0, "Warranty", dims);
+  }
+  const gapSoldMinor = p.gapSoldMinor && p.gapSoldMinor > 0 ? p.gapSoldMinor : 0;
+  if (gapSoldMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, gapSoldMinor, 0, "GAP receivable", dims));
+    addResoldProductLines(lines, gapSoldMinor, p.gapCostMinor ?? 0, "GAP", dims);
+  }
+
+  return { lines, memo: `Consigned vehicle sold as agent for ${supplier}`, category: "SYSTEM" };
+}
+
 export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
+  // Agent basis is a different rule, not a variation of this one — every line
+  // below assumes the dealership owned what it sold.
+  if (p.consignment) return consignedAgentSaleLines(p);
+
+  // Fail closed, and loudly. A sourced vehicle is the supplier's, so reaching
+  // the principal branch without consignment details means the caller is about
+  // to book revenue on a car the dealership never owned and relieve inventory
+  // it never held. Silence here is what put every historical sourced sale on
+  // the books at gross — see convex/sourcedAgentImpact.ts. Converting the car
+  // to owned stock is the other legitimate answer, and it has to be done on
+  // purpose rather than implied by a missing field.
+  if (p.isSourced) {
+    throw new Error(
+      `Sale ${p.saleId} is of a sourced vehicle, which is legally the supplier's. Post it on agent basis with the supplier's entitlement, or convert the vehicle to dealer-owned stock first — it cannot be posted as an owned sale.`
+    );
+  }
   const revenueMinor = p.taxMinor ? p.saleAmountMinor - p.taxMinor : p.saleAmountMinor;
   const dims = { customerId: p.customerId, vehicleId: p.vehicleId, salespersonId: p.salespersonId };
   const dealerFeesMinor = p.dealerFeesMinor && p.dealerFeesMinor > 0 ? p.dealerFeesMinor : 0;

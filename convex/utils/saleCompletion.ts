@@ -318,6 +318,36 @@ async function applySaleCompletionSideEffects(
   }
   const gapCostMinor = args.gapCost && args.gapCost > 0 ? toMinorUnits(args.gapCost, prepared.currency) : undefined;
 
+  // A sourced vehicle is legally the supplier's, so this sale is an agency
+  // sale: the dealership may recognize the spread over his entitlement and
+  // nothing more. `sourceCost` IS that entitlement — it is the figure the
+  // dealership agreed he gets, and the same figure the old principal posting
+  // was already crediting to AP-Suppliers.
+  //
+  // Absent, there is no entitlement to net against and therefore no margin.
+  // Posting anyway would either claim the whole transaction as the
+  // dealership's or invent a cost; both misstate revenue on a car it never
+  // owned, so the sale stops here rather than guessing.
+  const consignment = isSourced
+    ? (() => {
+        if (costMinor === undefined || costMinor <= 0) {
+          throw new ConvexError(
+            "This vehicle is sourced, so it belongs to the supplier and the sale is an agency sale — but no supplier cost is recorded, so the dealership's margin cannot be determined. Record the agreed supplier amount, or convert the vehicle to dealer-owned stock first."
+          );
+        }
+        return {
+          supplierEntitlementMinor: costMinor,
+          supplierName: prepared.vehicle.sourcedFromName,
+          // The dealership raises the invoice and collects, so gross runs
+          // through its books and the supplier's share is a liability until
+          // remitted. Where the buyer pays the supplier directly the route is
+          // DIRECT_TO_SUPPLIER; that is a per-agreement fact and gets its own
+          // recorded value once supplier settlement records land.
+          settlementRoute: "THROUGH_DEALERSHIP" as const,
+        };
+      })()
+    : undefined;
+
   await hookSaleCompleted(ctx, {
     orgId: args.orgId,
     saleId,
@@ -331,6 +361,10 @@ async function applySaleCompletionSideEffects(
     actorId: args.actorId,
     occurredAt: args.saleDate,
     isSourced,
+    consignment,
+    // Agent basis relieves no inventory and books no COGS — the dealership
+    // never held this car. Passing the cost through would post both.
+    ...(consignment ? { costMinor: undefined } : {}),
     dealerFeesMinor,
     warrantySoldMinor,
     warrantyCostMinor,

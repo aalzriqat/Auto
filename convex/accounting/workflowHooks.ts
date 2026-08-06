@@ -15,7 +15,7 @@ import { postAccountingEvent, PostCommand } from "./postingEngine";
 import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
-import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts } from "../chartOfAccounts";
+import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureConsignmentAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
   enqueuePendingReversal,
@@ -307,6 +307,12 @@ export async function hookSaleCompleted(
     occurredAt: number;
     /** Pass true for drop-shipped vehicles — credits AP-Suppliers instead of Vehicle Inventory for COGS. */
     isSourced?: boolean;
+    /** Present when the vehicle is the supplier's and this sale is on agent basis — see SaleCompletedPayload. */
+    consignment?: {
+      supplierEntitlementMinor: number;
+      supplierName?: string;
+      settlementRoute: "DIRECT_TO_SUPPLIER" | "THROUGH_DEALERSHIP";
+    };
     /** Documentation/admin fees on top of the vehicle price — added to the AR debit, credited to Dealer Fee Income. */
     dealerFeesMinor?: number;
     /** Warranty/GAP premium collected and the portion owed to the third-party underwriter — see SaleCompletedPayload. */
@@ -323,6 +329,11 @@ export async function hookSaleCompleted(
     if (await isChartInitialized(ctx, args.orgId)) {
       await ensureSaleFiAccounts(ctx, args.orgId, args.actorId);
     }
+  }
+  // Every existing org's chart predates agent accounting, so the first sourced
+  // sale after deploy would otherwise fail to resolve these three keys.
+  if (args.consignment && (await isChartInitialized(ctx, args.orgId))) {
+    await ensureConsignmentAccounts(ctx, args.orgId, args.actorId);
   }
   await postDomainEvent(ctx, {
     orgId: args.orgId,
@@ -343,6 +354,7 @@ export async function hookSaleCompleted(
       salespersonId: args.salespersonId.toString(),
       taxMinor: args.taxMinor,
       isSourced: args.isSourced ?? false,
+      ...(args.consignment ? { consignment: args.consignment } : {}),
       dealerFeesMinor: args.dealerFeesMinor,
       warrantySoldMinor: args.warrantySoldMinor,
       warrantyCostMinor: args.warrantyCostMinor,
