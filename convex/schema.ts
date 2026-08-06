@@ -2057,6 +2057,11 @@ export default defineSchema({
    * expenses leaves the dealership owing the employee 50. Collapsing those into
    * one unsigned "variance" is how a reimbursement silently becomes a shortage.
    *
+   * `reimbursedMinor` is what has actually been paid back, and the engine nets
+   * it so a caller reads what is still OUTSTANDING rather than what was
+   * incurred — a figure named "due" that does not move after payment is a
+   * double payment waiting to happen.
+   *
    * Note what is deliberately NOT stored: the employee's own money. It is not
    * independent information — it is exactly the amount by which expenses exceed
    * what they were given and did not return — and holding it as its own figure
@@ -2112,8 +2117,19 @@ export default defineSchema({
     kind: v.union(
       v.literal("ISSUED"),
       v.literal("RETURNED"),
-      v.literal("REIMBURSED")
+      v.literal("REIMBURSED"),
+      /**
+       * Cancels an earlier entry, netted against that entry's own kind.
+       *
+       * Without it the documented "correct it with another entry" workflow
+       * could only be performed by recording something untrue: a mistyped
+       * ISSUED of 7,000 could be offset only by a RETURNED of 6,300, asserting
+       * as fact that the employee handed back cash they never received.
+       */
+      v.literal("REVERSAL")
     ),
+    /** Required on a REVERSAL, forbidden otherwise. */
+    reversesEntryId: v.optional(v.id("financeDealCustodyEntries")),
     amountMinor: v.number(),
     method: v.optional(
       v.union(

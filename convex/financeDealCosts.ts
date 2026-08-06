@@ -43,6 +43,64 @@ const APPLICATION_NOT_FOUND = "Finance application not found in this organizatio
 const CUSTODY_NOT_FOUND = "Custody record not found in this organization.";
 const FEE_NOT_FOUND = "Deal cost not found in this organization.";
 
+/**
+ * Refuses to change anything a closed custody record was balanced against.
+ *
+ * Closing is a claim that the money is accounted for. Nothing froze the fee
+ * lines that determine that, so a late receipt recorded afterwards left the
+ * record stored as RECONCILED while the arithmetic said the employee was out of
+ * pocket — and `recordCustodyMovement` then refused the reimbursement, its
+ * error naming a `reopenDealCustody` mutation that did not exist. Reopen it
+ * deliberately instead.
+ */
+function assertCustodyOpen(custody: Doc<"financeDealCustody">): void {
+  if (custody.status !== "OPEN") {
+    throw new ConvexError(
+      "This custody record is closed. Reopen it before changing the costs it was balanced against."
+    );
+  }
+}
+
+/**
+ * Withdraws a deal's accounting classification when its basis changes.
+ *
+ * CLASSIFIED means somebody established the treatment against a specific set of
+ * costs, custody balances and an invoice. Nothing re-checked it afterwards, so
+ * adding an unquantified cost — or editing the invoice figure the treatment was
+ * granted on — left a deal reading as settled while its own summary said
+ * otherwise. This flag exists to be the gate a posting design reads; a gate
+ * that silently stops representing its precondition is the whole hazard.
+ *
+ * Withdrawn with a row rather than silently: it is a human judgement, and
+ * losing the fact that it was made and then invalidated is losing the audit.
+ */
+async function invalidateClassification(
+  ctx: MutationCtx,
+  app: Doc<"financeApplications">,
+  actorId: Id<"users">,
+  because: string
+): Promise<void> {
+  if (app.accountingClassification !== "CLASSIFIED") return;
+  const now = Date.now();
+  await ctx.db.insert("financeApplicationOverrides", {
+    orgId: app.orgId,
+    applicationId: app._id,
+    field: "accountingClassification",
+    previousValue: "CLASSIFIED",
+    newValue: "PENDING_CLASSIFICATION",
+    reason: because,
+    changedBy: actorId,
+    changedAt: now,
+  });
+  await ctx.db.patch(app._id, {
+    accountingClassification: "PENDING_CLASSIFICATION",
+    accountingClassifiedBy: undefined,
+    accountingClassifiedAt: undefined,
+    accountingClassificationNotes: undefined,
+    updatedAt: now,
+  });
+}
+
 /** Live cost lines: everything not voided. */
 async function activeFeesFor(
   ctx: QueryCtx | MutationCtx,
@@ -103,6 +161,10 @@ export function summarizeFees(fees: Array<Doc<"financeDealFees">>) {
   let linesAwaitingReconciliation = 0;
 
   for (const fee of fees) {
+    // Belt as well as braces. Every caller filters first, but this function is
+    // exported — and the first caller that passes raw rows would sum voided
+    // actuals into the total and count voided lines as awaiting one.
+    if (fee.voidedAt !== undefined) continue;
     if (fee.estimatedAmountMinor !== undefined) {
       estimatedTotalMinor += fee.estimatedAmountMinor;
     }
@@ -119,8 +181,9 @@ export function summarizeFees(fees: Array<Doc<"financeDealFees">>) {
     }
   }
 
+  const liveCount = fees.filter((fee) => fee.voidedAt === undefined).length;
   return {
-    lineCount: fees.length,
+    lineCount: liveCount,
     estimatedTotalMinor,
     actualTotalMinor,
     /** What the dealership itself ended up out of pocket, on recorded actuals only. */
@@ -128,7 +191,8 @@ export function summarizeFees(fees: Array<Doc<"financeDealFees">>) {
     linesAwaitingActual,
     linesAwaitingReconciliation,
     /** True only when every line has a checked actual. Estimates never satisfy this. */
-    fullyReconciled: fees.length > 0 && linesAwaitingActual === 0 && linesAwaitingReconciliation === 0,
+    fullyReconciled:
+      liveCount > 0 && linesAwaitingActual === 0 && linesAwaitingReconciliation === 0,
   };
 }
 
@@ -148,20 +212,17 @@ export function summarizeCustody(
     advanceIssuedMinor: custody.issuedMinor,
     actualExpensesMinor,
     employeeReturnedMinor: custody.returnedMinor,
+    alreadyReimbursedMinor: custody.reimbursedMinor,
   });
-
-  const outstandingReimbursementMinor = Math.max(
-    0,
-    reconciliation.dealerReimbursementDueMinor - custody.reimbursedMinor
-  );
 
   return {
     ...reconciliation,
     actualExpensesMinor,
     reimbursedMinor: custody.reimbursedMinor,
-    outstandingReimbursementMinor,
-    settled:
-      reconciliation.employeeOwesDealerMinor === 0 && outstandingReimbursementMinor === 0,
+    // The engine decides `reconciled` across all three directions — money still
+    // held, money still owed, and money paid twice. Recomputing it here is how
+    // the two would drift.
+    settled: reconciliation.reconciled,
   };
 }
 
@@ -196,13 +257,49 @@ async function recomputeCustodyTotals(
     .withIndex("by_custody", (q) => q.eq("custodyId", custodyId))
     .collect();
 
+  const reversedIds = new Set(
+    entries
+      .filter((entry) => entry.kind === "REVERSAL" && entry.reversesEntryId)
+      .map((entry) => entry.reversesEntryId!)
+  );
+
   let issuedMinor = 0;
   let returnedMinor = 0;
   let reimbursedMinor = 0;
+  const add = (kind: Doc<"financeDealCustodyEntries">["kind"], amount: number): void => {
+    // No `else` fallback. A future kind falling through to "reimbursed" would
+    // inflate what the dealership has paid back, drive the outstanding figure
+    // to zero and report the record settled — the "unknown treated as fine"
+    // shape, with the compiler silent because `else` accepts anything.
+    switch (kind) {
+      case "ISSUED":
+        issuedMinor += amount;
+        return;
+      case "RETURNED":
+        returnedMinor += amount;
+        return;
+      case "REIMBURSED":
+        reimbursedMinor += amount;
+        return;
+      case "REVERSAL":
+        return;
+      default: {
+        const unhandled: never = kind;
+        throw new ConvexError(
+          `Unhandled custody entry kind ${String(unhandled)}. Its effect on the balance has to be stated explicitly.`
+        );
+      }
+    }
+  };
+
   for (const entry of entries) {
-    if (entry.kind === "ISSUED") issuedMinor += entry.amountMinor;
-    else if (entry.kind === "RETURNED") returnedMinor += entry.amountMinor;
-    else reimbursedMinor += entry.amountMinor;
+    // A reversal and the entry it cancels contribute nothing between them, so
+    // both are skipped rather than one being subtracted from the other —
+    // netting a negative AND skipping the target applied the correction twice.
+    // Both rows stay in the table; only their effect on the totals is removed.
+    if (entry.kind === "REVERSAL") continue;
+    if (reversedIds.has(entry._id)) continue;
+    add(entry.kind, entry.amountMinor);
   }
 
   await ctx.db.patch(custodyId, {
@@ -282,6 +379,7 @@ export const recordDealFee = mutation({
     custodyId: v.optional(v.id("financeDealCustody")),
     paidAt: v.optional(v.number()),
     receiptReference: v.optional(v.string()),
+    documentStorageIds: v.optional(v.array(v.id("_storage"))),
     source: v.optional(v.union(v.literal("COMPANY_TEMPLATE"), v.literal("MANUAL"))),
   },
   handler: async (ctx, args) => {
@@ -321,8 +419,24 @@ export const recordDealFee = mutation({
       if (custody.applicationId !== args.applicationId) {
         throw new ConvexError("That custody record belongs to a different deal.");
       }
+      assertCustodyOpen(custody);
+      // F3: the custody balance is "what this person spent of the money they
+      // hold". Charging it for a cost somebody ELSE paid drives that balance to
+      // zero while the cash is still in their pocket, and the record then
+      // reconciles and closes clean. An obvious mis-click once a UI offers the
+      // deal's custody in a dropdown.
+      if (args.paidBy !== "EMPLOYEE") {
+        throw new ConvexError(
+          "A cost charged to an employee's custody must be recorded as paid by that employee. Remove the custody link, or record who actually paid."
+        );
+      }
       custodyId = custody._id;
     }
+
+    await invalidateClassification(
+      ctx, app, user._id,
+      "A new cost was added to the deal after its accounting was classified."
+    );
 
     const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
     const now = Date.now();
@@ -343,6 +457,7 @@ export const recordDealFee = mutation({
       custodyId,
       paidAt: args.paidAt,
       receiptReference: args.receiptReference?.trim() || undefined,
+      documentStorageIds: args.documentStorageIds,
       source: args.source ?? "MANUAL",
       createdBy: user._id,
       createdAt: now,
@@ -366,10 +481,13 @@ export const recordActualFeeAmount = mutation({
     actualAmountMinor: v.number(),
     paidAt: v.optional(v.number()),
     receiptReference: v.optional(v.string()),
+    documentStorageIds: v.optional(v.array(v.id("_storage"))),
     custodyId: v.optional(v.id("financeDealCustody")),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_FINANCE_APPLICATION]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.CREATE_FINANCE_APPLICATION,
+    ]);
     const fee = await requireOwnedRow(
       ctx,
       args.orgId,
@@ -394,13 +512,35 @@ export const recordActualFeeAmount = mutation({
       if (custody.applicationId !== fee.applicationId) {
         throw new ConvexError("That custody record belongs to a different deal.");
       }
+      assertCustodyOpen(custody);
+      if (fee.paidBy !== "EMPLOYEE") {
+        throw new ConvexError(
+          "A cost charged to an employee's custody must be recorded as paid by that employee."
+        );
+      }
       custodyId = custody._id;
+    }
+    // Editing the amount on a line that a CLOSED custody record was balanced
+    // against would leave that record permanently wrong with no way to correct
+    // it — `recordCustodyMovement` refuses once it is closed.
+    if (fee.custodyId) {
+      const existing = await ctx.db.get(fee.custodyId);
+      if (existing) assertCustodyOpen(existing);
+    }
+
+    const parent = await ctx.db.get(fee.applicationId);
+    if (parent) {
+      await invalidateClassification(
+        ctx, parent, user._id,
+        "A recorded cost was changed after the deal's accounting was classified."
+      );
     }
 
     await ctx.db.patch(args.feeId, {
       actualAmountMinor: args.actualAmountMinor,
       paidAt: args.paidAt ?? fee.paidAt,
       receiptReference: args.receiptReference?.trim() || fee.receiptReference,
+      documentStorageIds: args.documentStorageIds ?? fee.documentStorageIds,
       custodyId,
       // Changing the amount invalidates the check that was made against the old
       // one. Leaving the reconciliation in place would let an edit slip past
@@ -470,6 +610,10 @@ export const voidDealFee = mutation({
     reason: v.string(),
   },
   handler: async (ctx, args) => {
+    // Voiding a RECONCILED line destroys work done under a higher permission —
+    // it removes the amount from every total, which can unbalance a closed
+    // custody record and turn a deal that failed the classification gate into
+    // one that passes it. CREATE is held by SALES; confirming is not.
     const { user } = await requireTenantAuth(ctx, args.orgId, [
       PERMISSIONS.CREATE_FINANCE_APPLICATION,
     ]);
@@ -480,10 +624,25 @@ export const voidDealFee = mutation({
       args.feeId,
       FEE_NOT_FOUND
     );
-    if (fee.voidedAt !== undefined) return args.feeId;
     const reason = args.reason.trim();
     if (!reason) {
       throw new ConvexError("Say why this cost is being removed.");
+    }
+    if (fee.voidedAt !== undefined) return args.feeId;
+    if (fee.reconciledAt !== undefined) {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
+    }
+    if (fee.custodyId) {
+      const custody = await ctx.db.get(fee.custodyId);
+      if (custody) assertCustodyOpen(custody);
+    }
+
+    const voidParent = await ctx.db.get(fee.applicationId);
+    if (voidParent) {
+      await invalidateClassification(
+        ctx, voidParent, user._id,
+        "A cost was removed from the deal after its accounting was classified."
+      );
     }
 
     await ctx.db.patch(args.feeId, {
@@ -551,6 +710,16 @@ export const openDealCustody = mutation({
       throw new ConvexError("That person is not a member of this organization.");
     }
 
+    // The sole record of cash handed to a person. Letting the same someone
+    // issue it to themselves, reimburse themselves and close the record is an
+    // uncontrolled loop around the one control this table provides — the same
+    // separation the approval path already enforces.
+    if (args.userId === user._id) {
+      throw new ConvexError(
+        "Custody has to be issued by somebody other than the person receiving it."
+      );
+    }
+
     const existing = (await custodyFor(ctx, args.applicationId)).find(
       (row) => row.userId === args.userId && row.status === "OPEN"
     );
@@ -559,6 +728,11 @@ export const openDealCustody = mutation({
         "This person already holds an open custody record on this deal. Record the money against that one."
       );
     }
+
+    await invalidateClassification(
+      ctx, app, user._id,
+      "Custody was opened on the deal after its accounting was classified."
+    );
 
     const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
     const now = Date.now();
@@ -607,8 +781,11 @@ export const recordCustodyMovement = mutation({
     kind: v.union(
       v.literal("ISSUED"),
       v.literal("RETURNED"),
-      v.literal("REIMBURSED")
+      v.literal("REIMBURSED"),
+      v.literal("REVERSAL")
     ),
+    /** Required on a REVERSAL, rejected otherwise. */
+    reversesEntryId: v.optional(v.id("financeDealCustodyEntries")),
     amountMinor: v.number(),
     method: v.optional(
       v.union(
@@ -643,11 +820,57 @@ export const recordCustodyMovement = mutation({
       throw new ConvexError("The amount must be greater than zero.");
     }
 
+    if (args.kind === "REVERSAL") {
+      if (!args.reversesEntryId) {
+        throw new ConvexError("Say which movement this reverses.");
+      }
+      const target = await requireOwnedRow(
+        ctx,
+        args.orgId,
+        "financeDealCustodyEntries",
+        args.reversesEntryId,
+        "That movement was not found in this organization."
+      );
+      if (target.custodyId !== args.custodyId) {
+        throw new ConvexError("That movement belongs to a different custody record.");
+      }
+      if (target.kind === "REVERSAL") {
+        throw new ConvexError("A reversal cannot itself be reversed. Record the movement again.");
+      }
+      if (target.amountMinor !== args.amountMinor) {
+        throw new ConvexError(
+          `A reversal must cancel the whole movement. That one was ${target.amountMinor} minor units.`
+        );
+      }
+      const already = await ctx.db
+        .query("financeDealCustodyEntries")
+        .withIndex("by_custody", (q) => q.eq("custodyId", args.custodyId))
+        .collect();
+      if (already.some((row) => row.reversesEntryId === args.reversesEntryId)) {
+        throw new ConvexError("That movement has already been reversed.");
+      }
+    } else if (args.reversesEntryId) {
+      throw new ConvexError("Only a reversal may name the movement it cancels.");
+    }
+
+    // A return larger than what was handed over is a typo, not a fact — and
+    // left alone it drives the balance negative, so the module then instructs
+    // somebody to pay a reimbursement that is not owed.
+    if (args.kind === "RETURNED") {
+      const projected = custody.returnedMinor + args.amountMinor;
+      if (projected > custody.issuedMinor) {
+        throw new ConvexError(
+          `That would return ${projected} minor units against ${custody.issuedMinor} issued. Correct the issuance first, or reverse the movement that is wrong.`
+        );
+      }
+    }
+
     const now = Date.now();
     await ctx.db.insert("financeDealCustodyEntries", {
       orgId: args.orgId,
       custodyId: args.custodyId,
       kind: args.kind,
+      ...(args.reversesEntryId ? { reversesEntryId: args.reversesEntryId } : {}),
       amountMinor: args.amountMinor,
       method: args.method,
       reference: args.reference?.trim() || undefined,
@@ -702,13 +925,24 @@ export const reconcileDealCustody = mutation({
     );
     const writeOffReason = args.writeOffReason?.trim();
 
-    if (!summary.settled && !writeOffReason) {
-      const detail =
-        summary.employeeOwesDealerMinor > 0
-          ? `${summary.employeeOwesDealerMinor} minor units are still unaccounted for — record the receipts or the returned balance.`
-          : `${summary.outstandingReimbursementMinor} minor units are still owed to this person — record the reimbursement.`;
+    // A write-off is the dealership absorbing a loss. It is NOT a way to stop
+    // owing somebody: money the dealership owes an employee, closed unpaid, is
+    // just a decision not to pay a person — and the classification gate would
+    // then wave the deal through as settled. That direction has to be paid or
+    // explicitly reversed.
+    if (summary.reimbursementOutstandingMinor > 0) {
       throw new ConvexError(
-        `This custody record does not balance. ${detail} To close it anyway, record a write-off reason.`
+        `${summary.reimbursementOutstandingMinor} minor units are still owed to this person. Record the reimbursement before closing — a debt owed to an employee cannot be written off here.`
+      );
+    }
+    if (summary.reimbursementOverpaidMinor > 0) {
+      throw new ConvexError(
+        `This person has been reimbursed ${summary.reimbursementOverpaidMinor} minor units more than they were owed. Reverse the duplicate movement before closing.`
+      );
+    }
+    if (!summary.settled && !writeOffReason) {
+      throw new ConvexError(
+        `This custody record does not balance. ${summary.employeeOwesDealerMinor} minor units are still unaccounted for — record the receipts or the returned balance. To close it anyway, record a write-off reason.`
       );
     }
 
@@ -720,6 +954,70 @@ export const reconcileDealCustody = mutation({
       reconciliationNotes: notes,
       writeOffReason: writeOffReason && !summary.settled ? writeOffReason : undefined,
       updatedAt: now,
+    });
+    return args.custodyId;
+  },
+});
+
+/**
+ * Reopens a closed custody record so it can be corrected.
+ *
+ * The mutation the closed path always needed. Without it, a late receipt
+ * recorded against a reconciled record left it stored as balanced while the
+ * arithmetic said the employee was out of pocket — and every route to fixing it
+ * refused, with an error naming this function before it existed.
+ */
+export const reopenDealCustody = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    custodyId: v.id("financeDealCustody"),
+    reason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+    ]);
+    const custody = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeDealCustody",
+      args.custodyId,
+      CUSTODY_NOT_FOUND
+    );
+    if (custody.status === "OPEN") return args.custodyId;
+    const reason = args.reason.trim();
+    if (!reason) {
+      throw new ConvexError("Say why this custody record is being reopened.");
+    }
+
+    // Reopening undoes a reconciliation somebody signed off, so it leaves a row
+    // — and it withdraws the deal's classification, which may have been granted
+    // on the strength of this record being settled.
+    await ctx.db.insert("financeApplicationOverrides", {
+      orgId: args.orgId,
+      applicationId: custody.applicationId,
+      field: "financeDealCustody.status",
+      previousValue: custody.status,
+      newValue: "OPEN",
+      reason,
+      changedBy: user._id,
+      changedAt: Date.now(),
+    });
+    const app = await ctx.db.get(custody.applicationId);
+    if (app) {
+      await invalidateClassification(
+        ctx, app, user._id,
+        "A custody record was reopened after the deal's accounting was classified."
+      );
+    }
+
+    await ctx.db.patch(args.custodyId, {
+      status: "OPEN",
+      reconciledAt: undefined,
+      reconciledBy: undefined,
+      reconciliationNotes: undefined,
+      writeOffReason: undefined,
+      updatedAt: Date.now(),
     });
     return args.custodyId;
   },
@@ -798,6 +1096,11 @@ export const recordLegalInvoice = mutation({
       });
     }
 
+    await invalidateClassification(
+      ctx, app, user._id,
+      "The legal invoice was re-recorded after the deal's accounting was classified."
+    );
+
     await ctx.db.patch(args.applicationId, {
       legalInvoiceAmountMinor: args.legalInvoiceAmountMinor,
       legalInvoiceNumber: invoiceNumber,
@@ -855,6 +1158,17 @@ export const classifyDealAccounting = mutation({
 
     const fees = await activeFeesFor(ctx, args.applicationId);
     const summary = summarizeFees(fees);
+    // A deal with no live cost lines is the state "nobody itemized anything",
+    // which `summarizeFees` deliberately reports as NOT fully reconciled —
+    // nothing to have reconciled and everything checking out are different
+    // claims. Reading only the awaiting-counts let it through, because both are
+    // zero for an empty list, so a financed deal with an invoice and no costs
+    // at all classified clean.
+    if (summary.lineCount === 0) {
+      throw new ConvexError(
+        "No costs have been itemized on this deal. Record them, or record a zero-cost line saying the dealership bore none, before classifying its accounting."
+      );
+    }
     if (summary.linesAwaitingActual > 0) {
       throw new ConvexError(
         `${summary.linesAwaitingActual} cost(s) on this deal have no actual amount recorded. Estimates may be used to run the deal, but not to close it.`
@@ -866,12 +1180,31 @@ export const classifyDealAccounting = mutation({
       );
     }
 
-    const openCustody = (await custodyFor(ctx, args.applicationId)).filter(
-      (row) => row.status === "OPEN"
-    );
-    if (openCustody.length > 0) {
+    // Read the arithmetic, not the stored status. A record can be closed and
+    // still be unbalanced — a late receipt against a RECONCILED record is
+    // exactly the case — and a gate that trusts the flag it is meant to be
+    // guarding is not a gate.
+    const custodyRows = await custodyFor(ctx, args.applicationId);
+    for (const row of custodyRows) {
+      if (row.status === "OPEN") {
+        throw new ConvexError(
+          "A custody record on this deal is still open. Settle what that person holds or is owed before classifying."
+        );
+      }
+      const custodySummary = summarizeCustody(
+        row,
+        await custodyActualExpensesMinor(ctx, row._id)
+      );
+      if (!custodySummary.settled && row.status !== "WRITTEN_OFF") {
+        throw new ConvexError(
+          "A closed custody record on this deal no longer balances — its costs changed after it was reconciled. Reopen it and settle it before classifying."
+        );
+      }
+    }
+
+    if (app.accountingClassification === "CLASSIFIED") {
       throw new ConvexError(
-        `${openCustody.length} custody record(s) on this deal are still open. Settle what each person holds or is owed before closing.`
+        "This deal's accounting has already been classified. Change what it was based on to reopen it."
       );
     }
 

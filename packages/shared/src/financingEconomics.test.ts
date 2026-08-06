@@ -860,8 +860,11 @@ describe("evaluateQuotationException", () => {
 });
 
 describe("reconcileEmployeeCustody", () => {
+  const base = { alreadyReimbursedMinor: 0 };
+
   it("closes a 700 advance against 650 of expenses with 50 returned", () => {
     const reconciliation = reconcileEmployeeCustody({
+      ...base,
       advanceIssuedMinor: jod(700),
       actualExpensesMinor: jod(650),
       employeeReturnedMinor: jod(50),
@@ -869,17 +872,18 @@ describe("reconcileEmployeeCustody", () => {
 
     expect(reconciliation.reconciled).toBe(true);
     expect(reconciliation.remainingEmployeeBalanceMinor).toBe(0);
-    expect(reconciliation.dealerReimbursementDueMinor).toBe(0);
+    expect(reconciliation.reimbursementIncurredMinor).toBe(0);
   });
 
   it("does not let the employee's own contribution cancel the debt it creates", () => {
     // This case used to take `employeePersonalPaymentMinor: jod(50)` and add it
     // to the same side as the advance, which reported `reconciled: true` and a
-    // reimbursement due of ZERO — so the dealership that recorded its
-    // employee's contribution most carefully was the one that erased it. The
-    // assertions below were literally contradicted by the comment above them.
-    // The contribution is now derived, so it cannot disagree with the balance.
+    // reimbursement of ZERO — so the dealership that recorded its employee's
+    // contribution most carefully was the one that erased it. The assertions
+    // were literally contradicted by the comment above them. The contribution
+    // is now derived, so it cannot disagree with the balance.
     const reconciliation = reconcileEmployeeCustody({
+      ...base,
       advanceIssuedMinor: jod(700),
       actualExpensesMinor: jod(750),
       employeeReturnedMinor: 0,
@@ -887,49 +891,74 @@ describe("reconcileEmployeeCustody", () => {
 
     expect(reconciliation.reconciled).toBe(false);
     expect(reconciliation.remainingEmployeeBalanceMinor).toBe(jod(-50));
-    expect(reconciliation.dealerReimbursementDueMinor).toBe(jod(50));
-    expect(reconciliation.employeeFundedFromOwnPocketMinor).toBe(jod(50));
-  });
-
-  it("shows a reimbursement owed while the employee's own money is still out", () => {
-    const reconciliation = reconcileEmployeeCustody({
-      advanceIssuedMinor: jod(700),
-      actualExpensesMinor: jod(750),
-      employeeReturnedMinor: 0,
-    });
-
-    expect(reconciliation.remainingEmployeeBalanceMinor).toBe(jod(-50));
-    expect(reconciliation.dealerReimbursementDueMinor).toBe(jod(50));
-    expect(reconciliation.employeeOwesDealerMinor).toBe(0);
-    expect(reconciliation.reconciled).toBe(false);
+    expect(reconciliation.reimbursementIncurredMinor).toBe(jod(50));
+    expect(reconciliation.reimbursementOutstandingMinor).toBe(jod(50));
   });
 
   it("shows money still held by the employee as owed back to the dealership", () => {
     const reconciliation = reconcileEmployeeCustody({
+      ...base,
       advanceIssuedMinor: jod(700),
       actualExpensesMinor: jod(650),
       employeeReturnedMinor: 0,
     });
 
     expect(reconciliation.employeeOwesDealerMinor).toBe(jod(50));
-    expect(reconciliation.dealerReimbursementDueMinor).toBe(0);
+    expect(reconciliation.reimbursementIncurredMinor).toBe(0);
     expect(reconciliation.reconciled).toBe(false);
   });
 
   it("keeps the direction of the imbalance rather than collapsing it to a variance", () => {
     const owed = reconcileEmployeeCustody({
+      ...base,
       advanceIssuedMinor: jod(700),
       actualExpensesMinor: jod(750),
       employeeReturnedMinor: 0,
     });
     const held = reconcileEmployeeCustody({
+      ...base,
       advanceIssuedMinor: jod(700),
       actualExpensesMinor: jod(650),
       employeeReturnedMinor: 0,
     });
 
     expect(owed.remainingEmployeeBalanceMinor).toBe(-held.remainingEmployeeBalanceMinor);
-    expect(owed.dealerReimbursementDueMinor).toBe(held.employeeOwesDealerMinor);
+    expect(owed.reimbursementIncurredMinor).toBe(held.employeeOwesDealerMinor);
+  });
+
+  it("settles a debt only once it has actually been paid", () => {
+    const inputs = {
+      advanceIssuedMinor: jod(700),
+      actualExpensesMinor: jod(750),
+      employeeReturnedMinor: 0,
+    };
+
+    // Incurred stays put; outstanding is what a caller must read before paying.
+    // A figure named "due" that does not move after payment is a double
+    // payment waiting to happen.
+    const unpaid = reconcileEmployeeCustody({ ...inputs, alreadyReimbursedMinor: 0 });
+    expect(unpaid.reconciled).toBe(false);
+
+    const paid = reconcileEmployeeCustody({ ...inputs, alreadyReimbursedMinor: jod(50) });
+    expect(paid.reimbursementIncurredMinor).toBe(jod(50));
+    expect(paid.reimbursementOutstandingMinor).toBe(0);
+    expect(paid.reconciled).toBe(true);
+  });
+
+  it("surfaces an overpayment instead of clamping it away", () => {
+    // Two people recording the same reimbursement, or a retry after a timeout.
+    // Clamping to zero would report the record as balanced while the
+    // dealership is 50 out of pocket.
+    const reconciliation = reconcileEmployeeCustody({
+      advanceIssuedMinor: jod(700),
+      actualExpensesMinor: jod(750),
+      employeeReturnedMinor: 0,
+      alreadyReimbursedMinor: jod(100),
+    });
+
+    expect(reconciliation.reimbursementOverpaidMinor).toBe(jod(50));
+    expect(reconciliation.reimbursementOutstandingMinor).toBe(0);
+    expect(reconciliation.reconciled).toBe(false);
   });
 });
 

@@ -997,6 +997,16 @@ export interface CustodyReconciliationInput {
   advanceIssuedMinor: number;
   actualExpensesMinor: number;
   employeeReturnedMinor: number;
+  /**
+   * What the dealership has ALREADY paid back to the employee.
+   *
+   * An input rather than something the caller nets afterwards, so the engine
+   * can report what is still outstanding rather than only what was incurred. A
+   * figure named "due" that stays unchanged after payment is a double-payment
+   * waiting to happen, and on this branch a field wired to the wrong side of
+   * this identity has already cost real money once.
+   */
+  alreadyReimbursedMinor: number;
 }
 
 export interface CustodyReconciliation {
@@ -1007,23 +1017,36 @@ export interface CustodyReconciliation {
    * Negative: the dealership owes the employee a reimbursement.
    */
   remainingEmployeeBalanceMinor: number;
-  /** Owed back to the employee, when they spent more than they were given. */
-  dealerReimbursementDueMinor: number;
+  /**
+   * What the employee funded themselves, and is therefore owed — gross, before
+   * any reimbursement. This is what was INCURRED, not what is still open; read
+   * `reimbursementOutstandingMinor` before paying anybody.
+   *
+   * Derived, never an input. Taking it as a separate figure meant a caller who
+   * dutifully recorded "they put in 50 of their own" added it to the same side
+   * as the advance — cancelling the debt, driving this to zero and flipping
+   * `reconciled` to true. That is the reimbursement silently becoming a
+   * shortage that this function exists to prevent, reached through its own
+   * argument list.
+   */
+  reimbursementIncurredMinor: number;
+  /** Still owed to the employee after what has already been paid back. */
+  reimbursementOutstandingMinor: number;
+  /**
+   * Paid back beyond what was ever owed.
+   *
+   * Surfaced rather than clamped away: two people recording the same
+   * reimbursement, or a retry after a timeout, is how a dealership pays twice —
+   * and a `Math.max(0, ...)` that hides it reports the record as balanced.
+   */
+  reimbursementOverpaidMinor: number;
   /** Still held by the employee and owed back to the dealership. */
   employeeOwesDealerMinor: number;
   /**
-   * How much of the employee's own money went into the deal, DERIVED.
-   *
-   * Never an input. It is the arithmetic consequence of expenses exceeding the
-   * net advance, and taking it as a separate figure meant a caller who
-   * dutifully recorded "they put in 50 of their own" added it to the same side
-   * as the advance — cancelling the debt, driving
-   * `dealerReimbursementDueMinor` from 50 to zero and flipping `reconciled` to
-   * true. That is the reimbursement silently becoming a shortage that this
-   * function exists to prevent, reached through its own argument list.
+   * True only when nothing is outstanding in EITHER direction, including an
+   * overpayment. A debt that is owed but unpaid is not settled, and neither is
+   * one that was paid twice.
    */
-  employeeFundedFromOwnPocketMinor: number;
-  /** True only when nothing is left outstanding in either direction. */
   reconciled: boolean;
 }
 
@@ -1058,16 +1081,31 @@ export function reconcileEmployeeCustody(
   assertNonNegativeMinor(input.advanceIssuedMinor, "Advance issued");
   assertNonNegativeMinor(input.actualExpensesMinor, "Actual expenses");
   assertNonNegativeMinor(input.employeeReturnedMinor, "Amount returned by employee");
+  assertNonNegativeMinor(input.alreadyReimbursedMinor, "Amount already reimbursed");
 
   const remainingEmployeeBalanceMinor =
     input.advanceIssuedMinor - input.employeeReturnedMinor - input.actualExpensesMinor;
+  const reimbursementIncurredMinor = Math.max(0, -remainingEmployeeBalanceMinor);
+  const reimbursementOutstandingMinor = Math.max(
+    0,
+    reimbursementIncurredMinor - input.alreadyReimbursedMinor
+  );
+  const reimbursementOverpaidMinor = Math.max(
+    0,
+    input.alreadyReimbursedMinor - reimbursementIncurredMinor
+  );
+  const employeeOwesDealerMinor = Math.max(0, remainingEmployeeBalanceMinor);
 
   return {
     remainingEmployeeBalanceMinor,
-    dealerReimbursementDueMinor: Math.max(0, -remainingEmployeeBalanceMinor),
-    employeeOwesDealerMinor: Math.max(0, remainingEmployeeBalanceMinor),
-    employeeFundedFromOwnPocketMinor: Math.max(0, -remainingEmployeeBalanceMinor),
-    reconciled: remainingEmployeeBalanceMinor === 0,
+    reimbursementIncurredMinor,
+    reimbursementOutstandingMinor,
+    reimbursementOverpaidMinor,
+    employeeOwesDealerMinor,
+    reconciled:
+      employeeOwesDealerMinor === 0 &&
+      reimbursementOutstandingMinor === 0 &&
+      reimbursementOverpaidMinor === 0,
   };
 }
 

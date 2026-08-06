@@ -327,18 +327,29 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // `reconcileDealCustody`, `recordLegalInvoice` and `classifyDealAccounting`.
   //
   // Every one takes an `orgId` alongside a caller-supplied id — an
-  // `applicationId`, a `feeId` or a `custodyId` — so all nine land in
-  // `analysed` and are held to the `requireOwnedRow` rule. Each satisfies it
-  // inline, and the four that accept a SECOND id prove ownership of both
-  // separately rather than inferring the child from the parent: a `custodyId`
-  // that belongs to this org can still belong to a different deal, and the
-  // module rejects that explicitly. `analysed` moving up by exactly the number
-  // of new mutations is the signal to check for — it going up by less would
-  // mean one of them slipped into a skipped bucket.
+  // `applicationId`, a `feeId` or a `custodyId` — so all of them land in
+  // `analysed` and are held to the `requireOwnedRow` rule, satisfied inline.
+  //
+  // Three take a second caller-supplied id. Two of those (`recordDealFee` and
+  // `recordActualFeeAmount`, via `custodyId`) are second ROW ids and get their
+  // own `requireOwnedRow`, plus an explicit check that the row belongs to this
+  // DEAL — a custody record in the right organization can still belong to a
+  // different application. `openDealCustody`'s second id is a `userId`, which
+  // is proved by a `memberships` lookup instead, closing the same hole by a
+  // different route. `recordCustodyMovement`'s reversal path adds a fourth
+  // second-row-id check on `financeDealCustodyEntries`.
+  //
+  // Then 454→455 / 301→302 by `financeDealCosts.reopenDealCustody`, which
+  // undoes a reconciliation so a closed custody record can be corrected. Same
+  // shape as its siblings.
+  //
+  // `analysed` moving up by exactly the number of new mutations is the signal
+  // to check for — going up by less would mean one slipped into a skipped
+  // bucket, which is the direction that hides an unguarded write.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 454,
-      analysed: 301,
+      totalMutations: 455,
+      analysed: 302,
       skippedNoArgsBlock: 9,
       skippedNoOrgId: 144,
     });

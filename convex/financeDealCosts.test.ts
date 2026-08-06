@@ -258,10 +258,10 @@ describe("employee custody", () => {
     // the advance, which drove the reimbursement due to zero and reported the
     // record as reconciled. The dealership that documented it most carefully
     // was the one that erased it.
-    expect(costs.custody[0]?.summary.employeeFundedFromOwnPocketMinor).toBe(jod(50));
-    expect(costs.custody[0]?.summary.dealerReimbursementDueMinor).toBe(jod(50));
+    expect(costs.custody[0]?.summary.reimbursementIncurredMinor).toBe(jod(50));
+    expect(costs.custody[0]?.summary.reimbursementIncurredMinor).toBe(jod(50));
     expect(costs.custody[0]?.summary.employeeOwesDealerMinor).toBe(0);
-    expect(costs.custody[0]?.summary.outstandingReimbursementMinor).toBe(jod(50));
+    expect(costs.custody[0]?.summary.reimbursementOutstandingMinor).toBe(jod(50));
     expect(costs.custody[0]?.summary.settled).toBe(false);
   });
 
@@ -415,8 +415,280 @@ describe("employee custody", () => {
     void other;
 
     await expect(
-      addFee(seed, { actualAmountMinor: jod(100), custodyId: otherCustodyId })
+      addFee(seed, {
+        actualAmountMinor: jod(100),
+        paidBy: "EMPLOYEE",
+        custodyId: otherCustodyId,
+      })
     ).rejects.toThrow(/different deal/i);
+  });
+});
+
+describe("a closed record cannot go quietly wrong afterwards", () => {
+  async function settledCustody(seed: Seed) {
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+      userId: seed.employeeId, issuedMinor: jod(700),
+    });
+    const feeId = await addFee(seed, {
+      actualAmountMinor: jod(700), paidBy: "EMPLOYEE", custodyId,
+    });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+      orgId: seed.orgId, custodyId, notes: "All receipts in.",
+    });
+    return { custodyId, feeId };
+  }
+
+  async function invoiceIt(seed: Seed, number: string) {
+    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+      legalInvoiceAmountMinor: jod(10_500), legalInvoiceNumber: number,
+      legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
+    });
+  }
+
+  test("a late receipt cannot silently unbalance a reconciled custody record", async () => {
+    const seed = await seedDeal();
+    const { custodyId, feeId } = await settledCustody(seed);
+    expect((await seed.t.run((ctx) => ctx.db.get(custodyId)))?.status).toBe("RECONCILED");
+
+    // Nothing froze the lines the balance was computed from, so this used to
+    // succeed — leaving the record stored as RECONCILED while the arithmetic
+    // said the employee was out of pocket, and every route to fixing it then
+    // refused with an error naming a mutation that did not exist.
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+        orgId: seed.orgId, feeId, actualAmountMinor: jod(750),
+      })
+    ).rejects.toThrow(/closed\. Reopen it/i);
+
+    await expect(
+      addFee(seed, { actualAmountMinor: jod(50), paidBy: "EMPLOYEE", custodyId })
+    ).rejects.toThrow(/closed\. Reopen it/i);
+
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.voidDealFee, {
+        orgId: seed.orgId, feeId, reason: "Wrong line.",
+      })
+    ).rejects.toThrow(/closed\. Reopen it/i);
+  });
+
+  test("reopening is possible, audited, and withdraws the classification", async () => {
+    const seed = await seedDeal();
+    const { custodyId, feeId } = await settledCustody(seed);
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: seed.orgId, feeId, notes: "Matched.",
+    });
+    await invoiceIt(seed, "INV-9");
+    await seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, {
+      orgId: seed.orgId, applicationId: seed.applicationId, notes: "All documents on file.",
+    });
+    expect((await readCosts(seed)).accountingClassification).toBe("CLASSIFIED");
+
+    await seed.asUser.mutation(api.financeDealCosts.reopenDealCustody, {
+      orgId: seed.orgId, custodyId, reason: "A late licensing receipt arrived.",
+    });
+
+    expect((await seed.t.run((ctx) => ctx.db.get(custodyId)))?.status).toBe("OPEN");
+    // The classification was granted on this record being settled, so it goes
+    // back to pending rather than standing on a basis that has changed.
+    expect((await readCosts(seed)).accountingClassification).toBe("PENDING_CLASSIFICATION");
+    const overrides = await seed.t.run((ctx) =>
+      ctx.db
+        .query("financeApplicationOverrides")
+        .withIndex("by_application", (q) => q.eq("applicationId", seed.applicationId))
+        .collect()
+    );
+    expect(overrides.some((o) => o.field === "financeDealCustody.status")).toBe(true);
+    expect(overrides.some((o) => o.field === "accountingClassification")).toBe(true);
+  });
+
+  test("adding a cost after classification withdraws it rather than leaving it stale", async () => {
+    const seed = await seedDeal();
+    const feeId = await addFee(seed, { actualAmountMinor: jod(120) });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: seed.orgId, feeId, notes: "Matched.",
+    });
+    await invoiceIt(seed, "INV-10");
+    await seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, {
+      orgId: seed.orgId, applicationId: seed.applicationId, notes: "Documents on file.",
+    });
+
+    // The flag exists to be the gate a posting design reads. A gate that
+    // silently stops representing its own precondition is the whole hazard.
+    await addFee(seed);
+
+    const costs = await readCosts(seed);
+    expect(costs.accountingClassification).toBe("PENDING_CLASSIFICATION");
+    expect(costs.summary.linesAwaitingActual).toBe(1);
+  });
+
+  test("classifying twice is refused rather than overwriting who decided", async () => {
+    const seed = await seedDeal();
+    const feeId = await addFee(seed, { actualAmountMinor: jod(120) });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: seed.orgId, feeId, notes: "Matched.",
+    });
+    await invoiceIt(seed, "INV-11");
+    await seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, {
+      orgId: seed.orgId, applicationId: seed.applicationId, notes: "First decision.",
+    });
+
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, {
+        orgId: seed.orgId, applicationId: seed.applicationId, notes: "Second decision.",
+      })
+    ).rejects.toThrow(/already been classified/i);
+  });
+
+  test("a deal with nothing itemized does not classify clean", async () => {
+    const seed = await seedDeal();
+    await invoiceIt(seed, "INV-12");
+
+    // Both awaiting-counts are zero for an empty list, so reading only those
+    // let "nobody itemized anything" through as complete — the exact state the
+    // module's own summary refuses to call reconciled.
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, {
+        orgId: seed.orgId, applicationId: seed.applicationId, notes: "Nothing to record.",
+      })
+    ).rejects.toThrow(/No costs have been itemized/i);
+  });
+});
+
+describe("money can only move in directions that are true", () => {
+  test("a cost somebody else paid cannot be charged to an employee's custody", async () => {
+    const seed = await seedDeal();
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+      userId: seed.employeeId, issuedMinor: jod(700),
+    });
+
+    // The dealership pays the fee itself by bank transfer, and the line is
+    // attached to the custody record by mis-click. That drove the balance to
+    // zero and let the record close while 700 in cash was still in the
+    // employee's pocket.
+    await expect(
+      addFee(seed, { actualAmountMinor: jod(700), paidBy: "DEALER", custodyId })
+    ).rejects.toThrow(/paid by that employee/i);
+
+    const costs = await readCosts(seed);
+    expect(costs.custody[0]?.summary.employeeOwesDealerMinor).toBe(jod(700));
+  });
+
+  test("a duplicate reimbursement is surfaced, not clamped away", async () => {
+    const seed = await seedDeal();
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+      userId: seed.employeeId, issuedMinor: jod(700),
+    });
+    await addFee(seed, { actualAmountMinor: jod(750), paidBy: "EMPLOYEE", custodyId });
+
+    // Two people recording the same payment, or a retry after a timeout.
+    for (let i = 0; i < 2; i += 1) {
+      await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        orgId: seed.orgId, custodyId, kind: "REIMBURSED", amountMinor: jod(50),
+      });
+    }
+
+    const costs = await readCosts(seed);
+    expect(costs.custody[0]?.summary.reimbursementOverpaidMinor).toBe(jod(50));
+    expect(costs.custody[0]?.summary.settled).toBe(false);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+        orgId: seed.orgId, custodyId, notes: "Close it.",
+      })
+    ).rejects.toThrow(/more than they were owed/i);
+  });
+
+  test("a return larger than the advance is refused rather than inverting the balance", async () => {
+    const seed = await seedDeal();
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+      userId: seed.employeeId, issuedMinor: jod(700),
+    });
+
+    // Left alone this drives the balance negative, and the module then
+    // instructs somebody to pay a reimbursement that is not owed.
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: jod(800),
+      })
+    ).rejects.toThrow(/issued/i);
+  });
+
+  test("a debt owed to an employee cannot be written off unpaid", async () => {
+    const seed = await seedDeal();
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+      userId: seed.employeeId, issuedMinor: jod(700),
+    });
+    await addFee(seed, { actualAmountMinor: jod(750), paidBy: "EMPLOYEE", custodyId });
+
+    // A write-off is the dealership absorbing a loss. It is not a way to stop
+    // owing a person — and closing it that way would let the deal classify as
+    // settled.
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+        orgId: seed.orgId, custodyId,
+        notes: "Employee left.",
+        writeOffReason: "Not paying this back.",
+      })
+    ).rejects.toThrow(/cannot be written off here/i);
+  });
+
+  test("a mistyped issuance is corrected by a reversal, not by a fictitious return", async () => {
+    const seed = await seedDeal();
+    const custodyId = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+      userId: seed.employeeId, issuedMinor: jod(7000),
+    });
+    const entryId = await seed.t.run(async (ctx) => {
+      const rows = await ctx.db
+        .query("financeDealCustodyEntries")
+        .withIndex("by_custody", (q) => q.eq("custodyId", custodyId))
+        .collect();
+      return rows[0]._id;
+    });
+
+    // The only alternative was a RETURNED of 6,300, asserting as fact that the
+    // employee handed back cash they never received.
+    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+      orgId: seed.orgId, custodyId, kind: "REVERSAL",
+      reversesEntryId: entryId, amountMinor: jod(7000),
+      note: "Mistyped: should have been 700.",
+    });
+    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+      orgId: seed.orgId, custodyId, kind: "ISSUED", amountMinor: jod(700),
+    });
+
+    const custody = await seed.t.run((ctx) => ctx.db.get(custodyId));
+    expect(custody?.issuedMinor).toBe(jod(700));
+    // Both the mistake and its correction stay on the record.
+    const entries = await seed.t.run((ctx) =>
+      ctx.db
+        .query("financeDealCustodyEntries")
+        .withIndex("by_custody", (q) => q.eq("custodyId", custodyId))
+        .collect()
+    );
+    expect(entries).toHaveLength(3);
+
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        orgId: seed.orgId, custodyId, kind: "REVERSAL",
+        reversesEntryId: entryId, amountMinor: jod(7000),
+      })
+    ).rejects.toThrow(/already been reversed/i);
+  });
+
+  test("custody cannot be issued to yourself", async () => {
+    const seed = await seedDeal();
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+        orgId: seed.orgId, applicationId: seed.applicationId,
+        userId: seed.userId, issuedMinor: jod(700),
+      })
+    ).rejects.toThrow(/other than the person receiving it/i);
   });
 });
 
@@ -479,6 +751,12 @@ describe("the legal invoice and accounting classification", () => {
       legalInvoiceAmountMinor: jod(10_500), legalInvoiceNumber: "INV-1",
       legalInvoiceDate: Date.now(), issuedTo: "CUSTOMER",
     });
+    // A reconciled cost, so the gate gets past the itemization check and the
+    // custody one is what actually fires.
+    const feeId = await addFee(seed, { actualAmountMinor: jod(120) });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: seed.orgId, feeId, notes: "Matched to the receipt.",
+    });
     await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
       orgId: seed.orgId, applicationId: seed.applicationId,
       userId: seed.employeeId, issuedMinor: jod(700),
@@ -488,7 +766,7 @@ describe("the legal invoice and accounting classification", () => {
       seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, {
         orgId: seed.orgId, applicationId: seed.applicationId, notes: "Close it.",
       })
-    ).rejects.toThrow(/custody record\(s\) on this deal are still open/i);
+    ).rejects.toThrow(/custody record on this deal is still open/i);
   });
 
   test("a deal defaults to pending classification rather than looking settled", async () => {
