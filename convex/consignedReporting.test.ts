@@ -525,9 +525,12 @@ describe("historical consigned sales after the migration", () => {
     const correction = await s.t.run(async (ctx) =>
       (await ctx.db.query("consignedSaleCorrections").collect()).find((c) => c.saleId === saleId)
     );
-    expect(correction!.status).toBe("REQUIRES_RECONCILIATION");
+    // The journal correction is unaffected — it is only the operational
+    // transaction row that needs a person. Two ledgers, two outcomes.
+    expect(correction!.status).toBe("POSTED");
+    expect(correction!.reportingBasisStatus).toBe("REQUIRES_RECONCILIATION");
     // And it says why, so the person picking it up does not have to guess.
-    expect(correction!.statusReason).toMatch(/deposits or an edit/i);
+    expect(correction!.reportingBasisReason).toMatch(/deposits or an edit/i);
   });
 
   test("two vehicle-sale rows for one car are never guessed between", async () => {

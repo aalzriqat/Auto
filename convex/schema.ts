@@ -785,21 +785,40 @@ export default defineSchema({
      *  - PENDING_POSTING — the event is durably queued; no journal yet.
      *  - POSTED — the journal exists. Only this counts as corrected.
      *  - FAILED — the event neither posted nor queued, or its outbox entry
-     *    dead-lettered. Retryable: the idempotency key is unchanged, so a retry
-     *    cannot double-post.
-     *  - REQUIRES_RECONCILIATION — the ledger correction is settled but
-     *    something a human has to decide is not, e.g. the sale's operational
-     *    transaction row could not be identified unambiguously so the reporting
-     *    basis was left alone rather than guessed at.
+     *    dead-lettered. A retry re-raises the event under the same key, so it
+     *    cannot double-post; a dead-lettered outbox row must be redriven by an
+     *    operator first (accountingOutbox.retryFailed), because postOrEnqueue
+     *    treats any unposted queued row as already handled.
+     *
+     * This tracks the JOURNAL only. Whether the operational ledger was also
+     * restated is `reportingBasisStatus` below — two ledgers with two failure
+     * modes, and folding them into one status made a queued correction whose
+     * transaction row needed a human permanently unpromotable: nothing ever
+     * wrote its journal id, and the impact report went on reporting an
+     * already-corrected sale as fully overstated, inviting a second manual
+     * correction.
      */
     status: v.union(
       v.literal("PENDING_POSTING"),
       v.literal("POSTED"),
-      v.literal("FAILED"),
-      v.literal("REQUIRES_RECONCILIATION")
+      v.literal("FAILED")
     ),
-    /** Why the row is FAILED or REQUIRES_RECONCILIATION. Absent otherwise. */
+    /** Why the row is FAILED. Absent otherwise. */
     statusReason: v.optional(v.string()),
+    /**
+     * Whether the sale's `transactions` row was restated onto the agent basis.
+     *
+     *  - RESTATED — done, or there was no such row to restate.
+     *  - REQUIRES_RECONCILIATION — the row could not be identified
+     *    unambiguously (a vehicle sold twice, an amount already netted down by
+     *    deposits), so it was left alone rather than guessed at. The journal
+     *    correction is unaffected and proceeds on its own.
+     */
+    reportingBasisStatus: v.optional(
+      v.union(v.literal("RESTATED"), v.literal("REQUIRES_RECONCILIATION"))
+    ),
+    /** Why the reporting basis needs a human. Absent when RESTATED. */
+    reportingBasisReason: v.optional(v.string()),
     /** The idempotency key of the correcting event, so a retry reuses its identity. */
     eventIdempotencyKey: v.optional(v.string()),
     /**

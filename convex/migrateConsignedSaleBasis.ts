@@ -116,7 +116,7 @@ type Report = {
   alreadyCorrected: number;
   /** Correction rows still waiting on the outbox. Re-run after the period opens. */
   awaitingPosting: number;
-  /** Correction rows a human has to look at — see `statusReason` on each row. */
+  /** Corrections whose operational transaction row a human has to resolve — see `reportingBasisReason`. Independent of the journal state. */
   requiresReconciliation: number;
   /** Correction rows whose event neither posted nor queued. Retried on the next run. */
   failed: number;
@@ -340,8 +340,9 @@ async function correctOneSale(
   }
 ): Promise<{
   netIncomeDeltaMinor: number;
-  status: "PENDING_POSTING" | "POSTED" | "FAILED" | "REQUIRES_RECONCILIATION";
+  status: "PENDING_POSTING" | "POSTED" | "FAILED";
   reportingBasisBackfilled: boolean;
+  reportingBasisNeedsHuman: boolean;
 }> {
   const { sale, assessment, actorId } = args;
   const revenueMinor = assessment.posted.revenueMinor;
@@ -391,14 +392,13 @@ async function correctOneSale(
     dryRun: false,
   });
 
-  const status: "PENDING_POSTING" | "POSTED" | "FAILED" | "REQUIRES_RECONCILIATION" = !basis.ok
-    ? "REQUIRES_RECONCILIATION"
-    : outcome.status;
-  const statusReason = !basis.ok
-    ? basis.reason
-    : outcome.status === "FAILED"
-      ? outcome.reason
-      : undefined;
+  // The two ledgers are recorded separately. Collapsing them meant a queued
+  // correction whose transaction row needed a human was filed under a status
+  // the reconciler never scans, so its journal id was never written and the
+  // impact report kept reporting a corrected sale as fully overstated —
+  // an invitation to post the correction a second time by hand.
+  const status = outcome.status;
+  const statusReason = outcome.status === "FAILED" ? outcome.reason : undefined;
 
   await ctx.db.insert("consignedSaleCorrections", {
     orgId: sale.orgId,
@@ -408,6 +408,8 @@ async function correctOneSale(
     originalJournalEntryIds: assessment.journalEntryIds,
     status,
     statusReason,
+    reportingBasisStatus: basis.ok ? "RESTATED" : "REQUIRES_RECONCILIATION",
+    reportingBasisReason: basis.ok ? undefined : basis.reason,
     eventIdempotencyKey: idempotencyKey,
     correctionJournalEntryId:
       outcome.status === "POSTED" ? outcome.journalEntryId : undefined,
@@ -453,7 +455,12 @@ async function correctOneSale(
     idempotencyKey,
   });
 
-  return { netIncomeDeltaMinor, status, reportingBasisBackfilled: basis.ok && basis.restated };
+  return {
+    netIncomeDeltaMinor,
+    status,
+    reportingBasisBackfilled: basis.ok && basis.restated,
+    reportingBasisNeedsHuman: !basis.ok,
+  };
 }
 
 /**
@@ -470,10 +477,12 @@ async function correctOneSale(
 async function refreshCorrection(
   ctx: MutationCtx,
   correction: Doc<"consignedSaleCorrections">
-): Promise<"POSTED" | "PENDING_POSTING" | "FAILED" | "REQUIRES_RECONCILIATION" | "UNCHANGED"> {
-  if (correction.status === "POSTED" || correction.status === "REQUIRES_RECONCILIATION") {
-    return "UNCHANGED";
-  }
+): Promise<"POSTED" | "PENDING_POSTING" | "FAILED" | "UNCHANGED"> {
+  // Only the journal's own state is terminal here. A row whose reporting basis
+  // still needs a human is NOT terminal: its journal must still be promoted
+  // when the outbox drains, or its id is never recorded and the impact report
+  // reports an already-corrected sale as untouched.
+  if (correction.status === "POSTED") return "UNCHANGED";
 
   const idempotencyKey = correction.eventIdempotencyKey ?? correctionKeyFor(correction.saleId);
 
@@ -638,10 +647,14 @@ export const migrateConsignedSaleBasis = internalMutation({
           else report.alreadyCorrected += 1;
         } else if (effective === "PENDING_POSTING") {
           report.awaitingPosting += 1;
-        } else if (effective === "REQUIRES_RECONCILIATION") {
-          report.requiresReconciliation += 1;
         } else {
           report.failed += 1;
+        }
+        // Counted alongside the journal state, not instead of it: a correction
+        // can be fully posted and still have a transaction row nobody could
+        // identify.
+        if (existing.reportingBasisStatus === "REQUIRES_RECONCILIATION") {
+          report.requiresReconciliation += 1;
         }
         continue;
       }
@@ -705,29 +718,23 @@ export const migrateConsignedSaleBasis = internalMutation({
           dryRun: true,
         });
         // Counted exactly as the real run counts it, so the two reports are
-        // comparable line for line: a row whose reporting basis cannot be
-        // derived lands as REQUIRES_RECONCILIATION and nowhere else.
-        if (!basis.ok) {
-          report.requiresReconciliation += 1;
-        } else {
-          if (basis.restated) report.reportingBasisBackfilled += 1;
-          if (await shouldPost(ctx, sale.orgId, sale.saleDate)) report.postedNow += 1;
-          else report.queuedNow += 1;
-        }
+        // comparable line for line — including the case where the journal
+        // posts and the transaction row still needs a person.
+        if (!basis.ok) report.requiresReconciliation += 1;
+        else if (basis.restated) report.reportingBasisBackfilled += 1;
+        if (await shouldPost(ctx, sale.orgId, sale.saleDate)) report.postedNow += 1;
+        else report.queuedNow += 1;
         continue;
       }
 
-      const { netIncomeDeltaMinor, status, reportingBasisBackfilled } = await correctOneSale(ctx, {
-        sale,
-        assessment,
-        actorId,
-      });
+      const { netIncomeDeltaMinor, status, reportingBasisBackfilled, reportingBasisNeedsHuman } =
+        await correctOneSale(ctx, { sale, assessment, actorId });
       report.netIncomeDeltaMinor += netIncomeDeltaMinor;
       if (status === "POSTED") report.postedNow += 1;
       else if (status === "PENDING_POSTING") report.queuedNow += 1;
-      else if (status === "REQUIRES_RECONCILIATION") report.requiresReconciliation += 1;
       else report.failed += 1;
       if (reportingBasisBackfilled) report.reportingBasisBackfilled += 1;
+      if (reportingBasisNeedsHuman) report.requiresReconciliation += 1;
     }
 
     if (page.isDone) {

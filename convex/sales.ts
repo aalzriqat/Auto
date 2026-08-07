@@ -4,7 +4,7 @@ import { mutation } from "./functions";
 import { Doc, Id, TableNames } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
+import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
@@ -1735,8 +1735,24 @@ export const consignedSalePreview = query({
     settlementRoute: v.optional(supplierSettlementRouteValidator),
   },
   handler: async (ctx, args) => {
-    // Cost and margin, so the same permission that gates them everywhere else.
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_REPORTS]);
+    // Fails SOFT, and that matters more than it looks. This runs from a
+    // `useQuery` inside the sale dialog, and convex/react rethrows a query
+    // error during render — so a permission this caller lacks does not hide a
+    // section, it replaces the page with the error boundary. The default SALES
+    // role has VIEW_SALES and not VIEW_REPORTS, and the Edit button on the
+    // sales list is ungated, so requiring both here crashed the dialog for the
+    // role that opens it most.
+    //
+    // Entry is therefore gated on being allowed to see the sale at all; the
+    // cost-bearing answer is withheld by returning null, exactly as
+    // dashboard.stats withholds its profit figures.
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    const canSeeCost =
+      isSystemOwnerRole(role) ||
+      [PERMISSIONS.VIEW_EXPENSES, PERMISSIONS.VIEW_REPORTS, PERMISSIONS.VIEW_FINANCE].some((p) =>
+        role.permissions.includes(p)
+      );
+    if (!canSeeCost) return null;
 
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.orgId !== args.orgId || vehicle.isDeleted) return null;

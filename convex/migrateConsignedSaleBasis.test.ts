@@ -598,3 +598,114 @@ describe("a correction that could only queue", () => {
     expect(corrections).toHaveLength(0);
   });
 });
+
+/**
+ * The combination that made a correction permanently unpromotable.
+ *
+ * A closed period (so the journal queues) AND a transaction row netted down by
+ * a reservation deposit (so the reporting basis cannot be derived) is the
+ * ordinary production shape, not an edge case — عربون is standard, and the
+ * periods a restatement corrects are closed by definition.
+ *
+ * Folding both into one status filed the row under one the reconciler never
+ * scans. Its journal id was never written, so `sourcedSaleImpactReport` went on
+ * reporting an already-corrected sale as fully overstated — which is an
+ * invitation to post the correction a second time by hand.
+ */
+describe("a correction that both queues AND needs a human", () => {
+  const LONG_AGO = Date.UTC(new Date().getUTCFullYear() - 3, 2, 4);
+
+  async function seedBothProblems(tag: string) {
+    const s = await seedDealer(tag);
+    const { saleId, vehicleId } = await seedLegacyPrincipalSale(s, {
+      vin: `VINBOTH${tag}`,
+      sourceCost: ENTITLEMENT,
+    });
+    await s.t.run((ctx) => ctx.db.patch(saleId, { saleDate: LONG_AGO }));
+    // Netted down by a 1,000 deposit, exactly as createSaleTransaction writes it.
+    await s.t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId: s.orgId,
+        type: "IN" as const,
+        amount: SALE_PRICE - 1_000,
+        date: LONG_AGO,
+        category: "VEHICLE_SALE",
+        description: "Sale net of a deposit already booked",
+        vehicleId,
+        customerId: s.customerId,
+      })
+    );
+    return { s, saleId, vehicleId };
+  }
+
+  async function openPeriodAndDrain(s: Awaited<ReturnType<typeof seedDealer>>) {
+    const fiscalYear = new Date(LONG_AGO).getUTCFullYear();
+    await s.asUser.mutation(api.accountingPeriods.create, {
+      orgId: s.orgId,
+      startDate: Date.UTC(fiscalYear, 0, 1),
+      endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+      fiscalYear,
+      periodNumber: 1,
+    });
+    const periods = await s.asUser.query(api.accountingPeriods.list, { orgId: s.orgId });
+    const reopened = periods.find((p) => p.fiscalYear === fiscalYear)!;
+    await s.asUser.mutation(api.accountingPeriods.open, { orgId: s.orgId, periodId: reopened._id });
+    await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+  }
+
+  test("records both facts separately rather than collapsing them", async () => {
+    const { s, saleId } = await seedBothProblems("both1");
+
+    const report = await runMigration(s);
+    expect(report.queuedNow).toBe(1);
+    // The transaction row is a SEPARATE problem and is reported as one.
+    expect(report.requiresReconciliation).toBe(1);
+
+    const correction = await s.t.run(async (ctx) =>
+      (await ctx.db.query("consignedSaleCorrections").collect()).find((c) => c.saleId === saleId)
+    );
+    expect(correction!.status).toBe("PENDING_POSTING");
+    expect(correction!.reportingBasisStatus).toBe("REQUIRES_RECONCILIATION");
+    expect(correction!.reportingBasisReason).toMatch(/deposits or an edit/i);
+  });
+
+  test("still promotes the journal once the outbox drains", async () => {
+    const { s, saleId } = await seedBothProblems("both2");
+    await runMigration(s);
+    await openPeriodAndDrain(s);
+
+    const result = await s.t.mutation(
+      internal.migrateConsignedSaleBasis.reconcileConsignedSaleCorrections,
+      { orgId: s.orgId }
+    );
+    expect(result.promoted).toBe(1);
+
+    const correction = await s.t.run(async (ctx) =>
+      (await ctx.db.query("consignedSaleCorrections").collect()).find((c) => c.saleId === saleId)
+    );
+    expect(correction!.status).toBe("POSTED");
+    // The id that was never being written. Without it the impact report cannot
+    // tell the correction apart from the original posting.
+    expect(correction!.correctionJournalEntryId).toBeDefined();
+    // And the transaction row is still, correctly, somebody's job.
+    expect(correction!.reportingBasisStatus).toBe("REQUIRES_RECONCILIATION");
+  });
+
+  test("the impact report stops calling the corrected sale overstated", async () => {
+    // The consequence that matters: an accountant reading a report that says
+    // this sale was never restated will restate it again by hand.
+    const { s } = await seedBothProblems("both3");
+    await runMigration(s);
+    await openPeriodAndDrain(s);
+    await s.t.mutation(internal.migrateConsignedSaleBasis.reconcileConsignedSaleCorrections, {
+      orgId: s.orgId,
+    });
+
+    const impact = await s.asUser.query(api.sourcedAgentImpact.sourcedSaleImpactReport, {
+      orgId: s.orgId,
+    });
+    const org = impact.orgs.find((o) => o.orgId === s.orgId)!;
+    expect(org.anomalyCount).toBe(0);
+    expect(org.totals.revenueOverstatementMinor).toBe(0);
+  });
+});
