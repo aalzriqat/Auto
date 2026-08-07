@@ -2,7 +2,7 @@ import { TableAggregate } from "@convex-dev/aggregate";
 import { Triggers } from "convex-helpers/server/triggers";
 import type { GenericDatabaseWriter } from "convex/server";
 import { components } from "./_generated/api";
-import { DataModel, Id } from "./_generated/dataModel";
+import { DataModel, Doc, Id } from "./_generated/dataModel";
 import { validateVinChecksum } from "../lib/vinHelpers";
 
 /**
@@ -481,4 +481,229 @@ aggregateTriggers.register("instagramEvents", async (ctx, change) => {
 aggregateTriggers.register("facebookEvents", async (ctx, change) => {
   if (change.operation !== "insert" || !change.newDoc) return;
   await recordSocialContact(ctx, change.newDoc.orgId, "facebook", change.newDoc.senderFacebookId);
+});
+
+/**
+ * The grouping the Social Inbox has always used, lifted out of the query so the
+ * materialised table and any future reader cannot drift on what a "thread" is.
+ *
+ * Comments thread per (platform × customer × post); DMs per (platform ×
+ * customer). A comment whose `postId` has not been resolved yet lands in a
+ * shared `__none__` bucket, exactly as before, until a resync fills it in.
+ */
+export function socialConversationKey(id: {
+  platform: "instagram" | "facebook";
+  customerId: Id<"customers">;
+  kind: "comment" | "dm";
+  postId?: string;
+}): string {
+  if (id.kind === "dm") return `${id.platform}:${id.customerId}:dm`;
+  return `${id.platform}:${id.customerId}:comment:${id.postId ?? "__none__"}`;
+}
+
+export type SocialConversationIdentity = {
+  orgId: Id<"organizations">;
+  platform: "instagram" | "facebook";
+  customerId: Id<"customers">;
+  kind: "comment" | "dm";
+  postId?: string;
+};
+
+/**
+ * Which thread an event belongs to, or `null` if it belongs to none.
+ *
+ * An event with no `customerId` has no thread. The grouping query skipped those
+ * outright (`if (!ev.customerId) continue`), so materialising one would put a
+ * row in the inbox that the old list never showed.
+ */
+function socialConversationIdentity(
+  platform: "instagram" | "facebook",
+  doc: Doc<"instagramEvents"> | Doc<"facebookEvents">
+): SocialConversationIdentity | null {
+  if (!doc.customerId) return null;
+  return {
+    orgId: doc.orgId,
+    platform,
+    customerId: doc.customerId,
+    kind: doc.kind,
+    postId: doc.postId,
+  };
+}
+
+/**
+ * One thread's events, oldest first, with the per-platform sender columns
+ * flattened.
+ *
+ * Normalised here rather than at the call site because the two tables name the
+ * same thing differently (`senderInstagramId`/`senderUsername` against
+ * `senderFacebookId`/`senderName`), and a union of the two document types
+ * cannot be narrowed by an `in` check — the platform is the discriminator, and
+ * it is known at the point the query is chosen.
+ */
+type ThreadEvent = {
+  _creationTime: number;
+  kind: "comment" | "dm";
+  postId?: string;
+  text?: string;
+  vehicleId?: Id<"vehicles">;
+  leadId?: Id<"leads">;
+  autoRepliedAt?: number;
+  manualRepliedAt?: number;
+  senderRawId: string;
+  senderHandle?: string;
+};
+
+async function readThreadEvents(
+  ctx: { db: GenericDatabaseWriter<DataModel> },
+  id: SocialConversationIdentity
+): Promise<ThreadEvent[]> {
+  const rows: ThreadEvent[] =
+    id.platform === "instagram"
+      ? (
+          await ctx.db
+            .query("instagramEvents")
+            .withIndex("by_org_customer", (q) =>
+              q.eq("orgId", id.orgId).eq("customerId", id.customerId)
+            )
+            .collect()
+        ).map((row) => ({ ...row, senderRawId: row.senderInstagramId, senderHandle: row.senderUsername }))
+      : (
+          await ctx.db
+            .query("facebookEvents")
+            .withIndex("by_org_customer", (q) =>
+              q.eq("orgId", id.orgId).eq("customerId", id.customerId)
+            )
+            .collect()
+        ).map((row) => ({ ...row, senderRawId: row.senderFacebookId, senderHandle: row.senderName }));
+
+  return rows
+    .filter((row) => {
+      if (row.kind !== id.kind) return false;
+      if (id.kind !== "comment") return true;
+      return (row.postId ?? null) === (id.postId ?? null);
+    })
+    .sort((a, b) => a._creationTime - b._creationTime);
+}
+
+/**
+ * Rebuilds one thread's row from the events that currently exist, or deletes it
+ * when none remain.
+ *
+ * ## Why a full recompute rather than an incremental delta
+ *
+ * A delta has to reason about the transition — was this event already counted,
+ * was it already answered, did that vehicle appear anywhere else in the thread
+ * — and every one of those is a place a counter drifts silently. This project
+ * has already paid for that lesson once. Recomputing removes the entire class:
+ * the row is a pure function of the thread's events, so a wrong row can only
+ * survive until the next write touches it.
+ *
+ * The cost is bounded by *one customer's* events on one platform, read through
+ * `by_org_customer` — a handful of rows — not by the org's history. That is the
+ * trade: a small bounded read on write, in exchange for a list query that never
+ * reads events at all.
+ */
+export async function syncSocialConversation(
+  ctx: { db: GenericDatabaseWriter<DataModel> },
+  id: SocialConversationIdentity
+): Promise<void> {
+  const conversationKey = socialConversationKey(id);
+  const existing = await ctx.db
+    .query("socialConversations")
+    .withIndex("by_org_key", (q) =>
+      q.eq("orgId", id.orgId).eq("conversationKey", conversationKey)
+    )
+    .first();
+
+  const events = await readThreadEvents(ctx, id);
+
+  if (events.length === 0) {
+    if (existing) await ctx.db.delete(existing._id);
+    return;
+  }
+
+  const latest = events[events.length - 1];
+  // Distinct, in first-seen order: the list shows how many vehicles a thread
+  // touched and a summary of the first one.
+  const vehicleIds: Id<"vehicles">[] = [];
+  for (const event of events) {
+    if (event.vehicleId && !vehicleIds.includes(event.vehicleId)) {
+      vehicleIds.push(event.vehicleId);
+    }
+  }
+  // The most recent event carrying a lead, matching the old
+  // `[...events].reverse().find((e) => e.leadId)`.
+  let leadId: Id<"leads"> | undefined;
+  for (const event of events) {
+    if (event.leadId) leadId = event.leadId;
+  }
+
+  const row = {
+    orgId: id.orgId,
+    conversationKey,
+    platform: id.platform,
+    conversationKind: id.kind,
+    conversationPostId: id.kind === "comment" ? id.postId : undefined,
+    customerId: id.customerId,
+    lastEventAt: latest._creationTime,
+    eventCount: events.length,
+    unansweredCount: events.filter((e) => !e.autoRepliedAt && !e.manualRepliedAt).length,
+    vehicleIds,
+    vehicleCount: vehicleIds.length,
+    leadId,
+    latestText: latest.text,
+    latestSenderHandle: latest.senderHandle,
+    latestSenderRawId: latest.senderRawId,
+  };
+
+  if (existing) {
+    await ctx.db.patch(existing._id, row);
+  } else {
+    await ctx.db.insert("socialConversations", row);
+  }
+}
+
+/**
+ * Keeps `socialConversations` in step with an event write.
+ *
+ * Registered as a trigger for the same reason `recordSocialContact` is: these
+ * tables are written from five modules and some twenty call sites, and a
+ * materialised view maintained at the call sites is a view that one of them
+ * eventually forgets.
+ *
+ * Both sides of the write are synced, because an update can *move* an event
+ * between threads — `socialInboxBackfill` patches `postId`, which re-keys a
+ * comment, and a customer merge repoints `customerId`. Syncing only the new
+ * thread would leave the old one counting an event it no longer holds.
+ */
+async function syncConversationsForEventWrite(
+  ctx: { db: GenericDatabaseWriter<DataModel> },
+  platform: "instagram" | "facebook",
+  change: {
+    oldDoc: Doc<"instagramEvents"> | Doc<"facebookEvents"> | null;
+    newDoc: Doc<"instagramEvents"> | Doc<"facebookEvents"> | null;
+  }
+): Promise<void> {
+  const affected: SocialConversationIdentity[] = [];
+  const seen = new Set<string>();
+  for (const doc of [change.oldDoc, change.newDoc]) {
+    if (!doc) continue;
+    const id = socialConversationIdentity(platform, doc);
+    if (!id) continue;
+    const key = socialConversationKey(id);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    affected.push(id);
+  }
+  for (const id of affected) {
+    await syncSocialConversation(ctx, id);
+  }
+}
+
+aggregateTriggers.register("instagramEvents", async (ctx, change) => {
+  await syncConversationsForEventWrite(ctx, "instagram", change);
+});
+
+aggregateTriggers.register("facebookEvents", async (ctx, change) => {
+  await syncConversationsForEventWrite(ctx, "facebook", change);
 });

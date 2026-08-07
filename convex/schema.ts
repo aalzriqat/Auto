@@ -3063,6 +3063,71 @@ export default defineSchema({
     .index("by_org_platform_sender", ["orgId", "platform", "senderRawId"])
     .index("by_org", ["orgId"]),
 
+  /**
+   * One row per Social Inbox conversation thread — the unit the inbox list
+   * actually displays, materialised so it can be paginated.
+   *
+   * `socialInbox.listConversations` derived these by `.collect()`-ing every
+   * Instagram and Facebook event the org had ever received and grouping them in
+   * JavaScript: 1.34 GB of production bandwidth in the week of 2026-08-01,
+   * because it is a live subscription over the tables ingestion writes to and
+   * every inbound message made it re-read the whole history. A conversation is
+   * not a row, so there was nothing to paginate — the "cursor" was an offset
+   * into an in-memory array and each page re-scanned everything.
+   *
+   * ## Grouping key
+   *
+   * `conversationKey` is the exact string the old grouping used, so the split
+   * is unchanged: comments thread per (platform × customer × post), DMs per
+   * (platform × customer). Stored rather than recomputed so the upsert is one
+   * indexed point lookup.
+   *
+   * ## Why the denormalised fields are here
+   *
+   * `lastEventAt` is the sort key — the list orders by most recent activity, so
+   * it has to be indexed, not computed. The rest (`latestText`, the sender
+   * fields, `eventCount`, `unansweredCount`, `vehicleIds`, `leadId`) are what a
+   * row renders; keeping them here is what lets a page read 25 small rows
+   * instead of every event in the org.
+   *
+   * `unansweredCount` is a count, not the `needsReply` boolean the UI wants,
+   * because a boolean cannot be maintained: answering one event tells you
+   * nothing about whether the others are still unanswered. `needsReply` is
+   * `unansweredCount > 0`.
+   *
+   * `vehicleIds` is the distinct set in first-seen order, because the list
+   * shows both a count of linked vehicles and a summary of the first one.
+   */
+  socialConversations: defineTable({
+    orgId: v.id("organizations"),
+    conversationKey: v.string(),
+    platform: v.union(v.literal("instagram"), v.literal("facebook")),
+    conversationKind: v.union(v.literal("comment"), v.literal("dm")),
+    conversationPostId: v.optional(v.string()),
+    customerId: v.id("customers"),
+    lastEventAt: v.number(),
+    eventCount: v.number(),
+    unansweredCount: v.number(),
+    vehicleIds: v.array(v.id("vehicles")),
+    // `vehicleIds.length`, stored: Convex's filter expressions cannot measure an
+    // array, and the "has a linked vehicle" filter has to run inside the
+    // paginated read rather than after it.
+    vehicleCount: v.number(),
+    leadId: v.optional(v.id("leads")),
+    latestText: v.optional(v.string()),
+    latestSenderHandle: v.optional(v.string()),
+    latestSenderRawId: v.string(),
+  })
+    // Upsert path: resolve a thread from an event in one lookup.
+    .index("by_org_key", ["orgId", "conversationKey"])
+    // The list itself — descending gives most-recent-activity order directly.
+    .index("by_org_lastEventAt", ["orgId", "lastEventAt"])
+    // The two filters the inbox offers as first-class controls; the rest
+    // (hasVehicle, needsReply) are evaluated against the paginated stream,
+    // which reads these small rows rather than the events behind them.
+    .index("by_org_platform_lastEventAt", ["orgId", "platform", "lastEventAt"])
+    .index("by_org_kind_lastEventAt", ["orgId", "conversationKind", "lastEventAt"]),
+
   // Full Messenger thread: one row per message (in or out), enabling complete
   // conversation history including messages sent before AutoFlow existed.
   facebookMessages: defineTable({

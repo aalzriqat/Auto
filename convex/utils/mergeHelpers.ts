@@ -193,3 +193,23 @@ export const CUSTOMER_REFERENCING_TABLES = [
         .collect(),
   },
 ];
+
+/**
+ * Tables carrying a `customerId` that the merge must NOT rewrite, because the
+ * column is derived rather than a foreign key the row owns.
+ *
+ * `socialConversations` is materialised from `instagramEvents` and
+ * `facebookEvents`, both of which the registry above does repoint. Its
+ * `conversationKey` *embeds* the customer id, so blind-patching `customerId`
+ * would leave the key naming the loser: the row would no longer be found by the
+ * survivor's key, and the next inbound message would materialise a second
+ * thread beside the orphan. Letting the events move and the trigger rebuild is
+ * what keeps the two in step — the thread follows the survivor and the loser's
+ * row is deleted, because it now has no events.
+ *
+ * Kept as an explicit list rather than an exception in the test so the
+ * exhaustiveness check stays exhaustive: every table with a `customerId` must
+ * appear in exactly one of these two lists, and adding a column without
+ * deciding which is a build failure.
+ */
+export const CUSTOMER_DERIVED_TABLES = ["socialConversations"] as const;

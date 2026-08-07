@@ -321,11 +321,20 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // `requireOwnedRow`: it is an internalMutation with no caller-supplied
   // document id, and every row it touches is reached by walking either the
   // whole table or that same `orgId`'s `by_org` index.
+  // Then 445→447 / skippedNoArgsBlock 13→15, `analysed` unchanged at 288, by
+  // the two Social Inbox conversation backfills:
+  //
+  // `backfillInstagramConversations` and `backfillFacebookConversations`
+  // materialise `socialConversations` for events that predate the trigger. Both
+  // take the shared `BACKFILL_ARGS` constant rather than a literal args block,
+  // so they land in `skippedNoArgsBlock`; each walks one event table by
+  // pagination with no `orgId` and no caller-supplied document id, deriving the
+  // thread to rebuild from the row it just read.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 445,
+      totalMutations: 447,
       analysed: 288,
-      skippedNoArgsBlock: 13,
+      skippedNoArgsBlock: 15,
       skippedNoOrgId: 144,
     });
   });

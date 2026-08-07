@@ -7,6 +7,7 @@ import {
   leadsByOrg,
   membershipsByOrg,
   recordSocialContact,
+  syncSocialConversation,
   vehicleQualityByOrg,
   vehiclesByOrg,
 } from "./aggregates";
@@ -525,6 +526,70 @@ export const repairSocialContacts = internalMutation({
       // contract choice for clarity, not a guard against data loss.
       continueCursor: page.isDone || phase === "clear" ? null : page.continueCursor,
     };
+  },
+});
+
+/**
+ * Materialises `socialConversations` for the Instagram events that predate the
+ * trigger.
+ *
+ * Idempotent because `syncSocialConversation` is a full recompute keyed on the
+ * thread, not an increment: running it twice over the same event, or over two
+ * events in the same thread, converges on the identical row. That is the same
+ * property the aggregate backfills get from `insertIfDoesNotExist`, obtained
+ * here from the rebuild being a pure function of the thread's events.
+ *
+ * Separate from the Facebook one because a Convex function may run only one
+ * paginated query, and `convex-test` does not enforce that.
+ */
+export const backfillInstagramConversations = internalMutation({
+  args: BACKFILL_ARGS,
+  handler: async (ctx, args): Promise<BackfillResult> => {
+    const result = await seedAggregatePage(ctx, "instagramEvents", args, async (event) => {
+      if (!event.customerId) return;
+      await syncSocialConversation(ctx, {
+        orgId: event.orgId,
+        platform: "instagram",
+        customerId: event.customerId,
+        kind: event.kind,
+        postId: event.postId,
+      });
+    });
+
+    if (!result.isDone && args.continueAutomatically !== false) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillInstagramConversations, {
+        cursor: result.continueCursor,
+        batchSize: args.batchSize,
+      });
+    }
+
+    return result;
+  },
+});
+
+/** Facebook counterpart to `backfillInstagramConversations`. */
+export const backfillFacebookConversations = internalMutation({
+  args: BACKFILL_ARGS,
+  handler: async (ctx, args): Promise<BackfillResult> => {
+    const result = await seedAggregatePage(ctx, "facebookEvents", args, async (event) => {
+      if (!event.customerId) return;
+      await syncSocialConversation(ctx, {
+        orgId: event.orgId,
+        platform: "facebook",
+        customerId: event.customerId,
+        kind: event.kind,
+        postId: event.postId,
+      });
+    });
+
+    if (!result.isDone && args.continueAutomatically !== false) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillFacebookConversations, {
+        cursor: result.continueCursor,
+        batchSize: args.batchSize,
+      });
+    }
+
+    return result;
   },
 });
 

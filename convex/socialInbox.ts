@@ -106,7 +106,10 @@ function normalizeFacebookEvent(ev: Doc<"facebookEvents">): NormalizedEvent {
  * identifier, meaningless to the person reading the inbox, and it was landing
  * in the contact list whenever a profile lookup had not resolved yet.
  */
-function resolveSenderDisplayName(event: NormalizedEvent, customer: Doc<"customers"> | null): string {
+function resolveSenderDisplayName(
+  event: Pick<NormalizedEvent, "platform" | "senderRawId" | "senderHandle">,
+  customer: Doc<"customers"> | null
+): string {
   if (customer) {
     // Trimmed per field, matching the engagement helpers: a trailing space on
     // firstName otherwise leaves a double space in the joined name, which then
@@ -156,16 +159,9 @@ async function loadVehiclesForSuggestions(ctx: QueryCtx, orgId: Id<"organization
     .take(200);
 }
 
-/**
- * Stable key that groups events into a single conversation thread.
- * - Comments: one thread per (platform, customer, postId). Events with no postId
- *   are grouped into a "__none__" bucket until a resync can fill in the postId.
- * - DMs: one thread per (platform, customer) — all DMs in one inbox thread.
- */
-function getConversationKey(ev: NormalizedEvent): string {
-  if (ev.kind === "dm") return `${ev.platform}:${ev.customerId}:dm`;
-  return `${ev.platform}:${ev.customerId}:comment:${ev.postId ?? "__none__"}`;
-}
+// The thread grouping now lives in `convex/aggregates.ts` as
+// `socialConversationKey`, next to the trigger that materialises the rows, so
+// the reader and the writer cannot drift on what a thread is.
 
 /**
  * Paginated list of conversations for the Social Inbox — one row per
@@ -191,107 +187,84 @@ export const listConversations = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
     await requireFeature(ctx, args.orgId, "socialInbox");
 
-    const [igEvents, fbEvents] = await Promise.all([
-      ctx.db.query("instagramEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect(),
-      ctx.db.query("facebookEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect(),
-    ]);
-    const allEvents = [
-      ...igEvents.map(normalizeInstagramEvent),
-      ...fbEvents.map(normalizeFacebookEvent),
-    ];
+    // One page of materialised threads, newest activity first, straight off an
+    // index. This used to `.collect()` both event tables in full, group them in
+    // JavaScript, and slice the result — 1.34 GB of production bandwidth in a
+    // week, re-read from scratch on every inbound message and once per mounted
+    // page, because a "conversation" was not a row and the cursor was an offset
+    // into an in-memory array.
+    //
+    // `platform` and `kind` each get their own index so the common filtered
+    // views stay index-bounded. They are mutually exclusive in the index
+    // choice: a query can only use one, so when both are supplied the platform
+    // index runs and `kind` is matched against the stream. That still reads
+    // only small conversation rows, never the events behind them.
+    const baseQuery = args.platform
+      ? ctx.db
+          .query("socialConversations")
+          .withIndex("by_org_platform_lastEventAt", (q) =>
+            q.eq("orgId", args.orgId).eq("platform", args.platform!)
+          )
+      : args.kind
+        ? ctx.db
+            .query("socialConversations")
+            .withIndex("by_org_kind_lastEventAt", (q) =>
+              q.eq("orgId", args.orgId).eq("conversationKind", args.kind!)
+            )
+        : ctx.db
+            .query("socialConversations")
+            .withIndex("by_org_lastEventAt", (q) => q.eq("orgId", args.orgId));
 
-    // Group events into conversation threads
-    const grouped = new Map<
-      string,
-      {
-        events: NormalizedEvent[];
-        platform: "instagram" | "facebook";
-        kind: "comment" | "dm";
-        conversationPostId: string | null;
+    // Whatever the chosen index did not already constrain. `hasVehicle` reads
+    // the stored distinct-vehicle list and `needsReply` the stored unanswered
+    // count, so both mean exactly what the old in-memory predicates meant.
+    const filtered = baseQuery.filter((q) => {
+      const clauses = [];
+      if (args.platform && args.kind) {
+        clauses.push(q.eq(q.field("conversationKind"), args.kind));
       }
-    >();
-    for (const ev of allEvents) {
-      if (!ev.customerId) continue;
-      const key = getConversationKey(ev);
-      const existing = grouped.get(key);
-      if (existing) {
-        existing.events.push(ev);
-      } else {
-        grouped.set(key, {
-          events: [ev],
-          platform: ev.platform,
-          kind: ev.kind,
-          conversationPostId: ev.kind === "comment" ? (ev.postId ?? null) : null,
-        });
-      }
-    }
-
-    let conversations = Array.from(grouped.values()).map((g) => {
-      const latest = g.events.reduce((a, b) => (b._creationTime > a._creationTime ? b : a), g.events[0]);
-      const vehicleIds = new Set(g.events.filter((e) => e.vehicleId).map((e) => e.vehicleId as Id<"vehicles">));
-      const leadId = [...g.events].reverse().find((e) => e.leadId)?.leadId;
-      return {
-        customerId: latest.customerId!,
-        platform: g.platform,
-        conversationKind: g.kind,
-        conversationPostId: g.conversationPostId,
-        latest,
-        eventCount: g.events.length,
-        needsReply: g.events.some((e) => !e.autoRepliedAt && !e.manualRepliedAt),
-        vehicleIds,
-        leadId,
-      };
+      if (args.hasVehicle === true) clauses.push(q.gt(q.field("vehicleCount"), 0));
+      if (args.hasVehicle === false) clauses.push(q.eq(q.field("vehicleCount"), 0));
+      if (args.needsReply === true) clauses.push(q.gt(q.field("unansweredCount"), 0));
+      if (args.needsReply === false) clauses.push(q.eq(q.field("unansweredCount"), 0));
+      return clauses.length === 0 ? true : clauses.reduce((a, b) => q.and(a, b));
     });
-    conversations.sort((a, b) => b.latest._creationTime - a.latest._creationTime);
 
-    // Apply filters
-    if (args.platform) {
-      const p = args.platform;
-      conversations = conversations.filter((c) => c.platform === p);
-    }
-    if (args.kind) {
-      const k = args.kind;
-      conversations = conversations.filter((c) => c.conversationKind === k);
-    }
-    if (args.hasVehicle === true) conversations = conversations.filter((c) => c.vehicleIds.size > 0);
-    if (args.hasVehicle === false) conversations = conversations.filter((c) => c.vehicleIds.size === 0);
-    if (args.needsReply === true) conversations = conversations.filter((c) => c.needsReply);
-    if (args.needsReply === false) conversations = conversations.filter((c) => !c.needsReply);
-
-    const start = Number(args.paginationOpts.cursor ?? "0");
-    const numItems = args.paginationOpts.numItems;
-    const pageSlice = conversations.slice(start, start + numItems);
+    const pageResult = await filtered.order("desc").paginate(args.paginationOpts);
 
     const page = await Promise.all(
-      pageSlice.map(async (c) => {
+      pageResult.page.map(async (c) => {
         const customer = await ctx.db.get(c.customerId);
         const lead = c.leadId ? await ctx.db.get(c.leadId) : null;
-        const vehicleId = [...c.vehicleIds][0];
+        const vehicleId = c.vehicleIds[0];
         const vehicle = vehicleId ? await ctx.db.get(vehicleId) : null;
         return {
           customerId: c.customerId,
           leadId: c.leadId ?? null,
           platform: c.platform,
           conversationKind: c.conversationKind,
-          conversationPostId: c.conversationPostId,
-          senderDisplayName: resolveSenderDisplayName(c.latest, customer),
-          latestText: c.latest.text,
-          latestCreationTime: c.latest._creationTime,
-          latestSenderHandle: c.latest.senderHandle ?? null,
+          conversationPostId: c.conversationPostId ?? null,
+          senderDisplayName: resolveSenderDisplayName(
+            {
+              platform: c.platform,
+              senderRawId: c.latestSenderRawId,
+              senderHandle: c.latestSenderHandle,
+            },
+            customer
+          ),
+          latestText: c.latestText,
+          latestCreationTime: c.lastEventAt,
+          latestSenderHandle: c.latestSenderHandle ?? null,
           vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : null,
-          vehicleCount: c.vehicleIds.size,
+          vehicleCount: c.vehicleIds.length,
           eventCount: c.eventCount,
-          needsReply: c.needsReply,
+          needsReply: c.unansweredCount > 0,
           leadStage: lead?.stage ?? null,
         };
       })
     );
 
-    return {
-      page,
-      isDone: start + numItems >= conversations.length,
-      continueCursor: String(start + numItems),
-    };
+    return { ...pageResult, page };
   },
 });
 
