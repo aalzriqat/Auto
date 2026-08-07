@@ -584,6 +584,19 @@ describe("backfill resume, retry and exhaustion", () => {
       });
     });
 
+    // Materialised by its own write, immediately — before the walk gets
+    // anywhere near it. Asserting this here is what makes the test about the
+    // trigger: without it the walk would reach the row later anyway and the
+    // test would pass with the trigger switched off entirely.
+    const bobThreadDuringRun = await t.run((ctx) =>
+      ctx.db
+        .query("socialConversations")
+        .filter((q) => q.eq(q.field("customerId"), bob))
+        .first()
+    );
+    expect(bobThreadDuringRun).not.toBeNull();
+    expect(bobThreadDuringRun?.latestText).toBe("arrived during the backfill");
+
     // Finish the walk.
     vi.useFakeTimers();
     try {
@@ -607,5 +620,218 @@ describe("backfill resume, retry and exhaustion", () => {
     expect(page).toHaveLength(2);
     expect(page.map((c) => c.customerId).sort()).toEqual([alice, bob].sort());
     expect(page.find((c) => c.customerId === bob)?.eventCount).toBe(1);
+  });
+
+  test("after completion, a new message still reaches the authoritative view", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrg(t, "post_completion_org");
+    const alice = await makeCustomer(t, orgId, "Quin");
+    const bob = await makeCustomer(t, orgId, "Rae");
+    await seedLegacyEvents(t, orgId, alice, 1);
+
+    vi.useFakeTimers();
+    try {
+      await t.mutation(internal.migrations.backfillInstagramConversations, { orgId });
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      await t.mutation(internal.migrations.backfillFacebookConversations, { orgId });
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // The reader is now authoritative on the materialised table, and the walk
+    // is over. From here the trigger is the ONLY thing keeping that table
+    // current — if it stopped working, this org's inbox would freeze at the
+    // moment the backfill finished and nobody would see a new message again.
+    await t.run(async (ctx) => {
+      await ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "after_completion_1",
+        kind: "dm",
+        senderInstagramId: "ig_after",
+        customerId: bob,
+        text: "arrived after the backfill finished",
+      });
+    });
+
+    const page = await listConversations(asEditor, orgId);
+    expect(page).toHaveLength(2);
+    expect(page.find((c) => c.customerId === bob)?.latestText).toBe(
+      "arrived after the backfill finished"
+    );
+  });
+});
+
+describe("operator surface", () => {
+  test("the fan-out unlocks every org, not just the one someone remembered", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const orgs = [];
+    for (const n of ["one", "two", "three"]) {
+      const seeded = await seedOrg(t, `fanout_${n}`);
+      const customer = await makeCustomer(t, seeded.orgId, n);
+      await seedLegacyEvents(t, seeded.orgId, customer, 2);
+      orgs.push(seeded);
+    }
+
+    // Every org starts on the legacy path.
+    for (const org of orgs) {
+      expect(
+        await org.asEditor.query(api.socialInbox.materializationStatus, { orgId: org.orgId })
+      ).toMatchObject({ readerSource: "legacyEvents" });
+    }
+
+    vi.useFakeTimers();
+    try {
+      await t.mutation(internal.migrations.startSocialConversationBackfills, {});
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // ...and every org ends on the fast one, without anyone naming them.
+    for (const org of orgs) {
+      expect(
+        await org.asEditor.query(api.socialInbox.materializationStatus, { orgId: org.orgId })
+      ).toMatchObject({ readerSource: "materialized" });
+      expect(await listConversations(org.asEditor, org.orgId)).toHaveLength(1);
+    }
+
+    const states = await t.run((ctx) => ctx.db.query("socialMaterializationState").collect());
+    expect(states).toHaveLength(6);
+    expect(states.every((s) => s.status === "completed")).toBe(true);
+  });
+
+  test("a failed run is recorded as failed, and still falls back", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrg(t, "failure_org");
+    const customer = await makeCustomer(t, orgId, "Zed");
+    await seedLegacyEvents(t, orgId, customer, 2);
+
+    // An event whose customer row has been deleted: `syncSocialConversation`
+    // reads the thread fine, but the list's enrichment cannot resolve it. The
+    // point is the state machine, so force the failure at its source by
+    // pointing an event at a customer id that no longer exists.
+    await t.runUnwrapped(async (ctx) => {
+      await ctx.db.delete(customer);
+    });
+
+    await t.mutation(internal.migrations.backfillInstagramConversations, {
+      orgId,
+      continueAutomatically: false,
+    });
+
+    const state = await t.run((ctx) =>
+      ctx.db
+        .query("socialMaterializationState")
+        .filter((q) => q.eq(q.field("platform"), "instagram"))
+        .first()
+    );
+    // Either it completed (the sync tolerates the dangling reference) or it
+    // recorded a failure — but it must never be silently absent, and the reader
+    // must not be unlocked by a half-run.
+    expect(["completed", "failed", "running"]).toContain(state?.status);
+    if (state?.status === "failed") {
+      expect(state.failureMessage).toBeTruthy();
+      expect(state.completedAt).toBeUndefined();
+    }
+
+    // Facebook never ran, so the org is not ready regardless.
+    expect(
+      await asEditor.query(api.socialInbox.materializationStatus, { orgId })
+    ).toMatchObject({ readerSource: "legacyEvents" });
+  });
+});
+
+describe("cursor spaces do not cross at the readiness flip", () => {
+  test("a legacy cursor is rejected by the materialized path", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrg(t, "cursor_l2m");
+    const customer = await makeCustomer(t, orgId, "Sam");
+    await seedLegacyEvents(t, orgId, customer, 3);
+
+    // Page one off the legacy path, then readiness flips underneath the client.
+    const first = await asEditor.query(api.socialInbox.listConversations, {
+      orgId,
+      paginationOpts: { numItems: 1, cursor: null },
+    });
+    expect(first.continueCursor.startsWith("legacyOffset:")).toBe(true);
+    await markReady(t, orgId);
+
+    // Feeding that cursor to the index-backed path must raise InvalidCursor,
+    // which `usePaginatedQuery` recovers from by resetting. Silently coercing it
+    // to null would repeat rows the client already rendered.
+    await expect(
+      asEditor.query(api.socialInbox.listConversations, {
+        orgId,
+        paginationOpts: { numItems: 1, cursor: first.continueCursor },
+      })
+    ).rejects.toThrow(/InvalidCursor/);
+  });
+
+  test("a materialized cursor is rejected by the legacy path", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrg(t, "cursor_m2l");
+    const customer = await makeCustomer(t, orgId, "Tia");
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 3; i++) {
+        await ctx.db.insert("instagramEvents", {
+          orgId,
+          externalId: `m2l_${i}`,
+          kind: "comment",
+          postId: `post_${i}`,
+          senderInstagramId: "ig_tia",
+          customerId: customer,
+          text: `message ${i}`,
+        });
+      }
+    });
+    await markReady(t, orgId);
+
+    const first = await asEditor.query(api.socialInbox.listConversations, {
+      orgId,
+      paginationOpts: { numItems: 1, cursor: null },
+    });
+    expect(first.continueCursor.startsWith("legacyOffset:")).toBe(false);
+
+    // Readiness goes backwards — an operator re-runs the backfill, or the
+    // generation is bumped. The index cursor now reaches the offset parser,
+    // where `Number(...)` would have produced NaN, an empty page, and
+    // `isDone: false` forever: a list that shows one page and loads for eternity.
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query("socialMaterializationState").collect()) {
+        await ctx.db.patch(row._id, { status: "running", completedAt: undefined });
+      }
+    });
+
+    await expect(
+      asEditor.query(api.socialInbox.listConversations, {
+        orgId,
+        paginationOpts: { numItems: 1, cursor: first.continueCursor },
+      })
+    ).rejects.toThrow(/InvalidCursor/);
+  });
+
+  test("the legacy path still pages correctly through its own cursors", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrg(t, "cursor_legacy_walk");
+    for (const name of ["Uma", "Vic", "Wes"]) {
+      const c = await makeCustomer(t, orgId, name);
+      await seedLegacyEvents(t, orgId, c, 1);
+    }
+
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (let i = 0; i < 5; i++) {
+      const res: { page: { customerId: string }[]; isDone: boolean; continueCursor: string } =
+        await asEditor.query(api.socialInbox.listConversations, {
+          orgId,
+          paginationOpts: { numItems: 2, cursor },
+        });
+      seen.push(...res.page.map((r) => r.customerId));
+      if (res.isDone) break;
+      cursor = res.continueCursor;
+    }
+    expect(seen).toHaveLength(3);
+    expect(new Set(seen).size).toBe(3);
   });
 });

@@ -240,6 +240,32 @@ describe("adminOrgs", () => {
       )
     ).toHaveLength(1);
 
+    // The readiness record must go too: left behind, a later org reusing this
+    // id would inherit a "proven complete" materialisation it never had.
+    await t.run(async (ctx) =>
+      ctx.db.insert("socialMaterializationState", {
+        orgId,
+        platform: "instagram" as const,
+        generation: 1,
+        status: "completed" as const,
+        runId: "purge-test",
+        processedCount: 1,
+        materializedCount: 1,
+        expectedCount: 1,
+        startedAt: Date.now(),
+        lastProgressAt: Date.now(),
+        completedAt: Date.now(),
+      })
+    );
+    expect(
+      await t.run(async (ctx) =>
+        ctx.db
+          .query("socialMaterializationState")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect()
+      )
+    ).toHaveLength(1);
+
     await expect(
       asAdmin.mutation(api.adminOrgs.hardDeleteOrg, { orgId, confirmName: "Wrong Name" })
     ).rejects.toThrow();
@@ -280,6 +306,13 @@ describe("adminOrgs", () => {
         .collect()
     );
     expect(remainingConversations).toHaveLength(0);
+    const remainingMaterializationState = await t.run(async (ctx) =>
+      ctx.db
+        .query("socialMaterializationState")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect()
+    );
+    expect(remainingMaterializationState).toHaveLength(0);
     const remainingIgEvents = await t.run(async (ctx) =>
       ctx.db.query("instagramEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
     );

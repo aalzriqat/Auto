@@ -577,6 +577,17 @@ type ConversationBackfillResult = {
  * materialised reader, that is precisely the false-completion the gate exists
  * to prevent.
  */
+/**
+ * The next run's sequence number, one past whatever the previous run id
+ * carried. Unparseable or absent ids restart at 0, which is safe because the
+ * timestamp segment still differs across milliseconds.
+ */
+function nextRunSequence(previousRunId: string | undefined): number {
+  if (!previousRunId) return 0;
+  const seq = Number(previousRunId.split(":").at(-1));
+  return Number.isInteger(seq) && seq >= 0 ? seq + 1 : 0;
+}
+
 async function beginConversationBackfill(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
@@ -597,13 +608,16 @@ async function beginConversationBackfill(
   // An operator start. Restart from the beginning under a new run id, which
   // also fences any chain still running under the old one.
   //
-  // `Date.now()` alone is the entropy. Two starts for the same org and platform
-  // inside one millisecond would share a run id and both proceed, which is
-  // harmless: the work is a full recompute per thread, so the two chains
-  // converge on the same rows. Deliberately not `Math.random()` or
-  // `crypto.randomUUID()` — this file has already been burned once by assuming
-  // a runtime capability that was never exercised against real Convex.
-  const nextRunId = `${platform}:${now}`;
+  // The id carries a sequence number taken from the record it replaces, not
+  // just a timestamp. `Date.now()` alone looks sufficient and is not: two
+  // operator starts inside the same millisecond produce identical ids, the
+  // second fails to fence the first, and two chains then share one cursor —
+  // which is exactly the false-completion this mechanism exists to prevent.
+  // Reading the previous sequence makes it strictly increasing without relying
+  // on `Math.random()` or `crypto.randomUUID()`, neither of which this file
+  // should assume after `events.at(-1)` had to be proven against a live
+  // deployment.
+  const nextRunId = `${platform}:${now}:${nextRunSequence(existing?.runId)}`;
   const fresh = {
     orgId,
     platform,
@@ -674,6 +688,82 @@ function conversationBatchSize(batchSize: number | undefined): number {
 }
 
 /**
+ * Records a run as failed rather than leaving it silently stalled.
+ *
+ * Only reachable for errors the handler can catch. A Convex transaction limit
+ * kills the transaction outright and rolls this write back with everything
+ * else, which is why `interrupted` — derived from a stale `lastProgressAt` —
+ * remains the catch-all signal. Both are non-`completed`, so the reader falls
+ * back either way; the difference is only how legible the state is to whoever
+ * has to fix it.
+ */
+async function recordConversationBackfillFailure(
+  ctx: MutationCtx,
+  state: Doc<"socialMaterializationState">,
+  error: unknown
+): Promise<ConversationBackfillResult> {
+  console.error("social conversation backfill failed", error);
+  await ctx.db.patch(state._id, {
+    status: "failed",
+    lastProgressAt: Date.now(),
+    // Truncated and generic: this string reaches an admin screen, and raw
+    // Convex errors leak schema and row shapes.
+    failureMessage:
+      error instanceof Error ? error.message.slice(0, 300) : "Unknown backfill error",
+  });
+  return { status: "failed", processed: state.processedCount, materialized: 0, isDone: false };
+}
+
+/**
+ * Starts both conversation backfills for every organization.
+ *
+ * Without this the migration has no operator surface at all: the two backfills
+ * are org-scoped, so running them means invoking 2N internal mutations by hand
+ * with no way to enumerate N — and until they run, every tenant stays on the
+ * legacy full-scan path, which is the entire cost this work exists to remove.
+ * A gate that is never unlocked is just a slower inbox.
+ *
+ * Safe to re-run. Each per-org backfill allocates a fresh run and restarts,
+ * and `syncSocialConversation` is a full recompute, so a redrive converges
+ * rather than duplicating.
+ */
+export const startSocialConversationBackfills = internalMutation({
+  args: {
+    cursor: v.optional(v.union(v.string(), v.null())),
+    batchSize: v.optional(v.number()),
+    continueAutomatically: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args): Promise<{ orgs: number; isDone: boolean }> => {
+    // THE one paginated query. Organizations are walked in pages so a tenant
+    // count that grows past a single transaction cannot wedge the fan-out.
+    const page = await ctx.db.query("organizations").paginate({
+      cursor: args.cursor ?? null,
+      numItems: 25,
+    });
+
+    for (const org of page.page) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillInstagramConversations, {
+        orgId: org._id,
+        batchSize: args.batchSize,
+      });
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillFacebookConversations, {
+        orgId: org._id,
+        batchSize: args.batchSize,
+      });
+    }
+
+    if (!page.isDone && args.continueAutomatically !== false) {
+      await ctx.scheduler.runAfter(0, internal.migrations.startSocialConversationBackfills, {
+        cursor: page.continueCursor,
+        batchSize: args.batchSize,
+      });
+    }
+
+    return { orgs: page.page.length, isDone: page.isDone };
+  },
+});
+
+/**
  * Materialises `socialConversations` for one org's Instagram events that
  * predate the trigger, and records whether that has been proven exhaustive.
  *
@@ -719,19 +809,25 @@ export const backfillInstagramConversations = internalMutation({
     // dominated by one thread and would otherwise recompute it once per event,
     // making the batch cost events x history instead of threads x history.
     const synced = new Set<string>();
-    for (const event of page.page) {
-      if (!event.customerId) continue;
-      const identity = {
-        orgId: event.orgId,
-        platform: "instagram" as const,
-        customerId: event.customerId,
-        kind: event.kind,
-        postId: event.postId,
-      };
-      const key = namespacedThreadKey(identity);
-      if (synced.has(key)) continue;
-      synced.add(key);
-      await syncSocialConversation(ctx, identity);
+    try {
+      for (const event of page.page) {
+        if (!event.customerId) continue;
+        const identity = {
+          orgId: event.orgId,
+          platform: "instagram" as const,
+          customerId: event.customerId,
+          kind: event.kind,
+          postId: event.postId,
+        };
+        const key = namespacedThreadKey(identity);
+        if (synced.has(key)) continue;
+        synced.add(key);
+        await syncSocialConversation(ctx, identity);
+      }
+    } catch (error) {
+      // Deliberately not rethrown: rethrowing rolls the transaction back, and
+      // with it the very record that says the run failed.
+      return await recordConversationBackfillFailure(ctx, state, error);
     }
 
     const result = await recordConversationBackfillProgress(
@@ -784,19 +880,25 @@ export const backfillFacebookConversations = internalMutation({
 
     // One sync per distinct thread, not per event. See the Instagram twin.
     const synced = new Set<string>();
-    for (const event of page.page) {
-      if (!event.customerId) continue;
-      const identity = {
-        orgId: event.orgId,
-        platform: "facebook" as const,
-        customerId: event.customerId,
-        kind: event.kind,
-        postId: event.postId,
-      };
-      const key = namespacedThreadKey(identity);
-      if (synced.has(key)) continue;
-      synced.add(key);
-      await syncSocialConversation(ctx, identity);
+    try {
+      for (const event of page.page) {
+        if (!event.customerId) continue;
+        const identity = {
+          orgId: event.orgId,
+          platform: "facebook" as const,
+          customerId: event.customerId,
+          kind: event.kind,
+          postId: event.postId,
+        };
+        const key = namespacedThreadKey(identity);
+        if (synced.has(key)) continue;
+        synced.add(key);
+        await syncSocialConversation(ctx, identity);
+      }
+    } catch (error) {
+      // Deliberately not rethrown: rethrowing rolls the transaction back, and
+      // with it the very record that says the run failed.
+      return await recordConversationBackfillFailure(ctx, state, error);
     }
 
     const result = await recordConversationBackfillProgress(

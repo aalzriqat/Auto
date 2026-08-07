@@ -110,8 +110,11 @@ const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // nothing. Its cost, and the point at which that stops being acceptable, are
   // documented on `syncSocialConversation` in `aggregates.ts`.
   { kind: "orgRows", table: "socialConversations", index: "by_org_lastEventAt" },
-  // The readiness record for the two steps above. Left behind, it would claim a
-  // recreated org with the same id had a proven-complete materialisation.
+  // The readiness record for the two steps above. Convex never reuses document
+  // ids, so this is not about a resurrected org reading someone else's state —
+  // it is that `hardDeleteOrg` reporting COMPLETED while leaving rows behind is
+  // this table's documented recurring defect, and an org-scoped table with no
+  // purge step is how the count got to 38.
   { kind: "orgRows", table: "socialMaterializationState", index: "by_org" },
   { kind: "orgRows", table: "facebookMessages", index: "by_org" },
   { kind: "socialPostsWithStorage" },

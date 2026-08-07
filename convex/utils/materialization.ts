@@ -98,10 +98,23 @@ export function describeMaterializationStatus(
  *    transaction as the write. It is live from the instant the code deploys —
  *    strictly before any backfill can be invoked, since the backfill is code
  *    from the same push.
- * 2. Every write path to `instagramEvents`/`facebookEvents` goes through the
- *    trigger-wrapped builders in `functions.ts`. That is not an assumption:
- *    `deferredThreadSync.test.ts` fails the build on any mutation that writes
- *    these tables without them.
+ * 2. Every write path to `instagramEvents`/`facebookEvents` goes through a
+ *    trigger-wrapped builder from `functions.ts`. That is enforced, not
+ *    assumed: `aggregateWiring.test.ts` fails the build on a Convex module
+ *    that imports a raw `mutation`/`internalMutation` instead.
+ *
+ *    One honest caveat. `socialBulkMutation` is deliberately wrapped with
+ *    `deferredThreadTriggers`, which does NOT recompute conversations per
+ *    write — bulk loops opt into it precisely to avoid O(N²) recomputes, and
+ *    settle up by calling `syncDeferredSocialThreads` at the end.
+ *    `deferredThreadSync.test.ts` fails the build if such a mutation never
+ *    calls it, but it cannot prove the handler collected *every* thread it
+ *    touched. Both current call sites do (`customers.mergeCustomers` collects
+ *    loser and survivor; `setConversationVehicle` collects the pre-patch rows,
+ *    and `vehicleId` is not part of the key). A future one that collects only
+ *    some of what it patches would leave stale rows that COMPLETED would then
+ *    vouch for. That is the residual risk in this argument, and it lives in the
+ *    writer, not the gate.
  * 3. So an event arriving mid-run is materialised by its own write, whether or
  *    not the walk has reached it yet.
  * 4. And the walk cannot skip it either. Pagination is by index sort key, new

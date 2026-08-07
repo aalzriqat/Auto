@@ -177,6 +177,41 @@ async function loadVehiclesForSuggestions(ctx: QueryCtx, orgId: Id<"organization
 // `socialConversationKey`, next to the trigger that materialises the rows, so
 // the reader and the writer cannot drift on what a thread is.
 
+/**
+ * The two sources page through different cursor spaces, and a client can hold a
+ * cursor across the moment readiness flips.
+ *
+ * The legacy path's cursor is an offset into a re-sorted array; the materialised
+ * path's is a Convex index sort key. Neither is meaningful to the other, and the
+ * failure is silent in the dangerous direction: `Number('["1700000000000",…]')`
+ * is `NaN`, `slice(NaN, NaN)` is empty, and the legacy path would answer with an
+ * empty page, `isDone: false`, and a `"NaN"` cursor — a Social Inbox that shows
+ * one page and then loads forever without ever finishing. That is the same
+ * confidently-wrong-and-quiet shape as the incident this gate was written for.
+ *
+ * So each path rejects the other's cursor explicitly. `InvalidCursor` is the one
+ * error `usePaginatedQuery` recovers from by itself: it resets pagination state
+ * and re-fetches from the start. Coercing a foreign cursor to `null` instead
+ * would look tidier and would duplicate rows across the seam.
+ */
+const LEGACY_CURSOR_PREFIX = "legacyOffset:";
+
+function invalidCursor(): never {
+  throw new ConvexError({
+    isConvexSystemError: true,
+    paginationError: "InvalidCursor",
+  });
+}
+
+/** Offset for the legacy path, rejecting a materialised cursor. */
+function parseLegacyCursor(cursor: string | null): number {
+  if (cursor === null) return 0;
+  if (!cursor.startsWith(LEGACY_CURSOR_PREFIX)) invalidCursor();
+  const offset = Number(cursor.slice(LEGACY_CURSOR_PREFIX.length));
+  if (!Number.isInteger(offset) || offset < 0) invalidCursor();
+  return offset;
+}
+
 /** One conversation row as the inbox renders it, from either source. */
 type ConversationListItem = {
   customerId: Id<"customers">;
@@ -294,7 +329,7 @@ async function listConversationsFromEvents(
   if (args.needsReply === true) conversations = conversations.filter((c) => c.needsReply);
   if (args.needsReply === false) conversations = conversations.filter((c) => !c.needsReply);
 
-  const start = Number(args.paginationOpts.cursor ?? "0");
+  const start = parseLegacyCursor(args.paginationOpts.cursor);
   const numItems = args.paginationOpts.numItems;
   const pageSlice = conversations.slice(start, start + numItems);
 
@@ -326,7 +361,7 @@ async function listConversationsFromEvents(
   return {
     page,
     isDone: start + numItems >= conversations.length,
-    continueCursor: String(start + numItems),
+    continueCursor: `${LEGACY_CURSOR_PREFIX}${start + numItems}`,
   };
 }
 
@@ -375,6 +410,13 @@ export const listConversations = query({
     if (!(await socialConversationsReady(ctx, args.orgId))) {
       return await listConversationsFromEvents(ctx, args);
     }
+
+    // Readiness flipped underneath a client that is mid-scroll on the legacy
+    // path. Convex would reject this cursor itself, but not before the shape of
+    // the error became the caller's problem; raising `InvalidCursor` is what
+    // makes `usePaginatedQuery` reset and re-page cleanly against the new
+    // source.
+    if (args.paginationOpts.cursor?.startsWith(LEGACY_CURSOR_PREFIX)) invalidCursor();
 
     // One page of materialised threads, newest activity first, straight off an
     // index. This used to `.collect()` both event tables in full, group them in

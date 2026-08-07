@@ -4,7 +4,7 @@ import {
   seedOrgWithMember,
   VIEWER_PERMISSIONS,
 } from "../test-utils/seedOrg";
-import { expect, test, describe, vi } from "vitest";
+import { expect, test, describe, vi, beforeEach } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import {
@@ -12,6 +12,7 @@ import {
   resetSocialConversationSyncCount,
 } from "./aggregates";
 import type { Id } from "./_generated/dataModel";
+import { SOCIAL_CONVERSATION_GENERATION } from "./utils/materialization";
 
 /**
  * `socialInbox.listConversations` used to `.collect()` every Instagram and
@@ -33,13 +34,59 @@ import type { Id } from "./_generated/dataModel";
  * grouping, and direct exercise of every way an event can move between threads.
  */
 
+/**
+ * Which source the suite is currently exercising.
+ *
+ * Every test below runs twice. That is not thoroughness for its own sake: when
+ * the readiness gate landed, `seedOrgWithMember` created its org with a raw
+ * insert and therefore no readiness record, so this entire file silently moved
+ * onto the legacy fallback. The suite stayed green while the materialised
+ * reader's filters, index selection and cursor pagination had no coverage at
+ * all — inverting `hasVehicle` on the materialised path passed all 37 tests.
+ *
+ * Green because nothing was examined is indistinguishable from green because
+ * nothing is wrong, which is the same failure the gate itself exists to stop.
+ * `actualConversations` therefore also asserts which path answered, so the
+ * suite fails loudly rather than quietly if it ever drifts back.
+ */
+type ReaderSource = "legacy" | "materialized";
+let currentSource: ReaderSource = "legacy";
+
+/** Records both platforms complete, which is what unlocks the indexed reader. */
+async function markMaterializationReady(
+  t: ReturnType<typeof convexTestWithComponents>,
+  orgId: Id<"organizations">
+) {
+  for (const platform of ["instagram", "facebook"] as const) {
+    await t.run((ctx) =>
+      ctx.db.insert("socialMaterializationState", {
+        orgId,
+        platform,
+        generation: SOCIAL_CONVERSATION_GENERATION,
+        status: "completed" as const,
+        runId: `suite:${platform}`,
+        processedCount: 0,
+        materializedCount: 0,
+        expectedCount: 0,
+        startedAt: Date.now(),
+        lastProgressAt: Date.now(),
+        completedAt: Date.now(),
+      })
+    );
+  }
+}
+
 /** Thin wrapper so call sites keep reading `asEditor` / `asUser`. */
 async function seedOrg(
   t: ReturnType<typeof convexTestWithComponents>,
   clerkId = "conv_editor_001",
-  permissions: string[] = VIEWER_PERMISSIONS
+  permissions: string[] = VIEWER_PERMISSIONS,
+  options: { markReady?: boolean } = {}
 ) {
   const { orgId, identity } = await seedOrgWithMember(t, { clerkId, permissions });
+  if ((options.markReady ?? true) && currentSource === "materialized") {
+    await markMaterializationReady(t, orgId);
+  }
   return { orgId, identity, asEditor: identity, asUser: identity };
 }
 
@@ -106,8 +153,19 @@ async function oracleConversations(
 async function actualConversations(
   asEditor: ReturnType<ReturnType<typeof convexTestWithComponents>["withIdentity"]>,
   orgId: Id<"organizations">,
-  args: Record<string, unknown> = {}
+  args: Record<string, unknown> = {},
+  // "any" is for the one test that deliberately crosses the boundary mid-test.
+  expectSource: ReaderSource | "any" = currentSource
 ) {
+  // Armed guard: prove the intended path actually answered. Without this the
+  // whole suite can drift onto one source and still pass.
+  if (expectSource !== "any") {
+    const status = await asEditor.query(api.socialInbox.materializationStatus, { orgId });
+    expect(status.readerSource).toBe(
+      expectSource === "materialized" ? "materialized" : "legacyEvents"
+    );
+  }
+
   const result = await asEditor.query(api.socialInbox.listConversations, {
     orgId,
     paginationOpts: { numItems: 100, cursor: null },
@@ -125,7 +183,13 @@ async function actualConversations(
   }));
 }
 
-describe("socialInbox.listConversations — materialised threads", () => {
+describe.each(["legacy", "materialized"] as const)(
+  "socialInbox.listConversations — %s source",
+  (source) => {
+  beforeEach(() => {
+    currentSource = source;
+  });
+
   test("matches the original grouping across platforms, kinds, posts and replies", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrg(t);
@@ -506,7 +570,11 @@ describe("socialInbox.listConversations — materialised threads", () => {
     vi.useFakeTimers();
     try {
       const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-      const { orgId, asEditor } = await seedOrg(t);
+      // Always starts un-ready: this test IS the transition from one source to
+      // the other, so it must not be pre-marked by the variant.
+      const { orgId, asEditor } = await seedOrg(t, undefined, undefined, {
+        markReady: false,
+      });
       const alice = await makeCustomer(t, orgId, "Alice", "Buyer");
       const bob = await makeCustomer(t, orgId, "Bob", "Buyer");
 
@@ -531,7 +599,7 @@ describe("socialInbox.listConversations — materialised threads", () => {
       // the events rather than report an empty inbox. Before the readiness
       // gate this returned 0 — which is exactly what a production deployment
       // showed staff over a thousand live events.
-      const beforeBackfill = await actualConversations(asEditor, orgId);
+      const beforeBackfill = await actualConversations(asEditor, orgId, {}, "legacy");
       expect(beforeBackfill).toHaveLength(2);
       expect(await t.run((ctx) => ctx.db.query("socialConversations").collect())).toHaveLength(0);
 
@@ -549,7 +617,8 @@ describe("socialInbox.listConversations — materialised threads", () => {
       };
 
       await runBackfills();
-      const healed = await actualConversations(asEditor, orgId);
+      // The backfill proved exhaustion, so the reader has switched sources.
+      const healed = await actualConversations(asEditor, orgId, {}, "materialized");
       const expected = await oracleConversations(t, orgId);
       expect(healed).toHaveLength(2);
       expect(healed.map((c) => c.eventCount).sort()).toEqual([1, 2]);
@@ -561,7 +630,7 @@ describe("socialInbox.listConversations — materialised threads", () => {
       // even in a single run; a redrive does it twice more. A recompute
       // converges, an increment would not.
       await runBackfills();
-      expect(await actualConversations(asEditor, orgId)).toEqual(healed);
+      expect(await actualConversations(asEditor, orgId, {}, "materialized")).toEqual(healed);
       expect(await t.run((ctx) => ctx.db.query("socialConversations").collect())).toHaveLength(2);
     } finally {
       vi.useRealTimers();
@@ -590,6 +659,9 @@ describe("socialInbox.listConversations — materialised threads", () => {
       })
     );
     await t.run(async (ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+    // This org is built by hand rather than through `seedOrg`, so it needs the
+    // readiness record the variant would otherwise have added.
+    if (currentSource === "materialized") await markMaterializationReady(t, orgId);
     const asMerger = t.withIdentity({ subject: "conv_merger" });
 
     const survivorId = await makeCustomer(t, orgId, "Survivor", "Customer");
@@ -895,4 +967,5 @@ describe("socialInbox.listConversations — materialised threads", () => {
       })
     ).rejects.toThrow();
   });
-});
+  }
+);
