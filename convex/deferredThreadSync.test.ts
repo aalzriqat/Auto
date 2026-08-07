@@ -159,7 +159,12 @@ export function deferredMutationsIn(source: string, rel: string): string[] {
   const found: string[] = [];
   const code = stripComments(source);
 
-  for (const raw of code.split(/\nexport const /).slice(1)) {
+  // Leading newline so a definition at offset 0 is chunked like any other.
+  // Splitting on a newline-prefixed `export const` alone made the FIRST
+  // definition in a module invisible — no chunk, no offender, silently clean.
+  // Fourth fail-open in this helper, same shape as the rest: it reported
+  // nothing because it looked at nothing.
+  for (const raw of ("\n" + code).split(/\nexport const /).slice(1)) {
     const whole = "export const " + raw;
     const end = whole.search(/\n\}\);/);
     const name = raw.match(/^(\w+)/)?.[1];
@@ -176,7 +181,12 @@ export function deferredMutationOffenders(source: string, rel: string): string[]
   const offenders: string[] = [];
   const code = stripComments(source);
 
-  for (const raw of code.split(/\nexport const /).slice(1)) {
+  // Leading newline so a definition at offset 0 is chunked like any other.
+  // Splitting on a newline-prefixed `export const` alone made the FIRST
+  // definition in a module invisible — no chunk, no offender, silently clean.
+  // Fourth fail-open in this helper, same shape as the rest: it reported
+  // nothing because it looked at nothing.
+  for (const raw of ("\n" + code).split(/\nexport const /).slice(1)) {
     const whole = "export const " + raw;
     // Bounded at this definition's own closing `});`. Splitting alone runs a
     // chunk to the next `export const` — or to EOF for the last one — so a
@@ -395,6 +405,25 @@ export const bad = socialBulkMutation({
     // Small and bounded. If this grows to most of the tree, the scan is heading
     // back toward the timeout that made a required check flaky.
     expect(scanned.length).toBeLessThanOrEqual(10);
+  });
+
+  test("an offender at the very start of a module is still caught", () => {
+    // No leading newline: `bad` is at offset 0. Splitting on a newline-prefixed
+    // `export const` produced zero chunks, so the first definition in a module
+    // was never examined and came back clean.
+    const source = `export const bad = socialBulkMutation({
+  args: {},
+  handler: async (ctx) => {
+    await ctx.db.patch(id, {});
+  },
+});
+`;
+    expect(source.startsWith("export const")).toBe(true);
+    expect(deferredMutationOffenders(source, "x.ts")).toEqual([
+      "x.ts:bad uses socialBulkMutation but never calls syncDeferredSocialThreads",
+      "x.ts:bad uses socialBulkMutation but never calls collectSocialThread",
+    ]);
+    expect(deferredMutationsIn(source, "x.ts")).toEqual(["x.ts:bad"]);
   });
 
   test("a helper defined after the offender cannot lend it the calls", () => {

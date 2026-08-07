@@ -702,6 +702,61 @@ describe("operator surface", () => {
     expect(states.every((s) => s.status === "completed")).toBe(true);
   });
 
+  test("a fan-out worker stands down if a chain started before it ran", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrg(t, "race_fanout");
+    for (const n of ["Mo", "Nel", "Oz"]) {
+      const c = await makeCustomer(t, orgId, n);
+      await seedLegacyEvents(t, orgId, c, 1);
+    }
+
+    // A chain is already live.
+    await t.mutation(internal.migrations.backfillInstagramConversations, {
+      orgId,
+      batchSize: 1,
+      continueAutomatically: false,
+    });
+    const live = await t.run((ctx) =>
+      ctx.db
+        .query("socialMaterializationState")
+        .filter((q) => q.eq(q.field("platform"), "instagram"))
+        .first()
+    );
+    expect(live?.status).toBe("running");
+
+    // A worker scheduled by a fan-out that observed `notStarted` now runs. The
+    // fan-out reads and schedules in one transaction and the worker runs in
+    // another, so its view was already stale — two concurrent fan-outs can both
+    // enqueue the same org and platform. Without `onlyIfIdle` this second
+    // worker takes the operator-start path, resets the cursor and fences the
+    // chain that was already working.
+    const stoodDown = await t.mutation(internal.migrations.backfillInstagramConversations, {
+      orgId,
+      onlyIfIdle: true,
+      continueAutomatically: false,
+    });
+    expect(stoodDown.status).toBe("staleRun");
+
+    const after = await t.run((ctx) =>
+      ctx.db
+        .query("socialMaterializationState")
+        .filter((q) => q.eq(q.field("platform"), "instagram"))
+        .first()
+    );
+    expect(after?.runId).toBe(live?.runId);
+    expect(after?.cursor).toBe(live?.cursor);
+    expect(after?.processedCount).toBe(live?.processedCount);
+
+    // A hand-invoked operator start (no `onlyIfIdle`) still restarts, which is
+    // what an operator asking for a rebuild means.
+    const restarted = await t.mutation(internal.migrations.backfillInstagramConversations, {
+      orgId,
+      batchSize: 1,
+      continueAutomatically: false,
+    });
+    expect(restarted.status).not.toBe("staleRun");
+  });
+
   test("re-running the fan-out does not restart a run that is still advancing", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrg(t, "inflight_fanout");

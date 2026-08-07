@@ -555,6 +555,12 @@ const CONVERSATION_BACKFILL_ARGS = {
    * run", which allocates a fresh run and restarts from the beginning.
    */
   runId: v.optional(v.string()),
+  /**
+   * Set by the fan-out. Makes a start yield to a chain that is already running,
+   * instead of resetting its cursor. An operator invoking a backfill by hand
+   * leaves it unset and gets the restart they asked for.
+   */
+  onlyIfIdle: v.optional(v.boolean()),
   batchSize: v.optional(v.number()),
   /** Set false to run exactly one batch — used by tests to drive it by hand. */
   continueAutomatically: v.optional(v.boolean()),
@@ -595,7 +601,8 @@ async function beginConversationBackfill(
   orgId: Id<"organizations">,
   platform: SocialPlatform,
   runId: string | undefined,
-  expectedCount: number
+  expectedCount: number,
+  onlyIfIdle = false
 ): Promise<Doc<"socialMaterializationState"> | null> {
   const existing = await readMaterializationState(ctx, orgId, platform);
   const now = Date.now();
@@ -605,6 +612,23 @@ async function beginConversationBackfill(
     if (!existing || existing.runId !== runId) return null;
     if (existing.status !== "running") return null;
     return existing;
+  }
+
+  // A fan-out start, which is an operator start that yields to a live chain.
+  //
+  // The fan-out reads state and schedules in one transaction, but the worker it
+  // schedules runs in another — so two fan-out invocations can both observe
+  // `notStarted` and both enqueue the same org and platform. The first worker
+  // inserts a `running` record; without this the second would take the operator
+  // path below, reset the cursor to zero and fence the chain that was already
+  // working. Progress restarts, and if that keeps happening the walk never
+  // lands.
+  //
+  // Correctness was never at risk — `syncSocialConversation` is a full
+  // recompute, so a duplicate pass converges — but liveness was.
+  if (onlyIfIdle && existing) {
+    const status = describeMaterializationStatus(existing, now);
+    if (status === "running" || status === "completed") return null;
   }
 
   // An operator start. Restart from the beginning under a new run id, which
@@ -833,6 +857,11 @@ export const startSocialConversationBackfills = internalMutation({
           orgId: org._id,
           batchSize: args.batchSize,
           continueAutomatically: args.continueAutomatically,
+          // The fan-out reads and schedules in separate transactions, so this
+          // decision can be stale by the time the worker runs. `onlyIfIdle`
+          // makes the worker re-check and stand down rather than restart a
+          // chain that started in between. `force` deliberately overrides it.
+          onlyIfIdle: args.force !== true,
         });
       }
     }
@@ -880,7 +909,8 @@ export const backfillInstagramConversations = internalMutation({
       args.orgId,
       "instagram",
       args.runId,
-      expectedCount
+      expectedCount,
+      args.onlyIfIdle
     );
     if (!state) return { status: "staleRun", processed: 0, materialized: 0, isDone: false };
 
@@ -937,7 +967,8 @@ export const backfillFacebookConversations = internalMutation({
       args.orgId,
       "facebook",
       args.runId,
-      expectedCount
+      expectedCount,
+      args.onlyIfIdle
     );
     if (!state) return { status: "staleRun", processed: 0, materialized: 0, isDone: false };
 
