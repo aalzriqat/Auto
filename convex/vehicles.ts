@@ -1113,6 +1113,30 @@ export const update = mutation({
         await insertPriceHistory(ctx, args.orgId, args.vehicleId, vehicle.sellingPrice, patch.sellingPrice, user._id);
       }
 
+      // Ownership is derived from sourceType, so the flag flipping erases the
+      // past: a car sold as the supplier's agent and bought in afterwards would
+      // read forever as stock the dealership always owned, making the
+      // agent-basis sale behind it look like a mistake. Record the transition
+      // before the flag moves, while the old values are still readable.
+      const previousSourceType = vehicle.sourceType ?? "STOCK";
+      const nextSourceType = (patch.sourceType as "STOCK" | "SOURCED" | undefined) ?? previousSourceType;
+      if (nextSourceType !== previousSourceType) {
+        await ctx.db.insert("vehicleOwnershipConversions", {
+          orgId: args.orgId,
+          vehicleId: args.vehicleId,
+          fromSourceType: previousSourceType,
+          toSourceType: nextSourceType,
+          supplierName: vehicle.sourcedFromName,
+          supplierEntitlementAtConversion: vehicle.sourceCost,
+          purchaseAmount:
+            "purchasePrice" in patch ? (patch.purchasePrice as number) : vehicle.purchasePrice,
+          purchaseDate: Date.now(),
+          paymentMethod: args.purchasePaymentMethod,
+          convertedBy: user._id,
+          convertedAt: Date.now(),
+        });
+      }
+
       await ctx.db.insert("vehicleEdits", {
         orgId: args.orgId,
         vehicleId: args.vehicleId,

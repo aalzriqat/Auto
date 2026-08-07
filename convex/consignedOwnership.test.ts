@@ -92,6 +92,52 @@ describe("conversion to dealer-owned stock", () => {
     expect(legalOwnerTypeOf(vehicle!)).toBe("DEALERSHIP");
   });
 
+  test("buying one in leaves a record of what it was, which the flag alone destroys", async () => {
+    const s = await seed();
+    await s.asUser.mutation(api.vehicles.update, {
+      orgId: s.orgId,
+      vehicleId: s.vehicleId,
+      sourceType: "STOCK",
+      purchasePrice: 9_800,
+      purchasePaymentMethod: "CASH",
+    });
+
+    const conversions = await s.t.run((ctx) =>
+      ctx.db
+        .query("vehicleOwnershipConversions")
+        .withIndex("by_org_vehicle", (q) => q.eq("orgId", s.orgId).eq("vehicleId", s.vehicleId))
+        .collect()
+    );
+    expect(conversions).toHaveLength(1);
+
+    // Assert what the row says, not that it exists. Derived ownership means the
+    // vehicle now reads as stock the dealership owns; without these values
+    // nothing anywhere records that it was ever the supplier's, and an
+    // agent-basis sale in its past would look like an error.
+    const row = conversions[0]!;
+    expect(row.fromSourceType).toBe("SOURCED");
+    expect(row.toSourceType).toBe("STOCK");
+    expect(row.supplierName).toBe("Amman Importer Co");
+    expect(row.supplierEntitlementAtConversion).toBe(9_500);
+    expect(row.purchaseAmount).toBe(9_800);
+    expect(row.convertedBy).toBe(s.userId);
+  });
+
+  test("an edit that does not change ownership records no conversion", async () => {
+    const s = await seed();
+    await s.asUser.mutation(api.vehicles.update, {
+      orgId: s.orgId, vehicleId: s.vehicleId, sellingPrice: 13_000,
+    });
+
+    const conversions = await s.t.run((ctx) =>
+      ctx.db
+        .query("vehicleOwnershipConversions")
+        .withIndex("by_org_vehicle", (q) => q.eq("orgId", s.orgId).eq("vehicleId", s.vehicleId))
+        .collect()
+    );
+    expect(conversions).toHaveLength(0);
+  });
+
   test("a consigned car that has already been SOLD cannot be converted afterwards", async () => {
     const s = await seed({ status: "SOLD" });
 

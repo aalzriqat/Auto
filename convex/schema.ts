@@ -831,6 +831,43 @@ export default defineSchema({
     changedAt: v.number(),
   }).index("by_org_vehicle", ["orgId", "vehicleId"]),
 
+  /**
+   * When a vehicle stopped being the supplier's and became the dealership's.
+   *
+   * Ownership itself is derived from `sourceType` (see utils/vehicleOwnership),
+   * which makes the current state impossible to contradict — but it also means
+   * the past is gone the moment the flag flips. A car sold last month as the
+   * supplier's agent and bought in this week would read, forever after, as
+   * ordinary stock the dealership always owned, and the agent-basis sale behind
+   * it would look like a mistake rather than what was correct at the time.
+   *
+   * Append-only. Nothing here is ever edited: a conversion recorded wrongly is
+   * corrected by a further row, because the whole point is that the sequence
+   * survives.
+   */
+  vehicleOwnershipConversions: defineTable({
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    fromSourceType: v.union(v.literal("STOCK"), v.literal("SOURCED")),
+    toSourceType: v.union(v.literal("STOCK"), v.literal("SOURCED")),
+    /** Snapshotted, not joined: the supplier's name on the vehicle can change afterwards. */
+    supplierName: v.optional(v.string()),
+    /** What the supplier was owed while it was consigned, as it stood at conversion. */
+    supplierEntitlementAtConversion: v.optional(v.number()),
+    /** What the dealership agreed to buy it for. */
+    purchaseAmount: v.optional(v.number()),
+    purchaseDate: v.optional(v.number()),
+    paymentMethod: v.optional(v.string()),
+    /** The payable this conversion created or settled, when one exists. */
+    supplierPayableId: v.optional(v.id("vehicleSupplierPayables")),
+    documentStorageIds: v.optional(v.array(v.id("_storage"))),
+    notes: v.optional(v.string()),
+    convertedBy: v.id("users"),
+    convertedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_vehicle", ["orgId", "vehicleId"]),
+
   vehicleReservations: defineTable({
     vehicleId: v.id("vehicles"),
     orgId: v.id("organizations"),

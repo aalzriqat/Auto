@@ -29,6 +29,7 @@ type StorageDeletionStep =
   | { kind: "applicationDocumentsWithStorage" }
   | { kind: "financeAppraisalsWithStorage" }
   | { kind: "financeDealFeesWithStorage" }
+  | { kind: "vehicleOwnershipConversionsWithStorage" }
   | { kind: "orgSettingsWithStorage" }
   | { kind: "socialPostsWithStorage" };
 type SpecialDeletionStep = StorageDeletionStep | { kind: "dmConversations" } | { kind: "liveChatThreads" };
@@ -85,6 +86,9 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "financeDealFeesWithStorage" },
   { kind: "orgRows", table: "financeDealCustody", index: "by_org" },
   { kind: "orgRows", table: "financeApplications", index: "by_org" },
+  // Before `vehicles`: these rows reference one, and the purchase document
+  // attached to a buy-in is a blob nothing else can reach once the row is gone.
+  { kind: "vehicleOwnershipConversionsWithStorage" },
   // Deliberately AFTER the applications, which hold `companyRuleVersionId` —
   // so this one outlives its referents rather than preceding them. It sits
   // after `financeCompanies` (above) for the same reason that ordering already
@@ -311,6 +315,25 @@ async function deleteFinanceDealFeesWithStorageBatch(
   return counts;
 }
 
+async function deleteVehicleOwnershipConversionsWithStorageBatch(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">
+) {
+  const rows = await ctx.db
+    .query("vehicleOwnershipConversions")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .take(ORG_DELETION_BATCH_SIZE);
+  const counts: DeletedCounts = {};
+  for (const row of rows) {
+    addStorageCount(counts, await deleteStorageIds(ctx, row.documentStorageIds ?? []));
+    await ctx.db.delete(row._id);
+  }
+  if (rows.length > 0) {
+    counts.vehicleOwnershipConversions = rows.length;
+  }
+  return counts;
+}
+
 async function deleteOrgSettingsWithStorageBatch(ctx: MutationCtx, orgId: Id<"organizations">) {
   const settingsRows = await ctx.db
     .query("orgSettings")
@@ -454,6 +477,9 @@ async function runDeletionStep(ctx: MutationCtx, step: DeletionStep, orgId: Id<"
   }
   if (step.kind === "financeDealFeesWithStorage") {
     return await deleteFinanceDealFeesWithStorageBatch(ctx, orgId);
+  }
+  if (step.kind === "vehicleOwnershipConversionsWithStorage") {
+    return await deleteVehicleOwnershipConversionsWithStorageBatch(ctx, orgId);
   }
   if (step.kind === "orgSettingsWithStorage") {
     return await deleteOrgSettingsWithStorageBatch(ctx, orgId);

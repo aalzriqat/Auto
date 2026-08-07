@@ -115,6 +115,7 @@ function tablesCoveredByDeletion(): Set<string> {
     ["applicationDocumentsWithStorage", "applicationDocuments"],
     ["financeAppraisalsWithStorage", "financeAppraisals"],
     ["financeDealFeesWithStorage", "financeDealFees"],
+    ["vehicleOwnershipConversionsWithStorage", "vehicleOwnershipConversions"],
     ["orgSettingsWithStorage", "orgSettings"],
     ["socialPostsWithStorage", "socialPosts"],
     ["dmConversations", "dmConversations"],
