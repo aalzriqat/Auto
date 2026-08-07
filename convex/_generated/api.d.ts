@@ -184,6 +184,7 @@ import type * as utils_trafficSource from "../utils/trafficSource.js";
 import type * as utils_userAgent from "../utils/userAgent.js";
 import type * as utils_validation from "../utils/validation.js";
 import type * as utils_vehicleCost from "../utils/vehicleCost.js";
+import type * as utils_vehicleOwnership from "../utils/vehicleOwnership.js";
 import type * as utils_vehicleStatusGuards from "../utils/vehicleStatusGuards.js";
 import type * as utils_vehicleTextMatch from "../utils/vehicleTextMatch.js";
 import type * as validations_customers from "../validations/customers.js";
@@ -385,6 +386,7 @@ declare const fullApi: ApiFromModules<{
   "utils/userAgent": typeof utils_userAgent;
   "utils/validation": typeof utils_validation;
   "utils/vehicleCost": typeof utils_vehicleCost;
+  "utils/vehicleOwnership": typeof utils_vehicleOwnership;
   "utils/vehicleStatusGuards": typeof utils_vehicleStatusGuards;
   "utils/vehicleTextMatch": typeof utils_vehicleTextMatch;
   "validations/customers": typeof validations_customers;

@@ -1010,6 +1010,27 @@ export const update = mutation({
       }
     }
 
+    // Buying in a consigned car is a real transaction, but only before it is
+    // sold. Afterwards it rewrites history: the sale already posted on agent
+    // basis — commission on the margin, no COGS, no inventory — and converting
+    // now capitalizes Vehicle Inventory for a vehicle that has already left the
+    // lot. Nothing will ever relieve that asset, because the sale that would
+    // have is in the past, so it sits on the balance sheet permanently while
+    // the completed sale's basis is silently contradicted underneath it.
+    //
+    // The reverse direction is left alone: STOCK→SOURCED on a sold vehicle is
+    // caught by the acquisition-exposure lock below.
+    if (
+      vehicle.sourceType === "SOURCED" &&
+      args.sourceType !== undefined &&
+      args.sourceType !== "SOURCED" &&
+      vehicle.status === "SOLD"
+    ) {
+      throw new ConvexError(
+        "This vehicle has already been sold on the supplier's behalf, so it cannot be converted to dealership stock now. Convert it before the sale, or correct the sale first."
+      );
+    }
+
     // If VIN is being changed, check for duplicates
     if (args.vin) {
       const normalizedVin = args.vin.trim().toUpperCase();
