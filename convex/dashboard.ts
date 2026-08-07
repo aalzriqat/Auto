@@ -253,7 +253,10 @@ export const stats = query({
     const saleTransactions = transactionCandidates;
 
     const SALES_CAP = 5000;
-    const salesVolume = activeSales.length > 0
+    // Gross transaction value: what the dealership handled, agent deals at full
+    // ticket. Turnover is computed further down, once the consigned vehicles are
+    // known — the two are different numbers and both are reported.
+    const grossTransactionValue = activeSales.length > 0
       ? activeSales.reduce((acc, sale) => acc + sale.salePrice, 0)
       : saleTransactions.reduce((acc, transaction) => acc + transaction.amount, 0);
     const salesCount = activeSales.length > 0 ? activeSales.length : saleTransactions.length;
@@ -338,21 +341,50 @@ export const stats = query({
     const costedVehicleIds = soldVehicleIds.slice(0, PROFIT_VEHICLE_CAP);
     const profitTruncated = soldVehicleIds.length > PROFIT_VEHICLE_CAP;
     const capitalizedCostByVehicle = new Map<string, number>();
-    if (canViewProfitMetrics) {
-      await Promise.all(
-        costedVehicleIds.map(async (vehicleId) => {
-          const vehicle = await ctx.db.get(vehicleId);
-          if (!vehicle || vehicle.orgId !== args.orgId) return;
-          capitalizedCostByVehicle.set(vehicleId, await computeVehicleCapitalizedCost(ctx, vehicle));
-        })
-      );
-    }
+    // Which of the sold vehicles were the supplier's. Loaded regardless of
+    // profit permission, because turnover depends on it: a consigned sale's
+    // revenue is the dealership's margin, not the car's price, and a viewer
+    // without profit access still must not be shown 12,500 of turnover on a car
+    // the dealership never owned.
+    const consignedVehicleIds = new Set<string>();
+    await Promise.all(
+      costedVehicleIds.map(async (vehicleId) => {
+        const vehicle = await ctx.db.get(vehicleId);
+        if (!vehicle || vehicle.orgId !== args.orgId) return;
+        const cost = await computeVehicleCapitalizedCost(ctx, vehicle);
+        capitalizedCostByVehicle.set(vehicleId, cost);
+        if (vehicle.sourceType === "SOURCED") consignedVehicleIds.add(vehicleId);
+      })
+    );
+
+    /**
+     * Accounting turnover for one sale: the margin on a consigned car, the
+     * price on the dealership's own stock.
+     *
+     * A consigned sale whose vehicle fell past the cap (or whose row is gone)
+     * cannot be split, so it contributes its gross — the same conservative
+     * choice the profit figures make, and the truncation is already reported.
+     */
+    const recognizedRevenueOfSale = (sale: { vehicleId: Id<"vehicles">; salePrice: number }): number => {
+      if (!consignedVehicleIds.has(sale.vehicleId)) return sale.salePrice;
+      const cost = capitalizedCostByVehicle.get(sale.vehicleId);
+      return cost === undefined ? sale.salePrice : Math.max(0, sale.salePrice - cost);
+    };
+
+    // Accounting turnover. Falls back to the transaction ledger when there are
+    // no sale rows, reading each row's recognized amount where it carries one.
+    const salesVolume = activeSales.length > 0
+      ? activeSales.reduce((acc, sale) => acc + recognizedRevenueOfSale(sale), 0)
+      : saleTransactions.reduce(
+          (acc, transaction) => acc + (transaction.recognizedRevenueAmount ?? transaction.amount),
+          0
+        );
 
     if (activeSales.length > 0) {
       for (const sale of activeSales) {
         const key = getChartKey(sale.saleDate);
 
-        monthlySales[key] = (monthlySales[key] || 0) + sale.salePrice;
+        monthlySales[key] = (monthlySales[key] || 0) + recognizedRevenueOfSale(sale);
 
         // A vehicle past the cap, or whose row is gone, is absent from the map.
         // Skip it rather than book its full sale price as profit. The omission is
@@ -479,7 +511,9 @@ export const stats = query({
     if (canViewSalesMetrics && canViewUsers) {
       for (const sale of activeSales) {
         const entry = revenueBySalesperson[sale.salespersonId] ?? { revenue: 0, deals: 0 };
-        entry.revenue += sale.salePrice;
+        // Ranking on gross would put whoever moved a consigned car above a
+        // colleague who earned twice the margin on stock the dealership owned.
+        entry.revenue += recognizedRevenueOfSale(sale);
         entry.deals += 1;
         revenueBySalesperson[sale.salespersonId] = entry;
       }
@@ -570,9 +604,45 @@ export const stats = query({
         .take(PREVIOUS_PERIOD_CAP)
       : [];
 
+    // Turnover for the comparison window needs the same consigned split, so the
+    // previous window's vehicles are costed here rather than inside the
+    // profit-only block below. Reuses anything the current window already read.
+    const previousSoldVehicleIdsForRevenue = Array.from(
+      new Set(previousSales.map((sale) => sale.vehicleId))
+    );
+    const previousRevenueBasisByVehicle = new Map(
+      await Promise.all(
+        previousSoldVehicleIdsForRevenue.slice(0, PROFIT_VEHICLE_CAP).map(async (vehicleId) => {
+          const vehicle = await ctx.db.get(vehicleId);
+          if (!vehicle || vehicle.orgId !== args.orgId) {
+            return [vehicleId, undefined] as const;
+          }
+          const cached = capitalizedCostByVehicle.get(vehicleId);
+          const cost = cached ?? (await computeVehicleCapitalizedCost(ctx, vehicle));
+          return [
+            vehicleId,
+            { consigned: vehicle.sourceType === "SOURCED", cost },
+          ] as const;
+        })
+      )
+    );
+    const previousRecognizedRevenueOfSale = (sale: {
+      vehicleId: Id<"vehicles">;
+      salePrice: number;
+    }): number => {
+      const basis = previousRevenueBasisByVehicle.get(sale.vehicleId);
+      if (!basis || !basis.consigned) return sale.salePrice;
+      return Math.max(0, sale.salePrice - basis.cost);
+    };
+
+    // Compared against the current period's turnover, so it has to be turnover
+    // too — mixing the two bases would show a swing that never happened.
     const previousSalesVolume = previousUsesSaleRows
-      ? previousSales.reduce((acc, sale) => acc + sale.salePrice, 0)
-      : previousSaleTransactions.reduce((acc, transaction) => acc + transaction.amount, 0);
+      ? previousSales.reduce((acc, sale) => acc + previousRecognizedRevenueOfSale(sale), 0)
+      : previousSaleTransactions.reduce(
+          (acc, transaction) => acc + (transaction.recognizedRevenueAmount ?? transaction.amount),
+          0
+        );
 
     const previousTotalExpenses = previousExpenses.reduce((acc, exp) => acc + exp.amount, 0);
 
@@ -649,7 +719,12 @@ export const stats = query({
       totalLeads: liveLeads,
       leadsByStage,
       salesThisMonth: salesCount,
+      // Accounting turnover: agent-sale gross is excluded, so this agrees with
+      // getSalesAndProfitReport and getProfitAndLoss on the same period.
       salesVolumeThisMonth: salesVolume,
+      // The deal volume actually handled, agent sales at full ticket. An
+      // operational KPI, explicitly separate from turnover.
+      grossTransactionValueThisMonth: grossTransactionValue,
       teamMembers,
       salesTrend,
       previousPeriod,

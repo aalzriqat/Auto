@@ -656,6 +656,11 @@ async function applySaleCompletionSideEffects(
     vehicle: prepared.vehicle,
     customer: prepared.customer,
     previouslyCollected,
+    // Agent basis recognizes the margin only; the gross stays on the row as
+    // `amount`. Computed from the same cost basis the GL and commissions use.
+    recognizedRevenue: isSourced && marginMinor !== null
+      ? Math.max(0, args.salePrice - costAmount) - previouslyCollected
+      : undefined,
     idempotencyKey: args.idempotencyKey,
   });
 

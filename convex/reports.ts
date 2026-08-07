@@ -842,6 +842,10 @@ export const getProfitAndLoss = query({
     let totalRevenue = 0;
     let costOfGoodsSold = 0;
     let operatingExpenses = 0;
+    // Reported beside turnover rather than folded into it: the dealership did
+    // handle these deals at full ticket, and that is worth knowing — it is just
+    // not its revenue.
+    let grossTransactionValue = 0;
 
     // Revenue: only explicit sale and deposit receipts.
     // COLLECTION_PAYMENT is an installment against an existing receivable — the
@@ -853,7 +857,12 @@ export const getProfitAndLoss = query({
     for (const tx of txInDateRange) {
       if (tx.isDeleted) continue;
       if (tx.type === "IN" && REVENUE_CATEGORIES.has(tx.category ?? "")) {
-        totalRevenue += tx.amount;
+        // `recognizedRevenueAmount` where the row carries one — a consigned
+        // sale, whose gross belongs to the supplier. Absent on owned sales and
+        // on every row written before consigned accounting, where the two
+        // figures are the same, so the fallback is exact rather than lenient.
+        totalRevenue += tx.recognizedRevenueAmount ?? tx.amount;
+        grossTransactionValue += tx.amount;
       } else if (tx.type === "OUT") {
         if (tx.category === "VEHICLE_PURCHASE" || (tx.category === "EXPENSE" && tx.vehicleId)) {
           costOfGoodsSold += tx.amount;
@@ -867,11 +876,15 @@ export const getProfitAndLoss = query({
     const netProfit = grossProfit - operatingExpenses;
 
     return {
+      // Accounting turnover. Excludes the gross of every consigned sale, and so
+      // agrees with getSalesAndProfitReport on the same period.
       totalRevenue,
       costOfGoodsSold,
       grossProfit,
       operatingExpenses,
       netProfit,
+      // Operational KPI, explicitly labelled and deliberately outside turnover.
+      grossTransactionValue,
       transactions: txInDateRange.sort((a, b) => b.date - a.date),
     };
   },

@@ -68,6 +68,11 @@ export async function createSaleTransaction(
     customer: Doc<"customers">;
     /** Amount already booked as separate DEPOSIT transactions for this deal — subtracted so it isn't double-counted as revenue. */
     previouslyCollected?: number;
+    /**
+     * Accounting turnover, when it differs from the sale price — the margin on
+     * a consigned sale. Omitted for owned stock, where the two are the same.
+     */
+    recognizedRevenue?: number;
     idempotencyKey?: string;
   }
 ): Promise<void> {
@@ -80,6 +85,14 @@ export async function createSaleTransaction(
     orgId: args.orgId,
     type: "IN",
     amount: args.salePrice - (args.previouslyCollected ?? 0),
+    // Kept as the gross so the operational ledger still says what the deal was
+    // worth. What must NOT come from it is turnover: getProfitAndLoss sums this
+    // category as revenue, which reported a consigned sale at its sticker price
+    // while the sales report reported the margin — the same month, two answers.
+    ...(args.recognizedRevenue !== undefined &&
+    args.recognizedRevenue !== args.salePrice - (args.previouslyCollected ?? 0)
+      ? { recognizedRevenueAmount: args.recognizedRevenue }
+      : {}),
     date: args.saleDate,
     category: "VEHICLE_SALE",
     description: `Sale of vehicle ${vehicleLabel} to ${customerLabel}${vinLabel}`,

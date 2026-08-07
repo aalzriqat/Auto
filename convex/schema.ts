@@ -2804,6 +2804,20 @@ export default defineSchema({
     .index("by_org", ["orgId"]),
 
   transactions: defineTable({
+    /**
+     * Accounting turnover for this row, when it differs from `amount`.
+     *
+     * `amount` is what the deal was worth — the gross transaction value. On a
+     * consigned sale that is a car the dealership never owned, so it is NOT its
+     * revenue. Both numbers are real and neither substitutes for the other: the
+     * dealership genuinely handled a 12,500 transaction and genuinely earned
+     * 3,000 on it.
+     *
+     * Absent means the two are the same, which is every owned sale and every
+     * row written before consigned accounting existed — so a reader that falls
+     * back to `amount` gets the right answer for all of them.
+     */
+    recognizedRevenueAmount: v.optional(v.number()),
     orgId: v.id("organizations"),
     type: v.union(v.literal("IN"), v.literal("OUT")),
     amount: v.number(),

@@ -324,3 +324,55 @@ describe("per-sale detail", () => {
     expect(row.vehicleCost).toBe(ENTITLEMENT);
   });
 });
+
+describe("every revenue consumer agrees on the same month", () => {
+  test("sales report, P&L and dashboard all report the margin, never the gross", async () => {
+    // The requirement in one assertion: a sourced month must not report 3,000
+    // in Sales Reports and 12,500 in the P&L or on the dashboard. Before this,
+    // `createSaleTransaction` wrote a VEHICLE_SALE row for the gross and
+    // `getProfitAndLoss` summed that category as revenue, so the two disagreed
+    // by the supplier's entire share.
+    const s = await seedDealer("crossAll");
+    await sellConsigned(s, "VINREPX1");
+    await sellOwned(s, "VINREPX2");
+
+    const expectedTurnover = MARGIN + OWNED_PRICE;
+    const expectedGross = SALE_PRICE + OWNED_PRICE;
+
+    const sales = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId, ...range(),
+    });
+    const pl = await s.asUser.query(api.reports.getProfitAndLoss, {
+      orgId: s.orgId, ...range(),
+    });
+    // The dashboard takes a coarse window rather than explicit dates.
+    const dash = await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId, timeRange: "YEAR" as const,
+    });
+
+    expect(sales.totalRevenue).toBe(expectedTurnover);
+    expect(pl.totalRevenue).toBe(expectedTurnover);
+    expect(dash.salesVolumeThisMonth).toBe(expectedTurnover);
+
+    // And the gross is still reported, explicitly labelled and outside turnover.
+    expect(sales.totalGrossTransactionValue).toBe(expectedGross);
+    expect(pl.grossTransactionValue).toBe(expectedGross);
+    expect(dash.grossTransactionValueThisMonth).toBe(expectedGross);
+  });
+
+  test("a salesperson's revenue matches the same basis on both surfaces", async () => {
+    const s = await seedDealer("crossRep");
+    await sellConsigned(s, "VINREPX3");
+
+    const perf = await s.asUser.query(api.reports.getSalespersonPerformance, {
+      orgId: s.orgId, ...range(),
+    });
+    // The dashboard takes a coarse window rather than explicit dates.
+    const dash = await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId, timeRange: "YEAR" as const,
+    });
+
+    expect(perf.find((r) => r.userId === s.userId)!.totalRevenue).toBe(MARGIN);
+    expect(dash.topPerformer?.revenue).toBe(MARGIN);
+  });
+});
