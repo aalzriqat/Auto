@@ -31,6 +31,16 @@ const saleStatus = v.union(
   v.literal("CANCELLED")
 );
 
+/**
+ * Where the buyer's money went on a consigned (SOURCED) sale. Only meaningful
+ * there; sale completion drops it for dealer-owned stock. Omitted means
+ * THROUGH_DEALERSHIP — see `consignedSettlementRoute` in utils/vehicleOwnership.
+ */
+const supplierSettlementRouteValidator = v.union(
+  v.literal("THROUGH_DEALERSHIP"),
+  v.literal("DIRECT_TO_SUPPLIER")
+);
+
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
 /**
@@ -290,6 +300,7 @@ export const create = mutation({
     gapSold: v.optional(v.number()),
     gapCost: v.optional(v.number()),
     gapTermMonths: v.optional(v.number()),
+    supplierSettlementRoute: v.optional(supplierSettlementRouteValidator),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -403,6 +414,7 @@ export const createDraft = mutation({
     gapSold: v.optional(v.number()),
     gapCost: v.optional(v.number()),
     gapTermMonths: v.optional(v.number()),
+    supplierSettlementRoute: v.optional(supplierSettlementRouteValidator),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -491,6 +503,7 @@ export const update = mutation({
     gapSold: v.optional(v.number()),
     gapCost: v.optional(v.number()),
     gapTermMonths: v.optional(v.number()),
+    supplierSettlementRoute: v.optional(supplierSettlementRouteValidator),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
@@ -531,7 +544,11 @@ export const update = mutation({
       args.warrantyTermMonths !== undefined ||
       args.gapSold !== undefined ||
       args.gapCost !== undefined ||
-      args.gapTermMonths !== undefined;
+      args.gapTermMonths !== undefined ||
+      // The route decides which accounts the sale posted to and whether a
+      // supplier payable exists. Editing it after completion would leave the
+      // ledger describing one arrangement and the sale row another.
+      args.supplierSettlementRoute !== undefined;
     if (sale.status === "COMPLETED" && hasCompletedSaleFinancialChange) {
       throwAppError(
         AppErrorCode.SALE_ALREADY_COMPLETED,
@@ -559,6 +576,7 @@ export const update = mutation({
     if (args.warrantySold !== undefined) patch.warrantySold = args.warrantySold;
     if (args.warrantyCost !== undefined) patch.warrantyCost = args.warrantyCost;
     if (args.warrantyTermMonths !== undefined) patch.warrantyTermMonths = args.warrantyTermMonths;
+    if (args.supplierSettlementRoute !== undefined) patch.supplierSettlementRoute = args.supplierSettlementRoute;
     if (args.gapSold !== undefined) patch.gapSold = args.gapSold;
     if (args.gapCost !== undefined) patch.gapCost = args.gapCost;
     if (args.gapTermMonths !== undefined) patch.gapTermMonths = args.gapTermMonths;

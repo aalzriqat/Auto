@@ -1128,6 +1128,23 @@ export default defineSchema({
     applicationId: v.optional(v.id("financeApplications")),
     quoteId: v.optional(v.id("quotes")),
     leadId: v.optional(v.id("leads")),
+    // Where the buyer's money went on a consigned (SOURCED) sale, recorded per
+    // deal because it is a fact about the agreement rather than about the
+    // vehicle. THROUGH_DEALERSHIP: gross landed in the dealership's account on
+    // the supplier's behalf, so his share is a liability from the moment it
+    // arrives. DIRECT_TO_SUPPLIER: the buyer paid the supplier, nothing gross
+    // ever reached these books, and the only asset is the margin he now owes
+    // back.
+    //
+    // Absent on every non-consigned sale and on consigned rows written before
+    // the route was recorded; readers must treat absent as THROUGH_DEALERSHIP,
+    // which is what those rows actually posted (see
+    // consignedSettlementRoute()). It is deliberately NOT defaulted at write
+    // time, so a row that predates the field stays distinguishable from one
+    // where somebody chose THROUGH_DEALERSHIP.
+    supplierSettlementRoute: v.optional(
+      v.union(v.literal("THROUGH_DEALERSHIP"), v.literal("DIRECT_TO_SUPPLIER"))
+    ),
     canonicalReceivableDocumentId: v.optional(v.id("receivableDocuments")),
     commissionAmount: v.optional(v.number()), // Calculated at sale time
     // How many COMMISSION_ADJUSTED corrections have been posted against this

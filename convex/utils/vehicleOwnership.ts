@@ -47,3 +47,38 @@ export function commercialRoleOf(vehicle: OwnershipFacts): CommercialRole {
 export function isConsignedAgentSale(vehicle: OwnershipFacts): boolean {
   return legalOwnerTypeOf(vehicle) === "SUPPLIER";
 }
+
+/**
+ * Where the buyer's money went on a consigned sale.
+ *
+ * Unlike ownership this is NOT derivable — the same consigned vehicle can be
+ * sold either way, and only the agreement says which. So it is recorded on the
+ * sale, and this is the one place that reads it.
+ */
+export type ConsignedSettlementRoute = "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER";
+
+/** The subset of a sale the route question depends on. */
+export interface SettlementRouteFacts {
+  supplierSettlementRoute?: ConsignedSettlementRoute;
+}
+
+/**
+ * Absent means THROUGH_DEALERSHIP, because that is what every consigned sale
+ * written before the field existed actually posted — the old code passed the
+ * route as a hardcoded literal. Reading absent as anything else would
+ * retroactively restate those deals.
+ */
+export function consignedSettlementRoute(sale: SettlementRouteFacts): ConsignedSettlementRoute {
+  return sale.supplierSettlementRoute ?? "THROUGH_DEALERSHIP";
+}
+
+/**
+ * Whether gross proceeds ran through the dealership's own bank on the
+ * supplier's behalf. Decides three things that must agree: whether the
+ * dealership owes the supplier (a payable) or the supplier owes the dealership
+ * (a receivable), whether the customer owes the dealership for the vehicle at
+ * all, and therefore what a customer deposit can legitimately be applied to.
+ */
+export function dealershipCollectsGross(route: ConsignedSettlementRoute): boolean {
+  return route === "THROUGH_DEALERSHIP";
+}

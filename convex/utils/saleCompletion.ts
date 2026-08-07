@@ -23,6 +23,11 @@ import { computeResoldProductMargin } from "../accounting/postingRules";
 import { toMinorUnits } from "./money";
 import { computeVehicleCapitalizedCost, vehicleHasCostBasis } from "./vehicleCost";
 import {
+  consignedSettlementRoute,
+  dealershipCollectsGross,
+  type ConsignedSettlementRoute,
+} from "./vehicleOwnership";
+import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
   ensureReceivableDocument,
@@ -59,6 +64,10 @@ type SaleCompletionArgs = {
   gapTermMonths?: number;
   idempotencyKey?: string;
   actorId: Id<"users">;
+  // Where the buyer's money went, on a consigned (SOURCED) sale only. Omitted
+  // means THROUGH_DEALERSHIP — see consignedSettlementRoute(). Ignored for
+  // dealer-owned stock, which has no supplier to settle with.
+  supplierSettlementRoute?: ConsignedSettlementRoute;
   // MANUAL commission mode carries the manager-entered amount through
   // completion untouched. Populated from the existing sale when completing a
   // draft; undefined for freshly-created sales.
@@ -251,6 +260,10 @@ async function insertSaleRecord(
     applicationId: args.applicationId,
     leadId: prepared.leadId,
     idempotencyKey: args.idempotencyKey,
+    // Only meaningful for a consigned sale. Writing it on dealer-owned stock
+    // would claim a supplier settlement arrangement that does not exist.
+    supplierSettlementRoute:
+      prepared.vehicle.sourceType === "SOURCED" ? args.supplierSettlementRoute : undefined,
   });
 }
 
@@ -262,6 +275,16 @@ async function applySaleCompletionSideEffects(
 ) {
   await markVehicleAsSold(ctx, args.vehicleId);
 
+  const isSourced = prepared.vehicle.sourceType === "SOURCED";
+  const settlementRoute = consignedSettlementRoute(args);
+  // On DIRECT_TO_SUPPLIER the buyer paid the supplier, so the dealership never
+  // invoiced the customer for the vehicle and holds no receivable for it. The
+  // deposit-application path below credits AR-Customers unconditionally, which
+  // on this route would drive a receivable that does not exist negative.
+  // Refusing is the fail-closed answer until an explicit deposit resolution
+  // says what the money is actually for.
+  const depositsGoToCustomerAr = !isSourced || dealershipCollectsGross(settlementRoute);
+
   let previouslyCollected = 0;
   let appliedDeposits: Array<{ depositId: Id<"deposits">; customerId: Id<"customers">; amount: number }> = [];
   if (args.quoteId) {
@@ -270,6 +293,11 @@ async function applySaleCompletionSideEffects(
       resolution: "APPLIED",
       actorId: args.actorId,
     });
+    if (resolvedResult.total > 0 && !depositsGoToCustomerAr) {
+      throw new ConvexError(
+        "The buyer paid the supplier directly on this consigned sale, so the dealership holds no receivable from the customer for the vehicle — a reservation deposit cannot be applied against one. Record how the deposit is to be resolved before completing the sale."
+      );
+    }
     previouslyCollected = resolvedResult.total;
     appliedDeposits = resolvedResult.appliedDeposits;
 
@@ -305,7 +333,6 @@ async function applySaleCompletionSideEffects(
     leadId: prepared.leadId,
   });
 
-  const isSourced = prepared.vehicle.sourceType === "SOURCED";
   // Single authoritative cost basis (see computeVehicleCapitalizedCost): for
   // sourced vehicles this is sourceCost; for owned stock it's purchase price
   // plus everything capitalized into Vehicle Inventory along the way (landed
@@ -351,12 +378,7 @@ async function applySaleCompletionSideEffects(
         return {
           supplierEntitlementMinor: costMinor,
           supplierName: prepared.vehicle.sourcedFromName,
-          // The dealership raises the invoice and collects, so gross runs
-          // through its books and the supplier's share is a liability until
-          // remitted. Where the buyer pays the supplier directly the route is
-          // DIRECT_TO_SUPPLIER; that is a per-agreement fact and gets its own
-          // recorded value once supplier settlement records land.
-          settlementRoute: "THROUGH_DEALERSHIP" as const,
+          settlementRoute,
         };
       })()
     : undefined;
@@ -409,6 +431,18 @@ async function applySaleCompletionSideEffects(
   // The receivable's total must match what the AR debit in hookSaleCompleted
   // actually posted (salePrice + dealerFees + warranty/GAP premiums) — not
   // just salePrice — or the subledger and GL diverge by that amount.
+  //
+  // On a consigned sale settled DIRECT_TO_SUPPLIER the vehicle itself is NOT in
+  // that debit: the buyer paid the supplier, the dealership issued no invoice
+  // for the car, and the customer owes it nothing for it. Only the dealership's
+  // own charges — fees and F&I products it sold in its own name — are
+  // receivable from the customer. Including the sale price here would create a
+  // subledger receivable with no GL counterpart and show a customer as owing
+  // money nobody ever billed them.
+  const vehicleReceivableMinor =
+    isSourced && !dealershipCollectsGross(settlementRoute)
+      ? 0
+      : toMinorUnits(args.salePrice, prepared.currency);
   const saleReceivableId = await ensureReceivableDocument(ctx, {
     orgId: args.orgId,
     branchId: prepared.vehicle.branchId,
@@ -417,7 +451,7 @@ async function applySaleCompletionSideEffects(
     customerId: args.customerId,
     sourceType: "sales",
     sourceId: saleId,
-    originalAmountMinor: toMinorUnits(args.salePrice, prepared.currency)
+    originalAmountMinor: vehicleReceivableMinor
       + (dealerFeesMinor ?? 0) + (warrantySoldMinor ?? 0) + (gapSoldMinor ?? 0),
     currency: prepared.currency,
     issueDate: args.saleDate,
@@ -518,9 +552,14 @@ async function applySaleCompletionSideEffects(
     await ctx.db.patch(args.tradeInVehicleId, { purchasePrice: args.tradeInValue });
   }
 
-  // For sourced vehicles, record the outstanding payable to the supplier dealer.
-  // The GL entry (DR COGS / CR AP-Suppliers) was already posted by hookSaleCompleted.
-  if (isSourced && costAmount > 0) {
+  // For sourced vehicles the dealership owes the supplier his entitlement out
+  // of the gross it collected — but only on the route where it actually
+  // collected the gross. On DIRECT_TO_SUPPLIER the buyer paid him, so nothing
+  // is owed to him at all; the claim runs the other way and lives in
+  // Receivable from Suppliers (see consignedAgentSaleLines). Creating a payable
+  // there would invent a debt and leave it permanently unsettleable, because no
+  // payment will ever be made against it.
+  if (isSourced && costAmount > 0 && dealershipCollectsGross(settlementRoute)) {
     const now = Date.now();
     await ctx.db.insert("vehicleSupplierPayables", {
       orgId: args.orgId,
@@ -698,6 +737,9 @@ export async function completeExistingSale(
     gapTermMonths: sale.gapTermMonths,
     idempotencyKey: args.idempotencyKey ?? sale.idempotencyKey,
     actorId: args.actorId,
+    // Carried from the draft, so completing it posts the route the deal was
+    // actually structured under rather than silently reverting to the default.
+    supplierSettlementRoute: sale.supplierSettlementRoute,
     // Preserve a manager-entered MANUAL commission across completion.
     existingCommissionAmount: sale.commissionAmount,
   };
