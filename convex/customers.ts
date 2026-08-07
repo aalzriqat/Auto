@@ -1,6 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { query, QueryCtx } from "./_generated/server";
-import { mutation } from "./functions";
+import { mutation, socialBulkMutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -11,6 +11,11 @@ import { validateInput } from "./utils/validation";
 import { CreateCustomerSchema, UpdateCustomerSchema } from "./validations/customers";
 import { normalizePhone, namesSimilar } from "./utils/dedup";
 import { CUSTOMER_REFERENCING_TABLES } from "./utils/mergeHelpers";
+import {
+  collectSocialThread,
+  newDeferredSocialThreads,
+  syncDeferredSocialThreads,
+} from "./aggregates";
 
 const CUSTOMER_SELECTOR_LIMIT = 50;
 const RECENT_CUSTOMER_SEARCH_WINDOW = 200;
@@ -814,7 +819,7 @@ export const previewMerge = query({
  * audit row. Requires PERMISSIONS.MERGE_CUSTOMERS — destructive, so OWNER
  * by default with MANAGER opted in via the default role template.
  */
-export const mergeCustomers = mutation({
+export const mergeCustomers = socialBulkMutation({
   args: {
     orgId: v.id("organizations"),
     survivorId: v.id("customers"),
@@ -893,14 +898,40 @@ export const mergeCustomers = mutation({
       await ctx.db.patch(survivor._id, mergedFields);
     }
 
+    // Social events are repointed like every other reference, but their
+    // conversation threads are recomputed once at the end rather than once per
+    // event. Merging a contact who arrived on both platforms is the single most
+    // common reason to merge at all, and a per-event recompute re-reads the
+    // whole thread each time — O(N squared), which on a long Messenger history
+    // reaches Convex's read ceiling and rolls the entire merge back. See
+    // `deferredThreadTriggers`.
+    //
+    // Both sides are collected: the loser's thread (which loses every event and
+    // is deleted) and the survivor's (which gains them), because `customerId`
+    // is part of the conversation key.
+    const touchedThreads = newDeferredSocialThreads();
+
     const reassignedCounts: Record<string, number> = {};
     for (const ref of CUSTOMER_REFERENCING_TABLES) {
       const rows = await ref.find(ctx, args.orgId, args.loserId);
       for (const row of rows) {
+        if (ref.table === "instagramEvents" || ref.table === "facebookEvents") {
+          const platform = ref.table === "instagramEvents" ? "instagram" : "facebook";
+          const event = row as Doc<"instagramEvents"> | Doc<"facebookEvents">;
+          collectSocialThread(touchedThreads, platform, event);
+          collectSocialThread(touchedThreads, platform, {
+            ...event,
+            customerId: args.survivorId,
+          } as Doc<"instagramEvents"> | Doc<"facebookEvents">);
+        }
         await ctx.db.patch(row._id, { customerId: args.survivorId });
       }
       reassignedCounts[ref.table] = rows.length;
     }
+
+    // Owed by every mutation built on `socialBulkMutation`. A throw here rolls
+    // back the patches above with it, so the merge stays all-or-nothing.
+    await syncDeferredSocialThreads(ctx, touchedThreads);
 
     await ctx.db.patch(loser._id, {
       isDeleted: true,

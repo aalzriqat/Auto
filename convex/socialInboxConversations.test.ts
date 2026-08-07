@@ -2,6 +2,10 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
+import {
+  readSocialConversationSyncCount,
+  resetSocialConversationSyncCount,
+} from "./aggregates";
 import type { Id } from "./_generated/dataModel";
 
 /**
@@ -615,6 +619,290 @@ describe("socialInbox.listConversations — materialised threads", () => {
     expect(rows[0].customerId).toBe(survivorId);
     expect(rows[0].conversationKey).toContain(survivorId);
     expect(rows[0].conversationKey).not.toContain(loserId);
+  });
+
+  /**
+   * The bulk paths recompute each touched thread ONCE, not once per event.
+   *
+   * This is a cost defect, which a correctness assertion cannot see — a
+   * quadratic implementation returns exactly the same rows. Asserting on
+   * elapsed time would be flaky and would still pass on a small fixture, so
+   * these count recomputes structurally.
+   */
+  describe("bulk operations defer the thread recompute", () => {
+    async function seedMergeOrg(t: ReturnType<typeof convexTestWithComponents>, clerkId: string) {
+      const orgId = await t.run(async (ctx) =>
+        ctx.db.insert("organizations", { name: "Bulk Org", createdAt: Date.now() })
+      );
+      await t.run(async (ctx) =>
+        ctx.db.insert("subscriptions", {
+          orgId, plan: "professional", status: "active",
+          createdAt: Date.now(), updatedAt: Date.now(),
+        })
+      );
+      const userId = await t.run(async (ctx) =>
+        ctx.db.insert("users", { clerkId, email: clerkId + "@test.com", name: "M" })
+      );
+      const roleId = await t.run(async (ctx) =>
+        ctx.db.insert("roles", {
+          orgId, name: "MANAGER",
+          permissions: ["view:leads", "view:customers", "merge:customers", "approve:requests"],
+        })
+      );
+      await t.run(async (ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+      return { orgId, asUser: t.withIdentity({ subject: clerkId }) };
+    }
+
+    test("merging 200 events in one thread recomputes it a bounded number of times", async () => {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const { orgId, asUser } = await seedMergeOrg(t, "bulk_merge_1");
+      const survivorId = await makeCustomer(t, orgId, "Survivor", "C");
+      const loserId = await makeCustomer(t, orgId, "Loser", "C");
+
+      await t.run(async (ctx) => {
+        for (let i = 0; i < 200; i += 1) {
+          await ctx.db.insert("facebookEvents", {
+            orgId, externalId: "bulk_" + i, kind: "dm",
+            senderFacebookId: "fb_bulk", customerId: loserId, text: "m" + i,
+          });
+        }
+      });
+
+      resetSocialConversationSyncCount();
+      await asUser.mutation(api.customers.mergeCustomers, { orgId, survivorId, loserId });
+      const recomputes = readSocialConversationSyncCount();
+
+      // Two threads are affected — the loser's (emptied) and the survivor's
+      // (filled) — so two recomputes. Before the deferred writer this was 400.
+      expect(recomputes).toBe(2);
+
+      const after = await actualConversations(asUser, orgId);
+      expect(after).toHaveLength(1);
+      expect(after[0].customerId).toBe(survivorId);
+      expect(after[0].eventCount).toBe(200);
+    }, 300000);
+
+    test("events spread across four threads recompute four times, not once per event", async () => {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const { orgId, asUser } = await seedMergeOrg(t, "bulk_merge_2");
+      const survivorId = await makeCustomer(t, orgId, "Survivor", "C");
+      const loserId = await makeCustomer(t, orgId, "Loser", "C");
+
+      // 4 threads: an IG DM, an FB DM, and two IG comment threads on different
+      // posts — 200 events total.
+      await t.run(async (ctx) => {
+        for (let i = 0; i < 50; i += 1) {
+          await ctx.db.insert("instagramEvents", {
+            orgId, externalId: "ig_dm_" + i, kind: "dm",
+            senderInstagramId: "ig_b", customerId: loserId, text: "a" + i,
+          });
+          await ctx.db.insert("facebookEvents", {
+            orgId, externalId: "fb_dm_" + i, kind: "dm",
+            senderFacebookId: "fb_b", customerId: loserId, text: "b" + i,
+          });
+          await ctx.db.insert("instagramEvents", {
+            orgId, externalId: "ig_p1_" + i, kind: "comment", postId: "p1",
+            senderInstagramId: "ig_b", customerId: loserId, text: "c" + i,
+          });
+          await ctx.db.insert("instagramEvents", {
+            orgId, externalId: "ig_p2_" + i, kind: "comment", postId: "p2",
+            senderInstagramId: "ig_b", customerId: loserId, text: "d" + i,
+          });
+        }
+      });
+
+      resetSocialConversationSyncCount();
+      await asUser.mutation(api.customers.mergeCustomers, { orgId, survivorId, loserId });
+
+      // 4 loser threads + 4 survivor threads. Proportional to threads, not to
+      // the 200 events — the whole point.
+      expect(readSocialConversationSyncCount()).toBe(8);
+      expect(await actualConversations(asUser, orgId)).toHaveLength(4);
+    }, 300000);
+
+    test("recompute count stays flat as the thread grows — the scaling regression", async () => {
+      const counts: number[] = [];
+      for (const n of [100, 200, 400]) {
+        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+        const { orgId, asUser } = await seedMergeOrg(t, "bulk_scale_" + n);
+        const survivorId = await makeCustomer(t, orgId, "S", "C");
+        const loserId = await makeCustomer(t, orgId, "L", "C");
+        await t.run(async (ctx) => {
+          for (let i = 0; i < n; i += 1) {
+            await ctx.db.insert("facebookEvents", {
+              orgId, externalId: "s_" + i, kind: "dm",
+              senderFacebookId: "fb_s", customerId: loserId, text: "m" + i,
+            });
+          }
+        });
+        resetSocialConversationSyncCount();
+        await asUser.mutation(api.customers.mergeCustomers, { orgId, survivorId, loserId });
+        counts.push(readSocialConversationSyncCount());
+      }
+
+      // Quadratic would give 200 / 400 / 800 here. Constant is the fix.
+      expect(counts).toEqual([2, 2, 2]);
+    }, 600000);
+
+    test("linking a vehicle across a customer's whole history recomputes once per thread", async () => {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const { orgId, asUser } = await seedMergeOrg(t, "bulk_vehicle");
+      const customerId = await makeCustomer(t, orgId, "Chatty", "C");
+      const vehicleId = await t.run((ctx) =>
+        ctx.db.insert("vehicles", {
+          orgId, vin: "VINBULK1", make: "Kia", model: "Sportage", year: 2023,
+          mileage: 10, color: "Blue", fuelType: "Gas", transmission: "Automatic",
+          sellingPrice: 20000, status: "AVAILABLE", createdAt: Date.now(),
+        })
+      );
+
+      await t.run(async (ctx) => {
+        for (let i = 0; i < 60; i += 1) {
+          await ctx.db.insert("instagramEvents", {
+            orgId, externalId: "veh_" + i, kind: "dm",
+            senderInstagramId: "ig_v", customerId, text: "m" + i,
+          });
+        }
+      });
+
+      resetSocialConversationSyncCount();
+      // The leads-page shape: no platform, no kind, so every unlinked event for
+      // the customer is repointed.
+      await asUser.mutation(api.socialInbox.setConversationVehicle, {
+        orgId, customerId, vehicleId,
+      });
+
+      // One thread touched. `vehicleId` is not part of the key, so old and new
+      // collapse to the same entry.
+      expect(readSocialConversationSyncCount()).toBe(1);
+
+      const after = await actualConversations(asUser, orgId);
+      expect(after).toHaveLength(1);
+      expect(after[0].vehicleCount).toBe(1);
+      expect(after[0].eventCount).toBe(60);
+    }, 300000);
+
+    test("a failure in the deferred sync rolls back every event patch", async () => {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const { orgId, asUser } = await seedMergeOrg(t, "bulk_rollback");
+      const survivorId = await makeCustomer(t, orgId, "Survivor", "C");
+      const loserId = await makeCustomer(t, orgId, "Loser", "C");
+
+      await t.run((ctx) =>
+        ctx.db.insert("facebookEvents", {
+          orgId, externalId: "rb_1", kind: "dm",
+          senderFacebookId: "fb_rb", customerId: loserId, text: "keep me",
+        })
+      );
+
+      // Deleting the survivor makes the merge throw. Convex rolls the whole
+      // mutation back, so atomicity is preserved even though the conversation
+      // sync now happens later than the event patches.
+      await t.run((ctx) => ctx.db.delete(survivorId));
+      await expect(
+        asUser.mutation(api.customers.mergeCustomers, { orgId, survivorId, loserId })
+      ).rejects.toThrow();
+
+      const events = await t.run((ctx) => ctx.db.query("facebookEvents").collect());
+      expect(events).toHaveLength(1);
+      expect(events[0].customerId).toBe(loserId);
+      const rows = await t.run((ctx) => ctx.db.query("socialConversations").collect());
+      expect(rows).toHaveLength(1);
+      expect(rows[0].customerId).toBe(loserId);
+    }, 300000);
+
+    test("ordinary single-event writes still sync synchronously", async () => {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const { orgId, asEditor } = await seedOrg(t, "bulk_webhook");
+      const customerId = await makeCustomer(t, orgId, "Web", "Hook");
+
+      resetSocialConversationSyncCount();
+      await t.run((ctx) =>
+        ctx.db.insert("instagramEvents", {
+          orgId, externalId: "wh_1", kind: "dm",
+          senderInstagramId: "ig_wh", customerId, text: "inbound",
+        })
+      );
+
+      // The normal writer is untouched: one write, one immediate recompute, and
+      // the thread is readable straight away.
+      expect(readSocialConversationSyncCount()).toBe(1);
+      const after = await actualConversations(asEditor, orgId);
+      expect(after).toHaveLength(1);
+      expect(after[0].latestText).toBe("inbound");
+    });
+
+    test("identical thread identifiers in two orgs never collapse into one key", async () => {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const { orgId, asUser } = await seedMergeOrg(t, "bulk_iso_a");
+      const { orgId: otherOrgId } = await seedMergeOrg(t, "bulk_iso_b");
+      const survivorId = await makeCustomer(t, orgId, "S", "C");
+      const loserId = await makeCustomer(t, orgId, "L", "C");
+      const otherCustomerId = await makeCustomer(t, otherOrgId, "Other", "C");
+
+      // Same platform and the same sender id in both orgs.
+      for (const i of [0, 1]) {
+        await t.run((ctx) =>
+          ctx.db.insert("facebookEvents", {
+            orgId, externalId: "iso_a_" + i, kind: "dm",
+            senderFacebookId: "shared_sender", customerId: loserId, text: "mine",
+          })
+        );
+        await t.run((ctx) =>
+          ctx.db.insert("facebookEvents", {
+            orgId: otherOrgId, externalId: "iso_b_" + i, kind: "dm",
+            senderFacebookId: "shared_sender", customerId: otherCustomerId, text: "theirs",
+          })
+        );
+      }
+
+      await asUser.mutation(api.customers.mergeCustomers, { orgId, survivorId, loserId });
+
+      const mine = await actualConversations(asUser, orgId);
+      expect(mine).toHaveLength(1);
+      expect(mine[0].customerId).toBe(survivorId);
+      expect(mine[0].eventCount).toBe(2);
+
+      // The other org's thread is untouched by a merge it had nothing to do with.
+      const theirs = await t.run((ctx) =>
+        ctx.db
+          .query("socialConversations")
+          .withIndex("by_org_lastEventAt", (q) => q.eq("orgId", otherOrgId))
+          .collect()
+      );
+      expect(theirs).toHaveLength(1);
+      expect(theirs[0].customerId).toBe(otherCustomerId);
+      expect(theirs[0].eventCount).toBe(2);
+    }, 300000);
+
+    test("an event written after the deferred sync is still materialised", async () => {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const { orgId, asUser } = await seedMergeOrg(t, "bulk_after");
+      const survivorId = await makeCustomer(t, orgId, "S", "C");
+      const loserId = await makeCustomer(t, orgId, "L", "C");
+
+      await t.run((ctx) =>
+        ctx.db.insert("facebookEvents", {
+          orgId, externalId: "after_1", kind: "dm",
+          senderFacebookId: "fb_after", customerId: loserId, text: "before merge",
+        })
+      );
+      await asUser.mutation(api.customers.mergeCustomers, { orgId, survivorId, loserId });
+
+      // A webhook arriving after the bulk operation goes through the normal
+      // writer, so suppression cannot leak past the mutation that opted into it.
+      await t.run((ctx) =>
+        ctx.db.insert("facebookEvents", {
+          orgId, externalId: "after_2", kind: "dm",
+          senderFacebookId: "fb_after", customerId: survivorId, text: "after merge",
+        })
+      );
+
+      const after = await actualConversations(asUser, orgId);
+      expect(after).toHaveLength(1);
+      expect(after[0].eventCount).toBe(2);
+      expect(after[0].latestText).toBe("after merge");
+    }, 300000);
   });
 
   test("requires org membership", async () => {

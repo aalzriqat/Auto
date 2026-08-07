@@ -1,7 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { query } from "./_generated/server";
-import { mutation } from "./functions";
+import { socialBulkMutation } from "./functions";
 import { QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -9,7 +9,14 @@ import { PERMISSIONS } from "./utils/permissions";
 import { suggestVehiclesFromText } from "./utils/vehicleTextMatch";
 import { recordLeadActivity, describeLeadFieldValue } from "./utils/leadActivity";
 import { requireFeature } from "./subscriptions";
-import { facebookEventsByOrg, instagramEventsByOrg, socialContactsByOrg } from "./aggregates";
+import {
+  collectSocialThread,
+  facebookEventsByOrg,
+  instagramEventsByOrg,
+  newDeferredSocialThreads,
+  socialContactsByOrg,
+  syncDeferredSocialThreads,
+} from "./aggregates";
 
 /**
  * Unifies `instagramEvents` and `facebookEvents` for the Social Inbox UI.
@@ -402,7 +409,7 @@ export const listEventsForCustomer = query({
  * all unlinked events for the customer are updated (leads-page behavior).
  * Also patches any associated lead that has no vehicle yet.
  */
-export const setConversationVehicle = mutation({
+export const setConversationVehicle = socialBulkMutation({
   args: {
     orgId: v.id("organizations"),
     customerId: v.id("customers"),
@@ -455,10 +462,23 @@ export const setConversationVehicle = mutation({
       (e) => !e.vehicleId && inScope(e, !args.platform || args.platform === "facebook")
     );
 
+    // Deferred conversation sync. From the leads page this runs with no
+    // `platform` or `conversationKind`, so it repoints *every* unlinked event
+    // for the customer across both platforms — and `vehicleId` is a
+    // materialised field, so a per-write recompute would re-read each thread
+    // once per event. See `deferredThreadTriggers`.
+    const touchedThreads = newDeferredSocialThreads();
+    for (const e of igToUpdate) collectSocialThread(touchedThreads, "instagram", e);
+    for (const e of fbToUpdate) collectSocialThread(touchedThreads, "facebook", e);
+
     await Promise.all([
       ...igToUpdate.map((e) => ctx.db.patch(e._id, { vehicleId: args.vehicleId })),
       ...fbToUpdate.map((e) => ctx.db.patch(e._id, { vehicleId: args.vehicleId })),
     ]);
+
+    // `vehicleId` does not appear in the conversation key, so the threads are
+    // the same before and after — collected from the pre-patch rows above.
+    await syncDeferredSocialThreads(ctx, touchedThreads);
 
     const allLeadIds = new Set(
       [...igToUpdate, ...fbToUpdate].filter((e) => e.leadId).map((e) => e.leadId as Id<"leads">)

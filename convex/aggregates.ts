@@ -397,14 +397,34 @@ export const socialContactsByOrg = new TableAggregate<{
  */
 export const aggregateTriggers = new Triggers<DataModel>();
 
-aggregateTriggers.register("vehicles", vehiclesByOrg.idempotentTrigger());
-aggregateTriggers.register("vehicles", vehicleQualityByOrg.idempotentTrigger());
-aggregateTriggers.register("customers", customersByOrg.idempotentTrigger());
-aggregateTriggers.register("leads", leadsByOrg.idempotentTrigger());
-aggregateTriggers.register("memberships", membershipsByOrg.idempotentTrigger());
-aggregateTriggers.register("instagramEvents", instagramEventsByOrg.idempotentTrigger());
-aggregateTriggers.register("facebookEvents", facebookEventsByOrg.idempotentTrigger());
-aggregateTriggers.register("socialContacts", socialContactsByOrg.idempotentTrigger());
+/**
+ * Every trigger except the conversation recompute.
+ *
+ * Shared by both writers below so that adding an aggregate cannot arm one and
+ * not the other — the failure that would produce is a tree that drifts only
+ * during bulk operations, which is precisely the kind nothing surfaces.
+ */
+function registerCountingTriggers(triggers: Triggers<DataModel>): void {
+  triggers.register("vehicles", vehiclesByOrg.idempotentTrigger());
+  triggers.register("vehicles", vehicleQualityByOrg.idempotentTrigger());
+  triggers.register("customers", customersByOrg.idempotentTrigger());
+  triggers.register("leads", leadsByOrg.idempotentTrigger());
+  triggers.register("memberships", membershipsByOrg.idempotentTrigger());
+  triggers.register("instagramEvents", instagramEventsByOrg.idempotentTrigger());
+  triggers.register("facebookEvents", facebookEventsByOrg.idempotentTrigger());
+  triggers.register("socialContacts", socialContactsByOrg.idempotentTrigger());
+
+  // Insert-only and a single indexed point lookup, so it is cheap enough to
+  // keep running inside a bulk loop.
+  triggers.register("instagramEvents", async (ctx, change) => {
+    if (change.operation !== "insert" || !change.newDoc) return;
+    await recordSocialContact(ctx, change.newDoc.orgId, "instagram", change.newDoc.senderInstagramId);
+  });
+  triggers.register("facebookEvents", async (ctx, change) => {
+    if (change.operation !== "insert" || !change.newDoc) return;
+    await recordSocialContact(ctx, change.newDoc.orgId, "facebook", change.newDoc.senderFacebookId);
+  });
+}
 
 /**
  * Materialises the distinct sender behind an inbound social event.
@@ -472,16 +492,6 @@ export async function recordSocialContact(
   if (existing) return;
   await ctx.db.insert("socialContacts", { orgId, platform, senderRawId });
 }
-
-aggregateTriggers.register("instagramEvents", async (ctx, change) => {
-  if (change.operation !== "insert" || !change.newDoc) return;
-  await recordSocialContact(ctx, change.newDoc.orgId, "instagram", change.newDoc.senderInstagramId);
-});
-
-aggregateTriggers.register("facebookEvents", async (ctx, change) => {
-  if (change.operation !== "insert" || !change.newDoc) return;
-  await recordSocialContact(ctx, change.newDoc.orgId, "facebook", change.newDoc.senderFacebookId);
-});
 
 /**
  * The grouping the Social Inbox has always used, lifted out of the query so the
@@ -621,10 +631,31 @@ async function readThreadEvents(
  * at a time inside one transaction — either a scheduled paginated repoint, or
  * an explicit "sync these threads once at the end" path that the loop opts into.
  */
+/**
+ * Test seam: how many times a thread has been recomputed.
+ *
+ * The defect this guards against is a *cost* one — a bulk loop recomputing the
+ * same thread once per event — and cost is exactly what a correctness assertion
+ * cannot see. Asserting on wall-clock time instead would be flaky and would
+ * still pass a quadratic implementation on a small fixture, so the regression
+ * test counts recomputes structurally: 400 events in one thread must recompute
+ * it once, not 400 times.
+ */
+let socialConversationSyncCount = 0;
+
+export function readSocialConversationSyncCount(): number {
+  return socialConversationSyncCount;
+}
+
+export function resetSocialConversationSyncCount(): void {
+  socialConversationSyncCount = 0;
+}
+
 export async function syncSocialConversation(
   ctx: { db: GenericDatabaseWriter<DataModel> },
   id: SocialConversationIdentity
 ): Promise<void> {
+  socialConversationSyncCount += 1;
   const conversationKey = socialConversationKey(id);
   const existing = await ctx.db
     .query("socialConversations")
@@ -724,6 +755,8 @@ async function syncConversationsForEventWrite(
   }
 }
 
+registerCountingTriggers(aggregateTriggers);
+
 aggregateTriggers.register("instagramEvents", async (ctx, change) => {
   await syncConversationsForEventWrite(ctx, "instagram", change);
 });
@@ -731,3 +764,84 @@ aggregateTriggers.register("instagramEvents", async (ctx, change) => {
 aggregateTriggers.register("facebookEvents", async (ctx, change) => {
   await syncConversationsForEventWrite(ctx, "facebook", change);
 });
+
+/**
+ * The writer for mutations that patch many of one customer's social events in a
+ * loop. Identical to `aggregateTriggers` except that it does **not** recompute
+ * conversation threads per write.
+ *
+ * ## Why this exists
+ *
+ * The per-write recompute is bounded by one thread, which is a handful of rows
+ * for the inbound-webhook path it was built for. In a loop it is not: each
+ * patch re-reads the whole thread, so N patches cost O(N squared) reads.
+ * Measured superlinear — 2x the events gave ~3x the time at n=200, converging
+ * on quadratic — and on a long Messenger history that reaches Convex's
+ * per-transaction read ceiling. The throw then rolls the whole mutation back,
+ * so `mergeCustomers` would fail outright for exactly the contacts that most
+ * need merging: the same person arriving once on Instagram and once on Facebook.
+ *
+ * ## Why not a scheduled repoint
+ *
+ * Moving the event repointing to a paginated background job scales harder but
+ * makes an operation that looks atomic stop being atomic — a merge could report
+ * success with half its events still on the loser, and would then need
+ * intermediate states, resumability, and a UI answer for "partially merged".
+ * Deferring *inside* the same transaction keeps the property that matters: the
+ * merge either happened completely or it did not happen at all. A throw in the
+ * final sync rolls back every patch with it.
+ *
+ * ## The invariant
+ *
+ * A mutation built on this writer MUST call `syncDeferredSocialThreads` with
+ * every thread it touched before it returns, or it commits event rows whose
+ * conversation summary is stale — silently, with nothing failing at write time.
+ * `convex/deferredThreadSync.test.ts` fails the build on any module that takes
+ * this builder without also calling the sync.
+ *
+ * The remaining cost is linear in the number of events repointed. A large
+ * enough customer could still approach the transaction write limit on volume
+ * alone; that is a separate, resumable-pagination design and deliberately not
+ * solved here.
+ */
+export const deferredThreadTriggers = new Triggers<DataModel>();
+registerCountingTriggers(deferredThreadTriggers);
+
+/**
+ * Threads touched by a bulk operation, keyed canonically so 500 events from one
+ * Messenger thread recompute once.
+ *
+ * The key is org-namespaced exactly like the trigger's own dedupe set — a
+ * second interpretation of "the same thread" is how these two paths would
+ * eventually disagree.
+ */
+export type DeferredSocialThreads = Map<string, SocialConversationIdentity>;
+
+export function newDeferredSocialThreads(): DeferredSocialThreads {
+  return new Map();
+}
+
+/** Records the thread an event belongs to, before and/or after a bulk write. */
+export function collectSocialThread(
+  threads: DeferredSocialThreads,
+  platform: "instagram" | "facebook",
+  doc: Doc<"instagramEvents"> | Doc<"facebookEvents"> | null | undefined
+): void {
+  if (!doc) return;
+  const id = socialConversationIdentity(platform, doc);
+  if (!id) return;
+  threads.set(`${id.orgId}:${socialConversationKey(id)}`, id);
+}
+
+/**
+ * Recomputes each collected thread exactly once. Call before returning from any
+ * mutation built on `deferredThreadTriggers`.
+ */
+export async function syncDeferredSocialThreads(
+  ctx: { db: GenericDatabaseWriter<DataModel> },
+  threads: DeferredSocialThreads
+): Promise<void> {
+  for (const id of threads.values()) {
+    await syncSocialConversation(ctx, id);
+  }
+}
