@@ -251,10 +251,11 @@ export default function CommissionsPage() {
       setEditingId(null);
       setEditingAmount("");
     } catch (e) {
-      // The server distinguishes "already recorded in the ledger", "paid
-      // amounts cannot be changed" and "cancelled sale" — each tells the
-      // manager something different about what to do next. Collapsing them
-      // into one generic string sends them to support instead.
+      // The server distinguishes "paid amounts cannot be changed", "cancelled
+      // sale", "hasn't posted to the ledger yet" and "no longer matches what
+      // the ledger recognized" — each tells the manager something different
+      // about what to do next. Collapsing them into one generic string sends
+      // them to support instead.
       toast.error(errorToast(e, t("CommissionUpdateFailed" as any)));
     }
   }

@@ -18,9 +18,11 @@ import { query } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
 import { MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 import { PostCommand, postAccountingEvent } from "./accounting/postingEngine";
 import { prepaidPostingBlockedReason } from "./utils/prepaidSourceLedger";
 import { payrollPostingBlockedReason } from "./utils/payrollSourceLedger";
+import { commissionPostingBlockedReason } from "./utils/commissionSourceLedger";
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { checkPostingAllowed } from "./accountingPeriods";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -277,8 +279,23 @@ export async function drainEntries(
     // negative balance that guard prevents, with no operator action. Reversals
     // are exempt: they unwind something that already posted.
     if (p.kind === "POST") {
-      const blockedReason =
-        (await prepaidPostingBlockedReason(ctx, p)) ?? (await payrollPostingBlockedReason(ctx, p));
+      let blockedReason: string | null;
+      try {
+        blockedReason =
+          (await prepaidPostingBlockedReason(ctx, p)) ??
+          (await payrollPostingBlockedReason(ctx, p)) ??
+          (await commissionPostingBlockedReason(ctx, p));
+      } catch (err) {
+        // A guard that THROWS must fail this one entry, not the drain. These
+        // guards walk data the admin raw-JSON editor can write, so a single
+        // malformed row could otherwise abort the whole mutation — and because
+        // every drain starts from the same query, that row would be hit first
+        // every time, silently stopping all GL posting for the organization.
+        const message = err instanceof Error ? err.message : String(err);
+        await markEntryFailed(ctx, p, `posting guard failed: ${message}`);
+        failed++;
+        continue;
+      }
       if (blockedReason) {
         // Held, not failed: this entry is not broken and retrying it is not
         // wrong — it is waiting on something else to post first. Routing it
@@ -318,11 +335,92 @@ export async function drainPendingForOrg(
 
 // ─── Internal mutation (scheduler target) ─────────────────────────────────────
 
+/** Pages per uninterrupted scheduler chain, before the sweep yields and resumes. */
+const MAX_DRAIN_PASSES = 40;
+
+/**
+ * How long a sweep waits before resuming from its cursor once the pass budget is
+ * spent. Long enough that a large backlog cannot monopolize the scheduler, short
+ * enough that draining it stays a matter of minutes rather than days.
+ */
+const DRAIN_RESUME_DELAY_MS = 60_000;
+
+/**
+ * Drains one PAGE and continues with a cursor until the org's PENDING rows are
+ * exhausted or the sweep budget runs out.
+ *
+ * Cursor, not "did we make progress". `drainPendingForOrg` always reads the
+ * OLDEST PENDING rows, and a held row stays PENDING — so a first batch that is
+ * entirely held meant no progress, no continuation, and every postable row
+ * behind it went unexamined however long it waited. Paging past them fixes
+ * that. It also fixes the mirror-image problem: counting failures as progress
+ * re-read the same rows on the next pass, so a batch of genuinely failing
+ * entries burned through MAX_ATTEMPTS in seconds and dead-lettered entries that
+ * a later retry would have posted. A cursor visits each row at most once per
+ * sweep, so one sweep costs each row exactly one attempt.
+ */
+async function drainPageAndContinue(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  limit: number,
+  cursor: string | null,
+  pass: number
+): Promise<{ posted: number; failed: number; held: number }> {
+  const page = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+    .paginate({ cursor, numItems: Math.min(limit, 200) });
+
+  const result = await drainEntries(ctx, page.page);
+
+  console.log(
+    `[outbox-drain] org ${orgId} pass ${pass}: posted ${result.posted}, failed ${result.failed}, held ${result.held}`
+  );
+
+  if (!page.isDone) {
+    // Always continue FROM THE CURSOR, even when the pass budget is spent.
+    //
+    // Stopping here used to drop the cursor, and every later trigger — cron or
+    // redrive — restarts at `null`. That reinstated the very starvation the
+    // cursor was added to remove, just further out: with a full budget the
+    // oldest 2,050 rows are all any sweep ever examines, so if those are held,
+    // nothing behind them is ever attempted again. Moving a permanent boundary
+    // is not removing it.
+    //
+    // The budget still does its real job of bounding one uninterrupted
+    // scheduler chain; it just yields instead of giving up. The delayed
+    // continuation resets the counter, so the sweep advances monotonically
+    // through the cursor and terminates on `isDone` regardless of backlog size,
+    // while capping how much work any one org can demand per minute.
+    const budgetSpent = pass >= MAX_DRAIN_PASSES;
+    if (budgetSpent) {
+      console.warn(
+        `[outbox-drain] org ${orgId}: pass budget spent with rows remaining — resuming from the cursor in ${DRAIN_RESUME_DELAY_MS}ms`
+      );
+    }
+    await ctx.scheduler.runAfter(
+      budgetSpent ? DRAIN_RESUME_DELAY_MS : 0,
+      internal.accountingOutbox.drainPendingAccountingEvents,
+      {
+        orgId,
+        limit,
+        cursor: page.continueCursor,
+        pass: budgetSpent ? 0 : pass + 1,
+      }
+    );
+  }
+  return result;
+}
+
 export const drainPendingAccountingEvents = internalMutation({
-  args: { orgId: v.id("organizations"), limit: v.optional(v.number()) },
-  handler: async (ctx, args) => {
-    return drainPendingForOrg(ctx, args.orgId, args.limit ?? 50);
+  args: {
+    orgId: v.id("organizations"),
+    limit: v.optional(v.number()),
+    cursor: v.optional(v.string()),
+    pass: v.optional(v.number()),
   },
+  handler: async (ctx, args) =>
+    drainPageAndContinue(ctx, args.orgId, args.limit ?? 50, args.cursor ?? null, args.pass ?? 0),
 });
 
 // ─── Visibility query ─────────────────────────────────────────────────────────
@@ -358,7 +456,13 @@ export const redrive = mutation({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
-    return drainPendingForOrg(ctx, args.orgId);
+    // Drains the first PAGE and continues from that page's cursor. Draining
+    // inline and then scheduling a cursorless sweep charged a failing row two
+    // attempts per button press — the inline call left it PENDING and the sweep
+    // selected it again immediately — so a row on its eighth attempt
+    // dead-lettered on one click, spending the retry budget the operator was
+    // trying to give it. The caller still gets this page's counts to show.
+    return drainPageAndContinue(ctx, args.orgId, 50, null, 0);
   },
 });
 

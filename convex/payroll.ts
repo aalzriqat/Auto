@@ -12,11 +12,17 @@ import {
   hookPayrollPaid,
   hookCommissionAccrued,
   isPostableNow,
+  commissionEntriesOutstandingStatus,
+  safeAdjustmentSeq,
+  recognizedCommissionMinor,
+  commissionAccountingDate,
+  commissionAccrualStrandedReason,
 } from "./accounting/workflowHooks";
 import { toMinorUnits, fromMinorUnits } from "./utils/money";
 import { paymentMethodValidator, normalizePaymentMethod, PaymentMethod } from "./utils/paymentMethods";
 import { runWithIdempotency } from "./utils/idempotency";
 import { isCommissionOwed } from "./utils/commission";
+import { checkPostingAllowed } from "./accountingPeriods";
 
 // ─── Employee compensation (fixed monthly salary) ──────────────────────────────
 
@@ -546,7 +552,12 @@ async function assertAdvanceIssuancesPosted(
 async function assertAccrualsPosted(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
-  items: { _id: Id<"payrollItems">; baseSalaryMinor: number; commissionSaleIds: Id<"sales">[] }[]
+  items: {
+    _id: Id<"payrollItems">;
+    baseSalaryMinor: number;
+    commissionSaleIds: Id<"sales">[];
+    currency: string;
+  }[]
 ): Promise<void> {
   for (const item of items) {
     if (item.baseSalaryMinor > 0 && (await accrualStillQueued(ctx, orgId, `payroll_accrued_${item._id}`))) {
@@ -557,9 +568,90 @@ async function assertAccrualsPosted(
     for (const saleId of item.commissionSaleIds) {
       const sale = await ctx.db.get(saleId);
       if (!sale || sale.commissionPaidAt != null || !sale.commissionAmount || sale.commissionAmount <= 0) continue;
-      if (await accrualStillQueued(ctx, orgId, `commission_accrued_${saleId}`)) {
+      // Corrections credit Commission Payable exactly as the accrual does, so
+      // checking the accrual alone was not enough: payment debits the full
+      // CORRECTED amount (settleItemCommissions re-derives it from the live
+      // sale), and a queued correction means the GL only holds the original —
+      // the difference comes straight out of the payable as a negative.
+      // Outstanding STATUS, not merely "is it queued". `commissionEntriesStillQueued`
+      // matches any row that is not POSTED, which includes a dead-lettered FAILED
+      // one — and no drain ever reads FAILED rows, so every period-based remedy
+      // below is powerless against it. sales.ts:assertCommissionEntriesPosted has
+      // branched on this for several rounds, with a comment warning against
+      // exactly the instruction this function was still giving; payroll simply
+      // was never brought in line.
+      const outstanding = await commissionEntriesOutstandingStatus(ctx, orgId, sale);
+      if (outstanding === "FAILED") {
         throw new ConvexError(
-          "A commission accrual for this run hasn't posted to the ledger yet (its accounting period may be closed). Open the period so the accrual posts, then pay."
+          "A ledger entry for a commission in this run has failed and needs to be retried before you can pay. Ask an administrator to retry it from Accounting → Setup."
+        );
+      }
+      if (outstanding === "PENDING") {
+        // Name the state rather than guessing at it. "Open the period" is the
+        // wrong instruction when no period covers the sale at all — the entry is
+        // then waiting on a month that has to be CREATED first, and an operator
+        // told to open something that does not exist has no way forward. This is
+        // the state a round-11 review reported as an inescapable deadlock; the
+        // escape is real, it just was not being said.
+        const saleMonth = new Date(sale.saleDate).toISOString().slice(0, 7);
+        // Three different states, three different remedies. `checkPostingAllowed`
+        // reports "no period" and "period exists but is FUTURE" identically as
+        // waiting:true, and telling someone to CREATE a period that already
+        // exists is its own dead end — they get "Period X already exists" and
+        // are no better off. So the period is looked up directly.
+        const period = await ctx.db
+          .query("accountingPeriods")
+          .withIndex("by_org_startDate", (q) => q.eq("orgId", orgId))
+          .filter((q) =>
+            q.and(
+              q.lte(q.field("startDate"), sale.saleDate),
+              q.gte(q.field("endDate"), sale.saleDate)
+            )
+          )
+          .first();
+        if (!period) {
+          throw new ConvexError(
+            `A commission in this run is dated ${saleMonth}, which no accounting period covers, so it cannot post. Create and open a period covering ${saleMonth}, then pay this run.`
+          );
+        }
+        if (period.status === "CLOSED" || period.status === "LOCKED") {
+          throw new ConvexError(
+            `A commission in this run is dated ${saleMonth}, whose accounting period is ${period.status}, so it cannot post. Reopen that period, then pay this run.`
+          );
+        }
+        if (period.status === "FUTURE") {
+          throw new ConvexError(
+            `A commission in this run is dated ${saleMonth}, whose accounting period has not been opened yet. Open it, then pay this run.`
+          );
+        }
+        // The period is OPEN, so nothing about the calendar is blocking this —
+        // the entry simply has not drained yet, or has dead-lettered. Sending
+        // the user to open a period that is already open would be one more
+        // instruction that changes nothing.
+        throw new ConvexError(
+          "A commission entry for this run hasn't posted to the ledger yet. If it does not clear shortly, ask an administrator to retry it from Accounting → Setup, then pay."
+        );
+      }
+      // Payment debits the payable by the sale's amount while the GL carries
+      // what the entries recognized. Normally identical, because every change
+      // posts a matching delta — but not if the row was written outside those
+      // paths. Paying across the gap drives Commission Payable negative.
+      const recognized = await recognizedCommissionMinor(ctx, orgId, sale, item.currency);
+      if (recognized === null) {
+        // `safeAdjustmentSeq`, not `Number.isSafeInteger`. recognizedCommissionMinor
+        // returns null for a counter that is negative or past the ceiling too, and
+        // both of those ARE safe integers — so a raw-JSON `commissionAdjustmentSeq:
+        // -3` sent accounting to reconcile a currency that was never the problem.
+        // sales.ts:assertCommissionRecognitionMatches already uses the right test.
+        throw new ConvexError(
+          safeAdjustmentSeq(sale.commissionAdjustmentSeq) !== null
+            ? "A commission on this run has a recognized total that cannot be read — either it was recognized in a different currency than the run pays, or a posted entry carries an unreadable amount. Have accounting reconcile it before paying."
+            : "A commission on this run has an unreadable correction history. Have accounting review it before paying."
+        );
+      }
+      if (recognized !== toMinorUnits(sale.commissionAmount, item.currency)) {
+        throw new ConvexError(
+          "A commission on this run does not match what the ledger recognized for it, so the run cannot be paid. Have accounting review it."
         );
       }
     }
@@ -980,6 +1072,11 @@ export const approveRun = mutation({
       // between draft and approval accrues, and is approved, at its live value.
       let approvedGross = 0;
       let approvedNet = 0;
+      // Sales dropped from this run because their commission cannot be
+      // recognized yet. Reported back rather than only logged: approval silently
+      // paying less than the draft showed is exactly the kind of change an
+      // approver must be told about.
+      const skippedCommissionSaleIds: Id<"sales">[] = [];
       for (const item of items) {
         // On re-approval the salary was already accrued at the first approval —
         // keep that frozen amount (its accrual key is idempotent, so re-resolving
@@ -1007,6 +1104,48 @@ export const approveRun = mutation({
           // so accruing (or later paying) them here would corrupt the payable.
           // Same shared rule as the sweep and the settlement path.
           if (!sale || !isCommissionOwed(sale)) continue;
+          // The last accrual path that dated itself independently. For a sale
+          // that already accrued this is a no-op on the shared key — but for a
+          // BACKLOG sale that never did, this creates the first accrual, and
+          // dating it at the payroll period rather than the sale defeats the
+          // whole point of earned-time recognition for exactly the population
+          // the backfill exists to fix. Whichever runs first wins the key, so
+          // approval racing the backfill decided the date.
+          // A backlog sale that never accrued, whose own period is CLOSED or
+          // LOCKED, cannot be recognized at all: the entry below would queue,
+          // burn every retry and dead-letter into a row that blocks payment and
+          // every future close. So it is skipped, exactly like the cancelled
+          // sale above — dropped from commissionMinor and liveSaleIds, so this
+          // run neither accrues nor pays it.
+          //
+          // Skipped, NOT refused. Throwing here aborts approveRun for every
+          // payslip in the run, and the sweep that builds a run
+          // (collectUnpaidCommissions) filters on isCommissionOwed, active
+          // membership and saleDate only — it has no period filter — so the same
+          // stranded sale returns in every future draft. Cancelling the draft
+          // does not break that loop. One sale in a LOCKED period, which cannot
+          // be reopened, would have held the whole organization's salaries
+          // hostage with no in-product way out.
+          //
+          // The commission is not lost or hidden: the sale still reads as owed
+          // on the commissions page, and the recognition-divergence control
+          // counts it under unrecognizedCount at every period close.
+          //
+          // Already-accrued sales are unaffected — the hook is a no-op for them,
+          // and so is this check.
+          const strandedReason = await commissionAccrualStrandedReason(
+            ctx,
+            args.orgId,
+            saleId,
+            sale.saleDate
+          );
+          if (strandedReason !== null) {
+            console.warn(
+              `[payroll] org ${args.orgId}: skipping sale ${saleId} — ${strandedReason}`
+            );
+            skippedCommissionSaleIds.push(saleId);
+            continue;
+          }
           await hookCommissionAccrued(ctx, {
             orgId: args.orgId,
             saleId,
@@ -1014,7 +1153,7 @@ export const approveRun = mutation({
             amountMinor: toMinorUnits(sale.commissionAmount, item.currency),
             currency: item.currency,
             actorId: user._id,
-            occurredAt: accrualDate,
+            occurredAt: await commissionAccountingDate(ctx, args.orgId, saleId, sale.saleDate),
           });
           commissionMinor += toMinorUnits(sale.commissionAmount, item.currency);
           liveSaleIds.push(saleId);
@@ -1048,8 +1187,15 @@ export const approveRun = mutation({
       // already posted and it can no longer be cancelled), and payment safely
       // skips the all-zero journal.
       if (!isReapproval && approvedGross <= 0) {
+        // "Cancel and rebuild" is only honest advice when rebuilding could
+        // produce a different draft. If the run came to zero because every
+        // commission in it was skipped, the sweep will select those same sales
+        // again and the next draft is identical — so the instruction has to name
+        // the actual blocker instead of sending the user round a closed loop.
         throw new ConvexError(
-          "Nothing to approve: no payslip has a positive gross. Cancel this draft and create a fresh run."
+          skippedCommissionSaleIds.length > 0
+            ? `Nothing to approve: the only pay in this run is ${skippedCommissionSaleIds.length} commission(s) whose accounting period is closed or locked, so they cannot be recognized. Reopen that period (a locked one needs the break-glass process) — rebuilding this run will produce the same draft.`
+            : "Nothing to approve: no payslip has a positive gross. Cancel this draft and create a fresh run."
         );
       }
 
@@ -1065,6 +1211,10 @@ export const approveRun = mutation({
         reapprovalReason: undefined,
         updatedAt: now,
       });
+
+      // The caller is told what was left out, so a run that approves for less
+      // than the draft displayed does not do so silently.
+      return { skippedCommissionSaleIds };
     } catch (error) {
       if (error instanceof ConvexError) throw error;
       console.error("payroll.approveRun failed", error);
@@ -1137,6 +1287,33 @@ export const payRun = mutation({
       // to a closed period), driving Salaries/Commission Payable negative until
       // the old period is opened. When the payment would itself queue (no open
       // period now), it drains after the accrual, so no guard is needed.
+      // ...but "would itself queue" is only harmless when NO period covers today
+      // yet: that entry waits, burns no attempts, and posts when the month opens.
+      // A CLOSED or LOCKED current period is the opposite — the payment burns
+      // every retry and dead-letters, leaving the run marked PAID with the
+      // payable never cleared and a FAILED row blocking every future close.
+      // Refuse before anything is written rather than pay into a ledger that can
+      // never record it.
+      const todayCheck = await checkPostingAllowed(ctx, args.orgId, now);
+      if (!todayCheck.ok && !todayCheck.waiting) {
+        // CLOSED and LOCKED both land here and need different actions: a
+        // locked period cannot be reopened through the normal mutation at all
+        // (accountingPeriods.reopen refuses it). Listing both remedies and
+        // leaving the operator to work out which applies is only half the fix —
+        // checkPostingAllowed does not report the status, so read the period.
+        const todayPeriod = await ctx.db
+          .query("accountingPeriods")
+          .withIndex("by_org_startDate", (q) => q.eq("orgId", args.orgId))
+          .filter((q) =>
+            q.and(q.lte(q.field("startDate"), now), q.gte(q.field("endDate"), now))
+          )
+          .first();
+        throw new ConvexError(
+          todayPeriod?.status === "LOCKED"
+            ? "Today's accounting period is LOCKED, so this payroll payment could never post. A locked period cannot be reopened normally — use the authorized break-glass process before paying this run."
+            : "Today's accounting period is CLOSED, so this payroll payment could never post. Reopen it before paying this run."
+        );
+      }
       if (await isPostableNow(ctx, args.orgId, now)) {
         await assertAccrualsPosted(ctx, args.orgId, items);
         await assertAdvanceIssuancesPosted(ctx, args.orgId, items);

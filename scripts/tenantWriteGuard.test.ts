@@ -320,12 +320,27 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // which clears the flag marking a deal's financing figures as needing review.
   // It takes an `orgId` and a caller-supplied `applicationId`, so it is held to
   // the `requireOwnedRow` rule and satisfies it inline like its siblings.
+  //
+  // Then 445→446 / skippedNoOrgId 144→145 by one mutation from main, with
+  // `analysed` deliberately unchanged:
+  //
+  // `migrateCommissionAccruals.backfillCommissionAccruals` accrues the
+  // commission backlog left by the move to earned-time recognition. It is an
+  // internalMutation that walks every organization by pagination and takes no
+  // `orgId` at all — there is no caller and no caller-supplied id — so it is
+  // correctly outside the analysed surface rather than exempted from it.
+  //
+  // Both sides of this merge moved skippedNoOrgId 143→144 independently — this
+  // branch via backfillFinancingEconomics, main via backfillCommissionAccruals
+  // — so the merged figure is 145, not the 144 either side carried alone.
+  // Taking either side's number verbatim would have silently un-pinned one
+  // migration from the guard.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 445,
+      totalMutations: 446,
       analysed: 292,
       skippedNoArgsBlock: 9,
-      skippedNoOrgId: 144,
+      skippedNoOrgId: 145,
     });
   });
 });

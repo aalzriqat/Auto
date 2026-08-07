@@ -1,0 +1,2657 @@
+/**
+ * Commission expense is recognized when the obligation becomes measurable, and
+ * corrections to it post adjusting entries.
+ *
+ * Before this, MANUAL mode deferred the accrual to PAYMENT — cash-basis
+ * recognition inside an accrual ledger. A car sold in July whose commission was
+ * paid in August showed its full margin in July and a naked expense in August,
+ * and Commission Payable never reflected money the dealership had already
+ * decided it owed. AUTO modes were always correct; this brings MANUAL in line.
+ *
+ * The second half of the change: an amount that had reached the ledger used to
+ * be unchangeable, with the error text pointing at a "correction workflow" that
+ * does not exist. A commission accrued at the wrong number was permanently
+ * wrong. Corrections now post a signed COMMISSION_ADJUSTED delta.
+ */
+import { convexTestWithComponents } from "../test-utils/convexTest";
+import { describe, expect, test, vi } from "vitest";
+import schema from "./schema";
+import { api, internal } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
+import { ruleCommissionAdjusted } from "./accounting/postingRules";
+
+vi.mock("./rateLimit", () => ({
+  rateLimiter: {
+    limit: vi.fn().mockResolvedValue({ ok: true }),
+    check: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
+  },
+  checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
+}));
+
+const MODULE_GLOB = import.meta.glob("./**/*.*s");
+
+const PERMISSIONS = [
+  "create:sales",
+  "view:sales",
+  "edit:sales",
+  "view:vehicles",
+  "view:commissions",
+  "manage:commissions",
+  "view:finance",
+  "manage:finance",
+  "view:payroll",
+  "manage:payroll",
+];
+
+/**
+ * A dealership with a live chart and an OPEN period covering the whole fiscal
+ * year, so hooks actually post instead of queueing to the outbox — the point of
+ * these tests is what lands in the ledger, not what is deferred.
+ */
+async function seedDealer(
+  suffix: string,
+  commissionMode: "MANUAL" | "AUTO_MEMBER" = "MANUAL",
+  opts: { priorYearPeriod?: boolean } = {}
+) {
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
+  const orgId = await t.run((ctx) =>
+    ctx.db.insert("organizations", { name: `Accrual Dealer ${suffix}`, createdAt: Date.now() })
+  );
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId,
+      plan: "professional",
+      status: "active",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+  );
+  const userId = await t.run((ctx) =>
+    ctx.db.insert("users", {
+      clerkId: `accrual_${suffix}`,
+      email: `${suffix}@example.com`,
+      name: "Rep User",
+    })
+  );
+  // OWNER so payroll's separation-of-duties guard (a non-owner may not approve a
+  // run that pays them) does not block the settlement tests below.
+  const roleId = await t.run((ctx) =>
+    ctx.db.insert("roles", { orgId, name: "OWNER", permissions: PERMISSIONS, isSystemOwnerRole: true })
+  );
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+  await t.run((ctx) =>
+    ctx.db.insert("orgSettings", {
+      orgId,
+      currency: "USD",
+      currencySymbol: "$",
+      enabledPaymentTypes: ["CASH"],
+      commissionMode,
+    })
+  );
+  const vehicleId = await t.run((ctx) =>
+    ctx.db.insert("vehicles", {
+      orgId,
+      vin: `VIN-${suffix}`,
+      make: "Honda",
+      model: "Accord",
+      year: 2020,
+      color: "Black",
+      fuelType: "Gasoline",
+      transmission: "Automatic",
+      mileage: 50000,
+      purchasePrice: 10000,
+      sellingPrice: 15000,
+      status: "AVAILABLE",
+    })
+  );
+  const customerId = await t.run((ctx) =>
+    ctx.db.insert("customers", {
+      orgId,
+      firstName: "John",
+      lastName: "Doe",
+      email: `${suffix}.customer@example.com`,
+    })
+  );
+
+  // A second owner, because cancelling a sale is a two-person control: the
+  // salesperson may not approve the cancellation of their own sale
+  // (assertDifferentActors). The commission tests need someone else to void it.
+  const managerId = await t.run((ctx) =>
+    ctx.db.insert("users", {
+      clerkId: `accrual_mgr_${suffix}`,
+      email: `mgr.${suffix}@example.com`,
+      name: "Manager User",
+    })
+  );
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: managerId, roleId }));
+
+  const asAdmin = t.withIdentity({ subject: `accrual_${suffix}`, clerkId: `accrual_${suffix}` });
+  const asManager = t.withIdentity({
+    subject: `accrual_mgr_${suffix}`,
+    clerkId: `accrual_mgr_${suffix}`,
+  });
+  await asAdmin.mutation(api.chartOfAccounts.initialize, { orgId });
+
+  const fiscalYear = new Date().getUTCFullYear();
+  if (opts.priorYearPeriod) {
+    await asAdmin.mutation(api.accountingPeriods.create, {
+      orgId,
+      startDate: Date.UTC(fiscalYear - 1, 0, 1),
+      endDate: Date.UTC(fiscalYear - 1, 11, 31, 23, 59, 59, 999),
+      fiscalYear: fiscalYear - 1,
+      periodNumber: 1,
+    });
+  }
+  await asAdmin.mutation(api.accountingPeriods.create, {
+    orgId,
+    startDate: Date.UTC(fiscalYear, 0, 1),
+    endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+    fiscalYear,
+    periodNumber: 1,
+  });
+  for (const period of await asAdmin.query(api.accountingPeriods.list, { orgId })) {
+    await asAdmin.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+  }
+
+  return { t, orgId, userId, managerId, vehicleId, customerId, asAdmin, asManager };
+}
+
+type Dealer = Awaited<ReturnType<typeof seedDealer>>;
+
+/**
+ * Net Commission Payable in minor units, summed straight off the GL. Credits
+ * increase a liability, so this is credits minus debits — and it counts
+ * reversing entries too, which is how the cancellation tests prove the account
+ * actually returns to zero rather than merely stopping at the accrual.
+ */
+async function commissionPayableMinor({ t, orgId }: Pick<Dealer, "t" | "orgId">): Promise<number> {
+  return await t.run(async (ctx) => {
+    const account = await ctx.db
+      .query("chartOfAccounts")
+      .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", "COMMISSION_PAYABLE"))
+      .unique();
+    if (!account) return 0;
+    const lines = await ctx.db
+      .query("journalLines")
+      .withIndex("by_org_account", (q) => q.eq("orgId", orgId).eq("accountId", account._id))
+      .collect();
+    return lines.reduce((sum, l) => sum + l.creditMinor - l.debitMinor, 0);
+  });
+}
+
+/** Net Commission Expense in minor units (debits minus credits — it is a P&L debit account). */
+async function commissionExpenseMinor({ t, orgId }: Pick<Dealer, "t" | "orgId">): Promise<number> {
+  return await t.run(async (ctx) => {
+    const account = await ctx.db
+      .query("chartOfAccounts")
+      .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", "COMMISSION_EXPENSE"))
+      .unique();
+    if (!account) return 0;
+    const lines = await ctx.db
+      .query("journalLines")
+      .withIndex("by_org_account", (q) => q.eq("orgId", orgId).eq("accountId", account._id))
+      .collect();
+    return lines.reduce((sum, l) => sum + l.debitMinor - l.creditMinor, 0);
+  });
+}
+
+async function accountingEventsFor(
+  { t, orgId }: Pick<Dealer, "t" | "orgId">,
+  eventType: string
+) {
+  return await t.run(async (ctx) => {
+    const rows = await ctx.db
+      .query("accountingEvents")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+    return rows.filter((r) => r.eventType === eventType);
+  });
+}
+
+/** How many corrections have been posted against a sale's accrual. */
+async function adjustmentSeq(d: Dealer, saleId: Id<"sales">): Promise<number> {
+  return await d.t.run(async (ctx) => (await ctx.db.get(saleId))?.commissionAdjustmentSeq ?? 0);
+}
+
+/**
+ * Closes the prior-year period. `close` refuses unless the caller echoes every
+ * current warning back verbatim — that is the mechanism forcing a human to have
+ * actually read the checklist — so the checklist is fetched and replayed here
+ * rather than the warnings being guessed at.
+ */
+async function closePriorYearPeriod(d: Dealer, priorYear: number) {
+  const period = (await d.asAdmin.query(api.accountingPeriods.list, { orgId: d.orgId })).find(
+    (p) => p.fiscalYear === priorYear
+  );
+  if (!period) throw new Error(`no ${priorYear} period to close`);
+  const checklist = await d.asAdmin.query(api.accountingPeriods.closeChecklist, {
+    orgId: d.orgId,
+    periodId: period._id,
+  });
+  await d.asAdmin.mutation(api.accountingPeriods.close, {
+    orgId: d.orgId,
+    periodId: period._id,
+    acknowledgedWarnings: checklist.warnings,
+    overrideReason: checklist.canClose ? undefined : "test fixture",
+  });
+}
+
+async function completedSale(d: Dealer, saleDate = Date.now(), salePrice = 15000) {
+  return await d.asAdmin.mutation(api.sales.create, {
+    orgId: d.orgId,
+    vehicleId: d.vehicleId,
+    customerId: d.customerId,
+    salespersonId: d.userId,
+    salePrice,
+    saleDate,
+    status: "COMPLETED",
+    financingType: "CASH",
+  });
+}
+
+describe("a MANUAL commission is recognized when it becomes measurable", () => {
+  test("setting the first amount on a completed sale accrues it immediately", async () => {
+    const d = await seedDealer("first_accrual");
+    const saleId = await completedSale(d);
+
+    // Nothing is owed until somebody decides an amount.
+    expect(await commissionPayableMinor(d)).toBe(0);
+
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+
+    // Pre-change this was still 0: MANUAL waited for payment, so the ledger
+    // showed no liability for money the dealership had already committed to.
+    expect(await commissionPayableMinor(d)).toBe(25_000);
+    expect(await commissionExpenseMinor(d)).toBe(25_000);
+  });
+
+  test("the accrual is dated to the sale, not to when the amount was typed", async () => {
+    const d = await seedDealer("accrual_date");
+    const fiscalYear = new Date().getUTCFullYear();
+    const saleDate = Date.UTC(fiscalYear, 0, 15);
+    const saleId = await completedSale(d, saleDate);
+
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 100,
+    });
+
+    const [accrual] = await accountingEventsFor(d, "COMMISSION_ACCRUED");
+    // The matching principle: the expense belongs in the period that recognized
+    // the revenue it was earned against.
+    expect(accrual?.accountingDate).toBe(saleDate);
+  });
+
+  test("an amount entered on a draft accrues when the sale completes, not before", async () => {
+    const d = await seedDealer("draft_then_complete");
+    const saleId = await d.asAdmin.mutation(api.sales.createDraft, {
+      orgId: d.orgId,
+      vehicleId: d.vehicleId,
+      customerId: d.customerId,
+      salespersonId: d.userId,
+      salePrice: 15000,
+      saleDate: Date.now(),
+      financingType: "CASH",
+    });
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 300,
+    });
+
+    // A draft has earned nothing — probable, but not yet incurred.
+    expect(await commissionPayableMinor(d)).toBe(0);
+
+    await d.asAdmin.mutation(api.sales.completeDraft, { orgId: d.orgId, saleId });
+
+    // Pre-change MANUAL deferred this to payment, so completing the sale left
+    // the ledger showing no liability for an amount already decided.
+    expect(await commissionPayableMinor(d)).toBe(30_000);
+  });
+
+  test("a completed sale with no amount accrues nothing", async () => {
+    const d = await seedDealer("no_amount");
+    await completedSale(d);
+    expect(await commissionPayableMinor(d)).toBe(0);
+    expect(await accountingEventsFor(d, "COMMISSION_ACCRUED")).toHaveLength(0);
+  });
+
+  test("an amount of zero is a decision, not a payable", async () => {
+    const d = await seedDealer("zero_amount");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 0,
+    });
+    expect(await commissionPayableMinor(d)).toBe(0);
+    expect(await accountingEventsFor(d, "COMMISSION_ACCRUED")).toHaveLength(0);
+  });
+});
+
+describe("correcting an amount already on the books posts an adjusting entry", () => {
+  test("an upward correction adds only the difference", async () => {
+    const d = await seedDealer("adjust_up");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+
+    // Pre-change this threw "already recorded in the ledger" and sent the user
+    // to a correction workflow that does not exist.
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 400,
+    });
+
+    // 250 accrued + 150 adjusted — not 250 + 400, which is what posting the new
+    // amount instead of the delta would produce.
+    expect(await commissionPayableMinor(d)).toBe(40_000);
+    expect(await commissionExpenseMinor(d)).toBe(40_000);
+    expect(await accountingEventsFor(d, "COMMISSION_ADJUSTED")).toHaveLength(1);
+    expect(await adjustmentSeq(d, saleId)).toBe(1);
+  });
+
+  test("a downward correction reduces the payable", async () => {
+    const d = await seedDealer("adjust_down");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 400,
+    });
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 150,
+    });
+
+    expect(await commissionPayableMinor(d)).toBe(15_000);
+    expect(await commissionExpenseMinor(d)).toBe(15_000);
+  });
+
+  test("correcting to zero clears the payable completely", async () => {
+    const d = await seedDealer("adjust_to_zero");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 400,
+    });
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 0,
+    });
+
+    expect(await commissionPayableMinor(d)).toBe(0);
+    expect(await commissionExpenseMinor(d)).toBe(0);
+  });
+
+  test("successive corrections each get their own entry and the payable tracks the latest amount", async () => {
+    const d = await seedDealer("adjust_many");
+    const saleId = await completedSale(d);
+    for (const amount of [250, 400, 175, 600]) {
+      await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+        orgId: d.orgId,
+        saleId,
+        commissionAmount: amount,
+      });
+    }
+
+    // Three corrections after the initial accrual. A shared idempotency key
+    // would have collapsed these into one and silently dropped the rest.
+    expect(await accountingEventsFor(d, "COMMISSION_ADJUSTED")).toHaveLength(3);
+    expect(await adjustmentSeq(d, saleId)).toBe(3);
+    expect(await commissionPayableMinor(d)).toBe(60_000);
+  });
+
+  test("re-submitting the same amount posts nothing and burns no sequence number", async () => {
+    const d = await seedDealer("adjust_noop");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+
+    expect(await accountingEventsFor(d, "COMMISSION_ADJUSTED")).toHaveLength(0);
+    expect(await adjustmentSeq(d, saleId)).toBe(0);
+    expect(await commissionPayableMinor(d)).toBe(25_000);
+  });
+
+  test("an AUTO-mode commission is still not hand-editable after completion", async () => {
+    const d = await seedDealer("auto_locked", "AUTO_MEMBER");
+    const saleId = await completedSale(d);
+    await expect(
+      d.asAdmin.mutation(api.sales.setCommissionAmount, {
+        orgId: d.orgId,
+        saleId,
+        commissionAmount: 999,
+      })
+    ).rejects.toThrow(/locked/i);
+  });
+});
+
+describe("voiding a sale backs the whole commission out of the ledger", () => {
+  test("cancellation reverses the accrual and every correction posted against it", async () => {
+    const d = await seedDealer("cancel_with_adjustments");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 400,
+    });
+    expect(await commissionPayableMinor(d)).toBe(40_000);
+
+    await d.asManager.mutation(api.sales.update, {
+      orgId: d.orgId,
+      saleId,
+      status: "CANCELLED",
+    });
+
+    // Reversing only COMMISSION_ACCRUED — the behavior before this change —
+    // leaves the +150 adjustment stranded and the account sitting at 15,000.
+    expect(await commissionPayableMinor(d)).toBe(0);
+    expect(await commissionExpenseMinor(d)).toBe(0);
+  });
+
+  test("cancellation reverses a commission corrected more than once", async () => {
+    // The single-correction case above exercises the forward probe only to
+    // sequence 1. reverseCommissionForSale walks upward past
+    // commissionAdjustmentSeq rather than trusting it, so the loop itself needs
+    // a sale with several corrections behind it.
+    const d = await seedDealer("cancel_many_adjustments");
+    const saleId = await completedSale(d);
+    for (const amount of [250, 400, 175, 900]) {
+      await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+        orgId: d.orgId,
+        saleId,
+        commissionAmount: amount,
+      });
+    }
+    // One accrual plus three corrections.
+    expect(await adjustmentSeq(d, saleId)).toBe(3);
+    expect(await commissionPayableMinor(d)).toBe(90_000);
+
+    await d.asManager.mutation(api.sales.update, {
+      orgId: d.orgId,
+      saleId,
+      status: "CANCELLED",
+    });
+
+    // Every one of them backed out — both sides of the journal, not just the
+    // payable.
+    expect(await commissionPayableMinor(d)).toBe(0);
+    expect(await commissionExpenseMinor(d)).toBe(0);
+  });
+
+  test("cancelling a sale that was never corrected still reverses cleanly", async () => {
+    const d = await seedDealer("cancel_plain");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    await d.asManager.mutation(api.sales.update, {
+      orgId: d.orgId,
+      saleId,
+      status: "CANCELLED",
+    });
+    expect(await commissionPayableMinor(d)).toBe(0);
+  });
+});
+
+describe("settlement clears exactly what was recognized", () => {
+  test("paying a corrected commission directly nets Commission Payable to zero", async () => {
+    const d = await seedDealer("direct_pay_adjusted");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 400,
+    });
+
+    await d.asAdmin.mutation(api.sales.markCommissionPaid, {
+      orgId: d.orgId,
+      saleId,
+      paymentMethod: "CASH",
+    });
+
+    expect(await commissionPayableMinor(d)).toBe(0);
+    // The expense stays — it was genuinely incurred; only the liability clears.
+    expect(await commissionExpenseMinor(d)).toBe(40_000);
+  });
+
+  test("a payroll run pays the corrected amount and leaves no residue", async () => {
+    const d = await seedDealer("payroll_adjusted");
+    const fiscalYear = new Date().getUTCFullYear();
+    const saleId = await completedSale(d, Date.UTC(fiscalYear, 0, 15));
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 400,
+    });
+
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId,
+      periodYear: fiscalYear,
+      periodMonth: 1,
+    });
+    await d.asAdmin.mutation(api.payroll.approveRun, { orgId: d.orgId, runId });
+    await d.asAdmin.mutation(api.payroll.payRun, { orgId: d.orgId, runId, method: "CASH" });
+
+    // Approval re-accrues on the same idempotency key (a no-op), so the payable
+    // is 400 — accrual 250 plus adjustment 150 — and payment clears all of it.
+    expect(await commissionPayableMinor(d)).toBe(0);
+    expect(await commissionExpenseMinor(d)).toBe(40_000);
+  });
+
+  test("correcting an amount after approval sends the run back for re-approval", async () => {
+    const d = await seedDealer("payroll_drift");
+    const fiscalYear = new Date().getUTCFullYear();
+    const saleId = await completedSale(d, Date.UTC(fiscalYear, 0, 15));
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId,
+      periodYear: fiscalYear,
+      periodMonth: 1,
+    });
+    await d.asAdmin.mutation(api.payroll.approveRun, { orgId: d.orgId, runId });
+
+    // The correction the old code made impossible: the amount was already
+    // accrued by approval, and the only advice on offer was a workflow that
+    // does not exist.
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 900,
+    });
+
+    const result = await d.asAdmin.mutation(api.payroll.payRun, {
+      orgId: d.orgId,
+      runId,
+      method: "CASH",
+    });
+    // Paying a different number than was authorized is a control failure, so
+    // the run must stop rather than quietly pay 900.
+    expect(result.status).toBe("NEEDS_REAPPROVAL");
+
+    await d.asAdmin.mutation(api.payroll.approveRun, { orgId: d.orgId, runId });
+    await d.asAdmin.mutation(api.payroll.payRun, { orgId: d.orgId, runId, method: "CASH" });
+    expect(await commissionPayableMinor(d)).toBe(0);
+    expect(await commissionExpenseMinor(d)).toBe(90_000);
+  });
+});
+
+describe("the Commission Payable reconciliation follows the entries, not the live amount", () => {
+  test("a corrected commission still reconciles", async () => {
+    const d = await seedDealer("recon_adjusted");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 400,
+    });
+
+    const recon = await d.asAdmin.query(api.accountingReports.commissionPayableReconciliation, {
+      orgId: d.orgId,
+    });
+    expect(recon.isReconciled).toBe(true);
+  });
+
+  test("a correction is always dated with the accrual it corrects, so no window can split them", async () => {
+    // Commission entries take the SALE's date, with no fallback — the same rule
+    // the sale's own entry uses. That is what makes the reconciliation's job
+    // possible: a correction can never land in a period its accrual is not in,
+    // so no reporting window can hold part of a commission and miss the rest.
+    //
+    // An earlier version of this rule moved an entry to the current period when
+    // the sale's own period had closed, which is exactly how a window came to
+    // hold 250 of a 400 commission. Both are now dated at the sale.
+    const d = await seedDealer("recon_split", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleDate = Date.UTC(priorYear, 5, 15);
+
+    const oldSale = await completedSale(d, saleDate);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId: oldSale,
+      commissionAmount: 250,
+    });
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId: oldSale,
+      commissionAmount: 400,
+    });
+
+    const [accrual] = await accountingEventsFor(d, "COMMISSION_ACCRUED");
+    const [adjustment] = await accountingEventsFor(d, "COMMISSION_ADJUSTED");
+    expect(accrual?.accountingDate).toBe(saleDate);
+    expect(adjustment?.accountingDate).toBe(saleDate);
+
+    // Both sit in the prior year, so every window sees the whole 400 or none.
+    const asOfPriorYear = await d.asAdmin.query(
+      api.accountingReports.commissionPayableReconciliation,
+      { orgId: d.orgId, toDate: Date.UTC(priorYear, 11, 31, 23, 59, 59, 999) }
+    );
+    expect(asOfPriorYear.isReconciled).toBe(true);
+
+    const asOfNow = await d.asAdmin.query(
+      api.accountingReports.commissionPayableReconciliation,
+      { orgId: d.orgId }
+    );
+    expect(asOfNow.isReconciled).toBe(true);
+    expect(await commissionPayableMinor(d)).toBe(40_000);
+  });
+});
+
+describe("the reconciliation is point-in-time on BOTH sides", () => {
+  test("a commission accrued in the period and paid after it still reconciles", async () => {
+    // The regression: the GL side is as-of-toDate, but the subledger side read
+    // CURRENT state, so a sale paid after the period end was dropped from the
+    // subledger while the GL correctly still carried the liability. Paying a
+    // month's commissions before closing that month is the normal workflow, so
+    // this fired on most closes — on books that are right.
+    const d = await seedDealer("recon_paid_after", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const priorYearEnd = Date.UTC(priorYear, 11, 31, 23, 59, 59, 999);
+
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    // Paid now — i.e. after the prior-year period ended.
+    await d.asAdmin.mutation(api.sales.markCommissionPaid, {
+      orgId: d.orgId,
+      saleId,
+      paymentMethod: "CASH",
+    });
+
+    const asOfPriorYearEnd = await d.asAdmin.query(
+      api.accountingReports.commissionPayableReconciliation,
+      { orgId: d.orgId, toDate: priorYearEnd }
+    );
+    expect(asOfPriorYearEnd.isReconciled).toBe(true);
+
+    // And current state nets to zero on both sides.
+    const asOfNow = await d.asAdmin.query(
+      api.accountingReports.commissionPayableReconciliation,
+      { orgId: d.orgId }
+    );
+    expect(asOfNow.isReconciled).toBe(true);
+  });
+
+  test("a commission accrued in the period and cancelled after it still reconciles", async () => {
+    // Same shape as the payment case: the reversal is dated after the window,
+    // so the GL still carries the accrual there and the subledger must too —
+    // even though the accrual's row now reads REVERSED.
+    const d = await seedDealer("recon_cancel_after", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const priorYearEnd = Date.UTC(priorYear, 11, 31, 23, 59, 59, 999);
+
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    await d.asManager.mutation(api.sales.update, {
+      orgId: d.orgId,
+      saleId,
+      status: "CANCELLED",
+    });
+
+    const asOfPriorYearEnd = await d.asAdmin.query(
+      api.accountingReports.commissionPayableReconciliation,
+      { orgId: d.orgId, toDate: priorYearEnd }
+    );
+    expect(asOfPriorYearEnd.isReconciled).toBe(true);
+    expect(await commissionPayableMinor(d)).toBe(0);
+  });
+});
+
+describe("the backlog backfill", () => {
+  test("accrues a completed unpaid commission that predates earned-time recognition", async () => {
+    const d = await seedDealer("backfill");
+    const saleId = await completedSale(d);
+    // A sale carrying a decided amount with no accrual — the state every
+    // MANUAL org is in for its existing commissions at deploy time.
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAmount: 250 }));
+    expect(await commissionPayableMinor(d)).toBe(0);
+
+    const dry = await d.t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {
+      dryRun: true,
+    });
+    expect(dry.accruedCount).toBe(1);
+    expect(await commissionPayableMinor(d)).toBe(0);
+
+    const run = await d.t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
+    expect(run.accruedCount).toBe(1);
+    expect(await commissionPayableMinor(d)).toBe(25_000);
+    expect(await commissionExpenseMinor(d)).toBe(25_000);
+
+    // Re-running accrues nothing further.
+    const again = await d.t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
+    expect(again.accruedCount).toBe(0);
+    expect(again.skippedAlreadyRecognized).toBe(1);
+    expect(await commissionPayableMinor(d)).toBe(25_000);
+  });
+
+  test("leaves an already-recognized commission alone", async () => {
+    const d = await seedDealer("backfill_noop");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+
+    const run = await d.t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
+    expect(run.accruedCount).toBe(0);
+    expect(await commissionPayableMinor(d)).toBe(25_000);
+  });
+
+  test("skips cancelled, unpaid-but-zero, and already-paid commissions", async () => {
+    const d = await seedDealer("backfill_skips");
+    const paidSale = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId: paidSale,
+      commissionAmount: 250,
+    });
+    await d.asAdmin.mutation(api.sales.markCommissionPaid, {
+      orgId: d.orgId,
+      saleId: paidSale,
+      paymentMethod: "CASH",
+    });
+    const before = await commissionPayableMinor(d);
+
+    const run = await d.t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
+    expect(run.accruedCount).toBe(0);
+    expect(await commissionPayableMinor(d)).toBe(before);
+  });
+});
+
+describe("no commission entry may overtake the entries it depends on", () => {
+  /**
+   * Builds the state the review found: an accrual sitting in the outbox because
+   * the sale's period was open when it was raised and has since been closed,
+   * while today's period is open so anything raised now posts immediately.
+   */
+  async function accrualQueuedBehindAClosedPeriod(suffix: string) {
+    const d = await seedDealer(suffix, "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    // Requeue the accrual as if it had never drained, then close its period so
+    // it can no longer post. Patching the event directly is the only way to
+    // model an outbox row whose period shut behind it.
+    await d.t.run(async (ctx) => {
+      const accrual = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", d.orgId).eq("sourceType", "sales").eq("sourceId", `commission_${saleId}`)
+        )
+        .first();
+      if (!accrual) throw new Error("expected an accrual to requeue");
+      const lines = await ctx.db
+        .query("journalLines")
+        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", accrual.journalEntryId!))
+        .collect();
+      for (const line of lines) await ctx.db.delete(line._id);
+      await ctx.db.delete(accrual.journalEntryId!);
+      await ctx.db.delete(accrual._id);
+      await ctx.db.insert("pendingAccountingEvents", {
+        orgId: d.orgId,
+        kind: "POST",
+        status: "PENDING",
+        idempotencyKey: `commission_accrued_${saleId}`,
+        accountingDate: Date.UTC(priorYear, 5, 15),
+        actorId: d.userId,
+        attempts: 1,
+        createdAt: Date.now(),
+        eventType: "COMMISSION_ACCRUED",
+        sourceType: "sales",
+        sourceId: `commission_${saleId}`,
+        eventVersion: 1,
+        occurredAt: Date.UTC(priorYear, 5, 15),
+        currency: "USD",
+        payload: {
+          saleId,
+          amountMinor: 25_000,
+          currency: "USD",
+          salespersonId: d.userId,
+        },
+      });
+    });
+    await closePriorYearPeriod(d, priorYear);
+    expect(await commissionPayableMinor(d)).toBe(0);
+    return { d, saleId };
+  }
+
+  test("a direct payment refuses when the sale's period cannot take the entry", async () => {
+    const { d, saleId } = await accrualQueuedBehindAClosedPeriod("pay_ahead");
+
+    // Previously this posted the payment on its own: the re-raised accrual is a
+    // no-op while an outbox row exists, so Commission Payable went to -25,000
+    // and stayed there until someone reopened the closed month.
+    //
+    // Two guards now stand in front of that. The INNER ordering guard is the one
+    // that fires here, because this sale's accrual does exist — it is sitting in
+    // the outbox, queued behind the closed month — so the message names that
+    // state rather than claiming the commission was never recognized.
+    //
+    // The outer guard deliberately does NOT fire for a queued accrual. It only
+    // refuses when a NEW entry dated at the sale would have to be created, which
+    // is the case covered separately in "a commission that never accrued is
+    // still refused once its month is closed". Applying it unconditionally was a
+    // regression: it also refused paying a commission that had already posted
+    // before its month closed, which is the ordinary month-end flow.
+    await expect(
+      d.asAdmin.mutation(api.sales.markCommissionPaid, {
+        orgId: d.orgId,
+        saleId,
+        paymentMethod: "CASH",
+      })
+    ).rejects.toThrow(/hasn't posted to the ledger yet/i);
+
+    expect(await commissionPayableMinor(d)).toBe(0);
+    // The whole mutation rolled back, so the sale is not left marked paid.
+    const sale = await d.t.run((ctx) => ctx.db.get(saleId));
+    expect(sale?.commissionPaidAt ?? null).toBeNull();
+  });
+
+  test("a correction refuses while the accrual it corrects has dead-lettered", async () => {
+    // Since every commission entry now takes the sale's own date, a correction
+    // can no longer land in a period its accrual is not in — that whole class is
+    // closed by construction. What remains reachable is an accrual that has
+    // exhausted its retries: the period is open, so the correction WOULD post,
+    // while the accrual it reduces will never drain on its own. A downward
+    // correction alone is a naked debit to Commission Payable.
+    const d = await seedDealer("adjust_ahead");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 250,
+    });
+    // Replace the posted accrual with a dead-lettered one.
+    await d.t.run(async (ctx) => {
+      const accrual = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", d.orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first();
+      const lines = await ctx.db
+        .query("journalLines")
+        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", accrual!.journalEntryId!))
+        .collect();
+      for (const line of lines) await ctx.db.delete(line._id);
+      await ctx.db.delete(accrual!.journalEntryId!);
+      await ctx.db.delete(accrual!._id);
+      await ctx.db.insert("pendingAccountingEvents", {
+        orgId: d.orgId, kind: "POST", status: "FAILED",
+        idempotencyKey: `commission_accrued_${saleId}`,
+        accountingDate: Date.now(), actorId: d.userId, attempts: 10,
+        createdAt: Date.now(), eventType: "COMMISSION_ACCRUED", sourceType: "sales",
+        sourceId: `commission_${saleId}`, eventVersion: 1, occurredAt: Date.now(),
+        currency: "USD",
+        payload: { saleId, amountMinor: 25_000, currency: "USD", salespersonId: d.userId },
+      });
+    });
+
+    await expect(
+      d.asAdmin.mutation(api.sales.setCommissionAmount, {
+        orgId: d.orgId,
+        saleId,
+        commissionAmount: 100,
+      })
+    ).rejects.toThrow(/failed and needs to be retried/i);
+
+    expect(await commissionPayableMinor(d)).toBe(0);
+    expect(await d.t.run((ctx) => ctx.db.get(saleId))).toMatchObject({ commissionAmount: 250 });
+  });
+
+  test("payroll refuses to pay while a CORRECTION is still queued", async () => {
+    // The accrual is posted, so payroll's old accrual-only guard passed — but
+    // payment debits the corrected amount, which the GL does not yet carry.
+    const d = await seedDealer("payroll_queued_adj", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    await d.t.run(async (ctx) => {
+      await ctx.db.insert("pendingAccountingEvents", {
+        orgId: d.orgId,
+        kind: "POST",
+        status: "PENDING",
+        idempotencyKey: `commission_adjusted_${saleId}_1`,
+        accountingDate: Date.UTC(priorYear, 5, 15),
+        actorId: d.userId,
+        attempts: 1,
+        createdAt: Date.now(),
+        eventType: "COMMISSION_ADJUSTED",
+        sourceType: "sales",
+        sourceId: `commission_adj_${saleId}_1`,
+        eventVersion: 1,
+        occurredAt: Date.UTC(priorYear, 5, 15),
+        currency: "USD",
+        payload: { saleId, deltaMinor: 15_000, currency: "USD", salespersonId: d.userId },
+      });
+      const sale = await ctx.db.get(saleId);
+      await ctx.db.patch(saleId, {
+        commissionAmount: 400,
+        commissionAdjustmentSeq: 1,
+      });
+      expect(sale).toBeTruthy();
+    });
+
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId,
+      periodYear: priorYear,
+      periodMonth: 6,
+    });
+    await d.asAdmin.mutation(api.payroll.approveRun, { orgId: d.orgId, runId });
+    await expect(
+      d.asAdmin.mutation(api.payroll.payRun, { orgId: d.orgId, runId, method: "CASH" })
+    ).rejects.toThrow(/hasn't posted to the ledger yet/i);
+  });
+});
+
+describe("the outbox will not drain a settlement ahead of its own accrual", () => {
+  /**
+   * The state a mutation-side guard cannot police, and the one a chart-ready
+   * dealership reaches by ordinary use: initializing a chart creates NO
+   * periods, so the first commissions queue, and the first period an accountant
+   * opens is usually the current month rather than the month of the sale.
+   */
+  async function queuedAccrualAndPayment(suffix: string, opts: { pay?: boolean } = {}) {
+    const pay = opts.pay ?? true;
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: `Drain ${suffix}`, createdAt: Date.now() })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId, plan: "professional", status: "active",
+        createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
+    const userId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: `drain_${suffix}`, email: `${suffix}@x.com`, name: "Rep" })
+    );
+    const roleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "OWNER", permissions: PERMISSIONS, isSystemOwnerRole: true })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+    await t.run((ctx) =>
+      ctx.db.insert("orgSettings", {
+        orgId, currency: "USD", currencySymbol: "$",
+        enabledPaymentTypes: ["CASH"], commissionMode: "MANUAL",
+      })
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, vin: `VIN-${suffix}`, make: "Honda", model: "Accord", year: 2020, color: "Black",
+        fuelType: "Gasoline", transmission: "Automatic", mileage: 1, purchasePrice: 10000,
+        sellingPrice: 15000, status: "AVAILABLE",
+      })
+    );
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Drain", lastName: "Buyer" })
+    );
+    const asAdmin = t.withIdentity({ subject: `drain_${suffix}`, clerkId: `drain_${suffix}` });
+
+    // Chart, but no periods at all — so everything queues.
+    await asAdmin.mutation(api.chartOfAccounts.initialize, { orgId });
+
+    const year = new Date().getUTCFullYear();
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, saleDate: Date.UTC(year, 0, 15),
+      status: "COMPLETED", financingType: "CASH",
+    });
+    await asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId, saleId, commissionAmount: 250,
+    });
+    if (pay) {
+      await asAdmin.mutation(api.sales.markCommissionPaid, {
+        orgId, saleId, paymentMethod: "CASH",
+      });
+    }
+
+    const queued = await t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+        .collect()
+    );
+    expect(queued.map((q) => q.eventType)).toContain("COMMISSION_ACCRUED");
+    if (pay) expect(queued.map((q) => q.eventType)).toContain("COMMISSION_PAID");
+
+    return { t, orgId, userId, saleId, asAdmin, year };
+  }
+
+  test("opening only the payment's period does not post the payment alone", async () => {
+    const { t, orgId, asAdmin, year } = await queuedAccrualAndPayment("pay_first");
+
+    // Open a period covering TODAY (when the payment is dated) but not January
+    // (when the accrual is dated).
+    await asAdmin.mutation(api.accountingPeriods.create, {
+      orgId,
+      startDate: Date.UTC(year, 5, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+      fiscalYear: year,
+      periodNumber: 2,
+    });
+    const period = (await asAdmin.query(api.accountingPeriods.list, { orgId }))[0];
+    await asAdmin.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+
+    // Before the drain-side guard, COMMISSION_PAID posted here on its own and
+    // Commission Payable sat at -25,000 until somebody opened a period nobody
+    // knew to look for.
+    expect(await commissionPayableMinor({ t, orgId })).toBe(0);
+    const stillQueued = await t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+        .collect()
+    );
+    expect(stillQueued.map((q) => q.eventType)).toContain("COMMISSION_PAID");
+  });
+
+  test("a queued correction does not drain ahead of the accrual it corrects", async () => {
+    // End-to-end cover for "a queued correction never posts alone". Note what
+    // actually holds it here: every commission entry for a sale whose own
+    // posting is queued inherits that posting's date, so the correction is out
+    // of the opened period. The dispatcher rule that ALSO forbids it is proved
+    // directly in utils/commissionSourceLedger.test.ts — deliberately, because
+    // a drain test can pass because the entry happened to be held on its own
+    // period rather than by the rule under test, which is how this class of
+    // ordering bug survives a green suite.
+    const { t, orgId, saleId, asAdmin, year } = await queuedAccrualAndPayment("adj_first", {
+      pay: false,
+    });
+    await asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId, saleId, commissionAmount: 100,
+    });
+
+    await asAdmin.mutation(api.accountingPeriods.create, {
+      orgId,
+      startDate: Date.UTC(year, 5, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+      fiscalYear: year,
+      periodNumber: 2,
+    });
+    const period = (await asAdmin.query(api.accountingPeriods.list, { orgId }))[0];
+    await asAdmin.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+
+    expect(await commissionPayableMinor({ t, orgId })).toBe(0);
+    expect(await commissionExpenseMinor({ t, orgId })).toBe(0);
+    const stillQueued = await t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+        .collect()
+    );
+    expect(stillQueued.map((q) => q.eventType)).toContain("COMMISSION_ADJUSTED");
+  });
+
+  test("a malformed row fails itself instead of aborting the whole drain", async () => {
+    // The guards walk data the admin raw-JSON editor can write, and they ran
+    // before drainEntries' per-entry try. A throw there aborted the whole
+    // mutation — and since every drain starts from the same query, that row was
+    // hit first every time, silently stopping all GL posting for the org.
+    const { t, orgId, saleId, asAdmin, year } = await queuedAccrualAndPayment("drain_isolation");
+    await t.run((ctx) => ctx.db.patch(saleId, { commissionAdjustmentSeq: 5_000_000 }));
+
+    await asAdmin.mutation(api.accountingPeriods.create, {
+      orgId,
+      startDate: Date.UTC(year, 0, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+      fiscalYear: year,
+      periodNumber: 1,
+    });
+    const period = (await asAdmin.query(api.accountingPeriods.list, { orgId }))[0];
+    await asAdmin.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+
+    // Returns rather than throwing, and never leaves the payable negative.
+    const result = await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    expect(result).toBeTruthy();
+    expect(await commissionPayableMinor({ t, orgId })).toBeGreaterThanOrEqual(0);
+  });
+
+  test("once the accrual's period opens too, both post and net to zero", async () => {
+    const { t, orgId, asAdmin, year } = await queuedAccrualAndPayment("both_open");
+
+    await asAdmin.mutation(api.accountingPeriods.create, {
+      orgId,
+      startDate: Date.UTC(year, 0, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+      fiscalYear: year,
+      periodNumber: 1,
+    });
+    const period = (await asAdmin.query(api.accountingPeriods.list, { orgId }))[0];
+    await asAdmin.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+    // Twice: the first drain posts the accrual, which unblocks the payment.
+    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+
+    expect(await commissionPayableMinor({ t, orgId })).toBe(0);
+    expect(await commissionExpenseMinor({ t, orgId })).toBe(25_000);
+  });
+});
+
+describe("commission entries are dated by one rule everywhere", () => {
+  test("an org with no chart queues its accrual at the SALE date, not today", async () => {
+    // Nothing posts without a chart, so falling back to today would buy nothing
+    // and permanently misdate the accrual: the sale itself queues at its own
+    // date, so an org that initializes its chart later would book revenue and
+    // commission in different months with no way to correct it.
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "No Chart Dealer", createdAt: Date.now() })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId,
+        plan: "professional",
+        status: "active",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+    const userId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "nochart", email: "nochart@example.com", name: "Rep" })
+    );
+    const roleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "OWNER", permissions: PERMISSIONS, isSystemOwnerRole: true })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+    await t.run((ctx) =>
+      ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "USD",
+        currencySymbol: "$",
+        enabledPaymentTypes: ["CASH"],
+        commissionMode: "MANUAL",
+      })
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, vin: "VIN-NOCHART", make: "Honda", model: "Accord", year: 2020, color: "Black",
+        fuelType: "Gasoline", transmission: "Automatic", mileage: 1, purchasePrice: 10000,
+        sellingPrice: 15000, status: "AVAILABLE",
+      })
+    );
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "No", lastName: "Chart" })
+    );
+    const asAdmin = t.withIdentity({ subject: "nochart", clerkId: "nochart" });
+
+    const saleDate = Date.UTC(new Date().getUTCFullYear(), 0, 20);
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, saleDate, status: "COMPLETED", financingType: "CASH",
+    });
+    await asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+
+    const queued = await t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(queued?.accountingDate).toBe(saleDate);
+  });
+});
+
+describe("a commission never outruns the sale that earned it", () => {
+  test("completing a sale backdated into a closed period does not post its commission alone", async () => {
+    // On main the sale and its commission shared one date, so either both
+    // posted or both queued. Giving only the commission a fallback let August
+    // carry Commission Expense for a sale whose revenue, COGS and receivable
+    // were queued in a closed June — and would eventually dead-letter.
+    // Backdated month-end data entry after a close is routine.
+    const d = await seedDealer("no_outrun", "AUTO_MEMBER", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    await d.t.run(async (ctx) => {
+      const membership = (await ctx.db.query("memberships").collect()).find(
+        (m) => m.orgId === d.orgId && m.userId === d.userId
+      );
+      await ctx.db.patch(membership!._id, { commissionRate: 10 });
+    });
+    await closePriorYearPeriod(d, priorYear);
+
+    await completedSale(d, Date.UTC(priorYear, 5, 20));
+
+    // The sale's own entry could not post into the closed year, so its
+    // commission must not have posted into the open one either.
+    expect(await commissionExpenseMinor(d)).toBe(0);
+    expect(await commissionPayableMinor(d)).toBe(0);
+  });
+
+  test("a legacy sale with no SALE_COMPLETED event is not blocked forever", async () => {
+    // Sales completed before the accounting hooks existed, and sales brought
+    // over by the cutover (which posts under migrate_<txId>), have no
+    // sale_completed_* event and never will. Blocking on that would hold their
+    // accrual permanently: held entries never increment attempts, so they never
+    // reach the FAILED list retryFailed can act on, and nothing in the product
+    // can clear them — a permanent unposted blocker on every close.
+    const d = await seedDealer("legacy_sale");
+    const saleId = await d.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: d.orgId,
+        vehicleId: d.vehicleId,
+        customerId: d.customerId,
+        salespersonId: d.userId,
+        salePrice: 15000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        commissionAmount: 250,
+      })
+    );
+
+    const run = await d.t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
+    expect(run.accruedCount).toBe(1);
+    await d.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: d.orgId });
+
+    expect(await commissionPayableMinor(d)).toBe(25_000);
+    expect(saleId).toBeTruthy();
+  });
+});
+
+describe("the recognition divergence control", () => {
+  test("flags a commission recognized at a different amount than the sale records", async () => {
+    // Models a delta computed against the wrong base, or an amount edited
+    // straight through the admin raw-JSON editor. The payable reconciliation
+    // cannot see this — both of its sides come from the same posted entries and
+    // would be wrong together.
+    const d = await seedDealer("divergence");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+
+    const clean = await d.asAdmin.query(api.accountingReports.commissionPayableReconciliation, {
+      orgId: d.orgId,
+    });
+    expect(clean.isReconciled).toBe(true);
+
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAmount: 900 }));
+
+    // Still "reconciled" — which is exactly why a second, independent control
+    // is needed.
+    const stillReconciled = await d.asAdmin.query(
+      api.accountingReports.commissionPayableReconciliation,
+      { orgId: d.orgId }
+    );
+    expect(stillReconciled.isReconciled).toBe(true);
+
+    const period = (await d.asAdmin.query(api.accountingPeriods.list, { orgId: d.orgId }))[0];
+    const checklist = await d.asAdmin.query(api.accountingPeriods.closeChecklist, {
+      orgId: d.orgId,
+      periodId: period._id,
+    });
+    expect(checklist.warnings.join(" ")).toMatch(/recognized in the ledger at a different amount/i);
+  });
+});
+
+describe("round-3 review fixes", () => {
+  test("recalculateCommission dates its accrual by the shared rule, not by today", async () => {
+    // The fourth call site. Dating it at `now` recognized the expense in the
+    // month the cost basis was fixed rather than the month of the sale — the
+    // exact mismatch this work removes — and, after a switch to MANUAL, let a
+    // later correction post into the sale's own period with no accrual there.
+    const d = await seedDealer("recalc_date", "AUTO_MEMBER");
+    const year = new Date().getUTCFullYear();
+    const saleDate = Date.UTC(year, 0, 15);
+
+    // Complete with no cost basis, so nothing accrues at completion.
+    await d.t.run((ctx) => ctx.db.patch(d.vehicleId, { purchasePrice: undefined }));
+    const saleId = await completedSale(d, saleDate);
+    expect(await accountingEventsFor(d, "COMMISSION_ACCRUED")).toHaveLength(0);
+
+    // Fix the cost and recalculate — much later than the sale.
+    await d.t.run((ctx) => ctx.db.patch(d.vehicleId, { purchasePrice: 10000 }));
+    await d.t.run(async (ctx) => {
+      const membership = (await ctx.db.query("memberships").collect()).find(
+        (m) => m.orgId === d.orgId && m.userId === d.userId
+      );
+      await ctx.db.patch(membership!._id, { commissionRate: 10 });
+    });
+    await d.asAdmin.mutation(api.sales.recalculateCommission, { orgId: d.orgId, saleId });
+
+    const [accrual] = await accountingEventsFor(d, "COMMISSION_ACCRUED");
+    expect(accrual?.accountingDate).toBe(saleDate);
+  });
+
+  test("a commission corrected past the adjustment ceiling is refused, not silently clamped", async () => {
+    // Past the ceiling the reversal walk and the queued-entry check both stop
+    // looking, so an entry there could never be reversed on cancellation and
+    // would never be seen by the settlement guards.
+    const d = await seedDealer("seq_ceiling");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAdjustmentSeq: 1000 }));
+
+    await expect(
+      d.asAdmin.mutation(api.sales.setCommissionAmount, {
+        orgId: d.orgId,
+        saleId,
+        commissionAmount: 300,
+      })
+    ).rejects.toThrow(/correction history cannot be extended safely/i);
+  });
+
+  test("settlement refuses when the sale's amount no longer matches what was recognized", async () => {
+    const d = await seedDealer("settle_divergent");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    // Written outside every path that posts a delta — the admin raw-JSON
+    // editor does exactly this.
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAmount: 900 }));
+
+    // Paying would debit 900 against a 250 credit and leave the payable at
+    // -650, with every later correction computing from the already-wrong row.
+    await expect(
+      d.asAdmin.mutation(api.sales.markCommissionPaid, {
+        orgId: d.orgId,
+        saleId,
+        paymentMethod: "CASH",
+      })
+    ).rejects.toThrow(/does not match what the ledger recognized/i);
+    expect(await commissionPayableMinor(d)).toBe(25_000);
+  });
+
+  test("the backlog is reported as unrecognized, not as recognized at the wrong amount", async () => {
+    // Every commission decided before earned-time recognition shipped is in
+    // this state. Reporting it as a mismatch made an ordinary migration
+    // backlog read as ledger corruption, on a warning that must be
+    // acknowledged verbatim on every close.
+    const d = await seedDealer("backlog_wording");
+    const saleId = await completedSale(d);
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAmount: 250 }));
+
+    const period = (await d.asAdmin.query(api.accountingPeriods.list, { orgId: d.orgId }))[0];
+    const before = await d.asAdmin.query(api.accountingPeriods.closeChecklist, {
+      orgId: d.orgId,
+      periodId: period._id,
+    });
+    expect(before.warnings.join(" ")).toMatch(/not recognized in the ledger at all/i);
+    expect(before.warnings.join(" ")).not.toMatch(/at a different amount/i);
+
+    await d.t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
+
+    const after = await d.asAdmin.query(api.accountingPeriods.closeChecklist, {
+      orgId: d.orgId,
+      periodId: period._id,
+    });
+    expect(after.warnings.join(" ")).not.toMatch(/not recognized in the ledger at all/i);
+  });
+
+  test("the backfill attributes its posting to the org owner, never to the salesperson", async () => {
+    // That id lands in accountingEvents.createdBy, journalEntries.postedBy and
+    // the immutable POST_EVENT audit row. The one actor who must never appear
+    // as the author of a commission posting is its beneficiary.
+    const d = await seedDealer("backfill_actor");
+    const saleId = await completedSale(d);
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAmount: 250 }));
+    // The salesperson is a plain member; the manager holds the OWNER role.
+    await d.t.run(async (ctx) => {
+      const roles = await ctx.db.query("roles").collect();
+      const ownerRole = roles.find((r) => r.orgId === d.orgId);
+      const plain = await ctx.db.insert("roles", {
+        orgId: d.orgId,
+        name: "SALES",
+        permissions: ["view:sales"],
+      });
+      const salesMembership = (await ctx.db.query("memberships").collect()).find(
+        (m) => m.orgId === d.orgId && m.userId === d.userId
+      );
+      await ctx.db.patch(salesMembership!._id, { roleId: plain });
+      expect(ownerRole).toBeTruthy();
+    });
+
+    await d.t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
+
+    const [accrual] = await accountingEventsFor(d, "COMMISSION_ACCRUED");
+    expect(accrual).toBeTruthy();
+    expect(accrual?.createdBy).toBe(d.managerId);
+    expect(accrual?.createdBy).not.toBe(d.userId);
+  });
+
+  test("a commission settled before commission GL hooks existed is not reported as backfillable", async () => {
+    // It has no entries and never will — the backfill skips paid commissions —
+    // so counting it named a remedy that cannot clear the warning, on a line
+    // that must be acknowledged verbatim at every close, forever.
+    const d = await seedDealer("historic_paid");
+    const saleId = await completedSale(d);
+    await d.t.run((ctx) =>
+      ctx.db.patch(saleId, { commissionAmount: 250, commissionPaidAt: Date.now() })
+    );
+
+    const period = (await d.asAdmin.query(api.accountingPeriods.list, { orgId: d.orgId }))[0];
+    const checklist = await d.asAdmin.query(api.accountingPeriods.closeChecklist, {
+      orgId: d.orgId,
+      periodId: period._id,
+    });
+    expect(checklist.warnings.join(" ")).not.toMatch(/not recognized in the ledger at all/i);
+  });
+
+  test("the backfill skips a commission amount that cannot be converted, and keeps going", async () => {
+    // isCommissionOwed admits any positive number, including Infinity, and
+    // toMinorUnits throws on it. A throw rolls back the self-reschedule with
+    // it, so one bad row would silently halt the walk for every later org.
+    const d = await seedDealer("backfill_bad_amount");
+    const bad = await completedSale(d);
+    const good = await d.t.run(async (ctx) => {
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId: d.orgId, vin: "VIN-GOOD", make: "Kia", model: "K5", year: 2024,
+        color: "White", fuelType: "Gasoline", transmission: "Automatic",
+        mileage: 1, purchasePrice: 9000, sellingPrice: 15000, status: "AVAILABLE",
+      });
+      return await ctx.db.insert("sales", {
+        orgId: d.orgId, vehicleId, customerId: d.customerId, salespersonId: d.userId,
+        salePrice: 15000, saleDate: Date.now(), status: "COMPLETED", commissionAmount: 100,
+      });
+    });
+    await d.t.run((ctx) => ctx.db.patch(bad, { commissionAmount: Number.POSITIVE_INFINITY }));
+
+    const run = await d.t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
+    expect(run.skippedInvalidAmount).toBe(1);
+    expect(run.accruedCount).toBe(1);
+    // The good one still accrued rather than being lost with the bad one.
+    expect(await commissionPayableMinor(d)).toBe(10_000);
+    expect(good).toBeTruthy();
+  });
+
+  test("the backfill skips a sale whose accrual was reversed instead of dying on it", async () => {
+    // Re-accruing on a reversed key throws "already been reversed and cannot be
+    // reposted", and that throw rolls back the self-reschedule with it — ending
+    // the walk for every later organization, silently.
+    const d = await seedDealer("backfill_reversed");
+    const reversed = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId: reversed, commissionAmount: 250,
+    });
+    await d.t.run(async (ctx) => {
+      const accrual = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", d.orgId).eq("sourceType", "sales").eq("sourceId", `commission_${reversed}`)
+        )
+        .first();
+      await ctx.db.patch(accrual!._id, { status: "REVERSED" });
+    });
+
+    const good = await d.t.run(async (ctx) => {
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId: d.orgId, vin: "VIN-REV-GOOD", make: "Kia", model: "K5", year: 2024,
+        color: "White", fuelType: "Gasoline", transmission: "Automatic",
+        mileage: 1, purchasePrice: 9000, sellingPrice: 15000, status: "AVAILABLE",
+      });
+      return await ctx.db.insert("sales", {
+        orgId: d.orgId, vehicleId, customerId: d.customerId, salespersonId: d.userId,
+        salePrice: 15000, saleDate: Date.now(), status: "COMPLETED", commissionAmount: 100,
+      });
+    });
+
+    const run = await d.t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
+    expect(run.skippedReversed).toBe(1);
+    expect(run.accruedCount).toBe(1);
+    expect(good).toBeTruthy();
+  });
+
+  test("the close checklist survives a commission amount that cannot be converted", async () => {
+    // The control exists to REPORT corrupt amounts; throwing on one takes down
+    // closeChecklist and, with it, `close` — before the blockers it builds and
+    // the owner override that is meant to be the escape hatch.
+    const d = await seedDealer("checklist_infinity");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 250,
+    });
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAmount: Number.POSITIVE_INFINITY }));
+
+    const period = (await d.asAdmin.query(api.accountingPeriods.list, { orgId: d.orgId }))[0];
+    const checklist = await d.asAdmin.query(api.accountingPeriods.closeChecklist, {
+      orgId: d.orgId,
+      periodId: period._id,
+    });
+    expect(checklist.warnings.join(" ")).toMatch(/at a different amount/i);
+  });
+
+  test("the backfill still accrues for an org that has not set up accounting", async () => {
+    // An org with NO chart is a normal supported state: nothing posts, so the
+    // accrual simply enqueues and drains itself when the chart is initialized.
+    // Skipping it consumed the migration cursor and left that dealership's
+    // entire backlog unrecognized — silently, with no second pass, because this
+    // is a one-time migration.
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "No Chart Yet", createdAt: Date.now() })
+    );
+    const userId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "nc", email: "nc@x.com", name: "Owner" })
+    );
+    const roleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "OWNER", permissions: PERMISSIONS, isSystemOwnerRole: true })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+    await t.run((ctx) =>
+      ctx.db.insert("orgSettings", {
+        orgId, currency: "USD", currencySymbol: "$",
+        enabledPaymentTypes: ["CASH"], commissionMode: "MANUAL",
+      })
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, vin: "VIN-NC", make: "Honda", model: "Accord", year: 2020, color: "Black",
+        fuelType: "Gasoline", transmission: "Automatic", mileage: 1, sellingPrice: 15000,
+        status: "SOLD",
+      })
+    );
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "No", lastName: "Chart" })
+    );
+    const saleId = await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId, salePrice: 15000,
+        saleDate: Date.now(), status: "COMPLETED", commissionAmount: 250,
+      })
+    );
+
+    const run = await t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
+    expect(run.skippedNoAccounts).toBe(0);
+    expect(run.accruedCount).toBe(1);
+
+    // Queued, not lost.
+    const queued = await t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(queued).toBeTruthy();
+  });
+
+  test("cancellation refuses rather than half-reversing when the correction count is unusable", async () => {
+    // Math.min(NaN, MAX) is NaN and `1 <= NaN` is false, so the loop ran zero
+    // times: the accrual was reversed, every correction's expense and payable
+    // stayed posted against a sale that no longer exists, and the cancellation
+    // reported success.
+    const d = await seedDealer("cancel_bad_seq");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 250,
+    });
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 400,
+    });
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAdjustmentSeq: Number.NaN }));
+
+    await expect(
+      d.asManager.mutation(api.sales.update, {
+        orgId: d.orgId, saleId, status: "CANCELLED",
+      })
+    ).rejects.toThrow(/not a usable number/i);
+
+    // The whole mutation rolled back, so the sale is not left cancelled with
+    // live commission entries behind it.
+    expect(await d.t.run((ctx) => ctx.db.get(saleId))).toMatchObject({ status: "COMPLETED" });
+    expect(await commissionPayableMinor(d)).toBe(40_000);
+  });
+
+  test("correcting a diverged commission is refused instead of widening the gap", async () => {
+    // A correction computes its delta from the SALE ROW. Correcting a row that
+    // has already drifted from the ledger does not close the gap — 250 - 900 is
+    // -650, which drives recognition to -400 and puts Commission Payable
+    // negative. The guards elsewhere refuse to SETTLE a diverged commission;
+    // without this the product still invited the operator to make it worse.
+    const d = await seedDealer("repair_footgun");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 250,
+    });
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAmount: 900 }));
+
+    await expect(
+      d.asAdmin.mutation(api.sales.setCommissionAmount, {
+        orgId: d.orgId, saleId, commissionAmount: 250,
+      })
+    ).rejects.toThrow(/no longer matches what the ledger recognized/i);
+
+    // Unchanged, not inverted.
+    expect(await commissionPayableMinor(d)).toBe(25_000);
+  });
+
+  test("a NaN correction count cannot mint a colliding adjustment key", async () => {
+    // `NaN + 1` is NaN and `NaN > MAX` is false, so a corrupt counter sailed
+    // past the ceiling and produced the key commission_adjusted_<id>_NaN. The
+    // first correction posted; the second collided on that same key and was
+    // silently dropped while the sale row moved anyway.
+    const d = await seedDealer("nan_seq");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 250,
+    });
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAdjustmentSeq: Number.NaN }));
+
+    await expect(
+      d.asAdmin.mutation(api.sales.setCommissionAmount, {
+        orgId: d.orgId, saleId, commissionAmount: 400,
+      })
+    ).rejects.toThrow(/correction history cannot be extended safely/i);
+  });
+
+  test("re-accruing an already-posted commission queues no phantom outbox row", async () => {
+    // postAccountingEvent dedupes on the key, so a row enqueued for an accrual
+    // that is already POSTED can never post anything. It would sit PENDING
+    // forever, count as an unposted event against every future period close,
+    // and finally dead-letter. Reachable now that MANUAL accrues at the sale:
+    // payroll re-hooks the same accrual at the run's period-end date.
+    const d = await seedDealer("phantom", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 250,
+    });
+    await closePriorYearPeriod(d, priorYear);
+
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId, periodYear: priorYear, periodMonth: 6,
+    });
+    await d.asAdmin.mutation(api.payroll.approveRun, { orgId: d.orgId, runId });
+
+    const phantom = await d.t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", d.orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(phantom).toBeNull();
+  });
+
+  test("a dead-lettered ledger entry is reported as needing a retry, not as a closed period", async () => {
+    // drainPendingForOrg reads only PENDING rows, so "open the period" is
+    // advice that provably cannot work for a FAILED entry — the same cry-wolf
+    // failure this work removed from the close checklist.
+    const d = await seedDealer("failed_entry_message");
+    const saleId = await completedSale(d);
+    await d.t.run(async (ctx) => {
+      await ctx.db.insert("pendingAccountingEvents", {
+        orgId: d.orgId,
+        kind: "POST",
+        status: "FAILED",
+        idempotencyKey: `sale_completed_${saleId}`,
+        accountingDate: Date.now(),
+        actorId: d.userId,
+        attempts: 10,
+        createdAt: Date.now(),
+        eventType: "SALE_COMPLETED",
+        sourceType: "sales",
+        sourceId: saleId,
+        eventVersion: 1,
+        occurredAt: Date.now(),
+        currency: "USD",
+        payload: { saleId },
+      });
+    });
+
+    await expect(
+      d.asAdmin.mutation(api.sales.setCommissionAmount, {
+        orgId: d.orgId, saleId, commissionAmount: 250,
+      })
+    ).rejects.toThrow(/failed and needs to be retried/i);
+  });
+
+  test("cancellation reverses corrections the counter does not admit to", async () => {
+    // safeAdjustmentSeq validates the counter's type and range, not its truth.
+    // A row edited back to 0 while commission_adjusted_..._1 sits posted passes
+    // every check, and cancellation would reverse the accrual, walk nothing,
+    // and report success — leaving that correction on a voided sale, where the
+    // divergence control (which excludes cancelled sales) never looks.
+    const d = await seedDealer("stale_counter");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 250,
+    });
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 400,
+    });
+    expect(await commissionPayableMinor(d)).toBe(40_000);
+
+    // The counter lies; the entries do not.
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAdjustmentSeq: 0 }));
+
+    await d.asManager.mutation(api.sales.update, {
+      orgId: d.orgId, saleId, status: "CANCELLED",
+    });
+
+    expect(await commissionPayableMinor(d)).toBe(0);
+    expect(await commissionExpenseMinor(d)).toBe(0);
+  });
+
+  test("recording a commission is refused when the sale's period is closed", async () => {
+    // The write used to SUCCEED here. Both downstream guards are gated on
+    // isPostableNow, which is false for a closed period, so both were skipped,
+    // the amount was saved, and the manager was told it worked — while the
+    // entry it enqueued was dated into a month that can never accept it, would
+    // burn its ten retries, and would dead-letter into a row blocking payment
+    // for that sale and every future close.
+    const d = await seedDealer("closed_period_refusal", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await closePriorYearPeriod(d, priorYear);
+
+    await expect(
+      d.asAdmin.mutation(api.sales.setCommissionAmount, {
+        orgId: d.orgId, saleId, commissionAmount: 250,
+      })
+    ).rejects.toThrow(/accounting period is closed/i);
+
+    // Nothing written, and nothing queued that could never post.
+    const untouched = await d.t.run((ctx) => ctx.db.get(saleId));
+    expect(untouched?.commissionAmount ?? null).toBeNull();
+    const queued = await d.t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", d.orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(queued).toBeNull();
+  });
+
+  test("a sale whose period merely does not exist yet still records and queues", async () => {
+    // The other half of the same rule: "no period yet" is a wait, not a
+    // refusal. It burns no retries and posts by itself once the month is
+    // opened, so refusing here would block ordinary use.
+    const d = await seedDealer("no_period_yet");
+    const farFuture = Date.UTC(new Date().getUTCFullYear() + 2, 3, 10);
+    const saleId = await completedSale(d, farFuture);
+
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 250,
+    });
+
+    const queued = await d.t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", d.orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(queued?.accountingDate).toBe(farFuture);
+    expect(queued?.attempts).toBe(0);
+  });
+
+  test("the backfill reports closed-period sales instead of queueing entries that cannot post", async () => {
+    const d = await seedDealer("backfill_closed", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    // A legacy amount, set before the period closed.
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAmount: 250 }));
+    await closePriorYearPeriod(d, priorYear);
+
+    const run = await d.t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
+    expect(run.skippedClosedPeriod).toBe(1);
+    expect(run.accruedCount).toBe(0);
+
+    const queued = await d.t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", d.orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(queued).toBeNull();
+  });
+
+  test("the backfill self-heals a chart missing the commission accounts", async () => {
+    // The hooks gained a self-heal for these two accounts; the backfill was
+    // still skipping exactly the legacy charts it was written for, and this
+    // migration runs once.
+    const d = await seedDealer("backfill_selfheal");
+    const saleId = await completedSale(d);
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAmount: 250 }));
+    await d.t.run(async (ctx) => {
+      for (const key of ["COMMISSION_EXPENSE", "COMMISSION_PAYABLE"] as const) {
+        const account = await ctx.db
+          .query("chartOfAccounts")
+          .withIndex("by_org_systemKey", (q) => q.eq("orgId", d.orgId).eq("systemKey", key))
+          .unique();
+        if (account) await ctx.db.delete(account._id);
+      }
+    });
+
+    const run = await d.t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
+    expect(run.skippedNoAccounts).toBe(0);
+    expect(run.accruedCount).toBe(1);
+    expect(await commissionPayableMinor(d)).toBe(25_000);
+  });
+
+  test("the backfill skips an org with no owner rather than inventing an actor", async () => {
+    const d = await seedDealer("backfill_no_owner");
+    const saleId = await completedSale(d);
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAmount: 250 }));
+    await d.t.run(async (ctx) => {
+      for (const role of await ctx.db.query("roles").collect()) {
+        if (role.orgId === d.orgId) await ctx.db.patch(role._id, { isSystemOwnerRole: false, name: "SALES" });
+      }
+    });
+
+    const run = await d.t.mutation(internal.migrateCommissionAccruals.backfillCommissionAccruals, {});
+    expect(run.skippedNoOwner).toBeGreaterThan(0);
+    expect(run.accruedCount).toBe(0);
+    expect(await commissionPayableMinor(d)).toBe(0);
+  });
+});
+
+describe("ruleCommissionAdjusted", () => {
+  const base = { saleId: "s1", currency: "USD", salespersonId: "u1" };
+
+  test("a positive delta debits expense and credits the payable", () => {
+    const { lines } = ruleCommissionAdjusted({ ...base, deltaMinor: 15_000 });
+    expect(lines).toEqual([
+      expect.objectContaining({ accountSystemKey: "COMMISSION_EXPENSE", debitMinor: 15_000, creditMinor: 0 }),
+      expect.objectContaining({ accountSystemKey: "COMMISSION_PAYABLE", debitMinor: 0, creditMinor: 15_000 }),
+    ]);
+  });
+
+  test("a negative delta is the mirror image, at its absolute value", () => {
+    const { lines } = ruleCommissionAdjusted({ ...base, deltaMinor: -15_000 });
+    expect(lines).toEqual([
+      expect.objectContaining({ accountSystemKey: "COMMISSION_PAYABLE", debitMinor: 15_000, creditMinor: 0 }),
+      expect.objectContaining({ accountSystemKey: "COMMISSION_EXPENSE", debitMinor: 0, creditMinor: 15_000 }),
+    ]);
+  });
+
+  test("a zero delta is refused rather than posted as an empty entry", () => {
+    expect(() => ruleCommissionAdjusted({ ...base, deltaMinor: 0 })).toThrow(/zero delta/i);
+  });
+
+  test("every adjustment balances", () => {
+    for (const deltaMinor of [1, -1, 999_999, -999_999, 250_00, -250_00]) {
+      const { lines } = ruleCommissionAdjusted({ ...base, deltaMinor });
+      const debits = lines.reduce((s, l) => s + l.debitMinor, 0);
+      const credits = lines.reduce((s, l) => s + l.creditMinor, 0);
+      expect(debits).toBe(credits);
+    }
+  });
+});
+
+
+/**
+ * Round 9. The closed-period refusal added in round 8 was applied
+ * unconditionally, and that was a regression: it refused the ordinary flow of
+ * closing a month and then paying the commissions earned in it.
+ *
+ * The condition that matters is whether a NEW entry dated at the sale actually
+ * has to be created. When the accrual is already on the books the safety-net
+ * hook is an idempotent no-op, nothing is dated into the closed period at all,
+ * and the payment carries today's date — so the closed period is irrelevant.
+ * When the accrual is absent, the entry really would be dead on arrival and the
+ * refusal is right.
+ */
+describe("a closed period blocks a commission only when something must post into it", () => {
+  test("a commission accrued before its month closed can still be paid afterwards", async () => {
+    const d = await seedDealer("pay_after_close", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    // Recognized in the month it was earned.
+    expect(await commissionPayableMinor(d)).toBe(25000);
+
+    // Month-end: the period closes with the liability outstanding. This is the
+    // normal course of business, not an edge case.
+    await closePriorYearPeriod(d, priorYear);
+
+    await d.asAdmin.mutation(api.sales.markCommissionPaid, {
+      orgId: d.orgId,
+      saleId,
+      paymentMethod: "CASH",
+    });
+
+    // The payable is cleared by a payment dated today, in the OPEN period. The
+    // closed month is untouched — nothing new was ever dated into it.
+    expect(await commissionPayableMinor(d)).toBe(0);
+  });
+
+  test("a commission that never accrued is still refused once its month is closed", async () => {
+    // The other half of the same rule: here the safety-net accrual really would
+    // create a new entry dated into the closed period, so it must be refused
+    // rather than queued to dead-letter.
+    const d = await seedDealer("pay_never_accrued", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+
+    // Straight to the row, so no accrual is ever raised — the shape of a legacy
+    // sale that predates earned-time recognition.
+    await d.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { commissionAmount: 250 });
+    });
+    expect(await commissionPayableMinor(d)).toBe(0);
+
+    await closePriorYearPeriod(d, priorYear);
+
+    await expect(
+      d.asAdmin.mutation(api.sales.markCommissionPaid, {
+        orgId: d.orgId,
+        saleId,
+        paymentMethod: "CASH",
+      })
+    ).rejects.toThrow(/never recognized|period is closed/i);
+
+    // And nothing was queued behind the refusal.
+    const queued = await d.t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", d.orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(queued).toBeNull();
+  });
+
+  test("payroll approval SKIPS a stranded sale instead of failing the whole run", async () => {
+    // approveRun was the last accrual path with no period check at all: a
+    // legacy unrecognized commission in a closed month approved the run and left
+    // the accrual to burn every retry and dead-letter.
+    //
+    // The first attempt at a fix threw, which was worse. The throw sits inside
+    // the per-payslip loop with no boundary, so it aborted approval for EVERY
+    // employee in the run — and collectUnpaidCommissions has no period filter,
+    // so the same stranded sale returns in every future draft. Cancelling the
+    // draft does not break that loop, and a LOCKED period cannot be reopened.
+    // One old sale would have held the whole organization's salaries hostage.
+    const d = await seedDealer("payroll_backlog_closed", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    // Straight to the row: never accrued, the shape of a legacy sale.
+    await d.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { commissionAmount: 250 });
+    });
+    // A second sale in a period that is still OPEN, for the same rep, so the run
+    // has something it legitimately must still pay. Its own vehicle — the first
+    // one is already sold.
+    const liveVehicleId = await d.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: d.orgId,
+        vin: "VIN-payroll_backlog_closed-live",
+        make: "Honda",
+        model: "Civic",
+        year: 2021,
+        color: "White",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 1000,
+        purchasePrice: 9000,
+        sellingPrice: 14000,
+        status: "AVAILABLE",
+      })
+    );
+    const liveSaleId = await d.asAdmin.mutation(api.sales.create, {
+      orgId: d.orgId,
+      vehicleId: liveVehicleId,
+      customerId: d.customerId,
+      salespersonId: d.userId,
+      salePrice: 14000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId: liveSaleId,
+      commissionAmount: 100,
+    });
+    await closePriorYearPeriod(d, priorYear);
+
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId,
+      periodYear: new Date().getUTCFullYear(),
+      periodMonth: new Date().getUTCMonth() + 1,
+    });
+
+    // Approval succeeds. Salaries and the payable commission are not held
+    // hostage by the stranded one.
+    await d.asAdmin.mutation(api.payroll.approveRun, { orgId: d.orgId, runId });
+    const run = await d.t.run(async (ctx) => await ctx.db.get(runId));
+    expect(run?.status).toBe("APPROVED");
+
+    // The stranded sale is excluded from what was approved...
+    const items = await d.t.run(async (ctx) =>
+      await ctx.db
+        .query("payrollItems")
+        .withIndex("by_run", (q) => q.eq("runId", runId))
+        .collect()
+    );
+    const allSaleIds = items.flatMap((i) => i.commissionSaleIds ?? []);
+    expect(allSaleIds).toContain(liveSaleId);
+    expect(allSaleIds).not.toContain(saleId);
+    // ...only the live 100 was approved, not 350.
+    expect(items.reduce((sum, i) => sum + (i.commissionMinor ?? 0), 0)).toBe(10000);
+
+    // ...and no dead-on-arrival accrual was enqueued for it.
+    const queued = await d.t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", d.orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(queued).toBeNull();
+
+    // The commission is not lost: the sale still reads as owed, so it stays
+    // visible on the commissions page and in the divergence control.
+    const stranded = await d.t.run(async (ctx) => await ctx.db.get(saleId));
+    expect(stranded?.commissionAmount).toBe(250);
+    expect(stranded?.commissionPaidAt ?? null).toBeNull();
+  });
+
+  test("payroll approval is unaffected when the accrual already posted", async () => {
+    const d = await seedDealer("payroll_accrued_closed", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    await closePriorYearPeriod(d, priorYear);
+
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId,
+      periodYear: new Date().getUTCFullYear(),
+      periodMonth: new Date().getUTCMonth() + 1,
+    });
+    await d.asAdmin.mutation(api.payroll.approveRun, { orgId: d.orgId, runId });
+
+    const run = await d.t.run(async (ctx) => await ctx.db.get(runId));
+    expect(run?.status).toBe("APPROVED");
+    // Still exactly one accrual, still dated to the sale's own month.
+    expect(await commissionPayableMinor(d)).toBe(25000);
+  });
+});
+
+/**
+ * Round 10. The closed-period rule was enforced on the dates entries are
+ * RECOGNIZED at, and not on the date they are PAID at — even though the whole
+ * safety argument for allowing payment after a close is "the payment is dated
+ * today". Nothing checked that today could take it.
+ */
+describe("the period that must accept a payment is today's, not the sale's", () => {
+  test("paying a commission is refused when TODAY's period is closed", async () => {
+    const d = await seedDealer("pay_today_closed");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    expect(await commissionPayableMinor(d)).toBe(25000);
+
+    // Close the period covering today. `close` has no "period must have ended"
+    // precondition, so this is reachable in the product.
+    await closePriorYearPeriod(d, new Date().getUTCFullYear());
+
+    await expect(
+      d.asAdmin.mutation(api.sales.markCommissionPaid, {
+        orgId: d.orgId,
+        saleId,
+        paymentMethod: "CASH",
+      })
+    ).rejects.toThrow(/today's accounting period is closed/i);
+
+    // Nothing was written: not marked paid, and no payment queued to
+    // dead-letter. Previously the sale was patched paid, the payment burned all
+    // ten attempts, and Commission Payable was never debited — with
+    // markCommissionUnpaid refusing to reverse a paid commission.
+    const sale = await d.t.run(async (ctx) => await ctx.db.get(saleId));
+    expect(sale?.commissionPaidAt ?? null).toBeNull();
+    expect(await commissionPayableMinor(d)).toBe(25000);
+  });
+});
+
+/**
+ * Round 10. The closed-period refusal in setCommissionAmount was hoisted above
+ * the branches that actually post, so it also refused three cases that write
+ * nothing to the ledger. Zeroing a commission is the repair an accountant
+ * reaches for on a stranded row, and it was blocked by a guard protecting a
+ * journal entry that would never have been written.
+ */
+describe("a closed period does not block commission edits that post nothing", () => {
+  test("a commission can be set to zero on a sale whose month is closed", async () => {
+    const d = await seedDealer("zero_in_closed", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { commissionAmount: 250 });
+    });
+    await closePriorYearPeriod(d, priorYear);
+
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 0,
+    });
+
+    const sale = await d.t.run(async (ctx) => await ctx.db.get(saleId));
+    expect(sale?.commissionAmount).toBe(0);
+    // Nothing posted and nothing queued — which is exactly why refusing it was
+    // wrong.
+    expect(await commissionPayableMinor(d)).toBe(0);
+    const queued = await d.t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", d.orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(queued).toBeNull();
+  });
+
+  test("re-saving the same amount on an accrued sale in a closed month is a no-op, not a refusal", async () => {
+    const d = await seedDealer("noop_in_closed", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    await closePriorYearPeriod(d, priorYear);
+
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+
+    // No adjustment was minted for a zero delta, so the correction count is
+    // untouched and the payable is unchanged.
+    expect(await commissionPayableMinor(d)).toBe(25000);
+    expect(await adjustmentSeq(d, saleId)).toBe(0);
+  });
+
+  test("changing the amount in a closed month IS still refused", async () => {
+    // The other side of the same rule: a real delta writes a real adjusting
+    // entry dated at the sale, so the closed period genuinely blocks it.
+    const d = await seedDealer("change_in_closed", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    await closePriorYearPeriod(d, priorYear);
+
+    await expect(
+      d.asAdmin.mutation(api.sales.setCommissionAmount, {
+        orgId: d.orgId,
+        saleId,
+        commissionAmount: 300,
+      })
+    ).rejects.toThrow(/this sale's accounting period is closed/i);
+    expect(await commissionPayableMinor(d)).toBe(25000);
+  });
+});
+
+/**
+ * Round 11. The skip added last round fired only for a CLOSED or LOCKED period.
+ * A sale in a month with NO period at all slipped past it, and that is worse:
+ * the accrual queues (nothing can post to a period that does not exist) while
+ * the payment CAN post, so payRun refuses the run — after approval, where
+ * cancelRun no longer works and nobody in the org can be paid.
+ *
+ * This is also a regression against main, where payroll accrued at the run's
+ * own period end (normally open) rather than at the sale.
+ */
+describe("a commission whose month has no period is deferred, never dropped", () => {
+  test("payroll still accrues it, queued at the sale's own date", async () => {
+    // A round-11 review proposed SKIPPING these, because payroll can approve a
+    // run whose accrual is queued and then payRun refuses it. Rejected: that
+    // silently drops the commission, and payroll.test.ts "#2 re-accruing a
+    // queued commission does not recognize it in a later period" pins the
+    // opposite as a deliberate invariant. Recognising it later in whichever
+    // month happens to be open is precisely what this branch exists to prevent.
+    const d = await seedDealer("no_period_deferred");
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { commissionAmount: 250 });
+    });
+
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId,
+      periodYear: new Date().getUTCFullYear(),
+      periodMonth: new Date().getUTCMonth() + 1,
+    });
+    const approval = await d.asAdmin.mutation(api.payroll.approveRun, {
+      orgId: d.orgId,
+      runId,
+    });
+    // Not skipped — deferred.
+    expect(approval?.skippedCommissionSaleIds ?? []).toHaveLength(0);
+
+    // The accrual exists and is queued at the SALE's date, not at the payroll
+    // month, so opening that month later recognises it where it was earned.
+    const queued = await d.t.run(async (ctx) =>
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", d.orgId).eq("idempotencyKey", `commission_accrued_${saleId}`)
+        )
+        .first()
+    );
+    expect(queued?.accountingDate).toBe(Date.UTC(priorYear, 5, 15));
+  });
+
+  test("paying that run names the month that must be created, not one to open", async () => {
+    // The deferral is only safe if the operator is told what to do. "Open the
+    // period" is the wrong instruction when no period covers the sale at all.
+    const d = await seedDealer("no_period_message");
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { commissionAmount: 250 });
+    });
+
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId,
+      periodYear: new Date().getUTCFullYear(),
+      periodMonth: new Date().getUTCMonth() + 1,
+    });
+    await d.asAdmin.mutation(api.payroll.approveRun, { orgId: d.orgId, runId });
+
+    await expect(
+      d.asAdmin.mutation(api.payroll.payRun, { orgId: d.orgId, runId, method: "CASH" })
+    ).rejects.toThrow(
+      new RegExp(`no accounting period covers.*Create and open a period covering ${priorYear}-06`, "is")
+    );
+
+    // Recoverable: create and open that month and the run pays. This is the
+    // "inescapable deadlock" — it has an exit, it just had to be said.
+    await d.asAdmin.mutation(api.accountingPeriods.create, {
+      orgId: d.orgId,
+      startDate: Date.UTC(priorYear, 5, 1),
+      endDate: Date.UTC(priorYear, 5, 30, 23, 59, 59, 999),
+      fiscalYear: priorYear,
+      periodNumber: 6,
+    });
+    const created = (await d.asAdmin.query(api.accountingPeriods.list, { orgId: d.orgId })).find(
+      (p) => p.fiscalYear === priorYear && p.periodNumber === 6
+    );
+    await d.asAdmin.mutation(api.accountingPeriods.open, {
+      orgId: d.orgId,
+      periodId: created!._id,
+    });
+    await d.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: d.orgId });
+
+    await d.asAdmin.mutation(api.payroll.payRun, { orgId: d.orgId, runId, method: "CASH" });
+    const run = await d.t.run(async (ctx) => await ctx.db.get(runId));
+    expect(run?.status).toBe("PAID");
+  });
+});
+
+/**
+ * Round 11. The payRun half of the today's-period guard shipped with no test at
+ * all — and it is a new hard throw on the salary-payment path.
+ */
+describe("payroll payment respects today's period", () => {
+  test("payRun is refused when TODAY's period is closed", async () => {
+    const d = await seedDealer("payrun_today_closed");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId,
+      periodYear: new Date().getUTCFullYear(),
+      periodMonth: new Date().getUTCMonth() + 1,
+    });
+    await d.asAdmin.mutation(api.payroll.approveRun, { orgId: d.orgId, runId });
+
+    await closePriorYearPeriod(d, new Date().getUTCFullYear());
+
+    await expect(
+      d.asAdmin.mutation(api.payroll.payRun, { orgId: d.orgId, runId, method: "CASH" })
+    ).rejects.toThrow(/today's accounting period is closed/i);
+
+    // Still APPROVED and unpaid — nothing was written on the way to the throw.
+    const run = await d.t.run(async (ctx) => await ctx.db.get(runId));
+    expect(run?.status).toBe("APPROVED");
+    expect(run?.paidAt ?? null).toBeNull();
+  });
+});
+
+/**
+ * Round 12. The three-way split of unrecognized commissions, the non-empty
+ * skipped-sales report and the zero-gross refusal all shipped without a test
+ * that reads them directly. In a file whose own comments record three separate
+ * regressions of the "named a remedy that does nothing" kind, new branches
+ * without direct coverage are how the fourth one arrives.
+ */
+describe("the close checklist names the remedy that fits each unrecognized commission", () => {
+  test("a closed-period commission and a no-period commission are reported apart", async () => {
+    const d = await seedDealer("checklist_buckets", "MANUAL", { priorYearPeriod: true });
+    const thisYear = new Date().getUTCFullYear();
+    const priorYear = thisYear - 1;
+
+    // (a) Unrecognized, in a period that exists and will be CLOSED.
+    const closedSaleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.t.run(async (ctx) => {
+      await ctx.db.patch(closedSaleId, { commissionAmount: 250 });
+    });
+    // (b) Unrecognized, on a date NO period covers (two years back).
+    const noPeriodVehicleId = await d.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: d.orgId, vin: "VIN-checklist-noperiod", make: "Kia", model: "Rio",
+        year: 2019, color: "Grey", fuelType: "Gasoline", transmission: "Automatic",
+        mileage: 500, purchasePrice: 8000, sellingPrice: 12000, status: "AVAILABLE",
+      })
+    );
+    const noPeriodSaleId = await d.asAdmin.mutation(api.sales.create, {
+      orgId: d.orgId,
+      vehicleId: noPeriodVehicleId,
+      customerId: d.customerId,
+      salespersonId: d.userId,
+      salePrice: 12000,
+      saleDate: Date.UTC(thisYear - 2, 3, 10),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+    await d.t.run(async (ctx) => {
+      await ctx.db.patch(noPeriodSaleId, { commissionAmount: 100 });
+    });
+
+    await closePriorYearPeriod(d, priorYear);
+
+    const currentPeriod = (
+      await d.asAdmin.query(api.accountingPeriods.list, { orgId: d.orgId })
+    ).find((p) => p.fiscalYear === thisYear)!;
+    const checklist = await d.asAdmin.query(api.accountingPeriods.closeChecklist, {
+      orgId: d.orgId,
+      periodId: currentPeriod._id,
+    });
+
+    // Each lands in its own bucket with its own instruction. Before the split
+    // both said "Run the commission accrual backfill", which skips both.
+    expect(checklist.warnings.some((w) => /closed or locked period/i.test(w))).toBe(true);
+    expect(checklist.warnings.some((w) => /no accounting period covers/i.test(w))).toBe(true);
+    // ...and neither is still being sent to the backfill.
+    expect(checklist.warnings.some((w) => /Run the commission accrual backfill/i.test(w))).toBe(
+      false
+    );
+  });
+});
+
+describe("approval reports the commissions it left out", () => {
+  test("skippedCommissionSaleIds names the stranded sale", async () => {
+    const d = await seedDealer("skipped_reported", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const strandedId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.t.run(async (ctx) => {
+      await ctx.db.patch(strandedId, { commissionAmount: 250 });
+    });
+    // Something payable, so this exercises the skip and not the zero-gross path.
+    const liveVehicleId = await d.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: d.orgId, vin: "VIN-skipped-live", make: "Honda", model: "Civic",
+        year: 2021, color: "White", fuelType: "Gasoline", transmission: "Automatic",
+        mileage: 1000, purchasePrice: 9000, sellingPrice: 14000, status: "AVAILABLE",
+      })
+    );
+    const liveSaleId = await d.asAdmin.mutation(api.sales.create, {
+      orgId: d.orgId, vehicleId: liveVehicleId, customerId: d.customerId,
+      salespersonId: d.userId, salePrice: 14000, saleDate: Date.now(),
+      status: "COMPLETED", financingType: "CASH",
+    });
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId: liveSaleId, commissionAmount: 100,
+    });
+    await closePriorYearPeriod(d, priorYear);
+
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId,
+      periodYear: new Date().getUTCFullYear(),
+      periodMonth: new Date().getUTCMonth() + 1,
+    });
+    const approval = await d.asAdmin.mutation(api.payroll.approveRun, {
+      orgId: d.orgId,
+      runId,
+    });
+
+    // The non-empty case, which nothing read before.
+    expect(approval?.skippedCommissionSaleIds).toEqual([strandedId]);
+  });
+
+  test("a run whose only pay is a stranded commission says so, instead of sending the user in a circle", async () => {
+    // collectUnpaidCommissions has no period filter, so "cancel and create a
+    // fresh run" rebuilds an identical draft. The message has to name the real
+    // blocker or the user loops forever.
+    const d = await seedDealer("zero_gross_stranded", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const strandedId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.t.run(async (ctx) => {
+      await ctx.db.patch(strandedId, { commissionAmount: 250 });
+    });
+    await closePriorYearPeriod(d, priorYear);
+
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId,
+      periodYear: new Date().getUTCFullYear(),
+      periodMonth: new Date().getUTCMonth() + 1,
+    });
+
+    await expect(
+      d.asAdmin.mutation(api.payroll.approveRun, { orgId: d.orgId, runId })
+    ).rejects.toThrow(/rebuilding this run will produce the same draft/i);
+  });
+});
+
+/**
+ * Round 12. payRun told the user to reopen a period for an entry that has
+ * DEAD-LETTERED. No drain reads FAILED rows, so reopening — or creating — a
+ * period does nothing at all for it; only an explicit retry does.
+ * sales.ts:assertCommissionEntriesPosted has branched on this for several
+ * rounds, carrying a comment warning against precisely that instruction.
+ * Payroll was never brought in line.
+ */
+describe("payroll names retry, not the calendar, for a dead-lettered entry", () => {
+  test("a FAILED commission entry asks for a retry instead of reopening a period", async () => {
+    const d = await seedDealer("payroll_failed_entry", "MANUAL", { priorYearPeriod: true });
+    const priorYear = new Date().getUTCFullYear() - 1;
+    const saleId = await completedSale(d, Date.UTC(priorYear, 5, 15));
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+
+    // A correction that dead-lettered. Its period is OPEN, so every
+    // period-based remedy is powerless — the row is simply skipped by every
+    // drain until someone retries it.
+    await d.t.run(async (ctx) => {
+      await ctx.db.insert("pendingAccountingEvents", {
+        orgId: d.orgId,
+        kind: "POST",
+        status: "FAILED",
+        idempotencyKey: `commission_adjusted_${saleId}_1`,
+        accountingDate: Date.UTC(priorYear, 5, 15),
+        actorId: d.userId,
+        attempts: 10,
+        createdAt: Date.now(),
+        eventType: "COMMISSION_ADJUSTED",
+        sourceType: "sales",
+        sourceId: `commission_adj_${saleId}_1`,
+        eventVersion: 1,
+        occurredAt: Date.UTC(priorYear, 5, 15),
+        currency: "USD",
+        payload: { saleId, deltaMinor: 15_000, currency: "USD", salespersonId: d.userId },
+      });
+      await ctx.db.patch(saleId, { commissionAmount: 400, commissionAdjustmentSeq: 1 });
+    });
+
+    const runId = await d.asAdmin.mutation(api.payroll.createRun, {
+      orgId: d.orgId,
+      periodYear: priorYear,
+      periodMonth: 6,
+    });
+    await d.asAdmin.mutation(api.payroll.approveRun, { orgId: d.orgId, runId });
+
+    await expect(
+      d.asAdmin.mutation(api.payroll.payRun, { orgId: d.orgId, runId, method: "CASH" })
+    ).rejects.toThrow(/failed and needs to be retried/i);
+
+    // And explicitly NOT the calendar advice, which would do nothing here.
+    await expect(
+      d.asAdmin.mutation(api.payroll.payRun, { orgId: d.orgId, runId, method: "CASH" })
+    ).rejects.not.toThrow(/reopen|create and open/i);
+  });
+});
+
+/**
+ * CodeRabbit, PR #205. `postedAmount` returned null both for "no such POSTED
+ * event" and for "POSTED but its payload amount is unreadable", and the caller
+ * skipped either — so a correction that really had posted, and really had moved
+ * Commission Payable, was dropped from the recognized total. The settlement
+ * guard then compared against an understated number.
+ *
+ * That is the same partial total the counter check two lines above refuses to
+ * produce, reached by a different route. Both the mutation-side walk
+ * (recognizedCommissionMinor) and the drain-side one
+ * (recognizedCommissionForSale) had it.
+ */
+describe("a posted entry with an unreadable amount fails closed", () => {
+  test("settlement is refused rather than compared against a partial total", async () => {
+    const d = await seedDealer("malformed_payload");
+    const saleId = await completedSale(d);
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 250,
+    });
+    await d.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId,
+      saleId,
+      commissionAmount: 400,
+    });
+    expect(await commissionPayableMinor(d)).toBe(40_000);
+
+    // The correction posted and moved the payable, but its amount is no longer
+    // readable — the raw-JSON admin editor is the threat model the walk's own
+    // docstring names.
+    await d.t.run(async (ctx) => {
+      const adj = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", d.orgId).eq("idempotencyKey", `commission_adjusted_${saleId}_1`)
+        )
+        .first();
+      expect(adj).toBeTruthy();
+      await ctx.db.patch(adj!._id, {
+        payload: { ...(adj!.payload as Record<string, unknown>), deltaMinor: "oops" },
+      });
+    });
+
+    // Previously the total came back as the accrual alone (25,000), the sale's
+    // 400 did not match it, and the user was told the amounts diverge — a
+    // different and wrong diagnosis. Now recognition is refused outright.
+    await expect(
+      d.asAdmin.mutation(api.sales.markCommissionPaid, {
+        orgId: d.orgId,
+        saleId,
+        paymentMethod: "CASH",
+      })
+    ).rejects.toThrow(/cannot be read/i);
+
+    const sale = await d.t.run(async (ctx) => await ctx.db.get(saleId));
+    expect(sale?.commissionPaidAt ?? null).toBeNull();
+  });
+});

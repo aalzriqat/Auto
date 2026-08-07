@@ -1,5 +1,6 @@
 import { Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
+import { commissionPrereqUnpostedReason, recognizedCommissionForSale } from "./commissionSourceLedger";
 
 /**
  * Outbox posting guard for payroll/advance settlement events, mirroring
@@ -85,14 +86,55 @@ async function payrollPaidBlockedReason(
   }
 
   const commissionMinor = typeof payload.commissionMinor === "number" ? payload.commissionMinor : 0;
+  let recognizedTotal = 0;
   if (commissionMinor > 0) {
     if (!item) {
       return "its payslip could not be resolved in this organization, so the commission accruals behind the Commission Payable it clears cannot be verified";
     }
+    const runCurrency = item.currency;
     for (const saleId of item.commissionSaleIds) {
-      if (!(await prereqPosted(ctx, orgId, `commission_accrued_${saleId}`))) {
-        return "a commission accrual behind it has not posted to the ledger yet, so this would clear a Commission Payable that was never accrued";
+      // The accrual alone is not the whole prerequisite: payment debits the
+      // CORRECTED amount (settleItemCommissions re-derives it from the live
+      // sale), so a correction still sitting in the outbox means the GL carries
+      // only the original and the difference comes straight out of the payable.
+      // Shared with the direct-payment path so the two cannot drift.
+      const sale = await ctx.db.get(saleId);
+      if (!sale || sale.orgId !== orgId) {
+        return "a sale behind its commission payment could not be resolved in this organization, so the Commission Payable it clears cannot be verified";
       }
+      const unposted = await commissionPrereqUnpostedReason(
+        ctx,
+        orgId,
+        saleId,
+        sale.commissionAdjustmentSeq ?? 0
+      );
+      if (unposted) return unposted;
+      const perCurrency = await recognizedCommissionForSale(
+        ctx,
+        orgId,
+        saleId,
+        sale.commissionAdjustmentSeq ?? 0
+      );
+      // The run's own currency, not a sum across currencies: minor units only
+      // mean anything alongside their scale, so folding a scale-3 JOD figure in
+      // with a scale-2 USD one compares numbers that are not the same unit.
+      if (perCurrency === null) {
+        // Same two causes as the commission ledger's own message: an unusable
+        // correction count, or a posted entry with an unreadable amount.
+        return "a sale on it has a recognized total that cannot be reconstructed — either an unusable correction count, or a posted entry with an unreadable amount — so the Commission Payable it clears cannot be verified";
+      }
+      const inRunCurrency = perCurrency.get(runCurrency);
+      if (perCurrency.size > 0 && inRunCurrency === undefined) {
+        return "a commission on it was recognized in a different currency than the run pays, so accounting must reconcile it before this can settle";
+      }
+      recognizedTotal += inRunCurrency ?? 0;
+    }
+    // The mutation-side check is skipped whenever the payment would queue, so a
+    // run frozen at a divergent commission total replays unchecked and clears
+    // more Commission Payable than was ever recognized. Compared against the
+    // payload as queued, which is what will actually post.
+    if (commissionMinor !== recognizedTotal) {
+      return "the commission it clears does not match what the ledger recognized for those sales, so it would leave Commission Payable wrong";
     }
   }
   // Advance recovery: the payment credits Employee Advances for every advance
