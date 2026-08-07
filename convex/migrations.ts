@@ -2,8 +2,11 @@ import { v } from "convex/values";
 import { internalMutation } from "./functions";
 import {
   customersByOrg,
+  facebookEventsByOrg,
+  instagramEventsByOrg,
   leadsByOrg,
   membershipsByOrg,
+  recordSocialContact,
   vehicleQualityByOrg,
   vehiclesByOrg,
 } from "./aggregates";
@@ -93,7 +96,13 @@ type BackfillArgs = {
 type BackfillResult = { migrated: number; isDone: boolean; continueCursor: string | null };
 
 /** Tables that have an aggregate to seed. */
-type BackfilledTable = "vehicles" | "customers" | "leads" | "memberships";
+type BackfilledTable =
+  | "vehicles"
+  | "customers"
+  | "leads"
+  | "memberships"
+  | "instagramEvents"
+  | "facebookEvents";
 
 /**
  * One page of a backfill: read a bounded slice of `table` and hand each row to
@@ -269,6 +278,152 @@ export const backfillLeadAggregate = internalMutation({
     }
 
     return result;
+  },
+});
+
+/**
+ * Seeds `instagramEventsByOrg`. See `backfillVehicleAggregate` for the mechanics.
+ *
+ * Separate from the Facebook one, and from the contact backfills below, because
+ * a Convex function may run only one paginated query — a single "backfill the
+ * Social Inbox" entry point that walked both tables would pass every test
+ * (`convex-test` does not enforce that limit) and fail on its first production
+ * call.
+ */
+export const backfillInstagramEventAggregate = internalMutation({
+  args: BACKFILL_ARGS,
+  handler: async (ctx, args): Promise<BackfillResult> => {
+    const result = await seedAggregatePage(ctx, "instagramEvents", args, async (event) => {
+      await instagramEventsByOrg.insertIfDoesNotExist(ctx, event);
+    });
+
+    if (!result.isDone && args.continueAutomatically !== false) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillInstagramEventAggregate, {
+        cursor: result.continueCursor,
+        batchSize: args.batchSize,
+      });
+    }
+
+    return result;
+  },
+});
+
+/** Seeds `facebookEventsByOrg`. Counterpart to `backfillInstagramEventAggregate`. */
+export const backfillFacebookEventAggregate = internalMutation({
+  args: BACKFILL_ARGS,
+  handler: async (ctx, args): Promise<BackfillResult> => {
+    const result = await seedAggregatePage(ctx, "facebookEvents", args, async (event) => {
+      await facebookEventsByOrg.insertIfDoesNotExist(ctx, event);
+    });
+
+    if (!result.isDone && args.continueAutomatically !== false) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillFacebookEventAggregate, {
+        cursor: result.continueCursor,
+        batchSize: args.batchSize,
+      });
+    }
+
+    return result;
+  },
+});
+
+/**
+ * Materialises a `socialContacts` row for every distinct Instagram sender
+ * already in `instagramEvents`.
+ *
+ * The trigger that maintains this table fires on event *inserts*, so it sees
+ * nothing that arrived before it deployed. Without this the "unique contacts"
+ * card reads zero and then climbs only as new senders appear.
+ *
+ * Idempotent by construction: `recordSocialContact` is insert-if-absent against
+ * the same unique index the trigger uses, so a redrive, an overlapping live
+ * insert, and a second full run all converge on one row per sender. That is the
+ * same property `insertIfDoesNotExist` gives the aggregate backfills, obtained
+ * here at the table rather than the tree.
+ */
+export const backfillInstagramSocialContacts = internalMutation({
+  args: BACKFILL_ARGS,
+  handler: async (ctx, args): Promise<BackfillResult> => {
+    const result = await seedAggregatePage(ctx, "instagramEvents", args, async (event) => {
+      await recordSocialContact(ctx, event.orgId, "instagram", event.senderInstagramId);
+    });
+
+    if (!result.isDone && args.continueAutomatically !== false) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillInstagramSocialContacts, {
+        cursor: result.continueCursor,
+        batchSize: args.batchSize,
+      });
+    }
+
+    return result;
+  },
+});
+
+/** Facebook counterpart to `backfillInstagramSocialContacts`. */
+export const backfillFacebookSocialContacts = internalMutation({
+  args: BACKFILL_ARGS,
+  handler: async (ctx, args): Promise<BackfillResult> => {
+    const result = await seedAggregatePage(ctx, "facebookEvents", args, async (event) => {
+      await recordSocialContact(ctx, event.orgId, "facebook", event.senderFacebookId);
+    });
+
+    if (!result.isDone && args.continueAutomatically !== false) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillFacebookSocialContacts, {
+        cursor: result.continueCursor,
+        batchSize: args.batchSize,
+      });
+    }
+
+    return result;
+  },
+});
+
+/**
+ * Repair step for `socialContacts`: deletes every row so the two
+ * `backfill*SocialContacts` migrations can re-derive them from the events that
+ * actually exist.
+ *
+ * Needed only after individual event rows have been hard-deleted through the
+ * super-admin raw-record editor — the only path in the product that removes
+ * events without removing the whole org. The contact trigger is insert-only, so
+ * such a deletion leaves a contact row behind and "unique contacts" reads high.
+ *
+ * Deleting through the wrapped `ctx.db` takes the rows out of
+ * `socialContactsByOrg` as it goes, so the tree and the table stay in step
+ * without a separate `clearAll`. The count reads zero between this and the
+ * backfills catching up, which for an analytics card is the right way round.
+ *
+ * Full sequence:
+ *   1. migrations:clearSocialContacts
+ *   2. migrations:backfillInstagramSocialContacts
+ *   3. migrations:backfillFacebookSocialContacts
+ */
+export const clearSocialContacts = internalMutation({
+  args: BACKFILL_ARGS,
+  handler: async (ctx, args): Promise<BackfillResult> => {
+    const numItems = args.batchSize ?? 200;
+    const page = await ctx.db.query("socialContacts").paginate({
+      cursor: args.cursor ?? null,
+      numItems,
+    });
+
+    for (const contact of page.page) {
+      await ctx.db.delete(contact._id);
+    }
+
+    // Every row on this page is gone, so the next batch starts from the
+    // beginning again rather than from a cursor pointing into deleted rows.
+    if (!page.isDone && args.continueAutomatically !== false) {
+      await ctx.scheduler.runAfter(0, internal.migrations.clearSocialContacts, {
+        batchSize: args.batchSize,
+      });
+    }
+
+    return {
+      migrated: page.page.length,
+      isDone: page.isDone,
+      continueCursor: page.isDone ? null : page.continueCursor,
+    };
   },
 });
 

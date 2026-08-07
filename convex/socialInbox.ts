@@ -9,6 +9,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { suggestVehiclesFromText } from "./utils/vehicleTextMatch";
 import { recordLeadActivity, describeLeadFieldValue } from "./utils/leadActivity";
 import { requireFeature } from "./subscriptions";
+import { facebookEventsByOrg, instagramEventsByOrg, socialContactsByOrg } from "./aggregates";
 
 /**
  * Unifies `instagramEvents` and `facebookEvents` for the Social Inbox UI.
@@ -514,23 +515,42 @@ export const platformStats = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
     await requireFeature(ctx, args.orgId, "socialInbox");
 
-    const [igEvents, fbEvents] = await Promise.all([
-      ctx.db.query("instagramEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect(),
-      ctx.db.query("facebookEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect(),
-    ]);
+    // Nine counts off three B-trees instead of reading every event the org has
+    // ever received. This query was Convex's #3 bandwidth consumer at 1.08 GB in
+    // one week: it is a live subscription over the same two tables social
+    // ingestion writes to, so each inbound message re-ran it over the whole
+    // history — and the history only grows.
+    //
+    // `exactKind` is a degenerate range (one key, both ends inclusive) because
+    // `kind` is the only element of the sort key; the whole namespace is the
+    // platform's total. Counting DMs as `total - comments` would be one fewer
+    // read, but `kind` is a two-value union today and a subtraction would
+    // silently absorb any third value into the DM figure.
+    const exactKind = (kind: "comment" | "dm") => ({
+      lower: { key: [kind] as [string], inclusive: true as const },
+      upper: { key: [kind] as [string], inclusive: true as const },
+    });
+    const exactPlatform = (platform: "instagram" | "facebook") => ({
+      lower: { key: [platform] as [string], inclusive: true as const },
+      upper: { key: [platform] as [string], inclusive: true as const },
+    });
 
-    const igComments = igEvents.filter((e) => e.kind === "comment").length;
-    const igDms = igEvents.filter((e) => e.kind === "dm").length;
-    const fbComments = fbEvents.filter((e) => e.kind === "comment").length;
-    const fbDms = fbEvents.filter((e) => e.kind === "dm").length;
-
-    const igUnique = new Set(igEvents.map((e) => e.senderInstagramId)).size;
-    const fbUnique = new Set(fbEvents.map((e) => e.senderFacebookId)).size;
+    const [igComments, igDms, igTotal, fbComments, fbDms, fbTotal, igUnique, fbUnique] =
+      await Promise.all([
+        instagramEventsByOrg.count(ctx, { namespace: args.orgId, bounds: exactKind("comment") }),
+        instagramEventsByOrg.count(ctx, { namespace: args.orgId, bounds: exactKind("dm") }),
+        instagramEventsByOrg.count(ctx, { namespace: args.orgId }),
+        facebookEventsByOrg.count(ctx, { namespace: args.orgId, bounds: exactKind("comment") }),
+        facebookEventsByOrg.count(ctx, { namespace: args.orgId, bounds: exactKind("dm") }),
+        facebookEventsByOrg.count(ctx, { namespace: args.orgId }),
+        socialContactsByOrg.count(ctx, { namespace: args.orgId, bounds: exactPlatform("instagram") }),
+        socialContactsByOrg.count(ctx, { namespace: args.orgId, bounds: exactPlatform("facebook") }),
+      ]);
 
     return {
-      instagram: { comments: igComments, dms: igDms, total: igEvents.length, uniqueContacts: igUnique },
-      facebook: { comments: fbComments, dms: fbDms, total: fbEvents.length, uniqueContacts: fbUnique },
-      total: igEvents.length + fbEvents.length,
+      instagram: { comments: igComments, dms: igDms, total: igTotal, uniqueContacts: igUnique },
+      facebook: { comments: fbComments, dms: fbDms, total: fbTotal, uniqueContacts: fbUnique },
+      total: igTotal + fbTotal,
     };
   },
 });

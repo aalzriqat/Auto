@@ -102,6 +102,9 @@ const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "oauthStates", index: "by_org" },
   { kind: "orgRows", table: "instagramEvents", index: "by_org" },
   { kind: "orgRows", table: "facebookEvents", index: "by_org" },
+  // Derived from the two event tables above; purged alongside them so a deleted
+  // org leaves no rows behind in `socialContactsByOrg` either.
+  { kind: "orgRows", table: "socialContacts", index: "by_org" },
   { kind: "orgRows", table: "facebookMessages", index: "by_org" },
   { kind: "socialPostsWithStorage" },
   { kind: "orgRows", table: "orgCustomFields", index: "by_org" },

@@ -1,5 +1,6 @@
 import { TableAggregate } from "@convex-dev/aggregate";
 import { Triggers } from "convex-helpers/server/triggers";
+import type { GenericDatabaseWriter } from "convex/server";
 import { components } from "./_generated/api";
 import { DataModel, Id } from "./_generated/dataModel";
 import { validateVinChecksum } from "../lib/vinHelpers";
@@ -313,6 +314,66 @@ export const membershipsByOrg = new TableAggregate<{
 });
 
 /**
+ * Event counts per org for the Social Inbox's analytics cards, one tree per
+ * platform table.
+ *
+ * `socialInbox.platformStats` reported six numbers — comments, DMs and total,
+ * for each of Instagram and Facebook — by `.collect()`-ing both event tables in
+ * full and counting the results in JavaScript. Per Convex's own per-function
+ * breakdown that was 1.08 GB of database bandwidth in one week against a
+ * production table of roughly a thousand rows, because the query is a live
+ * subscription over the exact tables that social ingestion writes to: every
+ * inbound comment or DM invalidated it and made it read everything again.
+ *
+ * `sortKey` is `[kind]` — the stored field verbatim, so "how many comments" is
+ * one contiguous range and "how many events" is the whole namespace. `kind` is
+ * written once at ingest and never patched, which is what makes these trees
+ * effectively insert-only and so about as drift-resistant as an aggregate gets.
+ *
+ * Two trees rather than one because a `TableAggregate` is bound to a single
+ * table, and Instagram and Facebook events live in separate tables with
+ * differently-named sender columns.
+ */
+export const instagramEventsByOrg = new TableAggregate<{
+  Namespace: Id<"organizations">;
+  Key: [string];
+  DataModel: DataModel;
+  TableName: "instagramEvents";
+}>(components.instagramEventsByOrg, {
+  namespace: (doc) => doc.orgId,
+  sortKey: (doc) => [doc.kind],
+});
+
+/** Facebook's counterpart to `instagramEventsByOrg`. */
+export const facebookEventsByOrg = new TableAggregate<{
+  Namespace: Id<"organizations">;
+  Key: [string];
+  DataModel: DataModel;
+  TableName: "facebookEvents";
+}>(components.facebookEventsByOrg, {
+  namespace: (doc) => doc.orgId,
+  sortKey: (doc) => [doc.kind],
+});
+
+/**
+ * Distinct-sender counts per org, keyed by platform — the "unique contacts"
+ * figure on the same analytics cards.
+ *
+ * Counts rows of `socialContacts`, which materialises one row per distinct
+ * sender precisely so this stays a count rather than a `Set` built over every
+ * event. See that table's comment for why it keys on the raw platform id.
+ */
+export const socialContactsByOrg = new TableAggregate<{
+  Namespace: Id<"organizations">;
+  Key: [string];
+  DataModel: DataModel;
+  TableName: "socialContacts";
+}>(components.socialContactsByOrg, {
+  namespace: (doc) => doc.orgId,
+  sortKey: (doc) => [doc.platform],
+});
+
+/**
  * The trigger registrations that keep every aggregate above in step with its
  * table.
  *
@@ -341,3 +402,57 @@ aggregateTriggers.register("vehicles", vehicleQualityByOrg.idempotentTrigger());
 aggregateTriggers.register("customers", customersByOrg.idempotentTrigger());
 aggregateTriggers.register("leads", leadsByOrg.idempotentTrigger());
 aggregateTriggers.register("memberships", membershipsByOrg.idempotentTrigger());
+aggregateTriggers.register("instagramEvents", instagramEventsByOrg.idempotentTrigger());
+aggregateTriggers.register("facebookEvents", facebookEventsByOrg.idempotentTrigger());
+aggregateTriggers.register("socialContacts", socialContactsByOrg.idempotentTrigger());
+
+/**
+ * Materialises the distinct sender behind an inbound social event.
+ *
+ * Registered as a trigger rather than called from the ingestion mutations
+ * because the event tables are written from five production modules and some
+ * twenty call sites (auto-reply bookkeeping, manual replies, postId repair, the
+ * resync backfills). Hanging this off the same wrapped `ctx.db` that the
+ * aggregates already use means there is no such thing as a write that forgets
+ * to maintain it, which is the only version of this that stays correct.
+ *
+ * Inserts only. The sender id is stamped once at ingest and never patched, so
+ * an update carries no new sender, and re-deriving on every reply would put an
+ * indexed read in front of routine bookkeeping writes for nothing.
+ *
+ * Deliberately does NOT delete on event deletion. An org purge removes the
+ * contact rows directly (`adminOrgs`), and nothing else in the product deletes
+ * individual events; a per-event decrement would need a "were there other
+ * events from this sender" scan on a path that never runs. Admin raw-record
+ * deletion can therefore leave a contact row whose events are gone — the count
+ * reads one high until the `migrations.clearSocialContacts` +
+ * `backfill*SocialContacts` repair sequence is run.
+ */
+export async function recordSocialContact(
+  ctx: { db: GenericDatabaseWriter<DataModel> },
+  orgId: Id<"organizations">,
+  platform: "instagram" | "facebook",
+  senderRawId: string
+): Promise<void> {
+  // An empty id is not a contact — it is a sender the webhook could not
+  // identify, and materialising it would invent a contact the Set never had.
+  if (!senderRawId) return;
+  const existing = await ctx.db
+    .query("socialContacts")
+    .withIndex("by_org_platform_sender", (q) =>
+      q.eq("orgId", orgId).eq("platform", platform).eq("senderRawId", senderRawId)
+    )
+    .first();
+  if (existing) return;
+  await ctx.db.insert("socialContacts", { orgId, platform, senderRawId });
+}
+
+aggregateTriggers.register("instagramEvents", async (ctx, change) => {
+  if (change.operation !== "insert" || !change.newDoc) return;
+  await recordSocialContact(ctx, change.newDoc.orgId, "instagram", change.newDoc.senderInstagramId);
+});
+
+aggregateTriggers.register("facebookEvents", async (ctx, change) => {
+  if (change.operation !== "insert" || !change.newDoc) return;
+  await recordSocialContact(ctx, change.newDoc.orgId, "facebook", change.newDoc.senderFacebookId);
+});

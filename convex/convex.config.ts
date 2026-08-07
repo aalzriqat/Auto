@@ -19,4 +19,12 @@ app.use(aggregate, { name: "customersByOrg" });
 app.use(aggregate, { name: "leadsByOrg" });
 app.use(aggregate, { name: "membershipsByOrg" });
 
+// Social Inbox. `socialInbox.platformStats` was Convex's #3 consumer at 1.08 GB
+// of production bandwidth in a single week — it read every Instagram and
+// Facebook event the org had ever received to produce nine numbers, and every
+// inbound message invalidated it into doing so again.
+app.use(aggregate, { name: "instagramEventsByOrg" });
+app.use(aggregate, { name: "facebookEventsByOrg" });
+app.use(aggregate, { name: "socialContactsByOrg" });
+
 export default app;
