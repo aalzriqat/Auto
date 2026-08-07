@@ -28,9 +28,26 @@ import type { Id } from "./_generated/dataModel";
  * grouping, and direct exercise of every way an event can move between threads.
  */
 
+/** Permissions each seeded role carries. */
+const VIEWER_PERMISSIONS = ["view:leads", "edit:leads"];
+const MANAGER_PERMISSIONS = [
+  "view:leads",
+  "view:customers",
+  "merge:customers",
+  "approve:requests",
+];
+
+/**
+ * An org with one member holding `permissions`.
+ *
+ * One helper rather than a viewer variant and a manager variant: they differed
+ * only in the role row, and the duplicated bodies were most of this file's
+ * duplication budget.
+ */
 async function seedOrg(
   t: ReturnType<typeof convexTestWithComponents>,
-  clerkId = "conv_editor_001"
+  clerkId = "conv_editor_001",
+  permissions: string[] = VIEWER_PERMISSIONS
 ) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() })
@@ -45,13 +62,14 @@ async function seedOrg(
     })
   );
   const userId = await t.run(async (ctx) =>
-    ctx.db.insert("users", { clerkId, email: `${clerkId}@test.com`, name: "Editor" })
+    ctx.db.insert("users", { clerkId, email: `${clerkId}@test.com`, name: "Member" })
   );
   const roleId = await t.run(async (ctx) =>
-    ctx.db.insert("roles", { orgId, name: "SALES", permissions: ["view:leads", "edit:leads"] })
+    ctx.db.insert("roles", { orgId, name: "SEEDED", permissions })
   );
   await t.run(async (ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
-  return { orgId, asEditor: t.withIdentity({ subject: clerkId }) };
+  const identity = t.withIdentity({ subject: clerkId });
+  return { orgId, identity, asEditor: identity, asUser: identity };
 }
 
 async function makeCustomer(
@@ -630,32 +648,9 @@ describe("socialInbox.listConversations — materialised threads", () => {
    * these count recomputes structurally.
    */
   describe("bulk operations defer the thread recompute", () => {
-    async function seedMergeOrg(t: ReturnType<typeof convexTestWithComponents>, clerkId: string) {
-      const orgId = await t.run(async (ctx) =>
-        ctx.db.insert("organizations", { name: "Bulk Org", createdAt: Date.now() })
-      );
-      await t.run(async (ctx) =>
-        ctx.db.insert("subscriptions", {
-          orgId, plan: "professional", status: "active",
-          createdAt: Date.now(), updatedAt: Date.now(),
-        })
-      );
-      const userId = await t.run(async (ctx) =>
-        ctx.db.insert("users", { clerkId, email: clerkId + "@test.com", name: "M" })
-      );
-      const roleId = await t.run(async (ctx) =>
-        ctx.db.insert("roles", {
-          orgId, name: "MANAGER",
-          permissions: ["view:leads", "view:customers", "merge:customers", "approve:requests"],
-        })
-      );
-      await t.run(async (ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
-      return { orgId, asUser: t.withIdentity({ subject: clerkId }) };
-    }
-
     test("merging 200 events in one thread recomputes it a bounded number of times", async () => {
       const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-      const { orgId, asUser } = await seedMergeOrg(t, "bulk_merge_1");
+      const { orgId, asUser } = await seedOrg(t, "bulk_merge_1", MANAGER_PERMISSIONS);
       const survivorId = await makeCustomer(t, orgId, "Survivor", "C");
       const loserId = await makeCustomer(t, orgId, "Loser", "C");
 
@@ -684,7 +679,7 @@ describe("socialInbox.listConversations — materialised threads", () => {
 
     test("events spread across four threads recompute four times, not once per event", async () => {
       const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-      const { orgId, asUser } = await seedMergeOrg(t, "bulk_merge_2");
+      const { orgId, asUser } = await seedOrg(t, "bulk_merge_2", MANAGER_PERMISSIONS);
       const survivorId = await makeCustomer(t, orgId, "Survivor", "C");
       const loserId = await makeCustomer(t, orgId, "Loser", "C");
 
@@ -724,7 +719,7 @@ describe("socialInbox.listConversations — materialised threads", () => {
       const counts: number[] = [];
       for (const n of [100, 200, 400]) {
         const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-        const { orgId, asUser } = await seedMergeOrg(t, "bulk_scale_" + n);
+        const { orgId, asUser } = await seedOrg(t, "bulk_scale_" + n, MANAGER_PERMISSIONS);
         const survivorId = await makeCustomer(t, orgId, "S", "C");
         const loserId = await makeCustomer(t, orgId, "L", "C");
         await t.run(async (ctx) => {
@@ -746,7 +741,7 @@ describe("socialInbox.listConversations — materialised threads", () => {
 
     test("linking a vehicle across a customer's whole history recomputes once per thread", async () => {
       const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-      const { orgId, asUser } = await seedMergeOrg(t, "bulk_vehicle");
+      const { orgId, asUser } = await seedOrg(t, "bulk_vehicle", MANAGER_PERMISSIONS);
       const customerId = await makeCustomer(t, orgId, "Chatty", "C");
       const vehicleId = await t.run((ctx) =>
         ctx.db.insert("vehicles", {
@@ -784,7 +779,7 @@ describe("socialInbox.listConversations — materialised threads", () => {
 
     test("a failure in the deferred sync rolls back every event patch", async () => {
       const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-      const { orgId, asUser } = await seedMergeOrg(t, "bulk_rollback");
+      const { orgId, asUser } = await seedOrg(t, "bulk_rollback", MANAGER_PERMISSIONS);
       const survivorId = await makeCustomer(t, orgId, "Survivor", "C");
       const loserId = await makeCustomer(t, orgId, "Loser", "C");
 
@@ -834,8 +829,8 @@ describe("socialInbox.listConversations — materialised threads", () => {
 
     test("identical thread identifiers in two orgs never collapse into one key", async () => {
       const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-      const { orgId, asUser } = await seedMergeOrg(t, "bulk_iso_a");
-      const { orgId: otherOrgId } = await seedMergeOrg(t, "bulk_iso_b");
+      const { orgId, asUser } = await seedOrg(t, "bulk_iso_a", MANAGER_PERMISSIONS);
+      const { orgId: otherOrgId } = await seedOrg(t, "bulk_iso_b", MANAGER_PERMISSIONS);
       const survivorId = await makeCustomer(t, orgId, "S", "C");
       const loserId = await makeCustomer(t, orgId, "L", "C");
       const otherCustomerId = await makeCustomer(t, otherOrgId, "Other", "C");
@@ -877,7 +872,7 @@ describe("socialInbox.listConversations — materialised threads", () => {
 
     test("an event written after the deferred sync is still materialised", async () => {
       const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-      const { orgId, asUser } = await seedMergeOrg(t, "bulk_after");
+      const { orgId, asUser } = await seedOrg(t, "bulk_after", MANAGER_PERMISSIONS);
       const survivorId = await makeCustomer(t, orgId, "S", "C");
       const loserId = await makeCustomer(t, orgId, "L", "C");
 
