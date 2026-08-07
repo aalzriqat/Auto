@@ -133,6 +133,7 @@ import type * as sourcedAgentImpact from "../sourcedAgentImpact.js";
 import type * as sourcingPayables from "../sourcingPayables.js";
 import type * as subledger from "../subledger.js";
 import type * as subscriptions from "../subscriptions.js";
+import type * as supplierReceivables from "../supplierReceivables.js";
 import type * as support from "../support.js";
 import type * as supportAgentAuth from "../supportAgentAuth.js";
 import type * as tasks from "../tasks.js";
@@ -336,6 +337,7 @@ declare const fullApi: ApiFromModules<{
   sourcingPayables: typeof sourcingPayables;
   subledger: typeof subledger;
   subscriptions: typeof subscriptions;
+  supplierReceivables: typeof supplierReceivables;
   support: typeof support;
   supportAgentAuth: typeof supportAgentAuth;
   tasks: typeof tasks;
