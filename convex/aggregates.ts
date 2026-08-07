@@ -420,13 +420,20 @@ aggregateTriggers.register("socialContacts", socialContactsByOrg.idempotentTrigg
  * an update carries no new sender, and re-deriving on every reply would put an
  * indexed read in front of routine bookkeeping writes for nothing.
  *
- * Deliberately does NOT delete on event deletion. An org purge removes the
- * contact rows directly (`adminOrgs`), and nothing else in the product deletes
- * individual events; a per-event decrement would need a "were there other
- * events from this sender" scan on a path that never runs. Admin raw-record
- * deletion can therefore leave a contact row whose events are gone — the count
- * reads one high until the `migrations.clearSocialContacts` +
- * `backfill*SocialContacts` repair sequence is run.
+ * Deliberately does NOT delete on event deletion, because *nothing in the
+ * product deletes an individual event*. The only deletion is the org purge
+ * (`adminOrgs.ts`), which removes the contact rows directly in the same pass.
+ * The super-admin raw-record editor cannot reach these tables: `adminData.ts`
+ * gates every hard delete on `ADMIN_TABLES`, which lists neither
+ * `instagramEvents` nor `facebookEvents`.
+ *
+ * That absence is what makes insert-only safe, so it is load-bearing rather
+ * than incidental — adding either table to `ADMIN_TABLES` is a one-line change
+ * that would make "unique contacts" read permanently high, silently.
+ * `socialInboxStats.test.ts` fails the build if either appears there. If the
+ * product ever does need per-event deletion, the honest fix is a decrement that
+ * first checks for other events from the same sender, not this trigger;
+ * `migrations.repairSocialContacts` is the recovery path in the meantime.
  */
 export async function recordSocialContact(
   ctx: { db: GenericDatabaseWriter<DataModel> },
@@ -439,9 +446,17 @@ export async function recordSocialContact(
   // `new Set(events.map(e => e.senderInstagramId))` counted `""` as a contact:
   // one anonymous bucket, reported to the dealer as a real person. Skipping it
   // means an org whose webhook failed to identify a sender now reads one lower
-  // than it used to. Measured on production (kindly-hound-172, 2026-08-07) no
-  // such row exists in either table — 347 Instagram and 682 Facebook events,
-  // zero blank sender ids — so no live org's number moves.
+  // than it used to.
+  //
+  // Measured on production (kindly-hound-172, 2026-08-07): 347 Instagram and
+  // 682 Facebook events, zero blank sender ids. That is a reading, not an
+  // invariant — three of the four ingest paths in `http.ts` drop an
+  // unidentified sender (`if (!fromId) continue` at the Instagram comment
+  // path, `if (!senderId) continue` at both DM paths) but the Facebook *feed
+  // comment* path does not, so a page comment arriving with no `from.id` would
+  // still be stored with an empty sender. Adding the fourth guard would change
+  // what gets ingested, which is a product decision and not this change's to
+  // make; it is left as a follow-up.
   //
   // Kept as a guard rather than "fixed" to match the old count, because the
   // alternative is materialising a `socialContacts` row keyed on the empty

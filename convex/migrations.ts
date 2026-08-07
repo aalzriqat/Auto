@@ -379,47 +379,127 @@ export const backfillFacebookSocialContacts = internalMutation({
 });
 
 /**
- * Repair step for `socialContacts`: deletes every row so the two
- * `backfill*SocialContacts` migrations can re-derive them from the events that
- * actually exist.
+ * Rebuilds `socialContacts` from the events that actually exist: clears the
+ * rows, then re-derives them from `instagramEvents` and `facebookEvents`.
  *
- * Needed only after individual event rows have been hard-deleted through the
- * super-admin raw-record editor — the only path in the product that removes
- * events without removing the whole org. The contact trigger is insert-only, so
- * such a deletion leaves a contact row behind and "unique contacts" reads high.
+ * ## One entry point, because the three-step version raced itself
+ *
+ * This began as a documented runbook — clear, then backfill Instagram, then
+ * backfill Facebook. Each step self-schedules its own continuation and returns
+ * to the operator after its first page, so on any deployment with more distinct
+ * senders than one batch, step 2 started while step 1 was still deleting.
+ * Contact rows inserted by the backfill are *newer* than the ones the clear has
+ * already passed, so the still-running clear reaches them and deletes them, and
+ * "unique contacts" reads permanently low with nothing failing. Following the
+ * documented sequence correctly was what triggered it.
+ *
+ * So the phases chain here instead: each one schedules the next only once its
+ * own pagination reports `isDone`. `rebuildVehicleAggregates` already works
+ * this way; the runbook version was the odd one out.
+ *
+ * Exactly one `.paginate()` runs per invocation — the phase picks which table.
+ * A Convex function may only run one, and `convex-test` does not enforce that,
+ * so it has to hold by construction rather than by testing.
+ *
+ * ## Scope
+ *
+ * `orgId` confines every phase to one tenant. Without it the clear walks the
+ * whole table, which zeroes the card for *every* org on the deployment until
+ * the rebuild catches up — a blast radius no single org's drift justifies. The
+ * unscoped form is kept for a genuine full rebuild.
  *
  * Deleting through the wrapped `ctx.db` takes the rows out of
- * `socialContactsByOrg` as it goes, so the tree and the table stay in step
- * without a separate `clearAll`. The count reads zero between this and the
- * backfills catching up, which for an analytics card is the right way round.
- *
- * Full sequence:
- *   1. migrations:clearSocialContacts
- *   2. migrations:backfillInstagramSocialContacts
- *   3. migrations:backfillFacebookSocialContacts
+ * `socialContactsByOrg` as it goes, so tree and table stay in step without a
+ * separate `clearAll`.
  */
-export const clearSocialContacts = internalMutation({
-  args: BACKFILL_ARGS,
-  handler: async (ctx, args): Promise<BackfillResult> => {
-    const numItems = args.batchSize ?? 200;
-    const page = await ctx.db.query("socialContacts").paginate({
-      cursor: args.cursor ?? null,
-      numItems,
-    });
+const REPAIR_PHASE = v.union(
+  v.literal("clear"),
+  v.literal("instagram"),
+  v.literal("facebook")
+);
 
-    for (const contact of page.page) {
-      await ctx.db.delete(contact._id);
+type RepairPhase = "clear" | "instagram" | "facebook";
+
+export const repairSocialContacts = internalMutation({
+  args: {
+    orgId: v.optional(v.id("organizations")),
+    phase: v.optional(REPAIR_PHASE),
+    cursor: v.optional(v.union(v.string(), v.null())),
+    batchSize: v.optional(v.number()),
+    continueAutomatically: v.optional(v.boolean()),
+  },
+  handler: async (
+    ctx,
+    args
+  ): Promise<BackfillResult & { phase: RepairPhase }> => {
+    const phase: RepairPhase = args.phase ?? "clear";
+    // Same ceiling and reasoning as `seedAggregatePage`: each row costs
+    // aggregate node patches on top of its own write, and an unclamped
+    // caller-supplied batch throws mid-chain and leaves the table half-cleared.
+    const numItems = Math.min(Math.max(args.batchSize ?? 100, 1), 250);
+    const orgId = args.orgId;
+
+    let page;
+    if (phase === "clear") {
+      page = orgId
+        ? await ctx.db
+            .query("socialContacts")
+            .withIndex("by_org", (q) => q.eq("orgId", orgId))
+            .paginate({ cursor: args.cursor ?? null, numItems })
+        : await ctx.db
+            .query("socialContacts")
+            .paginate({ cursor: args.cursor ?? null, numItems });
+      for (const contact of page.page) {
+        await ctx.db.delete(contact._id);
+      }
+    } else if (phase === "instagram") {
+      page = orgId
+        ? await ctx.db
+            .query("instagramEvents")
+            .withIndex("by_org", (q) => q.eq("orgId", orgId))
+            .paginate({ cursor: args.cursor ?? null, numItems })
+        : await ctx.db
+            .query("instagramEvents")
+            .paginate({ cursor: args.cursor ?? null, numItems });
+      for (const event of page.page) {
+        await recordSocialContact(ctx, event.orgId, "instagram", event.senderInstagramId);
+      }
+    } else {
+      page = orgId
+        ? await ctx.db
+            .query("facebookEvents")
+            .withIndex("by_org", (q) => q.eq("orgId", orgId))
+            .paginate({ cursor: args.cursor ?? null, numItems })
+        : await ctx.db
+            .query("facebookEvents")
+            .paginate({ cursor: args.cursor ?? null, numItems });
+      for (const event of page.page) {
+        await recordSocialContact(ctx, event.orgId, "facebook", event.senderFacebookId);
+      }
     }
 
-    // Every row on this page is gone, so the next batch starts from the
-    // beginning again rather than from a cursor pointing into deleted rows.
-    if (!page.isDone && args.continueAutomatically !== false) {
-      await ctx.scheduler.runAfter(0, internal.migrations.clearSocialContacts, {
-        batchSize: args.batchSize,
-      });
+    if (args.continueAutomatically !== false) {
+      if (!page.isDone) {
+        // The clear deletes every row it reads, so its next batch is the new
+        // first page and the cursor must be dropped. The rebuild phases only
+        // insert, so theirs must be kept.
+        await ctx.scheduler.runAfter(0, internal.migrations.repairSocialContacts, {
+          orgId,
+          phase,
+          cursor: phase === "clear" ? null : page.continueCursor,
+          batchSize: args.batchSize,
+        });
+      } else if (phase !== "facebook") {
+        await ctx.scheduler.runAfter(0, internal.migrations.repairSocialContacts, {
+          orgId,
+          phase: phase === "clear" ? "instagram" : "facebook",
+          batchSize: args.batchSize,
+        });
+      }
     }
 
     return {
+      phase,
       migrated: page.page.length,
       isDone: page.isDone,
       continueCursor: page.isDone ? null : page.continueCursor,

@@ -2,6 +2,8 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 /**
  * `socialInbox.platformStats` used to answer nine numbers by `.collect()`-ing
@@ -335,8 +337,11 @@ describe("socialInbox.platformStats", () => {
       })
     );
 
-    // The one path in the product that removes an event without removing the
-    // org: the super-admin raw-record editor.
+    // No product path reaches this — `adminData`'s hard delete is gated on
+    // ADMIN_TABLES, which lists neither event table (pinned by the guard test
+    // below), and the org purge removes the contact rows too. This is the
+    // hypothetical the insert-only trigger is not defended against, exercised
+    // directly so the recovery path stays proven.
     await t.run((ctx) => ctx.db.delete(purgedId));
 
     // The event tree self-heals (the aggregate trigger saw the delete); the
@@ -345,9 +350,13 @@ describe("socialInbox.platformStats", () => {
     expect(drifted.instagram.total).toBe(1);
     expect(drifted.instagram.uniqueContacts).toBe(2);
 
-    await t.mutation(internal.migrations.clearSocialContacts, {});
-    await t.mutation(internal.migrations.backfillInstagramSocialContacts, {});
-    await t.mutation(internal.migrations.backfillFacebookSocialContacts, {});
+    vi.useFakeTimers();
+    try {
+      await t.mutation(internal.migrations.repairSocialContacts, {});
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+    } finally {
+      vi.useRealTimers();
+    }
 
     const repaired = await asEditor.query(api.socialInbox.platformStats, { orgId });
     expect(repaired.instagram).toEqual({ comments: 1, dms: 0, total: 1, uniqueContacts: 1 });
@@ -398,26 +407,97 @@ describe("socialInbox.platformStats", () => {
       }
       expect((await asEditor.query(api.socialInbox.platformStats, { orgId })).facebook.uniqueContacts).toBe(5);
 
-      // `clearSocialContacts` deletes a page then re-schedules itself with no
-      // cursor, because every row it just read is gone and the next batch is
-      // the new first page. A one-row batch forces that self-scheduled chain to
-      // run five times — the path a single-page test never reaches.
-      await t.mutation(internal.migrations.clearSocialContacts, { batchSize: 1 });
-      await t.finishAllScheduledFunctions(vi.runAllTimers);
-
-      const emptied = await t.run((ctx) => ctx.db.query("socialContacts").collect());
-      expect(emptied).toHaveLength(0);
-      expect((await asEditor.query(api.socialInbox.platformStats, { orgId })).facebook.uniqueContacts).toBe(0);
-
-      await t.mutation(internal.migrations.backfillFacebookSocialContacts, { batchSize: 1 });
+      // A one-row batch forces every phase to self-schedule, and forces the
+      // clear→instagram→facebook handoff to happen through the scheduler —
+      // the path a single-page test never reaches. Started once, drained once.
+      const first = await t.mutation(internal.migrations.repairSocialContacts, { batchSize: 1 });
+      expect(first.phase).toBe("clear");
+      expect(first.isDone).toBe(false);
       await t.finishAllScheduledFunctions(vi.runAllTimers);
 
       const rebuilt = await asEditor.query(api.socialInbox.platformStats, { orgId });
       expect(rebuilt.facebook.uniqueContacts).toBe(5);
       expect(rebuilt.facebook.total).toBe(5);
+      // Exactly one row per sender — a rebuild that ran the insert phase twice,
+      // or that raced its own clear, would not land here.
+      const contacts = await t.run((ctx) => ctx.db.query("socialContacts").collect());
+      expect(contacts).toHaveLength(5);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  test("a scoped repair leaves every other org's contacts alone", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const { orgId, asEditor } = await seedOrgWithEditor(t);
+      const { orgId: otherOrgId, asEditor: asOther } = await seedOrgWithEditor(t, "stats_editor_002");
+
+      for (const org of [orgId, otherOrgId]) {
+        for (const i of [0, 1]) {
+          await t.run((ctx) =>
+            ctx.db.insert("instagramEvents", {
+              orgId: org,
+              externalId: `scoped_${org}_${i}`,
+              kind: "comment",
+              senderInstagramId: `scoped_sender_${org}_${i}`,
+            })
+          );
+        }
+      }
+
+      await t.mutation(internal.migrations.repairSocialContacts, { orgId, batchSize: 1 });
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      // Both orgs whole: the scoped clear must never walk the whole table, or
+      // one org's drift zeroes every tenant's card until the rebuild catches up.
+      expect((await asEditor.query(api.socialInbox.platformStats, { orgId })).instagram.uniqueContacts).toBe(2);
+      expect(
+        (await asOther.query(api.socialInbox.platformStats, { orgId: otherOrgId })).instagram.uniqueContacts
+      ).toBe(2);
+      const contacts = await t.run((ctx) => ctx.db.query("socialContacts").collect());
+      expect(contacts).toHaveLength(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("hard-deleting an org takes its social contacts and their counts with it", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithEditor(t);
+    const { orgId: survivorOrgId, asEditor: asSurvivor } = await seedOrgWithEditor(t, "stats_editor_003");
+
+    for (const org of [orgId, survivorOrgId]) {
+      await t.run((ctx) =>
+        ctx.db.insert("facebookEvents", {
+          orgId: org,
+          externalId: `purge_${org}`,
+          kind: "dm",
+          senderFacebookId: `purge_sender_${org}`,
+        })
+      );
+    }
+    expect(await t.run((ctx) => ctx.db.query("socialContacts").collect())).toHaveLength(2);
+
+    // `socialContacts` is org-scoped and derived, so it has to be in
+    // ORGANIZATION_DELETION_STEPS or a purged org's rows — and its aggregate
+    // entries — outlive it.
+    const deleted = await t.run(async (ctx) => {
+      const rows = await ctx.db
+        .query("socialContacts")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect();
+      for (const row of rows) await ctx.db.delete(row._id);
+      return rows.length;
+    });
+    expect(deleted).toBe(1);
+
+    const survivor = await asSurvivor.query(api.socialInbox.platformStats, { orgId: survivorOrgId });
+    expect(survivor.facebook.uniqueContacts).toBe(1);
+    const remaining = await t.run((ctx) => ctx.db.query("socialContacts").collect());
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].orgId).toBe(survivorOrgId);
   });
 
   test("requires org membership", async () => {
@@ -426,5 +506,36 @@ describe("socialInbox.platformStats", () => {
 
     const outsider = t.withIdentity({ subject: "not_a_member_001" });
     await expect(outsider.query(api.socialInbox.platformStats, { orgId })).rejects.toThrow();
+  });
+});
+
+/**
+ * Two build-time guards for invariants the insert-only contact trigger rests
+ * on. Both fail open at runtime — nothing throws, the count just drifts — so
+ * they have to be caught here rather than alerted on.
+ */
+describe("socialContacts invariants", () => {
+  const convexSource = (file: string) =>
+    fs.readFileSync(path.join(process.cwd(), "convex", file), "utf8");
+
+  test("the event tables stay out of the super-admin raw-record editor", () => {
+    // `recordSocialContact` never deletes, on the grounds that no product path
+    // deletes an individual event. `adminData.adminHardDelete` is gated on
+    // ADMIN_TABLES; adding either event table there is a one-line change that
+    // would make "unique contacts" read permanently high with no other signal.
+    const adminData = convexSource("adminData.ts");
+    const adminTables = adminData.slice(
+      adminData.indexOf("const ADMIN_TABLES"),
+      adminData.indexOf("];", adminData.indexOf("const ADMIN_TABLES"))
+    );
+
+    expect(adminTables).not.toContain("instagramEvents");
+    expect(adminTables).not.toContain("facebookEvents");
+  });
+
+  test("a purged org takes its socialContacts rows with it", () => {
+    // `socialContacts` is org-scoped and derived. Left out of the purge, a
+    // hard-deleted org's rows and its `socialContactsByOrg` entries outlive it.
+    expect(convexSource("adminOrgs.ts")).toContain('table: "socialContacts"');
   });
 });
