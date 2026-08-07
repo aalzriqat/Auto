@@ -917,6 +917,14 @@ export default defineSchema({
     // of a figure derivable from two others is a figure that can disagree with
     // them, and this one decides whether a supplier is still owed money.
     amountPaid: v.optional(v.number()),
+    /**
+     * How many payments have posted. Carried into the GL event's version and
+     * idempotency key, because `postAccountingEvent` dedupes on
+     * (eventType, sourceType, sourceId, eventVersion) — without it a second
+     * instalment silently returns "already posted" and the ledger records one
+     * payment where the subledger records several.
+     */
+    paymentSeq: v.optional(v.number()),
     paymentDueTrigger: v.optional(
       v.union(
         v.literal("ON_SALE"),

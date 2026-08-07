@@ -244,10 +244,19 @@ export const markPaid = mutation({
         if (payable.status === "CANCELLED") {
           throw new ConvexError("This payable was cancelled with its sale.");
         }
+        // Only what is still owed. Posting `amountDue` on a partially-paid row
+        // would discharge AP-Suppliers a second time for the instalments
+        // already posted, leaving the account short by exactly what had been
+        // paid so far.
+        const alreadyPaidBeforeSettle = payable.amountPaid ?? 0;
+        const remainingToSettle = payable.amountDue - alreadyPaidBeforeSettle;
+        if (remainingToSettle <= 0) {
+          throw new ConvexError("This payable has already been paid in full.");
+        }
         if (args.taxAmount !== undefined && (!Number.isFinite(args.taxAmount) || args.taxAmount < 0)) {
           throw new ConvexError("VAT amount cannot be negative.");
         }
-        if (args.taxAmount !== undefined && args.taxAmount > payable.amountDue) {
+        if (args.taxAmount !== undefined && args.taxAmount > remainingToSettle) {
           throw new ConvexError("VAT amount cannot exceed the amount due.");
         }
 
@@ -259,6 +268,7 @@ export const markPaid = mutation({
           // casing this row forever to avoid reporting a settled supplier as
           // still owed the lot.
           amountPaid: payable.amountDue,
+          paymentSeq: (payable.paymentSeq ?? 0) + 1,
           paidAt: now,
           paidBy: user._id,
           paymentMethod,
@@ -290,7 +300,8 @@ export const markPaid = mutation({
           orgId: args.orgId,
           payableId: args.payableId,
           sourcedFromName: payable.sourcedFromName,
-          amountMinor: toMinorUnits(payable.amountDue, currency),
+          amountMinor: toMinorUnits(remainingToSettle, currency),
+          paymentSeq: (payable.paymentSeq ?? 0) + 1,
           taxMinor: args.taxAmount ? toMinorUnits(args.taxAmount, currency) : undefined,
           currency,
           paymentMethod,
@@ -312,12 +323,13 @@ export const markPaid = mutation({
  * recording a payment that had not happened or leaving the supplier's balance
  * untouched until the last one landed.
  *
- * Deliberately does NOT post to the GL yet. The AP entry for a consigned deal
- * is raised at sale time for the full entitlement, so a part payment moves cash
- * against a liability that already exists — and getting that posting right
- * depends on the settlement route, which is the next piece of work. Recording
- * the fact now, unposted, is better than posting it wrongly: `settlementView`
- * reports the balance either way, and nothing here can misstate the ledger.
+ * Each instalment posts its own GL entry, discharging AP-Suppliers by exactly
+ * what moved. It did not, originally, on the reasoning that `settlementView`
+ * reports the balance either way — which is true of a part payment and false of
+ * the last one: the row reached PAID with no entry ever raised, and `markPaid`
+ * (the only path that raises one) refuses a PAID payable. The supplier then
+ * read as settled everywhere except the ledger, and nothing could discharge the
+ * liability again.
  */
 export const recordPartialPayment = mutation({
   args: {
@@ -381,6 +393,7 @@ export const recordPartialPayment = mutation({
 
         const now = Date.now();
         const settlesInFull = projected === payable.amountDue;
+        const paymentSeq = (payable.paymentSeq ?? 0) + 1;
         await ctx.db.patch(args.payableId, {
           amountPaid: projected,
           status: settlesInFull ? "PAID" : "PARTIALLY_PAID",
@@ -389,8 +402,32 @@ export const recordPartialPayment = mutation({
           paymentReference: args.paymentReference,
           paymentAccountId: args.paymentAccountId,
           paymentNotes: args.paymentNotes,
+          paymentSeq,
           updatedAt: now,
         });
+
+        // Same cost-origin reasoning as markPaid: a payable with a linked sale
+        // credited AP against COGS at sale time; one without credited Vehicle
+        // Inventory at acquisition, unless the vehicle has since sold and its
+        // cost has already moved to COGS.
+        let costOrigin: "COGS" | "VEHICLE_INVENTORY" = "COGS";
+        if (payable.saleId == null) {
+          const vehicle = await ctx.db.get(payable.vehicleId);
+          costOrigin = vehicle?.status === "SOLD" ? "COGS" : "VEHICLE_INVENTORY";
+        }
+        await hookSupplierPaymentSettled(ctx, {
+          orgId: args.orgId,
+          payableId: args.payableId,
+          sourcedFromName: payable.sourcedFromName,
+          amountMinor: toMinorUnits(args.amount, payable.currency),
+          currency: payable.currency,
+          paymentMethod,
+          costOrigin,
+          paymentSeq,
+          actorId: user._id,
+          occurredAt: now,
+        });
+
         return { amountPaid: projected, remainingAmount: payable.amountDue - projected };
       }
     );

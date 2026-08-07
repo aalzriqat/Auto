@@ -541,6 +541,8 @@ export async function hookSupplierPaymentSettled(
   args: {
     orgId: Id<"organizations">;
     payableId: Id<"vehicleSupplierPayables">;
+    /** Which payment against this payable this is. Defaults to 1. */
+    paymentSeq?: number;
     sourcedFromName: string;
     amountMinor: number;
     taxMinor?: number;
@@ -560,7 +562,11 @@ export async function hookSupplierPaymentSettled(
     eventType: "SUPPLIER_PAYMENT_SETTLED",
     sourceType: "vehicleSupplierPayables",
     sourceId: args.payableId.toString(),
-    idempotencyKey: `supplier_payment_settled_${args.payableId}`,
+    // Sequenced: a payable can be settled in instalments, and each one is its
+    // own movement of money. See the note on postDomainEvent's eventVersion for
+    // why the key alone is not enough.
+    idempotencyKey: `supplier_payment_settled_${args.payableId}_${args.paymentSeq ?? 1}`,
+    eventVersion: args.paymentSeq ?? 1,
     currency: args.currency,
     occurredAt: args.occurredAt,
     actorId: args.actorId,
