@@ -162,11 +162,15 @@ jobs:
   # playwright.yml (via playwright.config.ts's webServer) and twice more in
   # security.yml's zap-baseline/nuclei jobs — but none of those is a required
   # check, so a branch that type-checks and passes every test while failing
-  # `next build` could merge. `tsc --noEmit` does not catch it: the production
-  # build additionally runs the bundler, resolves every import for real,
-  # prerenders pages, and enforces Next's own build-time rules (a client
-  # component reading useSearchParams outside Suspense being the one that has
-  # bitten this repo before).
+  # `next build` could merge.
+  #
+  # `pnpm typecheck` does not cover this, and the reason is specific:
+  # tsconfig.json's `include` lists `.next/types/**/*.ts`, which only exists
+  # after a build. So the bare `tsc --noEmit` in the type-check job never
+  # checks Next's generated route types (PageProps/LayoutProps and friends) —
+  # a mismatched page signature typechecks clean there and fails here. The
+  # build also resolves every import through the real bundler rather than
+  # through tsc's resolver.
   #
   # It gets its own named job rather than leaning on Playwright's build because
   # "does the application compile?" and "do the E2E flows pass?" are different
@@ -174,13 +178,17 @@ jobs:
   # A build break should surface as a red `production-build`, not as an
   # ambiguous E2E timeout.
   #
-  # Secrets: forked PRs receive none, so `next build` would run here with empty
-  # values. Every PR in this repo is raised from a branch on the repo itself, so
-  # that path is currently unreachable — but if outside contributions ever start
-  # arriving, this job needs placeholder fallbacks before it is safe to keep as a
-  # required check.
+  # Env: deliberately placeholders, not repo secrets. lib/env.ts validates shape
+  # only (zod .url() / .min(1)) and throws on failure, so shape-valid dummies
+  # exercise exactly the same build path — while keeping this job working on
+  # forked PRs, which receive no secrets and would otherwise fail this required
+  # check permanently and unfixably. CLERK_SECRET_KEY is omitted entirely: it is
+  # .optional() in lib/env.ts and no route is statically prerendered, so the
+  # build never needs it, and `next build` runs arbitrary dependency code with
+  # the full job environment in process.env on a public repo.
   production-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
     - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -203,10 +211,10 @@ jobs:
     - name: Production build
       run: pnpm build
       env:
-        NEXT_PUBLIC_CONVEX_URL: ${{ secrets.NEXT_PUBLIC_CONVEX_URL }}
-        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
-        CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
-        NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+        NEXT_TELEMETRY_DISABLED: '1'
+        NEXT_PUBLIC_CONVEX_URL: https://ci-placeholder.convex.cloud
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_Y2ktcGxhY2Vob2xkZXIuY2xlcmsuYWNjb3VudHMuZGV2JA
+        NEXT_PUBLIC_APP_URL: http://localhost:3000
 
   convex-backend:
     runs-on: ubuntu-latest
