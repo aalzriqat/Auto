@@ -60,6 +60,11 @@ export const getOverview = query({
  * inference that is impossible in the one case that matters, where a completed
  * backfill and a backfill that never ran both leave zero rows behind.
  *
+ * ⚠️ No `/admin` screen renders this yet, so today it is a `convex run` /
+ * dashboard query. It is also the only way to notice an `interrupted` chain:
+ * nothing alerts on one. Verifying a deployment means calling this and
+ * confirming `readerSource === "materialized"` for every org.
+ *
  * `processed` and `materialized` are reported separately on purpose. A run over
  * 1,029 events that produced 12 threads is healthy; reporting only "12" next to
  * "1,029" reads like a stall.

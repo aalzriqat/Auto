@@ -702,6 +702,51 @@ describe("operator surface", () => {
     expect(states.every((s) => s.status === "completed")).toBe(true);
   });
 
+  test("re-running the fan-out does not restart a run that is still advancing", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrg(t, "inflight_fanout");
+    for (const n of ["Ivy", "Jud", "Kit"]) {
+      const c = await makeCustomer(t, orgId, n);
+      await seedLegacyEvents(t, orgId, c, 1);
+    }
+
+    // One page in, chain live.
+    await t.mutation(internal.migrations.backfillInstagramConversations, {
+      orgId,
+      batchSize: 1,
+      continueAutomatically: false,
+    });
+    const midRun = await t.run((ctx) =>
+      ctx.db
+        .query("socialMaterializationState")
+        .filter((q) => q.eq(q.field("platform"), "instagram"))
+        .first()
+    );
+    expect(midRun?.status).toBe("running");
+
+    // The natural operator move: re-run the fan-out to see how far it has got.
+    // Without this guard that re-enqueues the org through the operator-start
+    // path, which resets the cursor and fences the chain already doing the
+    // work — so checking on progress destroys it, and a long walk never lands.
+    const again = await t.mutation(internal.migrations.startSocialConversationBackfills, {
+      continueAutomatically: false,
+    });
+    // Per platform: Instagram is mid-walk so it is left alone; Facebook has not
+    // started, so it is enqueued. The point is that the live chain is untouched.
+    expect(again.skipped).toBe(1);
+    expect(again.started).toBe(1);
+
+    const after = await t.run((ctx) =>
+      ctx.db
+        .query("socialMaterializationState")
+        .filter((q) => q.eq(q.field("platform"), "instagram"))
+        .first()
+    );
+    expect(after?.runId).toBe(midRun?.runId);
+    expect(after?.cursor).toBe(midRun?.cursor);
+    expect(after?.processedCount).toBe(midRun?.processedCount);
+  });
+
   test("re-running the fan-out does not drop migrated orgs back to the full scan", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrg(t, "redrive_fanout");
@@ -725,7 +770,7 @@ describe("operator surface", () => {
     const second = await t.mutation(internal.migrations.startSocialConversationBackfills, {
       continueAutomatically: false,
     });
-    expect(second.skipped).toBe(1);
+    expect(second.skipped).toBe(2); // both platforms complete
     expect(second.started).toBe(0);
     expect(
       await asEditor.query(api.socialInbox.materializationStatus, { orgId })
@@ -739,7 +784,7 @@ describe("operator surface", () => {
       continueAutomatically: false,
       force: true,
     });
-    expect(forced.started).toBe(1);
+    expect(forced.started).toBe(2); // both platforms rebuilt
     expect(forced.skipped).toBe(0);
 
     // Draining that rebuild leaves the org ready again and the inbox correct.

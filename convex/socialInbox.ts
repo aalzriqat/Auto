@@ -507,10 +507,15 @@ export const listConversations = query({
  * Which source this org's inbox is reading, and how far its materialisation
  * has got.
  *
- * Tenant-scoped counterpart to `adminSystem.getSocialMaterializationStatus`,
- * so the inbox itself can say "still building, showing live results" instead of
- * leaving staff to wonder why a list feels slow — or, in the failure this was
- * written for, why it is empty.
+ * Tenant-scoped counterpart to `adminSystem.getSocialMaterializationStatus`.
+ *
+ * ⚠️ Nothing in `app/`, `components/` or `apps/` calls this yet. It exists so
+ * the inbox *can* say "still building, showing live results" rather than
+ * leaving staff to wonder why a list feels slow — but that banner has not been
+ * built, and adding it is UI work that has to go through the design workflow.
+ * Until then this is reachable only from the Convex dashboard or `convex run`.
+ * Said plainly because a doc comment describing intent as though it shipped is
+ * how the next person concludes the observability problem is solved.
  *
  * Returns counts that are already distinct: `processedCount` is source events
  * read, `materializedCount` is threads rebuilt. "0 of 1,029" was the unreadable

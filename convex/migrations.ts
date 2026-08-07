@@ -16,9 +16,10 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import {
+  describeMaterializationStatus,
   readMaterializationState,
-  socialConversationsReady,
   SOCIAL_CONVERSATION_GENERATION,
+  SOCIAL_PLATFORMS,
   type SocialPlatform,
 } from "./utils/materialization";
 import { ALL_PERMISSIONS, isSystemOwnerRole, normalizeRoleName, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
@@ -788,35 +789,52 @@ export const startSocialConversationBackfills = internalMutation({
       numItems: 25,
     });
 
+    // Decided per platform, not per org. An org can have Instagram mid-walk and
+    // Facebook not started, and the two want opposite answers.
+    const BACKFILL_FOR: Record<SocialPlatform, typeof internal.migrations.backfillInstagramConversations> = {
+      instagram: internal.migrations.backfillInstagramConversations,
+      facebook: internal.migrations.backfillFacebookConversations,
+    };
+
     let started = 0;
     let skipped = 0;
+    const now = Date.now();
     for (const org of page.page) {
-      // Starting a run resets its record to `running`, which un-readies the org
-      // and drops it back to the full event scan until the walk finishes. That
-      // is the right default for a first run and the wrong one for a redrive:
-      // re-running the fan-out over an already-migrated deployment would put
-      // *every* tenant back on the 1.34 GB/week path at once, for no gain,
-      // because the existing rows are already complete and the trigger keeps
-      // them current.
-      //
-      // So a completed platform is left alone unless `force` says otherwise.
-      // `force` is what an operator reaches for when they suspect the
-      // materialised rows are wrong and want them rebuilt from source.
-      const alreadyDone =
-        args.force !== true && (await socialConversationsReady(ctx, org._id));
-      if (alreadyDone) {
-        skipped += 1;
-        continue;
+      for (const platform of SOCIAL_PLATFORMS) {
+        const status = describeMaterializationStatus(
+          await readMaterializationState(ctx, org._id, platform),
+          now
+        );
+
+        // `completed` is skipped because starting a run resets the record to
+        // `running`, which un-readies the org and drops it back to the full
+        // event scan for the length of the walk. Over a migrated deployment
+        // that would put every tenant back on the 1.34 GB/week path at once,
+        // for no gain: the rows are already complete and the trigger keeps them
+        // current.
+        //
+        // `running` is skipped for a sharper reason. Re-enqueuing sends it
+        // through the operator-start path, which resets `cursor` and
+        // `processedCount` and fences the chain already doing the work — so an
+        // operator re-running the fan-out to *check on* progress restarts it
+        // instead, and on a long walk that is a livelock. `interrupted`,
+        // `failed` and `notStarted` all do want a new run.
+        const settled = status === "completed" || status === "running";
+        if (args.force !== true && settled) {
+          skipped += 1;
+          continue;
+        }
+
+        started += 1;
+        // `continueAutomatically` reaches the per-org chains too. Gating only
+        // the org walk meant an operator asking for a single step still kicked
+        // off full self-chaining runs for up to 25 tenants.
+        await ctx.scheduler.runAfter(0, BACKFILL_FOR[platform], {
+          orgId: org._id,
+          batchSize: args.batchSize,
+          continueAutomatically: args.continueAutomatically,
+        });
       }
-      started += 1;
-      await ctx.scheduler.runAfter(0, internal.migrations.backfillInstagramConversations, {
-        orgId: org._id,
-        batchSize: args.batchSize,
-      });
-      await ctx.scheduler.runAfter(0, internal.migrations.backfillFacebookConversations, {
-        orgId: org._id,
-        batchSize: args.batchSize,
-      });
     }
 
     if (!page.isDone && args.continueAutomatically !== false) {

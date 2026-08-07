@@ -154,17 +154,18 @@ async function actualConversations(
   asEditor: ReturnType<ReturnType<typeof convexTestWithComponents>["withIdentity"]>,
   orgId: Id<"organizations">,
   args: Record<string, unknown> = {},
-  // "any" is for the one test that deliberately crosses the boundary mid-test.
-  expectSource: ReaderSource | "any" = currentSource
+  // Overridden only by the backfill test, which crosses the boundary mid-test
+  // and so names the source it expects at each point. There is deliberately no
+  // "skip the check" value: an escape hatch on an armed guard is a way to
+  // disarm it by accident.
+  expectSource: ReaderSource = currentSource
 ) {
   // Armed guard: prove the intended path actually answered. Without this the
   // whole suite can drift onto one source and still pass.
-  if (expectSource !== "any") {
-    const status = await asEditor.query(api.socialInbox.materializationStatus, { orgId });
-    expect(status.readerSource).toBe(
-      expectSource === "materialized" ? "materialized" : "legacyEvents"
-    );
-  }
+  const status = await asEditor.query(api.socialInbox.materializationStatus, { orgId });
+  expect(status.readerSource).toBe(
+    expectSource === "materialized" ? "materialized" : "legacyEvents"
+  );
 
   const result = await asEditor.query(api.socialInbox.listConversations, {
     orgId,
@@ -504,6 +505,15 @@ describe.each(["legacy", "materialized"] as const)(
   test("paginates at the database, covering every thread exactly once", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrg(t);
+    // This test drives the cursor directly rather than through
+    // `actualConversations`, so it arms the guard itself. Its assertions -- 7
+    // unique ids, newest first -- pass identically on either source, so without
+    // this it would silently revert to legacy if `markMaterializationReady`
+    // ever drifted, while staying green. It is the cursor test; it has to know
+    // whose cursor it is testing.
+    expect(
+      (await asEditor.query(api.socialInbox.materializationStatus, { orgId })).readerSource
+    ).toBe(currentSource === "materialized" ? "materialized" : "legacyEvents");
 
     for (const i of [0, 1, 2, 3, 4, 5, 6]) {
       const customerId = await makeCustomer(t, orgId, `C${i}`, "Buyer");

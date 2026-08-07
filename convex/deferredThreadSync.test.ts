@@ -97,6 +97,21 @@ export function stripComments(source: string): string {
     }
   };
 
+  // `getChildren`, not `forEachChild`. `forEachChild` visits only syntactic
+  // children and skips punctuation tokens, so the leading trivia of a closing
+  // `}` or `)` is never reached — and `getTrailingCommentRanges` stops at the
+  // first line break, so a comment on the following line is not trailing trivia
+  // of the preceding node either. The gap that leaves is the single most likely
+  // place for the comment this guard must not be fooled by:
+  //
+  //     handler: async (ctx) => {
+  //       await ctx.db.patch(id, {});
+  //       // TODO: syncDeferredSocialThreads(ctx, threads)
+  //     },
+  //
+  // Verified: that comment survived `forEachChild` and satisfied the
+  // obligation. `getChildren` materialises token nodes, so their trivia is
+  // visited too.
   const visit = (node: ts.Node) => {
     for (const range of ts.getLeadingCommentRanges(source, node.getFullStart()) ?? []) {
       blank(range.pos, range.end);
@@ -104,11 +119,31 @@ export function stripComments(source: string): string {
     for (const range of ts.getTrailingCommentRanges(source, node.getEnd()) ?? []) {
       blank(range.pos, range.end);
     }
-    node.forEachChild(visit);
+    for (const child of node.getChildren(sourceFile)) visit(child);
   };
   visit(sourceFile);
 
   return out.join("");
+}
+
+/**
+ * True when a module could possibly hold a deferred mutation.
+ *
+ * Parsing is far more expensive than the regex it replaced, and the scan runs
+ * over every Convex module twice. Doing that for all ~190 of them blew the
+ * 5s default timeout under CI's coverage instrumentation — a required check
+ * went red on a *timing* failure, which is the kind that comes back
+ * intermittently. Three files mention the builder; the rest cannot contain an
+ * offender by definition, so they are never parsed.
+ *
+ * Deliberately a raw-text check on the unstripped source: a file whose only
+ * mention is inside a comment is parsed unnecessarily, which is harmless. The
+ * failure that matters would be skipping a file that *does* use the builder,
+ * and that cannot happen — the name has to appear literally for the call to
+ * exist.
+ */
+function mayHoldDeferredMutation(source: string): boolean {
+  return source.includes("socialBulkMutation");
 }
 
 /**
@@ -120,6 +155,7 @@ export function stripComments(source: string): string {
  * same chunking as the obligation scan so the two cannot diverge.
  */
 export function deferredMutationsIn(source: string, rel: string): string[] {
+  if (!mayHoldDeferredMutation(source)) return [];
   const found: string[] = [];
   const code = stripComments(source);
 
@@ -136,6 +172,7 @@ export function deferredMutationsIn(source: string, rel: string): string[] {
 }
 
 export function deferredMutationOffenders(source: string, rel: string): string[] {
+  if (!mayHoldDeferredMutation(source)) return [];
   const offenders: string[] = [];
   const code = stripComments(source);
 
@@ -302,6 +339,62 @@ export const bad = socialBulkMutation({
 });
 `;
     expect(deferredMutationOffenders(source, "x.ts")).toHaveLength(2);
+  });
+
+  test("a comment in ANY position cannot satisfy the obligation", () => {
+    // The position above — leading trivia before `export const` — is the one a
+    // `forEachChild` walk happens to reach. These are the ones it misses,
+    // because `forEachChild` skips punctuation tokens so the leading trivia of
+    // a closing `}` or `)` is never visited. The first is the likeliest comment
+    // anyone would actually write.
+    const positions: Record<string, string> = {
+      "end of handler body": `
+export const bad = socialBulkMutation({
+  args: {},
+  handler: async (ctx) => {
+    await ctx.db.patch(id, {});
+    // TODO: syncDeferredSocialThreads(ctx, threads) and collectSocialThread(threads, p, d)
+  },
+});
+`,
+      "before the closing paren": `
+export const bad = socialBulkMutation({
+  args: {},
+  handler: async (ctx) => { await ctx.db.patch(id, {}); },
+  // syncDeferredSocialThreads(ctx, threads) / collectSocialThread(threads, p, d)
+});
+`,
+      "after the last args property": `
+export const bad = socialBulkMutation({
+  args: { a: v.string() },
+  // syncDeferredSocialThreads(ctx, threads) / collectSocialThread(threads, p, d)
+  handler: async (ctx) => { await ctx.db.patch(id, {}); },
+});
+`,
+    };
+
+    for (const [where, source] of Object.entries(positions)) {
+      expect(
+        deferredMutationOffenders(source, "x.ts"),
+        `a comment at the ${where} satisfied the obligation`
+      ).toHaveLength(2);
+    }
+  });
+
+  test("only modules that could hold the builder are parsed", () => {
+    // Parsing every Convex module twice blew CI's 5s timeout under coverage.
+    // A module that never names the builder cannot hold an offender, so it is
+    // skipped before the parser sees it.
+    const unrelated = "export const x = mutation({ args: {}, handler: async () => {} });\n";
+    expect(deferredMutationOffenders(unrelated, "x.ts")).toEqual([]);
+    expect(deferredMutationsIn(unrelated, "x.ts")).toEqual([]);
+
+    const scanned = convexModules(CONVEX_DIR).filter((file) =>
+      fs.readFileSync(file, "utf8").includes("socialBulkMutation")
+    );
+    // Small and bounded. If this grows to most of the tree, the scan is heading
+    // back toward the timeout that made a required check flaky.
+    expect(scanned.length).toBeLessThanOrEqual(10);
   });
 
   test("a helper defined after the offender cannot lend it the calls", () => {
