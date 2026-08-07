@@ -356,7 +356,7 @@ async function resolveReservationDeposits(
   };
   if (!args.quoteId) return empty;
 
-  const heldTotal = await heldDepositTotalForQuote(ctx, args.quoteId);
+  const heldTotal = await heldDepositTotalForVehicle(ctx, args.quoteId, args.vehicleId);
   if (heldTotal === 0) return empty;
 
   const currency = prepared.currency;
@@ -385,7 +385,7 @@ async function resolveReservationDeposits(
       );
     }
     throw new ConvexError(
-      "This sale leaves part of the customer's reservation deposit unapplied — the dealership is holding more than it billed them. Record what happens to it: applied to what they owe the dealership, applied to the supplier settlement, refunded, forfeited, or an approved other treatment with a reason."
+      "The reservation deposit held on this vehicle is larger than what the dealership billed the customer for it, so part of it would be left unapplied. Record what happens to that money: applied to what they owe the dealership, applied to the supplier settlement, refunded, forfeited, or an approved other treatment with a reason."
     );
   }
 
@@ -436,13 +436,18 @@ async function resolveReservationDeposits(
       }
       const resolved = await resolveDepositsForQuote(ctx, {
         quoteId: args.quoteId,
+        vehicleId: args.vehicleId,
         resolution: "APPLIED",
         actorId: args.actorId,
         treatment,
         saleId,
       });
       void resolved;
-      for (const { depositId, customerId, amount } of await settlementResolvedDepositRows(ctx, args.quoteId)) {
+      for (const { depositId, customerId, amount } of await settlementResolvedDepositRows(
+        ctx,
+        args.quoteId,
+        args.vehicleId
+      )) {
         await hookDepositAppliedToSettlement(ctx, {
           orgId: args.orgId,
           depositId,
@@ -466,7 +471,7 @@ async function resolveReservationDeposits(
       // segregation-of-duties refusal and the cashflow/payment-subledger rows
       // travel with the decision. Completing a sale authorizes `create:sales`;
       // keeping or returning a customer's deposit is a different authority.
-      for (const row of await heldDepositRowsForQuote(ctx, args.quoteId)) {
+      for (const row of await heldDepositRowsForVehicle(ctx, args.quoteId, args.vehicleId)) {
         await releaseHeldDeposit(ctx, {
           orgId: args.orgId,
           depositId: row.depositId,
@@ -505,6 +510,7 @@ async function recordOtherTreatment(
   }
   await recordUnpostedDepositTreatment(ctx, {
     quoteId: opts.args.quoteId!,
+    vehicleId: opts.args.vehicleId,
     actorId: opts.args.actorId,
     reason,
     saleId: opts.saleId,
@@ -512,22 +518,37 @@ async function recordOtherTreatment(
   return { previouslyCollected: 0, appliedDeposits: [], appliedToSupplierSettlement: 0 };
 }
 
-/** The reservation deposits still holding a vehicle for this quote. */
-async function heldDepositRowsForQuote(
+/**
+ * The reservation deposits still holding THIS car under this quote.
+ *
+ * Scoped to the vehicle, not the quote. A quote can cover several cars
+ * (`quotes.vehicleItems`), each completed on its own sale, and every deposit
+ * row names the car it is holding — so the allocation is recorded per deposit
+ * and never has to be apportioned or guessed. Summing the quote instead
+ * compared one car's invoice against every car's deposits, which made a
+ * two-vehicle quote demand a deposit treatment on the first completion and
+ * then refuse every one of them.
+ */
+async function heldDepositRowsForVehicle(
   ctx: MutationCtx,
-  quoteId: Id<"quotes">
+  quoteId: Id<"quotes">,
+  vehicleId: Id<"vehicles">
 ): Promise<Array<{ depositId: Id<"deposits">; customerId: Id<"customers">; amount: number; method?: string }>> {
   const deposits = await ctx.db
     .query("deposits")
     .withIndex("by_quote", (q) => q.eq("quoteId", quoteId))
     .collect();
   return deposits
-    .filter((d) => d.holdActive && d.isDeleted !== true)
+    .filter((d) => d.holdActive && d.isDeleted !== true && d.vehicleId === vehicleId)
     .map((d) => ({ depositId: d._id, customerId: d.customerId, amount: d.amount, method: d.method }));
 }
 
-async function heldDepositTotalForQuote(ctx: MutationCtx, quoteId: Id<"quotes">): Promise<number> {
-  const rows = await heldDepositRowsForQuote(ctx, quoteId);
+async function heldDepositTotalForVehicle(
+  ctx: MutationCtx,
+  quoteId: Id<"quotes">,
+  vehicleId: Id<"vehicles">
+): Promise<number> {
+  const rows = await heldDepositRowsForVehicle(ctx, quoteId, vehicleId);
   return rows.reduce((sum, r) => sum + r.amount, 0);
 }
 
@@ -538,14 +559,20 @@ async function heldDepositTotalForQuote(ctx: MutationCtx, quoteId: Id<"quotes">)
  */
 async function settlementResolvedDepositRows(
   ctx: MutationCtx,
-  quoteId: Id<"quotes">
+  quoteId: Id<"quotes">,
+  vehicleId: Id<"vehicles">
 ): Promise<Array<{ depositId: Id<"deposits">; customerId: Id<"customers">; amount: number }>> {
   const deposits = await ctx.db
     .query("deposits")
     .withIndex("by_quote", (q) => q.eq("quoteId", quoteId))
     .collect();
   return deposits
-    .filter((d) => d.resolutionTreatment === "APPLY_TO_TRANSACTION_SETTLEMENT" && d.isDeleted !== true)
+    .filter(
+      (d) =>
+        d.resolutionTreatment === "APPLY_TO_TRANSACTION_SETTLEMENT" &&
+        d.isDeleted !== true &&
+        d.vehicleId === vehicleId
+    )
     .map((d) => ({ depositId: d._id, customerId: d.customerId, amount: d.amount }));
 }
 
@@ -562,6 +589,7 @@ async function applyDepositsToCustomerAr(
   const { args, prepared, saleId } = opts;
   const resolved = await resolveDepositsForQuote(ctx, {
     quoteId: args.quoteId!,
+    vehicleId: args.vehicleId,
     resolution: "APPLIED",
     actorId: args.actorId,
     treatment,
@@ -867,7 +895,13 @@ async function applySaleCompletionSideEffects(
   // and is the only thing `supplierReceivables.recordReceipt` can settle
   // against. Without it the GL account would accrete every margin ever earned
   // this way with nothing able to discharge it.
-  if (isSourced && costAmount > 0 && !dealershipCollectsGross(settlementRoute)) {
+  //
+  // A zero margin opens nothing. The supplier owes the dealership nothing on
+  // this car, and a receivable for nothing is an OPEN row that can never be
+  // collected, never be closed by a receipt, and shows on the aging report
+  // forever.
+  const supplierOwesMargin = args.salePrice - costAmount > 0;
+  if (isSourced && costAmount > 0 && supplierOwesMargin && !dealershipCollectsGross(settlementRoute)) {
     const marginAmount = args.salePrice - costAmount;
     await openSupplierReceivable(ctx, {
       orgId: args.orgId,

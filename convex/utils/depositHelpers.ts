@@ -385,6 +385,17 @@ export async function resolveDepositsForQuote(
   ctx: MutationCtx,
   args: {
     quoteId: Id<"quotes">;
+    /**
+     * Which vehicle's deposits to resolve.
+     *
+     * A quote can carry several vehicles (`quotes.vehicleItems`), each sold on
+     * its own sale, and each deposit names the car it is holding. Resolving the
+     * whole quote when one line completes released the holds on cars that had
+     * not sold and counted their deposits against the completed sale's
+     * invoice — so the money for vehicle B paid down vehicle A's bill and B
+     * came off reservation for nothing.
+     */
+    vehicleId: Id<"vehicles">;
     resolution: "APPLIED" | "REFUNDED" | "FORFEITED";
     actorId: Id<"users">;
     /**
@@ -409,6 +420,8 @@ export async function resolveDepositsForQuote(
     args.treatment === undefined || args.treatment === "APPLY_TO_DEALER_AMOUNT";
   for (const deposit of deposits) {
     if (!deposit.holdActive) continue;
+    // Another line item's money. It stays held until its own car sells.
+    if (deposit.vehicleId !== args.vehicleId) continue;
     await ctx.db.patch(deposit._id, {
       status: args.resolution,
       holdActive: false,
@@ -441,6 +454,8 @@ export async function recordUnpostedDepositTreatment(
   ctx: MutationCtx,
   args: {
     quoteId: Id<"quotes">;
+    /** Scoped like resolveDepositsForQuote — only this car's deposits. */
+    vehicleId: Id<"vehicles">;
     actorId: Id<"users">;
     reason: string;
     saleId?: Id<"sales">;
@@ -456,6 +471,7 @@ export async function recordUnpostedDepositTreatment(
   const now = Date.now();
   for (const deposit of deposits) {
     if (!deposit.holdActive) continue;
+    if (deposit.vehicleId !== args.vehicleId) continue;
     await ctx.db.patch(deposit._id, {
       // status deliberately untouched — the money is still held.
       holdActive: false,
