@@ -229,9 +229,19 @@ jobs:
     # pattern in .gitleaks.toml. It decodes to
     # "ci-placeholder.clerk.accounts.dev$" — a well-formed key for an instance
     # that does not exist, and publishable by definition.
+    # The length assertion is not decoration. `export VAR="$(cmd)"` takes the
+    # exit status of `export`, not of the substitution, so `bash -e` cannot see
+    # a failed `base64` — the value would silently become the bare "pk_test_"
+    # prefix, which still satisfies lib/env.ts's .min(1) and would build green
+    # against a malformed key. `base64 -w0` is GNU coreutils and present on
+    # ubuntu-latest, so this is latent rather than live, but a container image
+    # with busybox base64 (no -w flag) would trip it. Fail loudly instead.
     - name: Production build
       run: |
-        export NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="pk_test_$(printf '%s' 'ci-placeholder.clerk.accounts.dev$' | base64 -w0)"
+        set -euo pipefail
+        key="pk_test_$(printf '%s' 'ci-placeholder.clerk.accounts.dev$' | base64 -w0 | tr -d '=')"
+        [ ${#key} -gt 40 ] || { echo "::error::Clerk placeholder assembly failed"; exit 1; }
+        export NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="$key"
         pnpm build
       env:
         NEXT_TELEMETRY_DISABLED: '1'
