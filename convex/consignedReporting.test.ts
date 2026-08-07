@@ -17,6 +17,8 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { saleEconomics } from "./utils/vehicleOwnership";
+import { SYSTEM_KEYS } from "./utils/defaultChart";
+import type { Id } from "./_generated/dataModel";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -374,5 +376,190 @@ describe("every revenue consumer agrees on the same month", () => {
 
     expect(perf.find((r) => r.userId === s.userId)!.totalRevenue).toBe(MARGIN);
     expect(dash.topPerformer?.revenue).toBe(MARGIN);
+  });
+});
+
+/**
+ * The back-book: consigned sales already on the books when this shipped.
+ *
+ * `recognizedRevenueAmount` is written by `createSaleTransaction`, so it only
+ * ever reaches sales made from this deploy onward. Historical rows carry the
+ * gross and nothing else, and `getProfitAndLoss` — which reads the transaction
+ * ledger rather than the sale rows — went on reporting it while the sales
+ * report and the dashboard, which read sale rows and cost basis, reported the
+ * margin. Same month, two answers, and the migration is what closes it.
+ */
+describe("historical consigned sales after the migration", () => {
+  /**
+   * The principal journal the OLD code posted for a consigned sale: gross
+   * revenue, a fabricated cost against AP-Suppliers, a gross receivable.
+   * Written directly because the current code refuses to post it — which is
+   * exactly why the migration exists.
+   */
+  async function postLegacyPrincipalJournal(
+    s: Awaited<ReturnType<typeof seedDealer>>,
+    saleId: Id<"sales">,
+    vin: string
+  ) {
+    await s.t.run(async (ctx) => {
+      const sale = (await ctx.db.get(saleId))!;
+      const accounts = (await ctx.db.query("chartOfAccounts").collect())
+        .filter((a) => a.orgId === s.orgId);
+      const byKey = new Map(accounts.filter((a) => a.systemKey).map((a) => [a.systemKey!, a._id]));
+      const entryId = await ctx.db.insert("journalEntries", {
+        orgId: s.orgId, journalNumber: `LEGACY-${vin}`, accountingDate: sale.saleDate,
+        sourceType: "sales", sourceId: saleId, category: "SYSTEM",
+        memo: "Legacy principal posting", status: "POSTED", currency: "JOD",
+        postedBy: s.userId, postedAt: Date.now(), createdAt: Date.now(),
+      });
+      const lines: Array<[string, number, number]> = [
+        [SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, SALE_PRICE * 1000, 0],
+        [SYSTEM_KEYS.SALES_REVENUE, 0, SALE_PRICE * 1000],
+        [SYSTEM_KEYS.COST_OF_VEHICLES_SOLD, ENTITLEMENT * 1000, 0],
+        [SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, 0, ENTITLEMENT * 1000],
+      ];
+      let n = 1;
+      for (const [key, debitMinor, creditMinor] of lines) {
+        await ctx.db.insert("journalLines", {
+          orgId: s.orgId, journalEntryId: entryId, lineNumber: n++,
+          accountId: byKey.get(key)!, debitMinor, creditMinor,
+          currency: "JOD", scale: 3, accountingDate: sale.saleDate,
+        });
+      }
+    });
+  }
+
+  /** A legacy sale with the operational transaction row the old code wrote for it. */
+  async function sellLegacyWithLedgerRow(
+    s: Awaited<ReturnType<typeof seedDealer>>,
+    vin: string
+  ) {
+    const saleId = await sellConsignedAsLegacyPrincipal(s, vin);
+    await postLegacyPrincipalJournal(s, saleId, vin);
+    const sale = await s.t.run((ctx) => ctx.db.get(saleId));
+    await s.t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId: s.orgId,
+        type: "IN" as const,
+        amount: SALE_PRICE,
+        date: sale!.saleDate,
+        category: "VEHICLE_SALE",
+        description: `Sale of vehicle ${vin}`,
+        vehicleId: sale!.vehicleId,
+        customerId: s.customerId,
+      })
+    );
+    return saleId;
+  }
+
+  test("the P&L reports the gross until the migration runs", async () => {
+    // Not a hypothetical: this is what every existing dealership's P&L says
+    // today, and it is why a gross fallback cannot be described as exact.
+    const s = await seedDealer("backbookBefore");
+    await sellLegacyWithLedgerRow(s, "VINBB1");
+
+    const pl = await s.asUser.query(api.reports.getProfitAndLoss, {
+      orgId: s.orgId, ...range(),
+    });
+    expect(pl.totalRevenue).toBe(SALE_PRICE);
+  });
+
+  test("the migration restates the reporting basis, and all three then agree", async () => {
+    const s = await seedDealer("backbookAfter");
+    await sellLegacyWithLedgerRow(s, "VINBB2");
+
+    const report = await s.t.mutation(
+      internal.migrateConsignedSaleBasis.migrateConsignedSaleBasis,
+      { orgId: s.orgId }
+    );
+    expect(report.corrected).toBe(1);
+    expect(report.reportingBasisBackfilled).toBe(1);
+
+    const sales = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId, ...range(),
+    });
+    const pl = await s.asUser.query(api.reports.getProfitAndLoss, {
+      orgId: s.orgId, ...range(),
+    });
+    const dash = await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId, timeRange: "YEAR" as const,
+    });
+
+    expect(sales.totalRevenue).toBe(MARGIN);
+    expect(pl.totalRevenue).toBe(MARGIN);
+    expect(dash.salesVolumeThisMonth).toBe(MARGIN);
+
+    // The gross survives as a labelled operational figure, outside turnover.
+    expect(pl.grossTransactionValue).toBe(SALE_PRICE);
+    expect(dash.grossTransactionValueThisMonth).toBe(SALE_PRICE);
+  });
+
+  test("a row whose amount no longer matches the sale is left for a human", async () => {
+    // Deposits booked as their own revenue rows, or a hand-edited amount: the
+    // margin cannot be derived from this row alone without moving revenue
+    // between periods to make a total come out right. So it is not.
+    const s = await seedDealer("backbookConflict");
+    const saleId = await sellConsignedAsLegacyPrincipal(s, "VINBB3");
+    await postLegacyPrincipalJournal(s, saleId, "VINBB3");
+    const sale = await s.t.run((ctx) => ctx.db.get(saleId));
+    await s.t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId: s.orgId,
+        type: "IN" as const,
+        amount: SALE_PRICE - 1_000,
+        date: sale!.saleDate,
+        category: "VEHICLE_SALE",
+        description: "Sale net of a deposit already booked",
+        vehicleId: sale!.vehicleId,
+        customerId: s.customerId,
+      })
+    );
+
+    const report = await s.t.mutation(
+      internal.migrateConsignedSaleBasis.migrateConsignedSaleBasis,
+      { orgId: s.orgId }
+    );
+    expect(report.requiresReconciliation).toBe(1);
+    expect(report.reportingBasisBackfilled).toBe(0);
+
+    const correction = await s.t.run(async (ctx) =>
+      (await ctx.db.query("consignedSaleCorrections").collect()).find((c) => c.saleId === saleId)
+    );
+    expect(correction!.status).toBe("REQUIRES_RECONCILIATION");
+    // And it says why, so the person picking it up does not have to guess.
+    expect(correction!.statusReason).toMatch(/deposits or an edit/i);
+  });
+
+  test("two vehicle-sale rows for one car are never guessed between", async () => {
+    const s = await seedDealer("backbookAmbiguous");
+    const saleId = await sellConsignedAsLegacyPrincipal(s, "VINBB4");
+    await postLegacyPrincipalJournal(s, saleId, "VINBB4");
+    const sale = await s.t.run((ctx) => ctx.db.get(saleId));
+    for (let i = 0; i < 2; i += 1) {
+      await s.t.run((ctx) =>
+        ctx.db.insert("transactions", {
+          orgId: s.orgId,
+          type: "IN" as const,
+          amount: SALE_PRICE,
+          date: sale!.saleDate,
+          category: "VEHICLE_SALE",
+          description: `Duplicate ${i}`,
+          vehicleId: sale!.vehicleId,
+          customerId: s.customerId,
+        })
+      );
+    }
+
+    const report = await s.t.mutation(
+      internal.migrateConsignedSaleBasis.migrateConsignedSaleBasis,
+      { orgId: s.orgId }
+    );
+    expect(report.requiresReconciliation).toBe(1);
+
+    // Neither row was touched — a guess would have restated the wrong one.
+    const rows = await s.t.run(async (ctx) =>
+      (await ctx.db.query("transactions").collect()).filter((tx) => tx.orgId === s.orgId)
+    );
+    expect(rows.every((tx) => tx.recognizedRevenueAmount === undefined)).toBe(true);
   });
 });

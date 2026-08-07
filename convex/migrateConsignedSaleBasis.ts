@@ -9,8 +9,9 @@ import {
   systemKeyByAccountId,
   type ConsignedSaleAssessment,
 } from "./sourcedAgentImpact";
-import { hookConsignedSaleReclassified } from "./accounting/workflowHooks";
+import { hookConsignedSaleReclassified, shouldPost } from "./accounting/workflowHooks";
 import { auditLog } from "./financialAudit";
+import { fromMinorUnits } from "./utils/money";
 
 /**
  * Restates historical consigned sales from principal to agent basis.
@@ -51,10 +52,33 @@ import { auditLog } from "./financialAudit";
  *     queued. A second run posts nothing even if everything else were wrong.
  *  2. This module: a `consignedSaleCorrections` row per sale, checked first.
  *     It exists so the audit trail is not duplicated either, and so a re-run
- *     can report "already corrected" rather than silently doing nothing.
+ *     can report on a sale it has already seen rather than silently doing
+ *     nothing.
  *
  * A re-run is therefore a no-op with a zero financial effect, which is the
  * requirement — not merely unlikely to double-post.
+ *
+ * ## Queued is not corrected
+ *
+ * The correction is dated to the sale so it lands in the period it corrects,
+ * and those periods are usually CLOSED — which means the ordinary outcome of
+ * `hookConsignedSaleReclassified` is that the event QUEUES to the outbox rather
+ * than posting. A `consignedSaleCorrections` row therefore carries a status,
+ * and only `POSTED` means a journal exists:
+ *
+ *   PENDING_POSTING → POSTED                (the outbox drained it)
+ *                   → FAILED                (it dead-lettered, or never queued)
+ *                   → REQUIRES_RECONCILIATION (ledger settled, something else isn't)
+ *
+ * A re-run promotes PENDING_POSTING rows whose journal has since appeared and
+ * retries FAILED ones, both against the SAME correction row, the same event
+ * idempotency key and no second audit entry — a retry can add a journal that
+ * was missing but can never add a second of anything. `reconcileConsignedSaleCorrections`
+ * does the promotion on its own, without re-scanning every sale.
+ *
+ * Recording a queued correction as complete is the specific defect this
+ * replaces: the pre-check reported `alreadyCorrected` forever while the books
+ * were never touched.
  *
  * ## Shape
  *
@@ -74,11 +98,33 @@ type Report = {
   dryRun: boolean;
   salesScanned: number;
   consignedSalesFound: number;
+  /**
+   * Sales this run acted on: it created the correction and its event.
+   *
+   * NOT the same as "posted". A correction dated into a closed period queues,
+   * and the two counters below say how these actually landed — `corrected` is
+   * only ever the sum of them plus any that failed.
+   */
   corrected: number;
+  /** Of `corrected`: journals that exist right now. */
+  postedNow: number;
+  /** Of `corrected`: durably queued to the outbox, awaiting an open period. */
+  queuedNow: number;
+  /** Rows this run promoted from PENDING_POSTING to POSTED — their journal had since appeared. */
+  reconciledToPosted: number;
+  /** Correction rows seen again that are already POSTED. Nothing to do. */
   alreadyCorrected: number;
+  /** Correction rows still waiting on the outbox. Re-run after the period opens. */
+  awaitingPosting: number;
+  /** Correction rows a human has to look at — see `statusReason` on each row. */
+  requiresReconciliation: number;
+  /** Correction rows whose event neither posted nor queued. Retried on the next run. */
+  failed: number;
   alreadyAgentBasis: number;
   /** Left for a human because the impact report flags them. */
   flagged: number;
+  /** Of `corrected`: sales whose reporting basis was restated on the transaction row too. */
+  reportingBasisBackfilled: number;
   revenueReclassifiedMinor: number;
   commissionRecognizedMinor: number;
   cogsReversedMinor: number;
@@ -92,9 +138,16 @@ const EMPTY_REPORT: Report = {
   salesScanned: 0,
   consignedSalesFound: 0,
   corrected: 0,
+  postedNow: 0,
+  queuedNow: 0,
+  reconciledToPosted: 0,
   alreadyCorrected: 0,
+  awaitingPosting: 0,
+  requiresReconciliation: 0,
+  failed: 0,
   alreadyAgentBasis: 0,
   flagged: 0,
+  reportingBasisBackfilled: 0,
   revenueReclassifiedMinor: 0,
   commissionRecognizedMinor: 0,
   cogsReversedMinor: 0,
@@ -107,9 +160,16 @@ const reportValidator = v.object({
   salesScanned: v.number(),
   consignedSalesFound: v.number(),
   corrected: v.number(),
+  postedNow: v.number(),
+  queuedNow: v.number(),
+  reconciledToPosted: v.number(),
   alreadyCorrected: v.number(),
+  awaitingPosting: v.number(),
+  requiresReconciliation: v.number(),
+  failed: v.number(),
   alreadyAgentBasis: v.number(),
   flagged: v.number(),
+  reportingBasisBackfilled: v.number(),
   revenueReclassifiedMinor: v.number(),
   commissionRecognizedMinor: v.number(),
   cogsReversedMinor: v.number(),
@@ -140,25 +200,135 @@ async function correctionActorFor(
   return memberships[0]?.userId ?? null;
 }
 
-/** The journal entry the correction event produced, if it posted rather than queued. */
-async function correctionJournalEntryFor(
+const correctionKeyFor = (saleId: Id<"sales">): string => `consigned_agent_reclass_${saleId}`;
+
+type CorrectionOutcome =
+  | { status: "POSTED"; journalEntryId: Id<"journalEntries"> | undefined }
+  | { status: "PENDING_POSTING" }
+  | { status: "FAILED"; reason: string };
+
+/**
+ * What actually became of a correction event — asked of the ledger and the
+ * outbox, never inferred from the fact that the hook returned without throwing.
+ *
+ * `postOrEnqueue` does one of three things and reports none of them: it posts,
+ * it enqueues, or it returns early because the work was already done. Only the
+ * first has written a journal, and treating the other two as if it had is what
+ * let a queued correction be recorded as complete.
+ */
+async function correctionOutcomeFor(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
   idempotencyKey: string
-): Promise<Id<"journalEntries"> | undefined> {
-  const event = await ctx.db
+): Promise<CorrectionOutcome> {
+  const posted = await ctx.db
     .query("accountingEvents")
     .withIndex("by_org_idempotency", (q) =>
       q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey)
     )
     .filter((q) => q.eq(q.field("status"), "POSTED"))
     .first();
-  if (!event) return undefined;
-  const entry = await ctx.db
-    .query("journalEntries")
-    .withIndex("by_accounting_event", (q) => q.eq("accountingEventId", event._id))
+  if (posted) {
+    const entry = await ctx.db
+      .query("journalEntries")
+      .withIndex("by_accounting_event", (q) => q.eq("accountingEventId", posted._id))
+      .first();
+    return { status: "POSTED", journalEntryId: entry?._id };
+  }
+
+  const queued = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey)
+    )
     .first();
-  return entry?._id;
+  if (queued) {
+    // FAILED in the outbox means dead-lettered: MAX_ATTEMPTS is spent and
+    // nothing retries it on its own. That is a failure with a durable record,
+    // not a pending state, and calling it pending would leave a correction
+    // waiting forever on a drain that has already given up.
+    if (queued.status === "FAILED") {
+      return {
+        status: "FAILED",
+        reason: `The correction event dead-lettered in the outbox after ${queued.attempts} attempts: ${queued.lastError ?? "no error recorded"}`,
+      };
+    }
+    return { status: "PENDING_POSTING" };
+  }
+
+  return {
+    status: "FAILED",
+    reason:
+      "The correction event neither posted nor queued. The organization most likely has no chart of accounts, so there is nothing to post to.",
+  };
+}
+
+/**
+ * Restates the sale's operational transaction row onto the agent basis.
+ *
+ * `getProfitAndLoss` and the dashboard's transaction fallback sum `transactions`
+ * as revenue, so correcting the journal alone leaves a sourced month reporting
+ * 12,500 of turnover in the P&L against 3,000 in the sales report. Writing
+ * `recognizedRevenueAmount` is what makes the three agree about history.
+ *
+ * Refuses to guess. `transactions` carries no sale id — only a vehicle — so the
+ * row is identified by (org, vehicle, IN, VEHICLE_SALE) and accepted ONLY when
+ * there is exactly one of it and its amount is the full sale price. A vehicle
+ * sold twice, a deal whose deposits were booked as separate revenue rows, a
+ * manually edited amount: each of those needs a person, and each is reported as
+ * REQUIRES_RECONCILIATION rather than restated on a guess.
+ */
+async function backfillReportingBasis(
+  ctx: MutationCtx,
+  args: {
+    sale: Doc<"sales">;
+    /** The dealership's margin, in major units — what turnover should now be. */
+    recognizedRevenue: number;
+    dryRun: boolean;
+  }
+): Promise<
+  | { ok: true; restated: boolean; transactionId: Id<"transactions"> | undefined }
+  | { ok: false; reason: string }
+> {
+  const { sale } = args;
+  const candidates = (
+    await ctx.db
+      .query("transactions")
+      .withIndex("by_org_vehicle", (q) => q.eq("orgId", sale.orgId).eq("vehicleId", sale.vehicleId))
+      .collect()
+  ).filter((tx) => tx.isDeleted !== true && tx.type === "IN" && tx.category === "VEHICLE_SALE");
+
+  // Nothing to restate rather than something to worry about: with no
+  // vehicle-sale row, the P&L never counted this sale's gross as revenue, so
+  // there is no overstatement to remove. Reported as unchanged, not as needing
+  // a human — an operator who is told to reconcile a sale where nothing is
+  // wrong stops reading the list.
+  if (candidates.length === 0) {
+    return { ok: true, restated: false, transactionId: undefined };
+  }
+  if (candidates.length > 1) {
+    return {
+      ok: false,
+      reason: `${candidates.length} vehicle-sale transactions exist for this vehicle, so which one belongs to this sale cannot be determined. Restate the reporting basis by hand.`,
+    };
+  }
+
+  const tx = candidates[0];
+  // A row netted down by deposits already booked as revenue elsewhere. The
+  // margin cannot simply be written here: part of the gross is recognized on
+  // other rows in possibly other periods, and netting it out of this one would
+  // move revenue between months to make a total come out right.
+  if (Math.abs(tx.amount - sale.salePrice) > 1e-6) {
+    return {
+      ok: false,
+      reason: `The vehicle-sale transaction is ${tx.amount} against a sale price of ${sale.salePrice} — deposits or an edit have already changed it, so the agent-basis amount cannot be derived from this row alone.`,
+    };
+  }
+
+  if (!args.dryRun) {
+    await ctx.db.patch(tx._id, { recognizedRevenueAmount: args.recognizedRevenue });
+  }
+  return { ok: true, restated: true, transactionId: tx._id };
 }
 
 async function correctOneSale(
@@ -168,7 +338,11 @@ async function correctOneSale(
     assessment: ConsignedSaleAssessment;
     actorId: Id<"users">;
   }
-): Promise<{ netIncomeDeltaMinor: number }> {
+): Promise<{
+  netIncomeDeltaMinor: number;
+  status: "PENDING_POSTING" | "POSTED" | "FAILED" | "REQUIRES_RECONCILIATION";
+  reportingBasisBackfilled: boolean;
+}> {
   const { sale, assessment, actorId } = args;
   const revenueMinor = assessment.posted.revenueMinor;
   const cogsMinor = assessment.posted.cogsMinor;
@@ -202,11 +376,29 @@ async function correctOneSale(
     occurredAt: sale.saleDate,
   });
 
-  const correctionJournalEntryId = await correctionJournalEntryFor(
-    ctx,
-    sale.orgId,
-    `consigned_agent_reclass_${sale._id}`
-  );
+  const idempotencyKey = correctionKeyFor(sale._id);
+  const outcome = await correctionOutcomeFor(ctx, sale.orgId, idempotencyKey);
+
+  // The reporting basis, restated on the operational ledger so the P&L stops
+  // reporting this sale's gross as turnover. Attempted whatever the journal
+  // did: the two are separate ledgers with separate failure modes, and holding
+  // the reporting fix hostage to a period that happens to be closed would leave
+  // the back-book disagreeing with itself for as long as the outbox is backed
+  // up. `commissionMinor` is the same margin the journal recognizes.
+  const basis = await backfillReportingBasis(ctx, {
+    sale,
+    recognizedRevenue: fromMinorUnits(commissionMinor, assessment.currency),
+    dryRun: false,
+  });
+
+  const status: "PENDING_POSTING" | "POSTED" | "FAILED" | "REQUIRES_RECONCILIATION" = !basis.ok
+    ? "REQUIRES_RECONCILIATION"
+    : outcome.status;
+  const statusReason = !basis.ok
+    ? basis.reason
+    : outcome.status === "FAILED"
+      ? outcome.reason
+      : undefined;
 
   await ctx.db.insert("consignedSaleCorrections", {
     orgId: sale.orgId,
@@ -214,7 +406,13 @@ async function correctOneSale(
     vehicleId: sale.vehicleId,
     currency: assessment.currency,
     originalJournalEntryIds: assessment.journalEntryIds,
-    correctionJournalEntryId,
+    status,
+    statusReason,
+    eventIdempotencyKey: idempotencyKey,
+    correctionJournalEntryId:
+      outcome.status === "POSTED" ? outcome.journalEntryId : undefined,
+    postedAt: outcome.status === "POSTED" ? Date.now() : undefined,
+    recognizedRevenueTransactionId: basis.ok ? basis.transactionId : undefined,
     revenueReclassifiedMinor: revenueMinor,
     commissionRecognizedMinor: commissionMinor,
     cogsReversedMinor: cogsMinor,
@@ -240,18 +438,140 @@ async function correctOneSale(
       basis: "CONSIGNED_AGENT",
       commissionRevenueMinor: commissionMinor,
       cogsMinor: 0,
-      correctionJournalEntryId,
+      // What the correction actually did, not what it was asked to do. A
+      // queued correction says so here rather than leaving a blank that reads
+      // like a posting with a missing id.
+      correctionStatus: status,
+      correctionJournalEntryId:
+        outcome.status === "POSTED" ? outcome.journalEntryId : undefined,
     },
     // Recorded for tracing, NOT for deduplication: `auditLog` stores this key
     // and never reads it, so this insert is unconditional. The
     // `consignedSaleCorrections` pre-check is the only thing keeping the audit
     // trail from duplicating on a re-run — do not remove it on the assumption
     // that this key protects anything.
-    idempotencyKey: `consigned_agent_reclass_${sale._id}`,
+    idempotencyKey,
   });
 
-  return { netIncomeDeltaMinor };
+  return { netIncomeDeltaMinor, status, reportingBasisBackfilled: basis.ok && basis.restated };
 }
+
+/**
+ * Brings an existing correction row up to date with what the ledger now says.
+ *
+ * Used both by a re-run of the migration and by `reconcileConsignedSaleCorrections`.
+ * It patches the SAME row, reuses the SAME event idempotency key and writes no
+ * audit entry — the audit entry was written when the correction was made, and
+ * a promotion from queued to posted is not a second correction. A FAILED row is
+ * re-hooked, which is safe for exactly the same reason: `postOrEnqueue` keys on
+ * the idempotency key, so the retry can supply a journal that was missing but
+ * cannot supply a second one.
+ */
+async function refreshCorrection(
+  ctx: MutationCtx,
+  correction: Doc<"consignedSaleCorrections">
+): Promise<"POSTED" | "PENDING_POSTING" | "FAILED" | "REQUIRES_RECONCILIATION" | "UNCHANGED"> {
+  if (correction.status === "POSTED" || correction.status === "REQUIRES_RECONCILIATION") {
+    return "UNCHANGED";
+  }
+
+  const idempotencyKey = correction.eventIdempotencyKey ?? correctionKeyFor(correction.saleId);
+
+  if (correction.status === "FAILED") {
+    // Re-raise the event. Whatever blocked it — no chart of accounts, a period
+    // that had not been created — may since have been fixed, and there is no
+    // other path that would notice.
+    const sale = await ctx.db.get(correction.saleId);
+    if (sale && sale.orgId === correction.orgId) {
+      await hookConsignedSaleReclassified(ctx, {
+        orgId: correction.orgId,
+        saleId: correction.saleId,
+        vehicleId: correction.vehicleId,
+        customerId: sale.customerId,
+        currency: correction.currency,
+        revenueMinor: correction.revenueReclassifiedMinor,
+        commissionMinor: correction.commissionRecognizedMinor,
+        cogsMinor: correction.cogsReversedMinor,
+        actorId: correction.correctedBy,
+        occurredAt: sale.saleDate,
+      });
+    }
+  }
+
+  const outcome = await correctionOutcomeFor(ctx, correction.orgId, idempotencyKey);
+  if (outcome.status === "PENDING_POSTING" && correction.status === "PENDING_POSTING") {
+    return "UNCHANGED";
+  }
+
+  await ctx.db.patch(correction._id, {
+    status: outcome.status,
+    statusReason: outcome.status === "FAILED" ? outcome.reason : undefined,
+    ...(outcome.status === "POSTED"
+      ? { correctionJournalEntryId: outcome.journalEntryId, postedAt: Date.now() }
+      : {}),
+  });
+  return outcome.status;
+}
+
+/**
+ * Promotes queued corrections whose journals have since been drained.
+ *
+ * The migration itself can do this, but only by re-reading every sale in the
+ * organization. After a closed period is reopened and the outbox drains, this
+ * is the cheap way to make the correction records say what the ledger says —
+ * one paginated query over the corrections themselves.
+ */
+export const reconcileConsignedSaleCorrections = internalMutation({
+  args: {
+    orgId: v.optional(v.id("organizations")),
+    cursor: v.optional(v.string()),
+    scanned: v.optional(v.number()),
+    promoted: v.optional(v.number()),
+    stillPending: v.optional(v.number()),
+    failed: v.optional(v.number()),
+  },
+  handler: async (
+    ctx,
+    args
+  ): Promise<{
+    status: "SCHEDULED" | "COMPLETE";
+    scanned: number;
+    promoted: number;
+    stillPending: number;
+    failed: number;
+  }> => {
+    let scanned = args.scanned ?? 0;
+    let promoted = args.promoted ?? 0;
+    let stillPending = args.stillPending ?? 0;
+    let failed = args.failed ?? 0;
+
+    // The single paginated query. Indexed on status so a large corrected
+    // back-book does not have to be walked to find the few still waiting.
+    const page = await ctx.db
+      .query("consignedSaleCorrections")
+      .withIndex("by_status", (q) => q.eq("status", "PENDING_POSTING"))
+      .paginate({ cursor: args.cursor ?? null, numItems: SALE_BATCH_SIZE });
+
+    for (const correction of page.page) {
+      if (args.orgId && correction.orgId !== args.orgId) continue;
+      scanned += 1;
+      const result = await refreshCorrection(ctx, correction);
+      if (result === "POSTED") promoted += 1;
+      else if (result === "FAILED") failed += 1;
+      else stillPending += 1;
+    }
+
+    if (page.isDone) {
+      return { status: "COMPLETE", scanned, promoted, stillPending, failed };
+    }
+    await ctx.scheduler.runAfter(
+      0,
+      internal.migrateConsignedSaleBasis.reconcileConsignedSaleCorrections,
+      { orgId: args.orgId, cursor: page.continueCursor, scanned, promoted, stillPending, failed }
+    );
+    return { status: "SCHEDULED", scanned, promoted, stillPending, failed };
+  },
+});
 
 export const migrateConsignedSaleBasis = internalMutation({
   args: {
@@ -306,7 +626,23 @@ export const migrateConsignedSaleBasis = internalMutation({
         .withIndex("by_org_sale", (q) => q.eq("orgId", sale.orgId).eq("saleId", sale._id))
         .first();
       if (existing) {
-        report.alreadyCorrected += 1;
+        // Seen before — but "seen" is not "corrected". Ask the ledger what
+        // became of it and, on a real run, bring the row up to date: promote a
+        // queued correction whose journal has since drained, retry one whose
+        // event never landed. Same row, same idempotency key, no second audit
+        // entry and no second journal.
+        const settled = dryRun ? existing.status : await refreshCorrection(ctx, existing);
+        const effective = settled === "UNCHANGED" ? existing.status : settled;
+        if (effective === "POSTED") {
+          if (existing.status === "PENDING_POSTING") report.reconciledToPosted += 1;
+          else report.alreadyCorrected += 1;
+        } else if (effective === "PENDING_POSTING") {
+          report.awaitingPosting += 1;
+        } else if (effective === "REQUIRES_RECONCILIATION") {
+          report.requiresReconciliation += 1;
+        } else {
+          report.failed += 1;
+        }
         continue;
       }
 
@@ -354,10 +690,44 @@ export const migrateConsignedSaleBasis = internalMutation({
       report.commissionRecognizedMinor += assessment.dealershipMarginMinor ?? 0;
       report.cogsReversedMinor += assessment.posted.cogsMinor;
 
-      if (dryRun) continue;
+      if (dryRun) {
+        // Predict how it would land rather than reporting a bare count. Whether
+        // the correction posts or queues is decided by whether an open period
+        // covers the sale date, which is knowable without writing anything —
+        // and a dry run that cannot distinguish the two is exactly the report
+        // that made a queued correction look complete.
+        const basis = await backfillReportingBasis(ctx, {
+          sale,
+          recognizedRevenue: fromMinorUnits(
+            assessment.dealershipMarginMinor ?? 0,
+            assessment.currency
+          ),
+          dryRun: true,
+        });
+        // Counted exactly as the real run counts it, so the two reports are
+        // comparable line for line: a row whose reporting basis cannot be
+        // derived lands as REQUIRES_RECONCILIATION and nowhere else.
+        if (!basis.ok) {
+          report.requiresReconciliation += 1;
+        } else {
+          if (basis.restated) report.reportingBasisBackfilled += 1;
+          if (await shouldPost(ctx, sale.orgId, sale.saleDate)) report.postedNow += 1;
+          else report.queuedNow += 1;
+        }
+        continue;
+      }
 
-      const { netIncomeDeltaMinor } = await correctOneSale(ctx, { sale, assessment, actorId });
+      const { netIncomeDeltaMinor, status, reportingBasisBackfilled } = await correctOneSale(ctx, {
+        sale,
+        assessment,
+        actorId,
+      });
       report.netIncomeDeltaMinor += netIncomeDeltaMinor;
+      if (status === "POSTED") report.postedNow += 1;
+      else if (status === "PENDING_POSTING") report.queuedNow += 1;
+      else if (status === "REQUIRES_RECONCILIATION") report.requiresReconciliation += 1;
+      else report.failed += 1;
+      if (reportingBasisBackfilled) report.reportingBasisBackfilled += 1;
     }
 
     if (page.isDone) {

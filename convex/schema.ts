@@ -773,11 +773,49 @@ export default defineSchema({
     currency: v.string(),
     originalJournalEntryIds: v.array(v.id("journalEntries")),
     /**
-     * Absent when the correction had to queue to the outbox because no open
-     * period covered the sale date. The event is durable either way; only the
-     * journal id is not yet knowable.
+     * How far this correction actually got.
+     *
+     * The distinction this exists to make: a correction dated into a closed or
+     * not-yet-existing period does not post — it queues to the outbox. That is
+     * the NORMAL case for historical restatements, since the periods being
+     * corrected are usually closed. Recording such a row as done meant the
+     * pre-check reported `alreadyCorrected` forever while no journal had ever
+     * been written, and a dead-lettered event would never be noticed.
+     *
+     *  - PENDING_POSTING — the event is durably queued; no journal yet.
+     *  - POSTED — the journal exists. Only this counts as corrected.
+     *  - FAILED — the event neither posted nor queued, or its outbox entry
+     *    dead-lettered. Retryable: the idempotency key is unchanged, so a retry
+     *    cannot double-post.
+     *  - REQUIRES_RECONCILIATION — the ledger correction is settled but
+     *    something a human has to decide is not, e.g. the sale's operational
+     *    transaction row could not be identified unambiguously so the reporting
+     *    basis was left alone rather than guessed at.
+     */
+    status: v.union(
+      v.literal("PENDING_POSTING"),
+      v.literal("POSTED"),
+      v.literal("FAILED"),
+      v.literal("REQUIRES_RECONCILIATION")
+    ),
+    /** Why the row is FAILED or REQUIRES_RECONCILIATION. Absent otherwise. */
+    statusReason: v.optional(v.string()),
+    /** The idempotency key of the correcting event, so a retry reuses its identity. */
+    eventIdempotencyKey: v.optional(v.string()),
+    /**
+     * Absent until the correction actually posts. The event is durable either
+     * way; only the journal id is not yet knowable.
      */
     correctionJournalEntryId: v.optional(v.id("journalEntries")),
+    /** When the journal was confirmed to exist — the moment status became POSTED. */
+    postedAt: v.optional(v.number()),
+    /**
+     * The `transactions` row whose reporting basis was restated to the agent
+     * margin, so Sales Reports, Dashboard and P&L agree about a historical
+     * sourced month. Absent when the row could not be identified — see
+     * REQUIRES_RECONCILIATION.
+     */
+    recognizedRevenueTransactionId: v.optional(v.id("transactions")),
     revenueReclassifiedMinor: v.number(),
     commissionRecognizedMinor: v.number(),
     cogsReversedMinor: v.number(),
@@ -792,7 +830,8 @@ export default defineSchema({
     correctedAt: v.number(),
   })
     .index("by_org", ["orgId"])
-    .index("by_org_sale", ["orgId", "saleId"]),
+    .index("by_org_sale", ["orgId", "saleId"])
+    .index("by_status", ["status"]),
 
   /**
    * What a supplier owes the DEALERSHIP on a consigned sale he was paid for

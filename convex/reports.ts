@@ -858,9 +858,15 @@ export const getProfitAndLoss = query({
       if (tx.isDeleted) continue;
       if (tx.type === "IN" && REVENUE_CATEGORIES.has(tx.category ?? "")) {
         // `recognizedRevenueAmount` where the row carries one — a consigned
-        // sale, whose gross belongs to the supplier. Absent on owned sales and
-        // on every row written before consigned accounting, where the two
-        // figures are the same, so the fallback is exact rather than lenient.
+        // sale, whose gross belongs to the supplier.
+        //
+        // Where it is absent, `amount` IS the revenue for every owned sale and
+        // every deposit, which is the overwhelming majority of rows. It is NOT
+        // a safe answer for a consigned sale predating this deploy: those were
+        // posted at gross and read as gross here. `migrateConsignedSaleBasis`
+        // writes the field onto them, and `sourcedSaleImpactReport` lists the
+        // ones it could not — so the remaining overstatement is bounded and
+        // enumerable rather than silent. Do not read this fallback as exact.
         totalRevenue += tx.recognizedRevenueAmount ?? tx.amount;
         grossTransactionValue += tx.amount;
       } else if (tx.type === "OUT") {

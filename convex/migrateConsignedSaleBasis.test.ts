@@ -441,3 +441,160 @@ describe("what the impact report says afterwards", () => {
     expect(org.totals.revenueOverstatementMinor).toBe(0);
   });
 });
+
+/**
+ * The historical periods a restatement corrects are usually CLOSED, so the
+ * ordinary outcome of the correction hook is that the event QUEUES rather than
+ * posting. Recording such a row as done meant the pre-check reported
+ * "already corrected" forever while no journal had ever been written.
+ */
+describe("a correction that could only queue", () => {
+  /** Dated into a year no accounting period covers, so nothing can post it. */
+  const LONG_AGO = Date.UTC(new Date().getUTCFullYear() - 3, 5, 12);
+
+  async function seedQueuedCase(tag: string) {
+    const s = await seedDealer(tag);
+    const { saleId, vehicleId } = await seedLegacyPrincipalSale(s, {
+      vin: `VINQ${tag}`,
+      sourceCost: ENTITLEMENT,
+    });
+    await s.t.run((ctx) => ctx.db.patch(saleId, { saleDate: LONG_AGO }));
+    return { s, saleId, vehicleId };
+  }
+
+  test("does not report a queued correction as corrected", async () => {
+    const { s, saleId } = await seedQueuedCase("q1");
+
+    const report = await runMigration(s);
+    expect(report.corrected).toBe(1);
+    // The distinction the whole lifecycle exists to make.
+    expect(report.queuedNow).toBe(1);
+    expect(report.postedNow).toBe(0);
+
+    const correction = await s.t.run(async (ctx) =>
+      (await ctx.db.query("consignedSaleCorrections").collect()).find((c) => c.saleId === saleId)
+    );
+    expect(correction!.status).toBe("PENDING_POSTING");
+    expect(correction!.correctionJournalEntryId).toBeUndefined();
+    expect(correction!.postedAt).toBeUndefined();
+
+    // And the books really are untouched: no journal exists to have touched them.
+    const after = await ledger(s.t, s.orgId);
+    expect(after[SYSTEM_KEYS.SALES_REVENUE]).toBe(-SALE_PRICE * SCALE);
+    expect(after[SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE] ?? 0).toBe(0);
+  });
+
+  test("a re-run says it is still waiting rather than that it is done", async () => {
+    const { s } = await seedQueuedCase("q2");
+    await runMigration(s);
+
+    const second = await runMigration(s);
+    expect(second.awaitingPosting).toBe(1);
+    // The specific wrong answer: reporting it as complete when nothing posted.
+    expect(second.alreadyCorrected).toBe(0);
+    expect(second.corrected).toBe(0);
+  });
+
+  test("a re-run duplicates neither the correction, the audit row nor the queued event", async () => {
+    const { s } = await seedQueuedCase("q3");
+    await runMigration(s);
+    await runMigration(s);
+    await runMigration(s);
+
+    const corrections = await s.t.run((ctx) =>
+      ctx.db.query("consignedSaleCorrections").collect()
+    );
+    expect(corrections).toHaveLength(1);
+
+    const migrations = await s.t.run(async (ctx) =>
+      (await ctx.db.query("financialAuditLog").collect())
+        .filter((a) => a.actionType === "MIGRATE_TRANSACTION")
+    );
+    expect(migrations).toHaveLength(1);
+
+    const queued = await s.t.run(async (ctx) =>
+      (await ctx.db.query("pendingAccountingEvents").collect())
+        .filter((p) => p.idempotencyKey.startsWith("consigned_agent_reclass_"))
+    );
+    expect(queued).toHaveLength(1);
+  });
+
+  test("promotes the row to POSTED once the outbox actually drains it", async () => {
+    const { s, saleId } = await seedQueuedCase("q4");
+    await runMigration(s);
+
+    // Open a period covering the sale, then drain — exactly the sequence an
+    // operator follows when reopening a year to take a restatement.
+    const fiscalYear = new Date(LONG_AGO).getUTCFullYear();
+    await s.asUser.mutation(api.accountingPeriods.create, {
+      orgId: s.orgId,
+      startDate: Date.UTC(fiscalYear, 0, 1),
+      endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+      fiscalYear,
+      periodNumber: 1,
+    });
+    const periods = await s.asUser.query(api.accountingPeriods.list, { orgId: s.orgId });
+    const reopened = periods.find((p) => p.fiscalYear === fiscalYear)!;
+    await s.asUser.mutation(api.accountingPeriods.open, { orgId: s.orgId, periodId: reopened._id });
+    await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+
+    const report = await runMigration(s);
+    expect(report.reconciledToPosted).toBe(1);
+
+    const correction = await s.t.run(async (ctx) =>
+      (await ctx.db.query("consignedSaleCorrections").collect()).find((c) => c.saleId === saleId)
+    );
+    expect(correction!.status).toBe("POSTED");
+    expect(correction!.correctionJournalEntryId).toBeDefined();
+
+    // The correction is now genuinely on the books.
+    const after = await ledger(s.t, s.orgId);
+    expect(after[SYSTEM_KEYS.SALES_REVENUE]).toBe(0);
+    expect(after[SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE]).toBe(-MARGIN * SCALE);
+    expect(netIncome(after)).toBe(MARGIN * SCALE);
+  });
+
+  test("the standalone reconciler promotes it without re-reading every sale", async () => {
+    const { s, saleId } = await seedQueuedCase("q5");
+    await runMigration(s);
+
+    const fiscalYear = new Date(LONG_AGO).getUTCFullYear();
+    await s.asUser.mutation(api.accountingPeriods.create, {
+      orgId: s.orgId,
+      startDate: Date.UTC(fiscalYear, 0, 1),
+      endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+      fiscalYear,
+      periodNumber: 1,
+    });
+    const periods = await s.asUser.query(api.accountingPeriods.list, { orgId: s.orgId });
+    const reopened = periods.find((p) => p.fiscalYear === fiscalYear)!;
+    await s.asUser.mutation(api.accountingPeriods.open, { orgId: s.orgId, periodId: reopened._id });
+    await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+
+    const result = await s.t.mutation(
+      internal.migrateConsignedSaleBasis.reconcileConsignedSaleCorrections,
+      { orgId: s.orgId }
+    );
+    expect(result.promoted).toBe(1);
+
+    const correction = await s.t.run(async (ctx) =>
+      (await ctx.db.query("consignedSaleCorrections").collect()).find((c) => c.saleId === saleId)
+    );
+    expect(correction!.status).toBe("POSTED");
+  });
+
+  test("the dry run predicts queuing instead of claiming it would post", async () => {
+    const { s } = await seedQueuedCase("q6");
+
+    const dry = await runMigration(s, { dryRun: true });
+    expect(dry.corrected).toBe(1);
+    expect(dry.queuedNow).toBe(1);
+    expect(dry.postedNow).toBe(0);
+
+    // And it wrote nothing at all.
+    const corrections = await s.t.run((ctx) =>
+      ctx.db.query("consignedSaleCorrections").collect()
+    );
+    expect(corrections).toHaveLength(0);
+  });
+});
