@@ -1312,6 +1312,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "كانت قائمة الفرص تبدأ بأقدم الفرص، فتقع الفرصة التي وردت قبل دقائق في آخر القائمة تماماً — في الصفحة الأخيرة، بعد تحميل كل ما هو أقدم منها. ولم يكن ترتيب العمود يحل المشكلة لأنه لا يعيد ترتيب سوى الصفوف الظاهرة على الشاشة. أصبحت الفرص تظهر من الأحدث إلى الأقدم في كل مكان: صفحة الفرص، وفلاتر المرحلة والمسؤول، وتطبيق الجوال، وشريط الفرص الأخيرة في لوحة التحكم الذي كان يعرض أقدم الفرص تحت عنوان «الأحدث».",
     publishedAt: releaseAt(2026, 8, 4, 6),
   },
+  {
+    type: "IMPROVEMENT",
+    titleEn: "Faster Social Inbox",
+    titleAr: "صندوق التواصل الاجتماعي أصبح أسرع",
+    descriptionEn: "The Social Inbox analytics cards now read maintained counts instead of re-reading every Instagram and Facebook message each time one arrives, and the mobile inbox no longer loads the full vehicle list until you open a conversation. The numbers shown are unchanged.",
+    descriptionAr: "أصبحت بطاقات إحصاءات صندوق التواصل الاجتماعي تقرأ أعداداً محفوظة بدلاً من إعادة قراءة كل رسائل إنستغرام وفيسبوك عند وصول كل رسالة جديدة، كما لم يعد تطبيق الجوال يحمّل قائمة السيارات كاملة إلا عند فتح المحادثة. الأرقام المعروضة كما هي دون تغيير.",
+    publishedAt: releaseAt(2026, 8, 7, 1),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

@@ -381,11 +381,34 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // RECOMPUTE these, never resolve a conflict by taking one side. Two branches
   // have already each moved the same counter independently, and picking either
   // number silently under-reports the merged surface.
+  // Then 440→445 / 287→288 / skippedNoArgsBlock 9→13 by the five Social Inbox
+  // aggregate migrations, which seed and repair the trees behind
+  // `socialInbox.platformStats`:
+  //
+  // `backfillInstagramEventAggregate`, `backfillFacebookEventAggregate`,
+  // `backfillInstagramSocialContacts` and `backfillFacebookSocialContacts` take
+  // the shared `BACKFILL_ARGS` constant rather than a literal `args: {` block,
+  // so they land in `skippedNoArgsBlock` (9→13). Each walks one table by
+  // pagination and takes no `orgId` and no document id — there is nothing for a
+  // caller to point elsewhere.
+  //
+  // `migrations.repairSocialContacts` rebuilds `socialContacts` from the event
+  // tables. It has a literal args block carrying an optional `orgId`, so it is
+  // the one of the five that lands in `analysed` (287→288). It needs no
+  // `requireOwnedRow`: it is an internalMutation with no caller-supplied
+  // document id, and every row it touches is reached by walking either the
+  // whole table or that same `orgId`'s `by_org` index.
+  // RECOMPUTE these, never resolve a conflict by taking one side. Both sides of
+  // this merge moved the same counters independently — this branch by
+  // `migrateConsignedSaleBasis`, main by the five Social Inbox aggregate
+  // migrations — so the merged figures are the sum of both movements, not the
+  // number either side carried alone. Taking either verbatim would silently
+  // un-pin the other side's mutations from the guard.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 459,
-      analysed: 305,
-      skippedNoArgsBlock: 9,
+      totalMutations: 464,
+      analysed: 306,
+      skippedNoArgsBlock: 13,
       skippedNoOrgId: 145,
     });
   });

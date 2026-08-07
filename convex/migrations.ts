@@ -2,8 +2,11 @@ import { v } from "convex/values";
 import { internalMutation } from "./functions";
 import {
   customersByOrg,
+  facebookEventsByOrg,
+  instagramEventsByOrg,
   leadsByOrg,
   membershipsByOrg,
+  recordSocialContact,
   vehicleQualityByOrg,
   vehiclesByOrg,
 } from "./aggregates";
@@ -93,7 +96,13 @@ type BackfillArgs = {
 type BackfillResult = { migrated: number; isDone: boolean; continueCursor: string | null };
 
 /** Tables that have an aggregate to seed. */
-type BackfilledTable = "vehicles" | "customers" | "leads" | "memberships";
+type BackfilledTable =
+  | "vehicles"
+  | "customers"
+  | "leads"
+  | "memberships"
+  | "instagramEvents"
+  | "facebookEvents";
 
 /**
  * One page of a backfill: read a bounded slice of `table` and hand each row to
@@ -269,6 +278,253 @@ export const backfillLeadAggregate = internalMutation({
     }
 
     return result;
+  },
+});
+
+/**
+ * Seeds `instagramEventsByOrg`. See `backfillVehicleAggregate` for the mechanics.
+ *
+ * Separate from the Facebook one, and from the contact backfills below, because
+ * a Convex function may run only one paginated query — a single "backfill the
+ * Social Inbox" entry point that walked both tables would pass every test
+ * (`convex-test` does not enforce that limit) and fail on its first production
+ * call.
+ */
+export const backfillInstagramEventAggregate = internalMutation({
+  args: BACKFILL_ARGS,
+  handler: async (ctx, args): Promise<BackfillResult> => {
+    const result = await seedAggregatePage(ctx, "instagramEvents", args, async (event) => {
+      await instagramEventsByOrg.insertIfDoesNotExist(ctx, event);
+    });
+
+    if (!result.isDone && args.continueAutomatically !== false) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillInstagramEventAggregate, {
+        cursor: result.continueCursor,
+        batchSize: args.batchSize,
+      });
+    }
+
+    return result;
+  },
+});
+
+/** Seeds `facebookEventsByOrg`. Counterpart to `backfillInstagramEventAggregate`. */
+export const backfillFacebookEventAggregate = internalMutation({
+  args: BACKFILL_ARGS,
+  handler: async (ctx, args): Promise<BackfillResult> => {
+    const result = await seedAggregatePage(ctx, "facebookEvents", args, async (event) => {
+      await facebookEventsByOrg.insertIfDoesNotExist(ctx, event);
+    });
+
+    if (!result.isDone && args.continueAutomatically !== false) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillFacebookEventAggregate, {
+        cursor: result.continueCursor,
+        batchSize: args.batchSize,
+      });
+    }
+
+    return result;
+  },
+});
+
+/**
+ * Materialises a `socialContacts` row for every distinct Instagram sender
+ * already in `instagramEvents`.
+ *
+ * The trigger that maintains this table fires on event *inserts*, so it sees
+ * nothing that arrived before it deployed. Without this the "unique contacts"
+ * card reads zero and then climbs only as new senders appear.
+ *
+ * Idempotent by construction: `recordSocialContact` is insert-if-absent against
+ * the same unique index the trigger uses, so a redrive, an overlapping live
+ * insert, and a second full run all converge on one row per sender. That is the
+ * same property `insertIfDoesNotExist` gives the aggregate backfills, obtained
+ * here at the table rather than the tree.
+ */
+export const backfillInstagramSocialContacts = internalMutation({
+  args: BACKFILL_ARGS,
+  handler: async (ctx, args): Promise<BackfillResult> => {
+    const result = await seedAggregatePage(ctx, "instagramEvents", args, async (event) => {
+      await recordSocialContact(ctx, event.orgId, "instagram", event.senderInstagramId);
+    });
+
+    if (!result.isDone && args.continueAutomatically !== false) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillInstagramSocialContacts, {
+        cursor: result.continueCursor,
+        batchSize: args.batchSize,
+      });
+    }
+
+    return result;
+  },
+});
+
+/** Facebook counterpart to `backfillInstagramSocialContacts`. */
+export const backfillFacebookSocialContacts = internalMutation({
+  args: BACKFILL_ARGS,
+  handler: async (ctx, args): Promise<BackfillResult> => {
+    const result = await seedAggregatePage(ctx, "facebookEvents", args, async (event) => {
+      await recordSocialContact(ctx, event.orgId, "facebook", event.senderFacebookId);
+    });
+
+    if (!result.isDone && args.continueAutomatically !== false) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillFacebookSocialContacts, {
+        cursor: result.continueCursor,
+        batchSize: args.batchSize,
+      });
+    }
+
+    return result;
+  },
+});
+
+/**
+ * Rebuilds `socialContacts` from the events that actually exist: clears the
+ * rows, then re-derives them from `instagramEvents` and `facebookEvents`.
+ *
+ * ## One entry point, because the three-step version raced itself
+ *
+ * This began as a documented runbook — clear, then backfill Instagram, then
+ * backfill Facebook. Each step self-schedules its own continuation and returns
+ * to the operator after its first page, so on any deployment with more distinct
+ * senders than one batch, step 2 started while step 1 was still deleting.
+ * Contact rows inserted by the backfill are *newer* than the ones the clear has
+ * already passed, so the still-running clear reaches them and deletes them, and
+ * "unique contacts" reads permanently low with nothing failing. Following the
+ * documented sequence correctly was what triggered it.
+ *
+ * So the phases chain here instead: each one schedules the next only once its
+ * own pagination reports `isDone`. `rebuildVehicleAggregates` already works
+ * this way; the runbook version was the odd one out.
+ *
+ * Exactly one `.paginate()` runs per invocation — the phase picks which table.
+ * A Convex function may only run one, and `convex-test` does not enforce that,
+ * so it has to hold by construction rather than by testing.
+ *
+ * ## Scope
+ *
+ * `orgId` confines every phase to one tenant. Without it the clear walks the
+ * whole table, which zeroes the card for *every* org on the deployment until
+ * the rebuild catches up — a blast radius no single org's drift justifies. The
+ * unscoped form is kept for a genuine full rebuild.
+ *
+ * Deleting through the wrapped `ctx.db` takes the rows out of
+ * `socialContactsByOrg` as it goes, so tree and table stay in step without a
+ * separate `clearAll`.
+ */
+const REPAIR_PHASE = v.union(
+  v.literal("clear"),
+  v.literal("instagram"),
+  v.literal("facebook")
+);
+
+type RepairPhase = "clear" | "instagram" | "facebook";
+
+export const repairSocialContacts = internalMutation({
+  args: {
+    orgId: v.optional(v.id("organizations")),
+    phase: v.optional(REPAIR_PHASE),
+    cursor: v.optional(v.union(v.string(), v.null())),
+    batchSize: v.optional(v.number()),
+    continueAutomatically: v.optional(v.boolean()),
+  },
+  handler: async (
+    ctx,
+    args
+  ): Promise<BackfillResult & { phase: RepairPhase }> => {
+    const phase: RepairPhase = args.phase ?? "clear";
+    // Same ceiling and reasoning as `seedAggregatePage`: each row costs
+    // aggregate node patches on top of its own write, and an unclamped
+    // caller-supplied batch throws mid-chain and leaves the table half-cleared.
+    const numItems = Math.min(Math.max(args.batchSize ?? 100, 1), 250);
+    const orgId = args.orgId;
+
+    // Exactly one `.paginate()` runs per invocation — the branches are mutually
+    // exclusive. A Convex function may only issue one, and `convex-test` does
+    // not enforce that, so the branch structure has to guarantee it rather than
+    // the tests.
+    //
+    // Written out per phase rather than behind a generic `paginate(table)`
+    // helper: `withIndex`'s field argument cannot narrow across a union of
+    // table names, so the `orgId` comparison widens to every table's field
+    // paths at once and fails to typecheck.
+    let page;
+    if (phase === "clear") {
+      page = orgId
+        ? await ctx.db
+            .query("socialContacts")
+            .withIndex("by_org", (q) => q.eq("orgId", orgId))
+            .paginate({ cursor: args.cursor ?? null, numItems })
+        : await ctx.db
+            .query("socialContacts")
+            .paginate({ cursor: args.cursor ?? null, numItems });
+      for (const contact of page.page) {
+        await ctx.db.delete(contact._id);
+      }
+    } else if (phase === "instagram") {
+      page = orgId
+        ? await ctx.db
+            .query("instagramEvents")
+            .withIndex("by_org", (q) => q.eq("orgId", orgId))
+            .paginate({ cursor: args.cursor ?? null, numItems })
+        : await ctx.db
+            .query("instagramEvents")
+            .paginate({ cursor: args.cursor ?? null, numItems });
+      for (const event of page.page) {
+        await recordSocialContact(ctx, event.orgId, "instagram", event.senderInstagramId);
+      }
+    } else {
+      page = orgId
+        ? await ctx.db
+            .query("facebookEvents")
+            .withIndex("by_org", (q) => q.eq("orgId", orgId))
+            .paginate({ cursor: args.cursor ?? null, numItems })
+        : await ctx.db
+            .query("facebookEvents")
+            .paginate({ cursor: args.cursor ?? null, numItems });
+      for (const event of page.page) {
+        await recordSocialContact(ctx, event.orgId, "facebook", event.senderFacebookId);
+      }
+    }
+
+    if (args.continueAutomatically !== false) {
+      if (!page.isDone) {
+        // The clear restarts from `null`: every row it read is deleted, so the
+        // next batch is the new first page. Passing the cursor back would work
+        // equally well — Convex cursors encode a sort key, not an offset, so
+        // both resume at the same surviving row — but `null` says plainly that
+        // there is nothing to resume from. The rebuild phases only insert, so
+        // theirs must be carried forward or they would restart each batch.
+        await ctx.scheduler.runAfter(0, internal.migrations.repairSocialContacts, {
+          orgId,
+          phase,
+          cursor: phase === "clear" ? null : page.continueCursor,
+          batchSize: args.batchSize,
+        });
+      } else if (phase !== "facebook") {
+        await ctx.scheduler.runAfter(0, internal.migrations.repairSocialContacts, {
+          orgId,
+          phase: phase === "clear" ? "instagram" : "facebook",
+          batchSize: args.batchSize,
+        });
+      }
+    }
+
+    return {
+      phase,
+      migrated: page.page.length,
+      isDone: page.isDone,
+      // The clear phase reports no cursor, even mid-run, because it has no use
+      // for one: its continuation restarts from `null`. Handing back a cursor
+      // the function itself never passes invites a caller to think it must be
+      // fed in to make progress.
+      //
+      // It would be *safe* to feed back — Convex cursors encode a sort key, not
+      // an offset, so a cursor into deleted rows still resumes at the first
+      // surviving row after them, and nothing is skipped. Reporting `null` is a
+      // contract choice for clarity, not a guard against data loss.
+      continueCursor: page.isDone || phase === "clear" ? null : page.continueCursor,
+    };
   },
 });
 
