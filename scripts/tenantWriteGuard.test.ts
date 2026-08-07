@@ -321,12 +321,32 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // `requireOwnedRow`: it is an internalMutation with no caller-supplied
   // document id, and every row it touches is reached by walking either the
   // whole table or that same `orgId`'s `by_org` index.
+  // Then 445→447 / skippedNoArgsBlock 13→15, `analysed` unchanged at 288, by
+  // the two Social Inbox conversation backfills:
+  //
+  // `backfillInstagramConversations` and `backfillFacebookConversations`
+  // materialise `socialConversations` for events that predate the trigger. Both
+  // take the shared `CONVERSATION_BACKFILL_ARGS` constant rather than a literal
+  // args block, so they land in `skippedNoArgsBlock` — that, and only that, is
+  // why they are not analysed.
+  //
+  // They DO take an `orgId`, and every row they touch is reached through that
+  // org's `by_org` index, so the writes are org-derived rather than
+  // caller-directed. There is no caller-supplied document id to own-check.
+  // Then 447→448 / skippedNoOrgId 144→145, `analysed` unchanged at 288, by
+  // `startSocialConversationBackfills`:
+  //
+  // It is the operator fan-out that starts the two backfills above for every
+  // organization, so it deliberately takes no `orgId` — it *enumerates* orgs by
+  // paginating the `organizations` table and passes each id to the per-org
+  // backfills. There is no caller-supplied org or document id for the guard to
+  // own-check, and it is an `internalMutation` with no public entry point.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 445,
+      totalMutations: 448,
       analysed: 288,
-      skippedNoArgsBlock: 13,
-      skippedNoOrgId: 144,
+      skippedNoArgsBlock: 15,
+      skippedNoOrgId: 145,
     });
   });
 });

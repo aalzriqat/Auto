@@ -130,9 +130,12 @@ function collectTaintedWrites(chunk: string, tainted: Set<string>): string[] {
  * Scans one Convex module's source for the shape.
  *
  * Scope, stated precisely so the result is not over-read:
- * - Only `mutation` / `internalMutation` exports. Queries cannot write, and the
- *   read-side half of the same defect is a different signature (entering a
- *   non-org-scoped index), not covered here.
+ * - Only `mutation` / `internalMutation` / `socialBulkMutation` exports. Queries
+ *   cannot write, and the read-side half of the same defect is a different
+ *   signature (entering a non-org-scoped index), not covered here.
+ *   `socialBulkMutation` writes exactly like `mutation` — it only defers the
+ *   conversation recompute — so omitting it would drop two live mutations out
+ *   of the analysed surface while every count still looked plausible.
  * - Only handlers whose `args` declare `orgId: v.id("organizations")` — that is
  *   what makes "the caller named an org but the row was never tied to it"
  *   meaningful.
@@ -152,7 +155,7 @@ export function findUnguardedTenantWrites(source: string, file: string): Unguard
   for (const raw of chunks) {
     const chunk = "export const " + raw;
     const functionName = raw.match(/^(\w+)/)?.[1];
-    const kind = chunk.match(/=\s*(internalMutation|mutation)\(/)?.[1];
+    const kind = chunk.match(/=\s*(internalMutation|socialBulkMutation|mutation)\(/)?.[1];
     if (!functionName || !kind) continue;
 
     const idArgs = orgScopedIdArgs(chunk);
@@ -233,7 +236,7 @@ export function summarizeCoverage(convexRoot: string): GuardCoverage {
     const source = fs.readFileSync(file, "utf8");
     for (const raw of source.split(/\nexport const /).slice(1)) {
       const chunk = "export const " + raw;
-      if (!/=\s*(internalMutation|mutation)\(/.test(chunk)) continue;
+      if (!/=\s*(internalMutation|socialBulkMutation|mutation)\(/.test(chunk)) continue;
       coverage.totalMutations++;
 
       const argsSource = chunk.match(/args:\s*\{([\s\S]*?)\n\s*handler:/)?.[1];
