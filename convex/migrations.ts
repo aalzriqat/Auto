@@ -842,6 +842,11 @@ export const startSocialConversationBackfills = internalMutation({
         cursor: page.continueCursor,
         batchSize: args.batchSize,
         force: args.force,
+        // Carried for symmetry with `force`. Only `true`/`undefined` can reach
+        // here today (a `false` short-circuits the branch above), but an
+        // asymmetric propagation is how a third semantic for this flag would
+        // break silently on page 2 and not page 1.
+        continueAutomatically: args.continueAutomatically,
       });
     }
 

@@ -678,20 +678,20 @@ export function resetSocialConversationSyncCount(): void {
  * on the merge path: 400 recomputes for 200 repointed events before, 2 after.
  *
  * The one loop still recomputing eagerly is the org purge
- * (`ORGANIZATION_DELETION_STEPS` in `adminOrgs.ts`), and that is an accepted
- * cost rather than an oversight. Each of the 50 event deletes in a batch
+ * (`ORGANIZATION_DELETION_STEPS` in `adminOrgs.ts`). Each event delete
  * recomputes its thread, so a batch dominated by one contact holding N events
- * reads roughly 50N — crossing Convex's per-transaction ceiling near N = 350.
- * Unlike the merge it is not retry-recoverable: the step re-reads the same
- * first 50 rows every time, fails identically, and leaves the request FAILED
- * with the org half-deleted.
+ * reads roughly batch x N. Unlike the merge it is not retry-recoverable: the
+ * step re-reads the same first rows every time, fails identically, and the
+ * abort rolls back the FAILED status the catch block would have written —
+ * leaving the request stuck with the org half-deleted.
  *
- * Left alone because the purge is not a hot path, no production org is near
- * that threshold, and both remedies — a smaller batch for the event steps, or
- * routing the purge through the deferred writer — change a deletion path this
- * project already knows is fragile. The trigger to revisit is concrete: one
- * social contact in one org holding more than a few hundred events on a single
- * platform.
+ * The event steps therefore take a smaller batch (`TRIGGER_HEAVY_BATCH_SIZE`
+ * in `adminOrgs.ts`). That moves the threshold, it does not remove it: the
+ * product is still linear in N. Against Convex's read ceiling it buys roughly
+ * 5x, and production is nowhere near either figure — about 700 events per org
+ * in total, across all contacts. The trigger to revisit is still concrete: one
+ * social contact in one org holding more than a thousand events on a single
+ * platform, at which point route the purge through the deferred writer.
  */
 export async function syncSocialConversation(
   ctx: { db: GenericDatabaseWriter<DataModel> },

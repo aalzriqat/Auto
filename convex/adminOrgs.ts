@@ -180,10 +180,13 @@ function scheduleDeletionBatch(ctx: MutationCtx, requestId: Id<"organizationDele
  * the identical first 50 rows and fails identically, leaving the org
  * permanently half-deleted with no forward path.
  *
- * A smaller batch for these two steps keeps the product bounded. It costs more
- * scheduled passes on a large org, which is the cheap side of the trade: this
- * path already has a documented history of reporting COMPLETED while leaving
- * rows behind.
+ * A smaller batch does not bound the product — it is still linear in N — it
+ * moves the threshold roughly 5x, from around 330 events on one
+ * contact/platform to around 1,600. Production is at roughly 700 events per org
+ * across all contacts, so this is comfortable today and is not a guarantee. The
+ * cost is more scheduled passes on a large org, which is the cheap side of the
+ * trade: this path already has a documented history of reporting COMPLETED
+ * while leaving rows behind.
  */
 const TRIGGER_HEAVY_DELETION_TABLES = new Set<TableNames>(["instagramEvents", "facebookEvents"]);
 const TRIGGER_HEAVY_BATCH_SIZE = 10;

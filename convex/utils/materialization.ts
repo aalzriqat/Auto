@@ -25,9 +25,14 @@ export const SOCIAL_CONVERSATION_GENERATION = 1;
  * A self-scheduled chain advances every few seconds, so minutes of silence
  * means the chain is gone — a throw that rolled its transaction back, a
  * deployment that landed mid-run, a transaction that hit a Convex limit. This
- * only affects how the state is *described* to staff; the reader already
- * refuses to trust anything that is not `completed`, so a wrong guess here
- * cannot produce a wrong inbox.
+ * The reader is unaffected either way — it refuses to trust anything that is
+ * not `completed` — so a wrong guess here cannot produce a wrong inbox.
+ *
+ * It is NOT purely descriptive, though. `startSocialConversationBackfills`
+ * uses the same call to decide whether a chain is still advancing and should be
+ * left alone, so this constant is also the redrive gate: lower it and a redrive
+ * fences a live chain, raise it and a genuinely dead one stays unredriveable
+ * for longer. Tune it with both effects in mind.
  */
 export const MATERIALIZATION_STALL_MS = 5 * 60 * 1000;
 
