@@ -341,21 +341,34 @@ export const stats = query({
     const costedVehicleIds = soldVehicleIds.slice(0, PROFIT_VEHICLE_CAP);
     const profitTruncated = soldVehicleIds.length > PROFIT_VEHICLE_CAP;
     const capitalizedCostByVehicle = new Map<string, number>();
-    // Which of the sold vehicles were the supplier's. Loaded regardless of
-    // profit permission, because turnover depends on it: a consigned sale's
-    // revenue is the dealership's margin, not the car's price, and a viewer
-    // without profit access still must not be shown 12,500 of turnover on a car
-    // the dealership never owned.
     const consignedVehicleIds = new Set<string>();
-    await Promise.all(
-      costedVehicleIds.map(async (vehicleId) => {
-        const vehicle = await ctx.db.get(vehicleId);
-        if (!vehicle || vehicle.orgId !== args.orgId) return;
-        const cost = await computeVehicleCapitalizedCost(ctx, vehicle);
-        capitalizedCostByVehicle.set(vehicleId, cost);
-        if (vehicle.sourceType === "SOURCED") consignedVehicleIds.add(vehicleId);
-      })
-    );
+    /**
+     * Gated on profit permission, and the gate has to be here rather than at
+     * the point of use.
+     *
+     * Two things depend on it. The obvious one is cost: `computeVehicleCapitalizedCost`
+     * reads every expense logged against a car, so running it for a viewer who
+     * may not see costs was up to ~1,000 extra document reads on every
+     * subscription tick, for figures that would then be withheld.
+     *
+     * The less obvious one is that a consigned sale's TURNOVER is its margin —
+     * the same number. Computing turnover on the agent basis for someone
+     * without cost permission would hand them the margin under a different
+     * label: 12,500 on the car and 3,000 of turnover discloses the supplier's
+     * entitlement exactly. So they get the gross, and `salesVolumeBasis` says
+     * so rather than letting a gross figure pass as accounting turnover.
+     */
+    if (canViewProfitMetrics) {
+      await Promise.all(
+        costedVehicleIds.map(async (vehicleId) => {
+          const vehicle = await ctx.db.get(vehicleId);
+          if (!vehicle || vehicle.orgId !== args.orgId) return;
+          const cost = await computeVehicleCapitalizedCost(ctx, vehicle);
+          capitalizedCostByVehicle.set(vehicleId, cost);
+          if (vehicle.sourceType === "SOURCED") consignedVehicleIds.add(vehicleId);
+        })
+      );
+    }
 
     /**
      * Accounting turnover for one sale: the margin on a consigned car, the
@@ -371,12 +384,26 @@ export const stats = query({
       return cost === undefined ? sale.salePrice : Math.max(0, sale.salePrice - cost);
     };
 
+    /**
+     * Which basis `salesVolume` and `monthlySales` are on, stated rather than
+     * assumed. ACCOUNTING_TURNOVER agrees with the sales reports and the P&L;
+     * GROSS_TRANSACTION_VALUE is what the dealership handled, consigned deals
+     * at full ticket, and is not turnover.
+     */
+    const salesVolumeBasis: "ACCOUNTING_TURNOVER" | "GROSS_TRANSACTION_VALUE" = canViewProfitMetrics
+      ? "ACCOUNTING_TURNOVER"
+      : "GROSS_TRANSACTION_VALUE";
+
     // Accounting turnover. Falls back to the transaction ledger when there are
     // no sale rows, reading each row's recognized amount where it carries one.
     const salesVolume = activeSales.length > 0
       ? activeSales.reduce((acc, sale) => acc + recognizedRevenueOfSale(sale), 0)
       : saleTransactions.reduce(
-          (acc, transaction) => acc + (transaction.recognizedRevenueAmount ?? transaction.amount),
+          (acc, transaction) =>
+            acc +
+            (canViewProfitMetrics
+              ? (transaction.recognizedRevenueAmount ?? transaction.amount)
+              : transaction.amount),
           0
         );
 
@@ -398,7 +425,13 @@ export const stats = query({
     } else {
       for (const transaction of saleTransactions) {
         const key = getChartKey(transaction.date);
-        monthlySales[key] = (monthlySales[key] || 0) + transaction.amount;
+        // Same basis as `salesVolume` above — the chart and the headline figure
+        // it summarizes cannot be on different bases.
+        monthlySales[key] =
+          (monthlySales[key] || 0) +
+          (canViewProfitMetrics
+            ? (transaction.recognizedRevenueAmount ?? transaction.amount)
+            : transaction.amount);
       }
     }
 
@@ -610,21 +643,26 @@ export const stats = query({
     const previousSoldVehicleIdsForRevenue = Array.from(
       new Set(previousSales.map((sale) => sale.vehicleId))
     );
+    // Gated exactly as the current window is, and for both of the same reasons:
+    // the cost reads are the expensive ones, and a consigned sale's turnover is
+    // its margin. A viewer without profit permission compares gross to gross.
     const previousRevenueBasisByVehicle = new Map(
-      await Promise.all(
-        previousSoldVehicleIdsForRevenue.slice(0, PROFIT_VEHICLE_CAP).map(async (vehicleId) => {
-          const vehicle = await ctx.db.get(vehicleId);
-          if (!vehicle || vehicle.orgId !== args.orgId) {
-            return [vehicleId, undefined] as const;
-          }
-          const cached = capitalizedCostByVehicle.get(vehicleId);
-          const cost = cached ?? (await computeVehicleCapitalizedCost(ctx, vehicle));
-          return [
-            vehicleId,
-            { consigned: vehicle.sourceType === "SOURCED", cost },
-          ] as const;
-        })
-      )
+      canViewProfitMetrics
+        ? await Promise.all(
+            previousSoldVehicleIdsForRevenue.slice(0, PROFIT_VEHICLE_CAP).map(async (vehicleId) => {
+              const vehicle = await ctx.db.get(vehicleId);
+              if (!vehicle || vehicle.orgId !== args.orgId) {
+                return [vehicleId, undefined] as const;
+              }
+              const cached = capitalizedCostByVehicle.get(vehicleId);
+              const cost = cached ?? (await computeVehicleCapitalizedCost(ctx, vehicle));
+              return [
+                vehicleId,
+                { consigned: vehicle.sourceType === "SOURCED", cost },
+              ] as const;
+            })
+          )
+        : []
     );
     const previousRecognizedRevenueOfSale = (sale: {
       vehicleId: Id<"vehicles">;
@@ -640,7 +678,11 @@ export const stats = query({
     const previousSalesVolume = previousUsesSaleRows
       ? previousSales.reduce((acc, sale) => acc + previousRecognizedRevenueOfSale(sale), 0)
       : previousSaleTransactions.reduce(
-          (acc, transaction) => acc + (transaction.recognizedRevenueAmount ?? transaction.amount),
+          (acc, transaction) =>
+            acc +
+            (canViewProfitMetrics
+              ? (transaction.recognizedRevenueAmount ?? transaction.amount)
+              : transaction.amount),
           0
         );
 
@@ -720,8 +762,12 @@ export const stats = query({
       leadsByStage,
       salesThisMonth: salesCount,
       // Accounting turnover: agent-sale gross is excluded, so this agrees with
-      // getSalesAndProfitReport and getProfitAndLoss on the same period.
+      // getSalesAndProfitReport and getProfitAndLoss on the same period —
+      // unless `salesVolumeBasis` says GROSS_TRANSACTION_VALUE, which is what a
+      // viewer without profit permission gets, because the agent basis would
+      // disclose the margin they are not permitted to see.
       salesVolumeThisMonth: salesVolume,
+      salesVolumeBasis,
       // The deal volume actually handled, agent sales at full ticket. An
       // operational KPI, explicitly separate from turnover.
       grossTransactionValueThisMonth: grossTransactionValue,
