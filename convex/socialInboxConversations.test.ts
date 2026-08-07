@@ -1,4 +1,9 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import {
+  MANAGER_PERMISSIONS,
+  seedOrgWithMember,
+  VIEWER_PERMISSIONS,
+} from "../test-utils/seedOrg";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -28,47 +33,13 @@ import type { Id } from "./_generated/dataModel";
  * grouping, and direct exercise of every way an event can move between threads.
  */
 
-/** Permissions each seeded role carries. */
-const VIEWER_PERMISSIONS = ["view:leads", "edit:leads"];
-const MANAGER_PERMISSIONS = [
-  "view:leads",
-  "view:customers",
-  "merge:customers",
-  "approve:requests",
-];
-
-/**
- * An org with one member holding `permissions`.
- *
- * One helper rather than a viewer variant and a manager variant: they differed
- * only in the role row, and the duplicated bodies were most of this file's
- * duplication budget.
- */
+/** Thin wrapper so call sites keep reading `asEditor` / `asUser`. */
 async function seedOrg(
   t: ReturnType<typeof convexTestWithComponents>,
   clerkId = "conv_editor_001",
   permissions: string[] = VIEWER_PERMISSIONS
 ) {
-  const orgId = await t.run(async (ctx) =>
-    ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() })
-  );
-  await t.run(async (ctx) =>
-    ctx.db.insert("subscriptions", {
-      orgId,
-      plan: "professional",
-      status: "active",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    })
-  );
-  const userId = await t.run(async (ctx) =>
-    ctx.db.insert("users", { clerkId, email: `${clerkId}@test.com`, name: "Member" })
-  );
-  const roleId = await t.run(async (ctx) =>
-    ctx.db.insert("roles", { orgId, name: "SEEDED", permissions })
-  );
-  await t.run(async (ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
-  const identity = t.withIdentity({ subject: clerkId });
+  const { orgId, identity } = await seedOrgWithMember(t, { clerkId, permissions });
   return { orgId, identity, asEditor: identity, asUser: identity };
 }
 
