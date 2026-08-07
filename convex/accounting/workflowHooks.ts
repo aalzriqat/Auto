@@ -273,6 +273,49 @@ export async function hookDepositApplied(
   });
 }
 
+/**
+ * The deposit is retained by the dealership against the margin the supplier
+ * owes it — only ever reachable on the DIRECT_TO_SUPPLIER route. See
+ * ruleDepositAppliedToSettlement for why this credits the supplier receivable
+ * rather than recognizing commission revenue a second time.
+ */
+export async function hookDepositAppliedToSettlement(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    depositId: Id<"deposits">;
+    customerId: Id<"customers">;
+    amountMinor: number;
+    currency: string;
+    supplierName?: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+    saleId?: Id<"sales">;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "DEPOSIT_APPLIED_TO_SETTLEMENT",
+    sourceType: "deposits",
+    sourceId: args.depositId.toString(),
+    // Distinct from `deposit_applied_*`: a deposit resolves exactly once, but
+    // the two treatments credit different accounts, so sharing a key would let
+    // whichever posted first silently suppress the other.
+    idempotencyKey: `deposit_applied_settlement_${args.depositId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      depositId: args.depositId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      customerId: args.customerId.toString(),
+      supplierName: args.supplierName,
+      saleId: args.saleId?.toString(),
+    },
+  });
+}
+
 type DepositResolutionHookArgs = {
   orgId: Id<"organizations">;
   depositId: Id<"deposits">;

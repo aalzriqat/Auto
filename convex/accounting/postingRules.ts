@@ -4,6 +4,7 @@ import { scaleForCurrency } from "../utils/money";
 export type EventType =
   | "DEPOSIT_RECEIVED"
   | "DEPOSIT_APPLIED"
+  | "DEPOSIT_APPLIED_TO_SETTLEMENT"
   | "DEPOSIT_REFUNDED"
   | "DEPOSIT_FORFEITED"
   | "SALE_COMPLETED"
@@ -50,7 +51,8 @@ export type EventType =
   | "JOURNAL_REVERSAL";
 
 export const ALL_EVENT_TYPES = new Set<string>([
-  "DEPOSIT_RECEIVED", "DEPOSIT_APPLIED", "DEPOSIT_REFUNDED", "DEPOSIT_FORFEITED",
+  "DEPOSIT_RECEIVED", "DEPOSIT_APPLIED", "DEPOSIT_APPLIED_TO_SETTLEMENT",
+  "DEPOSIT_REFUNDED", "DEPOSIT_FORFEITED",
   "SALE_COMPLETED", "SALE_CANCELLED", "COLLECTION_PAYMENT", "COLLECTION_REFUND", "EXPENSE_POSTED",
   "CHEQUE_RECEIVED", "CHEQUE_DEPOSITED", "CHEQUE_CLEARED", "CHEQUE_RETURNED",
   "COMMISSION_ACCRUED", "COMMISSION_ADJUSTED", "COMMISSION_PAID",
@@ -359,6 +361,49 @@ export function ruleDepositApplied(p: DepositAppliedPayload): RuleResult {
       line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, 0, p.amountMinor, "Applied to AR", { customerId: p.customerId }),
     ],
     memo: "Deposit applied to sale",
+    category: "SYSTEM",
+  };
+}
+
+export interface DepositAppliedToSettlementPayload {
+  depositId: string;
+  amountMinor: number;
+  currency: string;
+  customerId: string;
+  supplierName?: string;
+  saleId?: string;
+}
+
+/**
+ * A reservation deposit the dealership keeps as part of settling a consigned
+ * deal with the supplier.
+ *
+ * Only reachable on the DIRECT_TO_SUPPLIER route. There the buyer paid the
+ * supplier for the car, so the dealership holds no receivable from the customer
+ * for it — but it IS holding the customer's deposit in cash, against the margin
+ * the supplier now owes it. Releasing the deposit liability against that claim
+ * turns cash already in hand into margin realized.
+ *
+ * It credits the supplier receivable rather than commission revenue, even
+ * though this is the point at which the deposit "becomes part of the
+ * dealership's earned margin". Agent-basis revenue is recognized in full when
+ * the sale completes; crediting it again here would count the same margin
+ * twice, once as revenue earned and once as revenue collected. The economics
+ * the dealer described are unchanged either way — what differs is only whether
+ * the books say it twice.
+ *
+ * On THROUGH_DEALERSHIP this treatment is refused upstream: the supplier's
+ * entitlement is already credited to AP-Suppliers in full at sale, so crediting
+ * it again would inflate what the dealership owes him by the deposit.
+ */
+export function ruleDepositAppliedToSettlement(p: DepositAppliedToSettlementPayload): RuleResult {
+  const supplier = p.supplierName ?? "supplier";
+  return {
+    lines: [
+      line(SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY, p.amountMinor, 0, "Reservation deposit released", { customerId: p.customerId }),
+      line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, 0, p.amountMinor, `Deposit retained against commission due from ${supplier}`, { customerId: p.customerId }),
+    ],
+    memo: "Reservation deposit applied to supplier settlement",
     category: "SYSTEM",
   };
 }
@@ -1554,6 +1599,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
   switch (eventType as EventType) {
     case "DEPOSIT_RECEIVED": return ruleDepositReceived(payload as unknown as DepositReceivedPayload);
     case "DEPOSIT_APPLIED": return ruleDepositApplied(payload as unknown as DepositAppliedPayload);
+    case "DEPOSIT_APPLIED_TO_SETTLEMENT": return ruleDepositAppliedToSettlement(payload as unknown as DepositAppliedToSettlementPayload);
     case "DEPOSIT_REFUNDED": return ruleDepositRefunded(payload as unknown as DepositRefundedPayload);
     case "DEPOSIT_FORFEITED": return ruleDepositForfeited(payload as unknown as DepositForfeitedPayload);
     case "SALE_COMPLETED": return ruleSaleCompleted(payload as unknown as SaleCompletedPayload);

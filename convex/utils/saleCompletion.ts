@@ -8,13 +8,21 @@ import {
   createSaleTransaction,
   closeLeadsAsWon,
 } from "./saleHelpers";
-import { resolveDepositsForQuote } from "./depositHelpers";
+import {
+  resolveDepositsForQuote,
+  recordUnpostedDepositTreatment,
+  depositStatusForTreatment,
+  type DepositTreatment,
+} from "./depositHelpers";
 import { throwAppError, AppErrorCode } from "./errors";
 import { requireOrgMember } from "./tenancy";
 import {
   hookSaleCompleted,
   hookCommissionAccrued,
   hookDepositApplied,
+  hookDepositAppliedToSettlement,
+  hookDepositRefunded,
+  hookDepositForfeited,
   hookTradeInAccepted,
   getOrgCurrency,
   commissionAccountingDate,
@@ -68,6 +76,9 @@ type SaleCompletionArgs = {
   // means THROUGH_DEALERSHIP — see consignedSettlementRoute(). Ignored for
   // dealer-owned stock, which has no supplier to settle with.
   supplierSettlementRoute?: ConsignedSettlementRoute;
+  // What happens to the customer's reservation deposit. Required on a consigned
+  // sale that has one — see resolveReservationDeposits.
+  depositResolution?: { treatment: DepositTreatment; reason?: string };
   // MANUAL commission mode carries the manager-entered amount through
   // completion untouched. Populated from the existing sale when completing a
   // draft; undefined for freshly-created sales.
@@ -267,6 +278,233 @@ async function insertSaleRecord(
   });
 }
 
+type ResolvedReservationDeposits = {
+  /**
+   * Applied against what the CUSTOMER owes the dealership. Only this reduces
+   * the sale's outstanding balance; a deposit that went to the supplier
+   * settlement, was refunded, or awaits a manual journal did not.
+   */
+  previouslyCollected: number;
+  appliedDeposits: Array<{ depositId: Id<"deposits">; customerId: Id<"customers">; amount: number }>;
+};
+
+/**
+ * Decides what happens to the reservation deposit (عربون) when a sale
+ * completes.
+ *
+ * The reservation deposit is money paid to the DEALERSHIP against its own
+ * receipt voucher. It is not the financing down payment, which the customer
+ * pays to the finance company; nothing here may move one into the other.
+ *
+ * On a dealer-owned sale the answer has never been ambiguous — the customer
+ * owes the dealership the whole price, so the deposit comes off that — and it
+ * stays implicit. On a CONSIGNED sale it is genuinely ambiguous, because what
+ * the customer owes the dealership depends on which way the money went, and on
+ * the DIRECT_TO_SUPPLIER route it may be nothing at all. There the treatment
+ * must be stated rather than assumed.
+ */
+async function resolveReservationDeposits(
+  ctx: MutationCtx,
+  opts: {
+    args: SaleCompletionArgs;
+    prepared: PreparedSaleCompletion;
+    saleId: Id<"sales">;
+    isSourced: boolean;
+    settlementRoute: ConsignedSettlementRoute;
+    customerBillableMinor: number;
+  }
+): Promise<ResolvedReservationDeposits> {
+  const { args, prepared, saleId, isSourced, settlementRoute, customerBillableMinor } = opts;
+  const empty: ResolvedReservationDeposits = { previouslyCollected: 0, appliedDeposits: [] };
+  if (!args.quoteId) return empty;
+
+  const heldTotal = await heldDepositTotalForQuote(ctx, args.quoteId);
+  if (heldTotal === 0) return empty;
+
+  const currency = prepared.currency;
+  const heldTotalMinor = toMinorUnits(heldTotal, currency);
+
+  // Dealer-owned stock: unchanged behaviour, and deliberately so. Requiring an
+  // explicit treatment on every cash sale would be a different change to a
+  // flow that was never ambiguous.
+  const treatment = isSourced ? args.depositResolution?.treatment : undefined;
+  if (!isSourced) {
+    return await applyDepositsToCustomerAr(ctx, opts, undefined);
+  }
+
+  if (!treatment) {
+    throw new ConvexError(
+      "This vehicle belongs to the supplier and is being sold on his behalf, so what the customer's reservation deposit is applied to is not implied by the sale. Record the deposit's treatment — applied to an amount owed to the dealership, applied to the supplier settlement, refunded, forfeited, or an approved other treatment with a reason — before completing."
+    );
+  }
+
+  switch (treatment) {
+    case "APPLY_TO_DEALER_AMOUNT": {
+      // Capped at what the dealership actually billed. On DIRECT_TO_SUPPLIER
+      // that is only its own fees and F&I products; applying more would credit
+      // a receivable past zero and show the customer in credit for money the
+      // supplier was paid.
+      if (heldTotalMinor > customerBillableMinor) {
+        throw new ConvexError(
+          `The reservation deposit exceeds what the dealership billed this customer on this sale, so it cannot all be applied against it. Refund, forfeit, or apply the excess to the supplier settlement instead.`
+        );
+      }
+      return await applyDepositsToCustomerAr(ctx, opts, treatment);
+    }
+
+    case "APPLY_TO_TRANSACTION_SETTLEMENT": {
+      if (dealershipCollectsGross(settlementRoute)) {
+        // The supplier's entitlement was already credited to AP-Suppliers in
+        // full when the sale posted. Crediting it again would inflate what the
+        // dealership owes him by the deposit, and the extra would never clear.
+        throw new ConvexError(
+          "The dealership collected the gross proceeds on this sale, so the supplier settlement is already recorded in full and a deposit cannot be applied to it again. Apply the deposit to what the customer owes the dealership, refund it, or forfeit it."
+        );
+      }
+      const resolved = await resolveDepositsForQuote(ctx, {
+        quoteId: args.quoteId,
+        resolution: "APPLIED",
+        actorId: args.actorId,
+        treatment,
+        saleId,
+      });
+      void resolved;
+      for (const { depositId, customerId, amount } of await settlementResolvedDepositRows(ctx, args.quoteId)) {
+        await hookDepositAppliedToSettlement(ctx, {
+          orgId: args.orgId,
+          depositId,
+          customerId,
+          amountMinor: toMinorUnits(amount, currency),
+          currency,
+          supplierName: prepared.vehicle.sourcedFromName,
+          actorId: args.actorId,
+          occurredAt: args.saleDate,
+          saleId,
+        });
+      }
+      // Not collected against the customer's balance — it settled the
+      // supplier's claim instead.
+      return empty;
+    }
+
+    case "REFUND_TO_CUSTOMER":
+    case "FORFEITED": {
+      const status = depositStatusForTreatment(treatment);
+      const rows = await heldDepositRowsForQuote(ctx, args.quoteId);
+      await resolveDepositsForQuote(ctx, {
+        quoteId: args.quoteId,
+        resolution: status as "REFUNDED" | "FORFEITED",
+        actorId: args.actorId,
+        treatment,
+        saleId,
+      });
+      for (const row of rows) {
+        const hook = treatment === "REFUND_TO_CUSTOMER" ? hookDepositRefunded : hookDepositForfeited;
+        await hook(ctx, {
+          orgId: args.orgId,
+          depositId: row.depositId,
+          customerId: row.customerId,
+          amountMinor: toMinorUnits(row.amount, currency),
+          currency,
+          actorId: args.actorId,
+          occurredAt: args.saleDate,
+          ...(treatment === "REFUND_TO_CUSTOMER" ? { paymentMethod: row.method } : {}),
+        });
+      }
+      return empty;
+    }
+
+    case "OTHER": {
+      const reason = args.depositResolution?.reason?.trim();
+      if (!reason) {
+        throw new ConvexError(
+          "An 'other' deposit treatment has to say what it is. Record the approved treatment and the reason for it."
+        );
+      }
+      // Nothing is posted: the treatment is one the system has no rule for, so
+      // there is no account to credit. The liability stays on the books for a
+      // manual journal, and only the vehicle hold is released.
+      await recordUnpostedDepositTreatment(ctx, {
+        quoteId: args.quoteId,
+        actorId: args.actorId,
+        reason,
+        saleId,
+      });
+      return empty;
+    }
+  }
+}
+
+/** The reservation deposits still holding a vehicle for this quote. */
+async function heldDepositRowsForQuote(
+  ctx: MutationCtx,
+  quoteId: Id<"quotes">
+): Promise<Array<{ depositId: Id<"deposits">; customerId: Id<"customers">; amount: number; method?: string }>> {
+  const deposits = await ctx.db
+    .query("deposits")
+    .withIndex("by_quote", (q) => q.eq("quoteId", quoteId))
+    .collect();
+  return deposits
+    .filter((d) => d.holdActive && d.isDeleted !== true)
+    .map((d) => ({ depositId: d._id, customerId: d.customerId, amount: d.amount, method: d.method }));
+}
+
+async function heldDepositTotalForQuote(ctx: MutationCtx, quoteId: Id<"quotes">): Promise<number> {
+  const rows = await heldDepositRowsForQuote(ctx, quoteId);
+  return rows.reduce((sum, r) => sum + r.amount, 0);
+}
+
+/**
+ * The rows a settlement-treatment resolution just closed. `resolveDepositsForQuote`
+ * returns `appliedDeposits` only for customer-AR applications, so the settlement
+ * path reads back the rows it stamped with this sale instead.
+ */
+async function settlementResolvedDepositRows(
+  ctx: MutationCtx,
+  quoteId: Id<"quotes">
+): Promise<Array<{ depositId: Id<"deposits">; customerId: Id<"customers">; amount: number }>> {
+  const deposits = await ctx.db
+    .query("deposits")
+    .withIndex("by_quote", (q) => q.eq("quoteId", quoteId))
+    .collect();
+  return deposits
+    .filter((d) => d.resolutionTreatment === "APPLY_TO_TRANSACTION_SETTLEMENT" && d.isDeleted !== true)
+    .map((d) => ({ depositId: d._id, customerId: d.customerId, amount: d.amount }));
+}
+
+/** The long-standing behaviour: the deposit comes off what the customer owes. */
+async function applyDepositsToCustomerAr(
+  ctx: MutationCtx,
+  opts: {
+    args: SaleCompletionArgs;
+    prepared: PreparedSaleCompletion;
+    saleId: Id<"sales">;
+  },
+  treatment: "APPLY_TO_DEALER_AMOUNT" | undefined
+): Promise<ResolvedReservationDeposits> {
+  const { args, prepared, saleId } = opts;
+  const resolved = await resolveDepositsForQuote(ctx, {
+    quoteId: args.quoteId!,
+    resolution: "APPLIED",
+    actorId: args.actorId,
+    treatment,
+    saleId,
+  });
+  for (const { depositId, customerId, amount } of resolved.appliedDeposits) {
+    await hookDepositApplied(ctx, {
+      orgId: args.orgId,
+      depositId,
+      customerId,
+      amountMinor: toMinorUnits(amount, prepared.currency),
+      currency: prepared.currency,
+      actorId: args.actorId,
+      occurredAt: args.saleDate,
+      saleId,
+    });
+  }
+  return { previouslyCollected: resolved.total, appliedDeposits: resolved.appliedDeposits };
+}
+
 async function applySaleCompletionSideEffects(
   ctx: MutationCtx,
   args: SaleCompletionArgs,
@@ -277,43 +515,46 @@ async function applySaleCompletionSideEffects(
 
   const isSourced = prepared.vehicle.sourceType === "SOURCED";
   const settlementRoute = consignedSettlementRoute(args);
-  // On DIRECT_TO_SUPPLIER the buyer paid the supplier, so the dealership never
-  // invoiced the customer for the vehicle and holds no receivable for it. The
-  // deposit-application path below credits AR-Customers unconditionally, which
-  // on this route would drive a receivable that does not exist negative.
-  // Refusing is the fail-closed answer until an explicit deposit resolution
-  // says what the money is actually for.
-  const depositsGoToCustomerAr = !isSourced || dealershipCollectsGross(settlementRoute);
 
-  let previouslyCollected = 0;
-  let appliedDeposits: Array<{ depositId: Id<"deposits">; customerId: Id<"customers">; amount: number }> = [];
-  if (args.quoteId) {
-    const resolvedResult = await resolveDepositsForQuote(ctx, {
-      quoteId: args.quoteId,
-      resolution: "APPLIED",
-      actorId: args.actorId,
-    });
-    if (resolvedResult.total > 0 && !depositsGoToCustomerAr) {
-      throw new ConvexError(
-        "The buyer paid the supplier directly on this consigned sale, so the dealership holds no receivable from the customer for the vehicle — a reservation deposit cannot be applied against one. Record how the deposit is to be resolved before completing the sale."
-      );
-    }
-    previouslyCollected = resolvedResult.total;
-    appliedDeposits = resolvedResult.appliedDeposits;
-
-    for (const { depositId, customerId, amount } of resolvedResult.appliedDeposits) {
-      await hookDepositApplied(ctx, {
-        orgId: args.orgId,
-        depositId,
-        customerId,
-        amountMinor: toMinorUnits(amount, prepared.currency),
-        currency: prepared.currency,
-        actorId: args.actorId,
-        occurredAt: args.saleDate,
-        saleId,
-      });
-    }
+  // Amounts the customer is actually billed by the DEALERSHIP. Computed before
+  // deposits are resolved because a reservation deposit may only be applied
+  // against something the customer genuinely owes it, and that cap has to be
+  // known first.
+  //
+  // Warranty/GAP: the dealer resells these (collects the full premium, owes
+  // most of it to the underwriter, keeps a margin) — a term is required
+  // whenever there's a premium to defer, since it drives the recognition
+  // schedule (see dealerProductDeferrals / recognizeDeferredCommissionForMonth).
+  const dealerFeesMinor = args.dealerFees && args.dealerFees > 0 ? toMinorUnits(args.dealerFees, prepared.currency) : undefined;
+  const warrantySoldMinor = args.warrantySold && args.warrantySold > 0 ? toMinorUnits(args.warrantySold, prepared.currency) : undefined;
+  if (warrantySoldMinor && (!args.warrantyTermMonths || args.warrantyTermMonths <= 0)) {
+    throw new ConvexError("A warranty term (in months) is required when a warranty premium is charged.");
   }
+  const warrantyCostMinor = args.warrantyCost && args.warrantyCost > 0 ? toMinorUnits(args.warrantyCost, prepared.currency) : undefined;
+  const gapSoldMinor = args.gapSold && args.gapSold > 0 ? toMinorUnits(args.gapSold, prepared.currency) : undefined;
+  if (gapSoldMinor && (!args.gapTermMonths || args.gapTermMonths <= 0)) {
+    throw new ConvexError("A GAP term (in months) is required when a GAP premium is charged.");
+  }
+  const gapCostMinor = args.gapCost && args.gapCost > 0 ? toMinorUnits(args.gapCost, prepared.currency) : undefined;
+
+  // On a consigned sale settled DIRECT_TO_SUPPLIER the vehicle itself is NOT
+  // billed by the dealership: the buyer paid the supplier, the dealership
+  // issued no invoice for the car, and the customer owes it nothing for it.
+  const vehicleReceivableMinor =
+    isSourced && !dealershipCollectsGross(settlementRoute)
+      ? 0
+      : toMinorUnits(args.salePrice, prepared.currency);
+  const customerBillableMinor =
+    vehicleReceivableMinor + (dealerFeesMinor ?? 0) + (warrantySoldMinor ?? 0) + (gapSoldMinor ?? 0);
+
+  const { previouslyCollected, appliedDeposits } = await resolveReservationDeposits(ctx, {
+    args,
+    prepared,
+    saleId,
+    isSourced,
+    settlementRoute,
+    customerBillableMinor,
+  });
 
   await createSaleTransaction(ctx, {
     orgId: args.orgId,
@@ -340,23 +581,6 @@ async function applySaleCompletionSideEffects(
   // VEHICLE_INVENTORY, so this credit fully relieves it at sale.
   const costAmount = await computeVehicleCapitalizedCost(ctx, prepared.vehicle);
   const costMinor = costAmount > 0 ? toMinorUnits(costAmount, prepared.currency) : undefined;
-  const dealerFeesMinor = args.dealerFees && args.dealerFees > 0 ? toMinorUnits(args.dealerFees, prepared.currency) : undefined;
-
-  // Warranty/GAP: the dealer resells these (collects the full premium, owes
-  // most of it to the underwriter, keeps a margin) — a term is required
-  // whenever there's a premium to defer, since it drives the recognition
-  // schedule (see dealerProductDeferrals / recognizeDeferredCommissionForMonth).
-  const warrantySoldMinor = args.warrantySold && args.warrantySold > 0 ? toMinorUnits(args.warrantySold, prepared.currency) : undefined;
-  if (warrantySoldMinor && (!args.warrantyTermMonths || args.warrantyTermMonths <= 0)) {
-    throw new ConvexError("A warranty term (in months) is required when a warranty premium is charged.");
-  }
-  const warrantyCostMinor = args.warrantyCost && args.warrantyCost > 0 ? toMinorUnits(args.warrantyCost, prepared.currency) : undefined;
-
-  const gapSoldMinor = args.gapSold && args.gapSold > 0 ? toMinorUnits(args.gapSold, prepared.currency) : undefined;
-  if (gapSoldMinor && (!args.gapTermMonths || args.gapTermMonths <= 0)) {
-    throw new ConvexError("A GAP term (in months) is required when a GAP premium is charged.");
-  }
-  const gapCostMinor = args.gapCost && args.gapCost > 0 ? toMinorUnits(args.gapCost, prepared.currency) : undefined;
 
   // A sourced vehicle is legally the supplier's, so this sale is an agency
   // sale: the dealership may recognize the spread over his entitlement and
@@ -430,19 +654,9 @@ async function applySaleCompletionSideEffects(
 
   // The receivable's total must match what the AR debit in hookSaleCompleted
   // actually posted (salePrice + dealerFees + warranty/GAP premiums) — not
-  // just salePrice — or the subledger and GL diverge by that amount.
-  //
-  // On a consigned sale settled DIRECT_TO_SUPPLIER the vehicle itself is NOT in
-  // that debit: the buyer paid the supplier, the dealership issued no invoice
-  // for the car, and the customer owes it nothing for it. Only the dealership's
-  // own charges — fees and F&I products it sold in its own name — are
-  // receivable from the customer. Including the sale price here would create a
-  // subledger receivable with no GL counterpart and show a customer as owing
-  // money nobody ever billed them.
-  const vehicleReceivableMinor =
-    isSourced && !dealershipCollectsGross(settlementRoute)
-      ? 0
-      : toMinorUnits(args.salePrice, prepared.currency);
+  // just salePrice — or the subledger and GL diverge by that amount. That is
+  // exactly `customerBillableMinor`, computed above so the deposit cap and this
+  // document cannot disagree about what the customer was billed.
   const saleReceivableId = await ensureReceivableDocument(ctx, {
     orgId: args.orgId,
     branchId: prepared.vehicle.branchId,
@@ -451,8 +665,7 @@ async function applySaleCompletionSideEffects(
     customerId: args.customerId,
     sourceType: "sales",
     sourceId: saleId,
-    originalAmountMinor: vehicleReceivableMinor
-      + (dealerFeesMinor ?? 0) + (warrantySoldMinor ?? 0) + (gapSoldMinor ?? 0),
+    originalAmountMinor: customerBillableMinor,
     currency: prepared.currency,
     issueDate: args.saleDate,
     dueDate: args.saleDate,
@@ -650,6 +863,8 @@ export async function completeSalesForLineItems(
     downPayment?: number;
     taxRate?: number;
     financingType?: FinancingType;
+    supplierSettlementRoute?: ConsignedSettlementRoute;
+    depositResolution?: { treatment: DepositTreatment; reason?: string };
     idempotencyKey?: string;
     actorId: Id<"users">;
   }
@@ -680,6 +895,8 @@ export async function completeSalesForLineItems(
       taxRate: args.taxRate,
       taxAmount: args.taxRate !== undefined ? item.unitPrice * (args.taxRate / 100) : undefined,
       financingType: args.financingType,
+      supplierSettlementRoute: args.supplierSettlementRoute,
+      depositResolution: args.depositResolution,
       idempotencyKey: args.idempotencyKey ? `${args.idempotencyKey}:${item.vehicleId}` : undefined,
       actorId: args.actorId,
     });
@@ -695,6 +912,7 @@ export async function completeExistingSale(
     orgId: Id<"organizations">;
     saleId: Id<"sales">;
     actorId: Id<"users">;
+    depositResolution?: { treatment: DepositTreatment; reason?: string };
     idempotencyKey?: string;
   }
 ): Promise<Id<"sales">> {
@@ -740,6 +958,9 @@ export async function completeExistingSale(
     // Carried from the draft, so completing it posts the route the deal was
     // actually structured under rather than silently reverting to the default.
     supplierSettlementRoute: sale.supplierSettlementRoute,
+    // Stated at completion, not on the draft: it is a decision about money that
+    // is only made when the deal actually closes.
+    depositResolution: args.depositResolution,
     // Preserve a manager-entered MANUAL commission across completion.
     existingCommissionAmount: sale.commissionAmount,
   };

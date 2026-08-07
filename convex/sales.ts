@@ -41,6 +41,22 @@ const supplierSettlementRouteValidator = v.union(
   v.literal("DIRECT_TO_SUPPLIER")
 );
 
+/**
+ * What happens to the customer's reservation deposit (عربون) when the deal
+ * closes. Required on a consigned sale that has one, because there the answer
+ * is not implied by the sale — see resolveReservationDeposits.
+ */
+const depositResolutionValidator = v.object({
+  treatment: v.union(
+    v.literal("APPLY_TO_DEALER_AMOUNT"),
+    v.literal("APPLY_TO_TRANSACTION_SETTLEMENT"),
+    v.literal("REFUND_TO_CUSTOMER"),
+    v.literal("FORFEITED"),
+    v.literal("OTHER")
+  ),
+  reason: v.optional(v.string()),
+});
+
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
 /**
@@ -301,6 +317,7 @@ export const create = mutation({
     gapCost: v.optional(v.number()),
     gapTermMonths: v.optional(v.number()),
     supplierSettlementRoute: v.optional(supplierSettlementRouteValidator),
+    depositResolution: v.optional(depositResolutionValidator),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -336,6 +353,8 @@ export const completeFromQuote = mutation({
   args: {
     orgId: v.id("organizations"),
     quoteId: v.id("quotes"),
+    supplierSettlementRoute: v.optional(supplierSettlementRouteValidator),
+    depositResolution: v.optional(depositResolutionValidator),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -377,6 +396,8 @@ export const completeFromQuote = mutation({
           saleDate: Date.now(),
           downPayment: quote.downPayment,
           financingType: "CASH",
+          supplierSettlementRoute: args.supplierSettlementRoute,
+          depositResolution: args.depositResolution,
           idempotencyKey: args.idempotencyKey,
           actorId: user._id,
         });
@@ -415,6 +436,7 @@ export const createDraft = mutation({
     gapCost: v.optional(v.number()),
     gapTermMonths: v.optional(v.number()),
     supplierSettlementRoute: v.optional(supplierSettlementRouteValidator),
+    depositResolution: v.optional(depositResolutionValidator),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -447,6 +469,7 @@ export const completeDraft = mutation({
   args: {
     orgId: v.id("organizations"),
     saleId: v.id("sales"),
+    depositResolution: v.optional(depositResolutionValidator),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -470,6 +493,7 @@ export const completeDraft = mutation({
           orgId: args.orgId,
           saleId: args.saleId,
           actorId: user._id,
+          depositResolution: args.depositResolution,
           idempotencyKey: args.idempotencyKey,
         })
     );

@@ -307,8 +307,68 @@ export async function reactivateAllVehiclesForDeposit(
 }
 
 /**
+ * What was decided about a reservation deposit (عربون) when the deal it holds
+ * finished.
+ *
+ * The reservation deposit is the customer's money paid to the DEALERSHIP
+ * against its own receipt voucher. It is not the financing down payment, which
+ * the customer pays to the finance company and which never passes through
+ * these books. Conflating the two is the mistake this taxonomy exists to make
+ * impossible: nothing here can move a reservation deposit to a finance
+ * company, and nothing recognizes it as income merely because a deal closed.
+ *
+ *   APPLY_TO_DEALER_AMOUNT          against something the customer genuinely
+ *                                   owes the dealership on this deal.
+ *   APPLY_TO_TRANSACTION_SETTLEMENT against the dealership-side settlement with
+ *                                   the supplier.
+ *   REFUND_TO_CUSTOMER              returned.
+ *   FORFEITED                       retained under the cancellation policy.
+ *   OTHER                           an approved treatment none of the above
+ *                                   describes. Requires a reason, and posts
+ *                                   nothing — see below.
+ */
+export type DepositTreatment =
+  | "APPLY_TO_DEALER_AMOUNT"
+  | "APPLY_TO_TRANSACTION_SETTLEMENT"
+  | "REFUND_TO_CUSTOMER"
+  | "FORFEITED"
+  | "OTHER";
+
+/**
+ * The deposit row status each treatment leaves behind.
+ *
+ * OTHER maps to null deliberately. It means a human has approved a treatment
+ * the system has no rule for, so there is no account to credit and no honest
+ * status to claim — the liability stays exactly where it is, awaiting a manual
+ * journal. Only the vehicle hold is released. Picking any status here would be
+ * inventing an accounting outcome from a field whose entire purpose is to say
+ * that no automatic outcome applies.
+ */
+export function depositStatusForTreatment(
+  treatment: DepositTreatment
+): "APPLIED" | "REFUNDED" | "FORFEITED" | null {
+  switch (treatment) {
+    case "APPLY_TO_DEALER_AMOUNT":
+    case "APPLY_TO_TRANSACTION_SETTLEMENT":
+      return "APPLIED";
+    case "REFUND_TO_CUSTOMER":
+      return "REFUNDED";
+    case "FORFEITED":
+      return "FORFEITED";
+    case "OTHER":
+      return null;
+  }
+}
+
+/**
  * Resolves every actively-held deposit on a quote (e.g. when its sale
  * completes) and releases the vehicle hold if nothing else is holding it.
+ *
+ * `appliedDeposits` lists only deposits applied to what the CUSTOMER owes the
+ * dealership — those and only those become a canonical payment allocated to the
+ * sale's receivable. A deposit applied to the supplier settlement, refunded, or
+ * left for a manual journal never touches the customer's receivable, so
+ * including it would over-settle an invoice the customer still owes.
  */
 export async function resolveDepositsForQuote(
   ctx: MutationCtx,
@@ -316,6 +376,14 @@ export async function resolveDepositsForQuote(
     quoteId: Id<"quotes">;
     resolution: "APPLIED" | "REFUNDED" | "FORFEITED";
     actorId: Id<"users">;
+    /**
+     * Recorded alongside the status when the caller made an explicit choice.
+     * Absent for the implicit dealer-owned path, where "applied to what the
+     * customer owes" is the only thing APPLIED has ever meant.
+     */
+    treatment?: DepositTreatment;
+    treatmentReason?: string;
+    saleId?: Id<"sales">;
   }
 ): Promise<ResolvedDepositsForQuoteResult> {
   const deposits = await ctx.db
@@ -326,6 +394,8 @@ export async function resolveDepositsForQuote(
   let resolvedTotal = 0;
   const appliedDeposits: ResolvedDepositsForQuoteResult["appliedDeposits"] = [];
   const now = Date.now();
+  const appliesToCustomerAr =
+    args.treatment === undefined || args.treatment === "APPLY_TO_DEALER_AMOUNT";
   for (const deposit of deposits) {
     if (!deposit.holdActive) continue;
     await ctx.db.patch(deposit._id, {
@@ -333,9 +403,12 @@ export async function resolveDepositsForQuote(
       holdActive: false,
       resolvedBy: args.actorId,
       resolvedAt: now,
+      ...(args.treatment ? { resolutionTreatment: args.treatment } : {}),
+      ...(args.treatmentReason ? { resolutionReason: args.treatmentReason } : {}),
+      ...(args.saleId ? { resolutionSaleId: args.saleId } : {}),
     });
     resolvedTotal += deposit.amount;
-    if (args.resolution === "APPLIED") {
+    if (args.resolution === "APPLIED" && appliesToCustomerAr) {
       appliedDeposits.push({
         depositId: deposit._id,
         customerId: deposit.customerId,
@@ -345,6 +418,47 @@ export async function resolveDepositsForQuote(
     await releaseAllVehiclesForDeposit(ctx, deposit);
   }
   return { total: resolvedTotal, appliedDeposits };
+}
+
+/**
+ * Releases the vehicle hold without deciding anything about the money — the
+ * OTHER treatment. The deposit stays HELD and its liability stays on the books;
+ * what is recorded is that somebody chose a treatment the system does not post,
+ * and why.
+ */
+export async function recordUnpostedDepositTreatment(
+  ctx: MutationCtx,
+  args: {
+    quoteId: Id<"quotes">;
+    actorId: Id<"users">;
+    reason: string;
+    saleId?: Id<"sales">;
+  }
+): Promise<{ total: number; depositIds: Id<"deposits">[] }> {
+  const deposits = await ctx.db
+    .query("deposits")
+    .withIndex("by_quote", (q) => q.eq("quoteId", args.quoteId))
+    .collect();
+
+  let total = 0;
+  const depositIds: Id<"deposits">[] = [];
+  const now = Date.now();
+  for (const deposit of deposits) {
+    if (!deposit.holdActive) continue;
+    await ctx.db.patch(deposit._id, {
+      // status deliberately untouched — the money is still held.
+      holdActive: false,
+      resolvedBy: args.actorId,
+      resolvedAt: now,
+      resolutionTreatment: "OTHER" as const,
+      resolutionReason: args.reason,
+      ...(args.saleId ? { resolutionSaleId: args.saleId } : {}),
+    });
+    total += deposit.amount;
+    depositIds.push(deposit._id);
+    await releaseAllVehiclesForDeposit(ctx, deposit);
+  }
+  return { total, depositIds };
 }
 
 async function releaseQuoteDepositHolds(

@@ -2322,6 +2322,28 @@ export default defineSchema({
     createdAt: v.number(),
     resolvedBy: v.optional(v.id("users")),
     resolvedAt: v.optional(v.number()),
+    // What was DECIDED about the money, as distinct from `status`, which
+    // records what happened to it. Two treatments share the APPLIED status
+    // while crediting entirely different accounts, so the status alone cannot
+    // answer "applied to what?" — the question an auditor actually asks.
+    //
+    // OTHER carries a reason and leaves `status` alone: the liability stays on
+    // the books awaiting a manual journal. See depositStatusForTreatment.
+    //
+    // Absent on every deposit resolved before explicit treatments existed, and
+    // on the dealer-owned path where APPLIED has only ever meant
+    // APPLY_TO_DEALER_AMOUNT.
+    resolutionTreatment: v.optional(
+      v.union(
+        v.literal("APPLY_TO_DEALER_AMOUNT"),
+        v.literal("APPLY_TO_TRANSACTION_SETTLEMENT"),
+        v.literal("REFUND_TO_CUSTOMER"),
+        v.literal("FORFEITED"),
+        v.literal("OTHER")
+      )
+    ),
+    resolutionReason: v.optional(v.string()),
+    resolutionSaleId: v.optional(v.id("sales")),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),
