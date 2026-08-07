@@ -158,6 +158,56 @@ jobs:
     - name: TypeScript type check
       run: pnpm typecheck
 
+  # `pnpm build` ran nowhere in this workflow until now. It happens inside
+  # playwright.yml (via playwright.config.ts's webServer) and twice more in
+  # security.yml's zap-baseline/nuclei jobs — but none of those is a required
+  # check, so a branch that type-checks and passes every test while failing
+  # `next build` could merge. `tsc --noEmit` does not catch it: the production
+  # build additionally runs the bundler, resolves every import for real,
+  # prerenders pages, and enforces Next's own build-time rules (a client
+  # component reading useSearchParams outside Suspense being the one that has
+  # bitten this repo before).
+  #
+  # It gets its own named job rather than leaning on Playwright's build because
+  # "does the application compile?" and "do the E2E flows pass?" are different
+  # questions with different failure modes and very different flake profiles.
+  # A build break should surface as a red `production-build`, not as an
+  # ambiguous E2E timeout.
+  #
+  # Secrets: forked PRs receive none, so `next build` would run here with empty
+  # values. Every PR in this repo is raised from a branch on the repo itself, so
+  # that path is currently unreachable — but if outside contributions ever start
+  # arriving, this job needs placeholder fallbacks before it is safe to keep as a
+  # required check.
+  production-build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        persist-credentials: false
+
+    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      with:
+        version: 11.13.0
+
+    - name: Use Node.js
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: '22.21.1'
+        cache: 'pnpm'
+
+    - name: Install dependencies
+      run: pnpm install --frozen-lockfile --ignore-scripts
+
+    - name: Production build
+      run: pnpm build
+      env:
+        NEXT_PUBLIC_CONVEX_URL: ${{ secrets.NEXT_PUBLIC_CONVEX_URL }}
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+        NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+
   convex-backend:
     runs-on: ubuntu-latest
 
