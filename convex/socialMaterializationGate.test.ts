@@ -701,6 +701,59 @@ describe("operator surface", () => {
     expect(states.every((s) => s.status === "completed")).toBe(true);
   });
 
+  test("re-running the fan-out does not drop migrated orgs back to the full scan", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrg(t, "redrive_fanout");
+    const customer = await makeCustomer(t, orgId, "Ann");
+    await seedLegacyEvents(t, orgId, customer, 2);
+
+    vi.useFakeTimers();
+    try {
+      await t.mutation(internal.migrations.startSocialConversationBackfills, {});
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(
+      await asEditor.query(api.socialInbox.materializationStatus, { orgId })
+    ).toMatchObject({ readerSource: "materialized" });
+
+    // A second run must skip it. Restarting would reset the record to `running`
+    // and put the org back on the 1.34 GB/week event scan for no gain — across a
+    // whole deployment that is every tenant at once.
+    const second = await t.mutation(internal.migrations.startSocialConversationBackfills, {
+      continueAutomatically: false,
+    });
+    expect(second.skipped).toBe(1);
+    expect(second.started).toBe(0);
+    expect(
+      await asEditor.query(api.socialInbox.materializationStatus, { orgId })
+    ).toMatchObject({ readerSource: "materialized" });
+
+    // `force` is the deliberate rebuild: it enqueues the org again rather than
+    // skipping it. (The org only leaves `materialized` once those scheduled
+    // backfills actually start, which is why this asserts the enqueue decision
+    // and not a transient reader state.)
+    const forced = await t.mutation(internal.migrations.startSocialConversationBackfills, {
+      continueAutomatically: false,
+      force: true,
+    });
+    expect(forced.started).toBe(1);
+    expect(forced.skipped).toBe(0);
+
+    // Draining that rebuild leaves the org ready again and the inbox correct.
+    vi.useFakeTimers();
+    try {
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(
+      await asEditor.query(api.socialInbox.materializationStatus, { orgId })
+    ).toMatchObject({ readerSource: "materialized" });
+    expect(await listConversations(asEditor, orgId)).toHaveLength(1);
+  });
+
   test("a failed run is recorded as failed, and still falls back", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrg(t, "failure_org");

@@ -295,9 +295,9 @@ describe.each(["legacy", "materialized"] as const)(
     const actual = await actualConversations(asEditor, orgId);
     const expected = await oracleConversations(t, orgId);
     expect(actual).toHaveLength(2);
-    expect(actual.map((c) => c.eventCount).sort()).toEqual([1, 1]);
-    expect(actual.map((c) => c.eventCount).sort()).toEqual(
-      expected.map((c) => c.eventCount).sort()
+    expect(actual.map((c) => c.eventCount).sort((a, b) => a - b)).toEqual([1, 1]);
+    expect(actual.map((c) => c.eventCount).sort((a, b) => a - b)).toEqual(
+      expected.map((c) => c.eventCount).sort((a, b) => a - b)
     );
     // No orphan left under the old key.
     expect(await t.run((ctx) => ctx.db.query("socialConversations").collect())).toHaveLength(2);
@@ -621,7 +621,7 @@ describe.each(["legacy", "materialized"] as const)(
       const healed = await actualConversations(asEditor, orgId, {}, "materialized");
       const expected = await oracleConversations(t, orgId);
       expect(healed).toHaveLength(2);
-      expect(healed.map((c) => c.eventCount).sort()).toEqual([1, 2]);
+      expect(healed.map((c) => c.eventCount).sort((a, b) => a - b)).toEqual([1, 2]);
       expect(healed.map((c) => c.latestCreationTime)).toEqual(
         expected.map((c) => c.latestCreationTime)
       );
@@ -832,7 +832,21 @@ describe.each(["legacy", "materialized"] as const)(
       expect(after[0].eventCount).toBe(60);
     }, 300000);
 
-    test("a failure in the deferred sync rolls back every event patch", async () => {
+    // Scope, stated honestly: deleting the survivor makes `mergeCustomers`
+    // throw in its survivor lookup (`customers.ts`, before the reassignment
+    // loop), so what this proves is that a merge which fails *before* patching
+    // leaves both the events and the materialised rows untouched.
+    //
+    // The window it does NOT reach is a throw after the event patches and
+    // during `syncDeferredSocialThreads` — the one the deferred writer newly
+    // introduces. Injecting a failure there needs a seam inside the sync that
+    // this suite has no way to reach: convex-test runs the handler through the
+    // real module graph, so the sync cannot be stubbed, and no input makes a
+    // full thread recompute throw on its own. That window rests on Convex
+    // transaction atomicity, which is a platform guarantee rather than
+    // something this code can get wrong — a throw anywhere in the mutation
+    // rolls back every write in it, patches included.
+    test("a merge that fails before patching leaves events and threads untouched", async () => {
       const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
       const { orgId, asUser } = await seedOrg(t, "bulk_rollback", MANAGER_PERMISSIONS);
       const survivorId = await makeCustomer(t, orgId, "Survivor", "C");
@@ -845,9 +859,8 @@ describe.each(["legacy", "materialized"] as const)(
         })
       );
 
-      // Deleting the survivor makes the merge throw. Convex rolls the whole
-      // mutation back, so atomicity is preserved even though the conversation
-      // sync now happens later than the event patches.
+      // Deleting the survivor makes the merge throw in its survivor lookup,
+      // which runs before the reassignment loop.
       await t.run((ctx) => ctx.db.delete(survivorId));
       await expect(
         asUser.mutation(api.customers.mergeCustomers, { orgId, survivorId, loserId })

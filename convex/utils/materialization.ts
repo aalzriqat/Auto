@@ -1,6 +1,5 @@
-import type { Doc, Id } from "../_generated/dataModel";
+import type { DataModel, Doc, Id } from "../_generated/dataModel";
 import type { GenericDatabaseReader, GenericDatabaseWriter } from "convex/server";
-import type { DataModel } from "../_generated/dataModel";
 
 /**
  * The materialisation shape `socialConversations` readers currently expect.

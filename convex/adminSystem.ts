@@ -65,13 +65,19 @@ export const getOverview = query({
  * "1,029" reads like a stall.
  */
 export const getSocialMaterializationStatus = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
     await requireSuperAdmin(ctx);
     const now = Date.now();
-    const orgs = await ctx.db.query("organizations").take(OVERVIEW_COUNT_CAP);
+    // Paginated rather than `take(OVERVIEW_COUNT_CAP)`. Each org costs its own
+    // document plus one indexed read per platform, so a 10,000-org cap is
+    // ~30,000 reads in one query — past Convex's per-transaction ceiling, which
+    // would turn this status screen into an error exactly when a large tenant
+    // list is the reason someone opened it.
+    const orgPage = await ctx.db.query("organizations").paginate(args.paginationOpts);
+    const orgs = orgPage.page;
 
-    return await Promise.all(
+    const page = await Promise.all(
       orgs.map(async (org) => {
         const platforms = await Promise.all(
           SOCIAL_PLATFORMS.map(async (platform) => {
@@ -102,6 +108,8 @@ export const getSocialMaterializationStatus = query({
         };
       })
     );
+
+    return { ...orgPage, page };
   },
 });
 

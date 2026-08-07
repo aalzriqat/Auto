@@ -1,6 +1,7 @@
 import { expect, test, describe } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as ts from "typescript";
 
 /**
  * `socialBulkMutation` suppresses the per-write conversation recompute so a
@@ -45,9 +46,47 @@ function convexModules(dir: string, acc: string[] = []): string[] {
   return acc;
 }
 
-/** Comments cannot satisfy the obligation, so they are removed before scanning. */
+/**
+ * Blanks out comments so they cannot satisfy the obligation, using TypeScript's
+ * own scanner rather than a regular expression.
+ *
+ * The regex version removed anything shaped like a comment *anywhere*,
+ * including inside string, template and regular-expression literals. That is a
+ * fail-open defect in a guard, not a cosmetic one: a mutation containing a URL
+ * such as "https colon slash slash", or a regex literal matching a comment
+ * opener, would have had real code deleted — and deleting code can erase the
+ * closing `});` that marks a chunk boundary, which merges two
+ * mutations and lets a neighbour's `syncDeferredSocialThreads(` call cover an
+ * offender that has none. This guard has already shipped four separate
+ * fail-open bugs; it does not get a fifth for the sake of a one-liner.
+ *
+ * Comment ranges are replaced with spaces of equal length, and newlines inside
+ * block comments are preserved, so every downstream offset, chunk boundary and
+ * line number is exactly what it was in the source.
+ */
 export function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const scanner = ts.createScanner(
+    ts.ScriptTarget.Latest,
+    /* skipTrivia */ false,
+    ts.LanguageVariant.Standard,
+    source
+  );
+  const out = source.split("");
+  let token = scanner.scan();
+  while (token !== ts.SyntaxKind.EndOfFileToken) {
+    if (
+      token === ts.SyntaxKind.SingleLineCommentTrivia ||
+      token === ts.SyntaxKind.MultiLineCommentTrivia
+    ) {
+      const start = scanner.getTokenStart();
+      const end = scanner.getTokenEnd();
+      for (let i = start; i < end; i++) {
+        if (out[i] !== "\n" && out[i] !== "\r") out[i] = " ";
+      }
+    }
+    token = scanner.scan();
+  }
+  return out.join("");
 }
 
 /**
@@ -116,6 +155,70 @@ export function deferredMutationOffenders(source: string, rel: string): string[]
 }
 
 describe("deferred conversation sync", () => {
+  test("comment-like text inside literals is left alone", () => {
+    // Each of these would have been mangled by the regex stripper. The URL and
+    // the template both contain `//`; the regex literal contains a block-comment
+    // opener; and the closing delimiter inside a string is what could have
+    // swallowed real code up to the next one.
+    const url = 'const endpoint = "https://graph.example.com/v1";';
+    expect(stripComments(url)).toBe(url);
+
+    const template = "const t = `see https://example.com/docs for details`;";
+    expect(stripComments(template)).toBe(template);
+
+    const regex = "const re = /\\/\\*/;";
+    expect(stripComments(regex)).toBe(regex);
+
+    const closer = 'const s = "ends with a block comment closer: */";';
+    expect(stripComments(closer)).toBe(closer);
+
+    // Real comments still go, and the code around them survives intact.
+    const mixed = 'const a = 1; // note\nconst b = "//not a comment";';
+    const strippedMixed = stripComments(mixed);
+    expect(strippedMixed).toContain('const b = "//not a comment";');
+    expect(strippedMixed).not.toContain("note");
+    // Offsets are preserved so chunk boundaries and line numbers do not shift.
+    expect(strippedMixed).toHaveLength(mixed.length);
+  });
+
+  test("a comment opener inside a string cannot hide an offender", () => {
+    // This is the fail-open the regex stripper actually produced, not a
+    // hypothetical. `"/*"` in a string paired with the next real `*/` made the
+    // regex delete everything between them — including the offender's own
+    // closing `});` and the boundary before the compliant mutation. The two
+    // chunks merged, the offender inherited its neighbour's
+    // `syncDeferredSocialThreads(` call, and a mutation that syncs nothing was
+    // reported as clean.
+    const source = [
+      'import { socialBulkMutation } from "./functions";',
+      "",
+      "export const offender = socialBulkMutation({",
+      "  args: {},",
+      "  handler: async (ctx) => {",
+      '    const blockOpener = "/*";',
+      "    await ctx.db.patch(id, { blockOpener });",
+      "  },",
+      "});",
+      "",
+      "/* a perfectly ordinary comment */",
+      "export const compliant = socialBulkMutation({",
+      "  args: {},",
+      "  handler: async (ctx) => {",
+      "    const threads = newDeferredSocialThreads();",
+      '    collectSocialThread(threads, "instagram", doc);',
+      "    await syncDeferredSocialThreads(ctx, threads);",
+      "  },",
+      "});",
+      "",
+    ].join("\n");
+
+    const offenders = deferredMutationOffenders(source, "x.ts");
+    expect(offenders).toEqual([
+      "x.ts:offender uses socialBulkMutation but never calls syncDeferredSocialThreads",
+      "x.ts:offender uses socialBulkMutation but never calls collectSocialThread",
+    ]);
+  });
+
   test("every mutation built on socialBulkMutation syncs the threads it touched", () => {
     const offenders: string[] = [];
 
