@@ -353,6 +353,33 @@ describe("socialInbox.platformStats", () => {
     expect(repaired.instagram).toEqual({ comments: 1, dms: 0, total: 1, uniqueContacts: 1 });
   });
 
+  test("an unidentified sender counts as an event but not as a contact", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrgWithEditor(t);
+
+    await t.run((ctx) =>
+      ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "anonymous",
+        kind: "dm",
+        senderInstagramId: "",
+      })
+    );
+
+    const stats = await asEditor.query(api.socialInbox.platformStats, { orgId });
+
+    // The event itself is counted exactly as before.
+    expect(stats.instagram.total).toBe(1);
+    expect(stats.instagram.dms).toBe(1);
+    // The contact is not. This is a deliberate divergence: the `Set` this
+    // replaced counted `""` as one contact and showed the dealer a person who
+    // does not exist. Pinned so the difference stays a decision rather than a
+    // regression — see `recordSocialContact`.
+    expect(stats.instagram.uniqueContacts).toBe(0);
+    const contacts = await t.run((ctx) => ctx.db.query("socialContacts").collect());
+    expect(contacts).toHaveLength(0);
+  });
+
   test("requires org membership", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithEditor(t);

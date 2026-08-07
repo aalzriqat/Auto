@@ -434,8 +434,19 @@ export async function recordSocialContact(
   platform: "instagram" | "facebook",
   senderRawId: string
 ): Promise<void> {
-  // An empty id is not a contact — it is a sender the webhook could not
-  // identify, and materialising it would invent a contact the Set never had.
+  // A deliberate, documented divergence from the `Set` this replaces.
+  //
+  // `new Set(events.map(e => e.senderInstagramId))` counted `""` as a contact:
+  // one anonymous bucket, reported to the dealer as a real person. Skipping it
+  // means an org whose webhook failed to identify a sender now reads one lower
+  // than it used to. Measured on production (kindly-hound-172, 2026-08-07) no
+  // such row exists in either table — 347 Instagram and 682 Facebook events,
+  // zero blank sender ids — so no live org's number moves.
+  //
+  // Kept as a guard rather than "fixed" to match the old count, because the
+  // alternative is materialising a `socialContacts` row keyed on the empty
+  // string: a permanent phantom contact per org that no later event can
+  // reconcile away.
   if (!senderRawId) return;
   const existing = await ctx.db
     .query("socialContacts")
