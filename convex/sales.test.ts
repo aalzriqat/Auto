@@ -649,8 +649,8 @@ describe("C1/C2: MANUAL commission lifecycle", () => {
   });
 });
 
-describe("commission accrual lock respects reversals", () => {
-  test("a REVERSED accrual no longer locks a MANUAL commission amount", async () => {
+describe("correcting a commission already in the ledger", () => {
+  test("each change posts its own adjustment, and a queued accrual still counts as accrued", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "rev_unlock");
     await t.run(async (ctx) => {
@@ -687,22 +687,43 @@ describe("commission accrual lock respects reversals", () => {
         occurredAt: Date.now(),
         accountingDate: Date.now(),
         currency: "USD",
-        payload: {},
+        // The real amount, not `{}`. A POSTED accrual always carries
+        // amountMinor (hookCommissionAccrued writes it), and an empty payload
+        // is now correctly read as an unreadable amount and refused — so the
+        // shortcut was simulating a state that cannot occur.
+        payload: { saleId, amountMinor: 30_000, currency: "USD", salespersonId: userId },
         status: "POSTED",
         createdBy: userId,
         createdAt: Date.now(),
       })
     );
-    await expect(
-      asAdmin.mutation(api.sales.setCommissionAmount, { orgId, saleId, commissionAmount: 400 })
-    ).rejects.toThrow(/already recorded in the ledger/i);
-
-    // Reverse the accrual — the lock's own error message says "Reverse it
-    // before changing the amount", so a REVERSED accrual must actually unlock.
-    await t.run((ctx) => ctx.db.patch(eventId, { status: "REVERSED" }));
+    // An amount on the books is corrected, not frozen. This used to throw
+    // "already recorded in the ledger" and point at a correction workflow that
+    // does not exist, which left a wrong commission permanently wrong.
     await asAdmin.mutation(api.sales.setCommissionAmount, { orgId, saleId, commissionAmount: 400 });
-    const sale = await t.run((ctx) => ctx.db.get(saleId));
-    expect(sale?.commissionAmount).toBe(400);
+    expect(await t.run((ctx) => ctx.db.get(saleId))).toMatchObject({
+      commissionAmount: 400,
+      commissionAdjustmentSeq: 1,
+    });
+
+    // A second correction is its own entry, not a rewrite of the first.
+    await asAdmin.mutation(api.sales.setCommissionAmount, { orgId, saleId, commissionAmount: 500 });
+    expect(await t.run((ctx) => ctx.db.get(saleId))).toMatchObject({
+      commissionAmount: 500,
+      commissionAdjustmentSeq: 2,
+    });
+
+    // Marking the posted accrual REVERSED does not by itself return this sale
+    // to "never accrued": this org has no chart, so the real accrual from the
+    // first setCommissionAmount is still sitting in the outbox and will post.
+    // Treating it as accrued — and so correcting rather than re-accruing — is
+    // what keeps the eventual posting from being double-counted.
+    await t.run((ctx) => ctx.db.patch(eventId, { status: "REVERSED" }));
+    await asAdmin.mutation(api.sales.setCommissionAmount, { orgId, saleId, commissionAmount: 600 });
+    expect(await t.run((ctx) => ctx.db.get(saleId))).toMatchObject({
+      commissionAmount: 600,
+      commissionAdjustmentSeq: 3,
+    });
   });
 
   test("cancelling a never-completed draft does not wipe the trade-in vehicle's acquisition cost", async () => {

@@ -17,6 +17,7 @@ import {
   hookDepositApplied,
   hookTradeInAccepted,
   getOrgCurrency,
+  commissionAccountingDate,
 } from "../accounting/workflowHooks";
 import { computeResoldProductMargin } from "../accounting/postingRules";
 import { toMinorUnits } from "./money";
@@ -70,8 +71,12 @@ type PreparedSaleCompletion = {
   leadId?: Id<"leads">;
   commissionAmount?: number;
   currency: string;
-  // AUTO modes accrue the commission to the GL at completion; MANUAL defers it
-  // to payment time (so the amount stays editable until paid).
+  // True when the commission amount is already known at completion, in EITHER
+  // mode. MANUAL used to defer accrual to payment time so the amount stayed
+  // editable; it no longer does — recognition follows measurability, and a
+  // wrong amount is corrected by a signed adjusting entry rather than by being
+  // left unposted. Both branches below now set this from `commissionAmount`
+  // alone, so the mode no longer decides it.
   accrueAtCompletion: boolean;
 };
 
@@ -143,13 +148,21 @@ async function prepareSaleCompletion(
   const commissionMode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
 
   let commissionAmount: number | undefined;
-  // AUTO modes derive the amount now and accrue it to the GL at completion.
-  // MANUAL mode carries the manager-entered amount through untouched and defers
-  // its GL accrual to payment time, so it stays editable until paid (see
-  // sales.ts markCommissionPaid / setCommissionAmount).
+  // Commission expense is recognized once the obligation is both probable (the
+  // sale completed) and measurable (an amount exists) — dated to the sale, so it
+  // lands in the same period as the revenue it was earned against.
+  //
+  // AUTO modes derive the amount here, so they are measurable at completion.
+  // MANUAL is measurable at completion only when a manager already entered an
+  // amount on the draft; otherwise nothing accrues until one is set, and
+  // sales.setCommissionAmount accrues it then. Deferring MANUAL accrual to
+  // PAYMENT (the previous behavior) recognized the expense on a cash basis
+  // inside an accrual ledger: a car sold in July with its commission paid in
+  // August showed full margin in July and a naked expense in August.
   let accrueAtCompletion = false;
   if (commissionMode === "MANUAL") {
     commissionAmount = args.existingCommissionAmount;
+    accrueAtCompletion = commissionAmount != null;
   } else {
     commissionAmount = await computeAutoCommissionAmount(ctx, {
       salePrice: args.salePrice,
@@ -497,7 +510,11 @@ async function applySaleCompletionSideEffects(
       amountMinor: toMinorUnits(prepared.commissionAmount, prepared.currency),
       currency: prepared.currency,
       actorId: args.actorId,
-      occurredAt: args.saleDate,
+      // The same rule every other commission entry uses. Dating this one at the
+      // raw saleDate let a backdated completion queue its accrual behind a
+      // closed period while a later correction or payment — which DO use the
+      // rule — posted into an open one, leaving Commission Payable negative.
+      occurredAt: await commissionAccountingDate(ctx, args.orgId, saleId, args.saleDate),
     });
   }
 

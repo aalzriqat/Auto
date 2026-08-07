@@ -40,6 +40,55 @@ async function seed(t: any, suffix: string) {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     });
+    // A real payslip's commissionMinor is DERIVED from its commissionSaleIds
+    // (settleItemCommissions), so a positive commission with an empty list is a
+    // state production cannot produce — and one the guard now rightly refuses,
+    // since a commission paid against no sale cannot be verified against
+    // anything. The fixture carries a sale whose accrual is posted for the same
+    // amount, which is what a settleable payslip actually looks like.
+    const customerId = await ctx.db.insert("customers", {
+      orgId,
+      firstName: "Payroll",
+      lastName: "Buyer",
+    });
+    const vehicleId = await ctx.db.insert("vehicles", {
+      orgId,
+      make: "Test",
+      model: "Commission",
+      year: 2024,
+      mileage: 0,
+      color: "Black",
+      fuelType: "PETROL",
+      transmission: "AUTOMATIC",
+      sellingPrice: 30000,
+      status: "SOLD",
+    });
+    const saleId = await ctx.db.insert("sales", {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 30000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      commissionAmount: 10,
+    });
+    await ctx.db.insert("accountingEvents", {
+      orgId,
+      eventType: "COMMISSION_ACCRUED",
+      sourceType: "sales",
+      sourceId: `commission_${saleId}`,
+      eventVersion: 1,
+      idempotencyKey: `commission_accrued_${saleId}`,
+      occurredAt: Date.now(),
+      accountingDate: Date.now(),
+      currency: "JOD",
+      payload: { saleId, amountMinor: 10000, currency: "JOD", salespersonId: userId },
+      status: "POSTED",
+      createdBy: userId,
+      createdAt: Date.now(),
+    });
+
     const makeItem = async (owner: any) =>
       await ctx.db.insert("payrollItems", {
         orgId: owner,
@@ -53,7 +102,7 @@ async function seed(t: any, suffix: string) {
         grossMinor: 10000,
         netMinor: 10000,
         currency: "JOD",
-        commissionSaleIds: [],
+        commissionSaleIds: [saleId],
         createdAt: Date.now(),
       });
     return {
