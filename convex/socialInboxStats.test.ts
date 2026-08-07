@@ -1,5 +1,5 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { expect, test, describe } from "vitest";
+import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 
@@ -378,6 +378,46 @@ describe("socialInbox.platformStats", () => {
     expect(stats.instagram.uniqueContacts).toBe(0);
     const contacts = await t.run((ctx) => ctx.db.query("socialContacts").collect());
     expect(contacts).toHaveLength(0);
+  });
+
+  test("the repair sequence drains across batches, not just the first page", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const { orgId, asEditor } = await seedOrgWithEditor(t);
+
+      for (const i of [0, 1, 2, 3, 4]) {
+        await t.run((ctx) =>
+          ctx.db.insert("facebookEvents", {
+            orgId,
+            externalId: `batch_${i}`,
+            kind: "comment",
+            senderFacebookId: `batch_sender_${i}`,
+          })
+        );
+      }
+      expect((await asEditor.query(api.socialInbox.platformStats, { orgId })).facebook.uniqueContacts).toBe(5);
+
+      // `clearSocialContacts` deletes a page then re-schedules itself with no
+      // cursor, because every row it just read is gone and the next batch is
+      // the new first page. A one-row batch forces that self-scheduled chain to
+      // run five times — the path a single-page test never reaches.
+      await t.mutation(internal.migrations.clearSocialContacts, { batchSize: 1 });
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      const emptied = await t.run((ctx) => ctx.db.query("socialContacts").collect());
+      expect(emptied).toHaveLength(0);
+      expect((await asEditor.query(api.socialInbox.platformStats, { orgId })).facebook.uniqueContacts).toBe(0);
+
+      await t.mutation(internal.migrations.backfillFacebookSocialContacts, { batchSize: 1 });
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      const rebuilt = await asEditor.query(api.socialInbox.platformStats, { orgId });
+      expect(rebuilt.facebook.uniqueContacts).toBe(5);
+      expect(rebuilt.facebook.total).toBe(5);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("requires org membership", async () => {
