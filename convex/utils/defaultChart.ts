@@ -6,7 +6,6 @@ export const SYSTEM_KEYS = {
   ACCOUNTS_RECEIVABLE_CUSTOMERS: "ACCOUNTS_RECEIVABLE_CUSTOMERS",
   ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES",
   RECEIVABLE_FROM_SUPPLIERS: "RECEIVABLE_FROM_SUPPLIERS",
-  SUPPLIER_PROCEEDS_CLEARING: "SUPPLIER_PROCEEDS_CLEARING",
   CONSIGNMENT_COMMISSION_REVENUE: "CONSIGNMENT_COMMISSION_REVENUE",
   UNAPPLIED_CUSTOMER_CASH: "UNAPPLIED_CUSTOMER_CASH",
   CUSTOMER_DEPOSITS_LIABILITY: "CUSTOMER_DEPOSITS_LIABILITY",
@@ -154,20 +153,6 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: false,
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS,
-  },
-  {
-    // Gross proceeds the dealership collects on the supplier's behalf when the
-    // money routes through its account instead of straight to him. Money held
-    // for somebody else is not revenue and not the dealership's cash to spend;
-    // it sits here until it is remitted.
-    code: "2130",
-    name: "Supplier Proceeds Clearing",
-    nameAr: "حساب وسيط - متحصلات الموردين",
-    type: "LIABILITY",
-    normalBalance: "CREDIT",
-    isControlAccount: false,
-    allowManualPosting: false,
-    systemKey: SYSTEM_KEYS.SUPPLIER_PROCEEDS_CLEARING,
   },
   {
     code: "1220",

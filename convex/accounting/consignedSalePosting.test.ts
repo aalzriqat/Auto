@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { ruleSaleCompleted, SaleCompletedPayload } from "./postingRules";
+import { ruleSaleCompleted, ruleSupplierPaymentSettled, SaleCompletedPayload } from "./postingRules";
 import { SYSTEM_KEYS } from "../utils/defaultChart";
 
 /**
@@ -61,7 +61,28 @@ describe("a consigned vehicle sold as the supplier's agent", () => {
     // Gross arrives, but 9,500 of it belongs to somebody else from the instant
     // it lands — it is not the dealership's money to report or to spend.
     expect(net(result, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(jod(12_500));
-    expect(net(result, SYSTEM_KEYS.SUPPLIER_PROCEEDS_CLEARING)).toBe(-jod(9_500));
+    expect(net(result, SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS)).toBe(-jod(9_500));
+  });
+
+  test("credits the same account the supplier is later paid out of", () => {
+    // The sale raises what the supplier is owed; `markPaid` discharges it
+    // through ruleSupplierPaymentSettled. If the two name different accounts
+    // the liability is never cleared: the sale's credit sits there forever and
+    // the payment's debit lands on an account that was never credited, leaving
+    // two permanently wrong balances that happen to offset in total.
+    const sale = ruleSaleCompleted(consigned());
+    const settlement = ruleSupplierPaymentSettled({
+      payableId: "pay_1",
+      sourcedFromName: "Amman Importer Co",
+      amountMinor: jod(9_500),
+      currency: "JOD",
+      paymentMethod: "BANK_TRANSFER",
+      costOrigin: "COGS",
+    });
+
+    const raisedOn = sale.lines.filter((l) => l.creditMinor > 0).map((l) => l.accountSystemKey);
+    const settledOn = settlement.lines.filter((l) => l.debitMinor > 0).map((l) => l.accountSystemKey);
+    expect(raisedOn).toEqual(expect.arrayContaining(settledOn));
   });
 
   test("books only a claim for the margin when the buyer paid the supplier direct", () => {
@@ -69,7 +90,7 @@ describe("a consigned vehicle sold as the supplier's agent", () => {
 
     // Nothing gross ever reaches these books.
     expect(net(result, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(0);
-    expect(net(result, SYSTEM_KEYS.SUPPLIER_PROCEEDS_CLEARING)).toBe(0);
+    expect(net(result, SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS)).toBe(0);
     expect(net(result, SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS)).toBe(jod(3_000));
     expect(net(result, SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE)).toBe(-jod(3_000));
   });

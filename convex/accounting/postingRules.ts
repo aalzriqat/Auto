@@ -464,8 +464,15 @@ function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
       : [
           // Gross landed here on his behalf: an asset for the whole amount, of
           // which his share is a liability from the instant it arrives.
+          //
+          // AP-Suppliers rather than a separate clearing account, because this
+          // is the balance `sourcingPayables.markPaid` discharges. A dedicated
+          // clearing account read better and settled never: the sale credited
+          // one account and the payment debited another, so the liability stood
+          // forever while the payment's debit landed somewhere nothing had
+          // credited.
           line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, p.saleAmountMinor, 0, "Consigned sale proceeds receivable", dims),
-          line(SYSTEM_KEYS.SUPPLIER_PROCEEDS_CLEARING, 0, entitlementMinor, `Held for ${supplier}`, dims),
+          line(SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, 0, entitlementMinor, `Owed to ${supplier}`, dims),
           line(SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, marginMinor, "Consignment commission earned", dims),
         ];
 
