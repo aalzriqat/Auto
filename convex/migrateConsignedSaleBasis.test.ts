@@ -701,10 +701,10 @@ describe("a correction that both queues AND needs a human", () => {
       orgId: s.orgId,
     });
 
-    const impact = await s.asUser.query(api.sourcedAgentImpact.sourcedSaleImpactReport, {
+    const impact = await s.t.query(internal.sourcedAgentImpact.sourcedSaleImpactReport, {
       orgId: s.orgId,
     });
-    const org = impact.orgs.find((o) => o.orgId === s.orgId)!;
+    const org = impact.orgs.find((o: { orgId: string }) => o.orgId === s.orgId)!;
     expect(org.anomalyCount).toBe(0);
     expect(org.totals.revenueOverstatementMinor).toBe(0);
   });
