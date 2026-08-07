@@ -617,12 +617,13 @@ export async function syncSocialConversation(
 
   const events = await readThreadEvents(ctx, id);
 
-  if (events.length === 0) {
+  // Sorted oldest-first, so the newest is the last one. `at(-1)` is only
+  // `undefined` for an empty thread, which returned above.
+  const latest = events.at(-1);
+  if (!latest) {
     if (existing) await ctx.db.delete(existing._id);
     return;
   }
-
-  const latest = events[events.length - 1];
   // Distinct, in first-seen order: the list shows how many vehicles a thread
   // touched and a summary of the first one.
   const vehicleIds: Id<"vehicles">[] = [];

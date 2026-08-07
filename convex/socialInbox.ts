@@ -199,35 +199,39 @@ export const listConversations = query({
     // choice: a query can only use one, so when both are supplied the platform
     // index runs and `kind` is matched against the stream. That still reads
     // only small conversation rows, never the events behind them.
-    const baseQuery = args.platform
-      ? ctx.db
-          .query("socialConversations")
-          .withIndex("by_org_platform_lastEventAt", (q) =>
-            q.eq("orgId", args.orgId).eq("platform", args.platform!)
-          )
-      : args.kind
-        ? ctx.db
-            .query("socialConversations")
-            .withIndex("by_org_kind_lastEventAt", (q) =>
-              q.eq("orgId", args.orgId).eq("conversationKind", args.kind!)
-            )
-        : ctx.db
-            .query("socialConversations")
-            .withIndex("by_org_lastEventAt", (q) => q.eq("orgId", args.orgId));
+    const { orgId, platform, kind, hasVehicle, needsReply } = args;
+    const conversations = ctx.db.query("socialConversations");
+
+    let baseQuery;
+    if (platform) {
+      baseQuery = conversations.withIndex("by_org_platform_lastEventAt", (q) =>
+        q.eq("orgId", orgId).eq("platform", platform)
+      );
+    } else if (kind) {
+      baseQuery = conversations.withIndex("by_org_kind_lastEventAt", (q) =>
+        q.eq("orgId", orgId).eq("conversationKind", kind)
+      );
+    } else {
+      baseQuery = conversations.withIndex("by_org_lastEventAt", (q) => q.eq("orgId", orgId));
+    }
 
     // Whatever the chosen index did not already constrain. `hasVehicle` reads
-    // the stored distinct-vehicle list and `needsReply` the stored unanswered
+    // the stored distinct-vehicle count and `needsReply` the stored unanswered
     // count, so both mean exactly what the old in-memory predicates meant.
+    //
+    // `q.and` is variadic and each clause is independent, so they are collected
+    // and applied in one call. `true` when there is nothing to narrow — an
+    // `and()` over an empty list is not a shape worth relying on.
     const filtered = baseQuery.filter((q) => {
       const clauses = [];
-      if (args.platform && args.kind) {
-        clauses.push(q.eq(q.field("conversationKind"), args.kind));
-      }
-      if (args.hasVehicle === true) clauses.push(q.gt(q.field("vehicleCount"), 0));
-      if (args.hasVehicle === false) clauses.push(q.eq(q.field("vehicleCount"), 0));
-      if (args.needsReply === true) clauses.push(q.gt(q.field("unansweredCount"), 0));
-      if (args.needsReply === false) clauses.push(q.eq(q.field("unansweredCount"), 0));
-      return clauses.length === 0 ? true : clauses.reduce((a, b) => q.and(a, b));
+      // Only when the platform index was chosen, so `kind` was not applied to
+      // the index range and still has to be matched against the stream.
+      if (platform && kind) clauses.push(q.eq(q.field("conversationKind"), kind));
+      if (hasVehicle === true) clauses.push(q.gt(q.field("vehicleCount"), 0));
+      if (hasVehicle === false) clauses.push(q.eq(q.field("vehicleCount"), 0));
+      if (needsReply === true) clauses.push(q.gt(q.field("unansweredCount"), 0));
+      if (needsReply === false) clauses.push(q.eq(q.field("unansweredCount"), 0));
+      return clauses.length === 0 ? true : q.and(...clauses);
     });
 
     const pageResult = await filtered.order("desc").paginate(args.paginationOpts);
