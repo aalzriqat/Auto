@@ -4,6 +4,7 @@ import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { SOCIAL_CONVERSATION_GENERATION } from "./utils/materialization";
+import { recordConversationBackfillFailure } from "./migrations";
 import type { Id } from "./_generated/dataModel";
 
 /**
@@ -754,44 +755,56 @@ describe("operator surface", () => {
     expect(await listConversations(asEditor, orgId)).toHaveLength(1);
   });
 
-  test("a failed run is recorded as failed, and still falls back", async () => {
+  test("recording a failure marks the run failed and leaves it un-ready", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrg(t, "failure_org");
     const customer = await makeCustomer(t, orgId, "Zed");
     await seedLegacyEvents(t, orgId, customer, 2);
 
-    // An event whose customer row has been deleted: `syncSocialConversation`
-    // reads the thread fine, but the list's enrichment cannot resolve it. The
-    // point is the state machine, so force the failure at its source by
-    // pointing an event at a customer id that no longer exists.
-    await t.runUnwrapped(async (ctx) => {
-      await ctx.db.delete(customer);
-    });
-
+    // Start a run so there is a real state row to fail.
     await t.mutation(internal.migrations.backfillInstagramConversations, {
       orgId,
+      batchSize: 1,
       continueAutomatically: false,
     });
 
-    const state = await t.run((ctx) =>
+    // The failure recorder is called directly rather than provoked through the
+    // backfill. There is no reachable input that makes a page sync throw:
+    // `syncSocialConversation` groups events by thread identity and never reads
+    // the customer document, so a dangling `customerId` — the obvious candidate
+    // — completes normally. Rather than dress a passing run up as a failure
+    // test, this exercises the branch itself and asserts unconditionally.
+    const before = await t.run((ctx) =>
       ctx.db
         .query("socialMaterializationState")
         .filter((q) => q.eq(q.field("platform"), "instagram"))
         .first()
     );
-    // Either it completed (the sync tolerates the dangling reference) or it
-    // recorded a failure — but it must never be silently absent, and the reader
-    // must not be unlocked by a half-run.
-    expect(["completed", "failed", "running"]).toContain(state?.status);
-    if (state?.status === "failed") {
-      expect(state.failureMessage).toBeTruthy();
-      expect(state.completedAt).toBeUndefined();
-    }
+    expect(before?.status).toBe("running");
 
-    // Facebook never ran, so the org is not ready regardless.
+    await t.run(async (ctx) => {
+      await recordConversationBackfillFailure(
+        ctx as unknown as Parameters<typeof recordConversationBackfillFailure>[0],
+        before!,
+        new Error("read limit exceeded")
+      );
+    });
+
+    const after = await t.run((ctx) =>
+      ctx.db
+        .query("socialMaterializationState")
+        .filter((q) => q.eq(q.field("platform"), "instagram"))
+        .first()
+    );
+    expect(after?.status).toBe("failed");
+    expect(after?.failureMessage).toBe("read limit exceeded");
+    expect(after?.completedAt).toBeUndefined();
+
+    // A failed run must not unlock the reader, and the inbox stays correct.
     expect(
       await asEditor.query(api.socialInbox.materializationStatus, { orgId })
     ).toMatchObject({ readerSource: "legacyEvents" });
+    expect(await listConversations(asEditor, orgId)).toHaveLength(1);
   });
 });
 

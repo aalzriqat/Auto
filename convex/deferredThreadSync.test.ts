@@ -48,44 +48,66 @@ function convexModules(dir: string, acc: string[] = []): string[] {
 
 /**
  * Blanks out comments so they cannot satisfy the obligation, using TypeScript's
- * own scanner rather than a regular expression.
+ * parser rather than pattern matching.
  *
- * The regex version removed anything shaped like a comment *anywhere*,
- * including inside string, template and regular-expression literals. That is a
- * fail-open defect in a guard, not a cosmetic one: a mutation containing a URL
- * such as "https colon slash slash", or a regex literal matching a comment
- * opener, would have had real code deleted — and deleting code can erase the
- * closing `});` that marks a chunk boundary, which merges two
- * mutations and lets a neighbour's `syncDeferredSocialThreads(` call cover an
- * offender that has none. This guard has already shipped four separate
- * fail-open bugs; it does not get a fifth for the sake of a one-liner.
+ * Two earlier versions of this were fail-open, and the failure is the same
+ * shape each time: something that merely *looks* like a comment gets deleted,
+ * that deletion can remove the closing `});` bounding a mutation's chunk, the
+ * chunk then runs on into its neighbour, and the offender inherits a
+ * `syncDeferredSocialThreads(` call it never makes. A guard that reports clean
+ * because it destroyed the evidence is worse than no guard.
  *
- * Comment ranges are replaced with spaces of equal length, and newlines inside
- * block comments are preserved, so every downstream offset, chunk boundary and
- * line number is exactly what it was in the source.
+ *   - Regular expressions matched comment shapes inside string, template and
+ *     regex literals. A block-comment opener in a string pairs with the next
+ *     real closer and eats everything between.
+ *   - A bare `ts.createScanner` fixed that but has no syntactic context, so it
+ *     cannot distinguish division from the start of a regular expression. A
+ *     regex character class holding both comment delimiters came back with its
+ *     contents blanked. See the fixture named for it below.
+ *
+ * The parser resolves regex context correctly, so trivia ranges taken from its
+ * tokens are the real comments and nothing else. Ranges are replaced with
+ * spaces of equal length and newlines are preserved, leaving every downstream
+ * offset, chunk boundary and line number byte-for-byte unchanged.
  */
 export function stripComments(source: string): string {
-  const scanner = ts.createScanner(
+  // Parser, not scanner. A bare `ts.createScanner` has no syntactic context, so
+  // it cannot tell a division from the start of a regular expression: given
+  // `/[/*][*/]/` it reports the inner `/* ... */` as a block comment and blanks
+  // a valid character class. Verified — that exact input came back as
+  // `/[      ]/`. The parser decides regex context correctly, so comment ranges
+  // taken from token trivia are the real comments and nothing else.
+  const sourceFile = ts.createSourceFile(
+    "scan.ts",
+    source,
     ts.ScriptTarget.Latest,
-    /* skipTrivia */ false,
-    ts.LanguageVariant.Standard,
-    source
+    /* setParentNodes */ true
   );
   const out = source.split("");
-  let token = scanner.scan();
-  while (token !== ts.SyntaxKind.EndOfFileToken) {
-    if (
-      token === ts.SyntaxKind.SingleLineCommentTrivia ||
-      token === ts.SyntaxKind.MultiLineCommentTrivia
-    ) {
-      const start = scanner.getTokenStart();
-      const end = scanner.getTokenEnd();
-      for (let i = start; i < end; i++) {
-        if (out[i] !== "\n" && out[i] !== "\r") out[i] = " ";
-      }
+  const seen = new Set<string>();
+
+  const blank = (pos: number, end: number) => {
+    const key = `${pos}:${end}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    for (let i = pos; i < end; i++) {
+      // Newlines survive so offsets, chunk boundaries and line numbers are
+      // byte-for-byte what they were in the source.
+      if (out[i] !== "\n" && out[i] !== "\r") out[i] = " ";
     }
-    token = scanner.scan();
-  }
+  };
+
+  const visit = (node: ts.Node) => {
+    for (const range of ts.getLeadingCommentRanges(source, node.getFullStart()) ?? []) {
+      blank(range.pos, range.end);
+    }
+    for (const range of ts.getTrailingCommentRanges(source, node.getEnd()) ?? []) {
+      blank(range.pos, range.end);
+    }
+    node.forEachChild(visit);
+  };
+  visit(sourceFile);
+
   return out.join("");
 }
 
@@ -168,6 +190,12 @@ describe("deferred conversation sync", () => {
 
     const regex = "const re = /\\/\\*/;";
     expect(stripComments(regex)).toBe(regex);
+
+    // A regex character class holding both delimiters unescaped. This is what a
+    // context-free scanner gets wrong: it reads the inner `/*` ... `*/` as a
+    // block comment and blanks a valid character class.
+    const charClass = "const re = /[/*][*/]/;";
+    expect(stripComments(charClass)).toBe(charClass);
 
     const closer = 'const s = "ends with a block comment closer: */";';
     expect(stripComments(closer)).toBe(closer);

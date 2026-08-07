@@ -698,7 +698,7 @@ function conversationBatchSize(batchSize: number | undefined): number {
  * back either way; the difference is only how legible the state is to whoever
  * has to fix it.
  */
-async function recordConversationBackfillFailure(
+export async function recordConversationBackfillFailure(
   ctx: MutationCtx,
   state: Doc<"socialMaterializationState">,
   error: unknown
