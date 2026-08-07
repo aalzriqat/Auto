@@ -7,6 +7,7 @@ import {
   leadsByOrg,
   membershipsByOrg,
   recordSocialContact,
+  socialConversationKey,
   syncSocialConversation,
   vehicleQualityByOrg,
   vehiclesByOrg,
@@ -545,15 +546,27 @@ export const repairSocialContacts = internalMutation({
 export const backfillInstagramConversations = internalMutation({
   args: BACKFILL_ARGS,
   handler: async (ctx, args): Promise<BackfillResult> => {
+    // One sync per distinct thread, not per event. A thread's events are
+    // contiguous in creation time — they arrive as a burst — so a batch can be
+    // dominated by one thread and would otherwise recompute it once per event,
+    // making the batch cost events x history instead of threads x history. That
+    // is what pushes a batch past the per-transaction read ceiling, and a throw
+    // there rolls back the scheduled continuation too, halting the chain
+    // mid-table and leaving the inbox permanently half-materialised.
+    const synced = new Set<string>();
     const result = await seedAggregatePage(ctx, "instagramEvents", args, async (event) => {
       if (!event.customerId) return;
-      await syncSocialConversation(ctx, {
+      const identity = {
         orgId: event.orgId,
-        platform: "instagram",
+        platform: "instagram" as const,
         customerId: event.customerId,
         kind: event.kind,
         postId: event.postId,
-      });
+      };
+      const key = `${identity.orgId}:${socialConversationKey(identity)}`;
+      if (synced.has(key)) return;
+      synced.add(key);
+      await syncSocialConversation(ctx, identity);
     });
 
     if (!result.isDone && args.continueAutomatically !== false) {
@@ -571,15 +584,27 @@ export const backfillInstagramConversations = internalMutation({
 export const backfillFacebookConversations = internalMutation({
   args: BACKFILL_ARGS,
   handler: async (ctx, args): Promise<BackfillResult> => {
+    // One sync per distinct thread, not per event. A thread's events are
+    // contiguous in creation time — they arrive as a burst — so a batch can be
+    // dominated by one thread and would otherwise recompute it once per event,
+    // making the batch cost events x history instead of threads x history. That
+    // is what pushes a batch past the per-transaction read ceiling, and a throw
+    // there rolls back the scheduled continuation too, halting the chain
+    // mid-table and leaving the inbox permanently half-materialised.
+    const synced = new Set<string>();
     const result = await seedAggregatePage(ctx, "facebookEvents", args, async (event) => {
       if (!event.customerId) return;
-      await syncSocialConversation(ctx, {
+      const identity = {
         orgId: event.orgId,
-        platform: "facebook",
+        platform: "facebook" as const,
         customerId: event.customerId,
         kind: event.kind,
         postId: event.postId,
-      });
+      };
+      const key = `${identity.orgId}:${socialConversationKey(identity)}`;
+      if (synced.has(key)) return;
+      synced.add(key);
+      await syncSocialConversation(ctx, identity);
     });
 
     if (!result.isDone && args.continueAutomatically !== false) {

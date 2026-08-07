@@ -105,6 +105,11 @@ const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // Derived from the two event tables above; purged alongside them so a deleted
   // org leaves no rows behind in `socialContactsByOrg` either.
   { kind: "orgRows", table: "socialContacts", index: "by_org" },
+  // Backstop, not the primary mechanism: the two event steps above run first,
+  // and the conversation trigger deletes each thread as its last event goes, so
+  // this normally finds nothing. It exists to sweep a thread whose events were
+  // already missing. Removing it does not fail the purge test for that reason —
+  // the test asserts the end state, which the trigger reaches on its own.
   { kind: "orgRows", table: "socialConversations", index: "by_org_lastEventAt" },
   { kind: "orgRows", table: "facebookMessages", index: "by_org" },
   { kind: "socialPostsWithStorage" },

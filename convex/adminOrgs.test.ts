@@ -210,17 +210,33 @@ describe("adminOrgs", () => {
     // aggregate trigger. That table is org-scoped and derived, so the purge has
     // to carry it or the row — and its `socialContactsByOrg` entry — outlives
     // the org it belonged to.
+    // Carries a customerId so the event also materialises a
+    // `socialConversations` thread — without one the thread trigger skips the
+    // event entirely and the purge assertions below would prove nothing about
+    // that table.
+    const purgeContactId = await t.run(async (ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Purge", lastName: "Contact" })
+    );
     await t.run(async (ctx) =>
       ctx.db.insert("instagramEvents", {
         orgId,
         externalId: "purge_ig_1",
         kind: "dm",
         senderInstagramId: "purge_sender_1",
+        customerId: purgeContactId,
       })
     );
     expect(
       await t.run(async (ctx) =>
         ctx.db.query("socialContacts").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+      )
+    ).toHaveLength(1);
+    expect(
+      await t.run(async (ctx) =>
+        ctx.db
+          .query("socialConversations")
+          .withIndex("by_org_lastEventAt", (q) => q.eq("orgId", orgId))
+          .collect()
       )
     ).toHaveLength(1);
 
@@ -257,6 +273,13 @@ describe("adminOrgs", () => {
       ctx.db.query("socialContacts").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
     );
     expect(remainingSocialContacts).toHaveLength(0);
+    const remainingConversations = await t.run(async (ctx) =>
+      ctx.db
+        .query("socialConversations")
+        .withIndex("by_org_lastEventAt", (q) => q.eq("orgId", orgId))
+        .collect()
+    );
+    expect(remainingConversations).toHaveLength(0);
     const remainingIgEvents = await t.run(async (ctx) =>
       ctx.db.query("instagramEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
     );

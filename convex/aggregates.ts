@@ -598,10 +598,28 @@ async function readThreadEvents(
  * the row is a pure function of the thread's events, so a wrong row can only
  * survive until the next write touches it.
  *
- * The cost is bounded by *one customer's* events on one platform, read through
- * `by_org_customer` — a handful of rows — not by the org's history. That is the
- * trade: a small bounded read on write, in exchange for a list query that never
- * reads events at all.
+ * ## Cost, stated honestly
+ *
+ * One sync reads *one customer's* events on one platform through
+ * `by_org_customer`. For the path this was designed for — a single inbound
+ * webhook message — that is a handful of rows, and the trade is a small bounded
+ * read on write in exchange for a list query that never reads events at all.
+ *
+ * ⚠️ It is **not** bounded when a mutation patches many of one customer's
+ * events in a loop, because each patch fires a sync that re-reads the whole
+ * thread: N patches cost O(N²) reads. Measured superlinear (2x the events gave
+ * ~3x the time at n=200, converging on quadratic at higher n). The loops that
+ * do this today are `customers.mergeCustomers`, `socialInbox.setConversationVehicle`
+ * called without a platform, and the org purge. On a long Messenger thread that
+ * can reach Convex's per-transaction read ceiling, and a throw there rolls the
+ * whole mutation back — so the merge would fail outright rather than degrade.
+ *
+ * The backfills avoid it by deduping thread keys within a batch. The bulk
+ * mutation paths do NOT yet, and that is an open issue rather than a solved
+ * one: a per-transaction memo cannot fix it, because each patch invalidates the
+ * very thread the next patch re-reads. The fix is to stop patching events one
+ * at a time inside one transaction — either a scheduled paginated repoint, or
+ * an explicit "sync these threads once at the end" path that the loop opts into.
  */
 export async function syncSocialConversation(
   ctx: { db: GenericDatabaseWriter<DataModel> },
@@ -691,7 +709,12 @@ async function syncConversationsForEventWrite(
     if (!doc) continue;
     const id = socialConversationIdentity(platform, doc);
     if (!id) continue;
-    const key = socialConversationKey(id);
+    // Namespaced by org: `socialConversationKey` deliberately carries no
+    // orgId, so an update that moved an event between orgs would collide here
+    // and rebuild only the old org's thread. Nothing does that today —
+    // `adminData.assertPatchDoesNotRetenant` blocks it — but the set is free to
+    // make correct and this is a trap for whoever adds an org-move tool.
+    const key = `${id.orgId}:${socialConversationKey(id)}`;
     if (seen.has(key)) continue;
     seen.add(key);
     affected.push(id);

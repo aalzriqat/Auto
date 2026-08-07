@@ -428,6 +428,9 @@ describe("socialInbox.listConversations — materialised threads", () => {
       { platform: "instagram", hasVehicle: true },
       { platform: "facebook", needsReply: true },
       { kind: "comment", hasVehicle: false },
+      // The only two-clause all-false case: where a q.and arity slip or a
+      // `=== false` vs falsy mistake would show.
+      { hasVehicle: false, needsReply: false },
       { platform: "instagram", kind: "comment", hasVehicle: true, needsReply: true },
     ];
 
