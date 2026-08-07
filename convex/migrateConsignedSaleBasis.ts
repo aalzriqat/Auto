@@ -242,7 +242,11 @@ async function correctOneSale(
       cogsMinor: 0,
       correctionJournalEntryId,
     },
-    // Makes the audit row itself idempotent, alongside the corrections table.
+    // Recorded for tracing, NOT for deduplication: `auditLog` stores this key
+    // and never reads it, so this insert is unconditional. The
+    // `consignedSaleCorrections` pre-check is the only thing keeping the audit
+    // trail from duplicating on a re-run — do not remove it on the assumption
+    // that this key protects anything.
     idempotencyKey: `consigned_agent_reclass_${sale._id}`,
   });
 
@@ -284,6 +288,10 @@ export const migrateConsignedSaleBasis = internalMutation({
     // full table read, so hoisting it out of the sale loop is the difference
     // between one read per page and one per sale.
     const keyByAccountCache = new Map<string, Map<string, string>>();
+    // Memoized for the same reason as the chart: it is constant per org, and
+    // resolving it per sale cost a `memberships.take(100)` plus one role read
+    // each — up to ~2,500 extra document reads on a 25-sale page.
+    const actorCache = new Map<string, Id<"users"> | null>();
 
     for (const sale of page.page) {
       report.salesScanned += 1;
@@ -324,25 +332,29 @@ export const migrateConsignedSaleBasis = internalMutation({
         continue;
       }
 
+      // Resolved before the dry-run short-circuit, so a dry run predicts what
+      // the real run will actually do. Checking it afterwards meant the one
+      // function whose entire purpose is prediction reported as `corrected`
+      // rows the real run would report as `flagged`.
+      let actorId = actorCache.get(sale.orgId);
+      if (actorId === undefined) {
+        actorId = await correctionActorFor(ctx, sale.orgId);
+        actorCache.set(sale.orgId, actorId);
+      }
+      if (actorId === null) {
+        // An org with no members cannot have an accountable actor, and an
+        // accounting entry nobody is accountable for is not one this may write.
+        // Counted as flagged so the number of untouched rows stays truthful.
+        report.flagged += 1;
+        continue;
+      }
+
       report.corrected += 1;
       report.revenueReclassifiedMinor += assessment.posted.revenueMinor;
       report.commissionRecognizedMinor += assessment.dealershipMarginMinor ?? 0;
       report.cogsReversedMinor += assessment.posted.cogsMinor;
 
       if (dryRun) continue;
-
-      const actorId = await correctionActorFor(ctx, sale.orgId);
-      if (actorId === null) {
-        // An org with no members cannot have an accountable actor, and an
-        // accounting entry nobody is accountable for is not one this may write.
-        // Counted as flagged so the number of untouched rows stays truthful.
-        report.corrected -= 1;
-        report.revenueReclassifiedMinor -= assessment.posted.revenueMinor;
-        report.commissionRecognizedMinor -= assessment.dealershipMarginMinor ?? 0;
-        report.cogsReversedMinor -= assessment.posted.cogsMinor;
-        report.flagged += 1;
-        continue;
-      }
 
       const { netIncomeDeltaMinor } = await correctOneSale(ctx, { sale, assessment, actorId });
       report.netIncomeDeltaMinor += netIncomeDeltaMinor;

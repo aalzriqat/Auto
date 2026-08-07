@@ -960,6 +960,21 @@ export const finalizeDeal = mutation({
   args: {
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),
+    // Only consulted when the deal's vehicle is consigned AND the buyer paid
+    // the supplier directly — the one case where what the customer owes the
+    // dealership does not imply what its reservation deposit is applied to.
+    depositResolution: v.optional(
+      v.object({
+        treatment: v.union(
+          v.literal("APPLY_TO_DEALER_AMOUNT"),
+          v.literal("APPLY_TO_TRANSACTION_SETTLEMENT"),
+          v.literal("REFUND_TO_CUSTOMER"),
+          v.literal("FORFEITED"),
+          v.literal("OTHER")
+        ),
+        reason: v.optional(v.string()),
+      })
+    ),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -1037,6 +1052,7 @@ export const finalizeDeal = mutation({
           termMonths: quote.termMonths,
           applicationId: args.applicationId,
           quoteId: app.quoteId,
+          depositResolution: args.depositResolution,
           idempotencyKey: args.idempotencyKey,
           actorId: auth.user._id,
         });

@@ -36,6 +36,7 @@ const PERMS = [
   "manage:finance", "view:finance",
   "view:commissions", "manage:commissions",
   "view:deposits", "create:deposits", "manage:deposits",
+  "approve:requests",
 ];
 
 const SALE_PRICE = 12_500;
@@ -51,7 +52,10 @@ type Treatment =
   | "FORFEITED"
   | "OTHER";
 
-async function seed(tag: string, opts: { sourceType?: "SOURCED" | "STOCK" } = {}) {
+async function seed(
+  tag: string,
+  opts: { sourceType?: "SOURCED" | "STOCK"; sourceCost?: number } = {}
+) {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: `Dep ${tag}`, createdAt: Date.now() })
@@ -68,6 +72,12 @@ async function seed(tag: string, opts: { sourceType?: "SOURCED" | "STOCK" } = {}
     ctx.db.insert("roles", { orgId, name: "Owner", permissions: PERMS })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+  // A second member: cancelling a sale is refused for the salesperson who made
+  // it, so the approval has to come from somebody else.
+  const managerId = await t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: `${tag}_m`, email: `${tag}m@e.com`, name: "Manager" })
+  );
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: managerId, roleId }));
   await t.run((ctx) =>
     ctx.db.insert("orgSettings", {
       orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH", "BANK_TRANSFER"],
@@ -98,7 +108,7 @@ async function seed(tag: string, opts: { sourceType?: "SOURCED" | "STOCK" } = {}
       status: "AVAILABLE",
       sourceType,
       ...(sourceType === "SOURCED"
-        ? { sourcedFromName: "Amman Importer Co", sourceCost: SUPPLIER_ENTITLEMENT }
+        ? { sourcedFromName: "Amman Importer Co", sourceCost: opts.sourceCost ?? SUPPLIER_ENTITLEMENT }
         : { purchasePrice: SUPPLIER_ENTITLEMENT }),
     })
   );
@@ -119,12 +129,21 @@ async function seed(tag: string, opts: { sourceType?: "SOURCED" | "STOCK" } = {}
       status: "HELD", holdActive: true, createdBy: userId, createdAt: Date.now(),
     })
   );
-  return { t, orgId, userId, asUser, customerId, vehicleId, quoteId, depositId };
+  const asManager = t.withIdentity({ subject: `${tag}_m`, clerkId: `${tag}_m` });
+  return { t, orgId, userId, asUser, asManager, customerId, vehicleId, quoteId, depositId };
 }
 
+/**
+ * Net movement per system key. `includeReversed` counts entries a reversal has
+ * marked REVERSED alongside the POSTED reversal that offsets them — the pair
+ * nets to zero, so counting only POSTED would report the reversal alone and
+ * make a correctly-undone entry look like a fresh one in the opposite
+ * direction.
+ */
 async function postedBySystemKey(
   t: ReturnType<typeof convexTestWithComponents>,
-  orgId: string
+  orgId: string,
+  opts: { includeReversed?: boolean } = {}
 ): Promise<Record<string, number>> {
   return await t.run(async (ctx) => {
     // `.withIndex` is unavailable here: passing the convexTest handle as a
@@ -140,7 +159,9 @@ async function postedBySystemKey(
 
     const totals: Record<string, number> = {};
     for (const entry of entries) {
-      if (entry.status !== "POSTED") continue;
+      const counted =
+        entry.status === "POSTED" || (opts.includeReversed === true && entry.status === "REVERSED");
+      if (!counted) continue;
       const lines = (await ctx.db.query("journalLines").collect())
         .filter((l) => l.journalEntryId === entry._id);
       for (const l of lines) {
@@ -188,10 +209,10 @@ describe("the treatment taxonomy", () => {
   });
 });
 
-describe("a consigned sale will not guess", () => {
-  test("completing with a held deposit and no stated treatment is refused", async () => {
+describe("when a treatment has to be stated, and when it does not", () => {
+  test("the direct route refuses to guess, because the customer may owe nothing", async () => {
     const s = await seed("noTreat");
-    await expect(completeWith(s, "THROUGH_DEALERSHIP", undefined)).rejects.toThrow(
+    await expect(completeWith(s, "DIRECT_TO_SUPPLIER", undefined)).rejects.toThrow(
       /reservation deposit|treatment/i
     );
 
@@ -199,6 +220,22 @@ describe("a consigned sale will not guess", () => {
     const deposit = await s.t.run((ctx) => ctx.db.get(s.depositId));
     expect(deposit?.status).toBe("HELD");
     expect(deposit?.holdActive).toBe(true);
+  });
+
+  test("the through-dealership route resolves implicitly, like owned stock", async () => {
+    // Demanding a treatment here was a regression: no client passes one, so a
+    // consigned deal with a عربون could not be completed at all — and there was
+    // nothing to disambiguate, because the dealership collected the gross and
+    // holds the customer's receivable for it.
+    const s = await seed("thruImplicit");
+    await completeWith(s, "THROUGH_DEALERSHIP", undefined);
+
+    const deposit = await s.t.run((ctx) => ctx.db.get(s.depositId));
+    expect(deposit?.status).toBe("APPLIED");
+    expect(deposit?.resolutionTreatment).toBe("APPLY_TO_DEALER_AMOUNT");
+
+    const posted = await postedBySystemKey(s.t, s.orgId);
+    expect(posted[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS]).toBe((SALE_PRICE - DEPOSIT) * SCALE);
   });
 
   test("a dealer-owned sale still resolves implicitly, because it was never ambiguous", async () => {
@@ -270,6 +307,21 @@ describe("APPLY_TO_TRANSACTION_SETTLEMENT", () => {
     expect(posted[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS] ?? 0).toBe(0);
   });
 
+  test("cannot exceed the margin, or it turns an asset into the supplier's money", async () => {
+    // Deposits run 5-10% of the price and consignment margins are often
+    // smaller, so this is the ordinary case, not an exotic one. Applying a
+    // 1,000 deposit against a 350 margin would leave Receivable from Suppliers
+    // at -650: an asset account holding what is really the supplier's money,
+    // and nothing in the system can discharge it.
+    const s = await seed("thinMargin", { sourceCost: SALE_PRICE - 350 });
+    await expect(
+      completeWith(s, "DIRECT_TO_SUPPLIER", { treatment: "APPLY_TO_TRANSACTION_SETTLEMENT" })
+    ).rejects.toThrow(/exceeds the dealership's margin/i);
+
+    const posted = await postedBySystemKey(s.t, s.orgId);
+    expect(posted[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS] ?? 0).toBeGreaterThanOrEqual(0);
+  });
+
   test("is refused on the through-dealership route, where the settlement is already recorded", async () => {
     // AP-Suppliers was credited the supplier's full entitlement when the sale
     // posted. Crediting it again would inflate the debt by the deposit, and the
@@ -281,33 +333,29 @@ describe("APPLY_TO_TRANSACTION_SETTLEMENT", () => {
   });
 });
 
-describe("REFUND_TO_CUSTOMER and FORFEITED", () => {
-  test("a refund pays the money back and touches no revenue", async () => {
-    const s = await seed("refund");
-    await completeWith(s, "THROUGH_DEALERSHIP", { treatment: "REFUND_TO_CUSTOMER" });
+describe("REFUND_TO_CUSTOMER and FORFEITED are not sale-completion decisions", () => {
+  test.each(["REFUND_TO_CUSTOMER", "FORFEITED"] as const)(
+    "%s is refused here and sent to the controlled release path",
+    async (treatment) => {
+      // `deposits.release` requires APPROVE_REQUESTS rather than CREATE_SALES,
+      // refuses a release by the person who took the deposit, rejects a payment
+      // method it cannot route, and writes the canonical payment and cashflow
+      // rows beside the journal. Completing a sale carries none of that, so
+      // honouring these here let one salesperson take a customer's deposit and
+      // forfeit it straight to income on their own authority.
+      const s = await seed(`ctl${treatment.slice(0, 4)}`);
+      await expect(
+        completeWith(s, "THROUGH_DEALERSHIP", { treatment })
+      ).rejects.toThrow(/separate approval|deposits screen/i);
 
-    const posted = await postedBySystemKey(s.t, s.orgId);
-    expect(posted[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY]).toBe(DEPOSIT * SCALE);
-    expect(posted[SYSTEM_KEYS.CASH_ON_HAND]).toBe(-DEPOSIT * SCALE);
-    // The customer still owes the full gross: nothing came off it.
-    expect(posted[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS]).toBe(SALE_PRICE * SCALE);
-
-    const deposit = await s.t.run((ctx) => ctx.db.get(s.depositId));
-    expect(deposit?.status).toBe("REFUNDED");
-    expect(deposit?.resolutionTreatment).toBe("REFUND_TO_CUSTOMER");
-  });
-
-  test("a forfeiture is income, and is the only treatment that recognizes any", async () => {
-    const s = await seed("forfeit");
-    await completeWith(s, "THROUGH_DEALERSHIP", { treatment: "FORFEITED" });
-
-    const posted = await postedBySystemKey(s.t, s.orgId);
-    expect(posted[SYSTEM_KEYS.DEPOSIT_FORFEITURE_INCOME]).toBe(-DEPOSIT * SCALE);
-    expect(posted[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY]).toBe(DEPOSIT * SCALE);
-    // Forfeiture income, never commission — the deposit was not earned by
-    // selling the car.
-    expect(posted[SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE]).toBe(-MARGIN * SCALE);
-  });
+      // The money is untouched and the deposit is still held.
+      const posted = await postedBySystemKey(s.t, s.orgId);
+      expect(posted[SYSTEM_KEYS.CASH_ON_HAND] ?? 0).toBe(0);
+      expect(posted[SYSTEM_KEYS.DEPOSIT_FORFEITURE_INCOME] ?? 0).toBe(0);
+      const deposit = await s.t.run((ctx) => ctx.db.get(s.depositId));
+      expect(deposit?.status).toBe("HELD");
+    }
+  );
 });
 
 describe("OTHER", () => {
@@ -342,11 +390,7 @@ describe("OTHER", () => {
 
 describe("what no treatment may ever do", () => {
   test("none of them move the reservation deposit to a finance company", async () => {
-    for (const treatment of [
-      "APPLY_TO_DEALER_AMOUNT",
-      "REFUND_TO_CUSTOMER",
-      "FORFEITED",
-    ] as const) {
+    for (const treatment of ["APPLY_TO_DEALER_AMOUNT"] as const) {
       const s = await seed(`fin${treatment.slice(0, 6)}`);
       await completeWith(s, "THROUGH_DEALERSHIP", { treatment });
       const posted = await postedBySystemKey(s.t, s.orgId);
@@ -355,5 +399,36 @@ describe("what no treatment may ever do", () => {
       // never be booked as if it were.
       expect(posted[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES] ?? 0).toBe(0);
     }
+  });
+});
+
+describe("cancelling a sale whose deposit went to the supplier settlement", () => {
+  test("returns both the liability and the supplier claim to zero", async () => {
+    // The settlement treatment posts DEPOSIT_APPLIED_TO_SETTLEMENT, but
+    // cancellation reversed DEPOSIT_APPLIED — a different event, which does not
+    // exist for this deposit. `reverseEventIfPosted` then silently no-ops, so
+    // the deposit came back as HELD in the subledger while the GL still showed
+    // its liability discharged against the supplier receivable. Re-selling from
+    // the same quote then discharged the one deposit twice.
+    const s = await seed("cancelSettle");
+    const saleId = await completeWith(s, "DIRECT_TO_SUPPLIER", {
+      treatment: "APPLY_TO_TRANSACTION_SETTLEMENT",
+    });
+
+    await s.asManager.mutation(api.sales.update, {
+      orgId: s.orgId,
+      saleId,
+      status: "CANCELLED" as const,
+    });
+
+    const posted = await postedBySystemKey(s.t, s.orgId, { includeReversed: true });
+    expect(posted[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(0);
+    expect(posted[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS] ?? 0).toBe(0);
+
+    const deposit = await s.t.run((ctx) => ctx.db.get(s.depositId));
+    expect(deposit?.status).toBe("HELD");
+    // Cleared, not left pointing at a deal that no longer exists.
+    expect(deposit?.resolutionTreatment).toBeUndefined();
+    expect(deposit?.resolutionSaleId).toBeUndefined();
   });
 });

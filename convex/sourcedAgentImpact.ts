@@ -138,7 +138,22 @@ export async function assessConsignedSale(
       q.eq("orgId", orgId).eq("sourceType", "sales").eq("sourceId", sale._id)
     )
     .collect();
-  const live = entries.filter((e) => e.status === "POSTED");
+  // A correction posts a SECOND entry against the same sale. Counting it as an
+  // original would report every migrated sale as MULTIPLE_POSTED_JOURNALS with
+  // its pre-correction revenue apparently intact — telling an accountant the
+  // migration did nothing, and inviting a manual journal that corrects it
+  // twice. `alreadyCorrected` is what the sale's basis is read from instead.
+  const posted = entries.filter((e) => e.status === "POSTED");
+  const correctionEntryIds = new Set(
+    (
+      await ctx.db
+        .query("consignedSaleCorrections")
+        .withIndex("by_org_sale", (q) => q.eq("orgId", orgId).eq("saleId", sale._id))
+        .collect()
+    ).flatMap((c) => (c.correctionJournalEntryId ? [c.correctionJournalEntryId as string] : []))
+  );
+  const alreadyCorrected = correctionEntryIds.size > 0;
+  const live = posted.filter((e) => !correctionEntryIds.has(e._id));
 
   const totals: PostedTotals = {};
   for (const entry of live) {
@@ -167,7 +182,12 @@ export async function assessConsignedSale(
 
   const marginMinor = entitlementMinor === null ? null : grossMinor - entitlementMinor;
   const postedGrossProfit = postedRevenue - postedCogs;
-  const alreadyAgentBasis = postedRevenue === 0 && postedCogs === 0;
+  // Already on agent basis either because it was posted that way, or because a
+  // recorded correction put it there. A sale with NO posted journal at all is
+  // neither — it books nothing, which is an anomaly to investigate, not a
+  // correctly-posted agency sale.
+  const alreadyAgentBasis =
+    alreadyCorrected || (live.length > 0 && postedRevenue === 0 && postedCogs === 0);
 
   const flags: string[] = [];
   if (live.length === 0) flags.push("NO_POSTED_JOURNAL");
@@ -230,8 +250,8 @@ export async function assessConsignedSale(
       inventoryReliefMinor: 0,
     },
     overstatement: {
-      revenueMinor: marginMinor === null ? null : postedRevenue - marginMinor,
-      cogsMinor: postedCogs,
+      revenueMinor: alreadyCorrected ? 0 : marginMinor === null ? null : postedRevenue - marginMinor,
+      cogsMinor: alreadyCorrected ? 0 : postedCogs,
       customerArMinor: entitlementMinor === null ? null : postedCustomerAr - (marginMinor ?? 0),
     },
     journalEntryIds: live.map((e) => e._id),
@@ -298,9 +318,14 @@ export const sourcedSaleImpactReport = internalQuery({
         if (isAutomaticallyCorrectable(row)) migratableCount += 1;
         rows.push(row);
 
-        grossPostedRevenueMinor += row.posted.revenueMinor;
-        correctRevenueMinor += row.dealershipMarginMinor ?? 0;
-        postedCogsMinor += row.posted.cogsMinor;
+        // A corrected sale no longer overstates anything, so it contributes
+        // nothing to the overstatement totals — otherwise the report would keep
+        // quoting the full pre-migration figure after the migration ran.
+        if (!row.alreadyAgentBasis) {
+          grossPostedRevenueMinor += row.posted.revenueMinor;
+          correctRevenueMinor += row.dealershipMarginMinor ?? 0;
+          postedCogsMinor += row.posted.cogsMinor;
+        }
         postedCustomerArMinor += row.posted.customerArMinor;
         postedSupplierApMinor += row.posted.supplierApMinor;
       }

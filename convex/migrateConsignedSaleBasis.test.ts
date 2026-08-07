@@ -417,3 +417,27 @@ describe("the dry run", () => {
     expect(real.revenueReclassifiedMinor).toBe(dry.revenueReclassifiedMinor);
   });
 });
+
+describe("what the impact report says afterwards", () => {
+  test("a corrected sale reads as already on agent basis, not as an anomaly", async () => {
+    // The correction posts a SECOND journal entry against the same sale, and it
+    // debits revenue / credits COGS — the mirror of what the report counts. Read
+    // naively, the sale then shows two posted journals (an anomaly) with its
+    // pre-correction revenue and cost still apparently intact. An accountant
+    // reading that concludes the migration did nothing and raises a manual
+    // correcting journal, double-correcting the P&L.
+    const s = await seedDealer("afterMig");
+    await seedLegacyPrincipalSale(s, { vin: "VINMIG14", sourceCost: ENTITLEMENT });
+
+    await runMigration(s);
+
+    const report = await s.t.query(internal.sourcedAgentImpact.sourcedSaleImpactReport, {
+      orgId: s.orgId,
+    });
+    const org = report.orgs[0]!;
+    expect(org.anomalyCount).toBe(0);
+    expect(org.alreadyAgentBasisCount).toBe(1);
+    expect(org.migratableCount).toBe(0);
+    expect(org.totals.revenueOverstatementMinor).toBe(0);
+  });
+});

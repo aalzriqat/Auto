@@ -1590,6 +1590,22 @@ export const hookDepositApplicationReversed = makeReversalHook<{ depositId: Id<"
 });
 
 /**
+ * Reverses a DEPOSIT_APPLIED_TO_SETTLEMENT entry. The settlement treatment
+ * credits a different account from the ordinary application, so reversing it
+ * with `hookDepositApplicationReversed` reverses nothing at all: that hook
+ * looks for `DEPOSIT_APPLIED`, finds no such event, and silently no-ops —
+ * leaving the deposit reinstated as HELD while the GL still shows its
+ * liability extinguished against the supplier receivable.
+ */
+export const hookDepositSettlementApplicationReversed = makeReversalHook<{ depositId: Id<"deposits"> }>({
+  eventType: "DEPOSIT_APPLIED_TO_SETTLEMENT",
+  sourceType: "deposits",
+  sourceId: (a) => a.depositId.toString(),
+  reversalKey: (a) => `deposit_applied_settlement_reversed_${a.depositId}`,
+  pendingPostKey: (a) => `deposit_applied_settlement_${a.depositId}`,
+});
+
+/**
  * Reverses the DEPOSIT_RECEIVED entry when a HELD deposit is voided as
  * recorded-in-error (as opposed to refunded/forfeited, which post their own
  * dedicated resolution entries). If the original entry never posted (still in

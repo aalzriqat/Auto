@@ -3,6 +3,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import {
   hookDepositApplicationReversed,
+  hookDepositSettlementApplicationReversed,
   hookTradeInReversed,
   hookFiCommissionRecognitionsReversed,
 } from "../accounting/workflowHooks";
@@ -319,13 +320,28 @@ async function reinstateAppliedDeposits(
       holdActive: true,
       resolvedBy: undefined,
       resolvedAt: undefined,
+      // Cleared alongside the status. Leaving them set pointed a live deposit
+      // at the treatment and the sale of a deal that no longer exists, and the
+      // settlement re-hook reads `resolutionTreatment` to decide what to post.
+      resolutionTreatment: undefined,
+      resolutionReason: undefined,
+      resolutionSaleId: undefined,
     });
     // Puts every vehicle on the deposit's quote back on hold, not just
     // whichever vehicle belongs to the sale row being cancelled — a
     // multi-vehicle quote's other vehicles would otherwise stay AVAILABLE
     // despite the deposit being active again.
     await reactivateAllVehiclesForDeposit(ctx, deposit);
-    await hookDepositApplicationReversed(ctx, {
+    // Reverse the entry that was actually posted. Both treatments leave the
+    // deposit APPLIED but credit different accounts, so reversing the wrong one
+    // is not a partial undo — `reverseEventIfPosted` finds no matching event
+    // and silently no-ops, leaving the deposit live in the subledger while the
+    // GL still shows its liability discharged.
+    const reverse =
+      deposit.resolutionTreatment === "APPLY_TO_TRANSACTION_SETTLEMENT"
+        ? hookDepositSettlementApplicationReversed
+        : hookDepositApplicationReversed;
+    await reverse(ctx, {
       orgId: args.orgId,
       depositId: deposit._id,
       reason: args.reason,
