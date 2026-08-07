@@ -754,6 +754,18 @@ export default defineSchema({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
     saleId: v.optional(v.id("sales")),
+    // Supplier identity is SNAPSHOT-BASED for this workflow, deliberately.
+    // No canonical supplier entity exists in AutoFlow — suppliers are a name on
+    // a vehicle — so there is nothing for a `supplierId` to point at. Do not
+    // fabricate or persist one until supplier master data is introduced: a
+    // foreign key to a table that does not exist is worse than an honest name,
+    // because it looks like referential integrity and provides none.
+    //
+    // Introduce a supplier master separately if AutoFlow needs statements
+    // across multiple vehicles, supplier-level aging, contact or tax identity,
+    // consolidated balances, or supplier analytics. That is a subsystem with
+    // its own lifecycle, permissions, deduplication and migration — not a field
+    // to be smuggled into an accounting correction.
     sourcedFromName: v.string(),
     amountDue: v.number(),
     currency: v.string(),
