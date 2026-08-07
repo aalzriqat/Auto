@@ -5,7 +5,7 @@ import { Doc } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { throwAppError, AppErrorCode } from "./utils/errors";
-import { holdVehicleForDeposit, releaseAllVehiclesForDeposit } from "./utils/depositHelpers";
+import { holdVehicleForDeposit, releaseAllVehiclesForDeposit, releaseHeldDeposit } from "./utils/depositHelpers";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
@@ -148,13 +148,10 @@ export const release = mutation({
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // The permission is re-checked inside `releaseHeldDeposit` against the
+    // actor, so the guard travels with the decision rather than with this entry
+    // point. Kept here too because failing at the boundary is a better error.
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
-    if (args.resolution === "REFUNDED" && !args.refundMethod) {
-      throw new ConvexError("A refund payment method is required to refund a deposit.");
-    }
-    if (args.refundMethod === "OTHER") {
-      throw new ConvexError("Select a specific refund method — OTHER is not accepted for a deposit refund.");
-    }
     return await runWithIdempotency(
       ctx,
       {
@@ -170,115 +167,20 @@ export const release = mutation({
         }),
       },
       async () => {
-
         const deposit = await ctx.db.get(args.depositId);
         if (!deposit || deposit.orgId !== args.orgId) {
           throwAppError(AppErrorCode.DEPOSIT_NOT_FOUND, "Deposit not found in this organization.");
         }
-        if (deposit.status !== "HELD") {
-          throwAppError(AppErrorCode.DEPOSIT_ALREADY_RESOLVED, "This deposit has already been resolved.");
-        }
-        assertDifferentActors(
-          user._id,
-          deposit.createdBy,
-          "Deposit creator cannot resolve their own deposit refund or forfeiture."
-        );
 
-        const now = Date.now();
-        const currency = normalizeCurrency(deposit.currency ?? await getOrgCurrency(ctx, args.orgId));
-        const amountMinor = deposit.amountMinor ?? amountToMinorOrThrow(deposit.amount, currency);
-        await ctx.db.patch(args.depositId, {
-          status: args.resolution,
-          holdActive: false,
-          resolvedBy: user._id,
-          resolvedAt: now,
-          notes: args.notes ?? deposit.notes,
+        await releaseHeldDeposit(ctx, {
+          orgId: args.orgId,
+          depositId: args.depositId,
+          resolution: args.resolution,
+          actorId: user._id,
+          refundMethod: args.refundMethod,
+          notes: args.notes,
+          idempotencyKey: args.idempotencyKey,
         });
-
-        if (args.resolution === "REFUNDED") {
-          const [refundVehicle, refundCustomer] = await Promise.all([
-            ctx.db.get(deposit.vehicleId),
-            ctx.db.get(deposit.customerId),
-          ]);
-          const refundVehicleLabel = refundVehicle
-            ? `${refundVehicle.year} ${refundVehicle.make} ${refundVehicle.model}`.trim()
-            : "Vehicle";
-          const refundCustomerLabel = refundCustomer
-            ? `${refundCustomer.firstName ?? ""} ${refundCustomer.lastName ?? ""}`.trim() || "Customer"
-            : "Customer";
-          const depositSourceLabel = deposit.quoteId
-            ? `quote ${deposit.quoteId}`
-            : deposit.reservationId
-              ? `reservation ${deposit.reservationId}`
-              : "vehicle hold";
-
-          await ctx.db.insert("transactions", {
-            orgId: args.orgId,
-            type: "OUT",
-            amount: deposit.amount,
-            date: now,
-            category: "DEPOSIT",
-            description: `Deposit refund for ${depositSourceLabel} - ${refundVehicleLabel} - ${refundCustomerLabel}`,
-            vehicleId: deposit.vehicleId,
-            depositId: args.depositId,
-            idempotencyKey: args.idempotencyKey,
-          });
-
-          const refundPaymentId = await ctx.db.insert("collectionPayments", {
-            orgId: args.orgId,
-            customerId: deposit.customerId,
-            vehicleId: deposit.vehicleId,
-            direction: "OUT",
-            method: "REFUND",
-            amount: deposit.amount,
-            paymentDate: now,
-            status: "POSTED",
-            idempotencyKey: args.idempotencyKey,
-            reference: `Deposit refund ${args.depositId}`,
-            cashierId: user._id,
-            notes: args.notes,
-            createdAt: now,
-          });
-
-          const canonicalRefundPaymentId = await createCanonicalPayment(ctx, {
-            orgId: args.orgId,
-            direction: "OUT",
-            payerType: "CUSTOMER",
-            customerId: deposit.customerId,
-            method: args.refundMethod!,
-            amountMinor,
-            currency,
-            idempotencyKey: `deposit_refund_${args.depositId}`,
-            actorId: user._id,
-            status: "SETTLED",
-            externalReference: `Deposit refund ${args.depositId}`,
-            receivedAt: now,
-          });
-          await ctx.db.patch(refundPaymentId, { canonicalPaymentId: canonicalRefundPaymentId });
-
-          await hookDepositRefunded(ctx, {
-            orgId: args.orgId,
-            depositId: args.depositId,
-            customerId: deposit.customerId,
-            amountMinor,
-            currency,
-            actorId: user._id,
-            occurredAt: now,
-            paymentMethod: args.refundMethod,
-          });
-        } else {
-          await hookDepositForfeited(ctx, {
-            orgId: args.orgId,
-            depositId: args.depositId,
-            customerId: deposit.customerId,
-            amountMinor,
-            currency,
-            actorId: user._id,
-            occurredAt: now,
-          });
-        }
-
-        await releaseAllVehiclesForDeposit(ctx, deposit);
 
         const actorName = await getActorName(ctx);
         await notifyManagers(

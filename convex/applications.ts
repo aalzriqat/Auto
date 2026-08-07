@@ -6,7 +6,8 @@ import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
-import { releaseHoldForApplicationQuote } from "./utils/depositHelpers";
+import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
+import { depositMethodValidator, type DepositMethod } from "./utils/depositRecording";
 import { completeSale } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
@@ -973,6 +974,7 @@ export const finalizeDeal = mutation({
           v.literal("OTHER")
         ),
         reason: v.optional(v.string()),
+        refundMethod: v.optional(depositMethodValidator),
       })
     ),
     idempotencyKey: v.optional(v.string()),
@@ -1052,7 +1054,9 @@ export const finalizeDeal = mutation({
           termMonths: quote.termMonths,
           applicationId: args.applicationId,
           quoteId: app.quoteId,
-          depositResolution: args.depositResolution,
+          depositResolution: args.depositResolution as
+            | { treatment: DepositTreatment; reason?: string; refundMethod?: DepositMethod }
+            | undefined,
           idempotencyKey: args.idempotencyKey,
           actorId: auth.user._id,
         });

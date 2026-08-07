@@ -11,9 +11,10 @@ import {
 import {
   resolveDepositsForQuote,
   recordUnpostedDepositTreatment,
-  depositStatusForTreatment,
+  releaseHeldDeposit,
   type DepositTreatment,
 } from "./depositHelpers";
+import type { DepositMethod } from "./depositRecording";
 import { throwAppError, AppErrorCode } from "./errors";
 import { requireOrgMember } from "./tenancy";
 import {
@@ -78,7 +79,12 @@ type SaleCompletionArgs = {
   supplierSettlementRoute?: ConsignedSettlementRoute;
   // What happens to the customer's reservation deposit. Required on a consigned
   // sale that has one — see resolveReservationDeposits.
-  depositResolution?: { treatment: DepositTreatment; reason?: string };
+  depositResolution?: {
+    treatment: DepositTreatment;
+    reason?: string;
+    /** Required for REFUND_TO_CUSTOMER — the deposit's own method may be OTHER, which cannot be paid out. */
+    refundMethod?: DepositMethod;
+  };
   // MANUAL commission mode carries the manager-entered amount through
   // completion untouched. Populated from the existing sale when completing a
   // draft; undefined for freshly-created sales.
@@ -303,23 +309,26 @@ type ResolvedReservationDeposits = {
  * the customer's receivable for it, so "applied" can only mean one thing there
  * too, and it stays implicit as well.
  *
- * Demanding a stated treatment on that route was a regression, not a
- * safeguard. No client passes one — `applications.finalizeDeal` has no such
- * argument at all — so a financed consigned deal with a عربون on it simply
- * could not be closed. It also had no upside: those deals already posted the
- * deposit against AR, and that was already right.
+ * The trigger is the DEPOSIT BALANCE, not the settlement route. A reservation
+ * deposit is the dealership's own arrangement with its customer and has nothing
+ * to do with whether the supplier was settled through the dealership or paid
+ * directly — tying the two together made an unrelated field decide whether a
+ * customer's money needed a decision.
  *
- * What genuinely needs stating is DIRECT_TO_SUPPLIER, where the customer may
- * owe the dealership nothing at all and the deposit therefore has nowhere
- * obvious to go.
+ * What actually decides it is whether the deposit's disposition follows from
+ * the settlement. It does exactly when the dealership billed the customer at
+ * least as much as it is holding: the deposit comes off that bill, there is
+ * nowhere else for it to go, and no human needs to be asked. Whenever a balance
+ * would be left over — the whole deposit on a direct-settled consigned sale
+ * that carried no dealer fees, or simply a deposit larger than the invoice on
+ * any sale — the remainder is undetermined and has to be stated.
  *
- * REFUND_TO_CUSTOMER and FORFEITED are deliberately NOT actionable here. Both
- * already have a path — `deposits.release` — which requires APPROVE_REQUESTS
- * rather than CREATE_SALES, refuses a refund by the person who took the
- * deposit, rejects an "OTHER" payment method it cannot route, and writes the
- * canonical payment and cashflow rows beside the journal. Doing either from
- * sale completion would move the customer's money with none of that, letting
- * one salesperson take a deposit and forfeit it to income alone.
+ * REFUND_TO_CUSTOMER and FORFEITED are available here, but they run through
+ * `releaseHeldDeposit`, the same path the deposits screen uses. That keeps the
+ * approval permission, the refusal to let the person who took a deposit be the
+ * one who keeps it, the refund-method check, and the cashflow and payment-
+ * subledger rows attached to the decision rather than to the screen it is made
+ * on.
  */
 async function resolveReservationDeposits(
   ctx: MutationCtx,
@@ -346,50 +355,41 @@ async function resolveReservationDeposits(
 
   const stated = args.depositResolution?.treatment;
 
-  if (stated === "REFUND_TO_CUSTOMER" || stated === "FORFEITED") {
-    // Both move real money and both already have a controlled path. See the
-    // note on this function: reproducing them here would strip the approval
-    // permission, the segregation-of-duties check and the subledger rows.
-    throw new ConvexError(
-      "Refunding or forfeiting a reservation deposit is a separate approval, not part of completing the sale. Complete the sale, then release the deposit from the deposits screen."
-    );
-  }
+  // Determined exactly when the dealership billed the customer at least what it
+  // is holding: the deposit comes off that bill and nothing is left over. Note
+  // this is a statement about amounts, not about the settlement route — a
+  // direct-settled consigned sale carrying enough dealer fees is just as
+  // determined as an ordinary owned sale, and an owned sale whose deposit
+  // exceeds its invoice is just as undetermined as a bare consigned one.
+  const fullyAbsorbedByCustomerBill = heldTotalMinor <= customerBillableMinor;
 
-  // Implicit wherever "applied" can only mean one thing: dealer-owned stock,
-  // and a consigned sale whose gross the dealership itself collected.
-  const mustState = isSourced && !dealershipCollectsGross(settlementRoute);
-  if (!mustState) {
-    if (stated === "APPLY_TO_TRANSACTION_SETTLEMENT") {
-      // The supplier's entitlement is already credited to AP-Suppliers in full
-      // at sale, so a second credit would inflate the debt and never clear.
-      throw new ConvexError(
-        "The dealership collected the gross proceeds on this sale, so the supplier settlement is already recorded in full and a deposit cannot be applied to it again. Apply the deposit to what the customer owes the dealership instead."
+  if (!stated) {
+    if (fullyAbsorbedByCustomerBill) {
+      // Unchanged behaviour, and the overwhelmingly common case. A treatment is
+      // recorded on consigned sales so an auditor can see which of several
+      // possible dispositions applied; on owned stock APPLIED has only ever
+      // meant one thing, so nothing is recorded and old rows stay comparable.
+      return await applyDepositsToCustomerAr(
+        ctx,
+        opts,
+        isSourced ? "APPLY_TO_DEALER_AMOUNT" : undefined
       );
     }
-    if (stated === "OTHER") return await recordOtherTreatment(ctx, opts);
-    return await applyDepositsToCustomerAr(
-      ctx,
-      opts,
-      isSourced ? "APPLY_TO_DEALER_AMOUNT" : undefined
+    throw new ConvexError(
+      "This sale leaves part of the customer's reservation deposit unapplied — the dealership is holding more than it billed them. Record what happens to it: applied to what they owe the dealership, applied to the supplier settlement, refunded, forfeited, or an approved other treatment with a reason."
     );
   }
 
   const treatment = stated;
-  if (!treatment) {
-    throw new ConvexError(
-      "The buyer paid the supplier directly on this consigned sale, so the dealership may hold no receivable from the customer for the vehicle at all — what the reservation deposit is applied to is not implied by the sale. Record the deposit's treatment before completing."
-    );
-  }
 
   switch (treatment) {
     case "APPLY_TO_DEALER_AMOUNT": {
-      // Capped at what the dealership actually billed. On DIRECT_TO_SUPPLIER
-      // that is only its own fees and F&I products; applying more would credit
-      // a receivable past zero and show the customer in credit for money the
-      // supplier was paid.
-      if (heldTotalMinor > customerBillableMinor) {
+      // Capped at what the dealership actually billed. Applying more would
+      // credit a receivable past zero and show the customer in credit for money
+      // nobody billed them.
+      if (!fullyAbsorbedByCustomerBill) {
         throw new ConvexError(
-          `The reservation deposit exceeds what the dealership billed this customer on this sale, so it cannot all be applied against it. Refund, forfeit, or apply the excess to the supplier settlement instead.`
+          "The reservation deposit exceeds what the dealership billed this customer on this sale, so it cannot all be applied against it. Refund, forfeit, or apply the excess to the supplier settlement instead."
         );
       }
       return await applyDepositsToCustomerAr(ctx, opts, treatment);
@@ -402,6 +402,19 @@ async function resolveReservationDeposits(
       // applying it whole would drive Receivable from Suppliers to a credit
       // balance: an asset account holding what is really the supplier's money,
       // which nothing in the system can discharge.
+      if (isSourced && dealershipCollectsGross(settlementRoute)) {
+        // The supplier's entitlement was credited to AP-Suppliers in full when
+        // the sale posted, so a second credit would inflate the debt by the
+        // deposit and the excess would never clear.
+        throw new ConvexError(
+          "The dealership collected the gross proceeds on this sale, so the supplier settlement is already recorded in full and a deposit cannot be applied to it again. Apply the deposit to what the customer owes the dealership, refund it, or forfeit it."
+        );
+      }
+      if (!isSourced) {
+        throw new ConvexError(
+          "This vehicle is the dealership's own stock, so there is no supplier settlement for a deposit to be applied to."
+        );
+      }
       if (opts.marginMinor === null) {
         throw new ConvexError(
           "This vehicle has no recorded supplier cost, so the dealership's margin cannot be determined and a deposit cannot be applied against it."
@@ -435,6 +448,28 @@ async function resolveReservationDeposits(
       }
       // Not collected against the customer's balance — it settled the
       // supplier's claim instead.
+      return empty;
+    }
+
+    case "REFUND_TO_CUSTOMER":
+    case "FORFEITED": {
+      // Routed through the shared release path so the approval permission, the
+      // segregation-of-duties refusal and the cashflow/payment-subledger rows
+      // travel with the decision. Completing a sale authorizes `create:sales`;
+      // keeping or returning a customer's deposit is a different authority.
+      for (const row of await heldDepositRowsForQuote(ctx, args.quoteId)) {
+        await releaseHeldDeposit(ctx, {
+          orgId: args.orgId,
+          depositId: row.depositId,
+          resolution: treatment === "REFUND_TO_CUSTOMER" ? "REFUNDED" : "FORFEITED",
+          actorId: args.actorId,
+          refundMethod: args.depositResolution?.refundMethod,
+          occurredAt: args.saleDate,
+          saleId,
+          treatment,
+        });
+      }
+      // Neither reduces what the customer owes on this sale.
       return empty;
     }
 
@@ -899,7 +934,12 @@ export async function completeSalesForLineItems(
     taxRate?: number;
     financingType?: FinancingType;
     supplierSettlementRoute?: ConsignedSettlementRoute;
-    depositResolution?: { treatment: DepositTreatment; reason?: string };
+    depositResolution?: {
+    treatment: DepositTreatment;
+    reason?: string;
+    /** Required for REFUND_TO_CUSTOMER — the deposit's own method may be OTHER, which cannot be paid out. */
+    refundMethod?: DepositMethod;
+  };
     idempotencyKey?: string;
     actorId: Id<"users">;
   }
@@ -947,7 +987,12 @@ export async function completeExistingSale(
     orgId: Id<"organizations">;
     saleId: Id<"sales">;
     actorId: Id<"users">;
-    depositResolution?: { treatment: DepositTreatment; reason?: string };
+    depositResolution?: {
+    treatment: DepositTreatment;
+    reason?: string;
+    /** Required for REFUND_TO_CUSTOMER — the deposit's own method may be OTHER, which cannot be paid out. */
+    refundMethod?: DepositMethod;
+  };
     idempotencyKey?: string;
   }
 ): Promise<Id<"sales">> {

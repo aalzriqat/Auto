@@ -52,9 +52,16 @@ type Treatment =
   | "FORFEITED"
   | "OTHER";
 
+const SALES_ONLY_PERMS = PERMS.filter((p) => p !== "approve:requests");
+
 async function seed(
   tag: string,
-  opts: { sourceType?: "SOURCED" | "STOCK"; sourceCost?: number } = {}
+  opts: {
+    sourceType?: "SOURCED" | "STOCK";
+    sourceCost?: number;
+    /** Lets a test strip the approval permission from the second actor. */
+    managerPermissions?: string[];
+  } = {}
 ) {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
@@ -77,7 +84,16 @@ async function seed(
   const managerId = await t.run((ctx) =>
     ctx.db.insert("users", { clerkId: `${tag}_m`, email: `${tag}m@e.com`, name: "Manager" })
   );
-  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: managerId, roleId }));
+  const managerRoleId = await t.run((ctx) =>
+    ctx.db.insert("roles", {
+      orgId,
+      name: "Manager",
+      permissions: opts.managerPermissions ?? PERMS,
+    })
+  );
+  await t.run((ctx) =>
+    ctx.db.insert("memberships", { orgId, userId: managerId, roleId: managerRoleId })
+  );
   await t.run((ctx) =>
     ctx.db.insert("orgSettings", {
       orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH", "BANK_TRANSFER"],
@@ -174,12 +190,36 @@ async function postedBySystemKey(
   });
 }
 
+async function completeAs(
+  actor: { mutation: (ref: unknown, args: unknown) => Promise<unknown> },
+  s: Awaited<ReturnType<typeof seed>>,
+  route: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER",
+  resolution?: { treatment: Treatment; reason?: string; refundMethod?: string },
+  extra: Record<string, unknown> = {}
+) {
+  return await (actor as typeof s.asUser).mutation(api.sales.create, {
+    orgId: s.orgId,
+    vehicleId: s.vehicleId,
+    customerId: s.customerId,
+    // The salesperson on the deal stays the same whoever completes it.
+    salespersonId: s.userId,
+    salePrice: SALE_PRICE,
+    saleDate: Date.now(),
+    status: "COMPLETED" as const,
+    quoteId: s.quoteId,
+    supplierSettlementRoute: route,
+    ...(resolution ? { depositResolution: resolution } : {}),
+    ...extra,
+  });
+}
+
 async function completeWith(
   s: Awaited<ReturnType<typeof seed>>,
   route: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER",
-  resolution?: { treatment: Treatment; reason?: string },
+  resolution?: { treatment: Treatment; reason?: string; refundMethod?: string },
   extra: Record<string, unknown> = {}
 ) {
+  const { salePriceOverride, ...rest } = extra as { salePriceOverride?: number };
   return await s.asUser.mutation(api.sales.create, {
     orgId: s.orgId,
     vehicleId: s.vehicleId,
@@ -191,7 +231,8 @@ async function completeWith(
     quoteId: s.quoteId,
     supplierSettlementRoute: route,
     ...(resolution ? { depositResolution: resolution } : {}),
-    ...extra,
+    ...rest,
+    ...(salePriceOverride === undefined ? {} : { salePrice: salePriceOverride }),
   });
 }
 
@@ -333,29 +374,100 @@ describe("APPLY_TO_TRANSACTION_SETTLEMENT", () => {
   });
 });
 
-describe("REFUND_TO_CUSTOMER and FORFEITED are not sale-completion decisions", () => {
-  test.each(["REFUND_TO_CUSTOMER", "FORFEITED"] as const)(
-    "%s is refused here and sent to the controlled release path",
-    async (treatment) => {
-      // `deposits.release` requires APPROVE_REQUESTS rather than CREATE_SALES,
-      // refuses a release by the person who took the deposit, rejects a payment
-      // method it cannot route, and writes the canonical payment and cashflow
-      // rows beside the journal. Completing a sale carries none of that, so
-      // honouring these here let one salesperson take a customer's deposit and
-      // forfeit it straight to income on their own authority.
-      const s = await seed(`ctl${treatment.slice(0, 4)}`);
-      await expect(
-        completeWith(s, "THROUGH_DEALERSHIP", { treatment })
-      ).rejects.toThrow(/separate approval|deposits screen/i);
+describe("REFUND_TO_CUSTOMER and FORFEITED keep every control they carry elsewhere", () => {
+  // These are available at completion, but they move a customer's money and so
+  // run through the same path the deposits screen uses. The controls belong to
+  // the decision, not to the screen it is made on — reimplementing the posting
+  // here once produced a route that refunded and forfeited with none of them.
 
-      // The money is untouched and the deposit is still held.
+  test("a refund by an authorized second actor pays out through the subledger, not just the GL", async () => {
+    const s = await seed("refundOk");
+    await completeAs(s.asManager, s, "THROUGH_DEALERSHIP", {
+      treatment: "REFUND_TO_CUSTOMER",
+      refundMethod: "CASH",
+    });
+
+    const posted = await postedBySystemKey(s.t, s.orgId);
+    expect(posted[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY]).toBe(DEPOSIT * SCALE);
+    expect(posted[SYSTEM_KEYS.CASH_ON_HAND]).toBe(-DEPOSIT * SCALE);
+    // The customer still owes the full gross: nothing came off it.
+    expect(posted[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS]).toBe(SALE_PRICE * SCALE);
+
+    // Cash leaving the business has to appear where people look for cash
+    // leaving the business, or the journal reconciles against nothing.
+    const [txns, canonical] = await s.t.run(async (ctx) => [
+      (await ctx.db.query("transactions").collect()).filter(
+        (t) => t.orgId === s.orgId && t.type === "OUT" && t.category === "DEPOSIT"
+      ),
+      (await ctx.db.query("canonicalPayments").collect()).filter(
+        (c) => c.orgId === s.orgId && c.direction === "OUT"
+      ),
+    ]);
+    expect(txns).toHaveLength(1);
+    expect(canonical).toHaveLength(1);
+    expect(canonical[0]!.amountMinor).toBe(DEPOSIT * SCALE);
+
+    const deposit = await s.t.run((ctx) => ctx.db.get(s.depositId));
+    expect(deposit?.status).toBe("REFUNDED");
+    expect(deposit?.resolutionTreatment).toBe("REFUND_TO_CUSTOMER");
+  });
+
+  test("a forfeiture by an authorized second actor recognizes forfeiture income, never commission", async () => {
+    const s = await seed("forfeitOk");
+    await completeAs(s.asManager, s, "THROUGH_DEALERSHIP", { treatment: "FORFEITED" });
+
+    const posted = await postedBySystemKey(s.t, s.orgId);
+    expect(posted[SYSTEM_KEYS.DEPOSIT_FORFEITURE_INCOME]).toBe(-DEPOSIT * SCALE);
+    expect(posted[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY]).toBe(DEPOSIT * SCALE);
+    // The deposit was not earned by selling the car.
+    expect(posted[SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE]).toBe(-MARGIN * SCALE);
+  });
+
+  test.each(["REFUND_TO_CUSTOMER", "FORFEITED"] as const)(
+    "%s is refused when the person completing the sale is the one who took the deposit",
+    async (treatment) => {
+      // Otherwise one salesperson can take a customer's deposit and keep it, on
+      // their own authority, by closing the deal.
+      const s = await seed(`sod${treatment.slice(0, 4)}`);
+      await expect(
+        completeWith(s, "THROUGH_DEALERSHIP", { treatment, refundMethod: "CASH" })
+      ).rejects.toThrow(/creator cannot resolve their own/i);
+
       const posted = await postedBySystemKey(s.t, s.orgId);
       expect(posted[SYSTEM_KEYS.CASH_ON_HAND] ?? 0).toBe(0);
       expect(posted[SYSTEM_KEYS.DEPOSIT_FORFEITURE_INCOME] ?? 0).toBe(0);
-      const deposit = await s.t.run((ctx) => ctx.db.get(s.depositId));
-      expect(deposit?.status).toBe("HELD");
+      expect((await s.t.run((ctx) => ctx.db.get(s.depositId)))?.status).toBe("HELD");
     }
   );
+
+  test("a refund with no payment method is refused, and so is one that cannot be paid out", async () => {
+    const noMethod = await seed("refundNoM");
+    await expect(
+      completeAs(noMethod.asManager, noMethod, "THROUGH_DEALERSHIP", {
+        treatment: "REFUND_TO_CUSTOMER",
+      })
+    ).rejects.toThrow(/payment method is required/i);
+
+    const otherMethod = await seed("refundOther");
+    await expect(
+      completeAs(otherMethod.asManager, otherMethod, "THROUGH_DEALERSHIP", {
+        treatment: "REFUND_TO_CUSTOMER",
+        refundMethod: "OTHER",
+      })
+    ).rejects.toThrow(/OTHER is not accepted/i);
+  });
+
+  test("a completer without approval permission cannot release the deposit at all", async () => {
+    // Completing a sale authorizes `create:sales`. Keeping or returning a
+    // customer's deposit is a different authority, and checking it only at the
+    // mutation boundary would never have noticed.
+    const s = await seed("refundPerm", { managerPermissions: SALES_ONLY_PERMS });
+    await expect(
+      completeAs(s.asManager, s, "THROUGH_DEALERSHIP", {
+        treatment: "FORFEITED",
+      })
+    ).rejects.toThrow(/approval permission/i);
+  });
 });
 
 describe("OTHER", () => {
@@ -431,4 +543,55 @@ describe("cancelling a sale whose deposit went to the supplier settlement", () =
     expect(deposit?.resolutionTreatment).toBeUndefined();
     expect(deposit?.resolutionSaleId).toBeUndefined();
   });
+});
+
+describe("the trigger is the deposit balance, not the settlement route", () => {
+  test("a direct-settled sale needs NO treatment when the dealership billed enough to absorb it", async () => {
+    // Tying the requirement to DIRECT_TO_SUPPLIER made an unrelated field decide
+    // whether a customer's money needed a decision. Here the buyer paid the
+    // supplier, yet the dealership billed 1,000 of its own fees against a 1,000
+    // deposit — nothing is left over, so nothing needs stating.
+    const s = await seed("dirAbsorbed");
+    await completeWith(s, "DIRECT_TO_SUPPLIER", undefined, { dealerFees: DEPOSIT });
+
+    const deposit = await s.t.run((ctx) => ctx.db.get(s.depositId));
+    expect(deposit?.status).toBe("APPLIED");
+    expect(deposit?.resolutionTreatment).toBe("APPLY_TO_DEALER_AMOUNT");
+
+    const posted = await postedBySystemKey(s.t, s.orgId);
+    expect(posted[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS]).toBe(0);
+  });
+
+  test("a through-dealership sale DOES need one when the deposit exceeds the bill", async () => {
+    // The mirror case: the supplier was settled through the dealership, which
+    // used to mean "never ask" — but the customer was billed less than the
+    // deposit, so a balance is left with nowhere determined to go.
+    const s = await seed("thruExcess");
+    await expect(
+      completeWith(s, "THROUGH_DEALERSHIP", undefined, { salePriceOverride: 0 })
+    ).rejects.toThrow(/leaves part of the customer's reservation deposit unapplied/i);
+  });
+
+  test("an owned sale is subject to exactly the same rule", async () => {
+    // Consigned-ness is not the trigger either. A deposit larger than the
+    // invoice is undetermined on the dealership's own stock too.
+    const s = await seed("ownedExcess", { sourceType: "STOCK" });
+    await expect(
+      completeWith(s, "THROUGH_DEALERSHIP", undefined, { salePriceOverride: 0 })
+    ).rejects.toThrow(/leaves part of the customer's reservation deposit unapplied/i);
+  });
+
+  test.each([
+    ["THROUGH_DEALERSHIP", "APPLY_TO_DEALER_AMOUNT"],
+    ["DIRECT_TO_SUPPLIER", "APPLY_TO_TRANSACTION_SETTLEMENT"],
+  ] as const)(
+    "an explicit %s treatment of %s is honoured",
+    async (route, treatment) => {
+      const s = await seed(`both${route.slice(0, 4)}`);
+      await completeWith(s, route, { treatment });
+      const deposit = await s.t.run((ctx) => ctx.db.get(s.depositId));
+      expect(deposit?.status).toBe("APPLIED");
+      expect(deposit?.resolutionTreatment).toBe(treatment);
+    }
+  );
 });

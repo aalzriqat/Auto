@@ -20,6 +20,7 @@ import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { getOrgCurrency, hookCommissionAccrued, hookCommissionAdjusted, hookCommissionPaid, hookSaleCancelled, isPostableNow, reverseCommissionForSale, commissionAccountingDate, commissionAccrualStrandedReason, commissionEntriesOutstandingStatus, hasCommissionAccrual, recognizedCommissionMinor, safeAdjustmentSeq, MAX_COMMISSION_ADJUSTMENTS } from "./accounting/workflowHooks";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
+import { depositMethodValidator } from "./utils/depositRecording";
 import { toMinorUnits, fromMinorUnits, assertFiniteNumber } from "./utils/money";
 import { checkPostingAllowed } from "./accountingPeriods";
 
@@ -55,6 +56,9 @@ const depositResolutionValidator = v.object({
     v.literal("OTHER")
   ),
   reason: v.optional(v.string()),
+  // Required for REFUND_TO_CUSTOMER: the deposit's own recorded method may be
+  // OTHER, which the release path refuses because it cannot be paid out.
+  refundMethod: v.optional(depositMethodValidator),
 });
 
 // ─── Queries ─────────────────────────────────────────────────────────────────

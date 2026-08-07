@@ -1,6 +1,17 @@
+import { ConvexError } from "convex/values";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import { Doc, Id } from "../_generated/dataModel";
 import { throwAppError, AppErrorCode } from "./errors";
+import { requireActorPermission } from "./tenancy";
+import { PERMISSIONS } from "./permissions";
+import { assertDifferentActors } from "./financialGuards";
+import { normalizeCurrency, amountToMinorOrThrow, type DepositMethod } from "./depositRecording";
+import { createCanonicalPayment } from "../subledger";
+import {
+  getOrgCurrency,
+  hookDepositRefunded,
+  hookDepositForfeited,
+} from "../accounting/workflowHooks";
 
 /** Used when an org hasn't configured a reservationHoldDays setting. */
 export const DEFAULT_RESERVATION_HOLD_DAYS = 3;
@@ -537,4 +548,168 @@ export async function releaseHoldForApplicationQuote(
 
   await releaseQuoteDepositHolds(ctx, args.quoteId);
   await releaseMatchingReservationHoldsForQuote(ctx, { quote, actorId: args.actorId });
+}
+
+/**
+ * Releases one HELD deposit as a refund or a forfeiture, with every control
+ * that decision carries.
+ *
+ * This exists because there are now two places a deposit can be released — the
+ * deposits screen and the completion of the sale it was taken against — and the
+ * controls belong to the DECISION, not to the screen it happens to be made on.
+ * Reimplementing the posting in the second place produced a path that moved a
+ * customer's money with none of them: no approval permission, no separation
+ * between the person who took the deposit and the person who kept it, no check
+ * that the refund method could actually be paid out, and no record in the
+ * cashflow ledger or the payments subledger to reconcile the journal against.
+ *
+ * The GL entry alone is not a release. Cash leaving the business has to appear
+ * in the places people look for cash leaving the business.
+ */
+export async function releaseHeldDeposit(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    depositId: Id<"deposits">;
+    resolution: "REFUNDED" | "FORFEITED";
+    actorId: Id<"users">;
+    refundMethod?: DepositMethod;
+    notes?: string;
+    idempotencyKey?: string;
+    occurredAt?: number;
+    /** Recorded on the deposit when the release was decided by closing a sale. */
+    saleId?: Id<"sales">;
+    treatment?: DepositTreatment;
+  }
+): Promise<{ amountMinor: number; currency: string }> {
+  if (args.resolution === "REFUNDED" && !args.refundMethod) {
+    throw new ConvexError("A refund payment method is required to refund a deposit.");
+  }
+  if (args.refundMethod === "OTHER") {
+    throw new ConvexError("Select a specific refund method — OTHER is not accepted for a deposit refund.");
+  }
+
+  // Releasing a deposit is an approval, not a sale action. Checked against the
+  // actor rather than the entry point, because completing a sale authorizes
+  // `create:sales` and would otherwise carry this along for free.
+  await requireActorPermission(
+    ctx,
+    args.orgId,
+    args.actorId,
+    PERMISSIONS.APPROVE_REQUESTS,
+    "Refunding or forfeiting a reservation deposit requires approval permission."
+  );
+
+  const deposit = await ctx.db.get(args.depositId);
+  if (!deposit || deposit.orgId !== args.orgId) {
+    throwAppError(AppErrorCode.DEPOSIT_NOT_FOUND, "Deposit not found in this organization.");
+  }
+  if (deposit.status !== "HELD") {
+    throwAppError(AppErrorCode.DEPOSIT_ALREADY_RESOLVED, "This deposit has already been resolved.");
+  }
+  assertDifferentActors(
+    args.actorId,
+    deposit.createdBy,
+    "Deposit creator cannot resolve their own deposit refund or forfeiture."
+  );
+
+  const now = args.occurredAt ?? Date.now();
+  const currency = normalizeCurrency(deposit.currency ?? (await getOrgCurrency(ctx, args.orgId)));
+  const amountMinor = deposit.amountMinor ?? amountToMinorOrThrow(deposit.amount, currency);
+
+  await ctx.db.patch(args.depositId, {
+    status: args.resolution,
+    holdActive: false,
+    resolvedBy: args.actorId,
+    resolvedAt: now,
+    notes: args.notes ?? deposit.notes,
+    ...(args.treatment ? { resolutionTreatment: args.treatment } : {}),
+    ...(args.saleId ? { resolutionSaleId: args.saleId } : {}),
+  });
+  await releaseAllVehiclesForDeposit(ctx, deposit);
+
+  if (args.resolution === "REFUNDED") {
+    const [vehicle, customer] = await Promise.all([
+      ctx.db.get(deposit.vehicleId),
+      ctx.db.get(deposit.customerId),
+    ]);
+    const vehicleLabel = vehicle
+      ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim()
+      : "Vehicle";
+    const customerLabel = customer
+      ? `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim() || "Customer"
+      : "Customer";
+    const sourceLabel = deposit.quoteId
+      ? `quote ${deposit.quoteId}`
+      : deposit.reservationId
+        ? `reservation ${deposit.reservationId}`
+        : "vehicle hold";
+
+    await ctx.db.insert("transactions", {
+      orgId: args.orgId,
+      type: "OUT",
+      amount: deposit.amount,
+      date: now,
+      category: "DEPOSIT",
+      description: `Deposit refund for ${sourceLabel} - ${vehicleLabel} - ${customerLabel}`,
+      vehicleId: deposit.vehicleId,
+      depositId: args.depositId,
+      idempotencyKey: args.idempotencyKey,
+    });
+
+    const collectionPaymentId = await ctx.db.insert("collectionPayments", {
+      orgId: args.orgId,
+      customerId: deposit.customerId,
+      vehicleId: deposit.vehicleId,
+      direction: "OUT",
+      method: "REFUND",
+      amount: deposit.amount,
+      paymentDate: now,
+      status: "POSTED",
+      idempotencyKey: args.idempotencyKey,
+      reference: `Deposit refund ${args.depositId}`,
+      cashierId: args.actorId,
+      notes: args.notes,
+      createdAt: now,
+    });
+
+    const canonicalPaymentId = await createCanonicalPayment(ctx, {
+      orgId: args.orgId,
+      direction: "OUT",
+      payerType: "CUSTOMER",
+      customerId: deposit.customerId,
+      method: args.refundMethod!,
+      amountMinor,
+      currency,
+      idempotencyKey: `deposit_refund_${args.depositId}`,
+      actorId: args.actorId,
+      status: "SETTLED",
+      externalReference: `Deposit refund ${args.depositId}`,
+      receivedAt: now,
+    });
+    await ctx.db.patch(collectionPaymentId, { canonicalPaymentId });
+
+    await hookDepositRefunded(ctx, {
+      orgId: args.orgId,
+      depositId: args.depositId,
+      customerId: deposit.customerId,
+      amountMinor,
+      currency,
+      actorId: args.actorId,
+      occurredAt: now,
+      paymentMethod: args.refundMethod,
+    });
+  } else {
+    await hookDepositForfeited(ctx, {
+      orgId: args.orgId,
+      depositId: args.depositId,
+      customerId: deposit.customerId,
+      amountMinor,
+      currency,
+      actorId: args.actorId,
+      occurredAt: now,
+    });
+  }
+
+  return { amountMinor, currency };
 }
