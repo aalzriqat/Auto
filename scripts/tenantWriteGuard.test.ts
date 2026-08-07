@@ -304,11 +304,28 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // internalMutation that walks every organization by pagination and takes no
   // `orgId` at all — there is no caller and no caller-supplied id — so it is
   // correctly outside the analysed surface rather than exempted from it.
+  // Then 440→445 / 287→288 / skippedNoArgsBlock 9→13 by the five Social Inbox
+  // aggregate migrations, which seed and repair the trees behind
+  // `socialInbox.platformStats`:
+  //
+  // `backfillInstagramEventAggregate`, `backfillFacebookEventAggregate`,
+  // `backfillInstagramSocialContacts` and `backfillFacebookSocialContacts` take
+  // the shared `BACKFILL_ARGS` constant rather than a literal `args: {` block,
+  // so they land in `skippedNoArgsBlock` (9→13). Each walks one table by
+  // pagination and takes no `orgId` and no document id — there is nothing for a
+  // caller to point elsewhere.
+  //
+  // `migrations.repairSocialContacts` rebuilds `socialContacts` from the event
+  // tables. It has a literal args block carrying an optional `orgId`, so it is
+  // the one of the five that lands in `analysed` (287→288). It needs no
+  // `requireOwnedRow`: it is an internalMutation with no caller-supplied
+  // document id, and every row it touches is reached by walking either the
+  // whole table or that same `orgId`'s `by_org` index.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 440,
-      analysed: 287,
-      skippedNoArgsBlock: 9,
+      totalMutations: 445,
+      analysed: 288,
+      skippedNoArgsBlock: 13,
       skippedNoOrgId: 144,
     });
   });

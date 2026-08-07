@@ -147,7 +147,6 @@ export function SocialInboxModule({ orgId }: { orgId: string }) {
   const sendFacebookDm = useAction(api.facebookEngagement.sendFacebookDirectMessage);
   const linkVehicle = useMutation(api.socialInbox.setConversationVehicle);
   const stats = useQuery(api.socialInbox.platformStats, { orgId });
-  const vehicles = useQuery(api.vehicles.listAll, { orgId, includeReserved: true });
   const [platformFilter, setPlatformFilter] = useState<MobileSocialPlatform | "ALL">("ALL");
   const [needsReplyOnly, setNeedsReplyOnly] = useState(false);
   const { loadMore, results, status } = usePaginatedQuery(
@@ -174,6 +173,17 @@ export function SocialInboxModule({ orgId }: { orgId: string }) {
           conversationPostId: selected.conversationPostId ?? undefined,
         }
       : "skip",
+  );
+  // Only while a conversation is open. `vehicles.listAll` returns up to 200
+  // *whole* vehicle documents — image id arrays, spec fields, costing — and
+  // this screen wants nothing but the year/make/model label for the linking
+  // dropdown, which lives inside the modal below. Subscribed at screen level it
+  // held all of that live, and re-fetched it on every vehicle edit anywhere in
+  // the org, for a control the user may never open. Same "skip" gate the
+  // conversation's own events already use.
+  const vehicles = useQuery(
+    api.vehicles.listAll,
+    selected ? { orgId, includeReserved: true } : "skip",
   );
   const vehicleOptions = [
     { label: locale === "ar" ? "اختر سيارة" : "Select vehicle", value: "" },

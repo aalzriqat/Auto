@@ -206,6 +206,24 @@ describe("adminOrgs", () => {
       })
     );
 
+    // An inbound social event materialises a `socialContacts` row through the
+    // aggregate trigger. That table is org-scoped and derived, so the purge has
+    // to carry it or the row — and its `socialContactsByOrg` entry — outlives
+    // the org it belonged to.
+    await t.run(async (ctx) =>
+      ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "purge_ig_1",
+        kind: "dm",
+        senderInstagramId: "purge_sender_1",
+      })
+    );
+    expect(
+      await t.run(async (ctx) =>
+        ctx.db.query("socialContacts").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+      )
+    ).toHaveLength(1);
+
     await expect(
       asAdmin.mutation(api.adminOrgs.hardDeleteOrg, { orgId, confirmName: "Wrong Name" })
     ).rejects.toThrow();
@@ -235,6 +253,14 @@ describe("adminOrgs", () => {
       ctx.db.query("liveChatMessages").withIndex("by_thread", (q) => q.eq("threadId", liveChatThreadId)).collect()
     );
     expect(remainingLiveMessages).toHaveLength(0);
+    const remainingSocialContacts = await t.run(async (ctx) =>
+      ctx.db.query("socialContacts").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(remainingSocialContacts).toHaveLength(0);
+    const remainingIgEvents = await t.run(async (ctx) =>
+      ctx.db.query("instagramEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(remainingIgEvents).toHaveLength(0);
     const org = await t.run(async (ctx) => ctx.db.get(orgId));
     expect(org).toBeNull();
   });

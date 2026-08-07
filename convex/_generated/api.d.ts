@@ -425,4 +425,7 @@ export declare const components: {
   customersByOrg: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"customersByOrg">;
   leadsByOrg: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"leadsByOrg">;
   membershipsByOrg: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"membershipsByOrg">;
+  instagramEventsByOrg: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"instagramEventsByOrg">;
+  facebookEventsByOrg: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"facebookEventsByOrg">;
+  socialContactsByOrg: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"socialContactsByOrg">;
 };

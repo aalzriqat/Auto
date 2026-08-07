@@ -3038,6 +3038,31 @@ export default defineSchema({
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_pending_reply", ["pendingAutoReply"]),
 
+  /**
+   * One row per distinct social sender the org has ever heard from, per
+   * platform. Exists solely so `socialInbox.platformStats` can report
+   * "unique contacts" without reading every event row to build a Set.
+   *
+   * A distinct count is the one question a `TableAggregate` cannot answer: it
+   * counts keys, not distinct values of a key. Materialising each distinct
+   * sender as its own row turns that question back into a plain count, which
+   * `socialContactsByOrg` then answers off the B-tree.
+   *
+   * Keyed on the raw platform id (`senderInstagramId` / `senderFacebookId`),
+   * NOT on `customerId`. The two are 1:1 at ingest, but a customer merge
+   * repoints several senders at one customer row — counting customers would
+   * silently under-report exactly the orgs that have tidied their contacts,
+   * and the Set this replaces counted senders.
+   */
+  socialContacts: defineTable({
+    orgId: v.id("organizations"),
+    platform: v.union(v.literal("instagram"), v.literal("facebook")),
+    senderRawId: v.string(),
+  })
+    // Point lookup for the insert-if-absent path on every inbound event.
+    .index("by_org_platform_sender", ["orgId", "platform", "senderRawId"])
+    .index("by_org", ["orgId"]),
+
   // Full Messenger thread: one row per message (in or out), enabling complete
   // conversation history including messages sent before AutoFlow existed.
   facebookMessages: defineTable({
