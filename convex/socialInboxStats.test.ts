@@ -463,43 +463,6 @@ describe("socialInbox.platformStats", () => {
     }
   });
 
-  test("hard-deleting an org takes its social contacts and their counts with it", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId } = await seedOrgWithEditor(t);
-    const { orgId: survivorOrgId, asEditor: asSurvivor } = await seedOrgWithEditor(t, "stats_editor_003");
-
-    for (const org of [orgId, survivorOrgId]) {
-      await t.run((ctx) =>
-        ctx.db.insert("facebookEvents", {
-          orgId: org,
-          externalId: `purge_${org}`,
-          kind: "dm",
-          senderFacebookId: `purge_sender_${org}`,
-        })
-      );
-    }
-    expect(await t.run((ctx) => ctx.db.query("socialContacts").collect())).toHaveLength(2);
-
-    // `socialContacts` is org-scoped and derived, so it has to be in
-    // ORGANIZATION_DELETION_STEPS or a purged org's rows — and its aggregate
-    // entries — outlive it.
-    const deleted = await t.run(async (ctx) => {
-      const rows = await ctx.db
-        .query("socialContacts")
-        .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .collect();
-      for (const row of rows) await ctx.db.delete(row._id);
-      return rows.length;
-    });
-    expect(deleted).toBe(1);
-
-    const survivor = await asSurvivor.query(api.socialInbox.platformStats, { orgId: survivorOrgId });
-    expect(survivor.facebook.uniqueContacts).toBe(1);
-    const remaining = await t.run((ctx) => ctx.db.query("socialContacts").collect());
-    expect(remaining).toHaveLength(1);
-    expect(remaining[0].orgId).toBe(survivorOrgId);
-  });
-
   test("requires org membership", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithEditor(t);
@@ -524,17 +487,28 @@ describe("socialContacts invariants", () => {
     // ADMIN_TABLES; adding either event table there is a one-line change that
     // would make "unique contacts" read permanently high with no other signal.
     const adminData = convexSource("adminData.ts");
-    const adminTables = adminData.slice(
-      adminData.indexOf("const ADMIN_TABLES"),
-      adminData.indexOf("];", adminData.indexOf("const ADMIN_TABLES"))
-    );
+    const start = adminData.indexOf("const ADMIN_TABLES");
+    const end = adminData.indexOf("];", start);
+
+    // Locate the list before asserting on it. `indexOf` returning -1 would make
+    // `slice` yield an empty string and both assertions below pass having
+    // checked nothing — a guard against a fail-open invariant must not itself
+    // fail open when the constant is renamed or re-exported.
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const adminTables = adminData.slice(start, end);
+    // Self-check: the slice really is the table list, not an empty match.
+    expect(adminTables).toContain('table: "vehicles"');
 
     expect(adminTables).not.toContain("instagramEvents");
     expect(adminTables).not.toContain("facebookEvents");
   });
 
   test("a purged org takes its socialContacts rows with it", () => {
-    // `socialContacts` is org-scoped and derived. Left out of the purge, a
+    // Cheap companion to the executable coverage in `adminOrgs.test.ts`, which
+    // drives the real deletion request to completion. This one names the
+    // requirement at the point the trigger's safety argument depends on it:
+    // `socialContacts` is org-scoped and derived, so left out of the purge a
     // hard-deleted org's rows and its `socialContactsByOrg` entries outlive it.
     expect(convexSource("adminOrgs.ts")).toContain('table: "socialContacts"');
   });

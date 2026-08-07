@@ -439,6 +439,15 @@ export const repairSocialContacts = internalMutation({
     const numItems = Math.min(Math.max(args.batchSize ?? 100, 1), 250);
     const orgId = args.orgId;
 
+    // Exactly one `.paginate()` runs per invocation — the branches are mutually
+    // exclusive. A Convex function may only issue one, and `convex-test` does
+    // not enforce that, so the branch structure has to guarantee it rather than
+    // the tests.
+    //
+    // Written out per phase rather than behind a generic `paginate(table)`
+    // helper: `withIndex`'s field argument cannot narrow across a union of
+    // table names, so the `orgId` comparison widens to every table's field
+    // paths at once and fails to typecheck.
     let page;
     if (phase === "clear") {
       page = orgId
@@ -480,9 +489,12 @@ export const repairSocialContacts = internalMutation({
 
     if (args.continueAutomatically !== false) {
       if (!page.isDone) {
-        // The clear deletes every row it reads, so its next batch is the new
-        // first page and the cursor must be dropped. The rebuild phases only
-        // insert, so theirs must be kept.
+        // The clear restarts from `null`: every row it read is deleted, so the
+        // next batch is the new first page. Passing the cursor back would work
+        // equally well — Convex cursors encode a sort key, not an offset, so
+        // both resume at the same surviving row — but `null` says plainly that
+        // there is nothing to resume from. The rebuild phases only insert, so
+        // theirs must be carried forward or they would restart each batch.
         await ctx.scheduler.runAfter(0, internal.migrations.repairSocialContacts, {
           orgId,
           phase,
@@ -502,7 +514,16 @@ export const repairSocialContacts = internalMutation({
       phase,
       migrated: page.page.length,
       isDone: page.isDone,
-      continueCursor: page.isDone ? null : page.continueCursor,
+      // The clear phase reports no cursor, even mid-run, because it has no use
+      // for one: its continuation restarts from `null`. Handing back a cursor
+      // the function itself never passes invites a caller to think it must be
+      // fed in to make progress.
+      //
+      // It would be *safe* to feed back — Convex cursors encode a sort key, not
+      // an offset, so a cursor into deleted rows still resumes at the first
+      // surviving row after them, and nothing is skipped. Reporting `null` is a
+      // contract choice for clarity, not a guard against data loss.
+      continueCursor: page.isDone || phase === "clear" ? null : page.continueCursor,
     };
   },
 });
