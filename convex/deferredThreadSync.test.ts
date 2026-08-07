@@ -54,6 +54,26 @@ export function stripComments(source: string): string {
  * One entry per exported Convex function, split on the same boundary
  * `scripts/tenantWriteGuard.ts` uses.
  */
+/**
+ * One `rel:name` per exported mutation built on `socialBulkMutation`, using the
+ * same chunking as the obligation scan so the two cannot diverge.
+ */
+export function deferredMutationsIn(source: string, rel: string): string[] {
+  const found: string[] = [];
+  const code = stripComments(source);
+
+  for (const raw of code.split(/\nexport const /).slice(1)) {
+    const whole = "export const " + raw;
+    const end = whole.search(/\n\}\);/);
+    const name = raw.match(/^(\w+)/)?.[1];
+    if (!name) continue;
+    const chunk = end === -1 ? whole : whole.slice(0, end);
+    if (/=\s*socialBulkMutation\(/.test(chunk)) found.push(`${rel}:${name}`);
+  }
+
+  return found;
+}
+
 export function deferredMutationOffenders(source: string, rel: string): string[] {
   const offenders: string[] = [];
   const code = stripComments(source);
@@ -65,9 +85,20 @@ export function deferredMutationOffenders(source: string, rel: string): string[]
     // non-exported helper defined *after* an offending mutation leaked its
     // calls into the offender's chunk and the offender went unreported.
     const end = whole.search(/\n\}\);/);
-    const chunk = end === -1 ? whole : whole.slice(0, end);
     const name = raw.match(/^(\w+)/)?.[1];
     if (!name) continue;
+    if (end === -1) {
+      // No recognisable closing `});`, so the chunk cannot be bounded and would
+      // run on into the next definition, borrowing calls that are not its own.
+      // Report it rather than scan it: for a guard whose whole purpose is to
+      // catch a silent omission, "I could not parse this" must not read the
+      // same as "this is fine".
+      if (/=\s*socialBulkMutation\(/.test(whole)) {
+        offenders.push(`${rel}:${name} uses socialBulkMutation in a definition this guard cannot bound`);
+      }
+      continue;
+    }
+    const chunk = whole.slice(0, end);
     if (!/=\s*socialBulkMutation\(/.test(chunk)) continue;
 
     // Both halves are required. Collecting without syncing leaves the rows
@@ -189,16 +220,17 @@ async function unrelatedHelper(ctx) {
   test("the guard is armed — it sees the real mutations", () => {
     // A guard nobody has watched fail is not a guard. If the builder is renamed
     // the scan silently matches nothing and passes having checked no code.
+    //
+    // Shares `deferredMutationOffenders`' chunking rather than re-implementing
+    // it. A second scan of the same thing is exactly how two interpretations of
+    // one invariant drift apart — the mistake the namespaced thread key already
+    // made once in this feature. The unbounded version here attributed a
+    // non-exported `socialBulkMutation` to the preceding export.
     const found: string[] = [];
     for (const file of convexModules(CONVEX_DIR)) {
       const rel = path.relative(CONVEX_DIR, file).split(path.sep).join("/");
       if (rel === BUILDER_OWNER) continue;
-      const code = stripComments(fs.readFileSync(file, "utf8"));
-      for (const raw of code.split(/\nexport const /).slice(1)) {
-        const chunk = "export const " + raw;
-        const name = raw.match(/^(\w+)/)?.[1];
-        if (name && /=\s*socialBulkMutation\(/.test(chunk)) found.push(`${rel}:${name}`);
-      }
+      found.push(...deferredMutationsIn(fs.readFileSync(file, "utf8"), rel));
     }
 
     expect(found.sort()).toEqual([
