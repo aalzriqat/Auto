@@ -660,8 +660,8 @@ export function resetSocialConversationSyncCount(): void {
  * ⚠️ It is **not** bounded when a mutation patches many of one customer's
  * events in a loop, because each patch fires a sync that re-reads the whole
  * thread: N patches cost O(N²) reads. Measured superlinear (2x the events gave
- * ~3x the time at n=200, converging on quadratic at higher n). The loops that
- * do this today are `customers.mergeCustomers`, `socialInbox.setConversationVehicle`
+ * ~3x the time at n=200, converging on quadratic at higher n). The loops with
+ * this shape are `customers.mergeCustomers`, `socialInbox.setConversationVehicle`
  * called without a platform, and the org purge. On a long Messenger thread that
  * can reach Convex's per-transaction read ceiling, and a throw there rolls the
  * whole mutation back — so the merge would fail outright rather than degrade.

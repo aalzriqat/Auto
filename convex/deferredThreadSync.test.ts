@@ -59,7 +59,13 @@ export function deferredMutationOffenders(source: string, rel: string): string[]
   const code = stripComments(source);
 
   for (const raw of code.split(/\nexport const /).slice(1)) {
-    const chunk = "export const " + raw;
+    const whole = "export const " + raw;
+    // Bounded at this definition's own closing `});`. Splitting alone runs a
+    // chunk to the next `export const` — or to EOF for the last one — so a
+    // non-exported helper defined *after* an offending mutation leaked its
+    // calls into the offender's chunk and the offender went unreported.
+    const end = whole.search(/\n\}\);/);
+    const chunk = end === -1 ? whole : whole.slice(0, end);
     const name = raw.match(/^(\w+)/)?.[1];
     if (!name) continue;
     if (!/=\s*socialBulkMutation\(/.test(chunk)) continue;
@@ -134,6 +140,50 @@ export const bad = socialBulkMutation({
 });
 `;
     expect(deferredMutationOffenders(source, "x.ts")).toHaveLength(2);
+  });
+
+  test("a helper defined after the offender cannot lend it the calls", () => {
+    // The chunk for `bad` used to run to the next `export const` — here, to
+    // EOF — swallowing the helper below and its two calls, so `bad` passed.
+    const source = `
+import { socialBulkMutation } from "./functions";
+
+export const bad = socialBulkMutation({
+  args: {},
+  handler: async (ctx) => {
+    await ctx.db.patch(id, {});
+  },
+});
+
+async function unrelatedHelper(ctx) {
+  const threads = newDeferredSocialThreads();
+  collectSocialThread(threads, "instagram", doc);
+  await syncDeferredSocialThreads(ctx, threads);
+}
+`;
+    expect(deferredMutationOffenders(source, "x.ts")).toEqual([
+      "x.ts:bad uses socialBulkMutation but never calls syncDeferredSocialThreads",
+      "x.ts:bad uses socialBulkMutation but never calls collectSocialThread",
+    ]);
+  });
+
+  test("every Convex module has balanced block-comment delimiters", () => {
+    // `stripComments` deletes everything between `/*` and the next `*/`. An
+    // unbalanced `/*` inside a string or regex literal would therefore swallow
+    // real code — including, in the worst case, a non-syncing mutation, which
+    // would vanish from the scan entirely. That is the one shape in the
+    // stripper that fails OPEN rather than merely producing a noisy build, so
+    // it is pinned rather than reasoned about.
+    const unbalanced: string[] = [];
+    for (const file of convexModules(CONVEX_DIR)) {
+      const source = fs.readFileSync(file, "utf8");
+      const opens = (source.match(/\/\*/g) ?? []).length;
+      const closes = (source.match(/\*\//g) ?? []).length;
+      if (opens !== closes) {
+        unbalanced.push(`${path.relative(CONVEX_DIR, file)}: ${opens} open vs ${closes} close`);
+      }
+    }
+    expect(unbalanced).toEqual([]);
   });
 
   test("the guard is armed — it sees the real mutations", () => {
