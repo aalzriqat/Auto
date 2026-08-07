@@ -370,10 +370,21 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // always has — loading the row and refusing it when `payable.orgId` is not
   // the named org — which is what `requireOwnedRow` does, written out where the
   // analyzer can see it.
+  // Then 458→459 / 304→305 by `migrateConsignedSaleBasis`, which restates
+  // historical consigned sales from principal to agent basis. It takes an
+  // optional `orgId` so a dealership can be migrated on its own, which is what
+  // puts it in `analysed`. It writes no caller-supplied document id — the only
+  // other argument is an opaque pagination cursor — and every row it touches is
+  // reached by walking from that org, so the ownership rule is satisfied by
+  // construction rather than by a check.
+  //
+  // RECOMPUTE these, never resolve a conflict by taking one side. Two branches
+  // have already each moved the same counter independently, and picking either
+  // number silently under-reports the merged surface.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 458,
-      analysed: 304,
+      totalMutations: 459,
+      analysed: 305,
       skippedNoArgsBlock: 9,
       skippedNoOrgId: 145,
     });
