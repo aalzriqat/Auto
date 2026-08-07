@@ -32,7 +32,15 @@ export async function getOrgCurrency(ctx: QueryCtx | MutationCtx, orgId: Id<"org
   return settings?.currency ?? "JOD";
 }
 
-async function shouldPost(ctx: MutationCtx, orgId: Id<"organizations">, date: number): Promise<boolean> {
+/**
+ * Whether an event dated here would post now or queue to the outbox.
+ *
+ * Exported so the historical migration's dry run can predict which of the two
+ * a correction will do instead of reporting a bare "would correct" count —
+ * the distinction is the whole difference between a correction that reaches
+ * the books and one that sits waiting for a period to open.
+ */
+export async function shouldPost(ctx: MutationCtx, orgId: Id<"organizations">, date: number): Promise<boolean> {
   const [chartReady, period] = await Promise.all([
     isChartInitialized(ctx, orgId),
     getOpenPeriodForDate(ctx, orgId, date),
@@ -511,6 +519,11 @@ export async function hookSaleCompleted(
       salespersonId: args.salespersonId.toString(),
       taxMinor: args.taxMinor,
       isSourced: args.isSourced ?? false,
+      // Stamped unconditionally. It says "this payload was built by code that
+      // considers consignment", which is what lets ruleSaleCompleted refuse a
+      // sourced sale with no consignment block without also refusing the ones
+      // queued before agent basis existed. See SaleCompletedPayload.
+      consignmentEvaluated: true,
       ...(args.consignment ? { consignment: args.consignment } : {}),
       dealerFeesMinor: args.dealerFeesMinor,
       warrantySoldMinor: args.warrantySoldMinor,

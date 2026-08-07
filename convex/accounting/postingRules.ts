@@ -177,6 +177,28 @@ export interface SaleCompletedPayload {
   /** When true the vehicle was sourced from another dealer; credits AP-Suppliers instead of Vehicle Inventory for COGS. */
   isSourced?: boolean;
   /**
+   * Set by every emitter that knows consigned-agent basis exists — i.e. every
+   * one of them from this deploy onward. It is how this rule tells a caller
+   * that FORGOT the consignment details from one that predates them.
+   *
+   * It matters because outbox entries outlive deploys. An organization that
+   * enabled accounting after selling sourced cars has SALE_COMPLETED events
+   * queued from before agent basis existed: no `consignment`, and no way to
+   * reconstruct one, since the settlement route was never asked for and the
+   * supplier's entitlement was recorded only as a cost. Failing those closed
+   * would dead-letter them after MAX_ATTEMPTS and drop the sale off the books
+   * entirely; inventing a consignment block would be worse — it would fabricate
+   * a settlement route nobody chose.
+   *
+   * So a legacy event posts on the basis it was written for, exactly as it
+   * would have before this change, and the restatement to agent basis is left
+   * to `migrateConsignedSaleBasis`, which is the same treatment every already-
+   * posted historical sourced sale gets. Absence never grants permission to a
+   * NEW event: those all carry the flag, so a missing consignment there is a
+   * bug and still throws.
+   */
+  consignmentEvaluated?: boolean;
+  /**
    * Present when the vehicle is legally the supplier's and the dealership sold
    * it as his agent. Its presence switches this rule to agent basis entirely:
    * commission on the spread, no vehicle revenue, no COGS, no inventory.
@@ -501,14 +523,24 @@ function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
     );
   }
 
+  // A zero margin is a real deal, not a broken one: the dealership placed the
+  // car for a supplier and made nothing on the metal, earning only the dealer
+  // fees and F&I below. The journal simply has no commission line to write —
+  // `validateBalance` rejects a 0/0 line, so emitting one made the whole sale
+  // uncompletable rather than recording a fact worth recording. Where the
+  // dealership's own minimum-profit policy objects, that is for
+  // `convex/utils/profitApproval.ts` to raise as an approval, not for the
+  // ledger to make structurally unrepresentable.
   const lines: LineSpec[] =
     consignment.settlementRoute === "DIRECT_TO_SUPPLIER"
-      ? [
-          // The buyer paid the supplier. Nothing gross ever reaches these
-          // books; the only asset is the margin he now owes back.
-          line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, marginMinor, 0, `Commission due from ${supplier}`, dims),
-          line(SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, marginMinor, "Consignment commission earned", dims),
-        ]
+      ? marginMinor > 0
+        ? [
+            // The buyer paid the supplier. Nothing gross ever reaches these
+            // books; the only asset is the margin he now owes back.
+            line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, marginMinor, 0, `Commission due from ${supplier}`, dims),
+            line(SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, marginMinor, "Consignment commission earned", dims),
+          ]
+        : []
       : [
           // Gross landed here on his behalf: an asset for the whole amount, of
           // which his share is a liability from the instant it arrives.
@@ -521,7 +553,12 @@ function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
           // credited.
           line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, p.saleAmountMinor, 0, "Consigned sale proceeds receivable", dims),
           line(SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, 0, entitlementMinor, `Owed to ${supplier}`, dims),
-          line(SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, marginMinor, "Consignment commission earned", dims),
+          // Omitted at zero margin for the same reason as above; the AR and AP
+          // lines already balance each other when the entitlement is the whole
+          // price, so the entry stays valid without it.
+          ...(marginMinor > 0
+            ? [line(SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, marginMinor, "Consignment commission earned", dims)]
+            : []),
         ];
 
   // Dealer fees and F&I products are the dealership's own income on its own
@@ -557,11 +594,21 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   // the books at gross — see convex/sourcedAgentImpact.ts. Converting the car
   // to owned stock is the other legitimate answer, and it has to be done on
   // purpose rather than implied by a missing field.
-  if (p.isSourced) {
+  //
+  // Scoped to events whose emitter knew about agent basis. A legacy event
+  // queued before this deploy carries no such knowledge, and refusing it would
+  // dead-letter a real sale rather than book it — see `consignmentEvaluated`.
+  if (p.isSourced && p.consignmentEvaluated) {
     throw new Error(
       `Sale ${p.saleId} is of a sourced vehicle, which is legally the supplier's. Post it on agent basis with the supplier's entitlement, or convert the vehicle to dealer-owned stock first — it cannot be posted as an owned sale.`
     );
   }
+  // Reached by a legacy sourced event: it posts at gross exactly as it would
+  // have before agent basis existed, and `migrateConsignedSaleBasis` restates
+  // it afterwards along with every other historical sourced sale. Recorded in
+  // the memo so the entry is identifiable without reconstructing why.
+  const legacySourced = p.isSourced === true && p.consignmentEvaluated !== true;
+
   const revenueMinor = p.taxMinor ? p.saleAmountMinor - p.taxMinor : p.saleAmountMinor;
   const dims = { customerId: p.customerId, vehicleId: p.vehicleId, salespersonId: p.salespersonId };
   const dealerFeesMinor = p.dealerFeesMinor && p.dealerFeesMinor > 0 ? p.dealerFeesMinor : 0;
@@ -594,7 +641,13 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
     const costCreditDesc = p.isSourced ? "Supplier payable created" : "Inventory relief";
     lines.push(line(costCreditKey, 0, p.costMinor, costCreditDesc, { vehicleId: p.vehicleId }));
   }
-  return { lines, memo: "Vehicle sale completed", category: "SYSTEM" };
+  return {
+    lines,
+    memo: legacySourced
+      ? "Vehicle sale completed (sourced, principal basis — queued before agent accounting; awaiting restatement)"
+      : "Vehicle sale completed",
+    category: "SYSTEM",
+  };
 }
 
 export interface ConsignedSaleReclassifiedPayload {

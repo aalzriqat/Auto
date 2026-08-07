@@ -1,5 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { ruleSaleCompleted, ruleSupplierPaymentSettled, SaleCompletedPayload } from "./postingRules";
+import {
+  ruleSaleCompleted,
+  ruleSupplierPaymentSettled,
+  validateBalance,
+  SaleCompletedPayload,
+} from "./postingRules";
 import { SYSTEM_KEYS } from "../utils/defaultChart";
 
 /**
@@ -127,14 +132,19 @@ describe("the fail-closed guard on owned-basis posting", () => {
     // gross: revenue on a car the dealership never owned, and inventory relief
     // for stock it never held.
     expect(() =>
-      ruleSaleCompleted({ ...base, isSourced: true, costMinor: jod(9_500) })
+      ruleSaleCompleted({
+        ...base,
+        isSourced: true,
+        consignmentEvaluated: true,
+        costMinor: jod(9_500),
+      })
     ).toThrow(/cannot be posted as an owned sale/i);
   });
 
   test("names conversion to dealer-owned stock as the other legitimate answer", () => {
-    expect(() => ruleSaleCompleted({ ...base, isSourced: true })).toThrow(
-      /convert the vehicle to dealer-owned stock/i
-    );
+    expect(() =>
+      ruleSaleCompleted({ ...base, isSourced: true, consignmentEvaluated: true })
+    ).toThrow(/convert the vehicle to dealer-owned stock/i);
   });
 
   test("leaves an ordinary owned sale exactly as it was", () => {
@@ -162,5 +172,96 @@ describe("the fail-closed guard on owned-basis posting", () => {
 
     expect(agentProfit).toBe(jod(3_000));
     expect(principalProfit).toBe(jod(3_000));
+  });
+});
+
+describe("events queued before agent accounting existed", () => {
+  // The organizations this is about: they sold sourced cars, enabled accounting
+  // afterwards, and their SALE_COMPLETED events have been sitting in the outbox
+  // ever since. Those payloads carry `isSourced` and nothing else — no
+  // settlement route was ever asked for, so no consignment block can honestly
+  // be reconstructed from them.
+
+  test("posts a legacy sourced event on the basis it was written for", () => {
+    // Not a variation on agent basis: this is exactly what the rule produced
+    // before agent basis existed, which is what the queued event was built to
+    // produce. Failing it closed would dead-letter a real sale after
+    // MAX_ATTEMPTS and drop it off the books entirely.
+    const result = ruleSaleCompleted({ ...base, isSourced: true, costMinor: jod(9_500) });
+
+    expect(net(result, SYSTEM_KEYS.SALES_REVENUE)).toBe(-jod(12_500));
+    expect(net(result, SYSTEM_KEYS.COST_OF_VEHICLES_SOLD)).toBe(jod(9_500));
+    // AP-Suppliers, not Vehicle Inventory — the pre-existing sourced treatment.
+    expect(net(result, SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS)).toBe(-jod(9_500));
+    expect(net(result, SYSTEM_KEYS.VEHICLE_INVENTORY)).toBe(0);
+  });
+
+  test("says on the entry that it is awaiting restatement", () => {
+    // So the entry is identifiable later without reconstructing why it exists.
+    // migrateConsignedSaleBasis restates it like every other historical
+    // sourced sale once it has posted.
+    const result = ruleSaleCompleted({ ...base, isSourced: true, costMinor: jod(9_500) });
+    expect(result.memo).toMatch(/awaiting restatement/i);
+  });
+
+  test("balances, so the outbox can actually drain it", () => {
+    // The failure this replaces was not a wrong number, it was a throw: the
+    // event burned an attempt on every drain and dead-lettered.
+    expect(() =>
+      validateBalance(ruleSaleCompleted({ ...base, isSourced: true, costMinor: jod(9_500) }).lines)
+    ).not.toThrow();
+  });
+
+  test("still refuses a NEW sourced event with no consignment block", () => {
+    // The flag is what separates the two. Every emitter sets it from this
+    // deploy on, so its absence can only mean a payload built before agent
+    // basis — and its presence with no consignment is a bug that must not post.
+    expect(() =>
+      ruleSaleCompleted({
+        ...base,
+        isSourced: true,
+        consignmentEvaluated: true,
+        costMinor: jod(9_500),
+      })
+    ).toThrow(/cannot be posted as an owned sale/i);
+  });
+});
+
+describe("a consigned sale the dealership made nothing on", () => {
+  // A legitimate deal: the dealership placed the car for the supplier at his
+  // entitlement and earns only its fees. `validateBalance` rejects a 0/0 line,
+  // so emitting a zero commission line made the sale uncompletable — a
+  // representable fact turned into a structural impossibility.
+
+  test("posts nothing at all when settled directly and there are no fees", () => {
+    const result = ruleSaleCompleted(
+      consigned({ saleAmountMinor: jod(9_500) }, "DIRECT_TO_SUPPLIER")
+    );
+
+    expect(result.lines).toHaveLength(0);
+    expect(() => validateBalance(result.lines)).not.toThrow();
+  });
+
+  test("still posts the dealership's own fee income", () => {
+    const result = ruleSaleCompleted(
+      consigned({ saleAmountMinor: jod(9_500), dealerFeesMinor: jod(200) }, "DIRECT_TO_SUPPLIER")
+    );
+
+    expect(net(result, SYSTEM_KEYS.DEALER_FEE_INCOME)).toBe(-jod(200));
+    expect(net(result, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(jod(200));
+    // No commission was earned, so no receivable from the supplier is opened.
+    expect(net(result, SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS)).toBe(0);
+    expect(() => validateBalance(result.lines)).not.toThrow();
+  });
+
+  test("balances on the through-dealership route, where gross still moves", () => {
+    const result = ruleSaleCompleted(
+      consigned({ saleAmountMinor: jod(9_500) }, "THROUGH_DEALERSHIP")
+    );
+
+    expect(net(result, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(jod(9_500));
+    expect(net(result, SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS)).toBe(-jod(9_500));
+    expect(net(result, SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE)).toBe(0);
+    expect(() => validateBalance(result.lines)).not.toThrow();
   });
 });
