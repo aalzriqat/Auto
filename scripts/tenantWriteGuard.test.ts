@@ -320,7 +320,22 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // which clears the flag marking a deal's financing figures as needing review.
   // It takes an `orgId` and a caller-supplied `applicationId`, so it is held to
   // the `requireOwnedRow` rule and satisfies it inline like its siblings.
-  // Then 445→454 / 292→301 by the nine mutations in `financeDealCosts`, which
+  // Then 445→446 / skippedNoOrgId 144→145 by one mutation from main, with
+  // `analysed` deliberately unchanged:
+  //
+  // `migrateCommissionAccruals.backfillCommissionAccruals` accrues the
+  // commission backlog left by the move to earned-time recognition. It is an
+  // internalMutation that walks every organization by pagination and takes no
+  // `orgId` at all — there is no caller and no caller-supplied id — so it is
+  // correctly outside the analysed surface rather than exempted from it.
+  //
+  // Both sides of that merge moved skippedNoOrgId 143→144 independently — the
+  // base branch via backfillFinancingEconomics, main via
+  // backfillCommissionAccruals — so the merged figure is 145, not the 144
+  // either side carried alone. Taking either verbatim would have silently
+  // un-pinned one migration from the guard.
+  //
+  // Then 446→455 / 292→301 by the nine mutations in `financeDealCosts`, which
   // records what a financed deal actually cost and who is holding the money:
   // `recordDealFee`, `recordActualFeeAmount`, `reconcileDealFee`,
   // `voidDealFee`, `openDealCustody`, `recordCustodyMovement`,
@@ -339,7 +354,7 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // different route. `recordCustodyMovement`'s reversal path adds a fourth
   // second-row-id check on `financeDealCustodyEntries`.
   //
-  // Then 454→455 / 301→302 by `financeDealCosts.reopenDealCustody`, which
+  // Then 455→456 / 301→302 by `financeDealCosts.reopenDealCustody`, which
   // undoes a reconciliation so a closed custody record can be corrected. Same
   // shape as its siblings.
   //
@@ -348,10 +363,10 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // bucket, which is the direction that hides an unguarded write.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 455,
+      totalMutations: 456,
       analysed: 302,
       skippedNoArgsBlock: 9,
-      skippedNoOrgId: 144,
+      skippedNoOrgId: 145,
     });
   });
 });

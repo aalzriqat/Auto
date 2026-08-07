@@ -921,7 +921,14 @@ describe("applications hold release and deposit resolution", () => {
     ).rejects.toThrow(/disbursement has already been confirmed/i);
   });
 
-  test("cancelling a closed deal with commission reverses the commission accrual", async () => {
+  // NOTE: this fixture has no chart of accounts and no accounting period, so
+  // nothing here can post to the ledger and no reversal can be asserted from
+  // it. The name used to promise otherwise. What it actually pins is that
+  // cancelling a finalized deal cancels the SALE — the reversal itself is
+  // covered against real books in convex/commissionAccrualTiming.test.ts
+  // ("voiding a sale backs the whole commission out of the ledger"), which
+  // exercises the same reverseCommissionForSale through the other call site.
+  test("cancelling a closed deal with a commission cancels the underlying sale", async () => {
     const { t, orgId, applicationId, asUser } = await setupFinalizedFinancedDeal();
     await t.run(async (ctx) => {
       const app = await ctx.db.get(applicationId);

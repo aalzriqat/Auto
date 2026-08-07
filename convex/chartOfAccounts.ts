@@ -373,6 +373,28 @@ export async function ensurePayrollAccounts(
 }
 
 /**
+ * Self-heal for the two commission accounts, same shape as the payroll one.
+ *
+ * Commission now accrues INLINE at sale completion rather than at payment, so
+ * an org whose chart lacks these keys no longer merely fails to pay a
+ * commission — `resolveSystemAccount` throws and rolls back the entire sale
+ * completion, which is the most important write a dealership makes. Nothing
+ * warned them either: REQUIRED_SYSTEM_KEYS omits both, so Accounting → Setup
+ * reports such a chart as valid. Charts predating the commission accounts are
+ * real (migrateCommissionAccruals has to skip those orgs), so this closes the
+ * class for every tenant instead of relying on an inspection of the ones we
+ * happen to know about.
+ */
+export async function ensureCommissionAccounts(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.COMMISSION_EXPENSE, "6100");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.COMMISSION_PAYABLE, "2300");
+}
+
+/**
  * Phase 41 self-heal: input VAT on expenses/supplier payables debits this
  * account. Scoped to those two posting hooks only, same reasoning as
  * ensureFixedAssetAccounts — no other event type ever needs it.

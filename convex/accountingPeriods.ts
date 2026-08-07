@@ -15,6 +15,7 @@ import {
   computeSupplierPayablesReconciliation,
   computeCustomerDepositsReconciliation,
   computeCommissionPayableReconciliation,
+  computeCommissionRecognitionDivergence,
   computePrepaidRecognitionShortfall,
   GlVsSubledgerResult,
 } from "./accountingReports";
@@ -319,23 +320,35 @@ async function computeCloseChecklist(
   orgId: Id<"organizations">,
   period: Doc<"accountingPeriods">
 ): Promise<CloseChecklistResult> {
-  const pendingOutboxEvents = (
-    await ctx.db
-      .query("pendingAccountingEvents")
-      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
-      .collect()
-  ).filter((e) => e.accountingDate <= period.endDate);
-
+  // Collected once, unfiltered, and shared: the blocker counts below want only
+  // this period's rows, while the commission-recognition control needs every
+  // outstanding row regardless of date (a queued entry dated later still means
+  // that sale's recognition is pending rather than wrong). Reading them twice
+  // is what pushed this checklist toward the transaction read limit — and a
+  // checklist that throws takes `close` down with it, before the owner override
+  // that is supposed to be the escape hatch.
+  const allPendingOutbox = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+    .collect();
   // A dead-lettered event (accountingOutbox.ts's MAX_ATTEMPTS) represents the
   // same unposted GL impact as a pending one — it must block the close just
   // as hard, or a permanently-failed event could silently disappear from
   // every control the moment it stops retrying.
-  const failedOutboxEvents = (
-    await ctx.db
-      .query("pendingAccountingEvents")
-      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "FAILED"))
-      .collect()
-  ).filter((e) => e.accountingDate <= period.endDate);
+  const allFailedOutbox = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "FAILED"))
+    .collect();
+
+  // Same story for the sales table: both commission controls below scan it in
+  // full, so without sharing, one close reads it twice.
+  const allSales = await ctx.db
+    .query("sales")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+
+  const pendingOutboxEvents = allPendingOutbox.filter((e) => e.accountingDate <= period.endDate);
+  const failedOutboxEvents = allFailedOutbox.filter((e) => e.accountingDate <= period.endDate);
 
   // Not period-scoped by date — manualJournalDrafts have no accountingDate
   // until posted, and an unresolved approval is a control gap regardless of
@@ -363,14 +376,18 @@ async function computeCloseChecklist(
   // on them produced false close-blockers, so they are surfaced as warnings the
   // accountant reviews, not blockers. Independent read-only computations, so
   // run them concurrently rather than five sequential round-trips.
-  const [arReconciliation, vehicleInventoryRecon, supplierPayablesRecon, customerDepositsRecon, commissionPayableRecon, prepaidRecognitionShortfall] =
+  const [arReconciliation, vehicleInventoryRecon, supplierPayablesRecon, customerDepositsRecon, commissionPayableRecon, prepaidRecognitionShortfall, commissionRecognitionDivergence] =
     await Promise.all([
       computeSubledgerReconciliation(ctx, orgId, period.endDate),
       computeVehicleInventoryReconciliation(ctx, orgId, period.endDate),
       computeSupplierPayablesReconciliation(ctx, orgId, period.endDate),
       computeCustomerDepositsReconciliation(ctx, orgId, period.endDate),
-      computeCommissionPayableReconciliation(ctx, orgId, period.endDate),
+      computeCommissionPayableReconciliation(ctx, orgId, period.endDate, { sales: allSales }),
       computePrepaidRecognitionShortfall(ctx, orgId, period.endDate),
+      computeCommissionRecognitionDivergence(ctx, orgId, {
+        pendingEvents: [...allPendingOutbox, ...allFailedOutbox],
+        sales: allSales,
+      }),
     ]);
 
   const blockers: string[] = [];
@@ -423,13 +440,54 @@ async function computeCloseChecklist(
   }
   if (!commissionPayableRecon.isReconciled) {
     const badCurrencies = commissionPayableRecon.currencies.filter((c) => !commissionPayableRecon.byCurrency[c].isReconciled);
-    // The subledger side counts only commissions actually recognized in the GL
-    // (see computeCommissionPayableReconciliation), so a decided-but-unaccrued
-    // manual commission no longer shows up here as a difference. What remains
+    // The subledger side sums only what the commission ENTRIES actually
+    // recognized in the GL (see computeCommissionPayableReconciliation), so
+    // neither a commission still queued behind a closed period nor a correction
+    // that posted into a later one shows up here as a difference. What remains
     // is a real one — which matters, because closing a period requires
     // acknowledging every warning verbatim, and a line that fires on every
     // close teaches people to click through the ones that matter.
-    warnings.push(`Commission payable subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
+    // "(current-state check — review for timing differences)" is what the other
+    // four subledger warnings say, and it was copied here. It is no longer true
+    // of this one: computeCommissionPayableReconciliation is point-in-time on
+    // BOTH sides as of the period end, which is precisely the change that
+    // stopped it firing on every close. Telling an accountant to go looking for
+    // timing differences sends them after a cause that has been designed out.
+    warnings.push(`Commission payable subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (evaluated as of the period end on both sides — this is a real difference, not a timing one).`);
+  }
+  // The reconciliation above compares the GL against amounts derived from the
+  // same posted entries, so it cannot see a commission recognized at the wrong
+  // figure — both sides would be wrong together and agree. These are the
+  // independent checks: what the ledger recognized versus what the sale
+  // actually records. Sales with an entry still in the outbox are excluded,
+  // since unposted events are already a blocker above.
+  //
+  // Reported separately on purpose. "Never recognized" is the expected state of
+  // every commission decided before earned-time recognition shipped, and it is
+  // fixed by running the backfill; "recognized at a different amount" means
+  // something went wrong and needs a person. Reporting both under one message
+  // made an ordinary migration backlog read as ledger corruption — and a
+  // warning that must be acknowledged verbatim on every close is exactly how
+  // people learn to click through the ones that matter.
+  if (commissionRecognitionDivergence.unrecognizedCount > 0) {
+    warnings.push(
+      `${commissionRecognitionDivergence.unrecognizedCount} completed sale commission(s) are not recognized in the ledger at all. Run the commission accrual backfill.`
+    );
+  }
+  if (commissionRecognitionDivergence.strandedCount > 0) {
+    warnings.push(
+      `${commissionRecognitionDivergence.strandedCount} completed sale commission(s) are not recognized and sit in a closed or locked period, so the backfill cannot post them. Reopen the period covering them (or set the commission to zero) first.`
+    );
+  }
+  if (commissionRecognitionDivergence.noPeriodCount > 0) {
+    warnings.push(
+      `${commissionRecognitionDivergence.noPeriodCount} completed sale commission(s) fall on dates no accounting period covers, so they can never post and will block future closes. Create a period covering those sale dates.`
+    );
+  }
+  if (commissionRecognitionDivergence.divergentCount > 0) {
+    warnings.push(
+      `${commissionRecognitionDivergence.divergentCount} commission(s) are recognized in the ledger at a different amount than the sale records. Review before closing.`
+    );
   }
 
   return {

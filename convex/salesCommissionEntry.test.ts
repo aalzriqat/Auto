@@ -457,7 +457,7 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
     expect(owed.reduce((sum, r) => sum + (r.commissionAmount ?? 0), 0)).toBe(500);
   });
 
-  test("a commission accrued by an approved payroll run is rejected for editing", async () => {
+  test("a commission accrued by an approved payroll run is corrected, not frozen", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const ids = await seedCommissionOrg(t, "manual_accrued", [
       "create:sales",
@@ -504,18 +504,20 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
     });
     await ids.asAdmin.mutation(api.payroll.approveRun, { orgId: ids.orgId, runId });
 
-    // The amount is now on the books. The mutation is the authority on this —
-    // an approval by another manager can land between a render and a click, so
-    // the query result can never be — and it must refuse with a reason the UI
-    // can show verbatim rather than a generic failure.
-    await expect(
-      ids.asAdmin.mutation(api.sales.setCommissionAmount, {
-        orgId: ids.orgId,
-        saleId,
-        commissionAmount: 900,
-      })
-    ).rejects.toThrow(/already recorded in the ledger/i);
-    expect(await t.run((ctx) => ctx.db.get(saleId))).toMatchObject({ commissionAmount: 250 });
+    // The amount is now on the books. It used to be refused outright from here
+    // on, which meant a commission approved at the wrong number could never be
+    // put right. It is corrected instead: the change posts a signed adjusting
+    // entry, and payRun's drift check is what stops the run paying an amount
+    // nobody authorized (see commissionAccrualTiming.test.ts).
+    await ids.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: ids.orgId,
+      saleId,
+      commissionAmount: 900,
+    });
+    expect(await t.run((ctx) => ctx.db.get(saleId))).toMatchObject({
+      commissionAmount: 900,
+      commissionAdjustmentSeq: 1,
+    });
   });
 
   test("an offboarded salesperson's unpaid commission is flagged, because payroll will skip it", async () => {

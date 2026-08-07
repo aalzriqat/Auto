@@ -16,6 +16,7 @@ export type EventType =
   | "CHEQUE_CLEARED"
   | "CHEQUE_RETURNED"
   | "COMMISSION_ACCRUED"
+  | "COMMISSION_ADJUSTED"
   | "COMMISSION_PAID"
   | "FINANCE_DISBURSED"
   | "FINANCE_CASH_RECEIVED"
@@ -52,7 +53,7 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "DEPOSIT_RECEIVED", "DEPOSIT_APPLIED", "DEPOSIT_REFUNDED", "DEPOSIT_FORFEITED",
   "SALE_COMPLETED", "SALE_CANCELLED", "COLLECTION_PAYMENT", "COLLECTION_REFUND", "EXPENSE_POSTED",
   "CHEQUE_RECEIVED", "CHEQUE_DEPOSITED", "CHEQUE_CLEARED", "CHEQUE_RETURNED",
-  "COMMISSION_ACCRUED", "COMMISSION_PAID",
+  "COMMISSION_ACCRUED", "COMMISSION_ADJUSTED", "COMMISSION_PAID",
   "FINANCE_DISBURSED", "FINANCE_CASH_RECEIVED", "PAYMENT_LINK_RECEIVED",
   "SUPPLIER_PAYMENT_SETTLED",
   "ASSET_CAPITALIZED", "DEPRECIATION_POSTED", "ASSET_IMPAIRED", "ASSET_DISPOSED",
@@ -291,6 +292,19 @@ export function expenseAccountKeyForCategory(category?: string): SystemKey {
 export interface CommissionAccruedPayload {
   saleId: string;
   amountMinor: number;
+  currency: string;
+  salespersonId: string;
+}
+
+/**
+ * A correction to an already-recognized commission. `deltaMinor` is SIGNED —
+ * the difference between the new amount and the one currently on the books, not
+ * the new amount itself. Posting the new amount instead would double the
+ * liability, so the sign is the whole point of the payload.
+ */
+export interface CommissionAdjustedPayload {
+  saleId: string;
+  deltaMinor: number;
   currency: string;
   salespersonId: string;
 }
@@ -752,6 +766,37 @@ export function ruleCommissionAccrued(p: CommissionAccruedPayload): RuleResult {
     memo: "Commission accrued",
     category: "SYSTEM",
   };
+}
+
+/**
+ * Corrects a commission already recognized in the ledger, by the SIGNED delta
+ * between the new amount and the accrued one. A correction is a new economic
+ * event, never an edit of the original journal: the original entry and every
+ * adjustment stay on the books so the decision history is auditable.
+ *
+ * Upward — Dr Commission Expense / Cr Commission Payable (more is owed).
+ * Downward — the mirror image, which also covers a commission corrected to
+ * zero: the delta then equals the full accrued amount and the payable nets out.
+ *
+ * A zero delta is refused rather than posted: an empty journal entry carries no
+ * information and would make the adjustment sequence lie about how many real
+ * corrections happened. Callers must not post when nothing changed.
+ */
+export function ruleCommissionAdjusted(p: CommissionAdjustedPayload): RuleResult {
+  const amountMinor = Math.abs(p.deltaMinor);
+  if (amountMinor === 0) {
+    throw new Error("COMMISSION_ADJUSTED with a zero delta — refusing to post an empty journal entry");
+  }
+  const lines: LineSpec[] = p.deltaMinor > 0
+    ? [
+        line(SYSTEM_KEYS.COMMISSION_EXPENSE, amountMinor, 0, "Commission corrected upward", { salespersonId: p.salespersonId }),
+        line(SYSTEM_KEYS.COMMISSION_PAYABLE, 0, amountMinor, "Commission payable increased", { salespersonId: p.salespersonId }),
+      ]
+    : [
+        line(SYSTEM_KEYS.COMMISSION_PAYABLE, amountMinor, 0, "Commission payable reduced", { salespersonId: p.salespersonId }),
+        line(SYSTEM_KEYS.COMMISSION_EXPENSE, 0, amountMinor, "Commission corrected downward", { salespersonId: p.salespersonId }),
+      ];
+  return { lines, memo: "Commission adjusted", category: "ADJUSTMENT" };
 }
 
 export function ruleCommissionPaid(p: CommissionPaidPayload): RuleResult {
@@ -1514,6 +1559,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "CHEQUE_CLEARED": return ruleChequeClear(payload as unknown as ChequeClearedPayload);
     case "CHEQUE_RETURNED": return ruleChequeReturned(payload as unknown as ChequeReturnedPayload);
     case "COMMISSION_ACCRUED": return ruleCommissionAccrued(payload as unknown as CommissionAccruedPayload);
+    case "COMMISSION_ADJUSTED": return ruleCommissionAdjusted(payload as unknown as CommissionAdjustedPayload);
     case "COMMISSION_PAID": return ruleCommissionPaid(payload as unknown as CommissionPaidPayload);
     case "FINANCE_DISBURSED": return ruleFinanceDisbursed(payload as unknown as FinanceDisbursedPayload);
     case "FINANCE_CASH_RECEIVED": return ruleFinanceCashReceived(payload as unknown as FinanceCashReceivedPayload);
