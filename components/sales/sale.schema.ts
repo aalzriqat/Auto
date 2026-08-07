@@ -26,6 +26,10 @@ export const saleSchema = z.object({
   gapSold: z.coerce.number().min(0).optional(),
   gapCost: z.coerce.number().min(0).optional(),
   gapTermMonths: z.coerce.number().min(0).max(360).optional(),
+
+  // Consigned (SOURCED) vehicles only: where the buyer's money went. Ignored
+  // server-side for dealer-owned stock, which has no supplier to settle with.
+  supplierSettlementRoute: z.enum(["THROUGH_DEALERSHIP", "DIRECT_TO_SUPPLIER"]).optional(),
 }).refine(
   (data) => !data.warrantySold || (data.warrantyTermMonths ?? 0) > 0,
   { message: "A warranty term (in months) is required when a warranty premium is charged", path: ["warrantyTermMonths"] }

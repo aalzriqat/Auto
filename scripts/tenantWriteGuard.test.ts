@@ -416,8 +416,8 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // the guard doing precisely its job.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 466,
-      analysed: 308,
+      totalMutations: 467,
+      analysed: 309,
       skippedNoArgsBlock: 13,
       skippedNoOrgId: 145,
     });

@@ -40,6 +40,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 
 import { saleSchema, SaleFormValues, SaleDialogProps } from "./sale.schema";
 import { getErrorMessage } from "@/lib/errors";
+import { ConsignedSettlementSection } from "./ConsignedSettlementSection";
 
 
 export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
@@ -97,6 +98,10 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
       gapSold: 0,
       gapCost: 0,
       gapTermMonths: 0,
+      // Consigned sales only. THROUGH_DEALERSHIP is what an omitted route has
+      // always meant server-side (see consignedSettlementRoute), so defaulting
+      // to it here changes nothing for a form that never touches the field.
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
     },
   });
 
@@ -138,6 +143,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
         taxRate: sale.taxRate || 0,
         taxAmount: sale.taxAmount || 0,
         dealerFees: sale.dealerFees || 0,
+        supplierSettlementRoute: sale.supplierSettlementRoute ?? "THROUGH_DEALERSHIP",
         downPayment: sale.downPayment || 0,
         tradeInVehicleId: sale.tradeInVehicleId || "none",
         tradeInValue: sale.tradeInValue || 0,
@@ -176,6 +182,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
         gapSold: 0,
         gapCost: 0,
         gapTermMonths: 0,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
       });
     }
   }, [sale, open, form]);
@@ -226,6 +233,10 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
           gapSold: values.gapSold,
           gapCost: values.gapCost,
           gapTermMonths: values.gapTermMonths,
+          // Still editable while the sale is a draft: completeDraft reads the
+          // route off the stored row rather than taking one, so this is the
+          // last point at which it can be chosen.
+          supplierSettlementRoute: values.supplierSettlementRoute,
         });
         if (completingDraft) {
           completeDraftIdempotencyKeyRef.current ??= `complete-draft-sale:${crypto.randomUUID()}`;
@@ -267,6 +278,10 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
           gapSold: values.gapSold,
           gapCost: values.gapCost,
           gapTermMonths: values.gapTermMonths,
+          // Ignored server-side for dealer-owned stock, which has no supplier
+          // to settle with — so it is sent unconditionally rather than
+          // duplicating the SOURCED test on the client.
+          supplierSettlementRoute: values.supplierSettlementRoute,
           idempotencyKey: createSaleIdempotencyKeyRef.current,
         };
         if (values.status === "PENDING") {
@@ -456,6 +471,23 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                   />
                 </div>
               </div>
+
+              {/* Renders itself only when the selected vehicle is consigned —
+                  a dealer-owned sale has no supplier to settle with, and the
+                  section would be one more thing to read past. */}
+              {activeOrgId ? (
+              <ConsignedSettlementSection
+                orgId={activeOrgId}
+                vehicleId={(sale ? sale.vehicleId : watchAll.vehicleId) as Id<"vehicles"> | undefined}
+                salePrice={Number(watchAll.salePrice) || 0}
+                value={watchAll.supplierSettlementRoute ?? "THROUGH_DEALERSHIP"}
+                onChange={(route) => form.setValue("supplierSettlementRoute", route)}
+                // Locked once the sale is completed: the journal, the payable
+                // or receivable and the customer's invoice are all posted from
+                // this choice, and re-routing them is a reversal, not an edit.
+                disabled={sale != null && sale.status !== "PENDING"}
+              />
+              ) : null}
 
               {/* Trade-In & Financing Section */}
               <div className="bg-muted/30 p-4 rounded-lg border space-y-4">

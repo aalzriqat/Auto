@@ -116,6 +116,26 @@ export const salesEn = {
   CompletedStatus: "Completed (Delivered)",
   CancelledStatus: "Cancelled (Refunded/Backed out)",
   PricingAndFees: "Pricing & Fees",
+  // Consigned (SOURCED) sale settlement — see ConsignedSettlementSection.
+  ConsignedSaleSettlement: "Consigned Vehicle — Supplier Settlement",
+  ConsignedSaleSettlementDesc:
+    "This car belongs to {supplier}. The dealership is selling it as his agent and keeps only its margin. Record where the buyer's money went — it decides who owes whom.",
+  SupplierSettlementRoute: "Where the buyer paid",
+  RouteThroughDealership: "Through the dealership",
+  RouteThroughDealershipHint: "The buyer paid the dealership the full price.",
+  RouteDirectToSupplier: "Direct to the supplier",
+  RouteDirectToSupplierHint: "The buyer paid the supplier. The dealership never handled the money.",
+  GrossTransactionValue: "Gross transaction value",
+  SupplierEntitlement: "{supplier} is entitled to",
+  DealerGrossMargin: "Dealership margin",
+  TheDealership: "The dealership",
+  TheSupplier: "the supplier",
+  ConsignedThroughConsequence:
+    "The dealership invoices the customer for the full price and owes {supplier} his share. Settle it from Supplier Payables.",
+  ConsignedDirectConsequence:
+    "The customer is invoiced nothing for the car. {supplier} is holding the dealership's margin until he settles it — collect it from Supplier Receivables.",
+  ConsignedNoSupplierCost:
+    "No supplier amount is recorded for this vehicle, so the dealership's margin cannot be determined and the sale cannot be completed. Record the agreed supplier amount, or convert the vehicle to dealer-owned stock first.",
   Taxes: "Taxes (JOD)",
   FinancingAndTradeIn: "Financing & Trade-In",
   SelectTradeIn: "Select trade-in (optional)",
@@ -613,6 +633,26 @@ export const salesAr = {
   CompletedStatus: "مكتمل (تم التسليم)",
   CancelledStatus: "ملغى (مسترجع / تراجع)",
   PricingAndFees: "التسعير والرسوم",
+  // تسوية المركبة بالأمانة (SOURCED) — انظر ConsignedSettlementSection.
+  ConsignedSaleSettlement: "مركبة بالأمانة — تسوية المورّد",
+  ConsignedSaleSettlementDesc:
+    "هذه المركبة ملك {supplier}. المعرض يبيعها بالوكالة عنه ولا يحتفظ إلا بهامشه. سجّل أين ذهبت نقود المشتري — فهي التي تحدد من يدين لمن.",
+  SupplierSettlementRoute: "أين دفع المشتري",
+  RouteThroughDealership: "عن طريق المعرض",
+  RouteThroughDealershipHint: "دفع المشتري كامل المبلغ للمعرض.",
+  RouteDirectToSupplier: "مباشرة إلى المورّد",
+  RouteDirectToSupplierHint: "دفع المشتري للمورّد، ولم يستلم المعرض المبلغ إطلاقًا.",
+  GrossTransactionValue: "إجمالي قيمة الصفقة",
+  SupplierEntitlement: "مستحق {supplier}",
+  DealerGrossMargin: "هامش المعرض",
+  TheDealership: "المعرض",
+  TheSupplier: "المورّد",
+  ConsignedThroughConsequence:
+    "يصدر المعرض فاتورة بكامل المبلغ على العميل، ويبقى مدينًا لـ{supplier} بحصته. سدّدها من ذمم الموردين الدائنة.",
+  ConsignedDirectConsequence:
+    "لا يُفوتر العميل بثمن المركبة. يحتفظ {supplier} بهامش المعرض حتى يسدّده — حصّله من ذمم الموردين المدينة.",
+  ConsignedNoSupplierCost:
+    "لا يوجد مبلغ مورّد مسجّل لهذه المركبة، لذا لا يمكن تحديد هامش المعرض ولا إتمام البيع. سجّل المبلغ المتفق عليه مع المورّد، أو حوّل المركبة إلى ملكية المعرض أولًا.",
   Taxes: "الضرائب (دينار اردني)",
   FinancingAndTradeIn: "التمويل والاستبدال",
   SelectTradeIn: "اختر مركبة الاستبدال (اختياري)",

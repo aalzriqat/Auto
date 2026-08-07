@@ -10,7 +10,8 @@ import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
 import { CreateDraftSaleSchema, CreateSaleSchema, UpdateSaleSchema } from "./validations/sales";
 import { restoreVehicleFromSale } from "./utils/saleHelpers";
-import { vehicleHasCostBasis } from "./utils/vehicleCost";
+import { vehicleHasCostBasis, computeVehicleCapitalizedCost } from "./utils/vehicleCost";
+import { saleEconomics, dealershipCollectsGross } from "./utils/vehicleOwnership";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
 import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale } from "./utils/saleCompletion";
@@ -1708,5 +1709,70 @@ export const recalculateCommission = mutation({
       console.error("sales.recalculateCommission failed", error);
       throw new ConvexError("An unexpected error occurred. Please try again later.");
     }
+  },
+});
+
+/**
+ * What completing this sale would post, before it is completed.
+ *
+ * A consigned car is legally the supplier's, so the decision the salesperson is
+ * about to make — where the buyer's money went — changes which side of the
+ * balance sheet the deal lands on: the dealership either owes the supplier his
+ * entitlement, or holds a claim on him for its own margin. That is exactly the
+ * thing employees confuse, and it is not recoverable from the sale form.
+ *
+ * Computed here rather than in the client because the figures must be the ones
+ * that will actually post. `saleEconomics` is the same function the GL and the
+ * subledgers use, and the cost basis is `computeVehicleCapitalizedCost`, not the
+ * vehicle's bare `sourceCost` — a client multiplying the fields it happens to
+ * have would show a margin the ledger then contradicts.
+ */
+export const consignedSalePreview = query({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    salePrice: v.number(),
+    settlementRoute: v.optional(supplierSettlementRouteValidator),
+  },
+  handler: async (ctx, args) => {
+    // Cost and margin, so the same permission that gates them everywhere else.
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_REPORTS]);
+
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle || vehicle.orgId !== args.orgId || vehicle.isDeleted) return null;
+    if (vehicle.sourceType !== "SOURCED") return null;
+
+    assertFiniteNumber(args.salePrice, "sale price");
+
+    const capitalizedCost = await computeVehicleCapitalizedCost(ctx, vehicle);
+    const economics = saleEconomics({
+      salePrice: args.salePrice,
+      vehicle,
+      capitalizedCost,
+      supplierSettlementRoute: args.settlementRoute,
+    });
+    const route = economics.settlementRoute ?? "THROUGH_DEALERSHIP";
+    const collectsGross = dealershipCollectsGross(route);
+
+    return {
+      supplierName: vehicle.sourcedFromName ?? null,
+      settlementRoute: route,
+      grossTransactionValue: economics.grossTransactionValue,
+      supplierEntitlement: economics.supplierSettlement,
+      dealershipMargin: economics.dealershipMargin,
+      recognizedRevenue: economics.recognizedRevenue,
+      /** What the customer is invoiced for the car. Nothing, when the buyer paid the supplier. */
+      customerVehicleReceivable: collectsGross ? args.salePrice : 0,
+      /** Set on the route where gross ran through the dealership: it owes him his share. */
+      supplierPayable: collectsGross ? economics.supplierSettlement : 0,
+      /** Set on the other route: he holds the dealership's margin until he settles it. */
+      supplierReceivable: collectsGross ? 0 : economics.dealershipMargin,
+      /**
+       * True when no supplier amount is recorded. The sale cannot complete in
+       * that state — the margin is undeterminable — so the form says so rather
+       * than letting the mutation reject it after the fact.
+       */
+      missingSupplierCost: capitalizedCost <= 0,
+    };
   },
 });

@@ -128,7 +128,9 @@ describe("a viewer without profit permission", () => {
     // the supplier's entitlement stated by subtraction.
     expect(dash.salesVolumeThisMonth).not.toBe(MARGIN);
     expect(dash.salesVolumeThisMonth).toBe(SALE_PRICE);
-    expect(dash.totalProfit).toBeUndefined();
+    // The monthly chart is the other place the margin could leak, and it is
+    // built from the same helper.
+    expect(dash.salesTrend.some((point) => point.Revenue === MARGIN)).toBe(false);
   });
 
   test("is told which basis the figure is on rather than left to assume", async () => {
