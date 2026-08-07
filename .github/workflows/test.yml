@@ -158,6 +158,96 @@ jobs:
     - name: TypeScript type check
       run: pnpm typecheck
 
+  # `pnpm build` ran nowhere in this workflow until now. It happens inside
+  # playwright.yml (via playwright.config.ts's webServer) and twice more in
+  # security.yml's zap-baseline/nuclei jobs — but none of those is a required
+  # check, so a branch that type-checks and passes every test while failing
+  # `next build` could merge.
+  #
+  # `pnpm typecheck` does not cover this. Demonstrated, not assumed: a client
+  # component importing a Node built-in (`fs`) passes `tsc --noEmit`, which
+  # resolves it happily via @types/node, and fails the build, which has to
+  # produce a browser bundle — `Module not found: Can't resolve 'fs'`. On one
+  # commit, type-check green and production-build red (throwaway PR #209).
+  #
+  # Note what was NOT demonstrated: declaring a dynamic route's `params` as a
+  # plain object rather than a Promise also passes typecheck, but Next 16's
+  # generated `.next/types` did not reject it, so the build stayed green. The
+  # gate's value here is bundler-level module resolution, not route-type
+  # checking — don't widen that claim without re-testing it.
+  #
+  # It gets its own named job rather than leaning on Playwright's build because
+  # "does the application compile?" and "do the E2E flows pass?" are different
+  # questions with different failure modes and very different flake profiles.
+  # A build break should surface as a red `production-build`, not as an
+  # ambiguous E2E timeout.
+  #
+  # Env: deliberately placeholders, not repo secrets. lib/env.ts validates shape
+  # only (zod .url() / .min(1)) and throws on failure, so shape-valid dummies
+  # exercise exactly the same build path — while keeping this job working on
+  # forked PRs, which receive no secrets and would otherwise fail this required
+  # check permanently and unfixably. CLERK_SECRET_KEY is omitted entirely: it is
+  # .optional() in lib/env.ts and no route is statically prerendered, so the
+  # build never needs it, and `next build` runs arbitrary dependency code with
+  # the full job environment in process.env on a public repo.
+  #
+  # Two maintenance couplings this creates, both of which fail here rather than
+  # where the change was made:
+  #   - adding a *required* var to lib/env.ts turns this job red with only zod's
+  #     "Invalid environment variables" to explain it. Add the placeholder here
+  #     in the same commit.
+  #   - dropping CLERK_SECRET_KEY is safe only while nothing is statically
+  #     prerendered, and what guarantees that is the `await headers()` call in
+  #     app/layout.tsx. Remove that and prerendering resumes.
+  production-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        persist-credentials: false
+
+    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      with:
+        version: 11.13.0
+
+    - name: Use Node.js
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: '22.21.1'
+        cache: 'pnpm'
+
+    - name: Install dependencies
+      run: pnpm install --frozen-lockfile --ignore-scripts
+
+    # The Clerk placeholder is assembled here rather than written as a literal:
+    # a publishable key is base64 of a hostname, so its entropy is high enough
+    # that gitleaks' generic-api-key rule fires on it (it did — secret-scan, a
+    # required check, went red on the commit that first added it). Building it
+    # at runtime keeps the scanner at full strength instead of allowlisting a
+    # pattern in .gitleaks.toml. It decodes to
+    # "ci-placeholder.clerk.accounts.dev$" — a well-formed key for an instance
+    # that does not exist, and publishable by definition.
+    # The length assertion is not decoration. `export VAR="$(cmd)"` takes the
+    # exit status of `export`, not of the substitution, so `bash -e` cannot see
+    # a failed `base64` — the value would silently become the bare "pk_test_"
+    # prefix, which still satisfies lib/env.ts's .min(1) and would build green
+    # against a malformed key. `base64 -w0` is GNU coreutils and present on
+    # ubuntu-latest, so this is latent rather than live, but a container image
+    # with busybox base64 (no -w flag) would trip it. Fail loudly instead.
+    - name: Production build
+      run: |
+        set -euo pipefail
+        key="pk_test_$(printf '%s' 'ci-placeholder.clerk.accounts.dev$' | base64 -w0 | tr -d '=')"
+        [ ${#key} -gt 40 ] || { echo "::error::Clerk placeholder assembly failed"; exit 1; }
+        export NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="$key"
+        pnpm build
+      env:
+        NEXT_TELEMETRY_DISABLED: '1'
+        NEXT_PUBLIC_CONVEX_URL: https://ci-placeholder.convex.cloud
+        NEXT_PUBLIC_APP_URL: http://localhost:3000
+
   convex-backend:
     runs-on: ubuntu-latest
 
