@@ -64,17 +64,24 @@ const MAX_ACCRUALS_PER_INVOCATION = 25;
  */
 export const backfillCommissionAccruals = internalMutation({
   args: {
-    orgCursor: v.optional(v.string()),
+    // The organization walk is a _creationTime cursor, NOT a paginate cursor.
+    // Convex allows exactly one paginated query per function, and the sales
+    // page below is the one that has to be paginated. Paginating both threw
+    // "ran multiple paginated queries" on the very first production run.
+    orgAfter: v.optional(v.number()),
     saleCursor: v.optional(v.string()),
     dryRun: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     // One org per invocation. Batching organizations multiplied an already
     // unbounded per-org read by five.
-    const orgPage = await ctx.db
+    const org = await ctx.db
       .query("organizations")
-      .paginate({ cursor: args.orgCursor ?? null, numItems: 1 });
-    const org = orgPage.page[0];
+      .withIndex("by_creation_time", (q) =>
+        args.orgAfter === undefined ? q : q.gt("_creationTime", args.orgAfter)
+      )
+      .order("asc")
+      .first();
 
     if (!org) {
       console.log("[commission-backfill] complete: no further organizations");
@@ -222,12 +229,16 @@ export const backfillCommissionAccruals = internalMutation({
     // accruals already written are committed, so the next pass skips them as
     // already-recognized and works through the remainder. That makes forward
     // progress guaranteed — each pass either accrues something or advances.
-    const done = !capped && salePage.isDone && orgPage.isDone;
+    // `done` can no longer consult an org page's isDone: the next invocation
+    // discovers there is no further organization by finding none. A pass that
+    // finishes an org's sales always schedules one more, which returns the
+    // no-organization branch above and stops there.
+    const done = false;
     const nextArgs = capped
-      ? { orgCursor: args.orgCursor, saleCursor: args.saleCursor, dryRun: args.dryRun }
+      ? { orgAfter: args.orgAfter, saleCursor: args.saleCursor, dryRun: args.dryRun }
       : salePage.isDone
-        ? { orgCursor: orgPage.continueCursor, saleCursor: undefined, dryRun: args.dryRun }
-        : { orgCursor: args.orgCursor, saleCursor: salePage.continueCursor, dryRun: args.dryRun };
+        ? { orgAfter: org._creationTime, saleCursor: undefined, dryRun: args.dryRun }
+        : { orgAfter: args.orgAfter, saleCursor: salePage.continueCursor, dryRun: args.dryRun };
 
     if (!done) {
       await ctx.scheduler.runAfter(
