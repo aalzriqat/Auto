@@ -8,13 +8,7 @@ import { throwAppError, AppErrorCode } from "./utils/errors";
 import { holdVehicleForDeposit, releaseAllVehiclesForDeposit, releaseHeldDeposit } from "./utils/depositHelpers";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
-import { assertDifferentActors } from "./utils/financialGuards";
-import {
-  hookDepositForfeited,
-  hookDepositRefunded,
-  hookDepositVoided,
-  getOrgCurrency,
-} from "./accounting/workflowHooks";
+import { hookDepositVoided, getOrgCurrency } from "./accounting/workflowHooks";
 import {
   amountToMinorOrThrow,
   depositMethodValidator,
@@ -22,7 +16,7 @@ import {
   normalizeCurrency,
   recordHeldDeposit,
 } from "./utils/depositRecording";
-import { createCanonicalPayment, voidCanonicalPayment } from "./subledger";
+import { voidCanonicalPayment } from "./subledger";
 
 export const create = mutation({
   args: {
