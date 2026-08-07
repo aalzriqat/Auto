@@ -715,6 +715,47 @@ async function recordConversationBackfillFailure(
 }
 
 /**
+ * Rebuilds every distinct thread represented in one page of a backfill, and
+ * returns how many it rebuilt.
+ *
+ * One sync per distinct *thread*, not per event. A thread's events are
+ * contiguous in creation time — they arrive as a burst — so a batch can be
+ * dominated by one thread and would otherwise recompute it once per event,
+ * making the batch cost events x history instead of threads x history. That is
+ * what pushes a batch past the per-transaction read ceiling, and a throw there
+ * rolls back the scheduled continuation too, halting the chain mid-table.
+ *
+ * Shared by both platform backfills because that rule is the load-bearing part
+ * and two copies of it are two places for it to drift. The `.paginate()` calls
+ * deliberately stay in the callers: Convex permits exactly one per function,
+ * `convex-test` does not enforce it, and this repo has already shipped a
+ * backfill that passed the whole suite and then failed on its first production
+ * call. That constraint has to stay visible where it applies.
+ */
+async function syncThreadsInBackfillPage(
+  ctx: MutationCtx,
+  platform: SocialPlatform,
+  events: (Doc<"instagramEvents"> | Doc<"facebookEvents">)[]
+): Promise<number> {
+  const synced = new Set<string>();
+  for (const event of events) {
+    if (!event.customerId) continue;
+    const identity = {
+      orgId: event.orgId,
+      platform,
+      customerId: event.customerId,
+      kind: event.kind,
+      postId: event.postId,
+    };
+    const key = namespacedThreadKey(identity);
+    if (synced.has(key)) continue;
+    synced.add(key);
+    await syncSocialConversation(ctx, identity);
+  }
+  return synced.size;
+}
+
+/**
  * Starts both conversation backfills for every organization.
  *
  * Without this the migration has no operator surface at all: the two backfills
@@ -804,26 +845,9 @@ export const backfillInstagramConversations = internalMutation({
         numItems: conversationBatchSize(args.batchSize),
       });
 
-    // One sync per distinct thread, not per event. A thread's events are
-    // contiguous in creation time — they arrive as a burst — so a batch can be
-    // dominated by one thread and would otherwise recompute it once per event,
-    // making the batch cost events x history instead of threads x history.
-    const synced = new Set<string>();
+    let materialized: number;
     try {
-      for (const event of page.page) {
-        if (!event.customerId) continue;
-        const identity = {
-          orgId: event.orgId,
-          platform: "instagram" as const,
-          customerId: event.customerId,
-          kind: event.kind,
-          postId: event.postId,
-        };
-        const key = namespacedThreadKey(identity);
-        if (synced.has(key)) continue;
-        synced.add(key);
-        await syncSocialConversation(ctx, identity);
-      }
+      materialized = await syncThreadsInBackfillPage(ctx, "instagram", page.page);
     } catch (error) {
       // Deliberately not rethrown: rethrowing rolls the transaction back, and
       // with it the very record that says the run failed.
@@ -834,7 +858,7 @@ export const backfillInstagramConversations = internalMutation({
       ctx,
       state,
       page,
-      synced.size,
+      materialized,
       expectedCount
     );
 
@@ -878,23 +902,9 @@ export const backfillFacebookConversations = internalMutation({
         numItems: conversationBatchSize(args.batchSize),
       });
 
-    // One sync per distinct thread, not per event. See the Instagram twin.
-    const synced = new Set<string>();
+    let materialized: number;
     try {
-      for (const event of page.page) {
-        if (!event.customerId) continue;
-        const identity = {
-          orgId: event.orgId,
-          platform: "facebook" as const,
-          customerId: event.customerId,
-          kind: event.kind,
-          postId: event.postId,
-        };
-        const key = namespacedThreadKey(identity);
-        if (synced.has(key)) continue;
-        synced.add(key);
-        await syncSocialConversation(ctx, identity);
-      }
+      materialized = await syncThreadsInBackfillPage(ctx, "facebook", page.page);
     } catch (error) {
       // Deliberately not rethrown: rethrowing rolls the transaction back, and
       // with it the very record that says the run failed.
@@ -905,7 +915,7 @@ export const backfillFacebookConversations = internalMutation({
       ctx,
       state,
       page,
-      synced.size,
+      materialized,
       expectedCount
     );
 
