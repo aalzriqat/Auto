@@ -339,7 +339,7 @@ describe("what it refuses to touch", () => {
     expect(netIncome(await ledger(s.t, s.orgId))).toBe(netIncome(before));
   });
 
-  test("a vehicle marked SOURCED that also carries an own purchase price", async () => {
+  test("a vehicle carrying two DIFFERENT cost figures, because only a human can say which is the supplier's", async () => {
     const s = await seedDealer("bothPrices");
     await seedLegacyPrincipalSale(s, {
       vin: "VINMIG9", sourceCost: ENTITLEMENT, purchasePrice: 9_000,
@@ -348,6 +348,26 @@ describe("what it refuses to touch", () => {
     const report = await runMigration(s);
     expect(report.flagged).toBe(1);
     expect(report.corrected).toBe(0);
+  });
+
+  test("but NOT one whose purchase price merely repeats the supplier cost", async () => {
+    // There is no ambiguity here: both figures say the supplier is owed the
+    // same amount. Refusing these was measurably useless — on production 39 of
+    // 42 consigned vehicles carry a purchase price, including both that have
+    // sold, so the old flag disqualified every row the migration existed for.
+    const s = await seedDealer("samePrices");
+    await seedLegacyPrincipalSale(s, {
+      vin: "VINMIG13", sourceCost: ENTITLEMENT, purchasePrice: ENTITLEMENT,
+    });
+
+    const before = await ledger(s.t, s.orgId);
+    const report = await runMigration(s);
+
+    expect(report.flagged).toBe(0);
+    expect(report.corrected).toBe(1);
+    // And it is still only a reclassification.
+    expect(report.netIncomeDeltaMinor).toBe(0);
+    expect(netIncome(await ledger(s.t, s.orgId))).toBe(netIncome(before));
   });
 
   test("a dealer-owned sale, which was never misposted in the first place", async () => {

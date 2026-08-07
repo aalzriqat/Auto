@@ -159,11 +159,12 @@ describe("sourced-sale impact report", () => {
     expect(org.migratableCount).toBe(0);
   });
 
-  test("flags a car marked SOURCED that carries its own purchase price", async () => {
-    // Requirement 8: bought in for the dealership's own account but never
-    // reclassified. Migrating it as consigned would be wrong in both directions.
+  test("flags a car carrying two DIFFERENT cost figures", async () => {
+    // Requirement 8: two numbers for what the car cost, and nothing that says
+    // which one the supplier is actually owed. Correcting the sale would mean
+    // asserting one of them, which is a decision about somebody's money.
     const { org } = await seed({ purchasePrice: 9_000 });
-    expect(org.rows[0]!.flags).toContain("SOURCED_BUT_HAS_PURCHASE_PRICE");
+    expect(org.rows[0]!.flags).toContain("SOURCED_COST_CONFLICT");
     expect(org.migratableCount).toBe(0);
   });
 

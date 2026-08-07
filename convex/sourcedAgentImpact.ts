@@ -175,11 +175,27 @@ export async function assessConsignedSale(
   if (entitlementMinor === null) flags.push("NO_SOURCE_COST");
   if (marginMinor !== null && marginMinor < 0) flags.push("NEGATIVE_MARGIN");
   if (postedInventoryRelief > 0) flags.push("INVENTORY_RELIEVED_ON_CONSIGNED_CAR");
-  if (vehicle.purchasePrice && vehicle.purchasePrice > 0) {
-    // Marked SOURCED but carries an own-purchase price: either it was
-    // bought in and never reclassified, or the price is stale. Requirement
-    // 8 calls these out for manual reconciliation instead of migrating.
-    flags.push("SOURCED_BUT_HAS_PURCHASE_PRICE");
+  if (
+    vehicle.purchasePrice &&
+    vehicle.purchasePrice > 0 &&
+    entitlementMinor !== null &&
+    toMinorUnits(vehicle.purchasePrice, currency) !== entitlementMinor
+  ) {
+    // Two different figures for what this car cost, and no way to tell which
+    // one the supplier is actually owed. Correcting the sale means asserting
+    // one of them as his entitlement, which is a decision about somebody's
+    // money, so it goes to a human.
+    //
+    // Carrying a purchase price at all was previously enough to flag the row,
+    // on the reading that the car might have been bought in and never
+    // reclassified. That reading is settled: `sourceType: SOURCED` is a
+    // reliable business invariant for consigned accounting, so a SOURCED
+    // vehicle is the supplier's regardless of what else is recorded against
+    // it. The broader flag was also measurably useless — on production 39 of
+    // 42 consigned vehicles carry a purchase price, including both that have
+    // sold, so it disqualified every row the migration existed to correct
+    // while catching no actual ambiguity in most of them.
+    flags.push("SOURCED_COST_CONFLICT");
   }
   if (!alreadyAgentBasis && marginMinor !== null && postedGrossProfit !== marginMinor) {
     // The reclassification-not-restatement claim fails here. Correcting
