@@ -404,10 +404,20 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // migrations — so the merged figures are the sum of both movements, not the
   // number either side carried alone. Taking either verbatim would silently
   // un-pin the other side's mutations from the guard.
+  // Then 464→466 / 306→308 by the two mutations in `supplierReceivables`, which
+  // collect the dealership's agency margin from a supplier the buyer paid
+  // directly: `recordReceipt` and `setDisputed`. Both take an `orgId` and a
+  // caller-supplied `receivableId`, so both land in `analysed` and are held to
+  // the ownership rule.
+  //
+  // Both satisfy it with the load-and-compare written out inline. It began life
+  // behind a `loadOwnedReceivable` helper, which read better and this analyzer
+  // could not see through — it flagged `recordReceipt` immediately, which is
+  // the guard doing precisely its job.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 464,
-      analysed: 306,
+      totalMutations: 466,
+      analysed: 308,
       skippedNoArgsBlock: 13,
       skippedNoOrgId: 145,
     });

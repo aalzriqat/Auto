@@ -8,6 +8,7 @@ import {
   hookFiCommissionRecognitionsReversed,
 } from "../accounting/workflowHooks";
 import { reverseAllocation, voidCanonicalPayment } from "../subledger";
+import { cancelSupplierReceivablesForSale } from "../supplierReceivables";
 import { restoreVehicleFromSale } from "./saleHelpers";
 import {
   reactivateAllVehiclesForDeposit,
@@ -273,6 +274,16 @@ async function cancelPendingSupplierPayables(
     now: number;
   }
 ) {
+  // The claim on the other route cancels with the sale too, and refuses for the
+  // same reason: money that has already arrived is a correction somebody makes
+  // deliberately, not something a cancellation does on its way past.
+  await cancelSupplierReceivablesForSale(ctx, {
+    orgId: args.orgId,
+    saleId: args.saleId,
+    actorId: args.actorId,
+    now: args.now,
+  });
+
   const payables = await ctx.db
     .query("vehicleSupplierPayables")
     .withIndex("by_sale", (q) => q.eq("saleId", args.saleId))

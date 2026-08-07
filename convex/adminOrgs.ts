@@ -55,6 +55,7 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "financialAuditLog", index: "by_org" },
   { kind: "orgRows", table: "vehicleLandedCosts", index: "by_org_vehicle" },
   { kind: "orgRows", table: "vehicleSupplierPayables", index: "by_org" },
+  { kind: "orgRows", table: "vehicleSupplierReceivables", index: "by_org" },
   // Ordered before `sales` and `journalEntries` for the same reason as every
   // other child step: it holds ids into both, so removing it after them would
   // leave rows pointing at documents that no longer exist.

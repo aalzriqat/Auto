@@ -130,6 +130,16 @@ async function postDomainEvent(
     occurredAt: number;
     actorId: Id<"users">;
     payload: Record<string, unknown>;
+    /**
+     * Distinguishes REPEATED events of the same type against the same source —
+     * several instalments against one claim, say. `postAccountingEvent` dedupes
+     * on (eventType, sourceType, sourceId, eventVersion) as well as on the
+     * idempotency key, so leaving this at 1 makes every payment after the first
+     * silently return "already posted": the subledger records three receipts
+     * and the ledger records one. Defaults to 1, which is right for the events
+     * that genuinely happen once per source.
+     */
+    eventVersion?: number;
   }
 ): Promise<void> {
   await postOrEnqueue(ctx, {
@@ -137,7 +147,7 @@ async function postDomainEvent(
     eventType: args.eventType,
     sourceType: args.sourceType,
     sourceId: args.sourceId,
-    eventVersion: 1,
+    eventVersion: args.eventVersion ?? 1,
     accountingDate: args.occurredAt,
     occurredAt: args.occurredAt,
     currency: args.currency,
@@ -353,6 +363,50 @@ export async function hookConsignedSaleReclassified(
       revenueMinor: args.revenueMinor,
       commissionMinor: args.commissionMinor,
       cogsMinor: args.cogsMinor,
+    },
+  });
+}
+
+/**
+ * A receipt against a supplier receivable. Keyed on the receivable AND a
+ * sequence, because a claim can legitimately be collected in several
+ * instalments — keying on the receivable alone would silently drop every
+ * payment after the first.
+ */
+export async function hookSupplierReceivableCollected(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    receivableId: Id<"vehicleSupplierReceivables">;
+    vehicleId: Id<"vehicles">;
+    sourcedFromName: string;
+    amountMinor: number;
+    currency: string;
+    paymentMethod?: string;
+    receiptSeq: number;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "SUPPLIER_RECEIVABLE_COLLECTED",
+    sourceType: "vehicleSupplierReceivables",
+    sourceId: args.receivableId.toString(),
+    idempotencyKey: `supplier_receivable_collected_${args.receivableId}_${args.receiptSeq}`,
+    // The source identity has to differ too, not just the key — see the note on
+    // postDomainEvent's eventVersion.
+    eventVersion: args.receiptSeq,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      receivableId: args.receivableId.toString(),
+      sourcedFromName: args.sourcedFromName,
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+      vehicleId: args.vehicleId.toString(),
     },
   });
 }

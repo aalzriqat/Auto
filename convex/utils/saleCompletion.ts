@@ -29,6 +29,7 @@ import {
 import { computeResoldProductMargin } from "../accounting/postingRules";
 import { toMinorUnits } from "./money";
 import { computeVehicleCapitalizedCost, vehicleHasCostBasis } from "./vehicleCost";
+import { openSupplierReceivable } from "../supplierReceivables";
 import {
   consignedSettlementRoute,
   dealershipCollectsGross,
@@ -290,6 +291,12 @@ type ResolvedReservationDeposits = {
    */
   previouslyCollected: number;
   appliedDeposits: Array<{ depositId: Id<"deposits">; customerId: Id<"customers">; amount: number }>;
+  /**
+   * Applied against the supplier's settlement instead. The GL credit for this
+   * already reduced Receivable from Suppliers, so the claim opened below has to
+   * open net of it or the subledger and the ledger disagree from the outset.
+   */
+  appliedToSupplierSettlement: number;
 };
 
 /**
@@ -342,7 +349,11 @@ async function resolveReservationDeposits(
   }
 ): Promise<ResolvedReservationDeposits> {
   const { args, prepared, saleId, isSourced, settlementRoute, customerBillableMinor } = opts;
-  const empty: ResolvedReservationDeposits = { previouslyCollected: 0, appliedDeposits: [] };
+  const empty: ResolvedReservationDeposits = {
+    previouslyCollected: 0,
+    appliedDeposits: [],
+    appliedToSupplierSettlement: 0,
+  };
   if (!args.quoteId) return empty;
 
   const heldTotal = await heldDepositTotalForQuote(ctx, args.quoteId);
@@ -445,8 +456,8 @@ async function resolveReservationDeposits(
         });
       }
       // Not collected against the customer's balance — it settled the
-      // supplier's claim instead.
-      return empty;
+      // supplier's claim instead, which the claim below must open net of.
+      return { ...empty, appliedToSupplierSettlement: heldTotal };
     }
 
     case "REFUND_TO_CUSTOMER":
@@ -498,7 +509,7 @@ async function recordOtherTreatment(
     reason,
     saleId: opts.saleId,
   });
-  return { previouslyCollected: 0, appliedDeposits: [] };
+  return { previouslyCollected: 0, appliedDeposits: [], appliedToSupplierSettlement: 0 };
 }
 
 /** The reservation deposits still holding a vehicle for this quote. */
@@ -568,7 +579,11 @@ async function applyDepositsToCustomerAr(
       saleId,
     });
   }
-  return { previouslyCollected: resolved.total, appliedDeposits: resolved.appliedDeposits };
+  return {
+    previouslyCollected: resolved.total,
+    appliedDeposits: resolved.appliedDeposits,
+    appliedToSupplierSettlement: 0,
+  };
 }
 
 async function applySaleCompletionSideEffects(
@@ -622,15 +637,16 @@ async function applySaleCompletionSideEffects(
       ? toMinorUnits(args.salePrice, prepared.currency) - costMinor
       : null;
 
-  const { previouslyCollected, appliedDeposits } = await resolveReservationDeposits(ctx, {
+  const { previouslyCollected, appliedDeposits, appliedToSupplierSettlement } =
+    await resolveReservationDeposits(ctx, {
     args,
     prepared,
     saleId,
     isSourced,
     settlementRoute,
     customerBillableMinor,
-    marginMinor,
-  });
+      marginMinor,
+    });
 
   await createSaleTransaction(ctx, {
     orgId: args.orgId,
@@ -840,6 +856,26 @@ async function applySaleCompletionSideEffects(
   // Receivable from Suppliers (see consignedAgentSaleLines). Creating a payable
   // there would invent a debt and leave it permanently unsettleable, because no
   // payment will ever be made against it.
+  // On DIRECT_TO_SUPPLIER the claim runs the other way: the buyer paid him the
+  // gross, so he is holding the dealership's margin. Debiting Receivable from
+  // Suppliers records that it is owed; this records which deal it is owed on,
+  // and is the only thing `supplierReceivables.recordReceipt` can settle
+  // against. Without it the GL account would accrete every margin ever earned
+  // this way with nothing able to discharge it.
+  if (isSourced && costAmount > 0 && !dealershipCollectsGross(settlementRoute)) {
+    const marginAmount = args.salePrice - costAmount;
+    await openSupplierReceivable(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      saleId,
+      sourcedFromName: prepared.vehicle.sourcedFromName ?? "Unknown supplier",
+      amountDue: marginAmount,
+      currency: prepared.currency,
+      alreadyReceivedAmount: appliedToSupplierSettlement,
+      actorId: args.actorId,
+    });
+  }
+
   if (isSourced && costAmount > 0 && dealershipCollectsGross(settlementRoute)) {
     const now = Date.now();
     await ctx.db.insert("vehicleSupplierPayables", {

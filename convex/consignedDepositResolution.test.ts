@@ -190,14 +190,16 @@ async function postedBySystemKey(
   });
 }
 
+type RefundMethod = "CASH" | "BANK_TRANSFER" | "PAYMENT_LINK" | "CARD" | "CHEQUE" | "OTHER";
+
 async function completeAs(
-  actor: { mutation: (ref: unknown, args: unknown) => Promise<unknown> },
+  actor: Awaited<ReturnType<typeof seed>>["asUser"],
   s: Awaited<ReturnType<typeof seed>>,
   route: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER",
-  resolution?: { treatment: Treatment; reason?: string; refundMethod?: string },
+  resolution?: { treatment: Treatment; reason?: string; refundMethod?: RefundMethod },
   extra: Record<string, unknown> = {}
 ) {
-  return await (actor as typeof s.asUser).mutation(api.sales.create, {
+  return await actor.mutation(api.sales.create, {
     orgId: s.orgId,
     vehicleId: s.vehicleId,
     customerId: s.customerId,
@@ -216,7 +218,7 @@ async function completeAs(
 async function completeWith(
   s: Awaited<ReturnType<typeof seed>>,
   route: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER",
-  resolution?: { treatment: Treatment; reason?: string; refundMethod?: string },
+  resolution?: { treatment: Treatment; reason?: string; refundMethod?: RefundMethod },
   extra: Record<string, unknown> = {}
 ) {
   const { salePriceOverride, ...rest } = extra as { salePriceOverride?: number };

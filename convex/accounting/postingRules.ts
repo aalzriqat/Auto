@@ -23,6 +23,7 @@ export type EventType =
   | "FINANCE_CASH_RECEIVED"
   | "PAYMENT_LINK_RECEIVED"
   | "SUPPLIER_PAYMENT_SETTLED"
+  | "SUPPLIER_RECEIVABLE_COLLECTED"
   | "ASSET_CAPITALIZED"
   | "DEPRECIATION_POSTED"
   | "ASSET_IMPAIRED"
@@ -58,7 +59,7 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "CHEQUE_RECEIVED", "CHEQUE_DEPOSITED", "CHEQUE_CLEARED", "CHEQUE_RETURNED",
   "COMMISSION_ACCRUED", "COMMISSION_ADJUSTED", "COMMISSION_PAID",
   "FINANCE_DISBURSED", "FINANCE_CASH_RECEIVED", "PAYMENT_LINK_RECEIVED",
-  "SUPPLIER_PAYMENT_SETTLED",
+  "SUPPLIER_PAYMENT_SETTLED", "SUPPLIER_RECEIVABLE_COLLECTED",
   "ASSET_CAPITALIZED", "DEPRECIATION_POSTED", "ASSET_IMPAIRED", "ASSET_DISPOSED",
   "CAPITAL_CONTRIBUTED", "PARTNER_DREW", "PROFIT_DISTRIBUTED",
   "CLAIM_SETTLED", "CLAIM_WRITTEN_OFF",
@@ -692,6 +693,42 @@ export function ruleSupplierPaymentSettled(p: SupplierPaymentSettledPayload): Ru
   return {
     lines,
     memo: `Supplier payment — ${p.sourcedFromName}`,
+    category: "SYSTEM",
+  };
+}
+
+export interface SupplierReceivableCollectedPayload {
+  receivableId: string;
+  sourcedFromName: string;
+  amountMinor: number;
+  currency: string;
+  paymentMethod?: string;
+  vehicleId?: string;
+}
+
+/**
+ * The supplier pays back the dealership's agency margin on a consigned deal he
+ * collected the gross for.
+ *
+ * The exact reverse of the claim the sale opened: `consignedAgentSaleLines`
+ * debits Receivable from Suppliers on the DIRECT_TO_SUPPLIER route, and this is
+ * the only thing that brings it down. Without it the account accreted every
+ * margin ever earned that way and nothing could ever discharge it — an asset
+ * that only grows is not an asset, it is a hole in the ledger.
+ *
+ * Revenue is deliberately untouched. The margin was recognized when the sale
+ * completed; this is collection, not a second earning of it.
+ */
+export function ruleSupplierReceivableCollected(p: SupplierReceivableCollectedPayload): RuleResult {
+  // Inbound money, so the cheque case is a cheque the dealership HOLDS —
+  // cashAccountKey, not disbursementAccountKey.
+  const cashKey = cashAccountKey(p.paymentMethod);
+  return {
+    lines: [
+      line(cashKey, p.amountMinor, 0, `Received from ${p.sourcedFromName}`, { vehicleId: p.vehicleId }),
+      line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, 0, p.amountMinor, `Commission collected from ${p.sourcedFromName}`, { vehicleId: p.vehicleId }),
+    ],
+    memo: `Supplier commission received — ${p.sourcedFromName}`,
     category: "SYSTEM",
   };
 }
@@ -1691,6 +1728,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "FINANCE_CASH_RECEIVED": return ruleFinanceCashReceived(payload as unknown as FinanceCashReceivedPayload);
     case "PAYMENT_LINK_RECEIVED": return rulePaymentLinkReceived(payload as unknown as PaymentLinkReceivedPayload);
     case "SUPPLIER_PAYMENT_SETTLED": return ruleSupplierPaymentSettled(payload as unknown as SupplierPaymentSettledPayload);
+    case "SUPPLIER_RECEIVABLE_COLLECTED": return ruleSupplierReceivableCollected(payload as unknown as SupplierReceivableCollectedPayload);
     case "ASSET_CAPITALIZED": return ruleAssetCapitalized(payload as unknown as AssetCapitalizedPayload);
     case "DEPRECIATION_POSTED": return ruleDepreciationPosted(payload as unknown as DepreciationPostedPayload);
     case "FI_COMMISSION_RECOGNIZED": return ruleFiCommissionRecognized(payload as unknown as FiCommissionRecognizedPayload);

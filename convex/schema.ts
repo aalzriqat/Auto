@@ -794,6 +794,80 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_sale", ["orgId", "saleId"]),
 
+  /**
+   * What a supplier owes the DEALERSHIP on a consigned sale he was paid for
+   * directly.
+   *
+   * The mirror of `vehicleSupplierPayables`, and it exists for the same reason
+   * that one does: a general-ledger balance is not a subledger. On the
+   * DIRECT_TO_SUPPLIER route the buyer pays the supplier the whole
+   * 12,500, the supplier keeps his 9,500 entitlement, and the dealership's
+   * 3,000 agency margin stays with him until he settles it. Debiting
+   * Receivable from Suppliers records that the money is owed; only this records
+   * WHICH deal it is owed on, how much of it has since arrived, when, by what
+   * means, and against which reference — the things an aging report and a
+   * supplier conversation are actually made of.
+   *
+   * Supplier identity is snapshot-based for exactly the reason spelled out on
+   * `vehicleSupplierPayables.sourcedFromName`: there is no supplier master to
+   * point at, and a foreign key to a table that does not exist looks like
+   * referential integrity while providing none.
+   */
+  vehicleSupplierReceivables: defineTable({
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    saleId: v.id("sales"),
+    sourcedFromName: v.string(),
+    /** The dealership's agency margin on the deal — what the supplier owes back. */
+    amountDue: v.number(),
+    currency: v.string(),
+    status: v.union(
+      v.literal("OPEN"),
+      v.literal("PARTIALLY_PAID"),
+      v.literal("PAID"),
+      v.literal("DISPUTED"),
+      // Not one of the four the requirement names, and deliberately kept: a
+      // sale can be cancelled, and a claim against a deal that no longer exists
+      // is not "open". Without it, cancelling would either strand a live
+      // receivable or delete the record of one that existed.
+      v.literal("CANCELLED")
+    ),
+    /**
+     * Cumulative amount collected. `remainingAmount` is NOT stored — a second
+     * copy of a figure derivable from two others is a figure that can disagree
+     * with them, and this one decides whether a supplier still owes money.
+     */
+    amountReceived: v.optional(v.number()),
+    receiptMethod: v.optional(paymentMethodValidator),
+    /** Cheque number or transfer reference for the most recent receipt. */
+    receiptReference: v.optional(v.string()),
+    /** The bank or cash account the money arrived in. */
+    receiptAccountId: v.optional(v.id("chartOfAccounts")),
+    receiptNotes: v.optional(v.string()),
+    /**
+     * How many receipts have posted. The GL event's idempotency key includes
+     * it, so a second instalment of the same amount is a distinct event rather
+     * than a duplicate the outbox silently drops.
+     */
+    receiptSeq: v.optional(v.number()),
+    /** When the claim was settled in full. */
+    settledAt: v.optional(v.number()),
+    settledBy: v.optional(v.id("users")),
+    disputeReason: v.optional(v.string()),
+    disputedAt: v.optional(v.number()),
+    disputedBy: v.optional(v.id("users")),
+    cancelledAt: v.optional(v.number()),
+    cancelledBy: v.optional(v.id("users")),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_sale", ["orgId", "saleId"])
+    .index("by_org_vehicle", ["orgId", "vehicleId"])
+    .index("by_sale", ["saleId"]),
+
   vehicleSupplierPayables: defineTable({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
