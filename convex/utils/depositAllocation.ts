@@ -48,7 +48,15 @@ export type VehicleAllocation = {
   vehicleId: Id<"vehicles">;
   /** Absent when no allocation has been entered for this car yet. */
   allocatedMinor: number | undefined;
-  status: "ALLOCATED" | "APPLIED" | "RELEASED" | undefined;
+  status: "ALLOCATED" | "APPLIED" | "RELEASED" | "RESOLVED" | undefined;
+  /** What was decided about a RESOLVED slice. */
+  resolutionTreatment:
+    | "REALLOCATE_TO_VEHICLE"
+    | "RETURN_TO_UNALLOCATED"
+    | "REFUND_TO_CUSTOMER"
+    | "FORFEITED"
+    | "OTHER"
+    | undefined;
   active: boolean;
   holdId: Id<"depositVehicleHolds">;
 };
@@ -65,6 +73,14 @@ export type QuoteDepositAllocation = {
   appliedMinor: number;
   /** Released by a cancellation and awaiting an explicit decision. */
   releasedAwaitingDecisionMinor: number;
+  /**
+   * Refunded to the customer or forfeited — money that has LEFT the quote.
+   *
+   * Counted out of the available pool for good. Expressing these by zeroing the
+   * slice let refunded money reappear as allocatable, which is the same defect
+   * as paying it out twice.
+   */
+  resolvedOutMinor: number;
   /** Held but assigned to no car. Still a customer deposit liability. */
   unallocatedMinor: number;
   /** Cars on the quote that have no allocation entered at all. */
@@ -149,6 +165,7 @@ export async function quoteDepositAllocation(
         vehicleId: hold.vehicleId,
         allocatedMinor: hold.allocatedAmountMinor,
         status: hold.allocationStatus,
+        resolutionTreatment: hold.resolutionTreatment,
         active: hold.active,
         holdId: hold._id,
       });
@@ -158,6 +175,7 @@ export async function quoteDepositAllocation(
   let allocated = 0;
   let applied = 0;
   let released = 0;
+  let resolvedOut = 0;
   const withoutAllocation: Id<"vehicles">[] = [];
   for (const a of allocations) {
     if (a.allocatedMinor === undefined) {
@@ -166,7 +184,17 @@ export async function quoteDepositAllocation(
     }
     if (a.status === "APPLIED") applied += a.allocatedMinor;
     else if (a.status === "RELEASED") released += a.allocatedMinor;
-    else allocated += a.allocatedMinor;
+    else if (a.status === "RESOLVED") {
+      // Only money that actually left the quote is subtracted. A slice
+      // re-allocated to another car, or returned to the unallocated balance, is
+      // still on the quote and is already counted where it now lives.
+      if (
+        a.resolutionTreatment === "REFUND_TO_CUSTOMER" ||
+        a.resolutionTreatment === "FORFEITED"
+      ) {
+        resolvedOut += a.allocatedMinor;
+      }
+    } else allocated += a.allocatedMinor;
   }
 
   return {
@@ -176,10 +204,15 @@ export async function quoteDepositAllocation(
     allocatedMinor: allocated,
     appliedMinor: applied,
     releasedAwaitingDecisionMinor: released,
+    resolvedOutMinor: resolvedOut,
     // Released slices are deliberately NOT counted as available: they are
     // awaiting a decision, and treating them as spare would move a customer's
     // money from the car it was allocated against to another one by default.
-    unallocatedMinor: Math.max(0, heldTotalMinor - allocated - applied - released),
+    // Refunded and forfeited slices are gone for good.
+    unallocatedMinor: Math.max(
+      0,
+      heldTotalMinor - allocated - applied - released - resolvedOut
+    ),
     vehiclesWithoutAllocation: withoutAllocation,
   };
 }
@@ -205,29 +238,32 @@ export async function allocatedDepositForVehicle(
   const deposits = await heldDepositsForQuote(ctx, args.quoteId);
   if (deposits.length === 0) return { kind: "NO_DEPOSIT", allocatedMinor: 0 };
 
+  // Summed across every deposit on the quote, because a customer can pay the
+  // عربون in more than one instalment and each payment is its own row with its
+  // own hold rows. Returning the first match consumed one instalment's share
+  // and left the rest of the customer's money sitting unapplied.
   let sawHoldRows = false;
+  let totalAllocatedMinor = 0;
+  let anyAllocation = false;
+  let firstHoldId: Id<"depositVehicleHolds"> | undefined;
   for (const deposit of deposits) {
     const holds = await ctx.db
       .query("depositVehicleHolds")
-      .withIndex("by_deposit_vehicle", (q) =>
-        q.eq("depositId", deposit._id).eq("vehicleId", args.vehicleId)
-      )
-      .collect();
-    const anyHold = await ctx.db
-      .query("depositVehicleHolds")
       .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
-      .first();
-    if (anyHold) sawHoldRows = true;
+      .collect();
+    if (holds.length > 0) sawHoldRows = true;
 
     for (const hold of holds) {
+      if (hold.vehicleId !== args.vehicleId) continue;
       if (!hold.active) continue;
       if (hold.allocatedAmountMinor === undefined) continue;
-      return {
-        kind: "ALLOCATED",
-        allocatedMinor: hold.allocatedAmountMinor,
-        holdId: hold._id,
-      };
+      totalAllocatedMinor += hold.allocatedAmountMinor;
+      anyAllocation = true;
+      firstHoldId ??= hold._id;
     }
+  }
+  if (anyAllocation) {
+    return { kind: "ALLOCATED", allocatedMinor: totalAllocatedMinor, holdId: firstHoldId! };
   }
 
   // No hold rows at all: `deposits.create` writes them only for quotes with

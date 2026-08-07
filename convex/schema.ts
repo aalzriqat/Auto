@@ -2591,9 +2591,31 @@ export default defineSchema({
      *    decision. It is deliberately NOT returned to the pool automatically:
      *    money silently moving from the car it was allocated against to
      *    another one is precisely what an allocation exists to prevent.
+     *  - RESOLVED — that decision has been made and recorded on
+     *    `resolutionTreatment`. Terminal.
+     *
+     * RESOLVED exists because the alternative — expressing a decision by
+     * zeroing the amount and leaving the status at RELEASED — made refunded and
+     * forfeited money re-enter the quote's unallocated balance, and left the
+     * slice eligible to be resolved a second time.
      */
     allocationStatus: v.optional(
-      v.union(v.literal("ALLOCATED"), v.literal("APPLIED"), v.literal("RELEASED"))
+      v.union(
+        v.literal("ALLOCATED"),
+        v.literal("APPLIED"),
+        v.literal("RELEASED"),
+        v.literal("RESOLVED")
+      )
+    ),
+    /** What was decided about a RELEASED slice. Set with the RESOLVED status. */
+    resolutionTreatment: v.optional(
+      v.union(
+        v.literal("REALLOCATE_TO_VEHICLE"),
+        v.literal("RETURN_TO_UNALLOCATED"),
+        v.literal("REFUND_TO_CUSTOMER"),
+        v.literal("FORFEITED"),
+        v.literal("OTHER")
+      )
     ),
     /** Which sale consumed it, when APPLIED. */
     appliedSaleId: v.optional(v.id("sales")),

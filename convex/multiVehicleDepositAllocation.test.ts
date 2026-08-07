@@ -702,3 +702,126 @@ describe("completing the whole quote", () => {
     expect(view!.allocatedMinor).toBe(0);
   });
 });
+
+// ─── Money that has left the quote ───────────────────────────────────────────
+
+describe("a slice that was refunded or forfeited", () => {
+  async function releasedSlice(tag: string) {
+    const s = await seed(tag);
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 3_000 },
+      { vehicleId: s.vehicleB!, amount: 2_000 },
+    ]);
+    await s.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      vehicleId: s.vehicleA,
+    });
+    const view = await allocationView(s);
+    const holdId = view!.vehicles.find((v) => v.vehicleId === s.vehicleA)!.holdId!;
+    return { s, holdId };
+  }
+
+  test("does not come back as money the quote can still allocate", async () => {
+    // The defect this replaces: a decision recorded by zeroing the slice made
+    // it vanish from the released bucket and reappear in the unallocated
+    // balance. Refunded money became allocatable again — the same error as
+    // paying it out twice.
+    const { s, holdId } = await releasedSlice("refundGone");
+
+    await s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
+      orgId: s.orgId,
+      holdId,
+      treatment: "REFUND_TO_CUSTOMER" as const,
+      refundMethod: "CASH" as const,
+    });
+
+    const view = await allocationView(s);
+    expect(view!.releasedAwaitingDecisionMinor).toBe(0);
+    expect(view!.resolvedOutMinor).toBe(3_000 * SCALE);
+    // And crucially not 3,000 of newly available money.
+    expect(view!.unallocatedMinor).toBe(0);
+  });
+
+  test("a forfeiture is treated the same way", async () => {
+    const { s, holdId } = await releasedSlice("forfeitGone");
+
+    await s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
+      orgId: s.orgId,
+      holdId,
+      treatment: "FORFEITED" as const,
+      reason: "Customer walked away",
+    });
+
+    const view = await allocationView(s);
+    expect(view!.resolvedOutMinor).toBe(3_000 * SCALE);
+    expect(view!.unallocatedMinor).toBe(0);
+  });
+
+  test("cannot be resolved a second time", async () => {
+    // Without a terminal status the hold stayed RELEASED, so the same slice
+    // could be refunded and then re-allocated to another car.
+    const { s, holdId } = await releasedSlice("resolveTwice");
+
+    await s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
+      orgId: s.orgId,
+      holdId,
+      treatment: "REFUND_TO_CUSTOMER" as const,
+      refundMethod: "CASH" as const,
+    });
+
+    await expect(
+      s.asUser.mutation(api.deposits.resolveReleasedAllocation, {
+        orgId: s.orgId,
+        holdId,
+        treatment: "REALLOCATE_TO_VEHICLE" as const,
+        toVehicleId: s.vehicleB!,
+      })
+    ).rejects.toThrow(/has not been released/i);
+  });
+
+  test("re-allocating within the quote keeps the money on the quote", async () => {
+    // The distinction the summary has to make: a slice moved to another car is
+    // still the customer's money on this deal; a refunded one is not.
+    const { s, holdId } = await releasedSlice("reallocStays");
+
+    await s.asUser.mutation(api.deposits.resolveReleasedAllocation, {
+      orgId: s.orgId,
+      holdId,
+      treatment: "REALLOCATE_TO_VEHICLE" as const,
+      toVehicleId: s.vehicleB!,
+    });
+
+    const view = await allocationView(s);
+    expect(view!.resolvedOutMinor).toBe(0);
+    expect(view!.vehicles.find((v) => v.vehicleId === s.vehicleB)!.allocatedMinor).toBe(
+      5_000 * SCALE
+    );
+    expect(view!.unallocatedMinor).toBe(0);
+  });
+});
+
+describe("a quote whose deposit was paid in instalments", () => {
+  test("sums every payment's share for the vehicle being sold", async () => {
+    // `deposits.create` can be called more than once on a quote — the customer
+    // pays the عربون in parts — and each payment is its own row with its own
+    // hold rows. Reading only the first consumed one instalment's share and
+    // left the rest of the customer's money unapplied against their invoice.
+    const s = await seed("instalments");
+    await payDeposit(s, 3_000);
+    await payDeposit(s, 2_000);
+
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 3_000 },
+      { vehicleId: s.vehicleB!, amount: 2_000 },
+    ]);
+
+    const view = await allocationView(s);
+    expect(view!.heldTotalMinor).toBe(5_000 * SCALE);
+
+    await sell(s, s.vehicleA, PRICE_A);
+    // 3,000 against a 3,000 invoice, from both payments taken together.
+    expect((await saleTransactionFor(s, s.vehicleA))!.amount).toBe(0);
+  });
+});

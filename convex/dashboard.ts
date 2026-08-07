@@ -384,16 +384,17 @@ export const stats = query({
     let turnoverTruncated = false;
     const recognizedRevenueOfSale = (sale: { vehicleId: Id<"vehicles">; salePrice: number }): number => {
       if (!canViewProfitMetrics) return sale.salePrice;
-      if (!costedVehicleIdSet.has(sale.vehicleId)) {
+      // Two different absences, and both have to be excluded rather than
+      // booked at gross: past the costing cap, and a vehicle row that is gone
+      // or belongs to another org. In the second case `consignedVehicleIds`
+      // says "not consigned" only because nothing was ever read — which is not
+      // the same as knowing the dealership owned it.
+      const cost = capitalizedCostByVehicle.get(sale.vehicleId);
+      if (!costedVehicleIdSet.has(sale.vehicleId) || cost === undefined) {
         turnoverTruncated = true;
         return 0;
       }
       if (!consignedVehicleIds.has(sale.vehicleId)) return sale.salePrice;
-      const cost = capitalizedCostByVehicle.get(sale.vehicleId);
-      if (cost === undefined) {
-        turnoverTruncated = true;
-        return 0;
-      }
       return Math.max(0, sale.salePrice - cost);
     };
 

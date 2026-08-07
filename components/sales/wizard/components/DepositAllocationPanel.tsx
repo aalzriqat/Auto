@@ -50,6 +50,10 @@ export function DepositAllocationPanel({
       if (Object.keys(current).length > 0) return current;
       const seeded: Record<string, string> = {};
       for (const v of allocation.vehicles) {
+        // A slice already consumed by its sale, or already resolved, is not
+        // editable — and including it in the draft would count it twice
+        // against the deposit in the totals below.
+        if (v.status === "APPLIED" || v.status === "RESOLVED") continue;
         seeded[v.vehicleId] =
           v.allocatedMinor === undefined
             ? ""
@@ -78,7 +82,8 @@ export function DepositAllocationPanel({
   const available =
     allocation.heldTotalMinor -
     allocation.appliedMinor -
-    allocation.releasedAwaitingDecisionMinor;
+    allocation.releasedAwaitingDecisionMinor -
+    allocation.resolvedOutMinor;
   const remainingMinor = available - draftTotalMinor;
   const overAllocated = remainingMinor < 0;
   const money = (minor: number) =>
@@ -106,10 +111,12 @@ export function DepositAllocationPanel({
       await allocate({
         orgId,
         quoteId,
-        allocations: allocation.vehicles.map((v) => ({
-          vehicleId: v.vehicleId,
-          amount: Number(draft[v.vehicleId] || 0),
-        })),
+        allocations: allocation.vehicles
+          .filter((v) => v.status !== "APPLIED" && v.status !== "RESOLVED")
+          .map((v) => ({
+            vehicleId: v.vehicleId,
+            amount: Number(draft[v.vehicleId] || 0),
+          })),
       });
       toast.success(t("DepositAllocationSaved" as any));
     } catch (error) {
@@ -148,7 +155,7 @@ export function DepositAllocationPanel({
                 {t("QuotedAt" as any)} {v.unitPrice.toLocaleString()}
               </p>
             </div>
-            {v.status === "APPLIED" ? (
+            {v.status === "APPLIED" || v.status === "RESOLVED" ? (
               <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
                 <Check className="h-3.5 w-3.5" aria-hidden />
                 {money(v.allocatedMinor ?? 0)} · {t("DepositAllocationApplied" as any)}

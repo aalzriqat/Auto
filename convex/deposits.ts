@@ -414,13 +414,16 @@ export const allocateToVehicles = mutation({
 
     // Vehicles not named here keep their existing allocation, so the invariant
     // is checked against the whole picture rather than only the part being
-    // edited.
+    // edited. Summed per hold row, because a quote can carry several deposit
+    // rows — the customer paid the عربون in instalments — and each has its own
+    // hold for the same car.
     const retainedMinor = summary.allocations
       .filter(
         (a) =>
           a.active &&
           a.status !== "APPLIED" &&
           a.status !== "RELEASED" &&
+          a.status !== "RESOLVED" &&
           a.allocatedMinor !== undefined &&
           !proposedByVehicle.has(a.vehicleId.toString())
       )
@@ -434,28 +437,61 @@ export const allocateToVehicles = mutation({
     });
     if (!check.ok) throw new ConvexError(check.reason);
 
+    // Every named vehicle must have a hold row to write the allocation onto.
+    // Silently skipping one meant the caller was told the allocation saved
+    // while that car stayed unallocated and unsellable.
+    const holdVehicleIds = new Set(
+      summary.allocations.filter((a) => a.active).map((a) => a.vehicleId.toString())
+    );
+    for (const vehicleId of proposedByVehicle.keys()) {
+      if (!holdVehicleIds.has(vehicleId)) {
+        throw new ConvexError(
+          "One of the vehicles named has no active hold on this quote's deposit, so an allocation cannot be recorded against it."
+        );
+      }
+    }
+
     const now = Date.now();
     let written = 0;
-    for (const allocation of summary.allocations) {
-      const proposed = proposedByVehicle.get(allocation.vehicleId.toString());
-      if (proposed === undefined) continue;
-      if (allocation.status === "APPLIED") {
-        throw new ConvexError(
-          "That vehicle's share of the deposit has already been applied to its completed sale and cannot be re-allocated. Cancel the sale first."
-        );
+    for (const [vehicleKey, proposed] of proposedByVehicle) {
+      const holdsForVehicle = summary.allocations.filter(
+        (a) => a.vehicleId.toString() === vehicleKey && a.active
+      );
+      for (const allocation of holdsForVehicle) {
+        if (allocation.status === "APPLIED") {
+          throw new ConvexError(
+            "That vehicle's share of the deposit has already been applied to its completed sale and cannot be re-allocated. Cancel the sale first."
+          );
+        }
+        if (allocation.status === "RELEASED") {
+          throw new ConvexError(
+            "That vehicle's share was released when it left the deal and needs an explicit decision before it can be used again."
+          );
+        }
+        if (allocation.status === "RESOLVED") {
+          throw new ConvexError(
+            "That vehicle's share has already been resolved and cannot be allocated again."
+          );
+        }
       }
-      if (allocation.status === "RELEASED") {
-        throw new ConvexError(
-          "That vehicle's share was released when it left the deal and needs an explicit decision before it can be used again."
-        );
+
+      // The amount is the VEHICLE's, not each payment's. Where the customer
+      // paid in instalments the car has one hold row per payment, and writing
+      // the requested figure onto every one of them allocated it several times
+      // over. It is carried on the first and the rest are set to nothing —
+      // which payment the money came from does not change what the car owes.
+      let remaining = proposed;
+      for (const allocation of holdsForVehicle) {
+        const share = remaining;
+        remaining = 0;
+        await ctx.db.patch(allocation.holdId, {
+          allocatedAmountMinor: share,
+          allocationStatus: "ALLOCATED",
+          allocatedAt: now,
+          allocatedBy: user._id,
+        });
       }
-      await ctx.db.patch(allocation.holdId, {
-        allocatedAmountMinor: proposed,
-        allocationStatus: "ALLOCATED",
-        allocatedAt: now,
-        allocatedBy: user._id,
-      });
-      written += 1;
+      if (holdsForVehicle.length > 0) written += 1;
     }
 
     await auditLog(ctx, {
@@ -587,8 +623,13 @@ export const resolveReleasedAllocation = mutation({
     // unallocated balance, and a forfeiture is recorded rather than posted for
     // the same partial-row reason as a refund.
 
+    // Terminal, and the amount is preserved rather than zeroed. Zeroing it made
+    // a refunded slice disappear from the released bucket and reappear in the
+    // quote's unallocated balance — refunded money becoming allocatable again —
+    // and left the hold eligible to be resolved a second time.
     await ctx.db.patch(hold._id, {
-      allocatedAmountMinor: 0,
+      allocationStatus: "RESOLVED",
+      resolutionTreatment: args.treatment,
       releaseReason: args.reason?.trim(),
       resolvedAt: now,
       resolvedBy: user._id,
@@ -661,6 +702,7 @@ export const quoteAllocation = query({
       allocatedMinor: summary.allocatedMinor,
       appliedMinor: summary.appliedMinor,
       releasedAwaitingDecisionMinor: summary.releasedAwaitingDecisionMinor,
+      resolvedOutMinor: summary.resolvedOutMinor,
       unallocatedMinor: summary.unallocatedMinor,
       vehicles,
       /** Cars that cannot be sold until somebody allocates their share. */
