@@ -145,6 +145,7 @@ import type * as utils_commission from "../utils/commission.js";
 import type * as utils_commissionSourceLedger from "../utils/commissionSourceLedger.js";
 import type * as utils_dedup from "../utils/dedup.js";
 import type * as utils_defaultChart from "../utils/defaultChart.js";
+import type * as utils_depositAllocation from "../utils/depositAllocation.js";
 import type * as utils_depositHelpers from "../utils/depositHelpers.js";
 import type * as utils_depositRecording from "../utils/depositRecording.js";
 import type * as utils_env from "../utils/env.js";
@@ -349,6 +350,7 @@ declare const fullApi: ApiFromModules<{
   "utils/commissionSourceLedger": typeof utils_commissionSourceLedger;
   "utils/dedup": typeof utils_dedup;
   "utils/defaultChart": typeof utils_defaultChart;
+  "utils/depositAllocation": typeof utils_depositAllocation;
   "utils/depositHelpers": typeof utils_depositHelpers;
   "utils/depositRecording": typeof utils_depositRecording;
   "utils/env": typeof utils_env;

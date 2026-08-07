@@ -453,6 +453,9 @@ export default defineSchema({
       v.literal("RESOLVE_SYSTEM_ACCOUNT_ADOPTION"),
       v.literal("ACKNOWLEDGE_CLOSE_WARNINGS"),
       v.literal("SET_COMMISSION_AMOUNT"),
+      // Multi-vehicle reservation-deposit allocation — see depositAllocation.ts.
+      v.literal("ALLOCATE_DEPOSIT"),
+      v.literal("RESOLVE_DEPOSIT_ALLOCATION"),
     ),
     resourceType: v.string(),
     resourceId: v.string(),
@@ -2544,15 +2547,64 @@ export default defineSchema({
   // deposit's primary `vehicleId`. Only written for deposits on quotes with
   // more than one vehicle — single-vehicle deposits (the vast majority) get
   // zero rows here and rely solely on `deposits.by_vehicle_hold` as before.
+  /**
+   * Which cars one reservation deposit is holding, and — on a multi-vehicle
+   * quote — how much of it belongs to each.
+   *
+   * The deposit itself stays quote-scoped: the customer paid one عربون against
+   * one receipt voucher for one deal, and `deposits` holds exactly one row for
+   * it. What this table adds is the ALLOCATION, which is a separate decision
+   * and has to be made by a person.
+   *
+   * Nothing derives an allocation. Not FIFO, not proportionally to price, not
+   * `min(deposit, thisCarsBill)`, and above all not by reading the deposit
+   * row's own `vehicleId` — that field is only ever the quote's first line
+   * item, and treating it as an allocation silently assigns the whole deposit
+   * to whichever car happened to be listed first. A suggestion may be offered
+   * in the UI; only a confirmed, persisted allocation is accounting truth.
+   */
   depositVehicleHolds: defineTable({
     orgId: v.id("organizations"),
     depositId: v.id("deposits"),
     vehicleId: v.id("vehicles"),
     active: v.boolean(),
     createdAt: v.number(),
+    /**
+     * How much of the deposit is allocated to THIS car. Absent means not yet
+     * allocated — which is not zero: an unallocated multi-vehicle quote cannot
+     * finalize any of its cars, whereas an explicit zero is a decision that
+     * this car carries none of the deposit and may complete on that basis.
+     *
+     * The invariant is `sum(active allocations) <= held deposit`. The shortfall
+     * is the quote-level unallocated balance, which stays a customer deposit
+     * liability until somebody allocates or resolves it.
+     */
+    allocatedAmountMinor: v.optional(v.number()),
+    allocatedAt: v.optional(v.number()),
+    allocatedBy: v.optional(v.id("users")),
+    /**
+     * What became of this vehicle's slice.
+     *
+     *  - ALLOCATED — assigned and still held.
+     *  - APPLIED — consumed by that vehicle's completed sale.
+     *  - RELEASED — the vehicle left the deal and the slice needs an explicit
+     *    decision. It is deliberately NOT returned to the pool automatically:
+     *    money silently moving from the car it was allocated against to
+     *    another one is precisely what an allocation exists to prevent.
+     */
+    allocationStatus: v.optional(
+      v.union(v.literal("ALLOCATED"), v.literal("APPLIED"), v.literal("RELEASED"))
+    ),
+    /** Which sale consumed it, when APPLIED. */
+    appliedSaleId: v.optional(v.id("sales")),
+    /** Why it was released, and what a human decided to do with it. */
+    releaseReason: v.optional(v.string()),
+    resolvedAt: v.optional(v.number()),
+    resolvedBy: v.optional(v.id("users")),
   })
     .index("by_deposit", ["depositId"])
-    .index("by_vehicle_active", ["vehicleId", "active"]),
+    .index("by_vehicle_active", ["vehicleId", "active"])
+    .index("by_deposit_vehicle", ["depositId", "vehicleId"]),
 
   // Receipt voucher (سند قبض) auto-generated as proof of payment whenever a
   // deposit is recorded — one per deposit.

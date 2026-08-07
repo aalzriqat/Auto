@@ -6,6 +6,7 @@ import { requireActorPermission } from "./tenancy";
 import { PERMISSIONS } from "./permissions";
 import { assertDifferentActors } from "./financialGuards";
 import { normalizeCurrency, amountToMinorOrThrow, type DepositMethod } from "./depositRecording";
+import { fromMinorUnits } from "./money";
 import { createCanonicalPayment } from "../subledger";
 import {
   getOrgCurrency,
@@ -37,10 +38,29 @@ export async function getDefaultReservationExpiry(
 
 type ResolvedDepositsForQuoteResult = {
   total: number;
+  /**
+   * Every slice actually consumed, whatever the treatment was.
+   *
+   * `appliedDeposits` below is only the customer-AR ones, because that is the
+   * only treatment that credits a receivable. The settlement treatment needs
+   * the same list to raise its own event, and used to re-read the deposits
+   * table filtering on `deposit.vehicleId` — which on a multi-vehicle quote is
+   * the first line item and nothing to do with the car being sold.
+   */
+  consumedSlices: Array<{
+    depositId: Id<"deposits">;
+    customerId: Id<"customers">;
+    amount: number;
+    vehicleId: Id<"vehicles">;
+  }>;
   appliedDeposits: Array<{
     depositId: Id<"deposits">;
     customerId: Id<"customers">;
     amount: number;
+    /** Which car's allocated slice this was — the GL event is keyed on it. */
+    vehicleId: Id<"vehicles">;
+    /** Which application against this deposit row this is. 1 for a single-vehicle quote. */
+    allocationSeq?: number;
   }>;
 };
 
@@ -386,16 +406,19 @@ export async function resolveDepositsForQuote(
   args: {
     quoteId: Id<"quotes">;
     /**
-     * Which vehicle's deposits to resolve.
+     * The car whose sale is being finalized. Only ITS allocated share of the
+     * quote's reservation deposit is consumed.
      *
-     * A quote can carry several vehicles (`quotes.vehicleItems`), each sold on
-     * its own sale, and each deposit names the car it is holding. Resolving the
-     * whole quote when one line completes released the holds on cars that had
-     * not sold and counted their deposits against the completed sale's
-     * invoice — so the money for vehicle B paid down vehicle A's bill and B
-     * came off reservation for nothing.
+     * The عربون is quote-scoped — one payment, one receipt voucher, one
+     * `deposits` row — and a quote can carry several cars. Which part of that
+     * payment belongs to which car is a stored decision on
+     * `depositVehicleHolds`, never a calculation. Consuming the whole row on
+     * the first completion paid down one car's invoice with money the customer
+     * had put against another, and took that other car off reservation for
+     * nothing.
      */
     vehicleId: Id<"vehicles">;
+    currency: string;
     resolution: "APPLIED" | "REFUNDED" | "FORFEITED";
     actorId: Id<"users">;
     /**
@@ -415,33 +438,108 @@ export async function resolveDepositsForQuote(
 
   let resolvedTotal = 0;
   const appliedDeposits: ResolvedDepositsForQuoteResult["appliedDeposits"] = [];
+  const consumedSlices: ResolvedDepositsForQuoteResult["consumedSlices"] = [];
   const now = Date.now();
   const appliesToCustomerAr =
     args.treatment === undefined || args.treatment === "APPLY_TO_DEALER_AMOUNT";
+
   for (const deposit of deposits) {
-    if (!deposit.holdActive) continue;
-    // Another line item's money. It stays held until its own car sells.
-    if (deposit.vehicleId !== args.vehicleId) continue;
-    await ctx.db.patch(deposit._id, {
-      status: args.resolution,
-      holdActive: false,
-      resolvedBy: args.actorId,
-      resolvedAt: now,
-      ...(args.treatment ? { resolutionTreatment: args.treatment } : {}),
-      ...(args.treatmentReason ? { resolutionReason: args.treatmentReason } : {}),
-      ...(args.saleId ? { resolutionSaleId: args.saleId } : {}),
-    });
-    resolvedTotal += deposit.amount;
-    if (args.resolution === "APPLIED" && appliesToCustomerAr) {
-      appliedDeposits.push({
+    if (!deposit.holdActive || deposit.isDeleted === true) continue;
+
+    const holds = await ctx.db
+      .query("depositVehicleHolds")
+      .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
+      .collect();
+
+    if (holds.length === 0) {
+      // Single-vehicle quote: the whole row belongs to the one car, and the
+      // long-standing behaviour is exactly right.
+      if (deposit.vehicleId !== args.vehicleId) continue;
+      await ctx.db.patch(deposit._id, {
+        status: args.resolution,
+        holdActive: false,
+        resolvedBy: args.actorId,
+        resolvedAt: now,
+        ...(args.treatment ? { resolutionTreatment: args.treatment } : {}),
+        ...(args.treatmentReason ? { resolutionReason: args.treatmentReason } : {}),
+        ...(args.saleId ? { resolutionSaleId: args.saleId } : {}),
+      });
+      resolvedTotal += deposit.amount;
+      consumedSlices.push({
         depositId: deposit._id,
         customerId: deposit.customerId,
         amount: deposit.amount,
+        vehicleId: deposit.vehicleId,
+      });
+      if (args.resolution === "APPLIED" && appliesToCustomerAr) {
+        appliedDeposits.push({
+          depositId: deposit._id,
+          customerId: deposit.customerId,
+          amount: deposit.amount,
+          vehicleId: deposit.vehicleId,
+        });
+      }
+      await releaseAllVehiclesForDeposit(ctx, deposit);
+      continue;
+    }
+
+    // Multi-vehicle: consume only this car's stored slice, and leave every
+    // other car's slice and hold exactly where they are.
+    const mine = holds.find((h) => h.vehicleId === args.vehicleId && h.active);
+    if (!mine || mine.allocatedAmountMinor === undefined) continue;
+
+    const sliceMinor = mine.allocatedAmountMinor;
+    // Counted BEFORE this slice is marked applied, so the first application is
+    // version 1 and the second version 2.
+    const alreadyApplied = holds.filter((h) => h.allocationStatus === "APPLIED").length;
+    await ctx.db.patch(mine._id, {
+      allocationStatus: args.resolution === "APPLIED" ? "APPLIED" : "RELEASED",
+      active: false,
+      ...(args.saleId ? { appliedSaleId: args.saleId } : {}),
+      resolvedAt: now,
+      resolvedBy: args.actorId,
+    });
+    await maybeReleaseVehicleHold(ctx, args.vehicleId);
+
+    resolvedTotal += fromMinorUnits(sliceMinor, args.currency);
+    if (sliceMinor > 0) {
+      consumedSlices.push({
+        depositId: deposit._id,
+        customerId: deposit.customerId,
+        amount: fromMinorUnits(sliceMinor, args.currency),
+        vehicleId: args.vehicleId,
       });
     }
-    await releaseAllVehiclesForDeposit(ctx, deposit);
+    if (args.resolution === "APPLIED" && appliesToCustomerAr && sliceMinor > 0) {
+      appliedDeposits.push({
+        depositId: deposit._id,
+        customerId: deposit.customerId,
+        amount: fromMinorUnits(sliceMinor, args.currency),
+        vehicleId: args.vehicleId,
+        allocationSeq: alreadyApplied + 1,
+      });
+    }
+
+    // The deposit row itself only closes when nothing on the quote still has a
+    // live claim on it. A row cannot be half-APPLIED, so its status follows the
+    // last allocation rather than the first.
+    const remaining = await ctx.db
+      .query("depositVehicleHolds")
+      .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
+      .collect();
+    if (remaining.every((h) => h.active === false)) {
+      await ctx.db.patch(deposit._id, {
+        status: args.resolution,
+        holdActive: false,
+        resolvedBy: args.actorId,
+        resolvedAt: now,
+        ...(args.treatment ? { resolutionTreatment: args.treatment } : {}),
+        ...(args.treatmentReason ? { resolutionReason: args.treatmentReason } : {}),
+        ...(args.saleId ? { resolutionSaleId: args.saleId } : {}),
+      });
+    }
   }
-  return { total: resolvedTotal, appliedDeposits };
+  return { total: resolvedTotal, appliedDeposits, consumedSlices };
 }
 
 /**

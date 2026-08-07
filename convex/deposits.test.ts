@@ -639,6 +639,18 @@ describe("deposits multi-vehicle holds", () => {
     const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
     const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 5000 });
 
+    // A quote with more than one car cannot be finalized until somebody says
+    // how its one deposit divides between them — the split is the customer's
+    // decision, not something the prices imply. See depositAllocation.ts.
+    await asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId,
+      quoteId,
+      allocations: [
+        { vehicleId, amount: 3000 },
+        { vehicleId: secondVehicleId, amount: 2000 },
+      ],
+    });
+
     await asUser.mutation(api.sales.completeFromQuote, { orgId, quoteId });
 
     await t.run(async (ctx) => {
@@ -658,6 +670,14 @@ describe("deposits multi-vehicle holds", () => {
     const secondVehicleId = await makeSecondVehicle(t, orgId);
     const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
     const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 5000 });
+    await asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId,
+      quoteId,
+      allocations: [
+        { vehicleId, amount: 3000 },
+        { vehicleId: secondVehicleId, amount: 2000 },
+      ],
+    });
 
     const saleIds = await asUser.mutation(api.sales.completeFromQuote, { orgId, quoteId });
 

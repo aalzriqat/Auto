@@ -270,6 +270,19 @@ export async function hookDepositApplied(
     actorId: Id<"users">;
     occurredAt: number;
     saleId?: Id<"sales">;
+    /**
+     * Which car on a multi-vehicle quote is consuming its share.
+     *
+     * One deposit row can be applied several times — once per car it was
+     * allocated across — and each is its own movement of money. Without this
+     * the second car's application collides with the first on both the
+     * idempotency key and the (eventType, sourceType, sourceId, eventVersion)
+     * identity, and silently posts nothing: the ledger records one application
+     * where the subledger records several.
+     */
+    allocationVehicleId?: Id<"vehicles">;
+    /** Which application against this deposit this is. Defaults to 1. */
+    allocationSeq?: number;
   }
 ) {
   await postDomainEvent(ctx, {
@@ -277,7 +290,10 @@ export async function hookDepositApplied(
     eventType: "DEPOSIT_APPLIED",
     sourceType: "deposits",
     sourceId: args.depositId.toString(),
-    idempotencyKey: `deposit_applied_${args.depositId}`,
+    idempotencyKey: args.allocationVehicleId
+      ? `deposit_applied_${args.depositId}_${args.allocationVehicleId}`
+      : `deposit_applied_${args.depositId}`,
+    eventVersion: args.allocationSeq ?? 1,
     currency: args.currency,
     occurredAt: args.occurredAt,
     actorId: args.actorId,
@@ -287,6 +303,7 @@ export async function hookDepositApplied(
       currency: args.currency,
       customerId: args.customerId.toString(),
       saleId: args.saleId?.toString(),
+      allocationVehicleId: args.allocationVehicleId?.toString(),
     },
   });
 }

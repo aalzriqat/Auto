@@ -43,12 +43,20 @@ async function getSafelyReversiblePaymentKeys(
     keys.add(`trade_in_payment_${sale._id}`);
   }
   if (!sale.quoteId) return keys;
+  // Every deposit on the quote, whatever its current status.
+  //
+  // Filtering to APPLIED broke as soon as one deposit could be consumed by
+  // several sales: on a multi-vehicle quote the first cancellation reinstates
+  // the row to HELD, so the second sale's own slice — allocated from the very
+  // same payment — no longer looked safely reversible and the unwind stopped
+  // half done. The key names a payment this system created from this deposit
+  // either way, and an unexpected customer payment still has no matching key.
   const deposits = await ctx.db
     .query("deposits")
     .withIndex("by_quote", (q) => q.eq("quoteId", sale.quoteId!))
-    .filter((q) => q.eq(q.field("status"), "APPLIED"))
     .collect();
   for (const deposit of deposits) {
+    if (deposit.isDeleted === true) continue;
     keys.add(`deposit_received_${deposit._id}`);
   }
   return keys;

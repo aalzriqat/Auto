@@ -257,7 +257,9 @@ export const markPaid = mutation({
           throw new ConvexError("VAT amount cannot be negative.");
         }
         if (args.taxAmount !== undefined && args.taxAmount > remainingToSettle) {
-          throw new ConvexError("VAT amount cannot exceed the amount due.");
+          throw new ConvexError(
+            "VAT amount cannot exceed the amount still outstanding on this payable."
+          );
         }
 
         const now = Date.now();

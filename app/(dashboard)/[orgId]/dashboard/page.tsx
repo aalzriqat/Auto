@@ -230,8 +230,17 @@ export default function DashboardPage() {
                   <div className="text-3xl md:text-5xl font-bold tracking-tight">
                     {formatCompact(stats?.salesVolumeThisMonth || 0)}
                   </div>
+                  {/* The label follows the basis the server computed, because
+                      the two are different figures. A viewer without cost
+                      permission cannot be shown agent-basis turnover — on a
+                      consigned sale that IS the margin — so they get the gross,
+                      and calling it "Revenue" would put two managers on
+                      different numbers under one word. */}
                   <p className="text-sm text-white/80 mt-1 flex items-center">
-                    {t("Revenue" as any) || "Revenue"} <span className="ms-1 text-[#4ade80] font-medium">(+0.0%)</span>
+                    {stats?.salesVolumeBasis === "GROSS_TRANSACTION_VALUE"
+                      ? (t("GrossTransactionValue" as any) || "Deal volume")
+                      : (t("Revenue" as any) || "Revenue")}
+                    <span className="ms-1 text-[#4ade80] font-medium">(+0.0%)</span>
                   </p>
                 </div>
                 <div>

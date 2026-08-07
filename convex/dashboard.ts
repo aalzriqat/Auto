@@ -342,6 +342,7 @@ export const stats = query({
     const profitTruncated = soldVehicleIds.length > PROFIT_VEHICLE_CAP;
     const capitalizedCostByVehicle = new Map<string, number>();
     const consignedVehicleIds = new Set<string>();
+    const costedVehicleIdSet = new Set<string>(costedVehicleIds);
     /**
      * Gated on profit permission, and the gate has to be here rather than at
      * the point of use.
@@ -374,14 +375,26 @@ export const stats = query({
      * Accounting turnover for one sale: the margin on a consigned car, the
      * price on the dealership's own stock.
      *
-     * A consigned sale whose vehicle fell past the cap (or whose row is gone)
-     * cannot be split, so it contributes its gross — the same conservative
-     * choice the profit figures make, and the truncation is already reported.
+     * A vehicle past PROFIT_VEHICLE_CAP was never costed, so nothing here can
+     * tell whether it was consigned. Contributing its gross would put part of
+     * the figure on one basis and part on another with nothing saying which —
+     * a number that is neither turnover nor deal volume. It is excluded
+     * instead, and `truncated.turnover` says the figure is short.
      */
+    let turnoverTruncated = false;
     const recognizedRevenueOfSale = (sale: { vehicleId: Id<"vehicles">; salePrice: number }): number => {
+      if (!canViewProfitMetrics) return sale.salePrice;
+      if (!costedVehicleIdSet.has(sale.vehicleId)) {
+        turnoverTruncated = true;
+        return 0;
+      }
       if (!consignedVehicleIds.has(sale.vehicleId)) return sale.salePrice;
       const cost = capitalizedCostByVehicle.get(sale.vehicleId);
-      return cost === undefined ? sale.salePrice : Math.max(0, sale.salePrice - cost);
+      if (cost === undefined) {
+        turnoverTruncated = true;
+        return 0;
+      }
+      return Math.max(0, sale.salePrice - cost);
     };
 
     /**
@@ -783,6 +796,10 @@ export const stats = query({
         sales: salesTruncated,
         members: false,
         profit: profitTruncated,
+        // Sales whose vehicle fell past the costing cap are left OUT of
+        // turnover rather than folded in at gross, so the figure is short
+        // rather than on two bases at once.
+        turnover: turnoverTruncated,
       },
       taskStats: {
         total: totalTasks,

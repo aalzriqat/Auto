@@ -868,7 +868,15 @@ export const getProfitAndLoss = query({
         // ones it could not — so the remaining overstatement is bounded and
         // enumerable rather than silent. Do not read this fallback as exact.
         totalRevenue += tx.recognizedRevenueAmount ?? tx.amount;
-        grossTransactionValue += tx.amount;
+        // Vehicle sales only, so this means the same thing here as it does in
+        // getSalesAndProfitReport and on the dashboard: the value of the deals
+        // the dealership handled, agent sales at full ticket.
+        //
+        // REVENUE_CATEGORIES also contains DEPOSIT, and counting those inflated
+        // the figure by money that is a payment against a deal rather than a
+        // deal — so the same month reported two different "gross transaction
+        // values" depending on which screen was asked.
+        if (tx.category === "VEHICLE_SALE") grossTransactionValue += tx.amount;
       } else if (tx.type === "OUT") {
         if (tx.category === "VEHICLE_PURCHASE" || (tx.category === "EXPENSE" && tx.vehicleId)) {
           costOfGoodsSold += tx.amount;

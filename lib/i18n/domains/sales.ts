@@ -117,6 +117,21 @@ export const salesEn = {
   CancelledStatus: "Cancelled (Refunded/Backed out)",
   PricingAndFees: "Pricing & Fees",
   // Consigned (SOURCED) sale settlement — see ConsignedSettlementSection.
+  // Multi-vehicle reservation-deposit allocation — see DepositAllocationPanel.
+  DepositAllocation: "Deposit allocation",
+  DepositAllocationDesc:
+    "This quote covers more than one vehicle and carries one reservation deposit of {amount}. Record how much of it belongs to each vehicle — the split is the customer's decision and cannot be worked out from the prices.",
+  DepositAllocationBlocking:
+    "No vehicle on this quote can be sold until its share of the deposit is recorded.",
+  DepositAllocationRemaining: "{amount} left to allocate",
+  DepositAllocationOver: "{amount} more than the deposit",
+  DepositAllocationRemainderNote:
+    "Anything left unallocated stays a customer deposit on the quote. It is not applied to any sale until it is allocated or resolved.",
+  DepositAllocationSuggest: "Suggest a split",
+  DepositAllocationSave: "Save allocation",
+  DepositAllocationSaved: "Deposit allocation saved",
+  DepositAllocationApplied: "applied",
+  QuotedAt: "Quoted at",
   ConsignedSaleSettlement: "Consigned Vehicle — Supplier Settlement",
   ConsignedSaleSettlementDesc:
     "This car belongs to {supplier}. The dealership is selling it as his agent and keeps only its margin. Record where the buyer's money went — it decides who owes whom.",
@@ -634,6 +649,21 @@ export const salesAr = {
   CancelledStatus: "ملغى (مسترجع / تراجع)",
   PricingAndFees: "التسعير والرسوم",
   // تسوية المركبة بالأمانة (SOURCED) — انظر ConsignedSettlementSection.
+  // توزيع العربون على مركبات العرض — انظر DepositAllocationPanel.
+  DepositAllocation: "توزيع العربون",
+  DepositAllocationDesc:
+    "يشمل هذا العرض أكثر من مركبة ويحمل عربونًا واحدًا بقيمة {amount}. سجّل حصة كل مركبة منه — فالتوزيع قرار العميل ولا يمكن استنتاجه من الأسعار.",
+  DepositAllocationBlocking:
+    "لا يمكن بيع أي مركبة في هذا العرض قبل تسجيل حصتها من العربون.",
+  DepositAllocationRemaining: "متبقٍ للتوزيع {amount}",
+  DepositAllocationOver: "{amount} زيادة عن العربون",
+  DepositAllocationRemainderNote:
+    "ما يبقى دون توزيع يظل عربونًا للعميل على العرض، ولا يُطبَّق على أي عملية بيع حتى يُوزَّع أو تُحسم معالجته.",
+  DepositAllocationSuggest: "اقترح توزيعًا",
+  DepositAllocationSave: "حفظ التوزيع",
+  DepositAllocationSaved: "تم حفظ توزيع العربون",
+  DepositAllocationApplied: "مُطبَّق",
+  QuotedAt: "السعر في العرض",
   ConsignedSaleSettlement: "مركبة بالأمانة — تسوية المورّد",
   ConsignedSaleSettlementDesc:
     "هذه المركبة ملك {supplier}. المعرض يبيعها بالوكالة عنه ولا يحتفظ إلا بهامشه. سجّل أين ذهبت نقود المشتري — فهي التي تحدد من يدين لمن.",

@@ -27,9 +27,13 @@ import {
   commissionAccountingDate,
 } from "../accounting/workflowHooks";
 import { computeResoldProductMargin } from "../accounting/postingRules";
-import { toMinorUnits } from "./money";
+import { toMinorUnits, fromMinorUnits } from "./money";
 import { computeVehicleCapitalizedCost, vehicleHasCostBasis } from "./vehicleCost";
 import { openSupplierReceivable } from "../supplierReceivables";
+import {
+  allocatedDepositForVehicle,
+  throwAllocationRequired,
+} from "./depositAllocation";
 import {
   consignedSettlementRoute,
   dealershipCollectsGross,
@@ -356,11 +360,28 @@ async function resolveReservationDeposits(
   };
   if (!args.quoteId) return empty;
 
-  const heldTotal = await heldDepositTotalForVehicle(ctx, args.quoteId, args.vehicleId);
-  if (heldTotal === 0) return empty;
-
   const currency = prepared.currency;
-  const heldTotalMinor = toMinorUnits(heldTotal, currency);
+
+  // THIS car's share of the quote's deposit, and nothing else.
+  //
+  // A quote can carry several cars against one عربون paid on one receipt
+  // voucher, so the deposit row is quote-scoped by design. How much of it
+  // belongs to each car is a decision somebody made and stored — see
+  // convex/utils/depositAllocation.ts. Comparing the whole quote's deposit
+  // against one line item's bill made a two-car quote demand a treatment on
+  // the first completion and then refuse every treatment offered.
+  const allocation = await allocatedDepositForVehicle(ctx, {
+    quoteId: args.quoteId,
+    vehicleId: args.vehicleId,
+    currency,
+  });
+  if (allocation.kind === "NO_DEPOSIT") return empty;
+  if (allocation.kind === "NOT_ALLOCATED") throwAllocationRequired();
+
+  const heldTotalMinor = allocation.allocatedMinor;
+  if (heldTotalMinor === 0) return empty;
+  const heldTotal = fromMinorUnits(heldTotalMinor, currency);
+  const allocationHoldId = allocation.kind === "ALLOCATED" ? allocation.holdId : undefined;
 
   const stated = args.depositResolution?.treatment;
 
@@ -437,17 +458,16 @@ async function resolveReservationDeposits(
       const resolved = await resolveDepositsForQuote(ctx, {
         quoteId: args.quoteId,
         vehicleId: args.vehicleId,
+        currency,
         resolution: "APPLIED",
         actorId: args.actorId,
         treatment,
         saleId,
       });
-      void resolved;
-      for (const { depositId, customerId, amount } of await settlementResolvedDepositRows(
-        ctx,
-        args.quoteId,
-        args.vehicleId
-      )) {
+      // The slices this call actually consumed. Re-reading the deposits table
+      // and filtering on `deposit.vehicleId` reported the quote's FIRST line
+      // item, which on a multi-vehicle quote is not the car being sold.
+      for (const { depositId, customerId, amount } of resolved.consumedSlices) {
         await hookDepositAppliedToSettlement(ctx, {
           orgId: args.orgId,
           depositId,
@@ -467,6 +487,19 @@ async function resolveReservationDeposits(
 
     case "REFUND_TO_CUSTOMER":
     case "FORFEITED": {
+      // Only where the deposit belongs to this car alone. `releaseHeldDeposit`
+      // resolves the WHOLE deposit row — refunds it, posts it, closes it — and
+      // on a multi-vehicle quote that row is also holding the other cars'
+      // money. Refunding one car's share through it would pay out the rest of
+      // the deal by accident.
+      //
+      // The partial case has its own path: reduce this car's allocation, then
+      // resolve the released slice explicitly (deposits.resolveReleasedAllocation).
+      if (allocationHoldId !== undefined) {
+        throw new ConvexError(
+          "This deposit is shared with other vehicles on the same quote, so it cannot be refunded or forfeited from here — doing so would resolve the whole deposit and take the other vehicles' share with it. Re-allocate this vehicle's share to zero first, then decide what happens to the released amount."
+        );
+      }
       // Routed through the shared release path so the approval permission, the
       // segregation-of-duties refusal and the cashflow/payment-subledger rows
       // travel with the decision. Completing a sale authorizes `create:sales`;
@@ -488,7 +521,10 @@ async function resolveReservationDeposits(
     }
 
     case "OTHER":
-      return await recordOtherTreatment(ctx, opts);
+      return await recordOtherTreatment(ctx, {
+        ...opts,
+        isSharedDeposit: allocationHoldId !== undefined,
+      });
   }
 }
 
@@ -500,8 +536,13 @@ async function resolveReservationDeposits(
  */
 async function recordOtherTreatment(
   ctx: MutationCtx,
-  opts: { args: SaleCompletionArgs; saleId: Id<"sales"> }
+  opts: { args: SaleCompletionArgs; saleId: Id<"sales">; isSharedDeposit: boolean }
 ): Promise<ResolvedReservationDeposits> {
+  if (opts.isSharedDeposit) {
+    throw new ConvexError(
+      "This deposit is shared with other vehicles on the same quote, so an 'other' treatment cannot be recorded against it from here — it would release the whole deposit. Re-allocate this vehicle's share to zero first, then record the treatment against the released amount."
+    );
+  }
   const reason = opts.args.depositResolution?.reason?.trim();
   if (!reason) {
     throw new ConvexError(
@@ -552,29 +593,6 @@ async function heldDepositTotalForVehicle(
   return rows.reduce((sum, r) => sum + r.amount, 0);
 }
 
-/**
- * The rows a settlement-treatment resolution just closed. `resolveDepositsForQuote`
- * returns `appliedDeposits` only for customer-AR applications, so the settlement
- * path reads back the rows it stamped with this sale instead.
- */
-async function settlementResolvedDepositRows(
-  ctx: MutationCtx,
-  quoteId: Id<"quotes">,
-  vehicleId: Id<"vehicles">
-): Promise<Array<{ depositId: Id<"deposits">; customerId: Id<"customers">; amount: number }>> {
-  const deposits = await ctx.db
-    .query("deposits")
-    .withIndex("by_quote", (q) => q.eq("quoteId", quoteId))
-    .collect();
-  return deposits
-    .filter(
-      (d) =>
-        d.resolutionTreatment === "APPLY_TO_TRANSACTION_SETTLEMENT" &&
-        d.isDeleted !== true &&
-        d.vehicleId === vehicleId
-    )
-    .map((d) => ({ depositId: d._id, customerId: d.customerId, amount: d.amount }));
-}
 
 /** The long-standing behaviour: the deposit comes off what the customer owes. */
 async function applyDepositsToCustomerAr(
@@ -590,12 +608,13 @@ async function applyDepositsToCustomerAr(
   const resolved = await resolveDepositsForQuote(ctx, {
     quoteId: args.quoteId!,
     vehicleId: args.vehicleId,
+    currency: prepared.currency,
     resolution: "APPLIED",
     actorId: args.actorId,
     treatment,
     saleId,
   });
-  for (const { depositId, customerId, amount } of resolved.appliedDeposits) {
+  for (const { depositId, customerId, amount, vehicleId, allocationSeq } of resolved.appliedDeposits) {
     await hookDepositApplied(ctx, {
       orgId: args.orgId,
       depositId,
@@ -605,6 +624,11 @@ async function applyDepositsToCustomerAr(
       actorId: args.actorId,
       occurredAt: args.saleDate,
       saleId,
+      // One deposit row can be applied once per car it was allocated across,
+      // and each is its own movement. Without the vehicle in the key the second
+      // car's application dedupes against the first and posts nothing.
+      allocationVehicleId: vehicleId,
+      allocationSeq,
     });
   }
   return {
@@ -900,9 +924,16 @@ async function applySaleCompletionSideEffects(
   // this car, and a receivable for nothing is an OPEN row that can never be
   // collected, never be closed by a receipt, and shows on the aging report
   // forever.
-  const supplierOwesMargin = args.salePrice - costAmount > 0;
+  //
+  // Rounded to the currency before it becomes a claim total. `salePrice` and
+  // the capitalized cost are both decimals, and their difference carries float
+  // error that would otherwise be stored as the amount a supplier owes — a
+  // receivable of 2999.9999999999995 can never be settled to zero.
+  const rawMarginAmount = args.salePrice - costAmount;
+  const marginMinorForClaim = toMinorUnits(Math.max(0, rawMarginAmount), prepared.currency);
+  const supplierOwesMargin = marginMinorForClaim > 0;
   if (isSourced && costAmount > 0 && supplierOwesMargin && !dealershipCollectsGross(settlementRoute)) {
-    const marginAmount = args.salePrice - costAmount;
+    const marginAmount = fromMinorUnits(marginMinorForClaim, prepared.currency);
     await openSupplierReceivable(ctx, {
       orgId: args.orgId,
       vehicleId: args.vehicleId,

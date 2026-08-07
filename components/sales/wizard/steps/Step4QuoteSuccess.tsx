@@ -9,6 +9,8 @@ import { CheckCircle2, FileDown, LogOut, HandCoins, FileText, BadgeCheck, Receip
 import { QuotePrintTemplate } from "../../QuotePrintTemplate";
 import { ReceiptVoucherPrintTemplate } from "../../ReceiptVoucherPrintTemplate";
 import { RecordDepositDialog } from "../components/RecordDepositDialog";
+import { DepositAllocationPanel } from "../components/DepositAllocationPanel";
+import { ConsignedSettlementSection } from "../../ConsignedSettlementSection";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useQuery, useMutation } from "convex/react";
@@ -88,6 +90,13 @@ export function Step4QuoteSuccess({
   // The only place in the wizard that ever registers a sale — generating a
   // quote (Step3Review) never does. Loops every vehicle on the quote (one for
   // the common case, several for a multi-vehicle/fleet quote).
+  // Applies to every consigned vehicle on the quote. `completeFromQuote` takes
+  // one route for the call, so a quote mixing two consigned cars settled
+  // different ways has to be split into separate deals — which is what it is.
+  const [settlementRoute, setSettlementRoute] = useState<
+    "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER"
+  >("THROUGH_DEALERSHIP");
+
   const handleSubmitSale = async () => {
     if (!activeOrgId || !quote || !me) return;
     setIsCompletingSale(true);
@@ -96,6 +105,11 @@ export function Step4QuoteSuccess({
       const ids = await completeFromQuote({
         orgId: activeOrgId,
         quoteId,
+        // Where the buyer's money went, for the consigned cars on this quote.
+        // Omitted, the server reads THROUGH_DEALERSHIP, which posts the gross
+        // through the dealership's own receivable — so a deal the supplier was
+        // paid for directly was being booked as though it had not been.
+        supplierSettlementRoute: settlementRoute,
         idempotencyKey: completeSaleIdempotencyKeyRef.current,
       });
       setSaleId(ids[0]);
@@ -249,6 +263,19 @@ export function Step4QuoteSuccess({
           </Button>
         </div>
       </div>
+
+      {activeOrgId ? (
+        <div className="space-y-4">
+          <DepositAllocationPanel orgId={activeOrgId} quoteId={quoteId} />
+          <ConsignedSettlementSection
+            orgId={activeOrgId}
+            vehicleId={quote?.vehicleId}
+            salePrice={quote?.vehiclePrice ?? 0}
+            value={settlementRoute}
+            onChange={setSettlementRoute}
+          />
+        </div>
+      ) : null}
 
       <RecordDepositDialog
         open={depositDialogOpen}
