@@ -110,6 +110,22 @@ const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // this normally finds nothing. It exists to sweep a thread whose events were
   // already missing. Removing it does not fail the purge test for that reason —
   // the test asserts the end state, which the trigger reaches on its own.
+  //
+  // ⚠️ Accepted cost, recorded deliberately rather than left silent. This
+  // deletion runs on the ordinary (eager) writer, so each of the 50 event
+  // deletes in a batch recomputes its thread — reads of roughly 50 x N when a
+  // batch is dominated by one contact holding N events. That crosses Convex's
+  // per-transaction read ceiling somewhere around N = 330, and unlike the merge
+  // it is not recoverable by retry: the step re-reads the same first 50 rows by
+  // index every time, so it fails identically and the request is marked FAILED
+  // with the org half-deleted.
+  //
+  // Not fixed here because the purge is not a hot path, no production org is
+  // near that threshold, and the two cheap remedies (a smaller batch for the
+  // event steps, or routing the purge through the deferred writer) each change
+  // a deletion path this project already knows is fragile. The threshold to act
+  // on is concrete: a single social contact in one org holding more than a few
+  // hundred events on one platform.
   { kind: "orgRows", table: "socialConversations", index: "by_org_lastEventAt" },
   { kind: "orgRows", table: "facebookMessages", index: "by_org" },
   { kind: "socialPostsWithStorage" },

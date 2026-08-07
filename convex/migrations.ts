@@ -7,7 +7,7 @@ import {
   leadsByOrg,
   membershipsByOrg,
   recordSocialContact,
-  socialConversationKey,
+  namespacedThreadKey,
   syncSocialConversation,
   vehicleQualityByOrg,
   vehiclesByOrg,
@@ -563,7 +563,7 @@ export const backfillInstagramConversations = internalMutation({
         kind: event.kind,
         postId: event.postId,
       };
-      const key = `${identity.orgId}:${socialConversationKey(identity)}`;
+      const key = namespacedThreadKey(identity);
       if (synced.has(key)) return;
       synced.add(key);
       await syncSocialConversation(ctx, identity);
@@ -601,7 +601,7 @@ export const backfillFacebookConversations = internalMutation({
         kind: event.kind,
         postId: event.postId,
       };
-      const key = `${identity.orgId}:${socialConversationKey(identity)}`;
+      const key = namespacedThreadKey(identity);
       if (synced.has(key)) return;
       synced.add(key);
       await syncSocialConversation(ctx, identity);

@@ -520,6 +520,22 @@ export type SocialConversationIdentity = {
 };
 
 /**
+ * The thread key, namespaced by org — the form every dedupe set uses.
+ *
+ * `socialConversationKey` deliberately carries no orgId, because it is also the
+ * stored `conversationKey` and the table is already partitioned by `orgId` in
+ * every index. Anything that dedupes threads *in memory* does need the org in
+ * the key, and there are four such sets across the trigger, the bulk writers
+ * and the two backfills. One definition, because "a second interpretation of
+ * the same thread is how these paths would eventually disagree" is only true if
+ * there is genuinely one.
+ */
+export function namespacedThreadKey(id: SocialConversationIdentity): string {
+  return `${id.orgId}:${socialConversationKey(id)}`;
+}
+
+
+/**
  * Which thread an event belongs to, or `null` if it belongs to none.
  *
  * An event with no `customerId` has no thread. The grouping query skipped those
@@ -596,6 +612,32 @@ async function readThreadEvents(
 }
 
 /**
+ * Test seam: how many times a thread has been recomputed.
+ *
+ * The defect this guards against is a *cost* one — a bulk loop recomputing the
+ * same thread once per event — and cost is exactly what a correctness assertion
+ * cannot see. Asserting on wall-clock time instead would be flaky and would
+ * still pass a quadratic implementation on a small fixture, so the regression
+ * test counts recomputes structurally: 400 events in one thread must recompute
+ * it once, not 400 times.
+ *
+ * Deliberately shipped in the production bundle rather than stripped behind
+ * a flag: it is one integer that never persists and never allocates, and the
+ * tests assert exact positive counts, so a seam that stopped being shared
+ * would fail them rather than silently pass. Do not remove it as debug
+ * residue — it is the only regression test for this class of defect.
+ */
+let socialConversationSyncCount = 0;
+
+export function readSocialConversationSyncCount(): number {
+  return socialConversationSyncCount;
+}
+
+export function resetSocialConversationSyncCount(): void {
+  socialConversationSyncCount = 0;
+}
+
+/**
  * Rebuilds one thread's row from the events that currently exist, or deletes it
  * when none remain.
  *
@@ -624,33 +666,21 @@ async function readThreadEvents(
  * can reach Convex's per-transaction read ceiling, and a throw there rolls the
  * whole mutation back — so the merge would fail outright rather than degrade.
  *
- * The backfills avoid it by deduping thread keys within a batch. The bulk
- * mutation paths do NOT yet, and that is an open issue rather than a solved
- * one: a per-transaction memo cannot fix it, because each patch invalidates the
- * very thread the next patch re-reads. The fix is to stop patching events one
- * at a time inside one transaction — either a scheduled paginated repoint, or
- * an explicit "sync these threads once at the end" path that the loop opts into.
- */
-/**
- * Test seam: how many times a thread has been recomputed.
+ * A per-transaction memo does NOT fix that, which is worth stating because it
+ * is the obvious first idea: each patch invalidates the very thread the next
+ * patch re-reads, so the cache never hits. The fix has to be to stop
+ * recomputing per write at all.
  *
- * The defect this guards against is a *cost* one — a bulk loop recomputing the
- * same thread once per event — and cost is exactly what a correctness assertion
- * cannot see. Asserting on wall-clock time instead would be flaky and would
- * still pass a quadratic implementation on a small fixture, so the regression
- * test counts recomputes structurally: 400 events in one thread must recompute
- * it once, not 400 times.
+ * All three loops now avoid it. The backfills dedupe thread keys within a
+ * batch; `customers.mergeCustomers` and `socialInbox.setConversationVehicle`
+ * opt into `deferredThreadTriggers`, which suppresses the per-write recompute
+ * so the loop can sync each touched thread exactly once at the end. Measured
+ * on the merge path: 400 recomputes for 200 repointed events before, 2 after.
+ *
+ * The one loop still recomputing eagerly is the org purge — see the note on
+ * `ORGANIZATION_DELETION_STEPS` in `adminOrgs.ts` for why that is accepted and
+ * at what point it would stop being.
  */
-let socialConversationSyncCount = 0;
-
-export function readSocialConversationSyncCount(): number {
-  return socialConversationSyncCount;
-}
-
-export function resetSocialConversationSyncCount(): void {
-  socialConversationSyncCount = 0;
-}
-
 export async function syncSocialConversation(
   ctx: { db: GenericDatabaseWriter<DataModel> },
   id: SocialConversationIdentity
@@ -745,7 +775,7 @@ async function syncConversationsForEventWrite(
     // and rebuild only the old org's thread. Nothing does that today —
     // `adminData.assertPatchDoesNotRetenant` blocks it — but the set is free to
     // make correct and this is a trap for whoever adds an org-move tool.
-    const key = `${id.orgId}:${socialConversationKey(id)}`;
+    const key = namespacedThreadKey(id);
     if (seen.has(key)) continue;
     seen.add(key);
     affected.push(id);
@@ -830,7 +860,7 @@ export function collectSocialThread(
   if (!doc) return;
   const id = socialConversationIdentity(platform, doc);
   if (!id) return;
-  threads.set(`${id.orgId}:${socialConversationKey(id)}`, id);
+  threads.set(namespacedThreadKey(id), id);
 }
 
 /**
