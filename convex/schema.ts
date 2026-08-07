@@ -3128,6 +3128,60 @@ export default defineSchema({
     .index("by_org_platform_lastEventAt", ["orgId", "platform", "lastEventAt"])
     .index("by_org_kind_lastEventAt", ["orgId", "conversationKind", "lastEventAt"]),
 
+  /**
+   * Whether `socialConversations` may be trusted as the authoritative source
+   * for one org and platform.
+   *
+   * This table exists because of a real production incident. The materialised
+   * reader was deployed while the table behind it was still empty, and the
+   * Social Inbox answered "no conversations" with total confidence for an org
+   * holding a thousand events. Code and schema existing is not evidence that
+   * the data behind them exists, so readiness has to be recorded durably rather
+   * than inferred — and it cannot be inferred from row counts either, because
+   * zero conversations is a legitimate completed result for a quiet org.
+   *
+   * One row per (org, generation, platform). Absence means NOT STARTED, which
+   * is why the reader treats a missing row as "not ready" rather than as an
+   * empty result: fail closed toward the slow-but-correct legacy path.
+   *
+   * `generation` is what stops an old completed backfill from vouching for a
+   * newer materialisation shape. Bump
+   * `SOCIAL_CONVERSATION_GENERATION` whenever the meaning of a
+   * `socialConversations` row changes, and every reader falls back until the
+   * new generation is proven complete.
+   */
+  socialMaterializationState: defineTable({
+    orgId: v.id("organizations"),
+    platform: v.union(v.literal("instagram"), v.literal("facebook")),
+    generation: v.number(),
+    // No "notStarted": that is the absence of the row. No "interrupted"
+    // either — an abandoned chain leaves `running` with a stale
+    // `lastProgressAt`, and interruption is derived from that rather than
+    // stored, because the process that would have written it is by definition
+    // the one that died.
+    status: v.union(v.literal("running"), v.literal("completed"), v.literal("failed")),
+    // Fences concurrent chains: a scheduled continuation carries the runId it
+    // was started under and aborts if the record has moved on to another.
+    runId: v.string(),
+    cursor: v.optional(v.string()),
+    // Source rows read, and threads recomputed. Deliberately distinct: a batch
+    // of 250 events belonging to 3 threads processes 250 and materialises 3,
+    // and collapsing them would make "0 changed" indistinguishable from
+    // "0 examined".
+    processedCount: v.number(),
+    materializedCount: v.number(),
+    // The aggregate's event count at the last progress write. A progress
+    // indicator only — never the completion criterion, which is pagination
+    // exhaustion. Events arriving mid-run move this number.
+    expectedCount: v.number(),
+    startedAt: v.number(),
+    lastProgressAt: v.number(),
+    completedAt: v.optional(v.number()),
+    failureMessage: v.optional(v.string()),
+  })
+    .index("by_org_generation_platform", ["orgId", "generation", "platform"])
+    .index("by_org", ["orgId"]),
+
   // Full Messenger thread: one row per message (in or out), enabling complete
   // conversation history including messages sent before AutoFlow existed.
   facebookMessages: defineTable({

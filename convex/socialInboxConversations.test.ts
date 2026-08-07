@@ -527,12 +527,24 @@ describe("socialInbox.listConversations — materialised threads", () => {
         });
       });
 
-      expect(await actualConversations(asEditor, orgId)).toHaveLength(0);
+      // Materialisation is empty and unproven, so the reader must fall back to
+      // the events rather than report an empty inbox. Before the readiness
+      // gate this returned 0 — which is exactly what a production deployment
+      // showed staff over a thousand live events.
+      const beforeBackfill = await actualConversations(asEditor, orgId);
+      expect(beforeBackfill).toHaveLength(2);
+      expect(await t.run((ctx) => ctx.db.query("socialConversations").collect())).toHaveLength(0);
 
       const runBackfills = async () => {
-        await t.mutation(internal.migrations.backfillInstagramConversations, { batchSize: 1 });
+        await t.mutation(internal.migrations.backfillInstagramConversations, {
+          orgId,
+          batchSize: 1,
+        });
         await t.finishAllScheduledFunctions(vi.runAllTimers);
-        await t.mutation(internal.migrations.backfillFacebookConversations, { batchSize: 1 });
+        await t.mutation(internal.migrations.backfillFacebookConversations, {
+          orgId,
+          batchSize: 1,
+        });
         await t.finishAllScheduledFunctions(vi.runAllTimers);
       };
 

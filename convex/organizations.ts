@@ -6,6 +6,10 @@ import { requireTenantAuth, requireOwner, requireOrCreateAuthenticatedUser } fro
 import { PERMISSIONS, DEFAULT_ROLE_TEMPLATES, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { throwAppError, AppErrorCode } from "./utils/errors";
+import {
+  SOCIAL_CONVERSATION_GENERATION,
+  SOCIAL_PLATFORMS,
+} from "./utils/materialization";
 
 const ACTIVE_DELETION_STATUSES = ["PENDING_REVIEW", "APPROVED", "RUNNING"] as const;
 
@@ -47,6 +51,32 @@ export const create = mutation({
       name: args.name.trim(),
       createdAt: Date.now(),
     });
+
+    // A brand-new org has no social events, so its materialised conversation
+    // set is exhaustively correct the moment it exists — the eligible source is
+    // empty, and every event from here on is materialised by the trigger as it
+    // arrives. Recording that up front is what stops new tenants from sitting
+    // on the legacy full-scan path forever waiting for a backfill that has
+    // nothing to do.
+    //
+    // This is the one place COMPLETED may be written without a pagination pass,
+    // and it is sound for a reason specific to this moment: an event cannot
+    // exist for an organization that did not exist when the event arrived.
+    const materializationStamp = {
+      orgId,
+      generation: SOCIAL_CONVERSATION_GENERATION,
+      status: "completed" as const,
+      runId: `orgCreate:${Date.now()}`,
+      processedCount: 0,
+      materializedCount: 0,
+      expectedCount: 0,
+      startedAt: Date.now(),
+      lastProgressAt: Date.now(),
+      completedAt: Date.now(),
+    };
+    for (const platform of SOCIAL_PLATFORMS) {
+      await ctx.db.insert("socialMaterializationState", { ...materializationStamp, platform });
+    }
 
     // Seed default roles for the new organization
     let ownerRoleId = null;

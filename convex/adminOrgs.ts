@@ -110,6 +110,9 @@ const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // nothing. Its cost, and the point at which that stops being acceptable, are
   // documented on `syncSocialConversation` in `aggregates.ts`.
   { kind: "orgRows", table: "socialConversations", index: "by_org_lastEventAt" },
+  // The readiness record for the two steps above. Left behind, it would claim a
+  // recreated org with the same id had a proven-complete materialisation.
+  { kind: "orgRows", table: "socialMaterializationState", index: "by_org" },
   { kind: "orgRows", table: "facebookMessages", index: "by_org" },
   { kind: "socialPostsWithStorage" },
   { kind: "orgRows", table: "orgCustomFields", index: "by_org" },

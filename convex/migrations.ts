@@ -13,8 +13,13 @@ import {
   vehiclesByOrg,
 } from "./aggregates";
 import { internal } from "./_generated/api";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
+import {
+  readMaterializationState,
+  SOCIAL_CONVERSATION_GENERATION,
+  type SocialPlatform,
+} from "./utils/materialization";
 import { ALL_PERMISSIONS, isSystemOwnerRole, normalizeRoleName, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
 import {
   hasActiveDepositHold,
@@ -531,31 +536,191 @@ export const repairSocialContacts = internalMutation({
 });
 
 /**
- * Materialises `socialConversations` for the Instagram events that predate the
- * trigger.
+ * Argument shape for the two conversation backfills.
+ *
+ * Org-scoped, unlike the aggregate backfills above. The aggregates are one
+ * global tree per table and a global walk is the honest shape for them. A
+ * conversation backfill decides whether one *tenant's* inbox may trust the
+ * materialised table, and a global walk cannot answer that for any single org
+ * until it has finished for all of them — one noisy tenant would hold every
+ * other tenant on the slow path, and worse, there would be no truthful moment
+ * at which to record that a given org was done.
+ */
+const CONVERSATION_BACKFILL_ARGS = {
+  orgId: v.id("organizations"),
+  /**
+   * Present only on a scheduled continuation. Absent means "operator starting a
+   * run", which allocates a fresh run and restarts from the beginning.
+   */
+  runId: v.optional(v.string()),
+  batchSize: v.optional(v.number()),
+  /** Set false to run exactly one batch — used by tests to drive it by hand. */
+  continueAutomatically: v.optional(v.boolean()),
+} as const;
+
+type ConversationBackfillResult = {
+  status: "running" | "completed" | "failed" | "staleRun";
+  processed: number;
+  materialized: number;
+  isDone: boolean;
+};
+
+/**
+ * Claims the state row for this page, or returns null when the caller is a
+ * continuation of a run that has been superseded.
+ *
+ * The fencing matters more than it looks. Without it, an operator re-running a
+ * backfill while an earlier chain is still in flight leaves two chains writing
+ * to one state row, each overwriting the other's cursor — and the one that
+ * happens to read the last page marks the whole thing COMPLETED while the
+ * other is still somewhere in the middle. Since COMPLETED is what unlocks the
+ * materialised reader, that is precisely the false-completion the gate exists
+ * to prevent.
+ */
+async function beginConversationBackfill(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  platform: SocialPlatform,
+  runId: string | undefined,
+  expectedCount: number
+): Promise<Doc<"socialMaterializationState"> | null> {
+  const existing = await readMaterializationState(ctx, orgId, platform);
+  const now = Date.now();
+
+  if (runId !== undefined) {
+    // A continuation. It may only proceed if it still owns the run.
+    if (!existing || existing.runId !== runId) return null;
+    if (existing.status !== "running") return null;
+    return existing;
+  }
+
+  // An operator start. Restart from the beginning under a new run id, which
+  // also fences any chain still running under the old one.
+  //
+  // `Date.now()` alone is the entropy. Two starts for the same org and platform
+  // inside one millisecond would share a run id and both proceed, which is
+  // harmless: the work is a full recompute per thread, so the two chains
+  // converge on the same rows. Deliberately not `Math.random()` or
+  // `crypto.randomUUID()` — this file has already been burned once by assuming
+  // a runtime capability that was never exercised against real Convex.
+  const nextRunId = `${platform}:${now}`;
+  const fresh = {
+    orgId,
+    platform,
+    generation: SOCIAL_CONVERSATION_GENERATION,
+    status: "running" as const,
+    runId: nextRunId,
+    cursor: undefined,
+    processedCount: 0,
+    materializedCount: 0,
+    expectedCount,
+    startedAt: now,
+    lastProgressAt: now,
+    completedAt: undefined,
+    failureMessage: undefined,
+  };
+
+  if (existing) {
+    await ctx.db.patch(existing._id, fresh);
+    return { ...existing, ...fresh };
+  }
+  const id = await ctx.db.insert("socialMaterializationState", fresh);
+  const inserted = await ctx.db.get(id);
+  if (!inserted) throw new Error("materialization state vanished immediately after insert");
+  return inserted;
+}
+
+/**
+ * Records one page's progress, and completion only on proven exhaustion.
+ *
+ * `page.isDone` is the *only* thing that may write COMPLETED. Not "the batch
+ * returned without throwing", not "nothing changed this time", and not
+ * "processed reached expected" — `expectedCount` is a live aggregate that
+ * inbound messages move underneath the run, so treating it as a finish line
+ * would mark a backfill complete while rows remained, or never at all.
+ */
+async function recordConversationBackfillProgress(
+  ctx: MutationCtx,
+  state: Doc<"socialMaterializationState">,
+  page: { page: unknown[]; isDone: boolean; continueCursor: string },
+  materialized: number,
+  expectedCount: number
+): Promise<ConversationBackfillResult> {
+  const now = Date.now();
+  const processedCount = state.processedCount + page.page.length;
+  const materializedCount = state.materializedCount + materialized;
+
+  await ctx.db.patch(state._id, {
+    processedCount,
+    materializedCount,
+    expectedCount,
+    lastProgressAt: now,
+    cursor: page.isDone ? undefined : page.continueCursor,
+    status: page.isDone ? "completed" : "running",
+    completedAt: page.isDone ? now : undefined,
+  });
+
+  return {
+    status: page.isDone ? "completed" : "running",
+    processed: processedCount,
+    materialized: materializedCount,
+    isDone: page.isDone,
+  };
+}
+
+/** Batch ceiling, shared by both conversation backfills. See `seedAggregatePage`. */
+function conversationBatchSize(batchSize: number | undefined): number {
+  return Math.min(Math.max(batchSize ?? 100, 1), 250);
+}
+
+/**
+ * Materialises `socialConversations` for one org's Instagram events that
+ * predate the trigger, and records whether that has been proven exhaustive.
  *
  * Idempotent because `syncSocialConversation` is a full recompute keyed on the
  * thread, not an increment: running it twice over the same event, or over two
  * events in the same thread, converges on the identical row. That is the same
  * property the aggregate backfills get from `insertIfDoesNotExist`, obtained
- * here from the rebuild being a pure function of the thread's events.
+ * here from the rebuild being a pure function of the thread's events. A resumed
+ * or restarted run therefore cannot duplicate or double-count a conversation.
  *
  * Separate from the Facebook one because a Convex function may run only one
  * paginated query, and `convex-test` does not enforce that.
  */
 export const backfillInstagramConversations = internalMutation({
-  args: BACKFILL_ARGS,
-  handler: async (ctx, args): Promise<BackfillResult> => {
+  args: CONVERSATION_BACKFILL_ARGS,
+  handler: async (ctx, args): Promise<ConversationBackfillResult> => {
+    const expectedCount = await instagramEventsByOrg.count(ctx, {
+      namespace: args.orgId,
+      bounds: {},
+    });
+    const state = await beginConversationBackfill(
+      ctx,
+      args.orgId,
+      "instagram",
+      args.runId,
+      expectedCount
+    );
+    if (!state) return { status: "staleRun", processed: 0, materialized: 0, isDone: false };
+
+    // THE one paginated query this function is allowed. Convex permits exactly
+    // one per function and `convex-test` does not enforce it, so keeping it
+    // visible here — rather than behind a shared helper — is deliberate.
+    const page = await ctx.db
+      .query("instagramEvents")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .paginate({
+        cursor: state.cursor ?? null,
+        numItems: conversationBatchSize(args.batchSize),
+      });
+
     // One sync per distinct thread, not per event. A thread's events are
     // contiguous in creation time — they arrive as a burst — so a batch can be
     // dominated by one thread and would otherwise recompute it once per event,
-    // making the batch cost events x history instead of threads x history. That
-    // is what pushes a batch past the per-transaction read ceiling, and a throw
-    // there rolls back the scheduled continuation too, halting the chain
-    // mid-table and leaving the inbox permanently half-materialised.
+    // making the batch cost events x history instead of threads x history.
     const synced = new Set<string>();
-    const result = await seedAggregatePage(ctx, "instagramEvents", args, async (event) => {
-      if (!event.customerId) return;
+    for (const event of page.page) {
+      if (!event.customerId) continue;
       const identity = {
         orgId: event.orgId,
         platform: "instagram" as const,
@@ -564,14 +729,23 @@ export const backfillInstagramConversations = internalMutation({
         postId: event.postId,
       };
       const key = namespacedThreadKey(identity);
-      if (synced.has(key)) return;
+      if (synced.has(key)) continue;
       synced.add(key);
       await syncSocialConversation(ctx, identity);
-    });
+    }
+
+    const result = await recordConversationBackfillProgress(
+      ctx,
+      state,
+      page,
+      synced.size,
+      expectedCount
+    );
 
     if (!result.isDone && args.continueAutomatically !== false) {
       await ctx.scheduler.runAfter(0, internal.migrations.backfillInstagramConversations, {
-        cursor: result.continueCursor,
+        orgId: args.orgId,
+        runId: state.runId,
         batchSize: args.batchSize,
       });
     }
@@ -582,18 +756,36 @@ export const backfillInstagramConversations = internalMutation({
 
 /** Facebook counterpart to `backfillInstagramConversations`. */
 export const backfillFacebookConversations = internalMutation({
-  args: BACKFILL_ARGS,
-  handler: async (ctx, args): Promise<BackfillResult> => {
-    // One sync per distinct thread, not per event. A thread's events are
-    // contiguous in creation time — they arrive as a burst — so a batch can be
-    // dominated by one thread and would otherwise recompute it once per event,
-    // making the batch cost events x history instead of threads x history. That
-    // is what pushes a batch past the per-transaction read ceiling, and a throw
-    // there rolls back the scheduled continuation too, halting the chain
-    // mid-table and leaving the inbox permanently half-materialised.
+  args: CONVERSATION_BACKFILL_ARGS,
+  handler: async (ctx, args): Promise<ConversationBackfillResult> => {
+    const expectedCount = await facebookEventsByOrg.count(ctx, {
+      namespace: args.orgId,
+      bounds: {},
+    });
+    const state = await beginConversationBackfill(
+      ctx,
+      args.orgId,
+      "facebook",
+      args.runId,
+      expectedCount
+    );
+    if (!state) return { status: "staleRun", processed: 0, materialized: 0, isDone: false };
+
+    // THE one paginated query this function is allowed. Convex permits exactly
+    // one per function and `convex-test` does not enforce it, so keeping it
+    // visible here — rather than behind a shared helper — is deliberate.
+    const page = await ctx.db
+      .query("facebookEvents")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .paginate({
+        cursor: state.cursor ?? null,
+        numItems: conversationBatchSize(args.batchSize),
+      });
+
+    // One sync per distinct thread, not per event. See the Instagram twin.
     const synced = new Set<string>();
-    const result = await seedAggregatePage(ctx, "facebookEvents", args, async (event) => {
-      if (!event.customerId) return;
+    for (const event of page.page) {
+      if (!event.customerId) continue;
       const identity = {
         orgId: event.orgId,
         platform: "facebook" as const,
@@ -602,14 +794,23 @@ export const backfillFacebookConversations = internalMutation({
         postId: event.postId,
       };
       const key = namespacedThreadKey(identity);
-      if (synced.has(key)) return;
+      if (synced.has(key)) continue;
       synced.add(key);
       await syncSocialConversation(ctx, identity);
-    });
+    }
+
+    const result = await recordConversationBackfillProgress(
+      ctx,
+      state,
+      page,
+      synced.size,
+      expectedCount
+    );
 
     if (!result.isDone && args.continueAutomatically !== false) {
       await ctx.scheduler.runAfter(0, internal.migrations.backfillFacebookConversations, {
-        cursor: result.continueCursor,
+        orgId: args.orgId,
+        runId: state.runId,
         batchSize: args.batchSize,
       });
     }

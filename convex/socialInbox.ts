@@ -15,8 +15,15 @@ import {
   instagramEventsByOrg,
   newDeferredSocialThreads,
   socialContactsByOrg,
+  socialConversationKey,
   syncDeferredSocialThreads,
 } from "./aggregates";
+import {
+  describeMaterializationStatus,
+  readMaterializationState,
+  socialConversationsReady,
+  SOCIAL_PLATFORMS,
+} from "./utils/materialization";
 
 /**
  * Unifies `instagramEvents` and `facebookEvents` for the Social Inbox UI.
@@ -170,6 +177,159 @@ async function loadVehiclesForSuggestions(ctx: QueryCtx, orgId: Id<"organization
 // `socialConversationKey`, next to the trigger that materialises the rows, so
 // the reader and the writer cannot drift on what a thread is.
 
+/** One conversation row as the inbox renders it, from either source. */
+type ConversationListItem = {
+  customerId: Id<"customers">;
+  leadId: Id<"leads"> | null;
+  platform: "instagram" | "facebook";
+  conversationKind: "comment" | "dm";
+  conversationPostId: string | null;
+  senderDisplayName: string;
+  latestText: string | undefined;
+  latestCreationTime: number;
+  latestSenderHandle: string | null;
+  vehicleSummary: string | null;
+  vehicleCount: number;
+  eventCount: number;
+  needsReply: boolean;
+  leadStage: string | null;
+};
+
+/**
+ * The pre-materialisation implementation, kept as the fallback the readiness
+ * gate falls back *to*.
+ *
+ * This is not dead code and must not be deleted as such. It is what the Social
+ * Inbox runs for any org whose `socialConversations` rows have not been proven
+ * complete — which includes the window between deploying this file and
+ * finishing the backfill, the exact window in which a production deployment
+ * once showed staff an empty inbox over a thousand live events.
+ *
+ * It reads both event tables in full, which is the 1.34 GB/week cost the
+ * materialised path exists to remove. That is the intended trade: correct and
+ * expensive beats fast and wrong, and it only runs until the backfill proves
+ * itself.
+ */
+async function listConversationsFromEvents(
+  ctx: QueryCtx,
+  args: {
+    orgId: Id<"organizations">;
+    paginationOpts: { numItems: number; cursor: string | null };
+    platform?: "instagram" | "facebook";
+    kind?: "comment" | "dm";
+    hasVehicle?: boolean;
+    needsReply?: boolean;
+  }
+): Promise<{ page: ConversationListItem[]; isDone: boolean; continueCursor: string }> {
+  const [igEvents, fbEvents] = await Promise.all([
+    ctx.db.query("instagramEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect(),
+    ctx.db.query("facebookEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect(),
+  ]);
+  const allEvents = [
+    ...igEvents.map(normalizeInstagramEvent),
+    ...fbEvents.map(normalizeFacebookEvent),
+  ];
+
+  const grouped = new Map<
+    string,
+    {
+      events: NormalizedEvent[];
+      platform: "instagram" | "facebook";
+      kind: "comment" | "dm";
+      conversationPostId: string | null;
+    }
+  >();
+  for (const ev of allEvents) {
+    if (!ev.customerId) continue;
+    // The writer's canonical key, so the fallback groups threads exactly as the
+    // materialised path does. Using a second local implementation here is how
+    // the two sources would silently disagree about what a conversation is.
+    const key = socialConversationKey({
+      platform: ev.platform,
+      customerId: ev.customerId,
+      kind: ev.kind,
+      postId: ev.postId,
+    });
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.events.push(ev);
+    } else {
+      grouped.set(key, {
+        events: [ev],
+        platform: ev.platform,
+        kind: ev.kind,
+        conversationPostId: ev.kind === "comment" ? (ev.postId ?? null) : null,
+      });
+    }
+  }
+
+  let conversations = Array.from(grouped.values()).map((g) => {
+    const latest = g.events.reduce((a, b) => (b._creationTime > a._creationTime ? b : a), g.events[0]);
+    const vehicleIds = new Set(g.events.filter((e) => e.vehicleId).map((e) => e.vehicleId as Id<"vehicles">));
+    const leadId = [...g.events].reverse().find((e) => e.leadId)?.leadId;
+    return {
+      customerId: latest.customerId!,
+      platform: g.platform,
+      conversationKind: g.kind,
+      conversationPostId: g.conversationPostId,
+      latest,
+      eventCount: g.events.length,
+      needsReply: g.events.some((e) => !e.autoRepliedAt && !e.manualRepliedAt),
+      vehicleIds,
+      leadId,
+    };
+  });
+  conversations.sort((a, b) => b.latest._creationTime - a.latest._creationTime);
+
+  if (args.platform) {
+    const p = args.platform;
+    conversations = conversations.filter((c) => c.platform === p);
+  }
+  if (args.kind) {
+    const k = args.kind;
+    conversations = conversations.filter((c) => c.conversationKind === k);
+  }
+  if (args.hasVehicle === true) conversations = conversations.filter((c) => c.vehicleIds.size > 0);
+  if (args.hasVehicle === false) conversations = conversations.filter((c) => c.vehicleIds.size === 0);
+  if (args.needsReply === true) conversations = conversations.filter((c) => c.needsReply);
+  if (args.needsReply === false) conversations = conversations.filter((c) => !c.needsReply);
+
+  const start = Number(args.paginationOpts.cursor ?? "0");
+  const numItems = args.paginationOpts.numItems;
+  const pageSlice = conversations.slice(start, start + numItems);
+
+  const page = await Promise.all(
+    pageSlice.map(async (c) => {
+      const customer = await ctx.db.get(c.customerId);
+      const lead = c.leadId ? await ctx.db.get(c.leadId) : null;
+      const vehicleId = [...c.vehicleIds][0];
+      const vehicle = vehicleId ? await ctx.db.get(vehicleId) : null;
+      return {
+        customerId: c.customerId,
+        leadId: c.leadId ?? null,
+        platform: c.platform,
+        conversationKind: c.conversationKind,
+        conversationPostId: c.conversationPostId,
+        senderDisplayName: resolveSenderDisplayName(c.latest, customer),
+        latestText: c.latest.text,
+        latestCreationTime: c.latest._creationTime,
+        latestSenderHandle: c.latest.senderHandle ?? null,
+        vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : null,
+        vehicleCount: c.vehicleIds.size,
+        eventCount: c.eventCount,
+        needsReply: c.needsReply,
+        leadStage: lead?.stage ?? null,
+      };
+    })
+  );
+
+  return {
+    page,
+    isDone: start + numItems >= conversations.length,
+    continueCursor: String(start + numItems),
+  };
+}
+
 /**
  * Paginated list of conversations for the Social Inbox — one row per
  * (platform × customer × post) for comments, one row per (platform × customer)
@@ -193,6 +353,28 @@ export const listConversations = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
     await requireFeature(ctx, args.orgId, "socialInbox");
+
+    // The materialised table is authoritative only once a backfill for the
+    // current generation has proven, by exhausting the source, that it holds
+    // every thread this org has. Anything else — never started, mid-run,
+    // interrupted, failed, or completed under an older generation — falls back
+    // to reading the events directly.
+    //
+    // This is the fix for a production incident, not a precaution. Deploying
+    // the materialised reader ahead of its backfill made the Social Inbox
+    // report zero conversations for an org holding 1,029 events, with no error
+    // and no way for staff to tell an empty inbox from an unbuilt one. The
+    // gate makes deployment order irrelevant: the code can ship hours or days
+    // before the backfill finishes and the inbox stays correct throughout,
+    // switching over by itself once completion is recorded.
+    //
+    // Exactly one source answers any given request. Blending a page from both
+    // would have to reconcile two different cursor spaces — an integer offset
+    // here, an index sort key there — and could duplicate or drop threads at
+    // the seam.
+    if (!(await socialConversationsReady(ctx, args.orgId))) {
+      return await listConversationsFromEvents(ctx, args);
+    }
 
     // One page of materialised threads, newest activity first, straight off an
     // index. This used to `.collect()` both event tables in full, group them in
@@ -276,6 +458,54 @@ export const listConversations = query({
     );
 
     return { ...pageResult, page };
+  },
+});
+
+/**
+ * Which source this org's inbox is reading, and how far its materialisation
+ * has got.
+ *
+ * Tenant-scoped counterpart to `adminSystem.getSocialMaterializationStatus`,
+ * so the inbox itself can say "still building, showing live results" instead of
+ * leaving staff to wonder why a list feels slow — or, in the failure this was
+ * written for, why it is empty.
+ *
+ * Returns counts that are already distinct: `processedCount` is source events
+ * read, `materializedCount` is threads rebuilt. "0 of 1,029" was the unreadable
+ * signal that prompted this; "1,029 processed, 12 threads, completed" is not.
+ */
+export const materializationStatus = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+    await requireFeature(ctx, args.orgId, "socialInbox");
+
+    const now = Date.now();
+    const platforms = await Promise.all(
+      SOCIAL_PLATFORMS.map(async (platform) => {
+        const row = await readMaterializationState(ctx, args.orgId, platform);
+        return {
+          platform,
+          status: describeMaterializationStatus(row, now),
+          processedCount: row?.processedCount ?? 0,
+          materializedCount: row?.materializedCount ?? 0,
+          expectedCount: row?.expectedCount ?? 0,
+          startedAt: row?.startedAt ?? null,
+          lastProgressAt: row?.lastProgressAt ?? null,
+          completedAt: row?.completedAt ?? null,
+          failureMessage: row?.failureMessage ?? null,
+        };
+      })
+    );
+
+    return {
+      // The honest answer to "is this list coming off the fast path", which is
+      // the only thing the UI should branch on.
+      readerSource: platforms.every((p) => p.status === "completed")
+        ? ("materialized" as const)
+        : ("legacyEvents" as const),
+      platforms,
+    };
   },
 });
 

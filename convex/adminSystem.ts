@@ -7,6 +7,12 @@ import { requireSuperAdmin } from "./utils/tenancy";
 import { logAdminAction } from "./adminAudit";
 import { internal } from "./_generated/api";
 import { CRON_HEARTBEAT_JOBS } from "./constants";
+import {
+  describeMaterializationStatus,
+  readMaterializationState,
+  SOCIAL_CONVERSATION_GENERATION,
+  SOCIAL_PLATFORMS,
+} from "./utils/materialization";
 
 const OVERVIEW_TABLES = [
   "organizations",
@@ -43,6 +49,59 @@ export const getOverview = query({
       };
     }
     return counts;
+  },
+});
+
+/**
+ * Per-org, per-platform state of the `socialConversations` materialisation.
+ *
+ * Exists so an operator can answer "is this org's Social Inbox reading the
+ * fast path, and if not, why not" without inferring it from row counts — the
+ * inference that is impossible in the one case that matters, where a completed
+ * backfill and a backfill that never ran both leave zero rows behind.
+ *
+ * `processed` and `materialized` are reported separately on purpose. A run over
+ * 1,029 events that produced 12 threads is healthy; reporting only "12" next to
+ * "1,029" reads like a stall.
+ */
+export const getSocialMaterializationStatus = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireSuperAdmin(ctx);
+    const now = Date.now();
+    const orgs = await ctx.db.query("organizations").take(OVERVIEW_COUNT_CAP);
+
+    return await Promise.all(
+      orgs.map(async (org) => {
+        const platforms = await Promise.all(
+          SOCIAL_PLATFORMS.map(async (platform) => {
+            const row = await readMaterializationState(ctx, org._id, platform);
+            return {
+              platform,
+              status: describeMaterializationStatus(row, now),
+              generation: row?.generation ?? null,
+              expectedGeneration: SOCIAL_CONVERSATION_GENERATION,
+              processedCount: row?.processedCount ?? 0,
+              materializedCount: row?.materializedCount ?? 0,
+              expectedCount: row?.expectedCount ?? 0,
+              startedAt: row?.startedAt ?? null,
+              lastProgressAt: row?.lastProgressAt ?? null,
+              completedAt: row?.completedAt ?? null,
+              failureMessage: row?.failureMessage ?? null,
+            };
+          })
+        );
+        return {
+          orgId: org._id,
+          orgName: org.name,
+          // What the reader actually does, which is the question being asked.
+          readerSource: platforms.every((p) => p.status === "completed")
+            ? ("materialized" as const)
+            : ("legacyEvents" as const),
+          platforms,
+        };
+      })
+    );
   },
 });
 
