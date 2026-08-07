@@ -82,3 +82,75 @@ export function consignedSettlementRoute(sale: SettlementRouteFacts): ConsignedS
 export function dealershipCollectsGross(route: ConsignedSettlementRoute): boolean {
   return route === "THROUGH_DEALERSHIP";
 }
+
+/**
+ * What one sale is worth, told apart into the four figures a dealership
+ * actually needs — because on a consigned sale they are four different numbers
+ * that a single "revenue" column silently conflates.
+ */
+export interface SaleEconomics {
+  isAgentSale: boolean;
+  settlementRoute: ConsignedSettlementRoute | null;
+  /**
+   * What the customer transacted for. On an agent sale this is real and worth
+   * showing — it is the size of the deal the dealership arranged — but it is
+   * NOT the dealership's revenue, because the car was never its to sell.
+   */
+  grossTransactionValue: number;
+  /** The supplier's share of that gross. Zero on dealer-owned stock. */
+  supplierSettlement: number;
+  /** What the dealership actually earned: its commission, or its gross profit. */
+  dealershipMargin: number;
+  /** What belongs in turnover. The margin on an agent sale; the price on an owned one. */
+  recognizedRevenue: number;
+  /** Cost of sales. Zero on an agent sale — there is no cost of a car you never bought. */
+  recognizedCost: number;
+}
+
+/**
+ * Splits a sale into agent-aware economics.
+ *
+ * `dealershipMargin` is deliberately identical under both bases — price less
+ * cost — which is why restating a historical consigned sale changes turnover
+ * and cost of sales but not profit. It is also why a corrected historical sale
+ * and a newly-posted one report the same numbers: both are derived from the
+ * sale and the vehicle, not from whichever basis the ledger happens to carry.
+ *
+ * `capitalizedCost` must come from `computeVehicleCapitalizedCost`, the single
+ * cost basis the GL and commissions also use. For a SOURCED vehicle that IS the
+ * supplier's entitlement, so nothing here re-derives it.
+ */
+export function saleEconomics(args: {
+  salePrice: number;
+  vehicle: OwnershipFacts;
+  capitalizedCost: number;
+  supplierSettlementRoute?: ConsignedSettlementRoute;
+}): SaleEconomics {
+  const { salePrice, capitalizedCost } = args;
+  const agent = isConsignedAgentSale(args.vehicle);
+  const margin = salePrice - capitalizedCost;
+
+  if (!agent) {
+    return {
+      isAgentSale: false,
+      settlementRoute: null,
+      grossTransactionValue: salePrice,
+      supplierSettlement: 0,
+      dealershipMargin: margin,
+      recognizedRevenue: salePrice,
+      recognizedCost: capitalizedCost,
+    };
+  }
+
+  return {
+    isAgentSale: true,
+    settlementRoute: consignedSettlementRoute(args),
+    grossTransactionValue: salePrice,
+    supplierSettlement: capitalizedCost,
+    dealershipMargin: margin,
+    // The whole point. Turnover is what the dealership sold, and on a consigned
+    // car that is its service, not the vehicle.
+    recognizedRevenue: margin,
+    recognizedCost: 0,
+  };
+}

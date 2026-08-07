@@ -17,6 +17,7 @@ import {
   queuedEntryCountsInRange,
   type RecognitionState,
 } from "./utils/prepaidRecognitionEvents";
+import { saleEconomics } from "./utils/vehicleOwnership";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 
@@ -80,6 +81,12 @@ export const getSalesAndProfitReport = query({
     let totalRevenue = 0;
     let totalCost = 0;
     let totalProfit = 0;
+    // Consigned sales are the dealership's SERVICE, not its stock. Their gross
+    // is real and worth showing — it is the size of the deal arranged — but it
+    // is not turnover, so it is reported alongside rather than inside it.
+    let totalGrossTransactionValue = 0;
+    let totalSupplierSettlement = 0;
+    let agentSaleCount = 0;
 
     const vehicleIds = Array.from(new Set(salesInDateRange.map(s => s.vehicleId)));
     const vehicles = await Promise.all(vehicleIds.map(id => ctx.db.get(id)));
@@ -120,11 +127,22 @@ export const getSalesAndProfitReport = query({
 
       const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
       const cost = capitalizedCostByVehicle.get(sale.vehicleId) ?? 0;
-      const profit = sale.salePrice - cost;
+      const economics = saleEconomics({
+        salePrice: sale.salePrice,
+        vehicle: vehicle ?? {},
+        capitalizedCost: cost,
+        supplierSettlementRoute: sale.supplierSettlementRoute,
+      });
 
-      totalRevenue += sale.salePrice;
-      totalCost += cost;
-      totalProfit += profit;
+      totalRevenue += economics.recognizedRevenue;
+      totalCost += economics.recognizedCost;
+      // Unchanged by the agent split, and deliberately so: price less cost is
+      // the same number either way, which is exactly why restating a consigned
+      // sale moves turnover and cost of sales but never profit.
+      totalProfit += economics.dealershipMargin;
+      totalGrossTransactionValue += economics.grossTransactionValue;
+      totalSupplierSettlement += economics.supplierSettlement;
+      if (economics.isAgentSale) agentSaleCount += 1;
 
       return {
         ...sale,
@@ -134,17 +152,30 @@ export const getSalesAndProfitReport = query({
         vehicleVin: vehicle?.vin,
         vehicleCost: cost,
         vehicleExpenses: totalExpenses,
-        totalCost: cost,
-        netProfit: profit,
+        totalCost: economics.recognizedCost,
+        netProfit: economics.dealershipMargin,
+        isAgentSale: economics.isAgentSale,
+        settlementRoute: economics.settlementRoute,
+        grossTransactionValue: economics.grossTransactionValue,
+        supplierSettlement: economics.supplierSettlement,
+        recognizedRevenue: economics.recognizedRevenue,
       };
     });
 
     enrichedSales.sort((a, b) => b.saleDate - a.saleDate);
 
     return {
+      // Turnover. Excludes the gross of every consigned sale — the dealership
+      // never owned those cars and may recognize only its margin on them.
       totalRevenue,
       totalCost,
       totalProfit,
+      // The deal volume the dealership actually handled, agent sales at full
+      // ticket. Equals totalRevenue when nothing consigned was sold.
+      totalGrossTransactionValue,
+      // What of that gross belongs to suppliers and never was the dealership's.
+      totalSupplierSettlement,
+      agentSaleCount,
       sales: enrichedSales,
     };
   },
@@ -674,16 +705,26 @@ export const getSalespersonPerformance = query({
     const result = Object.entries(salesBySalesperson).map(([userId, userSales]) => {
       let totalRevenue = 0;
       let totalProfit = 0;
+      let totalGrossTransactionValue = 0;
 
       const user = userMap.get(userId as Id<"users">);
       const userName = (user && "name" in user ? user.name : null) ?? "Unknown";
 
       for (const sale of userSales) {
         const cost = capitalizedCostByVehicle.get(sale.vehicleId) ?? 0;
-        const profit = sale.salePrice - cost;
+        const economics = saleEconomics({
+          salePrice: sale.salePrice,
+          vehicle: vehicleMap.get(sale.vehicleId) ?? {},
+          capitalizedCost: cost,
+          supplierSettlementRoute: sale.supplierSettlementRoute,
+        });
 
-        totalRevenue += sale.salePrice;
-        totalProfit += profit;
+        // Same exclusion as getSalesAndProfitReport: a rep who sold a consigned
+        // car did not turn over its sticker price. Ranking on that would rank
+        // them above someone who sold twice the margin on owned stock.
+        totalRevenue += economics.recognizedRevenue;
+        totalProfit += economics.dealershipMargin;
+        totalGrossTransactionValue += economics.grossTransactionValue;
       }
 
       return {
@@ -692,6 +733,7 @@ export const getSalespersonPerformance = query({
         vehiclesSold: userSales.length,
         totalRevenue,
         totalProfit,
+        totalGrossTransactionValue,
       };
     });
 
