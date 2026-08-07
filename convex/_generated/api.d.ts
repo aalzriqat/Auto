@@ -174,6 +174,7 @@ import type * as utils_saleCompletion from "../utils/saleCompletion.js";
 import type * as utils_saleHelpers from "../utils/saleHelpers.js";
 import type * as utils_smartReplyBuilder from "../utils/smartReplyBuilder.js";
 import type * as utils_smartReplyIntent from "../utils/smartReplyIntent.js";
+import type * as utils_supplierSettlement from "../utils/supplierSettlement.js";
 import type * as utils_socialAutoPost from "../utils/socialAutoPost.js";
 import type * as utils_socialMobile from "../utils/socialMobile.js";
 import type * as utils_socialMobileReply from "../utils/socialMobileReply.js";
@@ -374,6 +375,7 @@ declare const fullApi: ApiFromModules<{
   "utils/saleHelpers": typeof utils_saleHelpers;
   "utils/smartReplyBuilder": typeof utils_smartReplyBuilder;
   "utils/smartReplyIntent": typeof utils_smartReplyIntent;
+  "utils/supplierSettlement": typeof utils_supplierSettlement;
   "utils/socialAutoPost": typeof utils_socialAutoPost;
   "utils/socialMobile": typeof utils_socialMobile;
   "utils/socialMobileReply": typeof utils_socialMobileReply;

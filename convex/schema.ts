@@ -757,11 +757,57 @@ export default defineSchema({
     sourcedFromName: v.string(),
     amountDue: v.number(),
     currency: v.string(),
-    status: v.union(v.literal("PENDING"), v.literal("PAID"), v.literal("CANCELLED")),
+    // PENDING is retained permanently as a legacy value. Every row written
+    // before consigned-agent accounting carries it, and dropping it from the
+    // union would make those rows unreadable — a schema change that destroys
+    // access to existing payables is a worse outcome than one extra literal.
+    // `deriveSettlementStatus` maps it to DUE_ON_SALE for every reader.
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("NOT_YET_DUE"),
+      v.literal("DUE_ON_SALE"),
+      v.literal("PARTIALLY_PAID"),
+      v.literal("PAID"),
+      v.literal("DISPUTED"),
+      v.literal("CANCELLED")
+    ),
+    // How `amountDue` was arrived at. Recorded rather than inferred: the same
+    // number reached by an agreed cost and by a percentage of the sale means
+    // different things when the sale price later changes.
+    settlementCalculationMethod: v.optional(
+      v.union(
+        v.literal("AGREED_SOURCE_COST"),
+        v.literal("PERCENTAGE_OF_SALE"),
+        v.literal("FIXED_AMOUNT"),
+        v.literal("OTHER")
+      )
+    ),
+    settlementCalculationNote: v.optional(v.string()),
+    // Cumulative. `remainingAmount` is deliberately NOT stored — a second copy
+    // of a figure derivable from two others is a figure that can disagree with
+    // them, and this one decides whether a supplier is still owed money.
+    amountPaid: v.optional(v.number()),
+    paymentDueTrigger: v.optional(
+      v.union(
+        v.literal("ON_SALE"),
+        v.literal("ON_SETTLEMENT_RECEIPT"),
+        v.literal("FIXED_DATE"),
+        v.literal("ON_DEMAND")
+      )
+    ),
+    paymentDueDate: v.optional(v.number()),
     paidAt: v.optional(v.number()),
     paidBy: v.optional(v.id("users")),
     paymentMethod: v.optional(paymentMethodValidator),
+    /** Cheque number or transfer reference. */
+    paymentReference: v.optional(v.string()),
+    /** The bank or cash account the payment left. */
+    paymentAccountId: v.optional(v.id("chartOfAccounts")),
     paymentNotes: v.optional(v.string()),
+    documentStorageIds: v.optional(v.array(v.id("_storage"))),
+    disputedAt: v.optional(v.number()),
+    disputedBy: v.optional(v.id("users")),
+    disputeReason: v.optional(v.string()),
     // Portion of amountDue that is input VAT paid to the supplier (tax-inclusive,
     // not additive) — feeds the VAT return's input side. Optional/backward compatible.
     taxAmount: v.optional(v.number()),

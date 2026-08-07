@@ -361,10 +361,19 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // `analysed` moving up by exactly the number of new mutations is the signal
   // to check for — going up by less would mean one slipped into a skipped
   // bucket, which is the direction that hides an unguarded write.
+  //
+  // Then 456→458 / 302→304 by two mutations in `sourcingPayables` that record
+  // what a supplier has actually been paid on a consigned vehicle:
+  // `recordPartialPayment` and `setDisputed`. Both take an `orgId` and a
+  // caller-supplied `payableId`, so both land in `analysed` and are held to the
+  // ownership rule. Both satisfy it the same way their sibling `markPaid`
+  // always has — loading the row and refusing it when `payable.orgId` is not
+  // the named org — which is what `requireOwnedRow` does, written out where the
+  // analyzer can see it.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 456,
-      analysed: 302,
+      totalMutations: 458,
+      analysed: 304,
       skippedNoArgsBlock: 9,
       skippedNoOrgId: 145,
     });
