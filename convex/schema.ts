@@ -750,6 +750,50 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_org_vehicle", ["orgId", "vehicleId"]),
 
+  /**
+   * One row per historical consigned sale restated from principal to agent
+   * basis, written by migrateConsignedSaleBasis.
+   *
+   * This is the migration's audit trail AND its idempotency key. The GL is
+   * already protected — postOrEnqueue drops a duplicate idempotency key — but
+   * "it posted nothing the second time" is not the same as being able to show
+   * an auditor which sales were touched, by whom, on what evidence, and that
+   * the correction left profit unchanged. That is what this table is for, and
+   * why it stores the amounts rather than pointing at the journal and hoping.
+   *
+   * `originalJournalEntryIds` links back to the entries being corrected. The
+   * correction is a NEW entry, never an edit of those — the original posting
+   * and its restatement both stay on the books, which is the only version of
+   * this an auditor can follow.
+   */
+  consignedSaleCorrections: defineTable({
+    orgId: v.id("organizations"),
+    saleId: v.id("sales"),
+    vehicleId: v.id("vehicles"),
+    currency: v.string(),
+    originalJournalEntryIds: v.array(v.id("journalEntries")),
+    /**
+     * Absent when the correction had to queue to the outbox because no open
+     * period covered the sale date. The event is durable either way; only the
+     * journal id is not yet knowable.
+     */
+    correctionJournalEntryId: v.optional(v.id("journalEntries")),
+    revenueReclassifiedMinor: v.number(),
+    commissionRecognizedMinor: v.number(),
+    cogsReversedMinor: v.number(),
+    /**
+     * Stored even though it is always zero. The migration's entire licence to
+     * run unattended is that it cannot move profit; recording the number it
+     * actually computed means a later reader can verify that claim per row
+     * instead of taking it on trust.
+     */
+    netIncomeDeltaMinor: v.number(),
+    correctedBy: v.id("users"),
+    correctedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_sale", ["orgId", "saleId"]),
+
   vehicleSupplierPayables: defineTable({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),

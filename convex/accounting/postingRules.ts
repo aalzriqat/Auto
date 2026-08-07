@@ -44,6 +44,7 @@ export type EventType =
   | "PREPAID_EXPENSE_REFUNDED"
   | "PREPAID_EXPENSE_WRITTEN_OFF"
   | "RECEIVABLE_CREATED"
+  | "CONSIGNED_SALE_RECLASSIFIED"
   | "EMPLOYEE_ADVANCE_PAID"
   | "EMPLOYEE_ADVANCE_RECOVERED"
   | "PAYROLL_ACCRUED"
@@ -69,6 +70,7 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "PREPAID_EXPENSE_REFUNDED",
   "PREPAID_EXPENSE_WRITTEN_OFF",
   "RECEIVABLE_CREATED",
+  "CONSIGNED_SALE_RECLASSIFIED",
   "EMPLOYEE_ADVANCE_PAID", "EMPLOYEE_ADVANCE_RECOVERED", "PAYROLL_ACCRUED", "PAYROLL_PAID",
   // JOURNAL_REVERSAL is intentionally excluded: it is written directly by
   // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
@@ -592,6 +594,76 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
     lines.push(line(costCreditKey, 0, p.costMinor, costCreditDesc, { vehicleId: p.vehicleId }));
   }
   return { lines, memo: "Vehicle sale completed", category: "SYSTEM" };
+}
+
+export interface ConsignedSaleReclassifiedPayload {
+  saleId: string;
+  vehicleId: string;
+  customerId: string;
+  currency: string;
+  /** Vehicle revenue the principal posting recognized, now removed in full. */
+  revenueMinor: number;
+  /** The dealership's spread over the supplier's entitlement, recognized instead. */
+  commissionMinor: number;
+  /** Fabricated cost of a car the dealership never owned, now removed in full. */
+  cogsMinor: number;
+}
+
+/**
+ * Restates one historical consigned sale from principal to agent basis.
+ *
+ * The original posting booked the gross as revenue and the supplier's
+ * entitlement as cost of sales. Both are wrong on a car the dealership never
+ * owned, but they offset, so the sale's contribution to profit was already
+ * right. That is the entire reason this correction is safe to automate: it
+ * moves four account balances and leaves net income exactly where it was.
+ *
+ *   Dr  Sales Revenue                    (the gross that was never revenue)
+ *     Cr  Consignment Commission Revenue (the spread, which is)
+ *     Cr  Cost of Vehicles Sold          (the cost that was never incurred)
+ *
+ * Nothing on the balance sheet moves. The principal posting debited
+ * AR-Customers for the gross and credited AP-Suppliers for the entitlement, and
+ * agent basis on the THROUGH_DEALERSHIP route does exactly the same — so those
+ * two are already correct and must not be touched. A sale where they are NOT
+ * correct (inventory relieved, no supplier cost, a profit that would move) is
+ * flagged by the impact report and never reaches this rule.
+ *
+ * The balance check is an assertion about the caller's arithmetic, not a
+ * validation of user input: revenue removed must equal commission recognized
+ * plus cost removed, or the entry changes profit and the premise has failed.
+ */
+export function ruleConsignedSaleReclassified(p: ConsignedSaleReclassifiedPayload): RuleResult {
+  if (p.revenueMinor !== p.commissionMinor + p.cogsMinor) {
+    throw new Error(
+      `Consigned reclassification for sale ${p.saleId} would change reported profit: removing ${p.revenueMinor} of revenue against ${p.commissionMinor} commission and ${p.cogsMinor} cost. Refusing to post.`
+    );
+  }
+  if (p.revenueMinor <= 0) {
+    throw new Error(
+      `Consigned reclassification for sale ${p.saleId} has no revenue to reclassify — it is already on agent basis. Refusing to post an empty correction.`
+    );
+  }
+
+  const dims = { customerId: p.customerId, vehicleId: p.vehicleId };
+  const lines: LineSpec[] = [
+    line(SYSTEM_KEYS.SALES_REVENUE, p.revenueMinor, 0, "Vehicle revenue removed — sold as agent", dims),
+  ];
+  // A zero line is rejected by validateBalance, and both of these are
+  // legitimately zero: a sale at exactly the supplier's entitlement earns no
+  // commission, and a sale posted without a cost basis booked no COGS.
+  if (p.commissionMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, p.commissionMinor, "Consignment commission recognized", dims));
+  }
+  if (p.cogsMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.COST_OF_VEHICLES_SOLD, 0, p.cogsMinor, "Cost removed — vehicle was never owned", dims));
+  }
+
+  return {
+    lines,
+    memo: "Consigned sale restated to agent basis",
+    category: "ADJUSTMENT",
+  };
 }
 
 export function ruleSupplierPaymentSettled(p: SupplierPaymentSettledPayload): RuleResult {
@@ -1603,6 +1675,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "DEPOSIT_REFUNDED": return ruleDepositRefunded(payload as unknown as DepositRefundedPayload);
     case "DEPOSIT_FORFEITED": return ruleDepositForfeited(payload as unknown as DepositForfeitedPayload);
     case "SALE_COMPLETED": return ruleSaleCompleted(payload as unknown as SaleCompletedPayload);
+    case "CONSIGNED_SALE_RECLASSIFIED": return ruleConsignedSaleReclassified(payload as unknown as ConsignedSaleReclassifiedPayload);
     case "SALE_CANCELLED": return ruleSaleCancelled(payload as unknown as SaleCancelledPayload);
     case "CHEQUE_DEPOSITED": return ruleChequeDeposited(payload as unknown as ChequeDepositedPayload);
     case "COLLECTION_PAYMENT": return ruleCollectionPayment(payload as unknown as CollectionPaymentPayload);

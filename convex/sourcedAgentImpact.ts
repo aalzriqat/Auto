@@ -23,6 +23,12 @@ import { toMinorUnits } from "./utils/money";
  * that holds for every row, the migration cannot change reported profit and the
  * risk is confined to classification. Where it does NOT hold, the row is
  * flagged rather than corrected — see `anomalies`.
+ *
+ * `assessConsignedSale` below is shared with the migration deliberately. The
+ * migration's contract is "correct only what this report says is safe", and two
+ * copies of that judgement would eventually disagree — at which point the
+ * report would be approving one set of rows and the migration rewriting
+ * another.
  */
 
 const REPORTED_KEYS = [
@@ -35,7 +41,7 @@ const REPORTED_KEYS = [
 
 type PostedTotals = Record<string, { debitMinor: number; creditMinor: number }>;
 
-async function systemKeyByAccountId(
+export async function systemKeyByAccountId(
   ctx: QueryCtx,
   orgId: Id<"organizations">
 ): Promise<Map<string, string>> {
@@ -69,6 +75,164 @@ function supplierEntitlementMinor(
   return toMinorUnits(vehicle.sourceCost, currency);
 }
 
+export type ConsignedSaleAssessment = {
+  saleId: Id<"sales">;
+  saleDate: number;
+  vehicleId: Id<"vehicles">;
+  vehicle: string;
+  vin: string | undefined;
+  supplierName: string | null;
+  currency: string;
+  financingType: string | null;
+  grossTransactionMinor: number;
+  supplierEntitlementMinor: number | null;
+  dealershipMarginMinor: number | null;
+  posted: {
+    revenueMinor: number;
+    cogsMinor: number;
+    customerArMinor: number;
+    supplierApMinor: number;
+    inventoryReliefMinor: number;
+    grossProfitMinor: number;
+  };
+  shouldBe: {
+    commissionRevenueMinor: number | null;
+    cogsMinor: number;
+    inventoryReliefMinor: number;
+  };
+  overstatement: {
+    revenueMinor: number | null;
+    cogsMinor: number;
+    customerArMinor: number | null;
+  };
+  journalEntryIds: Id<"journalEntries">[];
+  flags: string[];
+  /**
+   * Already posted on agent basis — no vehicle revenue and no COGS to reclassify.
+   * Deliberately NOT a flag: a flag means "a human must look at this", and a
+   * correctly-posted sale needs no attention. It is tracked separately so the
+   * migratable count means "rows the migration will actually change".
+   */
+  alreadyAgentBasis: boolean;
+};
+
+/**
+ * The single judgement of what one consigned sale posted and whether it can be
+ * corrected automatically. Used by the report to describe rows, and by the
+ * migration to decide which ones it may touch.
+ */
+export async function assessConsignedSale(
+  ctx: QueryCtx,
+  args: {
+    orgId: Id<"organizations">;
+    sale: Doc<"sales">;
+    vehicle: Doc<"vehicles">;
+    keyByAccount: Map<string, string>;
+  }
+): Promise<ConsignedSaleAssessment> {
+  const { orgId, sale, vehicle, keyByAccount } = args;
+
+  const entries = await ctx.db
+    .query("journalEntries")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", orgId).eq("sourceType", "sales").eq("sourceId", sale._id)
+    )
+    .collect();
+  const live = entries.filter((e) => e.status === "POSTED");
+
+  const totals: PostedTotals = {};
+  for (const entry of live) {
+    const lines = await ctx.db
+      .query("journalLines")
+      .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
+      .collect();
+    for (const l of lines) {
+      const key = keyByAccount.get(l.accountId);
+      if (!key || !REPORTED_KEYS.includes(key as (typeof REPORTED_KEYS)[number])) continue;
+      const bucket = (totals[key] ??= { debitMinor: 0, creditMinor: 0 });
+      bucket.debitMinor += l.debitMinor;
+      bucket.creditMinor += l.creditMinor;
+    }
+  }
+
+  const currency = live[0]?.currency ?? "JOD";
+  const grossMinor = toMinorUnits(sale.salePrice, currency);
+  const entitlementMinor = supplierEntitlementMinor(vehicle, currency);
+
+  const postedRevenue = totals[SYSTEM_KEYS.SALES_REVENUE]?.creditMinor ?? 0;
+  const postedCogs = totals[SYSTEM_KEYS.COST_OF_VEHICLES_SOLD]?.debitMinor ?? 0;
+  const postedCustomerAr = totals[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS]?.debitMinor ?? 0;
+  const postedSupplierAp = totals[SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS]?.creditMinor ?? 0;
+  const postedInventoryRelief = totals[SYSTEM_KEYS.VEHICLE_INVENTORY]?.creditMinor ?? 0;
+
+  const marginMinor = entitlementMinor === null ? null : grossMinor - entitlementMinor;
+  const postedGrossProfit = postedRevenue - postedCogs;
+  const alreadyAgentBasis = postedRevenue === 0 && postedCogs === 0;
+
+  const flags: string[] = [];
+  if (live.length === 0) flags.push("NO_POSTED_JOURNAL");
+  if (live.length > 1) flags.push("MULTIPLE_POSTED_JOURNALS");
+  if (entitlementMinor === null) flags.push("NO_SOURCE_COST");
+  if (marginMinor !== null && marginMinor < 0) flags.push("NEGATIVE_MARGIN");
+  if (postedInventoryRelief > 0) flags.push("INVENTORY_RELIEVED_ON_CONSIGNED_CAR");
+  if (vehicle.purchasePrice && vehicle.purchasePrice > 0) {
+    // Marked SOURCED but carries an own-purchase price: either it was
+    // bought in and never reclassified, or the price is stale. Requirement
+    // 8 calls these out for manual reconciliation instead of migrating.
+    flags.push("SOURCED_BUT_HAS_PURCHASE_PRICE");
+  }
+  if (!alreadyAgentBasis && marginMinor !== null && postedGrossProfit !== marginMinor) {
+    // The reclassification-not-restatement claim fails here. Correcting
+    // this row WOULD move reported profit, so it must not be migrated
+    // silently.
+    flags.push("PROFIT_WOULD_CHANGE");
+  }
+
+  return {
+    saleId: sale._id,
+    saleDate: sale.saleDate,
+    vehicleId: vehicle._id,
+    vehicle: `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim(),
+    vin: vehicle.vin,
+    supplierName: vehicle.sourcedFromName ?? null,
+    currency,
+    financingType: sale.financingType ?? null,
+    grossTransactionMinor: grossMinor,
+    supplierEntitlementMinor: entitlementMinor,
+    dealershipMarginMinor: marginMinor,
+    posted: {
+      revenueMinor: postedRevenue,
+      cogsMinor: postedCogs,
+      customerArMinor: postedCustomerAr,
+      supplierApMinor: postedSupplierAp,
+      inventoryReliefMinor: postedInventoryRelief,
+      grossProfitMinor: postedGrossProfit,
+    },
+    shouldBe: {
+      commissionRevenueMinor: marginMinor,
+      cogsMinor: 0,
+      inventoryReliefMinor: 0,
+    },
+    overstatement: {
+      revenueMinor: marginMinor === null ? null : postedRevenue - marginMinor,
+      cogsMinor: postedCogs,
+      customerArMinor: entitlementMinor === null ? null : postedCustomerAr - (marginMinor ?? 0),
+    },
+    journalEntryIds: live.map((e) => e._id),
+    flags,
+    alreadyAgentBasis,
+  };
+}
+
+/**
+ * Whether the migration may correct this row without a human first looking at
+ * it. Any flag disqualifies it, and a row already on agent basis has nothing to
+ * correct.
+ */
+export function isAutomaticallyCorrectable(assessment: ConsignedSaleAssessment): boolean {
+  return assessment.flags.length === 0 && !assessment.alreadyAgentBasis;
+}
+
 export const sourcedSaleImpactReport = internalQuery({
   args: {
     /** Omit to sweep every organization. */
@@ -98,109 +262,31 @@ export const sourcedSaleImpactReport = internalQuery({
       let postedCogsMinor = 0;
       let postedCustomerArMinor = 0;
       let postedSupplierApMinor = 0;
+      let alreadyAgentBasisCount = 0;
+      let migratableCount = 0;
 
       for (const sale of sales) {
         if (sale.status !== "COMPLETED") continue;
         const vehicle = await ctx.db.get(sale.vehicleId);
         if (!vehicle || vehicle.sourceType !== "SOURCED") continue;
 
-        const entries = await ctx.db
-          .query("journalEntries")
-          .withIndex("by_org_source", (q) =>
-            q.eq("orgId", org._id).eq("sourceType", "sales").eq("sourceId", sale._id)
-          )
-          .collect();
-        const live = entries.filter((e) => e.status === "POSTED");
+        const row = await assessConsignedSale(ctx, {
+          orgId: org._id,
+          sale,
+          vehicle,
+          keyByAccount,
+        });
 
-        const totals: PostedTotals = {};
-        for (const entry of live) {
-          const lines = await ctx.db
-            .query("journalLines")
-            .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
-            .collect();
-          for (const l of lines) {
-            const key = keyByAccount.get(l.accountId);
-            if (!key || !REPORTED_KEYS.includes(key as (typeof REPORTED_KEYS)[number])) continue;
-            const bucket = (totals[key] ??= { debitMinor: 0, creditMinor: 0 });
-            bucket.debitMinor += l.debitMinor;
-            bucket.creditMinor += l.creditMinor;
-          }
-        }
-
-        const currency = live[0]?.currency ?? "JOD";
-        const grossMinor = toMinorUnits(sale.salePrice, currency);
-        const entitlementMinor = supplierEntitlementMinor(vehicle, currency);
-
-        const postedRevenue = totals[SYSTEM_KEYS.SALES_REVENUE]?.creditMinor ?? 0;
-        const postedCogs = totals[SYSTEM_KEYS.COST_OF_VEHICLES_SOLD]?.debitMinor ?? 0;
-        const postedCustomerAr = totals[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS]?.debitMinor ?? 0;
-        const postedSupplierAp = totals[SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS]?.creditMinor ?? 0;
-        const postedInventoryRelief = totals[SYSTEM_KEYS.VEHICLE_INVENTORY]?.creditMinor ?? 0;
-
-        const marginMinor = entitlementMinor === null ? null : grossMinor - entitlementMinor;
-        const postedGrossProfit = postedRevenue - postedCogs;
-
-        const flags: string[] = [];
-        if (live.length === 0) flags.push("NO_POSTED_JOURNAL");
-        if (live.length > 1) flags.push("MULTIPLE_POSTED_JOURNALS");
-        if (entitlementMinor === null) flags.push("NO_SOURCE_COST");
-        if (marginMinor !== null && marginMinor < 0) flags.push("NEGATIVE_MARGIN");
-        if (postedInventoryRelief > 0) flags.push("INVENTORY_RELIEVED_ON_CONSIGNED_CAR");
-        if (vehicle.purchasePrice && vehicle.purchasePrice > 0) {
-          // Marked SOURCED but carries an own-purchase price: either it was
-          // bought in and never reclassified, or the price is stale. Requirement
-          // 8 calls these out for manual reconciliation instead of migrating.
-          flags.push("SOURCED_BUT_HAS_PURCHASE_PRICE");
-        }
-        if (marginMinor !== null && postedGrossProfit !== marginMinor) {
-          // The reclassification-not-restatement claim fails here. Correcting
-          // this row WOULD move reported profit, so it must not be migrated
-          // silently.
-          flags.push("PROFIT_WOULD_CHANGE");
-        }
-
-        const row = {
-          saleId: sale._id,
-          saleDate: sale.saleDate,
-          vehicleId: vehicle._id,
-          vehicle: `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim(),
-          vin: vehicle.vin,
-          supplierName: vehicle.sourcedFromName ?? null,
-          currency,
-          financingType: sale.financingType ?? null,
-          grossTransactionMinor: grossMinor,
-          supplierEntitlementMinor: entitlementMinor,
-          dealershipMarginMinor: marginMinor,
-          posted: {
-            revenueMinor: postedRevenue,
-            cogsMinor: postedCogs,
-            customerArMinor: postedCustomerAr,
-            supplierApMinor: postedSupplierAp,
-            inventoryReliefMinor: postedInventoryRelief,
-            grossProfitMinor: postedGrossProfit,
-          },
-          shouldBe: {
-            commissionRevenueMinor: marginMinor,
-            cogsMinor: 0,
-            inventoryReliefMinor: 0,
-          },
-          overstatement: {
-            revenueMinor: marginMinor === null ? null : postedRevenue - marginMinor,
-            cogsMinor: postedCogs,
-            customerArMinor: entitlementMinor === null ? null : postedCustomerAr - (marginMinor ?? 0),
-          },
-          journalEntryIds: live.map((e) => e._id),
-          flags,
-        };
-
-        if (flags.length > 0) anomalies.push(row);
+        if (row.flags.length > 0) anomalies.push(row);
+        if (row.alreadyAgentBasis) alreadyAgentBasisCount += 1;
+        if (isAutomaticallyCorrectable(row)) migratableCount += 1;
         rows.push(row);
 
-        grossPostedRevenueMinor += postedRevenue;
-        correctRevenueMinor += marginMinor ?? 0;
-        postedCogsMinor += postedCogs;
-        postedCustomerArMinor += postedCustomerAr;
-        postedSupplierApMinor += postedSupplierAp;
+        grossPostedRevenueMinor += row.posted.revenueMinor;
+        correctRevenueMinor += row.dealershipMarginMinor ?? 0;
+        postedCogsMinor += row.posted.cogsMinor;
+        postedCustomerArMinor += row.posted.customerArMinor;
+        postedSupplierApMinor += row.posted.supplierApMinor;
       }
 
       perOrg.push({
@@ -209,7 +295,12 @@ export const sourcedSaleImpactReport = internalQuery({
         salesExamined: sales.length,
         sourcedSalesFound: rows.length,
         anomalyCount: anomalies.length,
-        migratableCount: rows.length - anomalies.length,
+        // Rows the migration would actually change. Previously this was
+        // `rows - anomalies`, which counted sales already correctly posted on
+        // agent basis as pending work and would have overstated the expected
+        // effect of the migration on every re-read after a partial run.
+        migratableCount,
+        alreadyAgentBasisCount,
         totals: {
           postedRevenueMinor: grossPostedRevenueMinor,
           correctCommissionRevenueMinor: correctRevenueMinor,

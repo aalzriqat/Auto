@@ -316,6 +316,47 @@ export async function hookDepositAppliedToSettlement(
   });
 }
 
+/**
+ * Restates one historical consigned sale from principal to agent basis. The
+ * idempotency key is the sale, so a re-run of the migration posts nothing:
+ * postOrEnqueue drops an event whose key is already POSTED or already queued.
+ */
+export async function hookConsignedSaleReclassified(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    saleId: Id<"sales">;
+    vehicleId: Id<"vehicles">;
+    customerId: Id<"customers">;
+    currency: string;
+    revenueMinor: number;
+    commissionMinor: number;
+    cogsMinor: number;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "CONSIGNED_SALE_RECLASSIFIED",
+    sourceType: "sales",
+    sourceId: args.saleId.toString(),
+    idempotencyKey: `consigned_agent_reclass_${args.saleId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      saleId: args.saleId.toString(),
+      vehicleId: args.vehicleId.toString(),
+      customerId: args.customerId.toString(),
+      currency: args.currency,
+      revenueMinor: args.revenueMinor,
+      commissionMinor: args.commissionMinor,
+      cogsMinor: args.cogsMinor,
+    },
+  });
+}
+
 type DepositResolutionHookArgs = {
   orgId: Id<"organizations">;
   depositId: Id<"deposits">;

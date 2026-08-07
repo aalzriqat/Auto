@@ -87,6 +87,7 @@ import type * as marketplaceTradeIns from "../marketplaceTradeIns.js";
 import type * as marketplaceWhatsAppIntake from "../marketplaceWhatsAppIntake.js";
 import type * as memberships from "../memberships.js";
 import type * as migrateCommissionAccruals from "../migrateCommissionAccruals.js";
+import type * as migrateConsignedSaleBasis from "../migrateConsignedSaleBasis.js";
 import type * as migrateExpenseReversals from "../migrateExpenseReversals.js";
 import type * as migrateFinancingEconomics from "../migrateFinancingEconomics.js";
 import type * as migrateMarketplacePublicIds from "../migrateMarketplacePublicIds.js";
@@ -289,6 +290,7 @@ declare const fullApi: ApiFromModules<{
   marketplaceWhatsAppIntake: typeof marketplaceWhatsAppIntake;
   memberships: typeof memberships;
   migrateCommissionAccruals: typeof migrateCommissionAccruals;
+  migrateConsignedSaleBasis: typeof migrateConsignedSaleBasis;
   migrateExpenseReversals: typeof migrateExpenseReversals;
   migrateFinancingEconomics: typeof migrateFinancingEconomics;
   migrateMarketplacePublicIds: typeof migrateMarketplacePublicIds;

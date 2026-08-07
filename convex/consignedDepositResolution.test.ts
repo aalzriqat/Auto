@@ -127,25 +127,22 @@ async function postedBySystemKey(
   orgId: string
 ): Promise<Record<string, number>> {
   return await t.run(async (ctx) => {
-    const accounts = await ctx.db
-      .query("chartOfAccounts")
-      .withIndex("by_org", (q) => q.eq("orgId", orgId as never))
-      .collect();
+    // `.withIndex` is unavailable here: passing the convexTest handle as a
+    // parameter widens ctx.db to a union over every table, which drops the
+    // per-table index names. Filtering after collect is equivalent at test size.
+    const accounts = (await ctx.db.query("chartOfAccounts").collect())
+      .filter((a) => a.orgId === orgId);
     const keyByAccount = new Map<string, string>();
     for (const a of accounts) if (a.systemKey) keyByAccount.set(a._id, a.systemKey);
 
-    const entries = await ctx.db
-      .query("journalEntries")
-      .withIndex("by_org", (q) => q.eq("orgId", orgId as never))
-      .collect();
+    const entries = (await ctx.db.query("journalEntries").collect())
+      .filter((e) => e.orgId === orgId);
 
     const totals: Record<string, number> = {};
     for (const entry of entries) {
       if (entry.status !== "POSTED") continue;
-      const lines = await ctx.db
-        .query("journalLines")
-        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
-        .collect();
+      const lines = (await ctx.db.query("journalLines").collect())
+        .filter((l) => l.journalEntryId === entry._id);
       for (const l of lines) {
         const key = keyByAccount.get(l.accountId);
         if (!key) continue;
