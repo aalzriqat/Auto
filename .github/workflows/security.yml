@@ -47,8 +47,25 @@ jobs:
         with:
           sarif_file: semgrep.sarif
 
-  # SCA — dependency vulnerabilities against the OSV database (npm + pnpm lockfiles).
-  osv-scanner:
+  # SCA (runtime) — the primary dependency signal: packages that actually ship
+  # or run. This is the only SCA job that reaches the Security dashboard, so it
+  # is what a merge gate can meaningfully be built on.
+  #
+  # Scanned explicitly rather than with `--recursive ./`, because a recursive
+  # scan also picks up apps/mobile/android/gradle/verification-metadata.xml.
+  # That file is Gradle's append-only artifact *checksum ledger*, not a
+  # dependency manifest: it records every artifact Gradle ever resolved,
+  # including the build classpath (AGP, Kotlin plugin), test-only jars
+  # (junit, assertj, mockwebserver) and several simultaneous versions of the
+  # same library. It contributed 289 of 301 findings here — 4 Critical and 115
+  # High, none of them on a library that ships in the APK — which buried the
+  # runtime signal entirely. It is still scanned, by osv-toolchain below.
+  #
+  # apps/* is a pnpm workspace member, so pnpm-lock.yaml covers the mobile
+  # app's JS/React Native dependency graph too. What it does not cover is the
+  # Android *native* AAR graph (androidx, com.facebook.react), which only
+  # Gradle can resolve — tracked in docs/security/dependency-scanning.md.
+  osv-runtime:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -58,7 +75,26 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Run OSV-Scanner
+      # Explicit lockfile lists go stale silently: a new workspace or worker
+      # added later would simply never be scanned, and the job would stay
+      # green. Fail loudly instead so the omission is visible.
+      - name: Fail if an unlisted runtime lockfile appeared
+        run: |
+          expected=$(printf '%s\n' \
+            "./dealer-worker/package-lock.json" \
+            "./pnpm-lock.yaml" | sort)
+          actual=$(find . \
+            \( -name node_modules -o -name .git -o -name .next \) -prune -o \
+            \( -name 'pnpm-lock.yaml' -o -name 'package-lock.json' -o -name 'yarn.lock' \) \
+            -print | sort)
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::Runtime lockfile set changed. Update the osv-runtime scan-args below."
+            diff <(echo "$expected") <(echo "$actual") || true
+            exit 1
+          fi
+          echo "Runtime lockfile set unchanged."
+
+      - name: Run OSV-Scanner (runtime dependencies)
         id: osv-scanner
         continue-on-error: true
         uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
@@ -66,14 +102,84 @@ jobs:
           scan-args: |-
             --output=osv-results.sarif
             --format=sarif
-            --recursive
-            ./
+            --lockfile=pnpm-lock.yaml
+            --lockfile=dealer-worker/package-lock.json
 
       - name: Upload SARIF to GitHub Code Scanning
         uses: github/codeql-action/upload-sarif@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3
         if: always()
         with:
           sarif_file: osv-results.sarif
+          # Pinned explicitly. Without it, upload-sarif derives the analysis
+          # category from workflow file + JOB NAME, and the existing analysis on
+          # main is keyed `.github/workflows/security.yml:osv-scanner`. Renaming
+          # the job to osv-runtime would therefore start a NEW category, leaving
+          # the old one orphaned: its 289 gradle + 18 pnpm alerts would never be
+          # marked fixed, while the pnpm findings were re-created as new alerts
+          # under the new key — more open alerts than before, which is the exact
+          # opposite of the point. Pinning the old key updates the analysis in
+          # place, so the gradle findings close with a real `fixed` transition.
+          category: osv-scanner
+
+  # SCA (build toolchain) — supply-chain visibility for the Gradle build
+  # classpath. Deliberately NOT uploaded to code scanning: these are artifacts
+  # that run on the build machine, not in the APK or on any server, and at ~289
+  # findings they drown the runtime dashboard. Kept as a downloadable report and
+  # a job summary so the visibility is not lost, and non-blocking so a build-time
+  # advisory never stops a merge.
+  #
+  # Note this job has no `security-events: write` — it cannot publish alerts
+  # even by accident.
+  osv-toolchain:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Run OSV-Scanner (Gradle build toolchain)
+        continue-on-error: true
+        uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+        with:
+          scan-args: |-
+            --output=osv-toolchain.json
+            --format=json
+            --lockfile=apps/mobile/android/gradle/verification-metadata.xml
+
+      - name: Summarise toolchain findings
+        if: always()
+        run: |
+          {
+            echo "### Gradle build-toolchain advisories"
+            echo
+            echo "Build-machine artifacts only — these do not ship in the APK."
+            echo "Reported for supply-chain visibility; not a merge gate."
+            echo
+            if [ -s osv-toolchain.json ]; then
+              total=$(jq '[.results[]?.packages[]?.vulnerabilities[]?] | length' osv-toolchain.json 2>/dev/null || echo "?")
+              echo "Advisories: **${total}**"
+              echo
+              echo '| package | version | advisory |'
+              echo '| --- | --- | --- |'
+              jq -r '
+                .results[]?.packages[]? as $p
+                | $p.vulnerabilities[]?
+                | "| \($p.package.name) | \($p.package.version) | \(.id) |"
+              ' osv-toolchain.json 2>/dev/null | sort -u | head -100
+            else
+              echo "No report produced (scanner failed or found nothing)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload toolchain report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: osv-toolchain-report
+          path: osv-toolchain.json
+          if-no-files-found: warn
 
   # IaC / CI config security — scans GitHub Actions workflows for misconfigurations.
   checkov:
