@@ -162,3 +162,48 @@ export function saleEconomics(args: {
     recognizedCost: 0,
   };
 }
+
+/**
+ * Refuses to change what a vehicle IS after it has been sold, in either
+ * direction. Returns the operator-facing message, or null when the change is
+ * allowed.
+ *
+ * Shared because there are two doors into a vehicle patch — `vehicles.update`
+ * and the approval workflow's `vehicleEdits.resolve` — and the guard lived on
+ * only one of them. A user with `edit:vehicles:request` (the default SALES
+ * template) could submit the change as a request and have a manager approve it,
+ * flipping the basis of a sold car through the first-class path while the
+ * direct mutation refused it.
+ *
+ * Why both directions are refused:
+ *
+ *  - SOURCED→STOCK: the sale posted on agent basis — commission on the margin,
+ *    no COGS, no inventory — so converting now capitalizes Vehicle Inventory
+ *    for a car that has already left the lot. Nothing will ever relieve that
+ *    asset, because the sale that would have is in the past.
+ *  - STOCK→SOURCED: the sale posted as principal — gross revenue, COGS,
+ *    inventory relieved. Declaring the car consigned afterwards says the
+ *    dealership never owned what it has already recognised revenue and cost of
+ *    sales on, and pulls the sale into the consigned population that
+ *    `migrateConsignedSaleBasis` will restate.
+ *
+ * A genuine historical correction goes through the audited correction path,
+ * which posts a correcting journal and leaves a record, rather than editing the
+ * basis out from under a posted sale.
+ */
+export function retroactiveOwnershipChangeRefusal(args: {
+  currentSourceType: "STOCK" | "SOURCED" | undefined;
+  requestedSourceType: "STOCK" | "SOURCED" | undefined;
+  status: string | undefined;
+}): string | null {
+  if (args.requestedSourceType === undefined) return null;
+  if (args.status !== "SOLD") return null;
+  // `undefined` predates the field and means owned stock — the same reading
+  // `legalOwnerTypeOf` uses, so an old row is not treated as a change.
+  const current = args.currentSourceType ?? "STOCK";
+  if (args.requestedSourceType === current) return null;
+
+  return current === "SOURCED"
+    ? "This vehicle has already been sold on the supplier's behalf, so it cannot be converted to dealership stock now. Convert it before the sale, or correct the sale first."
+    : "This vehicle has already been sold as the dealership's own stock, so it cannot be reclassified as a supplier's vehicle now — the completed sale already recognized revenue and cost of sales on it. Correct the sale through the consigned-sale correction instead.";
+}

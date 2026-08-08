@@ -19,6 +19,7 @@ import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { toast } from "@/components/ui/sonner";
 import { downloadElementAsPdf } from "@/lib/htmlToPdf";
 import { getErrorMessage } from "@/lib/errors";
+import { decideDepositSubmission } from "@/lib/depositSettlementSubmission";
 
 interface Step4QuoteSuccessProps {
   paymentType: PaymentType;
@@ -142,11 +143,13 @@ export function Step4QuoteSuccess({
     []
   );
 
-  const blockingLine = Object.values(depositEligibility).find((line) => !line.canApply);
-  const anyLineConfirmed = Object.values(depositInSettlement).some(Boolean);
-  // Sent only when every line that has an opinion can accept it. Sending a
-  // treatment one line refuses throws and rolls the entire completion back.
-  const sendDepositTreatment = anyLineConfirmed && blockingLine === undefined;
+  // Extracted so it can be tested at all — this wizard has no test file, and
+  // this is the rule deciding whether a financial treatment is applied to every
+  // car on the deal. See lib/depositSettlementSubmission.ts.
+  const depositDecision = decideDepositSubmission(depositEligibility, depositInSettlement);
+  const blockingLine = depositDecision.blockingLine;
+  const someButNotAllConfirmed = depositDecision.partiallyConfirmed;
+  const sendDepositTreatment = depositDecision.sendTreatment;
 
   const handleSubmitSale = async () => {
     if (!activeOrgId || !quote || !me) return;
@@ -323,7 +326,17 @@ export function Step4QuoteSuccess({
             ) : (
               <Button
                 onClick={handleSubmitSale}
-                disabled={isCompletingSale || !quote || !me}
+                disabled={
+                  isCompletingSale ||
+                  !quote ||
+                  !me ||
+                  // A car on this quote refuses the deposit treatment, or only
+                  // some of them are confirmed. Either way the deal cannot be
+                  // submitted coherently — and letting it through produced a
+                  // refusal naming no vehicle, on a multi-car quote.
+                  !!blockingLine ||
+                  someButNotAllConfirmed
+                }
                 variant="outline"
                 size="lg"
                 className="min-w-[200px] border-emerald-500/40 text-emerald-600 hover:bg-emerald-500/10"
@@ -342,6 +355,27 @@ export function Step4QuoteSuccess({
           </Button>
         </div>
       </div>
+
+      {/* Which car is in the way, and why. This was computed and thrown away:
+          the submit was simply withheld, and the server's refusal names no
+          vehicle, so on a multi-car quote the operator was told a deposit was
+          too large without being told whose. */}
+      {activeOrgId && (blockingLine || someButNotAllConfirmed) && !saleId ? (
+        <p className="mx-auto flex max-w-2xl items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/[0.06] px-3 py-2.5 text-xs leading-relaxed text-amber-800 dark:text-amber-400">
+          <span aria-hidden>⚠</span>
+          <span>
+            {blockingLine ? (
+              <>
+                <span className="font-medium">{blockingLine.label}</span>
+                {" — "}
+                {blockingLine.reason}
+              </>
+            ) : (
+              t("DepositSettlementConfirmAllLines" as any)
+            )}
+          </span>
+        </p>
+      ) : null}
 
       {activeOrgId ? (
         <div className="space-y-4">

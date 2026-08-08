@@ -218,17 +218,26 @@ export async function assessConsignedSale(
   // A monetary field nobody can read. Reported so the row reaches a human, and
   // disqualifying (any flag is) so nothing is corrected off a figure that does
   // not exist.
-  if (grossMinor === null) flags.push("UNREADABLE_AMOUNT");
+  // Every monetary field this row reads, not just the sale price. `NaN` is
+  // falsy so a `> 0` short-circuit hides it, but `Infinity` and an
+  // out-of-safe-range value are truthy and still threw straight through the
+  // per-sale loop — the same report-wide abort, reached by a different field.
+  const purchaseMinor = safeMinor(vehicle.purchasePrice, currency);
+  const purchasePriceUnreadable =
+    vehicle.purchasePrice !== undefined &&
+    vehicle.purchasePrice !== null &&
+    purchaseMinor === null;
+  if (grossMinor === null || purchasePriceUnreadable) flags.push("UNREADABLE_AMOUNT");
   if (live.length === 0) flags.push("NO_POSTED_JOURNAL");
   if (live.length > 1) flags.push("MULTIPLE_POSTED_JOURNALS");
   if (entitlementMinor === null) flags.push("NO_SOURCE_COST");
   if (marginMinor !== null && marginMinor < 0) flags.push("NEGATIVE_MARGIN");
   if (postedInventoryRelief > 0) flags.push("INVENTORY_RELIEVED_ON_CONSIGNED_CAR");
   if (
-    vehicle.purchasePrice &&
-    vehicle.purchasePrice > 0 &&
+    purchaseMinor !== null &&
+    purchaseMinor > 0 &&
     entitlementMinor !== null &&
-    toMinorUnits(vehicle.purchasePrice, currency) !== entitlementMinor
+    purchaseMinor !== entitlementMinor
   ) {
     // Two different figures for what this car cost, and no way to tell which
     // one the supplier is actually owed. Correcting the sale means asserting

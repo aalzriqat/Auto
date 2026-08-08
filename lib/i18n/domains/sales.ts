@@ -163,6 +163,8 @@ export const salesEn = {
   DepositSettlementNotDecided:
     "This car's share of the deposit has not been decided yet. Record the split above first.",
   DepositSettlementUnavailable: "This deposit cannot be treated that way",
+  DepositSettlementConfirmAllLines:
+    "This deposit decision applies to the whole deal, so confirm it on every vehicle on this quote — or on none of them.",
   Taxes: "Taxes (JOD)",
   FinancingAndTradeIn: "Financing & Trade-In",
   SelectTradeIn: "Select trade-in (optional)",
@@ -737,6 +739,8 @@ export const salesAr = {
   DepositSettlementNotDecided:
     "لم تُحدَّد بعد حصة هذه المركبة من العربون. سجّل التوزيع أعلاه أولًا.",
   DepositSettlementUnavailable: "لا يمكن معالجة هذا العربون بهذه الطريقة",
+  DepositSettlementConfirmAllLines:
+    "قرار العربون يسري على الصفقة كاملة، لذا أكّده على كل مركبة في هذا العرض — أو على أي منها.",
   ConsignedNoSupplierCost:
     "لا يوجد مبلغ مورّد مسجّل لهذه المركبة، لذا لا يمكن تحديد هامش المعرض ولا إتمام البيع. سجّل المبلغ المتفق عليه مع المورّد، أو حوّل المركبة إلى ملكية المعرض أولًا.",
   Taxes: "الضرائب (دينار اردني)",

@@ -51,6 +51,7 @@ const vehicleSourceType = v.optional(v.union(v.literal("STOCK"), v.literal("SOUR
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
 import { paginationOptsValidator } from "convex/server";
+import { retroactiveOwnershipChangeRefusal } from "./utils/vehicleOwnership";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -1034,18 +1035,12 @@ export const update = mutation({
     // A genuine historical correction goes through the audited migration path
     // (`consignedSaleCorrections`), which posts a correcting journal and leaves
     // a record, rather than editing the basis out from under a posted sale.
-    const effectiveNewSourceType = args.sourceType ?? vehicle.sourceType;
-    if (
-      args.sourceType !== undefined &&
-      effectiveNewSourceType !== vehicle.sourceType &&
-      vehicle.status === "SOLD"
-    ) {
-      throw new ConvexError(
-        vehicle.sourceType === "SOURCED"
-          ? "This vehicle has already been sold on the supplier's behalf, so it cannot be converted to dealership stock now. Convert it before the sale, or correct the sale first."
-          : "This vehicle has already been sold as the dealership's own stock, so it cannot be reclassified as a supplier's vehicle now — the completed sale already recognized revenue and cost of sales on it. Correct the sale through the consigned-sale correction instead."
-      );
-    }
+    const ownershipRefusal = retroactiveOwnershipChangeRefusal({
+      currentSourceType: vehicle.sourceType,
+      requestedSourceType: args.sourceType,
+      status: vehicle.status,
+    });
+    if (ownershipRefusal) throw new ConvexError(ownershipRefusal);
 
     // If VIN is being changed, check for duplicates
     if (args.vin) {

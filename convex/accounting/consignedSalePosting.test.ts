@@ -50,42 +50,34 @@ function net(result: ReturnType<typeof ruleSaleCompleted>, key: string): number 
 }
 
 describe("sales tax on an agent-basis sale", () => {
-  test("is recorded as a liability, not dropped when revenue moves to the margin", () => {
-    // The principal rule carves the tax out of the sale amount and credits
-    // SALES_TAX_PAYABLE. Switching a consigned sale to agency margin must not
-    // lose that: the dealership billed the customer the gross INCLUDING tax and
-    // collected it, so the liability is its own regardless of who owned the car.
-    //
-    // Dropped silently, the dealership holds the customer's tax money with
-    // nothing on the books saying it owes it — and the entry still balanced,
-    // because the whole margin was credited to commission revenue instead.
-    const result = ruleSaleCompleted(consigned({ taxMinor: jod(500) }));
+  // The defect: `consignedAgentSaleLines` ignored `taxMinor` altogether, though
+  // `saleCompletion` passes it in the same payload as the consignment. The
+  // whole margin went to commission revenue, no liability was recorded, and the
+  // dealership held the customer's tax money with nothing saying it owed it —
+  // while the entry balanced, which is why nothing caught it.
+  //
+  // It is refused rather than posted because the codebase holds two
+  // contradictory tax conventions (see the rule's own comment): the principal
+  // rule reads `saleAmountMinor` as tax-INCLUSIVE, the sale form and the AR
+  // subledger read it as EXCLUSIVE. On an agency sale those give materially
+  // different commission revenue, so posting either one would be inventing tax
+  // policy. Refusing drops nothing and guesses nothing.
+  test.each([
+    ["THROUGH_DEALERSHIP" as const],
+    ["DIRECT_TO_SUPPLIER" as const],
+  ])("is refused on %s rather than silently dropped", (route) => {
+    expect(() => ruleSaleCompleted(consigned({ taxMinor: jod(500) }, route))).toThrow(
+      /tax/i
+    );
+  });
 
-    expect(net(result, SYSTEM_KEYS.SALES_TAX_PAYABLE)).toBe(-jod(500));
-    // The tax comes out of the dealership's OWN revenue, not the supplier's
-    // entitlement — his share of the car is unchanged by the dealership's tax.
-    expect(net(result, SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE)).toBe(-jod(2_500));
-    expect(net(result, SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS)).toBe(-jod(9_500));
-    expect(net(result, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(jod(12_500));
+  test("posts normally when there is no tax, which is every current wizard sale", () => {
+    // `completeFromQuote` passes no tax at all, so the refusal above cannot
+    // reach the sales wizard — only the sale form, which offers a tax field.
+    const result = ruleSaleCompleted(consigned({ taxMinor: 0 }));
+    expect(net(result, SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE)).toBe(-jod(3_000));
+    expect(net(result, SYSTEM_KEYS.SALES_TAX_PAYABLE)).toBe(0);
     expect(() => validateBalance(result.lines)).not.toThrow();
-  });
-
-  test("is refused rather than guessed at when the dealership never collected it", () => {
-    // On DIRECT_TO_SUPPLIER the buyer paid the supplier; no gross ever reaches
-    // these books and the dealership issued no invoice for the car. A tax
-    // amount on that route contradicts the route itself, and whose liability it
-    // is — the principal's or the agent's — is a tax policy question this rule
-    // has no rule for. It needs a decision, not a default.
-    expect(() =>
-      ruleSaleCompleted(consigned({ taxMinor: jod(500) }, "DIRECT_TO_SUPPLIER"))
-    ).toThrow(/tax/i);
-  });
-
-  test("is refused when it exceeds the dealership's own margin", () => {
-    // Carving 3,500 of tax out of a 3,000 margin would drive commission revenue
-    // negative — the dealership recognising a loss on a car it never owned, to
-    // fund a liability bigger than everything it earned.
-    expect(() => ruleSaleCompleted(consigned({ taxMinor: jod(3_500) }))).toThrow(/tax/i);
   });
 });
 

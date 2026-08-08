@@ -111,12 +111,31 @@ export async function postAccountingEvent(
   // lines (0 === 0), so without this distinction both outcomes wrote a journal
   // entry with no lines at all.
   if (ruleResult.skipPosting) {
+    // A declared skip that nevertheless produced lines is a rule contradicting
+    // itself, and silently discarding real debits and credits is the worse of
+    // the two readings.
+    if (ruleResult.lines.length > 0) {
+      throw new Error(
+        `Posting rule for ${cmd.eventType} declared skipPosting but produced ${ruleResult.lines.length} lines. Refusing to discard them.`
+      );
+    }
     return {
       eventId: null,
       journalEntryId: null,
       alreadyPosted: false,
       skipped: true,
     };
+  }
+
+  // 6c. An empty result that did NOT declare itself. `validateBalance` accepts
+  // zero lines (0 === 0), so without this a rule returning nothing by mistake
+  // writes a journal entry with no lines — a row asserting an event the books
+  // do not reflect. The `skipPosting` flag above is what distinguishes the
+  // deliberate case; reaching here without it is a bug in the rule.
+  if (ruleResult.lines.length === 0) {
+    throw new Error(
+      `Posting rule for ${cmd.eventType} produced no journal lines and did not declare skipPosting. A journal entry with no lines would balance trivially and assert an event the books do not reflect.`
+    );
   }
 
   // 7. Validate balance before resolving accounts

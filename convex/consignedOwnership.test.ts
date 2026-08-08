@@ -194,6 +194,27 @@ describe("conversion to dealer-owned stock", () => {
     expect(vehicle?.sourceType).toBe("STOCK");
   });
 
+  test("the approval workflow cannot apply what the direct mutation refuses", async () => {
+    // The guard lived only on `vehicles.update`. `vehicleEdits.requestUpdate`
+    // accepts `sourceType` in its payload and `resolve` applied it with a bare
+    // `ctx.db.patch`, so a user holding only edit:vehicles:request — the default
+    // SALES template — could submit the change and have a manager approve it.
+    // An approval workflow that can apply a patch the direct mutation refuses
+    // is not a workflow, it is a second door.
+    const s = await seed({ status: "SOLD", sourceType: "STOCK" });
+
+    await expect(
+      s.asUser.mutation(api.vehicleEdits.requestUpdate, {
+        orgId: s.orgId,
+        vehicleId: s.vehicleId,
+        payload: { sourceType: "SOURCED", sourcedFromName: "Amman Importer Co", sourceCost: 9_500 },
+      })
+    ).rejects.toThrow(/already been sold/i);
+
+    const vehicle = await s.t.run((ctx) => ctx.db.get(s.vehicleId));
+    expect(vehicle?.sourceType).toBe("STOCK");
+  });
+
   test("an unsold owned car can still be reclassified as consigned", async () => {
     // The guard is about the SALE, not about the direction. Before a sale there
     // is nothing recognised to contradict.

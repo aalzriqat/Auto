@@ -252,6 +252,17 @@ describe("sourced-sale impact report", () => {
     expect(good?.dealershipMarginMinor).toBe(jod(3_000));
   });
 
+  test("flags an unreadable PURCHASE price too, not just the sale price", async () => {
+    // NaN is falsy, so a `> 0` short-circuit hides it — but Infinity is truthy
+    // and threw straight through the same loop, aborting the same report from a
+    // different field. The first fix caught only the field its test used.
+    const { org } = await seed({ purchasePrice: Number.POSITIVE_INFINITY });
+    const row = org.rows[0]!;
+
+    expect(org.sourcedSalesFound).toBe(1);
+    expect(row.flags).toContain("UNREADABLE_AMOUNT");
+  });
+
   test("leaves owned stock out of the report entirely", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const orgId = await t.run(async (ctx) => {

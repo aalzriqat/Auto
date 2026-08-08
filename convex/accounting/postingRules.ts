@@ -534,34 +534,41 @@ function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
     );
   }
 
-  // Sales tax, carved out exactly as the principal rule carves it: the customer
-  // was billed the gross INCLUDING tax, so the tax is a liability from the
-  // moment it is collected and the rest is revenue. Ignoring it here — as this
-  // did — meant a consigned sale with tax credited the WHOLE margin to
-  // commission revenue and recorded no liability, so the dealership held the
-  // customer's tax money with nothing on the books saying it owed it. The entry
-  // balanced the entire time, which is why nothing caught it.
+  // Sales tax on an agency sale: refused, not guessed.
+  //
+  // Ignoring `taxMinor` — as this rule did — meant a consigned sale with tax
+  // credited the WHOLE margin to commission revenue and recorded no liability,
+  // so the dealership held the customer's tax money with nothing on the books
+  // saying it owed it. The entry balanced throughout, which is why nothing
+  // caught it. That silent drop is what this refusal closes.
+  //
+  // It is a refusal rather than a posting because the codebase currently holds
+  // TWO contradictory tax conventions, and picking one here would be inventing
+  // policy inside a posting rule:
+  //
+  //   - the principal rule treats `saleAmountMinor` as tax-INCLUSIVE — its AR
+  //     debit excludes tax and revenue is `saleAmount - tax` (see
+  //     `ruleSaleCompleted` below, and the SALES_TAX_PAYABLE line under it);
+  //   - the sale form treats it as tax-EXCLUSIVE — `SaleDialog` computes
+  //     `salePrice + taxAmount + fees + …`, and `customerBillableMinor` in
+  //     saleCompletion (which drives the AR subledger document) omits tax
+  //     entirely.
+  //
+  // Under the inclusive reading the tax comes out of the dealership's own
+  // margin; under the exclusive one it is billed on top and the margin is
+  // untouched. On an agency sale the two give materially different commission
+  // revenue, and the exclusive reading also makes tax routinely EXCEED an
+  // agent's spread — so a rule that carved tax out of the margin would refuse
+  // ordinary taxed consigned deals, or dead-letter them through the outbox when
+  // no period is open. Resolving that contradiction is a business decision
+  // about tax treatment, not a posting detail.
   const taxMinor = p.taxMinor && p.taxMinor > 0 ? p.taxMinor : 0;
   if (taxMinor > 0) {
-    if (consignment.settlementRoute === "DIRECT_TO_SUPPLIER") {
-      // The buyer paid the supplier. No gross reaches these books, the
-      // dealership issued no invoice for the car, and whether the tax is the
-      // principal's or the agent's is a tax question this rule has no rule for.
-      // Same posture as the negative margin above: a decision, not a default.
-      throw new Error(
-        `Consigned sale ${p.saleId} carries ${taxMinor} minor units of sales tax, but the buyer paid ${supplier} directly, so the dealership never billed or collected it. Record whose tax liability it is before completing the sale.`
-      );
-    }
-    if (taxMinor > marginMinor) {
-      // Carving more tax than the dealership earned would drive commission
-      // revenue negative — a loss recognized on a car it never owned, to fund a
-      // liability larger than everything the deal made.
-      throw new Error(
-        `Consigned sale ${p.saleId} carries ${taxMinor} minor units of sales tax against a dealership margin of ${marginMinor}. The tax cannot exceed what the dealership earned on the deal — check the tax amount and the supplier's entitlement.`
-      );
-    }
+    throw new Error(
+      `Consigned sale ${p.saleId} carries ${taxMinor} minor units of sales tax, and agency sales have no agreed tax treatment yet: the dealership sells this car as ${supplier}'s agent, so whether the tax is his liability or its own changes which of them the money is owed by. Record the tax against the supplier agreement, or sell the car as dealership stock, before completing the sale.`
+    );
   }
-  const commissionMinor = marginMinor - taxMinor;
+  const commissionMinor = marginMinor;
 
   // A zero margin is a real deal, not a broken one: the dealership placed the
   // car for a supplier and made nothing on the metal, earning only the dealer
