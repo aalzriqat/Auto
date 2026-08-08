@@ -215,6 +215,12 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
           {/* Messages */}
           <div
             ref={paneRef}
+            // This pane only became scrollable in this change, so it also needs
+            // to become reachable: without tabIndex a keyboard-only user cannot
+            // scroll back through history at all.
+            tabIndex={0}
+            role="log"
+            aria-label={t("Messages")}
             className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 py-3 bg-white flex flex-col"
           >
             {status === "CanLoadMore" && (

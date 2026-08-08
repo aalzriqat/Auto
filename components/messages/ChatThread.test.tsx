@@ -127,6 +127,40 @@ describe("ChatThread scroll contract", () => {
     expect(scrollCalls).toHaveLength(0);
   });
 
+  it("does not yank a reader who has scrolled up into history", () => {
+    const { container, rerender } = renderThread();
+    const el = container.querySelector(".overflow-y-auto") as HTMLElement;
+
+    // jsdom has no layout, so geometry is stubbed: a long thread scrolled well
+    // away from the bottom.
+    Object.defineProperty(el, "scrollHeight", { value: 4000, configurable: true });
+    Object.defineProperty(el, "clientHeight", { value: 400, configurable: true });
+    Object.defineProperty(el, "scrollTop", { value: 500, configurable: true, writable: true });
+    scrollCalls = [];
+
+    state.results = [message("m0"), ...state.results];
+    rerender(<ChatThread conversationId={CONVERSATION_ID} currentUserId={CURRENT_USER} />);
+
+    // 4000 - 500 - 400 = 3100px from the bottom — leave the reader alone.
+    expect(scrollCalls).toHaveLength(0);
+  });
+
+  it("still follows a new message when already at the bottom", () => {
+    const { container, rerender } = renderThread();
+    const el = container.querySelector(".overflow-y-auto") as HTMLElement;
+
+    Object.defineProperty(el, "scrollHeight", { value: 4000, configurable: true });
+    Object.defineProperty(el, "clientHeight", { value: 400, configurable: true });
+    Object.defineProperty(el, "scrollTop", { value: 3600, configurable: true, writable: true });
+    scrollCalls = [];
+
+    state.results = [message("m0"), ...state.results];
+    rerender(<ChatThread conversationId={CONVERSATION_ID} currentUserId={CURRENT_USER} />);
+
+    // Pinned to the bottom, so the thread should keep following.
+    expect(scrollCalls.at(-1)?.behavior).toBe("smooth");
+  });
+
   it("still scrolls when a genuinely new message arrives", () => {
     const { rerender } = renderThread();
     scrollCalls = [];
@@ -161,6 +195,27 @@ describe("ChatThread scroll contract", () => {
     rerender(<ChatThread conversationId={"conv2" as never} currentUserId={CURRENT_USER} />);
 
     expect(scrollCalls.at(-1)?.behavior).toBe("auto");
+  });
+
+  it("lets the messages pane shrink so it can scroll", () => {
+    const { container } = renderThread();
+    const el = container.querySelector(".overflow-y-auto") as HTMLElement;
+    expect(el).toBeTruthy();
+    // min-h-0 is what allows a flex child to shrink below its content; without
+    // it this pane grows to the whole thread and clips the composer.
+    expect(el.className).toContain("min-h-0");
+    expect(el.className).toContain("overscroll-contain");
+    expect(el.className).not.toMatch(/\bh-\[\d+px\]/);
+  });
+
+  it("exposes the scrollable pane to keyboard users", () => {
+    const { container } = renderThread();
+    const el = container.querySelector(".overflow-y-auto") as HTMLElement;
+    // Made scrollable by this change, so it must be focusable — otherwise
+    // keyboard-only users cannot reach the history at all.
+    expect(el.getAttribute("tabindex")).toBe("0");
+    expect(el.getAttribute("role")).toBe("log");
+    expect(el.getAttribute("aria-label")).toBeTruthy();
   });
 
   it("keeps a short thread resting on the composer", () => {

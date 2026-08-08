@@ -169,6 +169,10 @@ export function ChatThread({ conversationId, currentUserId }: Props) {
       {/* Messages */}
       <div
         ref={paneRef}
+        // Scrollable as of this change, so it must also be keyboard-reachable.
+        tabIndex={0}
+        role="log"
+        aria-label={t("Messages")}
         className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4 flex flex-col"
       >
         {status === "CanLoadMore" && (

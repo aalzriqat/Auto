@@ -2,6 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+/**
+ * How far from the bottom a reader can be before an incoming message stops
+ * auto-scrolling. Roughly one or two message bubbles.
+ */
+const NEAR_BOTTOM_PX = 200;
+
 interface Options {
   /**
    * Id of the newest message in the thread. `listMessages` returns newest-first,
@@ -69,6 +75,13 @@ export function useChatAutoScroll({ newestMessageId, enabled = true }: Options) 
       return;
     }
     if (!newestMessageId) return;
+    // Don't yank a reader who has scrolled up into history. `loadMore` is
+    // already excluded by keying on the newest id, but a message arriving from
+    // someone else would still drag them to the bottom mid-sentence. The
+    // initial scroll always runs, so opening a thread still lands at the newest
+    // message. The threshold absorbs the height of the message just rendered.
+    const distanceFromBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight;
+    if (hasScrolledRef.current && distanceFromBottom > NEAR_BOTTOM_PX) return;
     // Only record the initial scroll once there was actually a pane to scroll.
     if (scrollToBottom(hasScrolledRef.current)) {
       hasScrolledRef.current = true;
