@@ -557,16 +557,50 @@ export async function resolveDepositsForQuote(
     }
     await maybeReleaseVehicleHold(ctx, args.vehicleId);
 
-    // The deposit row itself only closes when nothing on the quote still has a
-    // live claim on it. A row cannot be half-APPLIED, so its status follows the
-    // last allocation rather than the first.
+    // The deposit row closes when every dinar of it has actually gone
+    // somewhere — not merely when no hold is active.
+    //
+    // The two are different whenever an allocation left a remainder, which is
+    // an explicitly supported outcome: 5,000 received, 3,000 to one car and
+    // 1,000 to another, 1,000 assigned to neither. Closing on "no active hold"
+    // marked that row APPLIED with the customer's 1,000 never applied and never
+    // paid back — and every path out of it then refused, because releasing a
+    // deposit or a share requires the row to be HELD and allocating requires a
+    // car without a completed sale. The only escape was to cancel a completed
+    // sale, reversing a real issued invoice, to get the row back to HELD.
     const remaining = await ctx.db
       .query("depositVehicleHolds")
       .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
       .collect();
+    // Read from the holds rather than from the application rows, because those
+    // are written after this runs — the slice just consumed above is APPLIED
+    // here but has no application row yet.
+    const goneMinor =
+      remaining.reduce((sum, hold) => {
+        const amount = hold.allocatedAmountMinor ?? 0;
+        if (hold.allocationStatus === "APPLIED" || hold.allocationStatus === "REVERSING") {
+          return sum + amount;
+        }
+        // A refunded or forfeited share has left the business. RETURN and
+        // REALLOCATE have not — that money lives on another hold row, which is
+        // counted on its own terms. OTHER has not either: it records a decision
+        // the system does not post, and the liability stays on the books.
+        if (
+          hold.allocationStatus === "RESOLVED" &&
+          (hold.resolutionTreatment === "REFUND_TO_CUSTOMER" ||
+            hold.resolutionTreatment === "FORFEITED")
+        ) {
+          return sum + amount;
+        }
+        return sum;
+      }, 0) + (deposit.releasedAmountMinor ?? 0);
+    const rowMinor = deposit.amountMinor ?? amountToMinorOrThrow(deposit.amount, args.currency);
+
     if (remaining.every((h) => h.active === false)) {
       await ctx.db.patch(deposit._id, {
-        status: args.resolution,
+        // Held money left over stays HELD, so it is still refundable. The hold
+        // side is closed either way — no car is waiting on it.
+        ...(goneMinor >= rowMinor ? { status: args.resolution } : {}),
         holdActive: false,
         resolvedBy: args.actorId,
         resolvedAt: now,

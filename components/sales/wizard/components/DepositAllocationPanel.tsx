@@ -53,7 +53,7 @@ export function DepositAllocationPanel({
         // A slice already consumed by its sale, or already resolved, is not
         // editable — and including it in the draft would count it twice
         // against the deposit in the totals below.
-        if (v.status === "APPLIED" || v.status === "RESOLVED") continue;
+        if (v.status !== undefined && v.status !== "ALLOCATED") continue;
         seeded[v.vehicleId] =
           v.allocatedMinor === undefined
             ? ""
@@ -112,7 +112,11 @@ export function DepositAllocationPanel({
         orgId,
         quoteId,
         allocations: allocation.vehicles
-          .filter((v) => v.status !== "APPLIED" && v.status !== "RESOLVED")
+          // Only the shares this screen can actually set. A car whose share is
+          // awaiting a decision, or still mid-reversal, is rejected outright by
+          // the server — so including it made editing ANY other car's share
+          // fail with a message about a car the operator had not touched.
+          .filter((v) => v.status === undefined || v.status === "ALLOCATED")
           .map((v) => ({
             vehicleId: v.vehicleId,
             amount: Number(draft[v.vehicleId] || 0),
@@ -155,10 +159,15 @@ export function DepositAllocationPanel({
                 {t("QuotedAt" as any)} {v.unitPrice.toLocaleString()}
               </p>
             </div>
-            {v.status === "APPLIED" || v.status === "RESOLVED" ? (
+            {v.status !== undefined && v.status !== "ALLOCATED" ? (
+              // Not editable here, and shown as such rather than as an input
+              // whose value can never be saved.
               <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
                 <Check className="h-3.5 w-3.5" aria-hidden />
-                {money(v.allocatedMinor ?? 0)} · {t("DepositAllocationApplied" as any)}
+                {money(v.allocatedMinor ?? 0)} ·{" "}
+                {v.status === "APPLIED" || v.status === "RESOLVED"
+                  ? t("DepositAllocationApplied" as any)
+                  : t("DepositAwaitingDecision" as any)}
               </span>
             ) : (
               <Input

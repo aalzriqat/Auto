@@ -913,13 +913,17 @@ async function outstandingDepositMinor(
     .query("depositVehicleHolds")
     .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
     .collect();
+  // OTHER is deliberately NOT here. It records a treatment the system does not
+  // post, so the GL keeps the credit — dropping it from this side would leave
+  // the two permanently apart, which is the noise this function exists to
+  // remove. Mirrors recordUnpostedDepositTreatment: the liability stays on the
+  // books awaiting a manual journal.
   const slicesFinalized = holds
     .filter(
       (hold) =>
         hold.allocationStatus === "RESOLVED" &&
         (hold.resolutionTreatment === "REFUND_TO_CUSTOMER" ||
-          hold.resolutionTreatment === "FORFEITED" ||
-          hold.resolutionTreatment === "OTHER")
+          hold.resolutionTreatment === "FORFEITED")
     )
     .reduce((sum, hold) => sum + (hold.allocatedAmountMinor ?? 0), 0);
 
@@ -933,7 +937,17 @@ async function outstandingDepositMinor(
   const resolvedWithoutSliceRecord = deposit.status !== "HELD" && accountedFor === 0;
   if (resolvedWithoutSliceRecord) return 0;
 
-  return Math.max(0, face - accountedFor);
+  const outstanding = face - accountedFor;
+  if (outstanding < 0) {
+    // More has been relieved than the row ever held. Nothing reachable does
+    // that today, and if something starts to, this is the control that is
+    // supposed to say so — clamping it to zero would hide exactly the class of
+    // error the reconciliation exists to catch.
+    console.error(
+      `Deposit ${deposit._id} has been relieved by ${accountedFor} against a face value of ${face}.`
+    );
+  }
+  return outstanding;
 }
 
 export async function computeCustomerDepositsReconciliation(

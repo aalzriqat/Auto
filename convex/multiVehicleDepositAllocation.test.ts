@@ -2323,3 +2323,113 @@ describe("a car whose share is zero, once its sale is complete", () => {
     await expectConservation(s);
   });
 });
+
+// ─── An allocation that leaves a remainder ───────────────────────────────────
+//
+// Leaving part of the عربون against no car is an explicitly supported outcome.
+// What must not happen is the deal closing around it.
+
+describe("a deposit with money assigned to no car at all", () => {
+  async function bothCarsSoldLeavingRemainder(tag: string) {
+    const s = await seed(tag);
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 3_000 },
+      { vehicleId: s.vehicleB!, amount: 1_000 },
+    ]);
+    await sell(s, s.vehicleA, PRICE_A);
+    await sell(s, s.vehicleB!, PRICE_B);
+    return s;
+  }
+
+  test("stays refundable after every car on the quote is sold", async () => {
+    // The row closed on "no active hold", which marked it APPLIED with 1,000 of
+    // the customer's money never applied and never paid back. Every path out
+    // then refused — releasing needs a HELD row, allocating needs a car without
+    // a completed sale — so the only way to give it back was to cancel a
+    // completed sale and reverse a real issued invoice.
+    const s = await bothCarsSoldLeavingRemainder("remainderRefundable");
+
+    const deposit = await s.t.run(async (ctx) =>
+      (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)
+    );
+    expect(deposit!.status).toBe("HELD");
+
+    const view = await expectConservation(s);
+    expect(view.appliedMinor).toBe(4_000 * SCALE);
+    expect(view.unallocatedMinor).toBe(1_000 * SCALE);
+
+    await release(s, deposit!._id);
+    expect(await cashOut(s)).toEqual([1_000]);
+    const after = await expectConservation(s);
+    expect(after.refundedMinor).toBe(1_000 * SCALE);
+    expect(after.unallocatedMinor).toBe(0);
+  });
+
+  test("and the liability reconciles the whole way through", async () => {
+    const s = await bothCarsSoldLeavingRemainder("remainderRecon");
+
+    const recon = await depositReconciliation(s);
+    expect(recon.isReconciled).toBe(true);
+    // 4,000 applied, 1,000 still owed to the customer.
+    expect(recon.byCurrency.JOD!.subledgerBalanceMinor).toBe(1_000 * SCALE);
+    expect(recon.byCurrency.JOD!.glBalanceMinor).toBe(1_000 * SCALE);
+  });
+
+  test("a deposit where every car carries nothing is still wholly owed", async () => {
+    // The widest form of the same thing: two zero shares close every hold while
+    // the entire 5,000 has gone nowhere. Reporting that row as resolved made the
+    // reconciliation call a live 5,000 liability zero.
+    const s = await seed("allZeroShares");
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 0 },
+      { vehicleId: s.vehicleB!, amount: 0 },
+    ]);
+    await sell(s, s.vehicleA, PRICE_A);
+    await sell(s, s.vehicleB!, PRICE_B);
+
+    const deposit = await s.t.run(async (ctx) =>
+      (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)
+    );
+    expect(deposit!.status).toBe("HELD");
+
+    const recon = await depositReconciliation(s);
+    expect(recon.isReconciled).toBe(true);
+    expect(recon.byCurrency.JOD!.subledgerBalanceMinor).toBe(5_000 * SCALE);
+
+    const view = await expectConservation(s);
+    expect(view.unallocatedMinor).toBe(5_000 * SCALE);
+    expect(view.appliedMinor).toBe(0);
+  });
+
+  test("a treatment the system does not post leaves the liability on the books", async () => {
+    // OTHER records a decision and posts nothing, so the GL keeps the credit.
+    // Dropping it from the subledger side would leave the two permanently apart
+    // — the noise the reconciliation exists to remove.
+    const s = await seed("otherTreatment");
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 3_000 },
+      { vehicleId: s.vehicleB!, amount: 2_000 },
+    ]);
+    await s.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      vehicleId: s.vehicleA,
+    });
+    const [holdA] = await holdsFor(s, s.vehicleA);
+    await s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
+      orgId: s.orgId,
+      holdId: holdA!._id,
+      treatment: "OTHER" as const,
+      reason: "Transferred to another deal, journalled by hand",
+    });
+
+    const recon = await depositReconciliation(s);
+    expect(recon.isReconciled).toBe(true);
+    // Nothing has been paid out, so all 5,000 is still owed.
+    expect(recon.byCurrency.JOD!.subledgerBalanceMinor).toBe(5_000 * SCALE);
+    expect(await cashOut(s)).toEqual([]);
+  });
+});
