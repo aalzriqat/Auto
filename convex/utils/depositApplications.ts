@@ -302,8 +302,8 @@ export async function reverseDepositApplicationsForSale(
  * timer or on a read.
  *
  * Keyed on the reversal's idempotency key, which `reverseDepositApplication`
- * derives as `reversed_<the application's own key>`. Returns the ids it
- * advanced so the caller can free their holds.
+ * derives as `reversed_<the application's own key>`. Frees the slice itself and
+ * returns the holds it advanced, for callers that want to report on them.
  */
 export async function completeDeferredReversal(
   ctx: MutationCtx,

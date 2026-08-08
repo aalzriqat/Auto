@@ -449,6 +449,15 @@ async function reinstateAppliedDeposits(
         resolvedAt: undefined,
         resolvedBy: undefined,
       });
+      // If this sale was the one that closed the row, reopen it. A zero slice
+      // posts no journal and so has no application row, and the legacy loop
+      // below skips any deposit that has application rows from OTHER cars — so
+      // the row stayed APPLIED with a live hold pointing at it. That put the
+      // car back on RESERVED (the hold is active) with no way out: releasing a
+      // share requires a HELD deposit, and the row had nothing left to release.
+      if (deposit.resolutionSaleId === args.saleId) {
+        await reopenDepositAfterReversal(ctx, deposit._id);
+      }
       await syncVehicleHoldStatus(ctx, hold.vehicleId, args.actorId);
     }
   }

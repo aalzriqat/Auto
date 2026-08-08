@@ -19,6 +19,8 @@ import {
   type PaymentMethod,
 } from "@/components/payments/PaymentMethodSelect";
 import { toast } from "@/components/ui/sonner";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import { getErrorMessage } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { DepositAllocationPanel } from "@/components/sales/wizard/components/DepositAllocationPanel";
@@ -69,6 +71,10 @@ type Treatment =
  */
 type RefundMethod = PaymentMethod;
 
+/** The two treatments that actually move money, and so are irreversible. */
+const movesMoney = (treatment: Treatment) =>
+  treatment === "REFUND_TO_CUSTOMER" || treatment === "FORFEITED";
+
 export function QuoteDepositManager({
   orgId,
   quoteId,
@@ -77,6 +83,11 @@ export function QuoteDepositManager({
   quoteId: Id<"quotes">;
 }) {
   const { t, isRtl } = useLanguage();
+  const { hasPermission } = usePermissions();
+  // Refund and forfeiture move a customer's money and carry an approval bar the
+  // server enforces. Offering them to somebody who cannot pass it turns a
+  // permission into an error message.
+  const canApprove = hasPermission(PERMISSIONS.APPROVE_REQUESTS);
   const allocation = useQuery(api.deposits.quoteAllocation, { orgId, quoteId });
   const releaseVehicle = useMutation(api.deposits.releaseVehicleAllocation);
   const resolveReleased = useMutation(api.deposits.resolveReleasedAllocation);
@@ -98,8 +109,11 @@ export function QuoteDepositManager({
 
   if (!allocation || allocation.totalReceivedMinor === 0) return null;
 
+  // One row per share, carrying its own amount and status. A car can hold more
+  // than one at once, and reading the vehicle's total for each of them showed
+  // two shares of 1,000 and 2,000 as "3,000" twice.
   const awaiting = allocation.vehicles.flatMap((vehicle) =>
-    (vehicle.awaitingDecisionHoldIds ?? []).map((holdId) => ({ vehicle, holdId }))
+    (vehicle.awaitingDecision ?? []).map((share) => ({ vehicle, ...share }))
   );
 
   const handleRelease = async (vehicleId: Id<"vehicles">) => {
@@ -226,16 +240,27 @@ export function QuoteDepositManager({
             </div>
           </header>
 
-          {awaiting.map(({ vehicle, holdId }) => {
+          {awaiting.map(({ vehicle, holdId, amountMinor, status }) => {
             const treatment = treatmentByHold[holdId] ?? "RETURN_TO_UNALLOCATED";
+            // Waiting on the ledger, not on a person. The reversing journal is
+            // queued behind a closed accounting period, and until it posts the
+            // original entry still stands — so the server refuses every
+            // treatment, and offering them here would be an error message
+            // dressed up as a choice.
+            const pendingReversal = status === "REVERSING";
             return (
               <div key={holdId} className="space-y-2 rounded-md bg-background p-3">
                 <p className="text-sm">
                   <span className="font-medium">{vehicle.label}</span>
                   <span className="ms-2 tabular-nums text-muted-foreground">
-                    {vehicle.allocatedMinor === undefined ? "" : money(vehicle.allocatedMinor)}
+                    {money(amountMinor)}
                   </span>
                 </p>
+                {pendingReversal ? (
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    {t("DepositReversingPending" as any)}
+                  </p>
+                ) : (
                 <div className="flex flex-wrap items-center gap-2">
                   <Select
                     value={treatment}
@@ -274,7 +299,15 @@ export function QuoteDepositManager({
                       </SelectTrigger>
                       <SelectContent>
                         {allocation.vehicles
-                          .filter((other) => other.vehicleId !== vehicle.vehicleId)
+                          .filter(
+                            (other) =>
+                              other.vehicleId !== vehicle.vehicleId &&
+                              // A car whose share is already on its completed
+                              // sale cannot take more after the fact, and the
+                              // server says so — better not to offer it.
+                              other.status !== "APPLIED" &&
+                              other.status !== "REVERSING"
+                          )
                           .map((other) => (
                             <SelectItem key={other.vehicleId} value={other.vehicleId}>
                               {other.label}
@@ -318,13 +351,28 @@ export function QuoteDepositManager({
                     className="h-8 text-xs"
                     disabled={
                       busyHoldId === holdId ||
-                      (treatment === "REALLOCATE_TO_VEHICLE" && !targetByHold[holdId])
+                      (treatment === "REALLOCATE_TO_VEHICLE" && !targetByHold[holdId]) ||
+                      (movesMoney(treatment) && !canApprove)
                     }
-                    onClick={() => handleResolve(holdId as Id<"depositVehicleHolds">)}
+                    onClick={() => {
+                      // Terminal, and one of them pays a customer. A select
+                      // change and a single click should not be able to forfeit
+                      // somebody's عربون by accident.
+                      if (movesMoney(treatment) && !window.confirm(t("ConfirmDepositResolution" as any))) {
+                        return;
+                      }
+                      void handleResolve(holdId as Id<"depositVehicleHolds">);
+                    }}
                   >
                     {t("DepositRecordDecision" as any)}
                   </Button>
                 </div>
+                )}
+                {movesMoney(treatment) && !canApprove && !pendingReversal && (
+                  <p className="text-xs text-muted-foreground">
+                    {t("DepositDecisionNeedsApproval" as any)}
+                  </p>
+                )}
               </div>
             );
           })}

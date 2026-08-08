@@ -1757,9 +1757,119 @@ describe("a share allocated at zero", () => {
     await expect(allocate(s, [{ vehicleId: s.vehicleA, amount: 0 }])).resolves.toBeDefined();
     await expectConservation(s);
   });
+
+  test("its car does not come back reserved with no way to free it", async () => {
+    // Sell the funded car first, then the zero-share car, then cancel the
+    // second. Reported as a case where the deposit row stays APPLIED while the
+    // reinstated hold reserves the vehicle, leaving no path to free either.
+    //
+    // I could NOT reproduce that: the row is HELD here both with and without
+    // the guard now in reinstateAppliedDeposits. The scenario is pinned
+    // anyway, because the invariant it asserts is the one that matters and
+    // nothing else covers this ordering.
+    const s = await seed("zeroSliceRowClosed");
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 0 },
+      { vehicleId: s.vehicleB!, amount: 5_000 },
+    ]);
+    await sell(s, s.vehicleB!, PRICE_B);
+    const saleA = await sell(s, s.vehicleA, PRICE_A);
+
+    await cancel(s, saleA);
+
+    const deposit = await s.t.run(async (ctx) =>
+      (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)
+    );
+    expect([deposit!.status, deposit!.holdActive]).toEqual(["HELD", true]);
+    expect(deposit!.holdActive).toBe(true);
+    // And the share can be taken off the deal again, which is what proves the
+    // car is not stuck.
+    await expect(
+      s.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+        orgId: s.orgId,
+        quoteId: s.quoteId,
+        vehicleId: s.vehicleA,
+      })
+    ).resolves.toBeDefined();
+    await expectConservation(s);
+  });
+});
+
+describe("what the allocation screen is told about a released share", () => {
+  test("each share carries its own amount, not the car's total", async () => {
+    // A car can hold more than one share at once. Printing the vehicle figure
+    // beside each of them showed 1,000 and 2,000 as "3,000" twice — 6,000 on
+    // screen where 3,000 exists — and an operator forfeiting "3,000" forfeited
+    // 1,000.
+    const s = await seed("perShareAmount");
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 2_000 },
+      { vehicleId: s.vehicleB!, amount: 1_000 },
+    ]);
+    await s.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      vehicleId: s.vehicleA,
+    });
+    const [holdA] = await holdsFor(s, s.vehicleA);
+    await s.asUser.mutation(api.deposits.resolveReleasedAllocation, {
+      orgId: s.orgId,
+      holdId: holdA!._id,
+      treatment: "REALLOCATE_TO_VEHICLE" as const,
+      toVehicleId: s.vehicleB!,
+    });
+    const saleB = await sell(s, s.vehicleB!, PRICE_B);
+    await cancel(s, saleB);
+
+    const view = await allocationView(s);
+    const shares = view!.vehicles.find((v) => v.vehicleId === s.vehicleB)!.awaitingDecision;
+    expect(shares.map((share) => share.amountMinor).sort((a, b) => a - b)).toEqual([
+      1_000 * SCALE,
+      2_000 * SCALE,
+    ]);
+    // And they sum to the bucket, rather than to twice the car's total.
+    expect(shares.reduce((sum, share) => sum + share.amountMinor, 0)).toBe(
+      view!.releasedAwaitingDecisionMinor
+    );
+  });
+
+  test("a share still mid-reversal is reported as such, not as decidable", async () => {
+    // `resolveReleasedAllocation` refuses a REVERSING share — its original
+    // entry is still POSTED — so a screen that cannot tell the two apart offers
+    // four treatments that all fail.
+    const s = await seed("shareStatusReported");
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 3_000 },
+      { vehicleId: s.vehicleB!, amount: 2_000 },
+    ]);
+    const saleA = await sell(s, s.vehicleA, PRICE_A);
+    const period = (await s.asUser.query(api.accountingPeriods.list, { orgId: s.orgId }))[0];
+    await closePeriod(s, period._id);
+    await cancel(s, saleA);
+
+    const view = await allocationView(s);
+    const shares = view!.vehicles.find((v) => v.vehicleId === s.vehicleA)!.awaitingDecision;
+    expect(shares).toHaveLength(1);
+    expect(shares[0]!.status).toBe("REVERSING");
+    expect(shares[0]!.amountMinor).toBe(3_000 * SCALE);
+  });
 });
 
 describe("the lifecycle has somewhere to happen", () => {
+  test("the screen is mounted where a quote can be reached at any time", () => {
+    // Asserting the mutations appear SOMEWHERE across both files let the mount
+    // be deleted while the test stayed green — which is the defect, not the
+    // component's existence.
+    const dialog = readFileSync(
+      join(process.cwd(), "components/customers/CustomerDetailsDialog.tsx"),
+      "utf8"
+    );
+    expect(dialog).toContain("<QuoteDepositManager");
+  });
+
   test("a released share can be decided from a shipped screen", async () => {
     // An ordinary sale cancellation on a multi-vehicle quote produces a share
     // awaiting a decision, and `deposits.release` refuses to pay it out — it

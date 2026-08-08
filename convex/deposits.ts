@@ -858,8 +858,25 @@ export const quoteAllocation = query({
           allocatedMinor: shown.length > 0 ? allocatedMinor : fallback?.allocatedMinor,
           status: shown[0]?.status ?? fallback?.status,
           holdId: shown[0]?.holdId ?? fallback?.holdId,
-          /** Every slice awaiting a decision on this car, each resolved on its own. */
-          awaitingDecisionHoldIds: awaitingDecision.map((a) => a.holdId),
+          /**
+           * Every share of this car that is off its sale, each with its OWN
+           * amount and status.
+           *
+           * Not a list of ids against the vehicle's total: a car can hold more
+           * than one share at once, and printing the vehicle figure beside each
+           * of them showed two shares of 1,000 and 2,000 as "3,000" twice —
+           * 6,000 on screen where 3,000 exists, and an operator forfeiting
+           * "3,000" forfeiting 1,000.
+           *
+           * REVERSING is included and marked, because the money is real and has
+           * to be visible; but it is waiting on the ledger rather than on a
+           * person, and `resolveReleasedAllocation` refuses it.
+           */
+          awaitingDecision: awaitingDecision.map((a) => ({
+            holdId: a.holdId,
+            amountMinor: a.allocatedMinor ?? 0,
+            status: a.status,
+          })),
         };
       })
     );

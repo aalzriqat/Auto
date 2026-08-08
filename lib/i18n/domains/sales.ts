@@ -364,6 +364,10 @@ export const salesEn = {
   DepositPending: "Deposit Pending",
   ApplicationDeposits: "Application Deposits",
   DepositAlreadyReleased: "Part of this deposit has already been refunded or forfeited.",
+  DepositReversingPending:
+    "This share is being backed out of the ledger. It cannot be decided until that reversal posts, which needs an open accounting period.",
+  DepositDecisionNeedsApproval:
+    "Refunding or forfeiting a share needs approval permission, and cannot be done by whoever took the deposit.",
   DepositReceived: "Deposit received",
   DepositAllocated: "Allocated",
   DepositApplied: "Applied to sales",
@@ -924,6 +928,10 @@ export const salesAr = {
   DepositPending: "دفعة مقدمة معلقة",
   ApplicationDeposits: "دفعات الطلب المقدمة",
   DepositAlreadyReleased: "تم استرداد أو مصادرة جزء من هذه الدفعة المقدمة مسبقًا.",
+  DepositReversingPending:
+    "يجري عكس قيد هذه الحصة. لا يمكن اتخاذ قرار بشأنها حتى يُرحَّل العكس، وهو ما يتطلب فترة محاسبية مفتوحة.",
+  DepositDecisionNeedsApproval:
+    "يتطلب استرداد الحصة أو مصادرتها صلاحية اعتماد، ولا يمكن أن ينفذه من استلم العربون.",
   DepositReceived: "العربون المستلم",
   DepositAllocated: "الموزّع",
   DepositApplied: "المطبَّق على المبيعات",
