@@ -422,6 +422,15 @@ export async function hookDepositAppliedToSettlement(
     identity?: DepositApplicationIdentity;
   }
 ) {
+  // Every existing org's chart predates agent accounting, and this rule needs
+  // RECEIVABLE_FROM_SUPPLIERS. Deposits are resolved BEFORE hookSaleCompleted
+  // runs, so its self-heal comes too late: the first settlement-treated
+  // consigned sale in any live org would roll the whole completion back with
+  // "System account RECEIVABLE_FROM_SUPPLIERS is not mapped". No fixture can
+  // catch it — they all call chartOfAccounts.initialize, which seeds it.
+  if (await isChartInitialized(ctx, args.orgId)) {
+    await ensureConsignmentAccounts(ctx, args.orgId, args.actorId);
+  }
   await postDomainEvent(ctx, {
     orgId: args.orgId,
     eventType: "DEPOSIT_APPLIED_TO_SETTLEMENT",
