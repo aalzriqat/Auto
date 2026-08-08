@@ -372,6 +372,7 @@ export const salesEn = {
     "This share is being backed out of the ledger. It cannot be decided until that reversal posts, which needs an open accounting period.",
   DepositDecisionNeedsApproval:
     "Refunding or forfeiting a share needs approval permission, and cannot be done by whoever took the deposit.",
+  DepositAllocationResolved: "Decided — see the deposit history",
   DepositReceived: "Deposit received",
   DepositAllocated: "Allocated",
   DepositApplied: "Applied to sales",
@@ -940,6 +941,7 @@ export const salesAr = {
     "يجري عكس قيد هذه الحصة. لا يمكن اتخاذ قرار بشأنها حتى يُرحَّل العكس، وهو ما يتطلب فترة محاسبية مفتوحة.",
   DepositDecisionNeedsApproval:
     "يتطلب استرداد الحصة أو مصادرتها صلاحية اعتماد، ولا يمكن أن ينفذه من استلم العربون.",
+  DepositAllocationResolved: "تم اتخاذ قرار بشأنها — راجع سجل العربون",
   DepositReceived: "العربون المستلم",
   DepositAllocated: "الموزّع",
   DepositApplied: "المطبَّق على المبيعات",

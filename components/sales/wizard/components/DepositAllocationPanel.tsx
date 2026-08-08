@@ -28,6 +28,17 @@ import { AlertTriangle, Check } from "lucide-react";
  * sold, and the panel says so rather than letting the sale fail later with an
  * error nobody can act on.
  */
+/** What became of a share that this screen cannot edit. */
+function statusLabel(
+  status: "ALLOCATED" | "APPLIED" | "REVERSING" | "RELEASED_AWAITING_DECISION" | "RESOLVED" | undefined,
+  t: (key: string) => string
+): string {
+  if (status === "APPLIED") return t("DepositAllocationApplied" as never);
+  if (status === "RESOLVED") return t("DepositAllocationResolved" as never);
+  if (status === "REVERSING") return t("DepositReversing" as never);
+  return t("DepositAwaitingDecision" as never);
+}
+
 export function DepositAllocationPanel({
   orgId,
   quoteId,
@@ -171,9 +182,11 @@ export function DepositAllocationPanel({
               <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
                 <Check className="h-3.5 w-3.5" aria-hidden />
                 {money(v.allocatedMinor ?? 0)} ·{" "}
-                {v.status === "APPLIED" || v.status === "RESOLVED"
-                  ? t("DepositAllocationApplied" as any)
-                  : t("DepositAwaitingDecision" as any)}
+                {/* RESOLVED is not APPLIED. An applied share went to that car's
+                    invoice; a resolved one was refunded, forfeited, moved to
+                    another car or returned to the pool — it never reached this
+                    car's sale, and saying it did is the opposite of true. */}
+                {statusLabel(v.status, t)}
               </span>
             ) : (
               <Input

@@ -670,6 +670,7 @@ export const stats = query({
     // Gated exactly as the current window is, and for both of the same reasons:
     // the cost reads are the expensive ones, and a consigned sale's turnover is
     // its margin. A viewer without profit permission compares gross to gross.
+    let previousTurnoverTruncated = false;
     const previousRevenueBasisByVehicle = new Map(
       canViewProfitMetrics
         ? await Promise.all(
@@ -692,8 +693,18 @@ export const stats = query({
       vehicleId: Id<"vehicles">;
       salePrice: number;
     }): number => {
+      if (!canViewProfitMetrics) return sale.salePrice;
+      // Excluded rather than booked at gross, exactly as the current window
+      // treats the same absence. Booking it at gross here put the two windows
+      // on different bases, so a period-over-period change reported the
+      // difference between an agent-basis turnover and a principal-basis one as
+      // if it were growth.
       const basis = previousRevenueBasisByVehicle.get(sale.vehicleId);
-      if (!basis || !basis.consigned) return sale.salePrice;
+      if (!basis) {
+        previousTurnoverTruncated = true;
+        return 0;
+      }
+      if (!basis.consigned) return sale.salePrice;
       return Math.max(0, sale.salePrice - basis.cost);
     };
 
@@ -810,7 +821,7 @@ export const stats = query({
         // Sales whose vehicle fell past the costing cap are left OUT of
         // turnover rather than folded in at gross, so the figure is short
         // rather than on two bases at once.
-        turnover: turnoverTruncated,
+        turnover: turnoverTruncated || previousTurnoverTruncated,
       },
       taskStats: {
         total: totalTasks,
