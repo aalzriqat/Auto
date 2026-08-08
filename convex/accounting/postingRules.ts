@@ -93,6 +93,17 @@ export interface RuleResult {
   lines: LineSpec[];
   memo: string;
   category: "SYSTEM" | "REVERSAL" | "ADJUSTMENT";
+  /**
+   * The event really happened and really has no accounting consequence.
+   *
+   * Distinct from an empty `lines` array reached by accident: `validateBalance`
+   * waves zero lines through because 0 === 0, so a rule that returned nothing
+   * silently posted a journal entry with no lines — a row asserting an event
+   * the books do not reflect, counted by every reconciliation and entry total.
+   * Saying so explicitly means the engine can skip the entry instead of writing
+   * an empty one, and a rule that returns nothing by mistake still fails.
+   */
+  skipPosting?: boolean;
 }
 
 function cashAccountKey(
@@ -523,6 +534,35 @@ function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
     );
   }
 
+  // Sales tax, carved out exactly as the principal rule carves it: the customer
+  // was billed the gross INCLUDING tax, so the tax is a liability from the
+  // moment it is collected and the rest is revenue. Ignoring it here — as this
+  // did — meant a consigned sale with tax credited the WHOLE margin to
+  // commission revenue and recorded no liability, so the dealership held the
+  // customer's tax money with nothing on the books saying it owed it. The entry
+  // balanced the entire time, which is why nothing caught it.
+  const taxMinor = p.taxMinor && p.taxMinor > 0 ? p.taxMinor : 0;
+  if (taxMinor > 0) {
+    if (consignment.settlementRoute === "DIRECT_TO_SUPPLIER") {
+      // The buyer paid the supplier. No gross reaches these books, the
+      // dealership issued no invoice for the car, and whether the tax is the
+      // principal's or the agent's is a tax question this rule has no rule for.
+      // Same posture as the negative margin above: a decision, not a default.
+      throw new Error(
+        `Consigned sale ${p.saleId} carries ${taxMinor} minor units of sales tax, but the buyer paid ${supplier} directly, so the dealership never billed or collected it. Record whose tax liability it is before completing the sale.`
+      );
+    }
+    if (taxMinor > marginMinor) {
+      // Carving more tax than the dealership earned would drive commission
+      // revenue negative — a loss recognized on a car it never owned, to fund a
+      // liability larger than everything the deal made.
+      throw new Error(
+        `Consigned sale ${p.saleId} carries ${taxMinor} minor units of sales tax against a dealership margin of ${marginMinor}. The tax cannot exceed what the dealership earned on the deal — check the tax amount and the supplier's entitlement.`
+      );
+    }
+  }
+  const commissionMinor = marginMinor - taxMinor;
+
   // A zero margin is a real deal, not a broken one: the dealership placed the
   // car for a supplier and made nothing on the metal, earning only the dealer
   // fees and F&I below. The journal simply has no commission line to write —
@@ -553,11 +593,15 @@ function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
           // credited.
           line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, p.saleAmountMinor, 0, "Consigned sale proceeds receivable", dims),
           line(SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, 0, entitlementMinor, `Owed to ${supplier}`, dims),
+          // The customer's tax, collected by the dealership with the gross.
+          ...(taxMinor > 0
+            ? [line(SYSTEM_KEYS.SALES_TAX_PAYABLE, 0, taxMinor, "Sales tax payable", { vehicleId: p.vehicleId })]
+            : []),
           // Omitted at zero margin for the same reason as above; the AR and AP
           // lines already balance each other when the entitlement is the whole
           // price, so the entry stays valid without it.
-          ...(marginMinor > 0
-            ? [line(SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, marginMinor, "Consignment commission earned", dims)]
+          ...(commissionMinor > 0
+            ? [line(SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, commissionMinor, "Consignment commission earned", dims)]
             : []),
         ];
 
@@ -577,6 +621,21 @@ function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
   if (gapSoldMinor > 0) {
     lines.push(line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, gapSoldMinor, 0, "GAP receivable", dims));
     addResoldProductLines(lines, gapSoldMinor, p.gapCostMinor ?? 0, "GAP", dims);
+  }
+
+  // A zero-margin direct-settled sale with no dealer fees and no F&I: the buyer
+  // paid the supplier, the dealership placed the car and earned nothing, and
+  // not one dinar passed through these books. That is a real deal with no
+  // accounting consequence — so it is declared as such rather than returned as
+  // an empty line array that `validateBalance` would wave through into a
+  // journal entry with no lines.
+  if (lines.length === 0) {
+    return {
+      lines,
+      memo: `Consigned vehicle placed for ${supplier} — no dealership income on the deal`,
+      category: "SYSTEM",
+      skipPosting: true,
+    };
   }
 
   return { lines, memo: `Consigned vehicle sold as agent for ${supplier}`, category: "SYSTEM" };

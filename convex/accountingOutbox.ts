@@ -170,7 +170,15 @@ const MAX_ATTEMPTS = 10;
 
 // ─── Drain core (plain function, reused by the mutation + schedulers) ──────────
 
-async function postPendingEntry(ctx: MutationCtx, p: Doc<"pendingAccountingEvents">): Promise<Id<"accountingEvents">> {
+/**
+ * Returns null when the rule declared the event has no accounting consequence —
+ * a queued posting can legitimately resolve to nothing, and the drain treats
+ * that as done rather than as a failure to retry forever.
+ */
+async function postPendingEntry(
+  ctx: MutationCtx,
+  p: Doc<"pendingAccountingEvents">
+): Promise<Id<"accountingEvents"> | null> {
   if (!p.eventType) throw new Error("Pending POST record missing eventType");
   if (!p.currency) throw new Error("Pending POST record missing currency");
   const res = await postAccountingEvent(ctx, {
@@ -206,9 +214,17 @@ async function reversePendingEntry(ctx: MutationCtx, p: Doc<"pendingAccountingEv
 async function markEntryPosted(
   ctx: MutationCtx,
   p: Doc<"pendingAccountingEvents">,
-  resultEventId: Id<"accountingEvents">
+  // Null when the rule declared the event has no accounting consequence. The
+  // queued work is still finished — leaving it PENDING would retry a posting
+  // that will correctly resolve to nothing every time, forever.
+  resultEventId: Id<"accountingEvents"> | null
 ): Promise<void> {
-  await ctx.db.patch(p._id, { status: "POSTED", resolvedAt: Date.now(), resultEventId, attempts: p.attempts + 1 });
+  await ctx.db.patch(p._id, {
+    status: "POSTED",
+    resolvedAt: Date.now(),
+    ...(resultEventId ? { resultEventId } : {}),
+    attempts: p.attempts + 1,
+  });
   // A deferred deposit reversal is only finished once its journal exists. The
   // application and its slice sit at REVERSING until here, so that a share
   // whose original entry is still POSTED cannot be refunded or re-allocated in

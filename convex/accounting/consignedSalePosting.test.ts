@@ -49,6 +49,81 @@ function net(result: ReturnType<typeof ruleSaleCompleted>, key: string): number 
     .reduce((sum, l) => sum + l.debitMinor - l.creditMinor, 0);
 }
 
+describe("sales tax on an agent-basis sale", () => {
+  test("is recorded as a liability, not dropped when revenue moves to the margin", () => {
+    // The principal rule carves the tax out of the sale amount and credits
+    // SALES_TAX_PAYABLE. Switching a consigned sale to agency margin must not
+    // lose that: the dealership billed the customer the gross INCLUDING tax and
+    // collected it, so the liability is its own regardless of who owned the car.
+    //
+    // Dropped silently, the dealership holds the customer's tax money with
+    // nothing on the books saying it owes it — and the entry still balanced,
+    // because the whole margin was credited to commission revenue instead.
+    const result = ruleSaleCompleted(consigned({ taxMinor: jod(500) }));
+
+    expect(net(result, SYSTEM_KEYS.SALES_TAX_PAYABLE)).toBe(-jod(500));
+    // The tax comes out of the dealership's OWN revenue, not the supplier's
+    // entitlement — his share of the car is unchanged by the dealership's tax.
+    expect(net(result, SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE)).toBe(-jod(2_500));
+    expect(net(result, SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS)).toBe(-jod(9_500));
+    expect(net(result, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(jod(12_500));
+    expect(() => validateBalance(result.lines)).not.toThrow();
+  });
+
+  test("is refused rather than guessed at when the dealership never collected it", () => {
+    // On DIRECT_TO_SUPPLIER the buyer paid the supplier; no gross ever reaches
+    // these books and the dealership issued no invoice for the car. A tax
+    // amount on that route contradicts the route itself, and whose liability it
+    // is — the principal's or the agent's — is a tax policy question this rule
+    // has no rule for. It needs a decision, not a default.
+    expect(() =>
+      ruleSaleCompleted(consigned({ taxMinor: jod(500) }, "DIRECT_TO_SUPPLIER"))
+    ).toThrow(/tax/i);
+  });
+
+  test("is refused when it exceeds the dealership's own margin", () => {
+    // Carving 3,500 of tax out of a 3,000 margin would drive commission revenue
+    // negative — the dealership recognising a loss on a car it never owned, to
+    // fund a liability bigger than everything it earned.
+    expect(() => ruleSaleCompleted(consigned({ taxMinor: jod(3_500) }))).toThrow(/tax/i);
+  });
+});
+
+describe("a zero-margin consigned sale", () => {
+  test("never posts an entry with no lines at all", () => {
+    // A zero-margin DIRECT_TO_SUPPLIER sale is a real deal — the dealership
+    // placed the car and made nothing on the metal — but nothing gross reaches
+    // these books either, so with no dealer fees and no F&I there is genuinely
+    // nothing to record. The old code returned an EMPTY line array, and
+    // `validateBalance` waves that through because 0 === 0, so a journal entry
+    // with no lines was posted: a row implying an event that has no accounting
+    // consequence, which then shows up in every entry count and reconciliation.
+    const result = ruleSaleCompleted(
+      consigned({ consignment: { supplierEntitlementMinor: jod(12_500), supplierName: "Amman Importer Co", settlementRoute: "DIRECT_TO_SUPPLIER" } })
+    );
+
+    expect(result.lines).toHaveLength(0);
+    // The rule says so explicitly rather than leaving the caller to infer it
+    // from an empty array it never checks.
+    expect(result.skipPosting).toBe(true);
+  });
+
+  test("still posts when the dealership earned its own income on the deal", () => {
+    // Zero margin on the metal, but dealer fees are the dealership's own income
+    // on its own services and have nothing to do with who owned the car.
+    const result = ruleSaleCompleted(
+      consigned({
+        consignment: { supplierEntitlementMinor: jod(12_500), supplierName: "Amman Importer Co", settlementRoute: "DIRECT_TO_SUPPLIER" },
+        dealerFeesMinor: jod(300),
+      })
+    );
+
+    expect(result.skipPosting ?? false).toBe(false);
+    expect(net(result, SYSTEM_KEYS.DEALER_FEE_INCOME)).toBe(-jod(300));
+    expect(() => validateBalance(result.lines)).not.toThrow();
+  });
+});
+
 describe("a consigned vehicle sold as the supplier's agent", () => {
   test("recognizes the margin as commission and no vehicle revenue at all", () => {
     const result = ruleSaleCompleted(consigned());

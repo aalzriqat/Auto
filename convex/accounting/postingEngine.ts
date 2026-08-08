@@ -31,9 +31,16 @@ export interface PostCommand {
 }
 
 export interface PostResult {
-  eventId: Id<"accountingEvents">;
-  journalEntryId: Id<"journalEntries">;
+  /** Null only when `skipped` — the event had no accounting consequence. */
+  eventId: Id<"accountingEvents"> | null;
+  journalEntryId: Id<"journalEntries"> | null;
   alreadyPosted: boolean;
+  /**
+   * The rule declared this event genuinely has nothing to post. Reported rather
+   * than swallowed so a caller can tell "no entry, deliberately" from "an entry
+   * I forgot to look for" — and so nothing writes a journal entry with no lines.
+   */
+  skipped?: boolean;
 }
 
 export async function postAccountingEvent(
@@ -96,6 +103,21 @@ export async function postAccountingEvent(
 
   // 6. Apply posting rules to generate line specs
   const ruleResult = applyPostingRule(cmd.eventType, cmd.payload);
+
+  // 6b. A rule may declare that the event genuinely has no accounting
+  // consequence — a consigned car placed for a supplier at zero margin with no
+  // dealership income, for instance. That is different from a rule returning
+  // nothing by mistake, which must still fail: `validateBalance` accepts zero
+  // lines (0 === 0), so without this distinction both outcomes wrote a journal
+  // entry with no lines at all.
+  if (ruleResult.skipPosting) {
+    return {
+      eventId: null,
+      journalEntryId: null,
+      alreadyPosted: false,
+      skipped: true,
+    };
+  }
 
   // 7. Validate balance before resolving accounts
   validateBalance(ruleResult.lines);
