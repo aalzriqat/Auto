@@ -864,6 +864,13 @@ describe("tax on an agency sale, with no open accounting period", () => {
  * shortened by the whole tail.
  */
 describe("turnover past the dashboard's costing cap", () => {
+  /**
+   * These seed 502 vehicles and 502 sales apiece, because the cap under test
+   * is 500. Around a second each normally, but well past vitest's 5s default
+   * once the coverage run instruments every module — which is how CI first
+   * failed them while every local run passed.
+   */
+  const HEAVY_TEST_TIMEOUT_MS = 60_000;
   const CAP = 500;
   const PAST_CAP_OWNED_PRICE = 7_777;
 
@@ -922,7 +929,7 @@ describe("turnover past the dashboard's costing cap", () => {
     expect(dash.salesVolumeThisMonth).toBe(
       CAP * OWNED_PRICE + PAST_CAP_OWNED_PRICE + MARGIN
     );
-  });
+  }, HEAVY_TEST_TIMEOUT_MS);
 
   test("a consigned sale past the cap contributes its MARGIN, not nothing", async () => {
     const { s } = await dealerPastTheCap("capConsigned");
@@ -942,7 +949,7 @@ describe("turnover past the dashboard's costing cap", () => {
     );
     // And nothing is short, so the flag must not claim otherwise.
     expect(dash.truncated.turnover).toBe(false);
-  });
+  }, HEAVY_TEST_TIMEOUT_MS);
 
   test("a consigned sale with no recorded supplier cost is excluded, and says so", async () => {
     // The one case that genuinely cannot be answered. Zero counts as missing,
@@ -959,7 +966,7 @@ describe("turnover past the dashboard's costing cap", () => {
 
     expect(dash.salesVolumeThisMonth).toBe(CAP * OWNED_PRICE + PAST_CAP_OWNED_PRICE);
     expect(dash.truncated.turnover).toBe(true);
-  });
+  }, HEAVY_TEST_TIMEOUT_MS);
 
   test("a past-cap vehicle belonging to another org is excluded, never booked at gross", async () => {
     // A tenancy guard with no regression test is a tenancy guard that will be
@@ -980,7 +987,7 @@ describe("turnover past the dashboard's costing cap", () => {
     // The foreign car's price is gone from turnover; the consigned one still counts.
     expect(dash.salesVolumeThisMonth).toBe(CAP * OWNED_PRICE + MARGIN);
     expect(dash.truncated.turnover).toBe(true);
-  });
+  }, HEAVY_TEST_TIMEOUT_MS);
 
   test("the salesperson ranking counts the same sale the headline does", async () => {
     const { s } = await dealerPastTheCap("capRanking");
@@ -995,7 +1002,7 @@ describe("turnover past the dashboard's costing cap", () => {
     expect(dash.topPerformer?.revenue).toBe(
       CAP * OWNED_PRICE + PAST_CAP_OWNED_PRICE + MARGIN
     );
-  });
+  }, HEAVY_TEST_TIMEOUT_MS);
 
   test("the COMPARISON window gets the same treatment, so a basis change is not read as growth", async () => {
     // The previous window only exists for DAY and MONTH (`comparesPeriods`),
@@ -1020,5 +1027,5 @@ describe("turnover past the dashboard's costing cap", () => {
     expect(dash.previousPeriod?.sales).toBe(
       CAP * OWNED_PRICE + PAST_CAP_OWNED_PRICE + MARGIN
     );
-  });
+  }, HEAVY_TEST_TIMEOUT_MS);
 });
