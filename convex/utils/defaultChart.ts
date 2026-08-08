@@ -145,7 +145,14 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     // full. Not AR-Customers: the customer owes nothing here, and not
     // AP-Suppliers netted down, because a receivable and a payable to the same
     // party are different balances that happen to face the same person.
-    code: "1230",
+    // 1240, not 1230: that code has belonged to Employee Advances since long
+    // before agent accounting existed. Two defaults on one code is not a
+    // cosmetic clash — `ensureSystemAccount` resolves a missing system account
+    // BY ITS DEFAULT CODE, finds the other system account already sitting there,
+    // correctly refuses to steal it, and throws. So the self-heal for this
+    // account could never run, and the first settlement-treated consigned sale
+    // in any existing org rolled the whole completion back.
+    code: "1240",
     name: "Receivable from Suppliers",
     nameAr: "ذمم مدينة - الموردين",
     type: "ASSET",

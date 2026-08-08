@@ -19,7 +19,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
-import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { SYSTEM_KEYS, DEFAULT_CHART } from "./utils/defaultChart";
 import { depositStatusForTreatment } from "./utils/depositHelpers";
 import type { Id } from "./_generated/dataModel";
 
@@ -62,6 +62,28 @@ async function seed(
     sourceCost?: number;
     /** Lets a test strip the approval permission from the second actor. */
     managerPermissions?: string[];
+    /**
+     * Puts a second car on the quote, which is what makes the عربون's split a
+     * decision rather than an implication. The quote then carries `vehicleItems`
+     * — the shape a fleet quote really has — instead of the legacy single-line
+     * fields.
+     */
+    extraLine?: { price: number; sourceCost?: number };
+    /**
+     * Records the deposit through `deposits.create`, once per amount, instead of
+     * inserting a row directly. A customer paying the عربون in instalments is
+     * several rows on one quote, each with its own holds; two synthetic rows
+     * hand-inserted are a shape production never makes, and a test built on one
+     * validates the patch rather than the behaviour.
+     */
+    instalments?: number[];
+    /**
+     * The state EVERY live org is actually in: a chart initialized before agent
+     * accounting existed, so it has no Receivable from Suppliers. The self-heal
+     * in `hookDepositAppliedToSettlement` is supposed to close that gap before
+     * the first settlement-treated consigned sale posts.
+     */
+    withoutConsignmentAccounts?: boolean;
   } = {}
 ) {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
@@ -104,6 +126,21 @@ async function seed(
   const asUser = t.withIdentity({ subject: `${tag}_u`, clerkId: `${tag}_u` });
   await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
 
+  if (opts.withoutConsignmentAccounts) {
+    // Removed rather than never-seeded, because `initialize` seeds the whole
+    // default chart and a live org's chart predates these two rows. Deleting
+    // them reproduces that org exactly.
+    await t.run(async (ctx) => {
+      const rows = (await ctx.db.query("chartOfAccounts").collect()).filter(
+        (a) =>
+          a.orgId === orgId &&
+          (a.systemKey === SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS ||
+            a.systemKey === SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE)
+      );
+      for (const row of rows) await ctx.db.delete(row._id);
+    });
+  }
+
   const fiscalYear = new Date().getUTCFullYear();
   await asUser.mutation(api.accountingPeriods.create, {
     orgId,
@@ -130,24 +167,67 @@ async function seed(
     })
   );
 
+  // The second car, when the test needs the split to be a decision.
+  const secondVehicleId = opts.extraLine
+    ? await t.run((ctx) =>
+        ctx.db.insert("vehicles", {
+          orgId, vin: `VINDEP2${tag}`, make: "Toyota", model: "Corolla", year: 2024, mileage: 12,
+          color: "Grey", fuelType: "Gas", transmission: "Auto", sellingPrice: opts.extraLine!.price,
+          status: "AVAILABLE",
+          sourceType: "SOURCED",
+          sourcedFromName: "Amman Importer Co",
+          sourceCost: opts.extraLine!.sourceCost ?? opts.extraLine!.price - MARGIN,
+        })
+      )
+    : undefined;
+
   // A quote carrying an actively-held reservation deposit — the shape sale
   // completion actually reads.
   const quoteId = await t.run((ctx) =>
     ctx.db.insert("quotes", {
-      orgId, customerId, vehicleId, vehiclePrice: SALE_PRICE,
+      orgId, customerId, vehicleId,
+      vehiclePrice: SALE_PRICE + (opts.extraLine?.price ?? 0),
+      ...(opts.extraLine
+        ? {
+            vehicleItems: [
+              { vehicleId, unitPrice: SALE_PRICE },
+              { vehicleId: secondVehicleId!, unitPrice: opts.extraLine.price },
+            ],
+          }
+        : {}),
       downPayment: 0, termMonths: 0,
       status: "ACCEPTED", createdBy: userId, createdAt: Date.now(),
     })
   );
-  const depositId = await t.run((ctx) =>
-    ctx.db.insert("deposits", {
-      orgId, vehicleId, customerId, quoteId,
-      amount: DEPOSIT, amountMinor: DEPOSIT * SCALE, currency: "JOD", method: "CASH",
-      status: "HELD", holdActive: true, createdBy: userId, createdAt: Date.now(),
-    })
-  );
+
+  let depositId: Id<"deposits">;
+  const depositIds: Id<"deposits">[] = [];
+  // A multi-car quote has to go through `deposits.create`: that is what writes
+  // the `depositVehicleHolds` row per car, and without those rows the quote does
+  // not read as multi-vehicle at all and its split cannot be recorded.
+  const instalments = opts.instalments ?? (opts.extraLine ? [DEPOSIT] : undefined);
+  if (instalments) {
+    for (const amount of instalments) {
+      depositIds.push(
+        await asUser.mutation(api.deposits.create, { orgId, quoteId, amount, method: "CASH" })
+      );
+    }
+    depositId = depositIds[0]!;
+  } else {
+    depositId = await t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId, vehicleId, customerId, quoteId,
+        amount: DEPOSIT, amountMinor: DEPOSIT * SCALE, currency: "JOD", method: "CASH",
+        status: "HELD", holdActive: true, createdBy: userId, createdAt: Date.now(),
+      })
+    );
+    depositIds.push(depositId);
+  }
   const asManager = t.withIdentity({ subject: `${tag}_m`, clerkId: `${tag}_m` });
-  return { t, orgId, userId, asUser, asManager, customerId, vehicleId, quoteId, depositId };
+  return {
+    t, orgId, userId, asUser, asManager, customerId, vehicleId, secondVehicleId,
+    quoteId, depositId, depositIds,
+  };
 }
 
 /**
@@ -366,14 +446,349 @@ describe("APPLY_TO_TRANSACTION_SETTLEMENT", () => {
     expect(posted[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS] ?? 0).toBeGreaterThanOrEqual(0);
   });
 
-  test("is refused on the through-dealership route, where the settlement is already recorded", async () => {
-    // AP-Suppliers was credited the supplier's full entitlement when the sale
-    // posted. Crediting it again would inflate the debt by the deposit, and the
-    // excess would never clear.
+  test("on the through-dealership route it comes off the customer's bill, and never off the supplier's entitlement", async () => {
+    // The operator states one thing — this عربون forms part of the settlement of
+    // this deal — and the server derives where that lands from the route. Here
+    // the dealership collected the gross, so the deposit is part of what the
+    // CUSTOMER paid IT.
+    //
+    // What it must NOT do is touch the supplier's entitlement: AP-Suppliers was
+    // credited his full 9,500 when the sale posted, and crediting it again would
+    // inflate the debt by the deposit and leave an excess nothing can clear.
+    // That double-credit is the thing this test exists to catch, so it is
+    // asserted as an amount rather than as an absence.
     const s = await seed("settleThru");
+    await completeWith(s, "THROUGH_DEALERSHIP", {
+      treatment: "APPLY_TO_TRANSACTION_SETTLEMENT",
+    });
+
+    const posted = await postedBySystemKey(s.t, s.orgId);
+    expect(posted[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS]).toBe((SALE_PRICE - DEPOSIT) * SCALE);
+    // Credited exactly once, in full. Not 9,500 + 1,000.
+    expect(posted[SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS]).toBe(-SUPPLIER_ENTITLEMENT * SCALE);
+    // The customer's deposit liability is discharged, not left standing.
+    expect(posted[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY]).toBe(DEPOSIT * SCALE);
+    // No claim on the supplier is opened on this route — he was never holding
+    // the dealership's money.
+    expect(posted[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS] ?? 0).toBe(0);
+
+    // The application row records where the money actually went, because that
+    // is what a cancellation reverses. Recording SUPPLIER_SETTLEMENT here would
+    // send the reversal after an entry that was never posted, and
+    // `reverseEventIfPosted` reports "nothing posted" exactly as it reports
+    // "already reversed" — silently.
+    const applications = await s.t.run(async (ctx) =>
+      (await ctx.db.query("depositApplications").collect()).filter((a) => a.orgId === s.orgId)
+    );
+    expect(applications).toHaveLength(1);
+    expect(applications[0]!.treatment).toBe("CUSTOMER_RECEIVABLE");
+    expect(applications[0]!.amountMinor).toBe(DEPOSIT * SCALE);
+  });
+
+  test("neither route lets the same deposit be credited twice", async () => {
+    // The failure mode this guards is not "an assertion is missing" — it is a
+    // deal that balances while the dealership has collected the deposit once and
+    // given credit for it twice. Both routes are checked against the total the
+    // deal was worth, because that total is what over-collection breaks.
+    for (const route of ["THROUGH_DEALERSHIP", "DIRECT_TO_SUPPLIER"] as const) {
+      const s = await seed(`noDouble_${route}`);
+      await completeWith(s, route, { treatment: "APPLY_TO_TRANSACTION_SETTLEMENT" });
+      const posted = await postedBySystemKey(s.t, s.orgId);
+
+      // The dealership's own gross margin is recognized once and is the same on
+      // both routes — the deposit changes who is holding the cash, never how
+      // much was earned.
+      expect(posted[SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE]).toBe(-MARGIN * SCALE);
+      // And the deposit discharges exactly its own value of liability, once.
+      expect(posted[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY]).toBe(DEPOSIT * SCALE);
+
+      // What the deal still owes the dealership, summed across both sides. The
+      // deposit has been collected in cash, so it comes off once and only once.
+      const stillOwed =
+        (posted[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS] ?? 0) +
+        (posted[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS] ?? 0);
+      const expected =
+        route === "THROUGH_DEALERSHIP"
+          ? (SALE_PRICE - DEPOSIT) * SCALE // billed the gross, less the عربون
+          : (MARGIN - DEPOSIT) * SCALE; // billed nothing; claims its margin, less the عربون
+      expect(stillOwed).toBe(expected);
+
+      // The GL is only one of the two sides, and it is not the side anybody
+      // collects against. `supplierReceivables.recordReceipt` settles the
+      // SUBLEDGER row, so a claim that says 3,000 outstanding while the GL says
+      // 2,000 sends somebody to collect money the dealership is already holding
+      // — and both books balance the whole time. That is the failure shape this
+      // branch exists for, so the claim is read directly.
+      if (route === "DIRECT_TO_SUPPLIER") {
+        const claims = await s.t.run(async (ctx) =>
+          (await ctx.db.query("vehicleSupplierReceivables").collect()).filter(
+            (r) => r.orgId === s.orgId
+          )
+        );
+        expect(claims).toHaveLength(1);
+        expect(claims[0]!.amountDue).toBe(MARGIN);
+        expect(claims[0]!.amountReceived).toBe(DEPOSIT);
+        expect(claims[0]!.status).toBe("PARTIALLY_PAID");
+      }
+    }
+  });
+});
+
+describe("APPLY_TO_TRANSACTION_SETTLEMENT across the shapes a real deal takes", () => {
+  test("applies only THIS car's share, and leaves the rest of the عربون held", async () => {
+    // One payment, one receipt voucher, two cars. The split is a decision
+    // somebody recorded — never FIFO, never proportional, never the whole row —
+    // so completing the first car may consume 600 and not a dinar more. Taking
+    // the row consumed one car's invoice with money the customer had put against
+    // another, and took that other car off reservation for nothing.
+    const s = await seed("partial", { extraLine: { price: 8_000 } });
+    await s.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      allocations: [
+        { vehicleId: s.vehicleId, amount: 600 },
+        { vehicleId: s.secondVehicleId!, amount: 400 },
+      ],
+    });
+
+    await completeWith(s, "DIRECT_TO_SUPPLIER", {
+      treatment: "APPLY_TO_TRANSACTION_SETTLEMENT",
+    });
+
+    const posted = await postedBySystemKey(s.t, s.orgId);
+    // 600 of the 3,000 margin is already in the dealership's hands.
+    expect(posted[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS]).toBe((MARGIN - 600) * SCALE);
+    // The whole 1,000 was taken in against a receipt voucher (a credit) and 600
+    // of it discharged (a debit). The other 400 is still the customer's money,
+    // still owed, still held against the car they have not taken.
+    expect(posted[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY]).toBe(-400 * SCALE);
+
+    const allocation = await s.asUser.query(api.deposits.quoteAllocation, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+    });
+    expect(allocation).not.toBeNull();
+    expect(allocation!.appliedMinor).toBe(600 * SCALE);
+    expect(allocation!.allocatedMinor).toBe(400 * SCALE);
+
+    const applications = await s.t.run(async (ctx) =>
+      (await ctx.db.query("depositApplications").collect()).filter((a) => a.orgId === s.orgId)
+    );
+    expect(applications).toHaveLength(1);
+    expect(applications[0]!.amountMinor).toBe(600 * SCALE);
+    expect(applications[0]!.vehicleId).toBe(s.vehicleId);
+
+    // And the collectable claim agrees with the GL. The cap that authorises the
+    // treatment and the slices that are actually spent are different figures
+    // from different places; crediting the claim with the cap would tell the
+    // dealership it is holding 1,000 of the supplier's margin when it is
+    // holding 600 — the other 400 still belongs to the customer.
+    const claims = await s.t.run(async (ctx) =>
+      (await ctx.db.query("vehicleSupplierReceivables").collect()).filter(
+        (r) => r.orgId === s.orgId
+      )
+    );
+    expect(claims).toHaveLength(1);
+    expect(claims[0]!.amountReceived).toBe(600);
+  });
+
+  test("consumes every instalment of the عربون, not just the first", async () => {
+    // A customer paying 600 now and 400 next week is two `deposits` rows on one
+    // quote, each with its own holds — the shape `deposits.create` really
+    // writes. Reading "the deposit" as one row applied 600 and left 400 of the
+    // customer's money sitting unapplied against a car that had been sold.
+    const s = await seed("instalments", { instalments: [600, 400] });
+    expect(s.depositIds).toHaveLength(2);
+
+    await completeWith(s, "DIRECT_TO_SUPPLIER", {
+      treatment: "APPLY_TO_TRANSACTION_SETTLEMENT",
+    });
+
+    const posted = await postedBySystemKey(s.t, s.orgId);
+    expect(posted[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS]).toBe((MARGIN - 1_000) * SCALE);
+    // Both instalments taken in, both discharged: the customer is owed nothing.
+    // A single-instalment reading would leave 400 of their money still a
+    // liability against a car that has been sold.
+    expect(posted[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY]).toBe(0);
+
+    // One application per instalment, each carrying its own identity — that is
+    // what lets a cancellation reverse exactly what this sale posted.
+    const applications = await s.t.run(async (ctx) =>
+      (await ctx.db.query("depositApplications").collect()).filter((a) => a.orgId === s.orgId)
+    );
+    expect(applications).toHaveLength(2);
+    expect(applications.map((a) => a.amountMinor).sort((x, y) => x - y)).toEqual([
+      400 * SCALE,
+      600 * SCALE,
+    ]);
+    for (const application of applications) {
+      expect(application.treatment).toBe("SUPPLIER_SETTLEMENT");
+    }
+
+    // The claim on the supplier has to agree with what was actually consumed.
+    // These are computed from two different places — the allocated total that
+    // caps the treatment, and the slices the resolution really spent — and when
+    // they disagree the GL says 2,000 outstanding while the subledger somebody
+    // collects against says 2,400. Both balance; the dealership bills the
+    // supplier for 400 dinars of its own money.
+    const claims = await s.t.run(async (ctx) =>
+      (await ctx.db.query("vehicleSupplierReceivables").collect()).filter(
+        (r) => r.orgId === s.orgId
+      )
+    );
+    expect(claims).toHaveLength(1);
+    expect(claims[0]!.amountReceived).toBe(1_000);
+  });
+
+  test("every dinar of the عربون is still in exactly one bucket afterwards", async () => {
+    // Conservation is recomputed inside the completion and rolls the whole
+    // transaction back if it fails, so this asserts the state it left behind
+    // rather than that it did not throw. The failure it guards is the one that
+    // balances: money counted as both applied and still held.
+    const s = await seed("conserve", { instalments: [600, 400] });
+    await completeWith(s, "DIRECT_TO_SUPPLIER", {
+      treatment: "APPLY_TO_TRANSACTION_SETTLEMENT",
+    });
+
+    const allocation = await s.asUser.query(api.deposits.quoteAllocation, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+    });
+    expect(allocation).not.toBeNull();
+    const a = allocation!;
+    const buckets =
+      a.allocatedMinor +
+      a.appliedMinor +
+      a.unallocatedMinor +
+      a.releasedAwaitingDecisionMinor +
+      a.reversingMinor +
+      a.refundedMinor +
+      a.forfeitedMinor;
+    expect(a.totalReceivedMinor).toBe(1_000 * SCALE);
+    expect(buckets).toBe(a.totalReceivedMinor);
+    // And it is in the bucket the treatment says it is in.
+    expect(a.appliedMinor).toBe(1_000 * SCALE);
+  });
+
+  test("an applied deposit cannot then be refunded, nor its share re-allocated", async () => {
+    // The money has gone somewhere: it is off the supplier's claim and the
+    // liability is discharged. Paying it back or moving it to another car after
+    // that pays the customer twice — once in credit, once in cash — and the
+    // deal still balances while it happens.
+    const s = await seed("spent", { extraLine: { price: 8_000 } });
+    await s.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      allocations: [
+        { vehicleId: s.vehicleId, amount: 600 },
+        { vehicleId: s.secondVehicleId!, amount: 400 },
+      ],
+    });
+    await completeWith(s, "DIRECT_TO_SUPPLIER", {
+      treatment: "APPLY_TO_TRANSACTION_SETTLEMENT",
+    });
+
+    // Refunding the whole row would take the second car's 400 with it as well
+    // as paying back the 600 already spent.
     await expect(
-      completeWith(s, "THROUGH_DEALERSHIP", { treatment: "APPLY_TO_TRANSACTION_SETTLEMENT" })
-    ).rejects.toThrow(/already recorded in full/i);
+      s.asManager.mutation(api.deposits.release, {
+        orgId: s.orgId,
+        depositId: s.depositId,
+        resolution: "REFUNDED",
+        refundMethod: "CASH",
+      })
+    ).rejects.toThrow();
+
+    // And the sold car's share cannot be moved onto the car still in the deal.
+    await expect(
+      s.asUser.mutation(api.deposits.allocateToVehicles, {
+        orgId: s.orgId,
+        quoteId: s.quoteId,
+        allocations: [
+          { vehicleId: s.vehicleId, amount: 0 },
+          { vehicleId: s.secondVehicleId!, amount: 1_000 },
+        ],
+      })
+    ).rejects.toThrow();
+
+    // Nothing moved: the ledger is exactly where the completion left it. 400 is
+    // still owed to the customer, and no cash went back out of the drawer — the
+    // refund this test attempted would have paid out the 600 already spent.
+    const posted = await postedBySystemKey(s.t, s.orgId);
+    expect(posted[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY]).toBe(-400 * SCALE);
+    expect(posted[SYSTEM_KEYS.CASH_ON_HAND]).toBe(1_000 * SCALE);
+  });
+});
+
+describe("the consignment accounts are ensured before the settlement posts", () => {
+  test("a live org whose chart predates agent accounting can complete its first settlement-treated sale", async () => {
+    // The ordering this covers: deposits are resolved BEFORE `hookSaleCompleted`
+    // runs, so that hook's self-heal comes too late — the settlement posting
+    // needs RECEIVABLE_FROM_SUPPLIERS first, and `resolveSystemAccount` throws
+    // on an unmapped key. A mutation is one transaction, so that throw rolls the
+    // WHOLE completion back: the sale, the inventory move, the deposit, all of
+    // it, for a reason that has nothing to do with the sale.
+    //
+    // Every existing org is in this state, so this is the first such sale in
+    // production, not an edge case.
+    const s = await seed("noChartAccts", { withoutConsignmentAccounts: true });
+
+    const saleId = await completeWith(s, "DIRECT_TO_SUPPLIER", {
+      treatment: "APPLY_TO_TRANSACTION_SETTLEMENT",
+    });
+    expect(saleId).toBeTruthy();
+
+    // The accounts were created on the way through.
+    const accounts = await s.t.run(async (ctx) =>
+      (await ctx.db.query("chartOfAccounts").collect()).filter((a) => a.orgId === s.orgId)
+    );
+    expect(
+      accounts.find((a) => a.systemKey === SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS)
+    ).toBeTruthy();
+
+    // Nothing rolled back: the sale is really there, and the deposit really moved.
+    const sale = await s.t.run((ctx) => ctx.db.get(saleId as Id<"sales">));
+    expect(sale?.status).toBe("COMPLETED");
+
+    const posted = await postedBySystemKey(s.t, s.orgId);
+    expect(posted[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS]).toBe((MARGIN - DEPOSIT) * SCALE);
+
+    // And every entry balances. A self-heal that invented an account of the
+    // wrong type would post a lopsided journal rather than refuse.
+    const unbalanced = await s.t.run(async (ctx) => {
+      const entries = (await ctx.db.query("journalEntries").collect()).filter(
+        (e) => e.orgId === s.orgId && e.status === "POSTED"
+      );
+      const bad: string[] = [];
+      for (const entry of entries) {
+        const lines = (await ctx.db.query("journalLines").collect()).filter(
+          (l) => l.journalEntryId === entry._id
+        );
+        const debit = lines.reduce((sum, l) => sum + l.debitMinor, 0);
+        const credit = lines.reduce((sum, l) => sum + l.creditMinor, 0);
+        if (debit !== credit) bad.push(`${entry._id}: ${debit} vs ${credit}`);
+      }
+      return bad;
+    });
+    expect(unbalanced).toEqual([]);
+  });
+
+  test("every default account code is unique, or the self-heal steals another account's code", async () => {
+    // `ensureSystemAccount` resolves a missing system account by its DEFAULT
+    // CHART CODE. Two defaults sharing a code means the self-heal for one of
+    // them finds the other already sitting on it, refuses to steal it, and
+    // throws — so the account is never created and the ordering fix above
+    // cannot work at all. Asserted on the data rather than on a posting,
+    // because this is a property of the table and it should fail loudly at the
+    // source rather than as a mystery rollback three layers down.
+    const seen = new Map<string, string>();
+    const duplicates: string[] = [];
+    for (const account of DEFAULT_CHART) {
+      const existing = seen.get(account.code);
+      if (existing) duplicates.push(`${account.code}: ${existing} and ${account.systemKey}`);
+      seen.set(account.code, account.systemKey ?? account.name);
+    }
+    expect(duplicates).toEqual([]);
   });
 });
 

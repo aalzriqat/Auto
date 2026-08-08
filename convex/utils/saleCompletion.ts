@@ -34,6 +34,7 @@ import {
   assertQuoteDepositConservation,
 } from "./depositAllocation";
 import { recordDepositApplication } from "./depositApplications";
+import { planDepositSettlementApplication } from "./depositSettlementPlan";
 import {
   consignedSettlementRoute,
   dealershipCollectsGross,
@@ -462,35 +463,32 @@ async function resolveReservationDeposits(
     }
 
     case "APPLY_TO_TRANSACTION_SETTLEMENT": {
-      // Capped at the margin the supplier actually owes back. Deposits run
-      // 5-10% of the price and consignment margins are often smaller, so a
-      // deposit exceeding the margin is ordinary rather than exotic — and
-      // applying it whole would drive Receivable from Suppliers to a credit
-      // balance: an asset account holding what is really the supplier's money,
-      // which nothing in the system can discharge.
-      if (isSourced && dealershipCollectsGross(settlementRoute)) {
-        // The supplier's entitlement was credited to AP-Suppliers in full when
-        // the sale posted, so a second credit would inflate the debt by the
-        // deposit and the excess would never clear.
-        throw new ConvexError(
-          "The dealership collected the gross proceeds on this sale, so the supplier settlement is already recorded in full and a deposit cannot be applied to it again. Apply the deposit to what the customer owes the dealership, refund it, or forfeit it."
-        );
+      // The operator states one thing — that this عربون forms part of the final
+      // settlement of this deal — and the server derives where that lands. The
+      // rule is shared with `sales.consignedSalePreview` so the figure shown
+      // before confirming is the figure that posts; see depositSettlementPlan.
+      const plan = planDepositSettlementApplication({
+        isSourced,
+        settlementRoute,
+        depositMinor: heldTotalMinor,
+        customerBillableMinor,
+        marginMinor: opts.marginMinor,
+      });
+      if (!plan.ok) throw new ConvexError(plan.reason);
+
+      if (plan.destination === "CUSTOMER_RECEIVABLE") {
+        // THROUGH_DEALERSHIP: the dealership collected the gross, so the
+        // supplier's entitlement is already credited to AP-Suppliers in full
+        // and crediting it again would inflate the debt by the deposit. What
+        // the customer paid the dealership comes off what the dealership
+        // billed them — which is `APPLY_TO_DEALER_AMOUNT`, recorded as such
+        // because that is what the money actually did. The application row
+        // carries `CUSTOMER_RECEIVABLE`, so a later cancellation reverses the
+        // entry that was really posted rather than a settlement entry that
+        // never was.
+        return await applyDepositsToCustomerAr(ctx, opts, "APPLY_TO_DEALER_AMOUNT");
       }
-      if (!isSourced) {
-        throw new ConvexError(
-          "This vehicle is the dealership's own stock, so there is no supplier settlement for a deposit to be applied to."
-        );
-      }
-      if (opts.marginMinor === null) {
-        throw new ConvexError(
-          "This vehicle has no recorded supplier cost, so the dealership's margin cannot be determined and a deposit cannot be applied against it."
-        );
-      }
-      if (heldTotalMinor > opts.marginMinor) {
-        throw new ConvexError(
-          "The reservation deposit exceeds the dealership's margin on this consigned sale, so it cannot all be applied to the supplier settlement — the excess is the supplier's money, not the dealership's. Refund the excess to the customer before completing."
-        );
-      }
+
       const resolved = await resolveDepositsForQuote(ctx, {
         quoteId: args.quoteId,
         vehicleId: args.vehicleId,
@@ -523,7 +521,24 @@ async function resolveReservationDeposits(
       }
       // Not collected against the customer's balance — it settled the
       // supplier's claim instead, which the claim below must open net of.
-      return { ...empty, appliedToSupplierSettlement: heldTotal };
+      //
+      // Summed from the slices actually consumed, NOT from `heldTotal`. The two
+      // are computed in different places — `heldTotal` is the allocated cap read
+      // before anything moved, `consumedSlices` is what the resolution really
+      // spent — and returning the cap made the claim's `alreadyReceivedAmount`
+      // an assumption rather than a fact. Where they disagree the GL nets the
+      // deposit off the receivable while the subledger somebody actually
+      // collects against does not, so the dealership goes and bills the supplier
+      // for money it is already holding. Both books balance while it happens,
+      // which is why this is derived rather than asserted.
+      const appliedMinor = resolved.consumedSlices.reduce(
+        (sum, slice) => sum + toMinorUnits(slice.amount, currency),
+        0
+      );
+      return {
+        ...empty,
+        appliedToSupplierSettlement: fromMinorUnits(appliedMinor, currency),
+      };
     }
 
     case "REFUND_TO_CUSTOMER":

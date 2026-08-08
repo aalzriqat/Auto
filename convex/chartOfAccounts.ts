@@ -451,7 +451,7 @@ export async function ensureConsignmentAccounts(
   orgId: Id<"organizations">,
   actorId: Id<"users">
 ): Promise<void> {
-  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, "1230");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, "1240");
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, "4170");
 }
 

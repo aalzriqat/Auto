@@ -149,6 +149,7 @@ import type * as utils_depositAllocation from "../utils/depositAllocation.js";
 import type * as utils_depositApplications from "../utils/depositApplications.js";
 import type * as utils_depositHelpers from "../utils/depositHelpers.js";
 import type * as utils_depositRecording from "../utils/depositRecording.js";
+import type * as utils_depositSettlementPlan from "../utils/depositSettlementPlan.js";
 import type * as utils_env from "../utils/env.js";
 import type * as utils_errors from "../utils/errors.js";
 import type * as utils_expenseAmortization from "../utils/expenseAmortization.js";
@@ -356,6 +357,7 @@ declare const fullApi: ApiFromModules<{
   "utils/depositApplications": typeof utils_depositApplications;
   "utils/depositHelpers": typeof utils_depositHelpers;
   "utils/depositRecording": typeof utils_depositRecording;
+  "utils/depositSettlementPlan": typeof utils_depositSettlementPlan;
   "utils/env": typeof utils_env;
   "utils/errors": typeof utils_errors;
   "utils/expenseAmortization": typeof utils_expenseAmortization;
