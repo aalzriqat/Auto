@@ -157,7 +157,6 @@ export function Step4QuoteSuccess({
   // car on the deal. See lib/depositSettlementSubmission.ts.
   const depositDecision = decideDepositSubmission(depositEligibility, depositInSettlement);
   const blockingLine = depositDecision.blockingLine;
-  const someButNotAllConfirmed = depositDecision.partiallyConfirmed;
   const sendDepositTreatment = depositDecision.sendTreatment;
 
   const handleSubmitSale = async () => {
@@ -343,8 +342,7 @@ export function Step4QuoteSuccess({
                   // some of them are confirmed. Either way the deal cannot be
                   // submitted coherently — and letting it through produced a
                   // refusal naming no vehicle, on a multi-car quote.
-                  !!blockingLine ||
-                  someButNotAllConfirmed
+                  !depositDecision.canSubmit
                 }
                 variant="outline"
                 size="lg"
@@ -369,7 +367,7 @@ export function Step4QuoteSuccess({
           the submit was simply withheld, and the server's refusal names no
           vehicle, so on a multi-car quote the operator was told a deposit was
           too large without being told whose. */}
-      {activeOrgId && (blockingLine || someButNotAllConfirmed) && !saleId ? (
+      {activeOrgId && !depositDecision.canSubmit && !saleId ? (
         <p className="mx-auto flex max-w-2xl items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/[0.06] px-3 py-2.5 text-xs leading-relaxed text-amber-800 dark:text-amber-400">
           <span aria-hidden>⚠</span>
           <span>
@@ -378,6 +376,17 @@ export function Step4QuoteSuccess({
                 <span className="font-medium">{blockingLine.label}</span>
                 {" — "}
                 {blockingLine.reason}
+              </>
+            ) : depositDecision.unconfirmedRequiredLine ? (
+              // Ordered after `blockingLine` deliberately: that one cannot be
+              // resolved from this screen and this one can, so showing both
+              // would give two instructions for one deal.
+              <>
+                <span className="font-medium">
+                  {depositDecision.unconfirmedRequiredLine.label}
+                </span>
+                {" — "}
+                {t("DepositSettlementRequired" as any)}
               </>
             ) : (
               t("DepositSettlementConfirmAllLines" as any)

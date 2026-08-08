@@ -32,6 +32,14 @@ export interface DepositSubmissionDecision {
   blockingLine: DepositLineEligibility | null;
   /** Confirmed on some lines but not all: incoherent, so submission is blocked. */
   partiallyConfirmed: boolean;
+  /**
+   * The first line that REQUIRES the treatment and has not been confirmed.
+   *
+   * Distinct from `blockingLine`: that one cannot be confirmed at all, this one
+   * has not been. The operator resolves it by ticking the box, so the screen
+   * has to name it rather than just refusing.
+   */
+  unconfirmedRequiredLine: DepositLineEligibility | null;
   /** Whether the deal may be submitted at all. */
   canSubmit: boolean;
 }
@@ -47,13 +55,30 @@ export function decideDepositSubmission(
   const everyConfirmed = lines.length > 0 && confirmedCount === lines.length;
   const partiallyConfirmed = confirmedCount > 0 && confirmedCount < lines.length;
 
+  // A line the server REQUIRES a treatment for, which nobody has confirmed.
+  //
+  // `required` was carried on every line and then never read here, so nothing
+  // was confirmed, `partiallyConfirmed` stayed false (it needs a count above
+  // zero), no line refused, and submission was allowed. The wizard then called
+  // `completeFromQuote` with no `depositResolution` at all and the server
+  // refused the sale — after the operator had been shown "this treatment is
+  // required" and left free to ignore it. The screen said go, the server said
+  // no, and the field that knew better was sitting unused in this function.
+  const unconfirmedRequiredLine =
+    lines
+      .filter(([id, line]) => line.required && line.canApply && confirmed[id] !== true)
+      .map(([, line]) => line)[0] ?? null;
+
   return {
     sendTreatment: everyConfirmed && blockingLine === null,
     blockingLine,
     partiallyConfirmed,
-    // A blocking line cannot be resolved from this screen, and a partial
-    // selection is an unfinished decision. Neither should reach the server,
-    // where the refusal names no vehicle.
-    canSubmit: blockingLine === null && !partiallyConfirmed,
+    unconfirmedRequiredLine,
+    // A blocking line cannot be resolved from this screen, a partial selection
+    // is an unfinished decision, and an unconfirmed required line is a refusal
+    // the server has already promised. None should reach it, where the message
+    // names no vehicle.
+    canSubmit:
+      blockingLine === null && !partiallyConfirmed && unconfirmedRequiredLine === null,
   };
 }

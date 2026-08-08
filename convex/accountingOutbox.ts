@@ -219,16 +219,19 @@ async function markEntryPosted(
   // that will correctly resolve to nothing every time, forever.
   resultEventId: Id<"accountingEvents"> | null
 ): Promise<void> {
-  await ctx.db.patch(p._id, {
-    status: "POSTED",
-    resolvedAt: Date.now(),
-    ...(resultEventId ? { resultEventId } : {}),
-    attempts: p.attempts + 1,
-  });
   // A deferred deposit reversal is only finished once its journal exists. The
   // application and its slice sit at REVERSING until here, so that a share
   // whose original entry is still POSTED cannot be refunded or re-allocated in
   // the meantime.
+  //
+  // Done BEFORE the row is marked POSTED, not after. The journal already
+  // exists by this point — `reversePendingEntry` returned — so nothing is lost
+  // by ordering it first, and a throw in here used to be caught by the drain
+  // loop and routed to `markEntryFailed`, which patched the SAME row that had
+  // just been patched POSTED. The entry finished FAILED with `resolvedAt` set
+  // while its journal sat in the ledger, and the application stayed REVERSING
+  // with nothing left to finish it. Now a failure leaves the row untouched and
+  // retryable, which is what the drain's error handling already expects.
   if (p.kind === "REVERSE") {
     await completeDeferredReversal(ctx, {
       orgId: p.orgId,
@@ -236,6 +239,12 @@ async function markEntryPosted(
       postedAt: Date.now(),
     });
   }
+  await ctx.db.patch(p._id, {
+    status: "POSTED",
+    resolvedAt: Date.now(),
+    ...(resultEventId ? { resultEventId } : {}),
+    attempts: p.attempts + 1,
+  });
 }
 
 /**

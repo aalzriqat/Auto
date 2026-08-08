@@ -15,6 +15,18 @@ const refusing = (label: string, reason: string): DepositLineEligibility => ({
   label,
 });
 
+/**
+ * Eligible, but the server does NOT insist on the treatment — the deposit fits
+ * inside what the dealership billed this customer, so the long-standing default
+ * handles it. This is the only shape for which declining is a real answer.
+ */
+const optional = (label: string): DepositLineEligibility => ({
+  canApply: true,
+  required: false,
+  reason: null,
+  label,
+});
+
 describe("whether a quote's deposit treatment may be sent", () => {
   test("a single confirmed line sends it", () => {
     const d = decideDepositSubmission({ a: eligible("Camry") }, { a: true });
@@ -73,13 +85,45 @@ describe("whether a quote's deposit treatment may be sent", () => {
     expect(d.canSubmit).toBe(true);
   });
 
-  test("confirming nothing on an eligible quote still submits, without the treatment", () => {
-    // Declining is a valid answer. The server then applies its long-standing
-    // default, and refuses if the deposit does not fit — which is the state the
-    // control exists to give a way out of, not one it may force.
-    const d = decideDepositSubmission({ a: eligible("Camry") }, {});
+  test("confirming nothing submits when no line REQUIRES the treatment", () => {
+    // Declining is a valid answer here, and only here: the deposit fits the
+    // customer's bill, so the server's long-standing default handles it.
+    const d = decideDepositSubmission({ a: optional("Camry") }, {});
     expect(d.sendTreatment).toBe(false);
     expect(d.partiallyConfirmed).toBe(false);
+    expect(d.unconfirmedRequiredLine).toBeNull();
     expect(d.canSubmit).toBe(true);
+  });
+
+  test("a REQUIRED line nobody confirmed blocks submission, and names itself", () => {
+    // This fixture used to be the one above, asserting that declining was
+    // fine — while carrying `required: true`, which is precisely the case the
+    // server refuses. The test encoded the defect: no line refused, nothing
+    // was confirmed so `partiallyConfirmed` stayed false, submission was
+    // allowed, and `completeFromQuote` went out with no treatment to a server
+    // that had already promised to reject it. The operator had been shown
+    // "this treatment is required" and left free to ignore it.
+    const d = decideDepositSubmission({ a: eligible("Camry") }, {});
+    expect(d.canSubmit).toBe(false);
+    expect(d.unconfirmedRequiredLine?.label).toBe("Camry");
+    expect(d.blockingLine).toBeNull();
+  });
+
+  test("confirming the required line releases it", () => {
+    const d = decideDepositSubmission({ a: eligible("Camry") }, { a: true });
+    expect(d.unconfirmedRequiredLine).toBeNull();
+    expect(d.canSubmit).toBe(true);
+    expect(d.sendTreatment).toBe(true);
+  });
+
+  test("a required line is not blamed when another line refuses outright", () => {
+    // `blockingLine` cannot be resolved on this screen; the required one can.
+    // Reporting both would give the operator two instructions for one deal.
+    const d = decideDepositSubmission(
+      { a: eligible("Camry"), b: refusing("Sunny", "exceeds the margin") },
+      {}
+    );
+    expect(d.canSubmit).toBe(false);
+    expect(d.blockingLine?.label).toBe("Sunny");
   });
 });
