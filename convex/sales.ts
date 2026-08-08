@@ -4,13 +4,14 @@ import { mutation } from "./functions";
 import { Doc, Id, TableNames } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
+import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
 import { CreateDraftSaleSchema, CreateSaleSchema, UpdateSaleSchema } from "./validations/sales";
 import { restoreVehicleFromSale } from "./utils/saleHelpers";
-import { vehicleHasCostBasis } from "./utils/vehicleCost";
+import { vehicleHasCostBasis, computeVehicleCapitalizedCost } from "./utils/vehicleCost";
+import { saleEconomics, dealershipCollectsGross } from "./utils/vehicleOwnership";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
 import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale } from "./utils/saleCompletion";
@@ -20,7 +21,10 @@ import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { getOrgCurrency, hookCommissionAccrued, hookCommissionAdjusted, hookCommissionPaid, hookSaleCancelled, isPostableNow, reverseCommissionForSale, commissionAccountingDate, commissionAccrualStrandedReason, commissionEntriesOutstandingStatus, hasCommissionAccrual, recognizedCommissionMinor, safeAdjustmentSeq, MAX_COMMISSION_ADJUSTMENTS } from "./accounting/workflowHooks";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
+import { depositMethodValidator } from "./utils/depositRecording";
 import { toMinorUnits, fromMinorUnits, assertFiniteNumber } from "./utils/money";
+import { allocatedDepositForVehicle } from "./utils/depositAllocation";
+import { planDepositSettlementApplication } from "./utils/depositSettlementPlan";
 import { checkPostingAllowed } from "./accountingPeriods";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
@@ -30,6 +34,35 @@ const saleStatus = v.union(
   v.literal("COMPLETED"),
   v.literal("CANCELLED")
 );
+
+/**
+ * Where the buyer's money went on a consigned (SOURCED) sale. Only meaningful
+ * there; sale completion drops it for dealer-owned stock. Omitted means
+ * THROUGH_DEALERSHIP — see `consignedSettlementRoute` in utils/vehicleOwnership.
+ */
+const supplierSettlementRouteValidator = v.union(
+  v.literal("THROUGH_DEALERSHIP"),
+  v.literal("DIRECT_TO_SUPPLIER")
+);
+
+/**
+ * What happens to the customer's reservation deposit (عربون) when the deal
+ * closes. Required on a consigned sale that has one, because there the answer
+ * is not implied by the sale — see resolveReservationDeposits.
+ */
+const depositResolutionValidator = v.object({
+  treatment: v.union(
+    v.literal("APPLY_TO_DEALER_AMOUNT"),
+    v.literal("APPLY_TO_TRANSACTION_SETTLEMENT"),
+    v.literal("REFUND_TO_CUSTOMER"),
+    v.literal("FORFEITED"),
+    v.literal("OTHER")
+  ),
+  reason: v.optional(v.string()),
+  // Required for REFUND_TO_CUSTOMER: the deposit's own recorded method may be
+  // OTHER, which the release path refuses because it cannot be paid out.
+  refundMethod: v.optional(depositMethodValidator),
+});
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -290,6 +323,8 @@ export const create = mutation({
     gapSold: v.optional(v.number()),
     gapCost: v.optional(v.number()),
     gapTermMonths: v.optional(v.number()),
+    supplierSettlementRoute: v.optional(supplierSettlementRouteValidator),
+    depositResolution: v.optional(depositResolutionValidator),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -325,6 +360,8 @@ export const completeFromQuote = mutation({
   args: {
     orgId: v.id("organizations"),
     quoteId: v.id("quotes"),
+    supplierSettlementRoute: v.optional(supplierSettlementRouteValidator),
+    depositResolution: v.optional(depositResolutionValidator),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -366,6 +403,8 @@ export const completeFromQuote = mutation({
           saleDate: Date.now(),
           downPayment: quote.downPayment,
           financingType: "CASH",
+          supplierSettlementRoute: args.supplierSettlementRoute,
+          depositResolution: args.depositResolution,
           idempotencyKey: args.idempotencyKey,
           actorId: user._id,
         });
@@ -403,6 +442,8 @@ export const createDraft = mutation({
     gapSold: v.optional(v.number()),
     gapCost: v.optional(v.number()),
     gapTermMonths: v.optional(v.number()),
+    supplierSettlementRoute: v.optional(supplierSettlementRouteValidator),
+    depositResolution: v.optional(depositResolutionValidator),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -435,6 +476,7 @@ export const completeDraft = mutation({
   args: {
     orgId: v.id("organizations"),
     saleId: v.id("sales"),
+    depositResolution: v.optional(depositResolutionValidator),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -458,6 +500,7 @@ export const completeDraft = mutation({
           orgId: args.orgId,
           saleId: args.saleId,
           actorId: user._id,
+          depositResolution: args.depositResolution,
           idempotencyKey: args.idempotencyKey,
         })
     );
@@ -491,6 +534,7 @@ export const update = mutation({
     gapSold: v.optional(v.number()),
     gapCost: v.optional(v.number()),
     gapTermMonths: v.optional(v.number()),
+    supplierSettlementRoute: v.optional(supplierSettlementRouteValidator),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
@@ -531,7 +575,11 @@ export const update = mutation({
       args.warrantyTermMonths !== undefined ||
       args.gapSold !== undefined ||
       args.gapCost !== undefined ||
-      args.gapTermMonths !== undefined;
+      args.gapTermMonths !== undefined ||
+      // The route decides which accounts the sale posted to and whether a
+      // supplier payable exists. Editing it after completion would leave the
+      // ledger describing one arrangement and the sale row another.
+      args.supplierSettlementRoute !== undefined;
     if (sale.status === "COMPLETED" && hasCompletedSaleFinancialChange) {
       throwAppError(
         AppErrorCode.SALE_ALREADY_COMPLETED,
@@ -559,6 +607,7 @@ export const update = mutation({
     if (args.warrantySold !== undefined) patch.warrantySold = args.warrantySold;
     if (args.warrantyCost !== undefined) patch.warrantyCost = args.warrantyCost;
     if (args.warrantyTermMonths !== undefined) patch.warrantyTermMonths = args.warrantyTermMonths;
+    if (args.supplierSettlementRoute !== undefined) patch.supplierSettlementRoute = args.supplierSettlementRoute;
     if (args.gapSold !== undefined) patch.gapSold = args.gapSold;
     if (args.gapCost !== undefined) patch.gapCost = args.gapCost;
     if (args.gapTermMonths !== undefined) patch.gapTermMonths = args.gapTermMonths;
@@ -1662,5 +1711,253 @@ export const recalculateCommission = mutation({
       console.error("sales.recalculateCommission failed", error);
       throw new ConvexError("An unexpected error occurred. Please try again later.");
     }
+  },
+});
+
+/**
+ * What completing this sale would post, before it is completed.
+ *
+ * A consigned car is legally the supplier's, so the decision the salesperson is
+ * about to make — where the buyer's money went — changes which side of the
+ * balance sheet the deal lands on: the dealership either owes the supplier his
+ * entitlement, or holds a claim on him for its own margin. That is exactly the
+ * thing employees confuse, and it is not recoverable from the sale form.
+ *
+ * Computed here rather than in the client because the figures must be the ones
+ * that will actually post. `saleEconomics` is the same function the GL and the
+ * subledgers use, and the cost basis is `computeVehicleCapitalizedCost`, not the
+ * vehicle's bare `sourceCost` — a client multiplying the fields it happens to
+ * have would show a margin the ledger then contradicts.
+ */
+/**
+ * The deposit half of `consignedSalePreview`.
+ *
+ * Answers, for one quote line: how much of the customer's عربون is riding on
+ * this car, whether the sale can complete without anybody saying what happens
+ * to it, and what confirming "it forms part of this deal's settlement" would
+ * leave owing on each side.
+ *
+ * The eligibility and the resulting amounts both come from
+ * `planDepositSettlementApplication` — the same call `resolveReservationDeposits`
+ * makes when the sale actually completes. Recomputing them here would be a
+ * second implementation of a financial rule, and the first time the two drifted
+ * an operator would be shown a figure the ledger then contradicts.
+ */
+async function previewDepositSettlement(
+  ctx: QueryCtx,
+  args: {
+    orgId: Id<"organizations">;
+    quoteId: Id<"quotes"> | undefined;
+    vehicleId: Id<"vehicles">;
+    salePrice: number;
+    capitalizedCost: number;
+    settlementRoute: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER";
+    collectsGross: boolean;
+  }
+) {
+  if (!args.quoteId) return null;
+
+  const currency = await getOrgCurrency(ctx, args.orgId);
+  const allocation = await allocatedDepositForVehicle(ctx, {
+    quoteId: args.quoteId,
+    vehicleId: args.vehicleId,
+    currency,
+  });
+  // No عربون on this quote at all — there is no decision to offer, and
+  // rendering the section anyway is how an operator learns to click past it.
+  if (allocation.kind === "NO_DEPOSIT") return null;
+
+  const salePriceMinor = toMinorUnits(args.salePrice, currency);
+  // Mirrors `applySaleCompletionSideEffects` exactly. `completeFromQuote` passes
+  // no dealer fees, warranty or GAP, so on the quote path the customer's bill
+  // for this line IS the vehicle receivable — nothing, when the buyer paid the
+  // supplier and the dealership invoiced nothing for the car.
+  const customerBillableMinor = args.collectsGross ? salePriceMinor : 0;
+  const marginMinor =
+    args.capitalizedCost > 0
+      ? salePriceMinor - toMinorUnits(args.capitalizedCost, currency)
+      : null;
+
+  // The split has not been recorded yet, so the amount riding on this car is
+  // not a number anybody has decided. The sale refuses to complete in that
+  // state; saying so beats showing a figure derived from a guess.
+  if (allocation.kind === "NOT_ALLOCATED") {
+    return {
+      currency,
+      depositAmount: 0,
+      allocationDecided: false,
+      treatmentRequired: true,
+      canApplyToSettlement: false,
+      blockedReason:
+        "This vehicle's share of the reservation deposit has not been decided yet. Record the split before completing the sale.",
+      destination: null,
+      customerReceivableAfter: fromMinorUnits(customerBillableMinor, currency),
+      supplierReceivableAfter: fromMinorUnits(Math.max(0, marginMinor ?? 0), currency),
+    };
+  }
+
+  const depositMinor = allocation.allocatedMinor;
+  const plan = planDepositSettlementApplication({
+    isSourced: true,
+    settlementRoute: args.settlementRoute,
+    depositMinor,
+    customerBillableMinor,
+    marginMinor,
+  });
+
+  return {
+    currency,
+    depositAmount: fromMinorUnits(depositMinor, currency),
+    allocationDecided: true,
+    /**
+     * True when completing WITHOUT a stated treatment would be refused, which
+     * is exactly when the deposit is bigger than what the dealership billed —
+     * always, on DIRECT_TO_SUPPLIER, where it billed nothing for the car. This
+     * is the flag that decides whether the operator must be asked at all.
+     */
+    treatmentRequired: depositMinor > customerBillableMinor,
+    canApplyToSettlement: plan.ok,
+    blockedReason: plan.ok ? null : plan.reason,
+    destination: plan.ok ? plan.destination : null,
+    customerReceivableAfter: fromMinorUnits(
+      plan.ok ? plan.customerReceivableAfterMinor : customerBillableMinor,
+      currency
+    ),
+    supplierReceivableAfter: fromMinorUnits(
+      plan.ok ? plan.supplierReceivableAfterMinor : Math.max(0, marginMinor ?? 0),
+      currency
+    ),
+  };
+}
+
+export const consignedSalePreview = query({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    /**
+     * Preview one LINE of a quote.
+     *
+     * When given, the price comes from that line and nothing quote-level is
+     * used. A multi-vehicle quote's `vehiclePrice` is the total of the whole
+     * deal, so pairing it with one car's supplier cost produced a margin that
+     * belonged to no vehicle at all — the first car's cost subtracted from
+     * every car's price, shown to the operator as that car's profit.
+     */
+    quoteId: v.optional(v.id("quotes")),
+    /** Only honoured when no quote is named — the sale form knows its own price. */
+    salePrice: v.optional(v.number()),
+    settlementRoute: v.optional(supplierSettlementRouteValidator),
+  },
+  handler: async (ctx, args) => {
+    // Fails SOFT, and that matters more than it looks. This runs from a
+    // `useQuery` inside the sale dialog, and convex/react rethrows a query
+    // error during render — so a permission this caller lacks does not hide a
+    // section, it replaces the page with the error boundary. The default SALES
+    // role has VIEW_SALES and not VIEW_REPORTS, and the Edit button on the
+    // sales list is ungated, so requiring both here crashed the dialog for the
+    // role that opens it most.
+    //
+    // Entry is therefore gated on being allowed to see the sale at all; the
+    // cost-bearing answer is withheld by returning null, exactly as
+    // dashboard.stats withholds its profit figures.
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    const canSeeCost =
+      isSystemOwnerRole(role) ||
+      [PERMISSIONS.VIEW_EXPENSES, PERMISSIONS.VIEW_REPORTS, PERMISSIONS.VIEW_FINANCE].some((p) =>
+        role.permissions.includes(p)
+      );
+    if (!canSeeCost) return null;
+
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle || vehicle.orgId !== args.orgId || vehicle.isDeleted) return null;
+    if (vehicle.sourceType !== "SOURCED") return null;
+
+    // The price this preview is about, derived on the server where a quote is
+    // named. A client passing a quote-level total for one line item is exactly
+    // the mistake this closes, so the caller does not get to supply it.
+    let salePrice: number;
+    let quoteLineIndex: number | undefined;
+    if (args.quoteId) {
+      const quote = await ctx.db.get(args.quoteId);
+      if (!quote || quote.orgId !== args.orgId) return null;
+      const items = quote.vehicleItems ?? [
+        { vehicleId: quote.vehicleId, unitPrice: quote.vehiclePrice },
+      ];
+      const index = items.findIndex((item) => item.vehicleId === args.vehicleId);
+      if (index < 0) return null;
+      const line = items[index]!;
+      // `unitPrice` is optional on the legacy single-line shape only, where the
+      // quote total IS the line. On a multi-line quote a missing unit price is
+      // an unanswerable question, not an excuse to fall back to the total.
+      if (line.unitPrice === undefined) {
+        if (items.length > 1) return null;
+        salePrice = quote.vehiclePrice;
+      } else {
+        salePrice = line.unitPrice;
+      }
+      quoteLineIndex = index;
+    } else {
+      if (args.salePrice === undefined) return null;
+      salePrice = args.salePrice;
+    }
+
+    assertFiniteNumber(salePrice, "sale price");
+
+    const capitalizedCost = await computeVehicleCapitalizedCost(ctx, vehicle);
+    const economics = saleEconomics({
+      salePrice,
+      vehicle,
+      capitalizedCost,
+      supplierSettlementRoute: args.settlementRoute,
+    });
+    const route = economics.settlementRoute ?? "THROUGH_DEALERSHIP";
+    const collectsGross = dealershipCollectsGross(route);
+
+    // What confirming the settlement treatment would do to this line, answered
+    // by the same function the completion posts through so the two cannot
+    // disagree. Quote-only: see the field comment on `depositSettlement`.
+    const depositSettlement = await previewDepositSettlement(ctx, {
+      orgId: args.orgId,
+      quoteId: args.quoteId,
+      vehicleId: args.vehicleId,
+      salePrice,
+      capitalizedCost,
+      settlementRoute: route,
+      collectsGross,
+    });
+
+    return {
+      supplierName: vehicle.sourcedFromName ?? null,
+      settlementRoute: route,
+      /** Which line of the quote this is about, so the UI cannot mislabel it. */
+      quoteLineIndex,
+      vehicleLabel: `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim(),
+      salePrice,
+      grossTransactionValue: economics.grossTransactionValue,
+      supplierEntitlement: economics.supplierSettlement,
+      dealershipMargin: economics.dealershipMargin,
+      recognizedRevenue: economics.recognizedRevenue,
+      /** What the customer is invoiced for the car. Nothing, when the buyer paid the supplier. */
+      customerVehicleReceivable: collectsGross ? salePrice : 0,
+      /** Set on the route where gross ran through the dealership: it owes him his share. */
+      supplierPayable: collectsGross ? economics.supplierSettlement : 0,
+      /** Set on the other route: he holds the dealership's margin until he settles it. */
+      supplierReceivable: collectsGross ? 0 : economics.dealershipMargin,
+      /**
+       * True when no supplier amount is recorded. The sale cannot complete in
+       * that state — the margin is undeterminable — so the form says so rather
+       * than letting the mutation reject it after the fact.
+       */
+      missingSupplierCost: capitalizedCost <= 0,
+      /**
+       * What confirming "this deposit forms part of the settlement of this
+       * deal" would actually do. Null when this preview is not about a quote
+       * line: the deposit is quote-scoped, so without a quote there is no share
+       * to speak of, and the sale form may add dealer fees this query cannot
+       * see — reporting a bill it cannot compute is how a preview starts
+       * disagreeing with the posting.
+       */
+      depositSettlement,
+    };
   },
 });

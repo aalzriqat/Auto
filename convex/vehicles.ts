@@ -51,6 +51,7 @@ const vehicleSourceType = v.optional(v.union(v.literal("STOCK"), v.literal("SOUR
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
 import { paginationOptsValidator } from "convex/server";
+import { retroactiveOwnershipChangeRefusal } from "./utils/vehicleOwnership";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -1010,6 +1011,37 @@ export const update = mutation({
       }
     }
 
+    // Changing what a vehicle IS, after it has been sold, rewrites history in
+    // whichever direction it runs. Both are refused.
+    //
+    // SOURCED→STOCK: the sale posted on agent basis — commission on the margin,
+    // no COGS, no inventory — and converting now capitalizes Vehicle Inventory
+    // for a car that has already left the lot. Nothing will ever relieve that
+    // asset, because the sale that would have is in the past, so it sits on the
+    // balance sheet permanently while the completed sale's basis is silently
+    // contradicted underneath it.
+    //
+    // STOCK→SOURCED: the sale posted as principal — gross revenue, COGS,
+    // inventory relieved. Declaring the car consigned afterwards says the
+    // dealership never owned what it has already recognised revenue and cost of
+    // sales on, and asserts a supplier entitlement out of a completed deal that
+    // nobody will ever settle.
+    //
+    // This direction was previously left open on the belief that the
+    // acquisition-exposure lock below caught it. It does not: that lock keys on
+    // `"sourceType" in patch && patch.sourceType !== "SOURCED"`, so a patch
+    // setting sourceType TO "SOURCED" never reaches it.
+    //
+    // A genuine historical correction goes through the audited migration path
+    // (`consignedSaleCorrections`), which posts a correcting journal and leaves
+    // a record, rather than editing the basis out from under a posted sale.
+    const ownershipRefusal = retroactiveOwnershipChangeRefusal({
+      currentSourceType: vehicle.sourceType,
+      requestedSourceType: args.sourceType,
+      status: vehicle.status,
+    });
+    if (ownershipRefusal) throw new ConvexError(ownershipRefusal);
+
     // If VIN is being changed, check for duplicates
     if (args.vin) {
       const normalizedVin = args.vin.trim().toUpperCase();
@@ -1090,6 +1122,30 @@ export const update = mutation({
     if (Object.keys(patch).length > 0) {
       if (typeof patch.sellingPrice === "number") {
         await insertPriceHistory(ctx, args.orgId, args.vehicleId, vehicle.sellingPrice, patch.sellingPrice, user._id);
+      }
+
+      // Ownership is derived from sourceType, so the flag flipping erases the
+      // past: a car sold as the supplier's agent and bought in afterwards would
+      // read forever as stock the dealership always owned, making the
+      // agent-basis sale behind it look like a mistake. Record the transition
+      // before the flag moves, while the old values are still readable.
+      const previousSourceType = vehicle.sourceType ?? "STOCK";
+      const nextSourceType = (patch.sourceType as "STOCK" | "SOURCED" | undefined) ?? previousSourceType;
+      if (nextSourceType !== previousSourceType) {
+        await ctx.db.insert("vehicleOwnershipConversions", {
+          orgId: args.orgId,
+          vehicleId: args.vehicleId,
+          fromSourceType: previousSourceType,
+          toSourceType: nextSourceType,
+          supplierName: vehicle.sourcedFromName,
+          supplierEntitlementAtConversion: vehicle.sourceCost,
+          purchaseAmount:
+            "purchasePrice" in patch ? (patch.purchasePrice as number) : vehicle.purchasePrice,
+          purchaseDate: Date.now(),
+          paymentMethod: args.purchasePaymentMethod,
+          convertedBy: user._id,
+          convertedAt: Date.now(),
+        });
       }
 
       await ctx.db.insert("vehicleEdits", {

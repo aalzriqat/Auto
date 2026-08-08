@@ -13,7 +13,17 @@ import { getActiveDepositHolds } from "./utils/depositHelpers";
 export const list = query({
   args: {
     orgId: v.id("organizations"),
-    status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"), v.literal("CANCELLED"))),
+    status: v.optional(
+      v.union(
+        v.literal("PENDING"),
+        v.literal("NOT_YET_DUE"),
+        v.literal("DUE_ON_SALE"),
+        v.literal("PARTIALLY_PAID"),
+        v.literal("PAID"),
+        v.literal("DISPUTED"),
+        v.literal("CANCELLED")
+      )
+    ),
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
@@ -203,6 +213,10 @@ export const markPaid = mutation({
     payableId: v.id("vehicleSupplierPayables"),
     paymentNotes: v.optional(v.string()),
     paymentMethod: v.optional(paymentMethodValidator),
+    /** Cheque number or transfer reference. */
+    paymentReference: v.optional(v.string()),
+    /** The bank or cash account the money left. */
+    paymentAccountId: v.optional(v.id("chartOfAccounts")),
     taxAmount: v.optional(v.number()),
     idempotencyKey: v.optional(v.string()),
   },
@@ -230,19 +244,38 @@ export const markPaid = mutation({
         if (payable.status === "CANCELLED") {
           throw new ConvexError("This payable was cancelled with its sale.");
         }
+        // Only what is still owed. Posting `amountDue` on a partially-paid row
+        // would discharge AP-Suppliers a second time for the instalments
+        // already posted, leaving the account short by exactly what had been
+        // paid so far.
+        const alreadyPaidBeforeSettle = payable.amountPaid ?? 0;
+        const remainingToSettle = payable.amountDue - alreadyPaidBeforeSettle;
+        if (remainingToSettle <= 0) {
+          throw new ConvexError("This payable has already been paid in full.");
+        }
         if (args.taxAmount !== undefined && (!Number.isFinite(args.taxAmount) || args.taxAmount < 0)) {
           throw new ConvexError("VAT amount cannot be negative.");
         }
-        if (args.taxAmount !== undefined && args.taxAmount > payable.amountDue) {
-          throw new ConvexError("VAT amount cannot exceed the amount due.");
+        if (args.taxAmount !== undefined && args.taxAmount > remainingToSettle) {
+          throw new ConvexError(
+            "VAT amount cannot exceed the amount still outstanding on this payable."
+          );
         }
 
         const now = Date.now();
         await ctx.db.patch(args.payableId, {
           status: "PAID",
+          // Settling in full is exactly that: the whole entitlement recorded as
+          // paid. Left at zero, `settlementView` would have to keep special-
+          // casing this row forever to avoid reporting a settled supplier as
+          // still owed the lot.
+          amountPaid: payable.amountDue,
+          paymentSeq: (payable.paymentSeq ?? 0) + 1,
           paidAt: now,
           paidBy: user._id,
           paymentMethod,
+          paymentReference: args.paymentReference,
+          paymentAccountId: args.paymentAccountId,
           paymentNotes: args.paymentNotes,
           taxAmount: args.taxAmount,
           updatedAt: now,
@@ -269,7 +302,8 @@ export const markPaid = mutation({
           orgId: args.orgId,
           payableId: args.payableId,
           sourcedFromName: payable.sourcedFromName,
-          amountMinor: toMinorUnits(payable.amountDue, currency),
+          amountMinor: toMinorUnits(remainingToSettle, currency),
+          paymentSeq: (payable.paymentSeq ?? 0) + 1,
           taxMinor: args.taxAmount ? toMinorUnits(args.taxAmount, currency) : undefined,
           currency,
           paymentMethod,
@@ -279,5 +313,184 @@ export const markPaid = mutation({
         });
       }
     );
+  },
+});
+
+/**
+ * Records part of what a supplier is owed, without closing the payable.
+ *
+ * `markPaid` settles the whole entitlement in one movement and posts the GL
+ * entry for it. Real settlements arrive in instalments — a cheque on account, a
+ * transfer for the balance — and forcing those through `markPaid` meant either
+ * recording a payment that had not happened or leaving the supplier's balance
+ * untouched until the last one landed.
+ *
+ * Each instalment posts its own GL entry, discharging AP-Suppliers by exactly
+ * what moved. It did not, originally, on the reasoning that `settlementView`
+ * reports the balance either way — which is true of a part payment and false of
+ * the last one: the row reached PAID with no entry ever raised, and `markPaid`
+ * (the only path that raises one) refuses a PAID payable. The supplier then
+ * read as settled everywhere except the ledger, and nothing could discharge the
+ * liability again.
+ */
+export const recordPartialPayment = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    payableId: v.id("vehicleSupplierPayables"),
+    amount: v.number(),
+    paymentMethod: v.optional(paymentMethodValidator),
+    paymentReference: v.optional(v.string()),
+    paymentAccountId: v.optional(v.id("chartOfAccounts")),
+    paymentNotes: v.optional(v.string()),
+    idempotencyKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const paymentMethod = normalizePaymentMethod(args.paymentMethod);
+
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "sourcingPayables.recordPartialPayment",
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        fingerprint: JSON.stringify({
+          payableId: args.payableId,
+          amount: args.amount,
+          paymentMethod,
+          paymentReference: args.paymentReference ?? null,
+        }),
+      },
+      async () => {
+        const payable = await ctx.db.get(args.payableId);
+        if (!payable || payable.orgId !== args.orgId) {
+          throw new ConvexError("Supplier payable not found.");
+        }
+        if (!Number.isFinite(args.amount) || args.amount <= 0) {
+          throw new ConvexError("A payment must be greater than zero.");
+        }
+        if (payable.status === "CANCELLED") {
+          throw new ConvexError("This payable was cancelled with its sale.");
+        }
+        if (payable.status === "PAID") {
+          throw new ConvexError("This payable is already settled in full.");
+        }
+        if (payable.status === "DISPUTED") {
+          throw new ConvexError(
+            "This payable is under dispute. Resolve the dispute before paying against it."
+          );
+        }
+
+        const alreadyPaid = payable.amountPaid ?? 0;
+        const projected = alreadyPaid + args.amount;
+        // Paying a supplier more than he is owed is a real error with real
+        // money behind it, and netting it into the next payable hides which
+        // deal it happened on.
+        if (projected > payable.amountDue) {
+          throw new ConvexError(
+            `That would pay ${projected} against ${payable.amountDue} owed. Reduce the amount, or correct the entitlement first.`
+          );
+        }
+
+        const now = Date.now();
+        const settlesInFull = projected === payable.amountDue;
+        const paymentSeq = (payable.paymentSeq ?? 0) + 1;
+        await ctx.db.patch(args.payableId, {
+          amountPaid: projected,
+          status: settlesInFull ? "PAID" : "PARTIALLY_PAID",
+          ...(settlesInFull ? { paidAt: now, paidBy: user._id } : {}),
+          paymentMethod,
+          paymentReference: args.paymentReference,
+          paymentAccountId: args.paymentAccountId,
+          paymentNotes: args.paymentNotes,
+          paymentSeq,
+          updatedAt: now,
+        });
+
+        // Same cost-origin reasoning as markPaid: a payable with a linked sale
+        // credited AP against COGS at sale time; one without credited Vehicle
+        // Inventory at acquisition, unless the vehicle has since sold and its
+        // cost has already moved to COGS.
+        let costOrigin: "COGS" | "VEHICLE_INVENTORY" = "COGS";
+        if (payable.saleId == null) {
+          const vehicle = await ctx.db.get(payable.vehicleId);
+          costOrigin = vehicle?.status === "SOLD" ? "COGS" : "VEHICLE_INVENTORY";
+        }
+        await hookSupplierPaymentSettled(ctx, {
+          orgId: args.orgId,
+          payableId: args.payableId,
+          sourcedFromName: payable.sourcedFromName,
+          amountMinor: toMinorUnits(args.amount, payable.currency),
+          currency: payable.currency,
+          paymentMethod,
+          costOrigin,
+          paymentSeq,
+          actorId: user._id,
+          occurredAt: now,
+        });
+
+        return { amountPaid: projected, remainingAmount: payable.amountDue - projected };
+      }
+    );
+  },
+});
+
+/**
+ * Marks a supplier's entitlement as disputed, or lifts the dispute.
+ *
+ * A disputed figure is not a payable that happens to be unpaid — it is one
+ * nobody has agreed. Payment is refused while it stands, so the dispute cannot
+ * be settled by quietly paying it.
+ */
+export const setDisputed = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    payableId: v.id("vehicleSupplierPayables"),
+    disputed: v.boolean(),
+    reason: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const payable = await ctx.db.get(args.payableId);
+    if (!payable || payable.orgId !== args.orgId) {
+      throw new ConvexError("Supplier payable not found.");
+    }
+    if (payable.status === "CANCELLED") {
+      throw new ConvexError("This payable was cancelled with its sale.");
+    }
+    if (payable.status === "PAID") {
+      throw new ConvexError("This payable is already settled. Reverse the payment first.");
+    }
+
+    const now = Date.now();
+    if (args.disputed) {
+      const reason = args.reason?.trim();
+      // A dispute blocks payment, so the reason is the only record of why the
+      // supplier is not being paid. Left optional it would be blank exactly
+      // when somebody needs it.
+      if (!reason) {
+        throw new ConvexError("Say what is disputed — it is the reason the supplier is not being paid.");
+      }
+      await ctx.db.patch(args.payableId, {
+        status: "DISPUTED",
+        disputedAt: now,
+        disputedBy: user._id,
+        disputeReason: reason,
+        updatedAt: now,
+      });
+    } else {
+      // Back to whatever the money says, not to a remembered previous status:
+      // payments may have been recorded while the dispute stood.
+      const alreadyPaid = payable.amountPaid ?? 0;
+      await ctx.db.patch(args.payableId, {
+        status: alreadyPaid > 0 ? "PARTIALLY_PAID" : "DUE_ON_SALE",
+        disputedAt: undefined,
+        disputedBy: undefined,
+        disputeReason: undefined,
+        updatedAt: now,
+      });
+    }
+    return args.payableId;
   },
 });

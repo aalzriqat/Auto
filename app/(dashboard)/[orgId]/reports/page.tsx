@@ -47,6 +47,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { downloadCSV } from "@/lib/utils/export";
+import { sumRecognizedRevenue, sumReportedCost, sumReportedProfit } from "@/lib/saleReporting";
 import { RoleGuard } from "@/components/auth/RoleGuard";
 import { paginationOptsValidator } from "convex/server";
 import { dateInputToUtcMs, dateInputEndToUtcMs, todayDateInput, daysFromTodayDateInput } from "@/lib/dateInput";
@@ -205,9 +206,13 @@ export default function ReportsPage() {
     ? salesReport?.sales
     : salesReport?.sales?.filter((s: any) => s.salespersonId === selectedSalesperson || s.salespersonName === selectedSalesperson);
 
-  const filteredRevenue = filteredSales?.reduce((sum: number, s: any) => sum + s.salePrice, 0) ?? 0;
-  const filteredCost = filteredSales?.reduce((sum: number, s: any) => sum + s.totalCost, 0) ?? 0;
-  const filteredProfit = filteredSales?.reduce((sum: number, s: any) => sum + s.netProfit, 0) ?? 0;
+  // Summed through the shared helper rather than inline, so this second place
+  // that decides what "revenue" means cannot drift from the backend's answer.
+  // It used to sum salePrice — the sticker price of a car the dealership never
+  // owned — which showed gross turnover beside a cost column of zero.
+  const filteredRevenue = sumRecognizedRevenue(filteredSales);
+  const filteredCost = sumReportedCost(filteredSales);
+  const filteredProfit = sumReportedProfit(filteredSales);
 
   const handlePrint = () => window.print();
   const dateFilterProps = { startDateStr, endDateStr, setStartDateStr, setEndDateStr, selectedSalesperson, setSelectedSalesperson, salespersonOptions };

@@ -174,6 +174,111 @@ describe("resetOrgFinancialData", () => {
     expect(vehicles[0].status).toBe("SOLD");
   });
 
+  test("deletes an appraisal's stored report rather than orphaning it", async () => {
+    const t = setup();
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Blob Motors", createdAt: Date.now() })
+    );
+    const blobId = await t.run((ctx) => ctx.storage.store(new Blob(["appraisal.pdf"])));
+
+    const appraisalId = await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: "reset_u1", email: "u@x.com" });
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, vin: "VINRESET1", make: "Toyota", model: "Camry", year: 2024, mileage: 10,
+        color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: 20000,
+        status: "AVAILABLE",
+      });
+      const customerId = await ctx.db.insert("customers", {
+        orgId, firstName: "Reset", lastName: "Customer",
+      });
+      const quoteId = await ctx.db.insert("quotes", {
+        orgId, customerId, vehicleId, vehiclePrice: 20000, downPayment: 2000,
+        termMonths: 48, status: "ACCEPTED", createdBy: userId, createdAt: Date.now(),
+      });
+      const applicationId = await ctx.db.insert("financeApplications", {
+        orgId, quoteId, customerId, vehicleId, salespersonId: userId,
+        status: "APPROVED", createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      return await ctx.db.insert("financeAppraisals", {
+        orgId, applicationId, vehicleId, appraisalAmountMinor: 12_500_000,
+        currency: "JOD", providerType: "FINANCE_COMPANY", appraisedAt: Date.now(),
+        documentStorageIds: [blobId], isReappraisal: false, status: "APPROVED",
+        recordedBy: userId, recordedAt: Date.now(),
+      });
+    });
+
+    await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
+      orgId,
+      dryRun: false,
+    });
+
+    // An orphaned row is recoverable. A blob with nothing referencing it is
+    // not enumerable, not deletable by any code path, and billed indefinitely —
+    // and this one is the finance company's report on a customer's vehicle.
+    expect(await t.run((ctx) => ctx.db.get(appraisalId))).toBeNull();
+    expect(await t.run((ctx) => ctx.storage.getUrl(blobId))).toBeNull();
+  });
+
+  test("a partial batch never deletes an application out from under its own fee rows", async () => {
+    const t = setup();
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Batch Motors", createdAt: Date.now() })
+    );
+
+    const ids = await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: "reset_u2", email: "u2@x.com" });
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, vin: "VINRESET2", make: "Kia", model: "Rio", year: 2024, mileage: 10,
+        color: "Red", fuelType: "Gas", transmission: "Auto", sellingPrice: 15000,
+        status: "AVAILABLE",
+      });
+      const customerId = await ctx.db.insert("customers", {
+        orgId, firstName: "Batch", lastName: "Customer",
+      });
+      const quoteId = await ctx.db.insert("quotes", {
+        orgId, customerId, vehicleId, vehiclePrice: 15000, downPayment: 1000,
+        termMonths: 48, status: "ACCEPTED", createdBy: userId, createdAt: Date.now(),
+      });
+      const applicationId = await ctx.db.insert("financeApplications", {
+        orgId, quoteId, customerId, vehicleId, salespersonId: userId,
+        status: "APPROVED", createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      const fee = async (n: number) =>
+        await ctx.db.insert("financeDealFees", {
+          orgId, applicationId, feeType: "LICENSING", currency: "JOD",
+          actualAmountMinor: n, paidBy: "DEALER", paidTo: "GOVERNMENT",
+          accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+          includedInQuotation: false, deductedFromSettlement: false, refundable: false,
+          source: "MANUAL", createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+        });
+      return { applicationId, feeA: await fee(1000), feeB: await fee(2000) };
+    });
+
+    // One row per table per run. The batch limit applies to each table
+    // separately, so without the deferral this clears one fee and then deletes
+    // the application in the same pass — leaving the second fee pointing at an
+    // applicationId that no longer resolves. Atomicity is no help: the whole
+    // broken state commits together.
+    const first = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
+      orgId, dryRun: false, batchSize: 1,
+    });
+    expect(first.remaining).toBeGreaterThan(0);
+    expect(await t.run((ctx) => ctx.db.get(ids.applicationId))).not.toBeNull();
+
+    // Repeat until it settles; the parent goes only once the children are gone.
+    for (let pass = 0; pass < 8; pass += 1) {
+      await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
+        orgId, dryRun: false, batchSize: 1,
+      });
+    }
+
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(ids.feeA)).toBeNull();
+      expect(await ctx.db.get(ids.feeB)).toBeNull();
+      expect(await ctx.db.get(ids.applicationId)).toBeNull();
+    });
+  });
+
   test("the signed-off scope excludes inventory, CRM, people and org config", async () => {
     // A guard on the constant itself. Adding a table here is a decision that
     // should fail this test and be made on purpose, not slipped in.
@@ -195,6 +300,23 @@ describe("resetOrgFinancialData", () => {
     for (const table of forbidden) {
       expect(RESET_TABLES_FOR_TEST).not.toContain(table);
     }
-    expect(RESET_TABLES_FOR_TEST).toHaveLength(26);
+    // 28 -> 31: `financeDealCustodyEntries`, `financeDealFees` and
+    // `financeDealCustody` — a financed deal's itemized costs and the money an
+    // employee is holding to pay them. All three are per-deal financial records
+    // whose parent `financeApplications` the reset already clears, so leaving
+    // them behind would orphan every cost line and every custody movement
+    // against an application id that no longer resolves. `financeDealFees`
+    // carries receipt attachments, which the storage sweep below handles, and
+    // it is listed before `financeDealCustody` because its rows reference one.
+    //
+    // 26 -> 28: `financeAppraisals` and `financeApplicationOverrides` were added
+    // deliberately. They are children of `financeApplications`, which the reset
+    // already clears, so leaving them out orphaned every appraisal and every
+    // money-change audit row against an application id that no longer resolves
+    // — and, for appraisals, left `_storage` blobs with nothing referencing
+    // them. They are listed immediately before their parent so a run that stops
+    // between batches never leaves a child without one. The financeCompanies
+    // row itself is still deliberately out of scope, as `forbidden` pins above.
+    expect(RESET_TABLES_FOR_TEST).toHaveLength(31);
   });
 });

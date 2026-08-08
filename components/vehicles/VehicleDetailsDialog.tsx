@@ -227,6 +227,15 @@ export function VehicleDetailsDialog({
         depositId,
         resolution,
         refundMethod: resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : undefined,
+        // Deliberately no idempotency key. A row can now be released more than
+        // once — the free part today, the rest when the cars it was held
+        // against fall away — and a key derived from the deposit and the
+        // resolution made the SECOND genuine payout match the first's stored
+        // command: the mutation returned without running, moved no money, and
+        // the operator was told the customer had been refunded.
+        //
+        // A double submit is already safe without one: the two calls serialize,
+        // and the second recomputes the free balance as zero and is refused.
       });
       toast.success(
         resolution === "REFUNDED"
@@ -494,6 +503,15 @@ export function VehicleDetailsDialog({
                                 {deposit.status}
                               </span>
                             </p>
+                            {/* What has already been handed back. A row can be
+                                released in part and stay HELD, so its face
+                                value alone would tell an operator they are
+                                about to refund money that has already gone. */}
+                            {(deposit.releasedAmountMinor ?? 0) > 0 && (
+                              <p className="text-xs font-medium text-amber-700 dark:text-amber-500 mt-0.5">
+                                {t("DepositAlreadyReleased" as any)}
+                              </p>
+                            )}
                             {deposit.notes && <p className="text-xs text-muted-foreground mt-0.5 italic">"{deposit.notes}"</p>}
                           </div>
                           {deposit.status === "HELD" && !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_REQUESTS) && (

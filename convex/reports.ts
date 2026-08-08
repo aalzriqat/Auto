@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { query, QueryCtx } from "./_generated/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
+import { grossTransactionValueForTransaction } from "./utils/grossTransactionValue";
 import { PERMISSIONS } from "./utils/permissions";
 import { rateLimiter } from "./rateLimit";
 import {
@@ -17,6 +18,7 @@ import {
   queuedEntryCountsInRange,
   type RecognitionState,
 } from "./utils/prepaidRecognitionEvents";
+import { saleEconomics } from "./utils/vehicleOwnership";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 
@@ -80,6 +82,12 @@ export const getSalesAndProfitReport = query({
     let totalRevenue = 0;
     let totalCost = 0;
     let totalProfit = 0;
+    // Consigned sales are the dealership's SERVICE, not its stock. Their gross
+    // is real and worth showing — it is the size of the deal arranged — but it
+    // is not turnover, so it is reported alongside rather than inside it.
+    let totalGrossTransactionValue = 0;
+    let totalSupplierSettlement = 0;
+    let agentSaleCount = 0;
 
     const vehicleIds = Array.from(new Set(salesInDateRange.map(s => s.vehicleId)));
     const vehicles = await Promise.all(vehicleIds.map(id => ctx.db.get(id)));
@@ -120,11 +128,22 @@ export const getSalesAndProfitReport = query({
 
       const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
       const cost = capitalizedCostByVehicle.get(sale.vehicleId) ?? 0;
-      const profit = sale.salePrice - cost;
+      const economics = saleEconomics({
+        salePrice: sale.salePrice,
+        vehicle: vehicle ?? {},
+        capitalizedCost: cost,
+        supplierSettlementRoute: sale.supplierSettlementRoute,
+      });
 
-      totalRevenue += sale.salePrice;
-      totalCost += cost;
-      totalProfit += profit;
+      totalRevenue += economics.recognizedRevenue;
+      totalCost += economics.recognizedCost;
+      // Unchanged by the agent split, and deliberately so: price less cost is
+      // the same number either way, which is exactly why restating a consigned
+      // sale moves turnover and cost of sales but never profit.
+      totalProfit += economics.dealershipMargin;
+      totalGrossTransactionValue += economics.grossTransactionValue;
+      totalSupplierSettlement += economics.supplierSettlement;
+      if (economics.isAgentSale) agentSaleCount += 1;
 
       return {
         ...sale,
@@ -134,17 +153,30 @@ export const getSalesAndProfitReport = query({
         vehicleVin: vehicle?.vin,
         vehicleCost: cost,
         vehicleExpenses: totalExpenses,
-        totalCost: cost,
-        netProfit: profit,
+        totalCost: economics.recognizedCost,
+        netProfit: economics.dealershipMargin,
+        isAgentSale: economics.isAgentSale,
+        settlementRoute: economics.settlementRoute,
+        grossTransactionValue: economics.grossTransactionValue,
+        supplierSettlement: economics.supplierSettlement,
+        recognizedRevenue: economics.recognizedRevenue,
       };
     });
 
     enrichedSales.sort((a, b) => b.saleDate - a.saleDate);
 
     return {
+      // Turnover. Excludes the gross of every consigned sale — the dealership
+      // never owned those cars and may recognize only its margin on them.
       totalRevenue,
       totalCost,
       totalProfit,
+      // The deal volume the dealership actually handled, agent sales at full
+      // ticket. Equals totalRevenue when nothing consigned was sold.
+      totalGrossTransactionValue,
+      // What of that gross belongs to suppliers and never was the dealership's.
+      totalSupplierSettlement,
+      agentSaleCount,
       sales: enrichedSales,
     };
   },
@@ -674,16 +706,26 @@ export const getSalespersonPerformance = query({
     const result = Object.entries(salesBySalesperson).map(([userId, userSales]) => {
       let totalRevenue = 0;
       let totalProfit = 0;
+      let totalGrossTransactionValue = 0;
 
       const user = userMap.get(userId as Id<"users">);
       const userName = (user && "name" in user ? user.name : null) ?? "Unknown";
 
       for (const sale of userSales) {
         const cost = capitalizedCostByVehicle.get(sale.vehicleId) ?? 0;
-        const profit = sale.salePrice - cost;
+        const economics = saleEconomics({
+          salePrice: sale.salePrice,
+          vehicle: vehicleMap.get(sale.vehicleId) ?? {},
+          capitalizedCost: cost,
+          supplierSettlementRoute: sale.supplierSettlementRoute,
+        });
 
-        totalRevenue += sale.salePrice;
-        totalProfit += profit;
+        // Same exclusion as getSalesAndProfitReport: a rep who sold a consigned
+        // car did not turn over its sticker price. Ranking on that would rank
+        // them above someone who sold twice the margin on owned stock.
+        totalRevenue += economics.recognizedRevenue;
+        totalProfit += economics.dealershipMargin;
+        totalGrossTransactionValue += economics.grossTransactionValue;
       }
 
       return {
@@ -692,6 +734,7 @@ export const getSalespersonPerformance = query({
         vehiclesSold: userSales.length,
         totalRevenue,
         totalProfit,
+        totalGrossTransactionValue,
       };
     });
 
@@ -800,6 +843,10 @@ export const getProfitAndLoss = query({
     let totalRevenue = 0;
     let costOfGoodsSold = 0;
     let operatingExpenses = 0;
+    // Reported beside turnover rather than folded into it: the dealership did
+    // handle these deals at full ticket, and that is worth knowing — it is just
+    // not its revenue.
+    let grossTransactionValue = 0;
 
     // Revenue: only explicit sale and deposit receipts.
     // COLLECTION_PAYMENT is an installment against an existing receivable — the
@@ -811,7 +858,26 @@ export const getProfitAndLoss = query({
     for (const tx of txInDateRange) {
       if (tx.isDeleted) continue;
       if (tx.type === "IN" && REVENUE_CATEGORIES.has(tx.category ?? "")) {
-        totalRevenue += tx.amount;
+        // `recognizedRevenueAmount` where the row carries one — a consigned
+        // sale, whose gross belongs to the supplier.
+        //
+        // Where it is absent, `amount` IS the revenue for every owned sale and
+        // every deposit, which is the overwhelming majority of rows. It is NOT
+        // a safe answer for a consigned sale predating this deploy: those were
+        // posted at gross and read as gross here. `migrateConsignedSaleBasis`
+        // writes the field onto them, and `sourcedSaleImpactReport` lists the
+        // ones it could not — so the remaining overstatement is bounded and
+        // enumerable rather than silent. Do not read this fallback as exact.
+        totalRevenue += tx.recognizedRevenueAmount ?? tx.amount;
+        // Vehicle sales only, at the full ticket. One definition, shared with
+        // getSalesAndProfitReport and the dashboard — see
+        // utils/grossTransactionValue for why all three have to agree, and for
+        // the two ways this used to disagree: DEPOSIT rows were counted as
+        // deals, and `amount` is net of anything already collected, so taking a
+        // deposit both inflated the figure once and deflated it again.
+        if (tx.category === "VEHICLE_SALE") {
+          grossTransactionValue += grossTransactionValueForTransaction(tx);
+        }
       } else if (tx.type === "OUT") {
         if (tx.category === "VEHICLE_PURCHASE" || (tx.category === "EXPENSE" && tx.vehicleId)) {
           costOfGoodsSold += tx.amount;
@@ -825,11 +891,15 @@ export const getProfitAndLoss = query({
     const netProfit = grossProfit - operatingExpenses;
 
     return {
+      // Accounting turnover. Excludes the gross of every consigned sale, and so
+      // agrees with getSalesAndProfitReport on the same period.
       totalRevenue,
       costOfGoodsSold,
       grossProfit,
       operatingExpenses,
       netProfit,
+      // Operational KPI, explicitly labelled and deliberately outside turnover.
+      grossTransactionValue,
       transactions: txInDateRange.sort((a, b) => b.date - a.date),
     };
   },

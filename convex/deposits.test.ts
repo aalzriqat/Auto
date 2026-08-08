@@ -639,6 +639,18 @@ describe("deposits multi-vehicle holds", () => {
     const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
     const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 5000 });
 
+    // A quote with more than one car cannot be finalized until somebody says
+    // how its one deposit divides between them — the split is the customer's
+    // decision, not something the prices imply. See depositAllocation.ts.
+    await asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId,
+      quoteId,
+      allocations: [
+        { vehicleId, amount: 3000 },
+        { vehicleId: secondVehicleId, amount: 2000 },
+      ],
+    });
+
     await asUser.mutation(api.sales.completeFromQuote, { orgId, quoteId });
 
     await t.run(async (ctx) => {
@@ -653,19 +665,31 @@ describe("deposits multi-vehicle holds", () => {
     });
   });
 
-  test("cancelling every sale row of a multi-vehicle deal reactivates every held vehicle, not just the primary", async () => {
+  test("cancelling every sale row of a multi-vehicle deal frees every vehicle and leaves each share awaiting a decision", async () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const secondVehicleId = await makeSecondVehicle(t, orgId);
     const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
     const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 5000 });
+    await asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId,
+      quoteId,
+      allocations: [
+        { vehicleId, amount: 3000 },
+        { vehicleId: secondVehicleId, amount: 2000 },
+      ],
+    });
 
     const saleIds = await asUser.mutation(api.sales.completeFromQuote, { orgId, quoteId });
 
-    // Unwinding the whole deal cancels each vehicle's own sale row in turn.
-    // The first cancellation reactivates the shared deposit (APPLIED -> HELD)
-    // and every depositVehicleHolds row; the second sale's own vehicle must
-    // still come back on hold even though the deposit itself no longer
-    // transitions again on this second call.
+    // Unwinding the whole deal cancels each vehicle's own sale row in turn, and
+    // each cancellation touches only its own car.
+    //
+    // This used to put every hold on the quote back on, from whichever
+    // cancellation ran first — so cancelling car A re-reserved car B while B's
+    // sale was still live. Now each share lands in RELEASED_AWAITING_DECISION
+    // and its car comes off hold: the money is not committed to anything until
+    // somebody says what happens to it, and the car is free to be sold to
+    // somebody else in the meantime.
     for (const saleId of saleIds) {
       await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
     }
@@ -673,12 +697,31 @@ describe("deposits multi-vehicle holds", () => {
     await t.run(async (ctx) => {
       const primary = await ctx.db.get(vehicleId);
       const secondary = await ctx.db.get(secondVehicleId);
-      expect(primary?.status).toBe("RESERVED");
-      expect(secondary?.status).toBe("RESERVED");
+      expect(primary?.status).toBe("AVAILABLE");
+      expect(secondary?.status).toBe("AVAILABLE");
 
+      // The money is back on the books as held — it was never refunded.
       const deposit = await ctx.db.get(depositId);
       expect(deposit?.status).toBe("HELD");
       expect(deposit?.holdActive).toBe(true);
+
+      const holds = (await ctx.db.query("depositVehicleHolds").collect()).filter(
+        (h) => h.depositId === depositId
+      );
+      expect(holds).toHaveLength(2);
+      expect(holds.every((h) => h.allocationStatus === "RELEASED_AWAITING_DECISION")).toBe(true);
+      // Each slice keeps its own amount, so neither car's share drifted onto
+      // the other during the unwind.
+      expect(holds.map((h) => h.allocatedAmountMinor).sort((a, b) => a! - b!)).toEqual([
+        2_000_000, 3_000_000,
+      ]);
+
+      // Both applications were backed out, each against its own journal.
+      const applications = (await ctx.db.query("depositApplications").collect()).filter(
+        (a) => a.depositId === depositId
+      );
+      expect(applications).toHaveLength(2);
+      expect(applications.every((a) => a.status === "REVERSED")).toBe(true);
     });
   });
 

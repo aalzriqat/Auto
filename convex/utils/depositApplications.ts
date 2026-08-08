@@ -1,0 +1,338 @@
+import { Doc, Id } from "../_generated/dataModel";
+import { MutationCtx, QueryCtx } from "../_generated/server";
+import {
+  hookDepositApplied,
+  hookDepositAppliedToSettlement,
+  reverseDepositApplication,
+  type DepositApplicationIdentity,
+} from "../accounting/workflowHooks";
+
+/**
+ * The record of deposit money being applied to a sale, and the only thing
+ * allowed to reverse it.
+ *
+ * ## Why the identity is stored rather than derived
+ *
+ * A reservation deposit is quote-scoped; a quote can carry several cars; each
+ * car is sold on its own sale. So one `deposits` row is applied several times,
+ * against several invoices, on several dates. Everything downstream — the
+ * journal, the reversal, the refundable balance — needs to know WHICH of those
+ * movements it is talking about, and nothing in `deposits` or
+ * `depositVehicleHolds` alone can say.
+ *
+ * Reversal is where getting this wrong stops being theoretical. It used to look
+ * up the original journal by `(orgId, sourceType: "deposits", sourceId:
+ * depositId, eventType)` and take `.first()`. Cancelling the second car's sale
+ * therefore reversed the first car's entry — against an invoice that was still
+ * live, so the customer's credit vanished from a deal nobody had touched, while
+ * the cancelled deal kept its own credit intact. Both books balanced. Both were
+ * wrong.
+ *
+ * A stored identity also survives a change of format. If the derivation ever
+ * moves, a reversal that re-derives goes looking for a key that was never
+ * written, finds nothing, and returns quietly — `reverseEventIfPosted` reports
+ * "nothing posted" exactly the way it reports "already reversed."
+ *
+ * ## Lifecycle
+ *
+ *     APPLIED ──▶ REVERSING ──▶ REVERSED
+ *
+ * REVERSING is durable, not momentary: with no open accounting period the
+ * reversal goes to the outbox, and until it actually posts the slice is not
+ * money anybody may spend again.
+ */
+
+export type DepositApplicationTreatment = "CUSTOMER_RECEIVABLE" | "SUPPLIER_SETTLEMENT";
+
+/** Statuses that still hold a claim on the deposit — the money is not back. */
+const LIVE_APPLICATION_STATUSES = new Set(["APPLIED", "REVERSING"]);
+
+function identityFor(args: {
+  depositId: Id<"deposits">;
+  vehicleId: Id<"vehicles">;
+  sequence: number;
+  treatment: DepositApplicationTreatment;
+}): DepositApplicationIdentity {
+  const settlement = args.treatment === "SUPPLIER_SETTLEMENT";
+  return {
+    eventType: settlement ? "DEPOSIT_APPLIED_TO_SETTLEMENT" : "DEPOSIT_APPLIED",
+    // Its own source type. The tuple (eventType, sourceType, sourceId,
+    // eventVersion) is what `postAccountingEvent` dedupes on, and sharing
+    // "deposits" would put every car on the quote under one source.
+    sourceType: "depositApplications",
+    sourceId: `${args.depositId}:${args.vehicleId}`,
+    // A car can be sold, cancelled and sold again off the same deposit. Each is
+    // a genuine new movement, so each needs its own version — at version 1 the
+    // second posting is silently swallowed as a duplicate.
+    eventVersion: args.sequence,
+    idempotencyKey: `${settlement ? "deposit_applied_settlement" : "deposit_applied"}_${
+      args.depositId
+    }_${args.vehicleId}_${args.sequence}`,
+  };
+}
+
+async function applicationsForDeposit(
+  ctx: QueryCtx | MutationCtx,
+  depositId: Id<"deposits">
+): Promise<Doc<"depositApplications">[]> {
+  return await ctx.db
+    .query("depositApplications")
+    .withIndex("by_deposit", (q) => q.eq("depositId", depositId))
+    .collect();
+}
+
+/**
+ * How much of this deposit is committed to sales that still stand.
+ *
+ * Subtracted from anything that would pay the money out again. Refunding a
+ * deposit whose slices had already been credited to live invoices paid the
+ * customer the same money twice — once off their invoice, once in cash.
+ */
+export async function liveAppliedMinorForDeposit(
+  ctx: QueryCtx | MutationCtx,
+  depositId: Id<"deposits">
+): Promise<number> {
+  const applications = await applicationsForDeposit(ctx, depositId);
+  return applications
+    .filter((a) => LIVE_APPLICATION_STATUSES.has(a.status))
+    .reduce((sum, a) => sum + a.amountMinor, 0);
+}
+
+/** Live applications of this deposit, per vehicle — for the allocation screen. */
+export async function liveApplicationsForDeposit(
+  ctx: QueryCtx | MutationCtx,
+  depositId: Id<"deposits">
+): Promise<Doc<"depositApplications">[]> {
+  const applications = await applicationsForDeposit(ctx, depositId);
+  return applications.filter((a) => LIVE_APPLICATION_STATUSES.has(a.status));
+}
+
+/**
+ * Records one application and posts its journal under the identity recorded.
+ *
+ * Both happen here so the two can never disagree. A row that says one thing and
+ * an event that says another is the failure this module exists to prevent, and
+ * it is invisible until a cancellation reverses the wrong car.
+ */
+export async function recordDepositApplication(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    depositId: Id<"deposits">;
+    quoteId?: Id<"quotes">;
+    quoteLineIndex?: number;
+    vehicleId: Id<"vehicles">;
+    saleId: Id<"sales">;
+    customerId: Id<"customers">;
+    holdId?: Id<"depositVehicleHolds">;
+    amountMinor: number;
+    currency: string;
+    treatment: DepositApplicationTreatment;
+    supplierName?: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+): Promise<Id<"depositApplications">> {
+  const existing = await applicationsForDeposit(ctx, args.depositId);
+  const sequence =
+    existing.filter((a) => a.vehicleId === args.vehicleId).length + 1;
+  const identity = identityFor({
+    depositId: args.depositId,
+    vehicleId: args.vehicleId,
+    sequence,
+    treatment: args.treatment,
+  });
+
+  const applicationId = await ctx.db.insert("depositApplications", {
+    orgId: args.orgId,
+    depositId: args.depositId,
+    quoteId: args.quoteId,
+    quoteLineIndex: args.quoteLineIndex,
+    vehicleId: args.vehicleId,
+    saleId: args.saleId,
+    customerId: args.customerId,
+    holdId: args.holdId,
+    amountMinor: args.amountMinor,
+    currency: args.currency,
+    treatment: args.treatment,
+    eventType: identity.eventType,
+    eventSourceType: identity.sourceType,
+    eventSourceId: identity.sourceId,
+    eventVersion: identity.eventVersion,
+    eventIdempotencyKey: identity.idempotencyKey,
+    status: "APPLIED",
+    appliedAt: args.occurredAt,
+    appliedBy: args.actorId,
+  });
+
+  if (args.treatment === "SUPPLIER_SETTLEMENT") {
+    await hookDepositAppliedToSettlement(ctx, {
+      orgId: args.orgId,
+      depositId: args.depositId,
+      customerId: args.customerId,
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      supplierName: args.supplierName,
+      actorId: args.actorId,
+      occurredAt: args.occurredAt,
+      saleId: args.saleId,
+      identity,
+    });
+  } else {
+    await hookDepositApplied(ctx, {
+      orgId: args.orgId,
+      depositId: args.depositId,
+      customerId: args.customerId,
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      actorId: args.actorId,
+      occurredAt: args.occurredAt,
+      saleId: args.saleId,
+      allocationVehicleId: args.vehicleId,
+      identity,
+    });
+  }
+
+  return applicationId;
+}
+
+/** The identity a row was posted under, read back rather than re-derived. */
+function recordedIdentity(row: Doc<"depositApplications">): DepositApplicationIdentity {
+  return {
+    eventType:
+      row.eventType === "DEPOSIT_APPLIED_TO_SETTLEMENT"
+        ? "DEPOSIT_APPLIED_TO_SETTLEMENT"
+        : "DEPOSIT_APPLIED",
+    sourceType: row.eventSourceType,
+    sourceId: row.eventSourceId,
+    eventVersion: row.eventVersion,
+    idempotencyKey: row.eventIdempotencyKey,
+  };
+}
+
+export type ReversedApplication = {
+  applicationId: Id<"depositApplications">;
+  depositId: Id<"deposits">;
+  vehicleId: Id<"vehicles">;
+  holdId: Id<"depositVehicleHolds"> | undefined;
+  amountMinor: number;
+  /**
+   * False while the reversing journal is only queued, because no accounting
+   * period was open. The money is not back yet: the original entry is still
+   * POSTED, and anything that pays it out now pays it out twice.
+   */
+  journalReversed: boolean;
+};
+
+/**
+ * Backs out every application made by ONE sale, and nothing else.
+ *
+ * Each row walks APPLIED → REVERSING → REVERSED around its own journal
+ * reversal, so a slice whose reversal was deferred to the outbox is left
+ * visibly mid-flight rather than quietly counted as money in hand.
+ */
+export async function reverseDepositApplicationsForSale(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    saleId: Id<"sales">;
+    reason: string;
+    actorId: Id<"users">;
+    reversalDate: number;
+  }
+): Promise<ReversedApplication[]> {
+  const applications = await ctx.db
+    .query("depositApplications")
+    .withIndex("by_sale", (q) => q.eq("saleId", args.saleId))
+    .collect();
+
+  const reversed: ReversedApplication[] = [];
+  for (const application of applications) {
+    if (application.orgId !== args.orgId) continue;
+    if (application.status === "REVERSED") continue;
+
+    await ctx.db.patch(application._id, {
+      status: "REVERSING",
+      reversalStartedAt: args.reversalDate,
+    });
+
+    const outcome = await reverseDepositApplication(ctx, {
+      orgId: args.orgId,
+      identity: recordedIdentity(application),
+      reason: args.reason,
+      actorId: args.actorId,
+      reversalDate: args.reversalDate,
+    });
+
+    // DEFERRED means the reversing entry is queued and the original is still
+    // POSTED. The application stays REVERSING until the outbox drains — see
+    // completeDeferredReversal — so nothing downstream can treat the amount as
+    // recovered while the ledger still shows it spent.
+    const journalReversed = outcome !== "DEFERRED";
+    await ctx.db.patch(
+      application._id,
+      journalReversed
+        ? {
+            status: "REVERSED",
+            reversedAt: args.reversalDate,
+            reversedBy: args.actorId,
+            reversalReason: args.reason,
+          }
+        : { reversedBy: args.actorId, reversalReason: args.reason }
+    );
+
+    reversed.push({
+      applicationId: application._id,
+      depositId: application.depositId,
+      vehicleId: application.vehicleId,
+      holdId: application.holdId,
+      amountMinor: application.amountMinor,
+      journalReversed,
+    });
+  }
+  return reversed;
+}
+
+/**
+ * Finishes a reversal that had to wait for an accounting period.
+ *
+ * Called by the outbox when a queued REVERSE entry actually posts. Until then
+ * the application sits at REVERSING and its slice is unspendable — which is the
+ * whole reason the state exists, and why nothing may transition out of it on a
+ * timer or on a read.
+ *
+ * Keyed on the reversal's idempotency key, which `reverseDepositApplication`
+ * derives as `reversed_<the application's own key>`. Frees the slice itself and
+ * returns the holds it advanced, for callers that want to report on them.
+ */
+export async function completeDeferredReversal(
+  ctx: MutationCtx,
+  args: { orgId: Id<"organizations">; reversalIdempotencyKey: string; postedAt: number }
+): Promise<Id<"depositVehicleHolds">[]> {
+  const prefix = "reversed_";
+  if (!args.reversalIdempotencyKey.startsWith(prefix)) return [];
+  const applicationKey = args.reversalIdempotencyKey.slice(prefix.length);
+
+  const application = await ctx.db
+    .query("depositApplications")
+    .withIndex("by_org_event_key", (q) =>
+      q.eq("orgId", args.orgId).eq("eventIdempotencyKey", applicationKey)
+    )
+    .unique();
+  if (!application || application.status !== "REVERSING") return [];
+
+  await ctx.db.patch(application._id, {
+    status: "REVERSED",
+    reversedAt: args.postedAt,
+  });
+
+  const freed: Id<"depositVehicleHolds">[] = [];
+  if (application.holdId) {
+    const hold = await ctx.db.get(application.holdId);
+    if (hold && hold.allocationStatus === "REVERSING") {
+      await ctx.db.patch(hold._id, { allocationStatus: "RELEASED_AWAITING_DECISION" });
+      freed.push(hold._id);
+    }
+  }
+  return freed;
+}

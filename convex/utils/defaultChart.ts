@@ -5,6 +5,8 @@ export const SYSTEM_KEYS = {
   VAT_RECEIVABLE: "VAT_RECEIVABLE",
   ACCOUNTS_RECEIVABLE_CUSTOMERS: "ACCOUNTS_RECEIVABLE_CUSTOMERS",
   ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES",
+  RECEIVABLE_FROM_SUPPLIERS: "RECEIVABLE_FROM_SUPPLIERS",
+  CONSIGNMENT_COMMISSION_REVENUE: "CONSIGNMENT_COMMISSION_REVENUE",
   UNAPPLIED_CUSTOMER_CASH: "UNAPPLIED_CUSTOMER_CASH",
   CUSTOMER_DEPOSITS_LIABILITY: "CUSTOMER_DEPOSITS_LIABILITY",
   CHEQUES_IN_HAND: "CHEQUES_IN_HAND",
@@ -137,6 +139,27 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: true,
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES,
+  },
+  {
+    // What a supplier owes the dealership on a consigned sale he collected in
+    // full. Not AR-Customers: the customer owes nothing here, and not
+    // AP-Suppliers netted down, because a receivable and a payable to the same
+    // party are different balances that happen to face the same person.
+    // 1240, not 1230: that code has belonged to Employee Advances since long
+    // before agent accounting existed. Two defaults on one code is not a
+    // cosmetic clash — `ensureSystemAccount` resolves a missing system account
+    // BY ITS DEFAULT CODE, finds the other system account already sitting there,
+    // correctly refuses to steal it, and throws. So the self-heal for this
+    // account could never run, and the first settlement-treated consigned sale
+    // in any existing org rolled the whole completion back.
+    code: "1240",
+    name: "Receivable from Suppliers",
+    nameAr: "ذمم مدينة - الموردين",
+    type: "ASSET",
+    normalBalance: "DEBIT",
+    isControlAccount: false,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS,
   },
   {
     code: "1220",
@@ -377,6 +400,22 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: false,
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.FI_COMMISSION_REVENUE,
+  },
+  {
+    // A consigned vehicle is legally the supplier's; the dealership sells it on
+    // his behalf and earns the spread over his entitlement. That spread is the
+    // ONLY revenue such a sale may recognize, and it is kept out of
+    // SALES_REVENUE deliberately: turnover reports must be able to exclude the
+    // gross transaction value of cars the dealership never owned. Posting it to
+    // 4100 would make the two indistinguishable forever.
+    code: "4170",
+    name: "Consignment Commission Revenue",
+    nameAr: "إيرادات عمولة البيع بالأمانة",
+    type: "REVENUE",
+    normalBalance: "CREDIT",
+    isControlAccount: false,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE,
   },
   {
     code: "4200",

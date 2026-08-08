@@ -1,9 +1,11 @@
+import { ConvexError } from "convex/values";
 import { SYSTEM_KEYS, SystemKey } from "../utils/defaultChart";
 import { scaleForCurrency } from "../utils/money";
 
 export type EventType =
   | "DEPOSIT_RECEIVED"
   | "DEPOSIT_APPLIED"
+  | "DEPOSIT_APPLIED_TO_SETTLEMENT"
   | "DEPOSIT_REFUNDED"
   | "DEPOSIT_FORFEITED"
   | "SALE_COMPLETED"
@@ -22,6 +24,7 @@ export type EventType =
   | "FINANCE_CASH_RECEIVED"
   | "PAYMENT_LINK_RECEIVED"
   | "SUPPLIER_PAYMENT_SETTLED"
+  | "SUPPLIER_RECEIVABLE_COLLECTED"
   | "ASSET_CAPITALIZED"
   | "DEPRECIATION_POSTED"
   | "ASSET_IMPAIRED"
@@ -43,6 +46,7 @@ export type EventType =
   | "PREPAID_EXPENSE_REFUNDED"
   | "PREPAID_EXPENSE_WRITTEN_OFF"
   | "RECEIVABLE_CREATED"
+  | "CONSIGNED_SALE_RECLASSIFIED"
   | "EMPLOYEE_ADVANCE_PAID"
   | "EMPLOYEE_ADVANCE_RECOVERED"
   | "PAYROLL_ACCRUED"
@@ -50,12 +54,13 @@ export type EventType =
   | "JOURNAL_REVERSAL";
 
 export const ALL_EVENT_TYPES = new Set<string>([
-  "DEPOSIT_RECEIVED", "DEPOSIT_APPLIED", "DEPOSIT_REFUNDED", "DEPOSIT_FORFEITED",
+  "DEPOSIT_RECEIVED", "DEPOSIT_APPLIED", "DEPOSIT_APPLIED_TO_SETTLEMENT",
+  "DEPOSIT_REFUNDED", "DEPOSIT_FORFEITED",
   "SALE_COMPLETED", "SALE_CANCELLED", "COLLECTION_PAYMENT", "COLLECTION_REFUND", "EXPENSE_POSTED",
   "CHEQUE_RECEIVED", "CHEQUE_DEPOSITED", "CHEQUE_CLEARED", "CHEQUE_RETURNED",
   "COMMISSION_ACCRUED", "COMMISSION_ADJUSTED", "COMMISSION_PAID",
   "FINANCE_DISBURSED", "FINANCE_CASH_RECEIVED", "PAYMENT_LINK_RECEIVED",
-  "SUPPLIER_PAYMENT_SETTLED",
+  "SUPPLIER_PAYMENT_SETTLED", "SUPPLIER_RECEIVABLE_COLLECTED",
   "ASSET_CAPITALIZED", "DEPRECIATION_POSTED", "ASSET_IMPAIRED", "ASSET_DISPOSED",
   "CAPITAL_CONTRIBUTED", "PARTNER_DREW", "PROFIT_DISTRIBUTED",
   "CLAIM_SETTLED", "CLAIM_WRITTEN_OFF",
@@ -67,6 +72,7 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "PREPAID_EXPENSE_REFUNDED",
   "PREPAID_EXPENSE_WRITTEN_OFF",
   "RECEIVABLE_CREATED",
+  "CONSIGNED_SALE_RECLASSIFIED",
   "EMPLOYEE_ADVANCE_PAID", "EMPLOYEE_ADVANCE_RECOVERED", "PAYROLL_ACCRUED", "PAYROLL_PAID",
   // JOURNAL_REVERSAL is intentionally excluded: it is written directly by
   // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
@@ -88,6 +94,17 @@ export interface RuleResult {
   lines: LineSpec[];
   memo: string;
   category: "SYSTEM" | "REVERSAL" | "ADJUSTMENT";
+  /**
+   * The event really happened and really has no accounting consequence.
+   *
+   * Distinct from an empty `lines` array reached by accident: `validateBalance`
+   * waves zero lines through because 0 === 0, so a rule that returned nothing
+   * silently posted a journal entry with no lines — a row asserting an event
+   * the books do not reflect, counted by every reconciliation and entry total.
+   * Saying so explicitly means the engine can skip the entry instead of writing
+   * an empty one, and a rule that returns nothing by mistake still fails.
+   */
+  skipPosting?: boolean;
 }
 
 function cashAccountKey(
@@ -171,6 +188,44 @@ export interface SaleCompletedPayload {
   taxMinor?: number;
   /** When true the vehicle was sourced from another dealer; credits AP-Suppliers instead of Vehicle Inventory for COGS. */
   isSourced?: boolean;
+  /**
+   * Set by every emitter that knows consigned-agent basis exists — i.e. every
+   * one of them from this deploy onward. It is how this rule tells a caller
+   * that FORGOT the consignment details from one that predates them.
+   *
+   * It matters because outbox entries outlive deploys. An organization that
+   * enabled accounting after selling sourced cars has SALE_COMPLETED events
+   * queued from before agent basis existed: no `consignment`, and no way to
+   * reconstruct one, since the settlement route was never asked for and the
+   * supplier's entitlement was recorded only as a cost. Failing those closed
+   * would dead-letter them after MAX_ATTEMPTS and drop the sale off the books
+   * entirely; inventing a consignment block would be worse — it would fabricate
+   * a settlement route nobody chose.
+   *
+   * So a legacy event posts on the basis it was written for, exactly as it
+   * would have before this change, and the restatement to agent basis is left
+   * to `migrateConsignedSaleBasis`, which is the same treatment every already-
+   * posted historical sourced sale gets. Absence never grants permission to a
+   * NEW event: those all carry the flag, so a missing consignment there is a
+   * bug and still throws.
+   */
+  consignmentEvaluated?: boolean;
+  /**
+   * Present when the vehicle is legally the supplier's and the dealership sold
+   * it as his agent. Its presence switches this rule to agent basis entirely:
+   * commission on the spread, no vehicle revenue, no COGS, no inventory.
+   *
+   * `settlementRoute` says where the buyer's money went. DIRECT_TO_SUPPLIER
+   * means the dealership never touched it and simply holds a claim for its
+   * margin. THROUGH_DEALERSHIP means gross landed in the dealership's account
+   * on the supplier's behalf, so the supplier's share is a liability from the
+   * moment it arrives — never revenue in transit.
+   */
+  consignment?: {
+    supplierEntitlementMinor: number;
+    supplierName?: string;
+    settlementRoute: "DIRECT_TO_SUPPLIER" | "THROUGH_DEALERSHIP";
+  };
   /** Documentation/admin fees charged on top of the vehicle price — added to the AR debit, credited to Dealer Fee Income. */
   dealerFeesMinor?: number;
   /**
@@ -347,6 +402,49 @@ export function ruleDepositApplied(p: DepositAppliedPayload): RuleResult {
   };
 }
 
+export interface DepositAppliedToSettlementPayload {
+  depositId: string;
+  amountMinor: number;
+  currency: string;
+  customerId: string;
+  supplierName?: string;
+  saleId?: string;
+}
+
+/**
+ * A reservation deposit the dealership keeps as part of settling a consigned
+ * deal with the supplier.
+ *
+ * Only reachable on the DIRECT_TO_SUPPLIER route. There the buyer paid the
+ * supplier for the car, so the dealership holds no receivable from the customer
+ * for it — but it IS holding the customer's deposit in cash, against the margin
+ * the supplier now owes it. Releasing the deposit liability against that claim
+ * turns cash already in hand into margin realized.
+ *
+ * It credits the supplier receivable rather than commission revenue, even
+ * though this is the point at which the deposit "becomes part of the
+ * dealership's earned margin". Agent-basis revenue is recognized in full when
+ * the sale completes; crediting it again here would count the same margin
+ * twice, once as revenue earned and once as revenue collected. The economics
+ * the dealer described are unchanged either way — what differs is only whether
+ * the books say it twice.
+ *
+ * On THROUGH_DEALERSHIP this treatment is refused upstream: the supplier's
+ * entitlement is already credited to AP-Suppliers in full at sale, so crediting
+ * it again would inflate what the dealership owes him by the deposit.
+ */
+export function ruleDepositAppliedToSettlement(p: DepositAppliedToSettlementPayload): RuleResult {
+  const supplier = p.supplierName ?? "supplier";
+  return {
+    lines: [
+      line(SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY, p.amountMinor, 0, "Reservation deposit released", { customerId: p.customerId }),
+      line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, 0, p.amountMinor, `Deposit retained against commission due from ${supplier}`, { customerId: p.customerId }),
+    ],
+    memo: "Reservation deposit applied to supplier settlement",
+    category: "SYSTEM",
+  };
+}
+
 export function ruleDepositRefunded(p: DepositRefundedPayload): RuleResult {
   const disbursementKey = disbursementAccountKey(p.paymentMethod);
   return {
@@ -410,7 +508,195 @@ function addResoldProductLines(
   }
 }
 
+/**
+ * A consigned vehicle sold as the supplier's agent.
+ *
+ * The dealership never owned the car, never invoiced the buyer for it, and may
+ * recognize only the spread over the supplier's entitlement. Booking the gross
+ * as revenue with the entitlement as COGS reaches the same bottom line — which
+ * is exactly why it survived so long — but it inflates turnover, cost of sales,
+ * receivables and payables by the supplier's share, and puts a car the
+ * dealership never owned through its inventory.
+ */
+function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
+  const consignment = p.consignment!;
+  const entitlementMinor = consignment.supplierEntitlementMinor;
+  const marginMinor = p.saleAmountMinor - entitlementMinor;
+  const dims = { customerId: p.customerId, vehicleId: p.vehicleId, salespersonId: p.salespersonId };
+  const supplier = consignment.supplierName ?? "supplier";
+
+  // Fail closed. A negative margin means the car sold for less than the
+  // supplier is owed, which is a real situation but not one this rule may
+  // guess at — posting a negative commission would misstate revenue and hide
+  // a loss the dealership has to fund. It needs a decision, not a default.
+  if (marginMinor < 0) {
+    throw new Error(
+      `Consigned sale ${p.saleId} is ${Math.abs(marginMinor)} minor units below the supplier's entitlement of ${entitlementMinor}. Record the shortfall against the supplier agreement before completing the sale.`
+    );
+  }
+
+  // Sales tax on an agency sale: refused, not guessed.
+  //
+  // Ignoring `taxMinor` — as this rule did — meant a consigned sale with tax
+  // credited the WHOLE margin to commission revenue and recorded no liability,
+  // so the dealership held the customer's tax money with nothing on the books
+  // saying it owed it. The entry balanced throughout, which is why nothing
+  // caught it. That silent drop is what this refusal closes.
+  //
+  // It is a refusal rather than a posting because the codebase holds TWO
+  // contradictory tax conventions, and every way of posting tax here either
+  // misstates money or invents policy. Settled deliberately, with the evidence:
+  //
+  // What the amount actually is: `saleAmountMinor` is tax-EXCLUSIVE.
+  // `saleCompletion` passes `args.salePrice` straight through, and `SaleDialog`
+  // bills the customer `salePrice + taxAmount + fees + …`. So the tax is added
+  // on top of the price, not contained in it.
+  //
+  // What the principal rule does with it: treats it as INCLUSIVE — revenue is
+  // `saleAmount - tax` and the AR debit omits the tax, so the dealership funds
+  // the customer's tax out of its own revenue and never bills anyone for it.
+  // That is wrong, it is wrong on `main` today, and it is wrong on the
+  // dealership's OWN sales — which is why it is not corrected here. Fixing it
+  // moves `customerBillableMinor`, the AR subledger document and every owned
+  // sale's revenue, and that is a change to make on its own evidence, not a
+  // side effect of enabling agent basis.
+  //
+  // So the three candidate postings, and why each is refused:
+  //
+  //   - Bill the tax on top (correct): needs `customerBillableMinor` to include
+  //     it, or the GL's AR debit and the AR subledger diverge by the tax. That
+  //     is the owned-sale change above.
+  //   - Carve it out of the margin (the principal rule's convention): a 16% tax
+  //     routinely EXCEEDS an agent's spread, so this refuses ordinary taxed
+  //     consigned deals — a conditional refusal that fires nearly always is
+  //     worse than an explicit one.
+  //   - Charge it to the supplier: he is the principal, so it is arguable — and
+  //     it is exactly the tax policy this rule may not invent.
+  //
+  // Production carries no taxed sale at all, so nothing real is blocked by
+  // waiting for that decision. The sale form warns before submit rather than
+  // letting an operator meet this as a failed save; see `consignedTaxRefusal`.
+  const taxMinor = p.taxMinor && p.taxMinor > 0 ? p.taxMinor : 0;
+  if (taxMinor > 0) {
+    // `ConvexError`, not `Error`. Convex redacts a plain Error's message from a
+    // production deployment, and `lib/errors.ts` then shows "An unexpected
+    // error occurred" — on a form whose only fix is clearing a tax field the
+    // operator has no reason to suspect. A refusal that cannot say what it
+    // wants is a dead end, not a decision point.
+    throw new ConvexError(
+      `Consigned sale ${p.saleId} carries ${taxMinor} minor units of sales tax, and agency sales have no agreed tax treatment yet: the dealership sells this car as ${supplier}'s agent, so whether the tax is his liability or its own changes which of them the money is owed by. Record the tax against the supplier agreement, or sell the car as dealership stock, before completing the sale.`
+    );
+  }
+  const commissionMinor = marginMinor;
+
+  // A zero margin is a real deal, not a broken one: the dealership placed the
+  // car for a supplier and made nothing on the metal, earning only the dealer
+  // fees and F&I below. The journal simply has no commission line to write —
+  // `validateBalance` rejects a 0/0 line, so emitting one made the whole sale
+  // uncompletable rather than recording a fact worth recording. Where the
+  // dealership's own minimum-profit policy objects, that is for
+  // `convex/utils/profitApproval.ts` to raise as an approval, not for the
+  // ledger to make structurally unrepresentable.
+  const lines: LineSpec[] =
+    consignment.settlementRoute === "DIRECT_TO_SUPPLIER"
+      ? marginMinor > 0
+        ? [
+            // The buyer paid the supplier. Nothing gross ever reaches these
+            // books; the only asset is the margin he now owes back.
+            line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, marginMinor, 0, `Commission due from ${supplier}`, dims),
+            line(SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, marginMinor, "Consignment commission earned", dims),
+          ]
+        : []
+      : [
+          // Gross landed here on his behalf: an asset for the whole amount, of
+          // which his share is a liability from the instant it arrives.
+          //
+          // AP-Suppliers rather than a separate clearing account, because this
+          // is the balance `sourcingPayables.markPaid` discharges. A dedicated
+          // clearing account read better and settled never: the sale credited
+          // one account and the payment debited another, so the liability stood
+          // forever while the payment's debit landed somewhere nothing had
+          // credited.
+          line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, p.saleAmountMinor, 0, "Consigned sale proceeds receivable", dims),
+          line(SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, 0, entitlementMinor, `Owed to ${supplier}`, dims),
+          // No tax line: `taxMinor` cannot be non-zero here, because the
+          // refusal above returns first. One used to sit at this point, and it
+          // was worse than dead — it credited SALES_TAX_PAYABLE without a
+          // matching debit anywhere, so the entry was short by exactly the tax
+          // and only the refusal above kept it from ever posting. Whoever
+          // lifts that refusal must add the debit side too; see the note there
+          // for which one.
+          // Omitted at zero margin for the same reason as above; the AR and AP
+          // lines already balance each other when the entitlement is the whole
+          // price, so the entry stays valid without it.
+          ...(commissionMinor > 0
+            ? [line(SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, commissionMinor, "Consignment commission earned", dims)]
+            : []),
+        ];
+
+  // Dealer fees and F&I products are the dealership's own income on its own
+  // services, not the supplier's car — they are unaffected by who owned it.
+  const dealerFeesMinor = p.dealerFeesMinor && p.dealerFeesMinor > 0 ? p.dealerFeesMinor : 0;
+  if (dealerFeesMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, dealerFeesMinor, 0, "Dealer fees receivable", dims));
+    lines.push(line(SYSTEM_KEYS.DEALER_FEE_INCOME, 0, dealerFeesMinor, "Dealer fee income", dims));
+  }
+  const warrantySoldMinor = p.warrantySoldMinor && p.warrantySoldMinor > 0 ? p.warrantySoldMinor : 0;
+  if (warrantySoldMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, warrantySoldMinor, 0, "Warranty receivable", dims));
+    addResoldProductLines(lines, warrantySoldMinor, p.warrantyCostMinor ?? 0, "Warranty", dims);
+  }
+  const gapSoldMinor = p.gapSoldMinor && p.gapSoldMinor > 0 ? p.gapSoldMinor : 0;
+  if (gapSoldMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, gapSoldMinor, 0, "GAP receivable", dims));
+    addResoldProductLines(lines, gapSoldMinor, p.gapCostMinor ?? 0, "GAP", dims);
+  }
+
+  // A zero-margin direct-settled sale with no dealer fees and no F&I: the buyer
+  // paid the supplier, the dealership placed the car and earned nothing, and
+  // not one dinar passed through these books. That is a real deal with no
+  // accounting consequence — so it is declared as such rather than returned as
+  // an empty line array that `validateBalance` would wave through into a
+  // journal entry with no lines.
+  if (lines.length === 0) {
+    return {
+      lines,
+      memo: `Consigned vehicle placed for ${supplier} — no dealership income on the deal`,
+      category: "SYSTEM",
+      skipPosting: true,
+    };
+  }
+
+  return { lines, memo: `Consigned vehicle sold as agent for ${supplier}`, category: "SYSTEM" };
+}
+
 export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
+  // Agent basis is a different rule, not a variation of this one — every line
+  // below assumes the dealership owned what it sold.
+  if (p.consignment) return consignedAgentSaleLines(p);
+
+  // Fail closed, and loudly. A sourced vehicle is the supplier's, so reaching
+  // the principal branch without consignment details means the caller is about
+  // to book revenue on a car the dealership never owned and relieve inventory
+  // it never held. Silence here is what put every historical sourced sale on
+  // the books at gross — see convex/sourcedAgentImpact.ts. Converting the car
+  // to owned stock is the other legitimate answer, and it has to be done on
+  // purpose rather than implied by a missing field.
+  //
+  // Scoped to events whose emitter knew about agent basis. A legacy event
+  // queued before this deploy carries no such knowledge, and refusing it would
+  // dead-letter a real sale rather than book it — see `consignmentEvaluated`.
+  if (p.isSourced && p.consignmentEvaluated) {
+    throw new Error(
+      `Sale ${p.saleId} is of a sourced vehicle, which is legally the supplier's. Post it on agent basis with the supplier's entitlement, or convert the vehicle to dealer-owned stock first — it cannot be posted as an owned sale.`
+    );
+  }
+  // Reached by a legacy sourced event: it posts at gross exactly as it would
+  // have before agent basis existed, and `migrateConsignedSaleBasis` restates
+  // it afterwards along with every other historical sourced sale. Recorded in
+  // the memo so the entry is identifiable without reconstructing why.
+  const legacySourced = p.isSourced === true && p.consignmentEvaluated !== true;
+
   const revenueMinor = p.taxMinor ? p.saleAmountMinor - p.taxMinor : p.saleAmountMinor;
   const dims = { customerId: p.customerId, vehicleId: p.vehicleId, salespersonId: p.salespersonId };
   const dealerFeesMinor = p.dealerFeesMinor && p.dealerFeesMinor > 0 ? p.dealerFeesMinor : 0;
@@ -443,7 +729,83 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
     const costCreditDesc = p.isSourced ? "Supplier payable created" : "Inventory relief";
     lines.push(line(costCreditKey, 0, p.costMinor, costCreditDesc, { vehicleId: p.vehicleId }));
   }
-  return { lines, memo: "Vehicle sale completed", category: "SYSTEM" };
+  return {
+    lines,
+    memo: legacySourced
+      ? "Vehicle sale completed (sourced, principal basis — queued before agent accounting; awaiting restatement)"
+      : "Vehicle sale completed",
+    category: "SYSTEM",
+  };
+}
+
+export interface ConsignedSaleReclassifiedPayload {
+  saleId: string;
+  vehicleId: string;
+  customerId: string;
+  currency: string;
+  /** Vehicle revenue the principal posting recognized, now removed in full. */
+  revenueMinor: number;
+  /** The dealership's spread over the supplier's entitlement, recognized instead. */
+  commissionMinor: number;
+  /** Fabricated cost of a car the dealership never owned, now removed in full. */
+  cogsMinor: number;
+}
+
+/**
+ * Restates one historical consigned sale from principal to agent basis.
+ *
+ * The original posting booked the gross as revenue and the supplier's
+ * entitlement as cost of sales. Both are wrong on a car the dealership never
+ * owned, but they offset, so the sale's contribution to profit was already
+ * right. That is the entire reason this correction is safe to automate: it
+ * moves four account balances and leaves net income exactly where it was.
+ *
+ *   Dr  Sales Revenue                    (the gross that was never revenue)
+ *     Cr  Consignment Commission Revenue (the spread, which is)
+ *     Cr  Cost of Vehicles Sold          (the cost that was never incurred)
+ *
+ * Nothing on the balance sheet moves. The principal posting debited
+ * AR-Customers for the gross and credited AP-Suppliers for the entitlement, and
+ * agent basis on the THROUGH_DEALERSHIP route does exactly the same — so those
+ * two are already correct and must not be touched. A sale where they are NOT
+ * correct (inventory relieved, no supplier cost, a profit that would move) is
+ * flagged by the impact report and never reaches this rule.
+ *
+ * The balance check is an assertion about the caller's arithmetic, not a
+ * validation of user input: revenue removed must equal commission recognized
+ * plus cost removed, or the entry changes profit and the premise has failed.
+ */
+export function ruleConsignedSaleReclassified(p: ConsignedSaleReclassifiedPayload): RuleResult {
+  if (p.revenueMinor !== p.commissionMinor + p.cogsMinor) {
+    throw new Error(
+      `Consigned reclassification for sale ${p.saleId} would change reported profit: removing ${p.revenueMinor} of revenue against ${p.commissionMinor} commission and ${p.cogsMinor} cost. Refusing to post.`
+    );
+  }
+  if (p.revenueMinor <= 0) {
+    throw new Error(
+      `Consigned reclassification for sale ${p.saleId} has no revenue to reclassify — it is already on agent basis. Refusing to post an empty correction.`
+    );
+  }
+
+  const dims = { customerId: p.customerId, vehicleId: p.vehicleId };
+  const lines: LineSpec[] = [
+    line(SYSTEM_KEYS.SALES_REVENUE, p.revenueMinor, 0, "Vehicle revenue removed — sold as agent", dims),
+  ];
+  // A zero line is rejected by validateBalance, and both of these are
+  // legitimately zero: a sale at exactly the supplier's entitlement earns no
+  // commission, and a sale posted without a cost basis booked no COGS.
+  if (p.commissionMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, p.commissionMinor, "Consignment commission recognized", dims));
+  }
+  if (p.cogsMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.COST_OF_VEHICLES_SOLD, 0, p.cogsMinor, "Cost removed — vehicle was never owned", dims));
+  }
+
+  return {
+    lines,
+    memo: "Consigned sale restated to agent basis",
+    category: "ADJUSTMENT",
+  };
 }
 
 export function ruleSupplierPaymentSettled(p: SupplierPaymentSettledPayload): RuleResult {
@@ -472,6 +834,42 @@ export function ruleSupplierPaymentSettled(p: SupplierPaymentSettledPayload): Ru
   return {
     lines,
     memo: `Supplier payment — ${p.sourcedFromName}`,
+    category: "SYSTEM",
+  };
+}
+
+export interface SupplierReceivableCollectedPayload {
+  receivableId: string;
+  sourcedFromName: string;
+  amountMinor: number;
+  currency: string;
+  paymentMethod?: string;
+  vehicleId?: string;
+}
+
+/**
+ * The supplier pays back the dealership's agency margin on a consigned deal he
+ * collected the gross for.
+ *
+ * The exact reverse of the claim the sale opened: `consignedAgentSaleLines`
+ * debits Receivable from Suppliers on the DIRECT_TO_SUPPLIER route, and this is
+ * the only thing that brings it down. Without it the account accreted every
+ * margin ever earned that way and nothing could ever discharge it — an asset
+ * that only grows is not an asset, it is a hole in the ledger.
+ *
+ * Revenue is deliberately untouched. The margin was recognized when the sale
+ * completed; this is collection, not a second earning of it.
+ */
+export function ruleSupplierReceivableCollected(p: SupplierReceivableCollectedPayload): RuleResult {
+  // Inbound money, so the cheque case is a cheque the dealership HOLDS —
+  // cashAccountKey, not disbursementAccountKey.
+  const cashKey = cashAccountKey(p.paymentMethod);
+  return {
+    lines: [
+      line(cashKey, p.amountMinor, 0, `Received from ${p.sourcedFromName}`, { vehicleId: p.vehicleId }),
+      line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, 0, p.amountMinor, `Commission collected from ${p.sourcedFromName}`, { vehicleId: p.vehicleId }),
+    ],
+    memo: `Supplier commission received — ${p.sourcedFromName}`,
     category: "SYSTEM",
   };
 }
@@ -1451,9 +1849,11 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
   switch (eventType as EventType) {
     case "DEPOSIT_RECEIVED": return ruleDepositReceived(payload as unknown as DepositReceivedPayload);
     case "DEPOSIT_APPLIED": return ruleDepositApplied(payload as unknown as DepositAppliedPayload);
+    case "DEPOSIT_APPLIED_TO_SETTLEMENT": return ruleDepositAppliedToSettlement(payload as unknown as DepositAppliedToSettlementPayload);
     case "DEPOSIT_REFUNDED": return ruleDepositRefunded(payload as unknown as DepositRefundedPayload);
     case "DEPOSIT_FORFEITED": return ruleDepositForfeited(payload as unknown as DepositForfeitedPayload);
     case "SALE_COMPLETED": return ruleSaleCompleted(payload as unknown as SaleCompletedPayload);
+    case "CONSIGNED_SALE_RECLASSIFIED": return ruleConsignedSaleReclassified(payload as unknown as ConsignedSaleReclassifiedPayload);
     case "SALE_CANCELLED": return ruleSaleCancelled(payload as unknown as SaleCancelledPayload);
     case "CHEQUE_DEPOSITED": return ruleChequeDeposited(payload as unknown as ChequeDepositedPayload);
     case "COLLECTION_PAYMENT": return ruleCollectionPayment(payload as unknown as CollectionPaymentPayload);
@@ -1469,6 +1869,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "FINANCE_CASH_RECEIVED": return ruleFinanceCashReceived(payload as unknown as FinanceCashReceivedPayload);
     case "PAYMENT_LINK_RECEIVED": return rulePaymentLinkReceived(payload as unknown as PaymentLinkReceivedPayload);
     case "SUPPLIER_PAYMENT_SETTLED": return ruleSupplierPaymentSettled(payload as unknown as SupplierPaymentSettledPayload);
+    case "SUPPLIER_RECEIVABLE_COLLECTED": return ruleSupplierReceivableCollected(payload as unknown as SupplierReceivableCollectedPayload);
     case "ASSET_CAPITALIZED": return ruleAssetCapitalized(payload as unknown as AssetCapitalizedPayload);
     case "DEPRECIATION_POSTED": return ruleDepreciationPosted(payload as unknown as DepreciationPostedPayload);
     case "FI_COMMISSION_RECOGNIZED": return ruleFiCommissionRecognized(payload as unknown as FiCommissionRecognizedPayload);

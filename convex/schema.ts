@@ -2,6 +2,26 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { paymentMethodValidator, acquisitionPaymentMethodValidator } from "./utils/paymentMethods";
 import { trustPassportFieldValidators } from "./utils/vehicleStatusGuards";
+import {
+  appraisalStatusValidator,
+  approvedPurchaseBasisValidator,
+  creditDecisionValidator,
+  customerContributionSettlementValidator,
+  dealerContributionSettlementValidator,
+  feeAccountingTreatmentValidator,
+  feePartyValidator,
+  feeResponsibilityValidator,
+  financeCompanyRuleSnapshotValidator,
+  financeFeeTemplateValidator,
+  financeFeeTypeValidator,
+  financingFailureReasonValidator,
+  gapResolutionValidator,
+  handoverStatusValidator,
+  ltvBasisValidator,
+  quotationCalculationSnapshotValidator,
+  quotationSourceValidator,
+  settlementStatusValidator,
+} from "./utils/financingEconomics";
 
 const organizationDeletionRequestStatus = v.union(
   v.literal("PENDING_REVIEW"),
@@ -433,6 +453,9 @@ export default defineSchema({
       v.literal("RESOLVE_SYSTEM_ACCOUNT_ADOPTION"),
       v.literal("ACKNOWLEDGE_CLOSE_WARNINGS"),
       v.literal("SET_COMMISSION_AMOUNT"),
+      // Multi-vehicle reservation-deposit allocation — see depositAllocation.ts.
+      v.literal("ALLOCATE_DEPOSIT"),
+      v.literal("RESOLVE_DEPOSIT_ALLOCATION"),
     ),
     resourceType: v.string(),
     resourceId: v.string(),
@@ -730,18 +753,260 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_org_vehicle", ["orgId", "vehicleId"]),
 
+  /**
+   * One row per historical consigned sale restated from principal to agent
+   * basis, written by migrateConsignedSaleBasis.
+   *
+   * This is the migration's audit trail AND its idempotency key. The GL is
+   * already protected — postOrEnqueue drops a duplicate idempotency key — but
+   * "it posted nothing the second time" is not the same as being able to show
+   * an auditor which sales were touched, by whom, on what evidence, and that
+   * the correction left profit unchanged. That is what this table is for, and
+   * why it stores the amounts rather than pointing at the journal and hoping.
+   *
+   * `originalJournalEntryIds` links back to the entries being corrected. The
+   * correction is a NEW entry, never an edit of those — the original posting
+   * and its restatement both stay on the books, which is the only version of
+   * this an auditor can follow.
+   */
+  consignedSaleCorrections: defineTable({
+    orgId: v.id("organizations"),
+    saleId: v.id("sales"),
+    vehicleId: v.id("vehicles"),
+    currency: v.string(),
+    originalJournalEntryIds: v.array(v.id("journalEntries")),
+    /**
+     * How far this correction actually got.
+     *
+     * The distinction this exists to make: a correction dated into a closed or
+     * not-yet-existing period does not post — it queues to the outbox. That is
+     * the NORMAL case for historical restatements, since the periods being
+     * corrected are usually closed. Recording such a row as done meant the
+     * pre-check reported `alreadyCorrected` forever while no journal had ever
+     * been written, and a dead-lettered event would never be noticed.
+     *
+     *  - PENDING_POSTING — the event is durably queued; no journal yet.
+     *  - POSTED — the journal exists. Only this counts as corrected.
+     *  - FAILED — the event neither posted nor queued, or its outbox entry
+     *    dead-lettered. A retry re-raises the event under the same key, so it
+     *    cannot double-post; a dead-lettered outbox row must be redriven by an
+     *    operator first (accountingOutbox.retryFailed), because postOrEnqueue
+     *    treats any unposted queued row as already handled.
+     *
+     * This tracks the JOURNAL only. Whether the operational ledger was also
+     * restated is `reportingBasisStatus` below — two ledgers with two failure
+     * modes, and folding them into one status made a queued correction whose
+     * transaction row needed a human permanently unpromotable: nothing ever
+     * wrote its journal id, and the impact report went on reporting an
+     * already-corrected sale as fully overstated, inviting a second manual
+     * correction.
+     */
+    status: v.union(
+      v.literal("PENDING_POSTING"),
+      v.literal("POSTED"),
+      v.literal("FAILED")
+    ),
+    /** Why the row is FAILED. Absent otherwise. */
+    statusReason: v.optional(v.string()),
+    /**
+     * Whether the sale's `transactions` row was restated onto the agent basis.
+     *
+     *  - RESTATED — done, or there was no such row to restate.
+     *  - REQUIRES_RECONCILIATION — the row could not be identified
+     *    unambiguously (a vehicle sold twice, an amount already netted down by
+     *    deposits), so it was left alone rather than guessed at. The journal
+     *    correction is unaffected and proceeds on its own.
+     */
+    reportingBasisStatus: v.optional(
+      v.union(v.literal("RESTATED"), v.literal("REQUIRES_RECONCILIATION"))
+    ),
+    /** Why the reporting basis needs a human. Absent when RESTATED. */
+    reportingBasisReason: v.optional(v.string()),
+    /** The idempotency key of the correcting event, so a retry reuses its identity. */
+    eventIdempotencyKey: v.optional(v.string()),
+    /**
+     * Absent until the correction actually posts. The event is durable either
+     * way; only the journal id is not yet knowable.
+     */
+    correctionJournalEntryId: v.optional(v.id("journalEntries")),
+    /** When the journal was confirmed to exist — the moment status became POSTED. */
+    postedAt: v.optional(v.number()),
+    /**
+     * The `transactions` row whose reporting basis was restated to the agent
+     * margin, so Sales Reports, Dashboard and P&L agree about a historical
+     * sourced month. Absent when the row could not be identified — see
+     * REQUIRES_RECONCILIATION.
+     */
+    recognizedRevenueTransactionId: v.optional(v.id("transactions")),
+    revenueReclassifiedMinor: v.number(),
+    commissionRecognizedMinor: v.number(),
+    cogsReversedMinor: v.number(),
+    /**
+     * Stored even though it is always zero. The migration's entire licence to
+     * run unattended is that it cannot move profit; recording the number it
+     * actually computed means a later reader can verify that claim per row
+     * instead of taking it on trust.
+     */
+    netIncomeDeltaMinor: v.number(),
+    correctedBy: v.id("users"),
+    correctedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_sale", ["orgId", "saleId"])
+    .index("by_status", ["status"]),
+
+  /**
+   * What a supplier owes the DEALERSHIP on a consigned sale he was paid for
+   * directly.
+   *
+   * The mirror of `vehicleSupplierPayables`, and it exists for the same reason
+   * that one does: a general-ledger balance is not a subledger. On the
+   * DIRECT_TO_SUPPLIER route the buyer pays the supplier the whole
+   * 12,500, the supplier keeps his 9,500 entitlement, and the dealership's
+   * 3,000 agency margin stays with him until he settles it. Debiting
+   * Receivable from Suppliers records that the money is owed; only this records
+   * WHICH deal it is owed on, how much of it has since arrived, when, by what
+   * means, and against which reference — the things an aging report and a
+   * supplier conversation are actually made of.
+   *
+   * Supplier identity is snapshot-based for exactly the reason spelled out on
+   * `vehicleSupplierPayables.sourcedFromName`: there is no supplier master to
+   * point at, and a foreign key to a table that does not exist looks like
+   * referential integrity while providing none.
+   */
+  vehicleSupplierReceivables: defineTable({
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    saleId: v.id("sales"),
+    sourcedFromName: v.string(),
+    /** The dealership's agency margin on the deal — what the supplier owes back. */
+    amountDue: v.number(),
+    currency: v.string(),
+    status: v.union(
+      v.literal("OPEN"),
+      v.literal("PARTIALLY_PAID"),
+      v.literal("PAID"),
+      v.literal("DISPUTED"),
+      // Not one of the four the requirement names, and deliberately kept: a
+      // sale can be cancelled, and a claim against a deal that no longer exists
+      // is not "open". Without it, cancelling would either strand a live
+      // receivable or delete the record of one that existed.
+      v.literal("CANCELLED")
+    ),
+    /**
+     * Cumulative amount collected. `remainingAmount` is NOT stored — a second
+     * copy of a figure derivable from two others is a figure that can disagree
+     * with them, and this one decides whether a supplier still owes money.
+     */
+    amountReceived: v.optional(v.number()),
+    receiptMethod: v.optional(paymentMethodValidator),
+    /** Cheque number or transfer reference for the most recent receipt. */
+    receiptReference: v.optional(v.string()),
+    /** The bank or cash account the money arrived in. */
+    receiptAccountId: v.optional(v.id("chartOfAccounts")),
+    receiptNotes: v.optional(v.string()),
+    /**
+     * How many receipts have posted. The GL event's idempotency key includes
+     * it, so a second instalment of the same amount is a distinct event rather
+     * than a duplicate the outbox silently drops.
+     */
+    receiptSeq: v.optional(v.number()),
+    /** When the claim was settled in full. */
+    settledAt: v.optional(v.number()),
+    settledBy: v.optional(v.id("users")),
+    disputeReason: v.optional(v.string()),
+    disputedAt: v.optional(v.number()),
+    disputedBy: v.optional(v.id("users")),
+    cancelledAt: v.optional(v.number()),
+    cancelledBy: v.optional(v.id("users")),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_sale", ["orgId", "saleId"])
+    .index("by_org_vehicle", ["orgId", "vehicleId"])
+    .index("by_sale", ["saleId"]),
+
   vehicleSupplierPayables: defineTable({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
     saleId: v.optional(v.id("sales")),
+    // Supplier identity is SNAPSHOT-BASED for this workflow, deliberately.
+    // No canonical supplier entity exists in AutoFlow — suppliers are a name on
+    // a vehicle — so there is nothing for a `supplierId` to point at. Do not
+    // fabricate or persist one until supplier master data is introduced: a
+    // foreign key to a table that does not exist is worse than an honest name,
+    // because it looks like referential integrity and provides none.
+    //
+    // Introduce a supplier master separately if AutoFlow needs statements
+    // across multiple vehicles, supplier-level aging, contact or tax identity,
+    // consolidated balances, or supplier analytics. That is a subsystem with
+    // its own lifecycle, permissions, deduplication and migration — not a field
+    // to be smuggled into an accounting correction.
     sourcedFromName: v.string(),
     amountDue: v.number(),
     currency: v.string(),
-    status: v.union(v.literal("PENDING"), v.literal("PAID"), v.literal("CANCELLED")),
+    // PENDING is retained permanently as a legacy value. Every row written
+    // before consigned-agent accounting carries it, and dropping it from the
+    // union would make those rows unreadable — a schema change that destroys
+    // access to existing payables is a worse outcome than one extra literal.
+    // `deriveSettlementStatus` maps it to DUE_ON_SALE for every reader.
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("NOT_YET_DUE"),
+      v.literal("DUE_ON_SALE"),
+      v.literal("PARTIALLY_PAID"),
+      v.literal("PAID"),
+      v.literal("DISPUTED"),
+      v.literal("CANCELLED")
+    ),
+    // How `amountDue` was arrived at. Recorded rather than inferred: the same
+    // number reached by an agreed cost and by a percentage of the sale means
+    // different things when the sale price later changes.
+    settlementCalculationMethod: v.optional(
+      v.union(
+        v.literal("AGREED_SOURCE_COST"),
+        v.literal("PERCENTAGE_OF_SALE"),
+        v.literal("FIXED_AMOUNT"),
+        v.literal("OTHER")
+      )
+    ),
+    settlementCalculationNote: v.optional(v.string()),
+    // Cumulative. `remainingAmount` is deliberately NOT stored — a second copy
+    // of a figure derivable from two others is a figure that can disagree with
+    // them, and this one decides whether a supplier is still owed money.
+    amountPaid: v.optional(v.number()),
+    /**
+     * How many payments have posted. Carried into the GL event's version and
+     * idempotency key, because `postAccountingEvent` dedupes on
+     * (eventType, sourceType, sourceId, eventVersion) — without it a second
+     * instalment silently returns "already posted" and the ledger records one
+     * payment where the subledger records several.
+     */
+    paymentSeq: v.optional(v.number()),
+    paymentDueTrigger: v.optional(
+      v.union(
+        v.literal("ON_SALE"),
+        v.literal("ON_SETTLEMENT_RECEIPT"),
+        v.literal("FIXED_DATE"),
+        v.literal("ON_DEMAND")
+      )
+    ),
+    paymentDueDate: v.optional(v.number()),
     paidAt: v.optional(v.number()),
     paidBy: v.optional(v.id("users")),
     paymentMethod: v.optional(paymentMethodValidator),
+    /** Cheque number or transfer reference. */
+    paymentReference: v.optional(v.string()),
+    /** The bank or cash account the payment left. */
+    paymentAccountId: v.optional(v.id("chartOfAccounts")),
     paymentNotes: v.optional(v.string()),
+    documentStorageIds: v.optional(v.array(v.id("_storage"))),
+    disputedAt: v.optional(v.number()),
+    disputedBy: v.optional(v.id("users")),
+    disputeReason: v.optional(v.string()),
     // Portion of amountDue that is input VAT paid to the supplier (tax-inclusive,
     // not additive) — feeds the VAT return's input side. Optional/backward compatible.
     taxAmount: v.optional(v.number()),
@@ -764,6 +1029,43 @@ export default defineSchema({
     changedBy: v.id("users"),
     changedAt: v.number(),
   }).index("by_org_vehicle", ["orgId", "vehicleId"]),
+
+  /**
+   * When a vehicle stopped being the supplier's and became the dealership's.
+   *
+   * Ownership itself is derived from `sourceType` (see utils/vehicleOwnership),
+   * which makes the current state impossible to contradict — but it also means
+   * the past is gone the moment the flag flips. A car sold last month as the
+   * supplier's agent and bought in this week would read, forever after, as
+   * ordinary stock the dealership always owned, and the agent-basis sale behind
+   * it would look like a mistake rather than what was correct at the time.
+   *
+   * Append-only. Nothing here is ever edited: a conversion recorded wrongly is
+   * corrected by a further row, because the whole point is that the sequence
+   * survives.
+   */
+  vehicleOwnershipConversions: defineTable({
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    fromSourceType: v.union(v.literal("STOCK"), v.literal("SOURCED")),
+    toSourceType: v.union(v.literal("STOCK"), v.literal("SOURCED")),
+    /** Snapshotted, not joined: the supplier's name on the vehicle can change afterwards. */
+    supplierName: v.optional(v.string()),
+    /** What the supplier was owed while it was consigned, as it stood at conversion. */
+    supplierEntitlementAtConversion: v.optional(v.number()),
+    /** What the dealership agreed to buy it for. */
+    purchaseAmount: v.optional(v.number()),
+    purchaseDate: v.optional(v.number()),
+    paymentMethod: v.optional(v.string()),
+    /** The payable this conversion created or settled, when one exists. */
+    supplierPayableId: v.optional(v.id("vehicleSupplierPayables")),
+    documentStorageIds: v.optional(v.array(v.id("_storage"))),
+    notes: v.optional(v.string()),
+    convertedBy: v.id("users"),
+    convertedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_vehicle", ["orgId", "vehicleId"]),
 
   vehicleReservations: defineTable({
     vehicleId: v.id("vehicles"),
@@ -1013,6 +1315,23 @@ export default defineSchema({
     applicationId: v.optional(v.id("financeApplications")),
     quoteId: v.optional(v.id("quotes")),
     leadId: v.optional(v.id("leads")),
+    // Where the buyer's money went on a consigned (SOURCED) sale, recorded per
+    // deal because it is a fact about the agreement rather than about the
+    // vehicle. THROUGH_DEALERSHIP: gross landed in the dealership's account on
+    // the supplier's behalf, so his share is a liability from the moment it
+    // arrives. DIRECT_TO_SUPPLIER: the buyer paid the supplier, nothing gross
+    // ever reached these books, and the only asset is the margin he now owes
+    // back.
+    //
+    // Absent on every non-consigned sale and on consigned rows written before
+    // the route was recorded; readers must treat absent as THROUGH_DEALERSHIP,
+    // which is what those rows actually posted (see
+    // consignedSettlementRoute()). It is deliberately NOT defaulted at write
+    // time, so a row that predates the field stays distinguishable from one
+    // where somebody chose THROUGH_DEALERSHIP.
+    supplierSettlementRoute: v.optional(
+      v.union(v.literal("THROUGH_DEALERSHIP"), v.literal("DIRECT_TO_SUPPLIER"))
+    ),
     canonicalReceivableDocumentId: v.optional(v.id("receivableDocuments")),
     commissionAmount: v.optional(v.number()), // Calculated at sale time
     // How many COMMISSION_ADJUSTED corrections have been posted against this
@@ -1486,7 +1805,65 @@ export default defineSchema({
     acceptedStatuses: v.optional(v.array(v.id("orgCustomerStatuses"))), // undefined/empty = accepts all
     deactivatedAt: v.optional(v.number()),
     deactivatedBy: v.optional(v.id("users")),
+
+    // --- Dealer-side purchase rules -------------------------------------
+    // The fields above describe the loan the company sells the CUSTOMER. These
+    // describe the purchase it makes from the DEALERSHIP, which is a different
+    // transaction with different terms and was previously unmodelled — only
+    // maxFinancingLTV existed, and nothing server-side ever read it.
+    //
+    // Every one is optional so the 25 existing companies keep working
+    // untouched; `buildRuleSnapshot` supplies conservative defaults.
+    //
+    // Bumped by finance.updateCompany on any rule change, and pointed at by the
+    // immutable financeCompanyRuleVersions row an application snapshots.
+    ruleVersion: v.optional(v.number()),
+    defaultLtvPercent: v.optional(v.number()),
+    minimumLtvPercent: v.optional(v.number()),
+    ltvBasis: v.optional(ltvBasisValidator),
+    minimumCustomerFirstPaymentMinor: v.optional(v.number()),
+    allowedAppraisalVariancePercent: v.optional(v.number()),
+    // Whether the company may buy at the dealer's submitted quotation when the
+    // independent appraisal lands lower, and by how much it may fall short.
+    allowsQuotationAboveAppraisal: v.optional(v.boolean()),
+    lowerAppraisalTolerancePercent: v.optional(v.number()),
+    quotationExceptionApproval: v.optional(
+      v.union(v.literal("AUTOMATIC"), v.literal("MANUAL"))
+    ),
+    // How the company settles: whether the dealer wires its contribution
+    // separately or the company nets it out, and whether customer money the
+    // company collects is passed through to the dealer inside the purchase
+    // price or retained. Both patterns are real; neither can be assumed.
+    dealerContributionSettlement: v.optional(dealerContributionSettlementValidator),
+    customerContributionSettlement: v.optional(customerContributionSettlementValidator),
+    feesDeductedFromSettlement: v.optional(v.boolean()),
+    // Whether the customer's first payment offsets the unfinanced share. The
+    // quotation solver only applies when it does; unset makes the solver
+    // decline rather than assume.
+    customerFirstPaymentOffsetsUnfinancedShare: v.optional(v.boolean()),
+    feeTemplates: v.optional(v.array(financeFeeTemplateValidator)),
   }).index("by_org", ["orgId"]),
+
+  /**
+   * Immutable snapshot of a finance company's dealer-side rules, written once
+   * per version whenever those rules change.
+   *
+   * Applications point at a version and also carry an inline copy, so a
+   * historical deal's terms cannot be rewritten by editing the company later —
+   * which is exactly what would happen if the rules were only ever read live.
+   */
+  financeCompanyRuleVersions: defineTable({
+    orgId: v.id("organizations"),
+    companyId: v.id("financeCompanies"),
+    version: v.number(),
+    snapshot: financeCompanyRuleSnapshotValidator,
+    note: v.optional(v.string()),
+    createdAt: v.number(),
+    createdBy: v.optional(v.id("users")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_company", ["companyId"])
+    .index("by_company_version", ["companyId", "version"]),
 
   vehicleValuations: defineTable({
     orgId: v.id("organizations"),
@@ -1673,15 +2050,428 @@ export default defineSchema({
         relationship: v.optional(v.string()),
       }))),
       customerStatusAtSubmission: v.optional(v.string()),
+      // NOTE: a vehicleValuations row, which is a mutable per-(vehicle, company)
+      // number with no provider, date or document — NOT an independent
+      // appraisal. And ltvAtSubmission is financedAmount ÷ that number, a
+      // derived ratio rather than the company's applied LTV rule. The
+      // financeAppraisals table and appliedLtvPercent below are the real ones;
+      // these two stay for the historical record and are never read as either.
       vehicleValuationAtSubmission: v.optional(v.number()),
       ltvAtSubmission: v.optional(v.number()),
     })),
+
+    // --- Lifecycle dimensions -------------------------------------------
+    // `status` above conflates all five of these. It stays as the legacy
+    // field every existing reader still uses; these carry the real state.
+    creditDecision: v.optional(creditDecisionValidator),
+    appraisalStatus: v.optional(appraisalStatusValidator),
+    gapResolution: v.optional(gapResolutionValidator),
+    settlementStatus: v.optional(settlementStatusValidator),
+    handoverStatus: v.optional(handoverStatusValidator),
+
+    // --- Dealer-side economics ------------------------------------------
+    // All in minor units of `economicsCurrency`. Deliberately NOT reusing
+    // quotes.totalFinancedAmount, which is the customer's Murabaha principal
+    // and was being read as four other things — see the module header on
+    // packages/shared/src/financingEconomics.ts.
+    economicsCurrency: v.optional(v.string()),
+    vehiclePurchaseCostMinor: v.optional(v.number()),
+    targetSellingAmountMinor: v.optional(v.number()),
+
+    // What the dealership actually sent the finance company. Calculated by
+    // default but overridable, because the number sent is a commercial
+    // decision and storing a computed value as if it were the submitted
+    // document would be a lie about a real artefact.
+    submittedQuotationMinor: v.optional(v.number()),
+    submittedQuotationSource: v.optional(quotationSourceValidator),
+    submittedQuotationOverrideReason: v.optional(v.string()),
+    // Mode, inputs, solver result, rule version and override, frozen at the
+    // moment the quotation was recorded.
+    quotationCalculationSnapshot: v.optional(quotationCalculationSnapshotValidator),
+    estimatedDealerBorneExpensesMinor: v.optional(v.number()),
+    quotationBufferMinor: v.optional(v.number()),
+    submittedQuotationAt: v.optional(v.number()),
+    submittedQuotationBy: v.optional(v.id("users")),
+    dealerEstimateMinor: v.optional(v.number()),
+
+    // What the company will actually buy at, and on what basis. Stored, never
+    // inferred from the appraisal: a tolerance rule can approve at the
+    // quotation despite a lower appraisal, and a negotiated third figure is
+    // neither of the two.
+    appliedLtvPercent: v.optional(v.number()),
+    approvedDealerPurchaseAmountMinor: v.optional(v.number()),
+    approvedPurchaseBasis: v.optional(approvedPurchaseBasisValidator),
+    approvedPurchaseAppraisalId: v.optional(v.id("financeAppraisals")),
+    approvedPurchaseExceptionRuleVersion: v.optional(v.number()),
+    approvedPurchaseApprovedBy: v.optional(v.id("users")),
+    approvedPurchaseApprovedAt: v.optional(v.number()),
+    approvedPurchaseNotes: v.optional(v.string()),
+
+    // Funding composition. Derived server-side from the three inputs above on
+    // every write, never accepted from a client.
+    financeCompanyFundedPortionMinor: v.optional(v.number()),
+    unfinancedPortionMinor: v.optional(v.number()),
+    customerFirstPaymentMinor: v.optional(v.number()),
+    // Customer money that goes to the FINANCE COMPANY. Must never create a
+    // dealer-side customer receivable.
+    customerContributionToFinanceCompanyMinor: v.optional(v.number()),
+    dealerContributionMinor: v.optional(v.number()),
+    dealerContributionSettlement: v.optional(dealerContributionSettlementValidator),
+    customerContributionSettlement: v.optional(customerContributionSettlementValidator),
+
+    // Settlement. `expected` is what the company owes; `actual` is what turned
+    // up. Keeping them apart is the whole reason confirmDisbursement could not
+    // handle a partial or late remittance.
+    expectedDealerRemittanceMinor: v.optional(v.number()),
+    actualDealerReceiptTotalMinor: v.optional(v.number()),
+    customerFinancingPrincipalMinor: v.optional(v.number()),
+    estimatedClosingExpensesMinor: v.optional(v.number()),
+    actualClosingExpensesMinor: v.optional(v.number()),
+    targetNetProceedsMinor: v.optional(v.number()),
+
+    // The legally documented transaction price — the invoice and purchase
+    // agreement, not a figure the system worked out.
+    //
+    // This is the ninth of nine amounts the deal keeps SEPARATELY, and the only
+    // one revenue may ever be posted from. Neither the dealer's target selling
+    // amount nor the finance company's approved purchase amount is revenue:
+    // both are real, both are stored, and neither is the invoice. Deriving this
+    // from either of them is the specific thing that is not allowed, because a
+    // financed deal's paperwork is what determines who sold what to whom.
+    //
+    // Unset means nobody has recorded the document yet, which is why
+    // `accountingClassification` exists rather than a default being assumed.
+    legalInvoiceAmountMinor: v.optional(v.number()),
+    legalInvoiceNumber: v.optional(v.string()),
+    legalInvoiceDate: v.optional(v.number()),
+    legalInvoiceRecordedBy: v.optional(v.id("users")),
+    legalInvoiceRecordedAt: v.optional(v.number()),
+    /** Who the invoice was actually issued to, which a financed deal makes a real question. */
+    legalInvoiceIssuedTo: v.optional(
+      v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY"), v.literal("OTHER"))
+    ),
+    legalInvoiceIssuedToOther: v.optional(v.string()),
+
+    // Whether the deal's accounting treatment has actually been established.
+    //
+    // PENDING_CLASSIFICATION is the honest default for a financed deal: until
+    // the invoice, the purchase agreement and the settlement advice say how the
+    // purchase amount and the dealer contribution are documented, there is no
+    // sale amount to post that would not be a guess. CLASSIFIED is set by a
+    // person, never inferred.
+    accountingClassification: v.optional(
+      v.union(v.literal("PENDING_CLASSIFICATION"), v.literal("CLASSIFIED"))
+    ),
+    accountingClassifiedBy: v.optional(v.id("users")),
+    accountingClassifiedAt: v.optional(v.number()),
+    accountingClassificationNotes: v.optional(v.string()),
+
+    // Appraisal gap and its negotiated split. The gap negotiated is the RAW
+    // difference against the submitted quotation, not the change in the
+    // company's funded portion.
+    rawAppraisalGapMinor: v.optional(v.number()),
+    customerGapShareMinor: v.optional(v.number()),
+    dealerGapShareMinor: v.optional(v.number()),
+    customerGapCashToDealerMinor: v.optional(v.number()),
+    customerGapInstallmentToDealerMinor: v.optional(v.number()),
+    customerGapToFinanceCompanyMinor: v.optional(v.number()),
+    gapResolvedAt: v.optional(v.number()),
+    gapResolvedBy: v.optional(v.id("users")),
+    gapResolutionNotes: v.optional(v.string()),
+
+    // Failure. The appraisal-fee treatment keys off the reason, not the status.
+    failureReason: v.optional(financingFailureReasonValidator),
+    failureNotes: v.optional(v.string()),
+    failedAt: v.optional(v.number()),
+    failedBy: v.optional(v.id("users")),
+    appraisalFeeResponsibility: v.optional(feeResponsibilityValidator),
+    appraisalFeeResponsibilityReason: v.optional(v.string()),
+
+    companyRuleSnapshot: v.optional(financeCompanyRuleSnapshotValidator),
+    companyRuleVersionId: v.optional(v.id("financeCompanyRuleVersions")),
+
+    // Set by the migration on rows whose pre-existing figures cannot be
+    // reinterpreted safely. Reported on, never silently cleared.
+    needsFinancingReconciliation: v.optional(v.boolean()),
+    financingReconciliationReason: v.optional(v.string()),
+    // Written only by migrateFinancingEconomics. Deliberately not one of the
+    // business dimensions: keying the backfill on `creditDecision` meant the
+    // live mutations that now maintain it also set the migration's own
+    // completion sentinel, so any legacy row a user touched mid-migration was
+    // skipped forever — without its rule snapshot, its remaining dimensions,
+    // or its reconciliation flag.
+    financingBackfilledAt: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
     .index("by_customer", ["customerId"])
     .index("by_vehicle", ["vehicleId"])
     .index("by_status", ["status"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_reconciliation", ["orgId", "needsFinancingReconciliation"]),
+
+  /**
+   * Every appraisal ever recorded against one application.
+   *
+   * Deliberately per-application rather than per-(vehicle, company) like
+   * `vehicleValuations`: that table holds one mutable number shared by every
+   * deal the vehicle appears in, so re-using a vehicle in a later application
+   * silently overwrote the basis the earlier deal was approved on. History here
+   * is append-only — a reappraisal supersedes its predecessor rather than
+   * replacing it.
+   */
+  financeAppraisals: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    vehicleId: v.id("vehicles"),
+    companyId: v.optional(v.id("financeCompanies")),
+    appraisalAmountMinor: v.number(),
+    currency: v.string(),
+    // Who performed it. The independent appraisal is performed or approved by
+    // the financing company; a dealer estimate is not an appraisal and is
+    // marked as such so it can never be mistaken for one.
+    providerType: v.union(
+      v.literal("FINANCE_COMPANY"),
+      v.literal("INDEPENDENT"),
+      v.literal("DEALER_ESTIMATE")
+    ),
+    providerName: v.optional(v.string()),
+    appraisedAt: v.number(),
+    documentStorageIds: v.optional(v.array(v.id("_storage"))),
+    isReappraisal: v.boolean(),
+    reappraisalReason: v.optional(v.string()),
+    status: v.union(
+      v.literal("RECORDED"),
+      v.literal("APPROVED"),
+      v.literal("SUPERSEDED"),
+      v.literal("REJECTED")
+    ),
+    supersededAt: v.optional(v.number()),
+    supersededByAppraisalId: v.optional(v.id("financeAppraisals")),
+    notes: v.optional(v.string()),
+    recordedBy: v.id("users"),
+    recordedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_application", ["applicationId"])
+    .index("by_vehicle", ["vehicleId"]),
+
+  /**
+   * One itemized cost on one financed deal, estimated and actual side by side.
+   *
+   * ## Why both, and why neither defaults to the other
+   *
+   * A quotation is prepared days before the costs are known, so the dealership
+   * has to work from estimates — and a deal is not closed on estimates. Storing
+   * one number that starts as an estimate and is later overwritten by the
+   * actual destroys the comparison the whole reconciliation depends on, and
+   * makes "was this ever checked?" unanswerable. `estimatedAmountMinor` and
+   * `actualAmountMinor` are therefore independent, and **an unset actual is not
+   * zero and not the estimate** — it means nobody has paid or recorded it yet.
+   *
+   * ## No plugs
+   *
+   * Nothing here is ever back-solved from a quotation, a target or a residual.
+   * A deal with no fees itemized has no fees, and reports a lower total —
+   * which is the honest figure. The alternative, inferring an allowance from
+   * the difference between two other numbers, turns arithmetic into a business
+   * fact nobody stated.
+   *
+   * ## Accounting treatment is explicit, always
+   *
+   * `accountingTreatment` is required. Defaulting it — say, treating every
+   * dealer-borne amount as a selling expense — is wrong for most of these: an
+   * appraisal fee the dealership swallows is an expense, an amount the customer
+   * still owes is a receivable, and money an employee fronted is a payable to
+   * that employee. The party who paid does not determine the treatment either,
+   * which is why `paidBy` and `accountingTreatment` are separate fields.
+   */
+  financeDealFees: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    feeType: financeFeeTypeValidator,
+    description: v.optional(v.string()),
+    currency: v.string(),
+
+    /** What the deal was quoted on. Usable operationally; never closure evidence. */
+    estimatedAmountMinor: v.optional(v.number()),
+    /** What was actually paid. Unset means unpaid or unrecorded — not zero. */
+    actualAmountMinor: v.optional(v.number()),
+
+    paidBy: feePartyValidator,
+    paidTo: feePartyValidator,
+    /** Required. See the note above — never inferred from `paidBy`. */
+    accountingTreatment: feeAccountingTreatmentValidator,
+    includedInQuotation: v.boolean(),
+    deductedFromSettlement: v.boolean(),
+    refundable: v.boolean(),
+
+    /** Set when an employee holding deal custody laid this out. */
+    custodyId: v.optional(v.id("financeDealCustody")),
+    paidAt: v.optional(v.number()),
+    receiptReference: v.optional(v.string()),
+    documentStorageIds: v.optional(v.array(v.id("_storage"))),
+
+    /** Whether the line came from the company's fee template or was typed. */
+    source: v.union(v.literal("COMPANY_TEMPLATE"), v.literal("MANUAL")),
+
+    /**
+     * Set only when a person has confirmed the actual against its evidence.
+     * Deliberately not derived from `actualAmountMinor` being present: an
+     * amount somebody typed and an amount somebody checked are different
+     * claims, and closure requires the second.
+     */
+    reconciledAt: v.optional(v.number()),
+    reconciledBy: v.optional(v.id("users")),
+    reconciliationNotes: v.optional(v.string()),
+
+    /** Voided rather than deleted, so a removed cost still has a trace. */
+    voidedAt: v.optional(v.number()),
+    voidedBy: v.optional(v.id("users")),
+    voidReason: v.optional(v.string()),
+
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_application", ["applicationId"])
+    .index("by_custody", ["custodyId"]),
+
+  /**
+   * Money handed to an employee to go and pay a financed deal's closing costs.
+   *
+   * ## Why this is NOT `employeeAdvances`
+   *
+   * It looks like one, and putting it there would take money from a person.
+   * `payroll.ts` sweeps **every** `OUTSTANDING` row in `employeeAdvances` for a
+   * user and deducts it from that month's salary. Deal custody is not a salary
+   * advance: the employee is holding the dealership's cash to spend on the
+   * dealership's behalf, settles it by producing receipts and returning the
+   * balance, and is frequently owed money rather than owing it. Recovering it
+   * from their pay would dock them for expenses they have already covered.
+   *
+   * ## The identity it has to close
+   *
+   * ```
+   * issued - returned - actualExpenses = remainingBalance
+   * ```
+   *
+   * `reconcileEmployeeCustody` in the shared engine computes it, and returns a
+   * **signed** balance on purpose: an advance of 700 against 650 of expenses
+   * with 50 returned reconciles to zero, while the same advance against 750 of
+   * expenses leaves the dealership owing the employee 50. Collapsing those into
+   * one unsigned "variance" is how a reimbursement silently becomes a shortage.
+   *
+   * `reimbursedMinor` is what has actually been paid back, and the engine nets
+   * it so a caller reads what is still OUTSTANDING rather than what was
+   * incurred — a figure named "due" that does not move after payment is a
+   * double payment waiting to happen.
+   *
+   * Note what is deliberately NOT stored: the employee's own money. It is not
+   * independent information — it is exactly the amount by which expenses exceed
+   * what they were given and did not return — and holding it as its own figure
+   * let it be added to the advance, cancelling the debt it was recording.
+   * `reimbursedMinor` is different and IS stored, because money owed and money
+   * actually paid back are separate facts and only the second closes the record.
+   */
+  financeDealCustody: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    /** The employee holding the money. */
+    userId: v.id("users"),
+    currency: v.string(),
+
+    /** Cash handed over. The sum of every issuance on this custody record. */
+    issuedMinor: v.number(),
+    /** Unspent cash the employee gave back. */
+    returnedMinor: v.number(),
+    /** Money the dealership has actually paid back to the employee. */
+    reimbursedMinor: v.number(),
+
+    status: v.union(
+      v.literal("OPEN"),
+      v.literal("RECONCILED"),
+      /** Closed with a difference nobody could account for, recorded as such. */
+      v.literal("WRITTEN_OFF")
+    ),
+    reconciledAt: v.optional(v.number()),
+    reconciledBy: v.optional(v.id("users")),
+    reconciliationNotes: v.optional(v.string()),
+    writeOffReason: v.optional(v.string()),
+
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_application", ["applicationId"])
+    .index("by_org_user", ["orgId", "userId"])
     .index("by_org_status", ["orgId", "status"]),
+
+  /**
+   * Every movement on a custody record, so the totals above are a sum of events
+   * rather than a number somebody patched.
+   *
+   * Without this, correcting a mistyped issuance means overwriting a total and
+   * losing the fact that it ever differed — the same defect the override table
+   * exists to prevent one layer up.
+   */
+  financeDealCustodyEntries: defineTable({
+    orgId: v.id("organizations"),
+    custodyId: v.id("financeDealCustody"),
+    kind: v.union(
+      v.literal("ISSUED"),
+      v.literal("RETURNED"),
+      v.literal("REIMBURSED"),
+      /**
+       * Cancels an earlier entry, netted against that entry's own kind.
+       *
+       * Without it the documented "correct it with another entry" workflow
+       * could only be performed by recording something untrue: a mistyped
+       * ISSUED of 7,000 could be offset only by a RETURNED of 6,300, asserting
+       * as fact that the employee handed back cash they never received.
+       */
+      v.literal("REVERSAL")
+    ),
+    /** Required on a REVERSAL, forbidden otherwise. */
+    reversesEntryId: v.optional(v.id("financeDealCustodyEntries")),
+    amountMinor: v.number(),
+    method: v.optional(
+      v.union(
+        v.literal("CASH"),
+        v.literal("BANK_TRANSFER"),
+        v.literal("CHEQUE"),
+        v.literal("CARD")
+      )
+    ),
+    reference: v.optional(v.string()),
+    note: v.optional(v.string()),
+    occurredAt: v.number(),
+    recordedBy: v.id("users"),
+    recordedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_custody", ["custodyId"]),
+
+  /**
+   * Audit trail for every manual override of a financing figure.
+   *
+   * Separate from `applicationStatusLog`, which records status transitions
+   * only. An override that changed a number without changing a status left no
+   * trace at all before this.
+   */
+  financeApplicationOverrides: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    field: v.string(),
+    previousValue: v.optional(v.string()),
+    newValue: v.string(),
+    reason: v.string(),
+    changedBy: v.id("users"),
+    changedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_application", ["applicationId"]),
 
   deposits: defineTable({
     orgId: v.id("organizations"),
@@ -1712,6 +2502,32 @@ export default defineSchema({
     // the vehicle immediately while the deposit itself stays HELD pending a
     // manager's manual refund/forfeit decision.
     holdActive: v.boolean(),
+    /**
+     * How much of this row has actually been paid back out or written off
+     * through `deposits.release`.
+     *
+     * A row is not all-or-nothing once its quote carries several cars: part can
+     * be credited against one car's live invoice while the remainder is
+     * refunded. `status` records only whichever happened last, so it cannot say
+     * how much money is still owed to the customer — and releasing on the row's
+     * face value paid out amounts that had already come off an invoice.
+     */
+    releasedAmountMinor: v.optional(v.number()),
+    /**
+     * The refunded and forfeited parts of `releasedAmountMinor`, kept apart.
+     *
+     * `status` cannot tell them apart once a row can be released more than
+     * once: it records only the last thing that happened, so a 3,000 cash
+     * refund followed by a 2,000 forfeiture reported all 5,000 as forfeited.
+     */
+    refundedAmountMinor: v.optional(v.number()),
+    forfeitedAmountMinor: v.optional(v.number()),
+    /**
+     * How many times this row has been released. Drives the accounting identity
+     * of each release: keyed on the row alone, every release after the first
+     * returned "already posted" and moved cash with no journal behind it.
+     */
+    releaseCount: v.optional(v.number()),
     canonicalPaymentId: v.optional(v.id("canonicalPayments")),
     idempotencyKey: v.optional(v.string()),
     notes: v.optional(v.string()),
@@ -1719,6 +2535,28 @@ export default defineSchema({
     createdAt: v.number(),
     resolvedBy: v.optional(v.id("users")),
     resolvedAt: v.optional(v.number()),
+    // What was DECIDED about the money, as distinct from `status`, which
+    // records what happened to it. Two treatments share the APPLIED status
+    // while crediting entirely different accounts, so the status alone cannot
+    // answer "applied to what?" — the question an auditor actually asks.
+    //
+    // OTHER carries a reason and leaves `status` alone: the liability stays on
+    // the books awaiting a manual journal. See depositStatusForTreatment.
+    //
+    // Absent on every deposit resolved before explicit treatments existed, and
+    // on the dealer-owned path where APPLIED has only ever meant
+    // APPLY_TO_DEALER_AMOUNT.
+    resolutionTreatment: v.optional(
+      v.union(
+        v.literal("APPLY_TO_DEALER_AMOUNT"),
+        v.literal("APPLY_TO_TRANSACTION_SETTLEMENT"),
+        v.literal("REFUND_TO_CUSTOMER"),
+        v.literal("FORFEITED"),
+        v.literal("OTHER")
+      )
+    ),
+    resolutionReason: v.optional(v.string()),
+    resolutionSaleId: v.optional(v.id("sales")),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),
@@ -1735,15 +2573,180 @@ export default defineSchema({
   // deposit's primary `vehicleId`. Only written for deposits on quotes with
   // more than one vehicle — single-vehicle deposits (the vast majority) get
   // zero rows here and rely solely on `deposits.by_vehicle_hold` as before.
+  /**
+   * Which cars one reservation deposit is holding, and — on a multi-vehicle
+   * quote — how much of it belongs to each.
+   *
+   * The deposit itself stays quote-scoped: the customer paid one عربون against
+   * one receipt voucher for one deal, and `deposits` holds exactly one row for
+   * it. What this table adds is the ALLOCATION, which is a separate decision
+   * and has to be made by a person.
+   *
+   * Nothing derives an allocation. Not FIFO, not proportionally to price, not
+   * `min(deposit, thisCarsBill)`, and above all not by reading the deposit
+   * row's own `vehicleId` — that field is only ever the quote's first line
+   * item, and treating it as an allocation silently assigns the whole deposit
+   * to whichever car happened to be listed first. A suggestion may be offered
+   * in the UI; only a confirmed, persisted allocation is accounting truth.
+   */
   depositVehicleHolds: defineTable({
     orgId: v.id("organizations"),
     depositId: v.id("deposits"),
     vehicleId: v.id("vehicles"),
     active: v.boolean(),
     createdAt: v.number(),
+    /**
+     * How much of the deposit is allocated to THIS car. Absent means not yet
+     * allocated — which is not zero: an unallocated multi-vehicle quote cannot
+     * finalize any of its cars, whereas an explicit zero is a decision that
+     * this car carries none of the deposit and may complete on that basis.
+     *
+     * The invariant is `sum(active allocations) <= held deposit`. The shortfall
+     * is the quote-level unallocated balance, which stays a customer deposit
+     * liability until somebody allocates or resolves it.
+     */
+    allocatedAmountMinor: v.optional(v.number()),
+    allocatedAt: v.optional(v.number()),
+    allocatedBy: v.optional(v.id("users")),
+    /**
+     * What became of this vehicle's slice.
+     *
+     *  - ALLOCATED — assigned and still held.
+     *  - APPLIED — consumed by that vehicle's completed sale. An applied slice
+     *    is real money already credited against a live invoice: it can be
+     *    neither refunded nor re-allocated while that sale stands.
+     *  - REVERSING — the sale was cancelled and this slice's own accounting
+     *    entry is being backed out. Durable rather than momentary, because the
+     *    reversal goes to the outbox when no period is open, and a slice whose
+     *    journal has not actually been reversed must not yet be spendable.
+     *  - RELEASED_AWAITING_DECISION — the slice is off its sale (or its vehicle
+     *    left the deal) and the journal is reversed. It needs an explicit
+     *    decision. It is deliberately NOT returned to the pool automatically:
+     *    money silently moving from the car it was allocated against to
+     *    another one is precisely what an allocation exists to prevent.
+     *  - RESOLVED — that decision has been made and recorded on
+     *    `resolutionTreatment`. Terminal.
+     *
+     * RESOLVED exists because the alternative — expressing a decision by
+     * zeroing the amount and leaving the status at RELEASED_AWAITING_DECISION —
+     * made refunded and forfeited money re-enter the quote's unallocated
+     * balance, and left the slice eligible to be resolved a second time.
+     *
+     * A terminal row is never rewritten into a new life. RETURN_TO_UNALLOCATED
+     * and REALLOCATE_TO_VEHICLE both INSERT a fresh hold and leave the old one
+     * where it is, so both histories survive and the vehicle a slice was taken
+     * off is immediately eligible to be allocated and sold again.
+     */
+    allocationStatus: v.optional(
+      v.union(
+        v.literal("ALLOCATED"),
+        v.literal("APPLIED"),
+        v.literal("REVERSING"),
+        v.literal("RELEASED_AWAITING_DECISION"),
+        v.literal("RESOLVED")
+      )
+    ),
+    /** What was decided about a RELEASED slice. Set with the RESOLVED status. */
+    resolutionTreatment: v.optional(
+      v.union(
+        v.literal("REALLOCATE_TO_VEHICLE"),
+        v.literal("RETURN_TO_UNALLOCATED"),
+        v.literal("REFUND_TO_CUSTOMER"),
+        v.literal("FORFEITED"),
+        v.literal("OTHER")
+      )
+    ),
+    /** Which sale consumed it, when APPLIED. */
+    appliedSaleId: v.optional(v.id("sales")),
+    /**
+     * The terminal slice this one was created out of — a released share
+     * re-allocated to another car, or returned to the pool and re-opened
+     * against the same one. Both rows are kept: the old one records what was
+     * decided, this one records what happened next.
+     */
+    sourceHoldId: v.optional(v.id("depositVehicleHolds")),
+    /** Why it was released, and what a human decided to do with it. */
+    releaseReason: v.optional(v.string()),
+    resolvedAt: v.optional(v.number()),
+    resolvedBy: v.optional(v.id("users")),
   })
     .index("by_deposit", ["depositId"])
-    .index("by_vehicle_active", ["vehicleId", "active"]),
+    .index("by_vehicle_active", ["vehicleId", "active"])
+    .index("by_deposit_vehicle", ["depositId", "vehicleId"]),
+
+  /**
+   * One immutable row per application of deposit money to a sale.
+   *
+   * ## Why an identity, and not a lookup
+   *
+   * A reservation deposit is quote-scoped and a quote can carry several cars,
+   * so one `deposits` row can be applied several times — once per car, each
+   * against a different sale, each its own movement of money. Reversal used to
+   * find its journal by `(orgId, sourceType: "deposits", sourceId: depositId)`
+   * and take the FIRST match, which meant cancelling car B's sale reversed
+   * whichever application posted first — car A's, against an invoice that is
+   * still live. Nothing in the data could tell the two apart.
+   *
+   * So every application records the full identity of what it did, including
+   * the exact accounting-event coordinates AS WRITTEN. Reversal reads them back
+   * rather than re-deriving them: a derivation that drifts from what was posted
+   * finds nothing, and `reverseEventIfPosted` answers "nothing to reverse" the
+   * same way it answers "already reversed" — silently.
+   *
+   * Rows are append-only apart from their own status transition
+   * APPLIED → REVERSING → REVERSED.
+   */
+  depositApplications: defineTable({
+    orgId: v.id("organizations"),
+    depositId: v.id("deposits"),
+    quoteId: v.optional(v.id("quotes")),
+    /** Position of the car on `quote.vehicleItems` — the quote line. */
+    quoteLineIndex: v.optional(v.number()),
+    vehicleId: v.id("vehicles"),
+    saleId: v.id("sales"),
+    customerId: v.id("customers"),
+    /**
+     * The allocation consumed. Absent on a single-vehicle quote, where
+     * `deposits.create` writes no hold rows because there is one place the
+     * money can go and no decision to make.
+     */
+    holdId: v.optional(v.id("depositVehicleHolds")),
+    amountMinor: v.number(),
+    currency: v.string(),
+    /**
+     * Which account the application credited. The two settle entirely
+     * different things, so a reversal that targets the wrong one reverses
+     * nothing at all.
+     */
+    treatment: v.union(
+      v.literal("CUSTOMER_RECEIVABLE"),
+      v.literal("SUPPLIER_SETTLEMENT")
+    ),
+    // ── the accounting identity, exactly as posted ──────────────────────────
+    eventType: v.string(),
+    eventSourceType: v.string(),
+    eventSourceId: v.string(),
+    eventVersion: v.number(),
+    eventIdempotencyKey: v.string(),
+    status: v.union(
+      v.literal("APPLIED"),
+      v.literal("REVERSING"),
+      v.literal("REVERSED")
+    ),
+    appliedAt: v.number(),
+    appliedBy: v.id("users"),
+    reversalStartedAt: v.optional(v.number()),
+    reversedAt: v.optional(v.number()),
+    reversedBy: v.optional(v.id("users")),
+    reversalReason: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_sale", ["saleId"])
+    .index("by_deposit", ["depositId"])
+    .index("by_quote", ["quoteId"])
+    .index("by_hold", ["holdId"])
+    .index("by_org_event_key", ["orgId", "eventIdempotencyKey"])
+    .index("by_org_customer", ["orgId", "customerId"]),
 
   // Receipt voucher (سند قبض) auto-generated as proof of payment whenever a
   // deposit is recorded — one per deposit.
@@ -2061,6 +3064,30 @@ export default defineSchema({
     .index("by_org", ["orgId"]),
 
   transactions: defineTable({
+    /**
+     * Accounting turnover for this row, when it differs from `amount`.
+     *
+     * `amount` is the cash side of the row — the sale price less anything
+     * already collected against the deal. On a consigned sale the deal is a car
+     * the dealership never owned, so its value is NOT its revenue. All three
+     * numbers are real and none substitutes for another: the dealership
+     * genuinely handled a 12,500 transaction, genuinely earned 3,000 on it, and
+     * genuinely banked 9,500 at completion after a 3,000 deposit.
+     *
+     * Absent means the two are the same, which is every owned sale and every
+     * row written before consigned accounting existed — so a reader that falls
+     * back to `amount` gets the right answer for all of them.
+     */
+    recognizedRevenueAmount: v.optional(v.number()),
+    /**
+     * The full ticket the deal was transacted at, before anything already
+     * collected was netted off `amount`.
+     *
+     * `amount` is net of deposits, so reading it as gross transaction value
+     * made a deposit REDUCE the reported size of a deal. See
+     * utils/grossTransactionValue for the one definition all three reports use.
+     */
+    grossTransactionValueAmount: v.optional(v.number()),
     orgId: v.id("organizations"),
     type: v.union(v.literal("IN"), v.literal("OUT")),
     amount: v.number(),
