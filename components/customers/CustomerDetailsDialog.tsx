@@ -29,6 +29,7 @@ import { QuotePrintTemplate } from "@/components/sales/QuotePrintTemplate";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { toast } from "@/components/ui/sonner";
 import { downloadElementAsPdf } from "@/lib/htmlToPdf";
+import { QuoteDepositManager } from "@/components/deposits/QuoteDepositManager";
 
 interface CustomerDetailsDialogProps {
   customerId: Id<"customers"> | null;
@@ -321,6 +322,18 @@ export function CustomerDetailsDialog({
                             </div>
                           )}
                         </div>
+
+                        {/* The عربون against this quote, for the life of the
+                            deal — not only in the wizard session that took it.
+                            A share released by a cancelled sale or a car
+                            leaving the deal has to be decided somewhere, and
+                            the deposits screen deliberately refuses to pay one
+                            out: it belongs to the car it was put against. */}
+                        {activeOrgId && (
+                          <div className="border-t pt-3">
+                            <QuoteDepositManager orgId={activeOrgId} quoteId={quote._id} />
+                          </div>
+                        )}
 
                         <div className="flex justify-between items-center text-xs text-muted-foreground pt-2">
                           <div className="flex flex-col gap-0.5">

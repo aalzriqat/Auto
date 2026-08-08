@@ -1655,6 +1655,42 @@ describe("a car that holds two shares of the same deposit", () => {
     expect(view.appliedMinor).toBe(3_000 * SCALE);
   });
 
+  test("cancelling its sale backs out both shares, each against its own journal", async () => {
+    // The highest-risk transition this change makes reachable: two
+    // applications of one deposit to one car, on one sale, each with its own
+    // accounting identity. Reversal has to find and back out both — the whole
+    // reason applications carry the coordinates they posted under.
+    const s = await reallocatedOntoB("reallocCancel");
+    const saleB = await sell(s, s.vehicleB!, PRICE_B);
+
+    await cancel(s, saleB);
+
+    const applications = await s.t.run(async (ctx) =>
+      (await ctx.db.query("depositApplications").collect()).filter(
+        (a) => a.orgId === s.orgId && a.vehicleId === s.vehicleB
+      )
+    );
+    expect(applications).toHaveLength(2);
+    expect(applications.every((a) => a.status === "REVERSED")).toBe(true);
+    // Two identities, not one applied twice.
+    expect(new Set(applications.map((a) => a.eventVersion)).size).toBe(2);
+    expect(new Set(applications.map((a) => a.eventIdempotencyKey)).size).toBe(2);
+
+    const holds = await holdsFor(s, s.vehicleB!);
+    const decided = holds.filter(
+      (h) => h.allocationStatus === "RELEASED_AWAITING_DECISION"
+    );
+    expect(decided).toHaveLength(2);
+    expect(decided.map((h) => h.allocatedAmountMinor).sort((a, b) => a! - b!)).toEqual([
+      1_000 * SCALE,
+      2_000 * SCALE,
+    ]);
+
+    const view = await expectConservation(s);
+    expect(view.releasedAwaitingDecisionMinor).toBe(3_000 * SCALE);
+    expect(view.appliedMinor).toBe(0);
+  });
+
   test("can still be taken off the deal after a re-allocation", async () => {
     const s = await reallocatedOntoB("reallocRelease");
 
@@ -1698,6 +1734,52 @@ describe("a car that holds two shares of the same deposit", () => {
       })
     ).resolves.toBeDefined();
     await expectConservation(s);
+  });
+});
+
+describe("a share allocated at zero", () => {
+  test("its car is allocatable again once the sale is cancelled", async () => {
+    // A zero allocation is a decision, and completion marks its hold APPLIED
+    // like any other — but nothing posts for nothing, so there is no
+    // application row to reverse it, and the hold stayed APPLIED after the sale
+    // was cancelled. The car was then refused a new allocation because of a
+    // sale that no longer existed.
+    const s = await seed("zeroSliceCancel");
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 0 },
+      { vehicleId: s.vehicleB!, amount: 5_000 },
+    ]);
+    const saleA = await sell(s, s.vehicleA, PRICE_A);
+
+    await cancel(s, saleA);
+
+    await expect(allocate(s, [{ vehicleId: s.vehicleA, amount: 0 }])).resolves.toBeDefined();
+    await expectConservation(s);
+  });
+});
+
+describe("the lifecycle has somewhere to happen", () => {
+  test("a released share can be decided from a shipped screen", async () => {
+    // An ordinary sale cancellation on a multi-vehicle quote produces a share
+    // awaiting a decision, and `deposits.release` refuses to pay it out — it
+    // has to go through `resolveReleasedAllocation`. If no client calls that,
+    // the money is real, on the books, and untouchable by any member of staff.
+    const clientSources = [
+      "components/deposits/QuoteDepositManager.tsx",
+      "components/customers/CustomerDetailsDialog.tsx",
+    ]
+      .map((relative) => {
+        try {
+          return readFileSync(join(process.cwd(), relative), "utf8");
+        } catch {
+          return "";
+        }
+      })
+      .join("\n");
+
+    expect(clientSources).toContain("resolveReleasedAllocation");
+    expect(clientSources).toContain("releaseVehicleAllocation");
   });
 });
 

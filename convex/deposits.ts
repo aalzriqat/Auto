@@ -938,7 +938,12 @@ export const releaseVehicleAllocation = mutation({
           q.eq("depositId", deposit._id).eq("vehicleId", args.vehicleId)
         )
         .collect();
-      if (vehicleHolds.some((h) => h.active && h.allocationStatus === "APPLIED")) {
+      // Not qualified by `active`: applying a slice sets `active: false` in the
+      // same patch, so asking for both could never be true and the operator got
+      // "that vehicle holds no active share" instead of being told to cancel
+      // the sale. Matches the sibling guards in allocateToVehicles and
+      // resolveReleasedAllocation.
+      if (vehicleHolds.some((h) => h.allocationStatus === "APPLIED")) {
         throw new ConvexError(
           "That vehicle's share has already been applied to its completed sale. Cancel the sale before removing the vehicle from the deal."
         );

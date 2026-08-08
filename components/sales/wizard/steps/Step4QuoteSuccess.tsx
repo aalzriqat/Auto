@@ -9,7 +9,7 @@ import { CheckCircle2, FileDown, LogOut, HandCoins, FileText, BadgeCheck, Receip
 import { QuotePrintTemplate } from "../../QuotePrintTemplate";
 import { ReceiptVoucherPrintTemplate } from "../../ReceiptVoucherPrintTemplate";
 import { RecordDepositDialog } from "../components/RecordDepositDialog";
-import { DepositAllocationPanel } from "../components/DepositAllocationPanel";
+import { QuoteDepositManager } from "@/components/deposits/QuoteDepositManager";
 import { ConsignedSettlementSection } from "../../ConsignedSettlementSection";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -266,7 +266,7 @@ export function Step4QuoteSuccess({
 
       {activeOrgId ? (
         <div className="space-y-4">
-          <DepositAllocationPanel orgId={activeOrgId} quoteId={quoteId} />
+          <QuoteDepositManager orgId={activeOrgId} quoteId={quoteId} />
           {/* One per car on the quote, each priced off its own line. Feeding
               the quote total into a single preview showed the first car's
               supplier cost against every car's price. The route is a single

@@ -418,6 +418,41 @@ async function reinstateAppliedDeposits(
 
   if (!args.quoteId) return;
 
+  // Slices this sale consumed that carry no money.
+  //
+  // A zero-amount allocation is a real decision — that car carries none of the
+  // deposit — and completion marks its hold APPLIED like any other. But no
+  // journal is posted for nothing, so there is no application row for the loop
+  // above to find, and the hold stayed APPLIED after its sale was cancelled.
+  // The car was then refused a new allocation with "already applied to its
+  // completed sale — cancel the sale first", for a sale that had been.
+  //
+  // The instalment spreader writes these routinely: a payment whose capacity is
+  // exhausted carries 0 for every car after the first.
+  const quoteDeposits = await ctx.db
+    .query("deposits")
+    .withIndex("by_quote", (q) => q.eq("quoteId", args.quoteId!))
+    .collect();
+  for (const deposit of quoteDeposits) {
+    const holds = await ctx.db
+      .query("depositVehicleHolds")
+      .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
+      .collect();
+    for (const hold of holds) {
+      if (hold.appliedSaleId !== args.saleId) continue;
+      if (hold.allocationStatus !== "APPLIED") continue;
+      if ((hold.allocatedAmountMinor ?? 0) !== 0) continue;
+      await ctx.db.patch(hold._id, {
+        active: true,
+        allocationStatus: "ALLOCATED",
+        appliedSaleId: undefined,
+        resolvedAt: undefined,
+        resolvedBy: undefined,
+      });
+      await syncVehicleHoldStatus(ctx, hold.vehicleId, args.actorId);
+    }
+  }
+
   // Deposits applied before applications were recorded. Their journals were
   // posted under the old identity (sourceType "deposits", the deposit's own
   // id), so they are reversed the old way — re-deriving a new-style identity
