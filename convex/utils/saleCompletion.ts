@@ -397,7 +397,25 @@ async function resolveReservationDeposits(
   if (allocation.kind === "NOT_ALLOCATED") throwAllocationRequired();
 
   const heldTotalMinor = allocation.allocatedMinor;
-  if (heldTotalMinor === 0) return empty;
+  if (heldTotalMinor === 0) {
+    // Zero is a decision — this car carries none of the deposit — and its hold
+    // still has to be consumed by its sale. Returning early left the hold
+    // ALLOCATED and active on a car that was now SOLD, and everything
+    // downstream reads an active hold as money that can still be moved: a
+    // further 3,000 could be allocated to that completed sale, or another car's
+    // released share re-allocated onto it, both accepted by the server and both
+    // offered on screen. It also kept the row's face value counted as an
+    // outstanding deposit liability for good.
+    await resolveDepositsForQuote(ctx, {
+      quoteId: args.quoteId!,
+      vehicleId: args.vehicleId,
+      currency,
+      resolution: "APPLIED",
+      actorId: args.actorId,
+      saleId,
+    });
+    return empty;
+  }
   const heldTotal = fromMinorUnits(heldTotalMinor, currency);
   const allocationHoldId = allocation.kind === "ALLOCATED" ? allocation.holdId : undefined;
 

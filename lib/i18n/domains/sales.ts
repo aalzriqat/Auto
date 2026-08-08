@@ -364,6 +364,10 @@ export const salesEn = {
   DepositPending: "Deposit Pending",
   ApplicationDeposits: "Application Deposits",
   DepositAlreadyReleased: "Part of this deposit has already been refunded or forfeited.",
+  ConfirmRefundShare:
+    "Refund {amount} of this deposit to the customer? Real money leaves the business and this cannot be undone.",
+  ConfirmForfeitShare:
+    "Forfeit {amount} of this deposit? The dealership keeps it and the customer does not get it back. This cannot be undone.",
   DepositReversingPending:
     "This share is being backed out of the ledger. It cannot be decided until that reversal posts, which needs an open accounting period.",
   DepositDecisionNeedsApproval:
@@ -928,6 +932,10 @@ export const salesAr = {
   DepositPending: "دفعة مقدمة معلقة",
   ApplicationDeposits: "دفعات الطلب المقدمة",
   DepositAlreadyReleased: "تم استرداد أو مصادرة جزء من هذه الدفعة المقدمة مسبقًا.",
+  ConfirmRefundShare:
+    "هل تريد إعادة {amount} من هذا العربون إلى العميل؟ ستخرج أموال فعلية ولا يمكن التراجع عن ذلك.",
+  ConfirmForfeitShare:
+    "هل تريد مصادرة {amount} من هذا العربون؟ يحتفظ المعرض بالمبلغ ولا يستعيده العميل. لا يمكن التراجع عن ذلك.",
   DepositReversingPending:
     "يجري عكس قيد هذه الحصة. لا يمكن اتخاذ قرار بشأنها حتى يُرحَّل العكس، وهو ما يتطلب فترة محاسبية مفتوحة.",
   DepositDecisionNeedsApproval:

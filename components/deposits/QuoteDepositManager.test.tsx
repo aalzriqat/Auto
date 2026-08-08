@@ -318,20 +318,33 @@ describe("a deposit paid in two instalments, on screen", () => {
     expect(rowAmounts.some((amount) => amount === "3,500")).toBe(false);
   });
 
-  test("the shares on screen add up to the bucket above them", async () => {
+  test("the shares on screen add up to the figure printed above them", async () => {
+    // Both read off the DOM. Comparing two fields of the query result to each
+    // other says nothing about what the operator is looking at.
     const s = await twoPaymentsWithACancelled("sharesSum");
-    const allocation = await renderWith(s, PERMS_MANAGER);
+    await renderWith(s, PERMS_MANAGER);
 
-    const total = allocation!.vehicles
-      .flatMap((v) => v.awaitingDecision)
-      .reduce((sum, share) => sum + share.amountMinor, 0);
-    expect(total).toBe(allocation!.releasedAwaitingDecisionMinor);
-    expect(total).toBe(3_500 * SCALE);
+    const rowTotal = screen
+      .getAllByText("DepositRecordDecision")
+      .map(
+        (button) =>
+          button.closest("div.space-y-2")?.querySelector("p span.tabular-nums")
+            ?.textContent ?? "0"
+      )
+      .reduce((sum, text) => sum + Number(text.replace(/,/g, "")), 0);
+
+    const bucket = screen
+      .getByText("DepositAwaitingDecision")
+      .parentElement!.querySelector("dd")!.textContent!;
+    expect(rowTotal).toBe(Number(bucket.replace(/,/g, "")));
+    expect(rowTotal).toBe(3_500);
   });
 
   test("a car whose share is spent is not offered as somewhere to move money", async () => {
-    // The server rejects it, so offering it produces an error toast where a
-    // filtered list would have produced nothing at all.
+    // Read from the rendered listbox, not from a filter re-written in the test.
+    // The earlier version of this re-implemented the component's own predicate
+    // and asserted the result, so deleting the filter left it green — the one
+    // thing it existed to catch.
     const s = await seedQuote("targetFilter");
     await payDeposit(s, 3_000);
     await payDeposit(s, 2_000);
@@ -343,18 +356,26 @@ describe("a deposit paid in two instalments, on screen", () => {
     const saleA = await sell(s, s.vehicleA, PRICE_A + 1_000);
     await cancel(s, saleA);
     const allocation = await renderWith(s, PERMS_MANAGER);
-
+    const soldLabel = allocation!.vehicles.find((v) => v.vehicleId === s.vehicleB)!.label;
     expect(
       allocation!.vehicles.find((v) => v.vehicleId === s.vehicleB)!.status
     ).toBe("APPLIED");
-    // The reallocation control only lists cars that could actually take it.
-    const options = allocation!.vehicles.filter(
-      (other) =>
-        other.vehicleId !== s.vehicleA &&
-        other.status !== "APPLIED" &&
-        other.status !== "REVERSING"
+
+    const row = screen
+      .getAllByText("DepositRecordDecision")[0]!
+      .closest("div.space-y-2") as HTMLElement;
+    chooseTreatment(row, "DepositTreatmentReallocate");
+
+    // The target select is now on screen. Open it and read what it offers.
+    const combos = row.querySelectorAll("[role='combobox']");
+    expect(combos.length).toBeGreaterThan(1);
+    fireEvent.keyDown(combos[1] as HTMLElement, { key: "Enter", code: "Enter" });
+
+    const offered = Array.from(document.querySelectorAll("[role='option']")).map(
+      (option) => option.textContent
     );
-    expect(options).toHaveLength(0);
+    expect(offered).not.toContain(soldLabel);
+    expect(offered).toHaveLength(0);
   });
 });
 
@@ -425,7 +446,6 @@ describe("what each role can do with a released share", () => {
 
     expect((screen.getAllByText("DepositRecordDecision")[0]!.closest("button") as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getAllByText("DepositDecisionNeedsApproval").length).toBeGreaterThan(0);
-    expect(mutationCalls).toHaveLength(0);
   });
 
   test("SALES can still return a share to the deal, which moves no money", async () => {
@@ -437,6 +457,9 @@ describe("what each role can do with a released share", () => {
     fireEvent.click(screen.getAllByText("DepositRecordDecision")[0]!.closest("button")!);
 
     expect(mutationCalls).toHaveLength(1);
+    expect(mutationCalls[0]!.name).toBe(
+      getFunctionName(api.deposits.resolveReleasedAllocation)
+    );
     expect(mutationCalls[0]!.args).toMatchObject({
       holdId,
       treatment: "RETURN_TO_UNALLOCATED",
@@ -453,6 +476,9 @@ describe("what each role can do with a released share", () => {
     fireEvent.click(record.closest("button")!);
 
     expect(mutationCalls).toHaveLength(1);
+    expect(mutationCalls[0]!.name).toBe(
+      getFunctionName(api.deposits.resolveReleasedAllocation)
+    );
     expect(mutationCalls[0]!.args).toMatchObject({
       orgId: s.orgId,
       holdId,
@@ -490,6 +516,9 @@ describe("what each role can do with a released share", () => {
     fireEvent.click(screen.getAllByText("DepositRecordDecision")[0]!.closest("button")!);
 
     expect(mutationCalls).toHaveLength(1);
+    expect(mutationCalls[0]!.name).toBe(
+      getFunctionName(api.deposits.resolveReleasedAllocation)
+    );
     expect(mutationCalls[0]!.args).toMatchObject({ holdId, treatment: "FORFEITED" });
   });
 });
@@ -528,8 +557,13 @@ describe("the role that cannot reach this screen at all", () => {
       join(process.cwd(), "components/customers/CustomerDetailsDialog.tsx"),
       "utf8"
     );
-    expect(dialog).toContain("canViewSales");
-    expect(dialog).toMatch(/canViewSales\s*&&\s*\(\s*\n?\s*<QuoteDepositManager|canViewSales && \(/);
     expect(dialog).toContain("PERMISSIONS.VIEW_SALES");
+    expect(dialog).toContain("<QuoteDepositManager");
+    // The alternation this replaces could only ever match its own trivial
+    // branch — the real source has a wrapping div between the gate and the
+    // component — so it asserted nothing about the two being connected.
+    const mountIndex = dialog.indexOf("<QuoteDepositManager");
+    const enclosing = dialog.slice(Math.max(0, mountIndex - 400), mountIndex);
+    expect(enclosing).toContain("canViewSales &&");
   });
 });

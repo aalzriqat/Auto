@@ -358,8 +358,17 @@ export function QuoteDepositManager({
                       // Terminal, and one of them pays a customer. A select
                       // change and a single click should not be able to forfeit
                       // somebody's عربون by accident.
-                      if (movesMoney(treatment) && !window.confirm(t("ConfirmDepositResolution" as any))) {
-                        return;
+                      // Names the treatment and the amount. "Resolve this
+                      // deposit?" reads like the harmless return-to-the-deal
+                      // option, and it was the only barrier between one select
+                      // change and forfeiting a customer's عربون.
+                      if (movesMoney(treatment)) {
+                        const question = (
+                          treatment === "FORFEITED"
+                            ? t("ConfirmForfeitShare" as any)
+                            : t("ConfirmRefundShare" as any)
+                        ).replace("{amount}", money(amountMinor));
+                        if (!window.confirm(question)) return;
                       }
                       void handleResolve(holdId as Id<"depositVehicleHolds">);
                     }}

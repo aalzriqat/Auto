@@ -1214,8 +1214,10 @@ describe("a released share that is refunded or forfeited", () => {
         refundMethod: "CASH" as const,
       })
     ).rejects.toThrow(/has not been released/i);
+    // Refused for either reason — the share is spent, and the sale it was spent
+    // on is complete. Whichever guard answers first, the answer is no.
     await expect(allocate(s, [{ vehicleId: s.vehicleA, amount: 0 }])).rejects.toThrow(
-      /already been applied/i
+      /already (been applied|complete)/i
     );
   });
 });
@@ -1760,13 +1762,18 @@ describe("a share allocated at zero", () => {
 
   test("its car does not come back reserved with no way to free it", async () => {
     // Sell the funded car first, then the zero-share car, then cancel the
-    // second. Reported as a case where the deposit row stays APPLIED while the
-    // reinstated hold reserves the vehicle, leaving no path to free either.
+    // second.
     //
-    // I could NOT reproduce that: the row is HELD here both with and without
-    // the guard now in reinstateAppliedDeposits. The scenario is pinned
-    // anyway, because the invariant it asserts is the one that matters and
-    // nothing else covers this ordering.
+    // Reported, and initially unreproducible — because a zero share used to
+    // leave its hold untouched, so nothing ever closed the row and there was
+    // nothing to reopen. Consuming a zero share like any other (see
+    // saleCompletion) makes the row close on that last sale, and this test now
+    // fails without the reopen guard in `reinstateAppliedDeposits`: the row
+    // stays APPLIED and the reinstated hold has nothing releasable behind it.
+    //
+    // Worth keeping in mind next time a finding will not reproduce: the
+    // scenario can be real and reached through a path the current code does not
+    // take yet.
     const s = await seed("zeroSliceRowClosed");
     await payDeposit(s);
     await allocate(s, [
@@ -2158,5 +2165,161 @@ describe("a deposit paid in two instalments, followed to the end", () => {
     // Two payouts, one per share, each with its own payment record.
     expect((await cashOut(s)).reduce((a, b) => a + b, 0)).toBe(1_500);
     expect((await outPayments(s))).toHaveLength(2);
+  });
+});
+
+// ─── The deposit liability, as the accountant sees it ────────────────────────
+
+const depositReconciliation = (s: Seed) =>
+  s.asUser.query(api.accountingReports.customerDepositsReconciliation, { orgId: s.orgId });
+
+describe("the customer-deposit liability reconciles while the deal is mid-life", () => {
+  test("the subledger side is what is still owed, not the row's face value", async () => {
+    // The GL debits Customer Deposits per slice, at the moment each is applied.
+    // The subledger side read the `deposits` row at face value and counted any
+    // HELD row in full — and on this branch a row stays HELD until its LAST
+    // slice is consumed. So every multi-car deal mid-life reported "customer
+    // deposits do not reconcile", which an accountant then has to acknowledge
+    // at every period close: the one control that catches a real
+    // deposit-liability error, turned into noise.
+    const s = await seed("reconMidLife");
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 3_000 },
+      { vehicleId: s.vehicleB!, amount: 2_000 },
+    ]);
+    expect((await depositReconciliation(s)).isReconciled).toBe(true);
+
+    await sell(s, s.vehicleA, PRICE_A);
+
+    const recon = await depositReconciliation(s);
+    expect(recon.isReconciled).toBe(true);
+    // 3,000 of the 5,000 has been credited against A's invoice, so 2,000 is
+    // still owed — and both sides have to say so, not just agree.
+    expect(recon.byCurrency.JOD!.subledgerBalanceMinor).toBe(2_000 * SCALE);
+    expect(recon.byCurrency.JOD!.glBalanceMinor).toBe(2_000 * SCALE);
+  });
+
+  test("and after a partial refund of what no sale claimed", async () => {
+    const s = await seed("reconPartialRefund");
+    await payDeposit(s);
+    await allocate(s, [{ vehicleId: s.vehicleA, amount: 3_000 }]);
+    await sell(s, s.vehicleA, PRICE_A);
+    await release(s, await depositRowId(s)); // refunds the free 2,000
+
+    const recon = await depositReconciliation(s);
+    expect(recon.isReconciled).toBe(true);
+    // 3,000 applied and 2,000 handed back leaves nothing outstanding.
+    expect(recon.byCurrency.JOD!.subledgerBalanceMinor).toBe(0);
+  });
+
+  test("and once every car on the quote is sold, including one carrying nothing", async () => {
+    // The permanent variance: a car allocated zero completes, and its row's
+    // face value stayed on the subledger side for good.
+    const s = await seed("reconZeroShare");
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 0 },
+      { vehicleId: s.vehicleB!, amount: 5_000 },
+    ]);
+    await sell(s, s.vehicleB!, PRICE_B);
+    await sell(s, s.vehicleA, PRICE_A);
+
+    const recon = await depositReconciliation(s);
+    expect(recon.isReconciled).toBe(true);
+    // Nothing is owed: all 5,000 went against B's invoice and A carried none.
+    expect(recon.byCurrency.JOD!.subledgerBalanceMinor).toBe(0);
+    expect(recon.byCurrency.JOD!.glBalanceMinor).toBe(0);
+  });
+
+  test("a deposit resolved before per-slice tracking existed still reconciles", async () => {
+    // Historical rows carry no application rows, no releasedAmountMinor and no
+    // hold treatments. Their status is the only record of what happened, and
+    // reading the remainder off face value would resurrect every one of them as
+    // an outstanding liability on deploy.
+    const s = await seed("reconLegacy");
+    await s.t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId: s.orgId,
+        vehicleId: s.vehicleA,
+        customerId: s.customerId,
+        amount: 1_500,
+        amountMinor: 1_500 * SCALE,
+        currency: "JOD",
+        status: "REFUNDED",
+        holdActive: false,
+        createdBy: s.userId,
+        createdAt: Date.now(),
+      })
+    );
+
+    expect((await depositReconciliation(s)).isReconciled).toBe(true);
+  });
+});
+
+describe("a car whose share is zero, once its sale is complete", () => {
+  async function zeroShareSold(tag: string) {
+    const s = await seed(tag);
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 0 },
+      { vehicleId: s.vehicleB!, amount: 5_000 },
+    ]);
+    const saleA = await sell(s, s.vehicleA, PRICE_A);
+    return { s, saleA };
+  }
+
+  test("its hold is consumed like any other, not left live on a sold car", async () => {
+    // Completion returned early for a zero share, so the hold stayed ALLOCATED
+    // and active on a car that was now SOLD — and everything downstream reads
+    // an active hold as money that can still be moved.
+    const { s } = await zeroShareSold("zeroConsumed");
+
+    const [holdA] = await holdsFor(s, s.vehicleA);
+    expect(holdA!.allocationStatus).toBe("APPLIED");
+    expect(holdA!.active).toBe(false);
+    expect(holdA!.appliedSaleId).toBeDefined();
+    await expectConservation(s);
+  });
+
+  test("no more deposit money can be allocated to it", async () => {
+    const { s } = await zeroShareSold("zeroNoRealloc");
+
+    await expect(allocate(s, [{ vehicleId: s.vehicleA, amount: 2_000 }])).rejects.toThrow(
+      /already (been applied|complete)/i
+    );
+  });
+
+  test("and another car's released share cannot be moved onto it", async () => {
+    const { s } = await zeroShareSold("zeroNoTarget");
+    await s.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      vehicleId: s.vehicleB!,
+    });
+    const releasedB = (await holdsFor(s, s.vehicleB!)).filter(
+      (h) => h.allocationStatus === "RELEASED_AWAITING_DECISION"
+    );
+
+    await expect(
+      s.asUser.mutation(api.deposits.resolveReleasedAllocation, {
+        orgId: s.orgId,
+        holdId: releasedB[0]!._id,
+        treatment: "REALLOCATE_TO_VEHICLE" as const,
+        toVehicleId: s.vehicleA,
+      })
+    ).rejects.toThrow(/already complete/i);
+  });
+
+  test("cancelling that sale puts the share back and frees the car", async () => {
+    const { s, saleA } = await zeroShareSold("zeroCancel");
+
+    await cancel(s, saleA);
+
+    const [holdA] = await holdsFor(s, s.vehicleA);
+    expect(holdA!.allocationStatus).toBe("ALLOCATED");
+    expect(holdA!.active).toBe(true);
+    await expect(allocate(s, [{ vehicleId: s.vehicleA, amount: 0 }])).resolves.toBeDefined();
+    await expectConservation(s);
   });
 });

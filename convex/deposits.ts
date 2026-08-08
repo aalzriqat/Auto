@@ -1,7 +1,7 @@
 import { ConvexError, v } from "convex/values";
-import { query } from "./_generated/server";
+import { query, type QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
-import { Doc } from "./_generated/dataModel";
+import { Doc, type Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { throwAppError, AppErrorCode } from "./utils/errors";
@@ -397,6 +397,33 @@ export const listByVehicle = query({
  * to exactly what is passed. Vehicles left out keep whatever they had, so a
  * correction to one car does not silently zero the others.
  */
+/**
+ * True when this car already has a completed sale on this quote.
+ *
+ * Deposit money may not be assigned to it: the invoice is issued and the
+ * receivable is settled, so an allocation made now credits nothing and simply
+ * sits there. The hold status alone does not answer it — a car whose share was
+ * exactly zero completes with its hold untouched, which reads as available.
+ */
+async function hasCompletedSaleOnQuote(
+  ctx: QueryCtx,
+  args: { orgId: Id<"organizations">; quoteId: Id<"quotes">; vehicleId: Id<"vehicles"> }
+): Promise<boolean> {
+  // Scoped by the quote, which is the narrow side: a quote carries a handful of
+  // cars and their sales, where an org carries every sale it has ever made.
+  const sales = await ctx.db
+    .query("sales")
+    .withIndex("by_quote", (q) => q.eq("quoteId", args.quoteId))
+    .collect();
+  return sales.some(
+    (sale) =>
+      sale.orgId === args.orgId &&
+      sale.vehicleId === args.vehicleId &&
+      sale.status === "COMPLETED" &&
+      sale.isDeleted !== true
+  );
+}
+
 export const allocateToVehicles = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -442,6 +469,17 @@ export const allocateToVehicles = mutation({
     for (const allocation of args.allocations) {
       if (!quoteVehicleIds.has(allocation.vehicleId.toString())) {
         throw new ConvexError("An allocation names a vehicle that is not on this quote.");
+      }
+      if (
+        await hasCompletedSaleOnQuote(ctx, {
+          orgId: args.orgId,
+          quoteId: args.quoteId,
+          vehicleId: allocation.vehicleId,
+        })
+      ) {
+        throw new ConvexError(
+          "That vehicle's sale on this quote is already complete, so deposit money cannot be assigned to it. Cancel the sale first."
+        );
       }
       assertFiniteNumber(allocation.amount, "allocation amount");
       if (seen.has(allocation.vehicleId.toString())) {
@@ -712,7 +750,19 @@ export const resolveReleasedAllocation = mutation({
           q.eq("depositId", hold.depositId).eq("vehicleId", args.toVehicleId!)
         )
         .collect();
-      if (targetHolds.some((h) => h.allocationStatus === "APPLIED")) {
+      // Checked against the SALE as well as the hold. A car whose share was
+      // exactly zero completes with its hold still ALLOCATED, so the hold
+      // status alone let a released share be moved onto a car that had already
+      // been sold and invoiced.
+      if (
+        targetHolds.some((h) => h.allocationStatus === "APPLIED") ||
+        (deposit.quoteId !== undefined &&
+          (await hasCompletedSaleOnQuote(ctx, {
+            orgId: args.orgId,
+            quoteId: deposit.quoteId,
+            vehicleId: args.toVehicleId,
+          })))
+      ) {
         throw new ConvexError(
           "That vehicle's sale is already complete; its share cannot be increased after the fact."
         );
