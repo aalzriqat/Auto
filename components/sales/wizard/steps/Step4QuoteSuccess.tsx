@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import Link from "next/link";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { PaymentType, WizardData } from "../types";
@@ -142,6 +142,19 @@ export function Step4QuoteSuccess({
   const quoteVehicleIds = (
     quote?.vehicleItems ?? (quote ? [{ vehicleId: quote.vehicleId }] : [])
   ).map((item) => item.vehicleId);
+
+  // Which lines turned out to be consigned. Only the preview can say, so the
+  // sections report it up and the route selector goes on the first line that
+  // actually has a supplier to settle with.
+  const [consignedLines, setConsignedLines] = useState<Record<string, boolean>>({});
+  const handleLineApplicable = useCallback(
+    (vehicleId: Id<"vehicles">, applicable: boolean) =>
+      setConsignedLines((prev) =>
+        prev[vehicleId] === applicable ? prev : { ...prev, [vehicleId]: applicable }
+      ),
+    []
+  );
+  const firstConsignedVehicleId = quoteVehicleIds.find((id) => consignedLines[id]);
 
   const orgBranding = {
     name: orgSettings?.dealershipName,
@@ -309,7 +322,7 @@ export function Step4QuoteSuccess({
               the quote total into a single preview showed the first car's
               supplier cost against every car's price. The route is a single
               decision for the deal, so it is asked for once, on the first. */}
-          {quoteVehicleIds.map((vehicleId, index) => (
+          {quoteVehicleIds.map((vehicleId) => (
             <ConsignedSettlementSection
               key={vehicleId}
               orgId={activeOrgId}
@@ -317,7 +330,13 @@ export function Step4QuoteSuccess({
               quoteId={quoteId}
               value={settlementRoute}
               onChange={setSettlementRoute}
-              showRouteSelector={index === 0}
+              // On the first CONSIGNED line, not the first line. A quote whose
+              // first car is dealer-owned renders nothing for it — so keying the
+              // selector to index 0 hid the control on every mixed quote, and
+              // the deal posted the THROUGH_DEALERSHIP default with the operator
+              // never asked which way the money went.
+              showRouteSelector={vehicleId === firstConsignedVehicleId}
+              onApplicable={handleLineApplicable}
             />
           ))}
         </div>

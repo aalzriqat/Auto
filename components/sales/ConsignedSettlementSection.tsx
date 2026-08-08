@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
@@ -47,6 +48,14 @@ interface Props {
   disabled?: boolean;
   /** The route is one decision for the whole quote, so it is asked for once. */
   showRouteSelector?: boolean;
+  /**
+   * Whether this line turned out to be consigned at all — knowable only once
+   * the preview answers, and the caller needs it to decide which line carries
+   * the route selector. Picking the first line blind puts the selector on a
+   * dealer-owned car, where this component renders nothing, so a mixed quote
+   * loses the control entirely and posts the default route.
+   */
+  onApplicable?: (vehicleId: Id<"vehicles">, applicable: boolean) => void;
 }
 
 export function ConsignedSettlementSection({
@@ -58,6 +67,7 @@ export function ConsignedSettlementSection({
   onChange,
   disabled,
   showRouteSelector = true,
+  onApplicable,
 }: Props) {
   const { t, isRtl } = useLanguage();
 
@@ -74,6 +84,15 @@ export function ConsignedSettlementSection({
         }
       : "skip"
   );
+
+  // Reported up before the early return below, so a caller can learn which
+  // lines are consigned. `undefined` is "not answered yet" and is deliberately
+  // not reported as "no" — that would move the route selector onto another line
+  // and then move it back when the query lands.
+  useEffect(() => {
+    if (!vehicleId || preview === undefined) return;
+    onApplicable?.(vehicleId, preview !== null);
+  }, [vehicleId, preview, onApplicable]);
 
   // `null` means the vehicle is dealer-owned, which has no supplier to settle
   // with; `undefined` means the query has not answered yet. Neither should
