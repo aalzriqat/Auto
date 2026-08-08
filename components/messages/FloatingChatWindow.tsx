@@ -68,16 +68,39 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
   // scroll the dashboard page behind this fixed window.
   const scrollToBottom = useCallback((smooth: boolean) => {
     const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+    if (!el) return false;
+    // `behavior: "smooth"` is not suppressed by prefers-reduced-motion the way
+    // the CSS animations in globals.css are, so check it here too.
+    const reduceMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    el.scrollTo({
+      top: el.scrollHeight,
+      behavior: smooth && !reduceMotion ? "smooth" : "auto",
+    });
+    return true;
   }, []);
 
-  // Scroll to bottom on new messages (jump on first paint, glide afterwards)
+  // `messages` is newest-first, so results[0] changes only when a genuinely new
+  // message arrives. Keying the effect on the total length instead would also
+  // fire for `loadMore`, which appends *older* pages — yanking a reader who is
+  // scrolling back through history down to the newest message.
+  const newestMessageId = messages?.[0]?._id;
+
+  // Jump to the bottom on first paint, glide for messages that arrive later.
   useEffect(() => {
-    if (isMinimized) return;
-    scrollToBottom(hasScrolledRef.current);
-    hasScrolledRef.current = true;
-  }, [messages?.length, isMinimized, scrollToBottom]);
+    if (isMinimized) {
+      // The pane unmounts while minimized, so the next expand starts at the top
+      // and needs an instant jump again rather than a long smooth scroll.
+      hasScrolledRef.current = false;
+      return;
+    }
+    if (!newestMessageId) return;
+    // Only record the initial scroll once the pane actually existed to scroll.
+    if (scrollToBottom(hasScrolledRef.current)) {
+      hasScrolledRef.current = true;
+    }
+  }, [newestMessageId, isMinimized, scrollToBottom]);
 
   const handleTyping = useCallback(() => {
     setTypingMutation({ conversationId, isTyping: true }).catch(() => null);

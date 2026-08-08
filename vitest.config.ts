@@ -43,6 +43,7 @@ export default defineConfig({
         "lib/commission.ts",
         "lib/vinHelpers.ts",
         "lib/financing.ts",
+        "lib/messageStamp.ts",
         "convex/orgSettings.ts",
         "convex/orgLeadSources.ts",
         "convex/orgPipelineStages.ts",

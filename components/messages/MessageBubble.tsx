@@ -4,7 +4,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import { Check, CheckCheck } from "lucide-react";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { formatMessageStamp } from "@/lib/messageStamp";
+import { formatMessageStampParts } from "@/lib/messageStamp";
 
 type MessageStatus = "sent" | "delivered" | "seen" | "received";
 
@@ -55,14 +55,27 @@ export function MessageBubble({
   isGroup,
 }: Props) {
   const { t } = useLanguage();
-  const stamp = formatMessageStamp(_creationTime, {
+  const stamp = formatMessageStampParts(_creationTime, {
     yesterdayLabel: t("MessagesYesterday"),
   });
+
+  /**
+   * The prefix ("أمس") and the date/time run ("04:53 PM") are isolated
+   * separately. Wrapping the joined string in a single `dir="ltr"` run makes
+   * the bidi algorithm reorder it to `04:53 أمس PM`, tearing AM/PM off its
+   * time; leaving it unisolated under RTL renders the time as `PM 04:53`.
+   */
+  const stampContent = (
+    <>
+      {stamp.prefix && <bdi>{stamp.prefix} </bdi>}
+      <bdi dir="ltr">{stamp.body}</bdi>
+    </>
+  );
 
   return (
     <div
       className={cn(
-        "flex items-end gap-2 group",
+        "flex items-end gap-2",
         isMine ? "flex-row-reverse" : "flex-row"
       )}
     >
@@ -105,12 +118,8 @@ export function MessageBubble({
               isMine ? "flex-row-reverse" : "flex-row"
             )}
           >
-            <span
-              dir="ltr"
-              style={{ unicodeBidi: "isolate" }}
-              className="text-[10px] text-slate-400 whitespace-nowrap"
-            >
-              {stamp}
+            <span className="text-[10px] text-slate-400 whitespace-nowrap">
+              {stampContent}
             </span>
             {isMine && <StatusIcon status={status} />}
           </div>
@@ -119,12 +128,8 @@ export function MessageBubble({
         {/* Group read receipts — mini avatars of who's seen the message */}
         {isGroup && isMine && (
           <div className={cn("flex items-center gap-1 mt-1", "flex-row-reverse")}>
-            <span
-              dir="ltr"
-              style={{ unicodeBidi: "isolate" }}
-              className="text-[10px] text-slate-400 me-1 whitespace-nowrap"
-            >
-              {stamp}
+            <span className="text-[10px] text-slate-400 me-1 whitespace-nowrap">
+              {stampContent}
             </span>
 
             {seenBy.length > 0 ? (
