@@ -207,6 +207,37 @@ describe("FloatingChatWindow scroll contract", () => {
     expect(scrollCalls).toHaveLength(0);
   });
 
+  it("still scrolls when messages resolve before the conversation does", () => {
+    // Convex settles the two queries independently. If listMessages lands first,
+    // `newestMessageId` is already set while the component is still returning
+    // null — so nothing in the dep array changes at the moment the pane finally
+    // mounts. Keying the effect on the pane element itself is what fixes it;
+    // otherwise the user opens the chat parked on the OLDEST message.
+    conversation = undefined;
+    listMessagesState.results = [message("m1"), message("m2")];
+    const { rerender } = renderWindow();
+    expect(scrollCalls).toHaveLength(0);
+
+    conversation = {
+      type: "DM",
+      members: [{ _id: "user2", name: "Other" }],
+      isMuted: false,
+      hasUnread: false,
+      typingUsers: [],
+    };
+    // Only the conversation resolves — `results` is deliberately untouched.
+    rerender(
+      <FloatingChatWindow
+        conversationId={CONVERSATION_ID}
+        currentUserId={CURRENT_USER}
+        index={0}
+      />
+    );
+
+    expect(scrollCalls.length).toBeGreaterThan(0);
+    expect(scrollCalls.at(-1)?.behavior).toBe("auto");
+  });
+
   it("does not arm the initial-scroll flag before the pane exists", () => {
     // Conversation still loading: the component returns null, but the effect
     // above the early return still runs.

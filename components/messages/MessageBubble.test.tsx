@@ -12,13 +12,24 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, cleanup } from "@testing-library/react";
 
+// Literal, not the constant below: vi.mock factories are hoisted above it.
 vi.mock("@/components/providers/LanguageProvider", () => ({
-  useLanguage: () => ({ t: (k: string) => (k === "MessagesYesterday" ? "أمس" : k), isRtl: true }),
+  useLanguage: () => ({
+    t: (k: string) => (k === "MessagesYesterday" ? "أمس" : k),
+    isRtl: true,
+  }),
 }));
 
 import { MessageBubble } from "./MessageBubble";
 
-const ARABIC = /[؀-ۿ]/;
+/**
+ * The localised label injected through the mocked `t()` below. Assertions key
+ * off this rather than "contains any Arabic character": MessageBubble passes no
+ * `locale`, so under an `ar-*` runtime the *time itself* is legitimately Arabic
+ * script (`٠٤:٥٣ م`). Asserting on the label keeps the barrier meaningful on
+ * any CI machine.
+ */
+const YESTERDAY_LABEL = "أمس";
 
 function at(y: number, m: number, d: number, h = 12, min = 0) {
   return new Date(y, m, d, h, min).getTime();
@@ -75,23 +86,25 @@ describe("MessageBubble stamp", () => {
 
     // This is the whole point: isolating the compound string is what produced
     // `04:53 أمس PM`. Only the Latin date/time run may be isolated.
-    expect(ARABIC.test(ltr.textContent ?? "")).toBe(false);
-    expect(ltr.textContent).toMatch(/\d/);
+    expect(ltr.textContent?.includes(YESTERDAY_LABEL)).toBe(false);
+    // Non-empty rather than /\d/: under an ar-* runtime the time is rendered
+    // with Arabic-Indic digits, which ASCII \d does not match.
+    expect(ltr.textContent?.trim()).not.toBe("");
   });
 
   it("still renders the localised yesterday label, outside that run", () => {
     const { container } = renderBubble(yesterdayAt(16, 53));
     const ltr = container.querySelector('[dir="ltr"]') as HTMLElement;
 
-    expect(container.textContent).toContain("أمس");
-    expect(ltr.textContent).not.toContain("أمس");
+    expect(container.textContent).toContain(YESTERDAY_LABEL);
+    expect(ltr.textContent).not.toContain(YESTERDAY_LABEL);
   });
 
   it("uses a single isolated run for a same-day message", () => {
     const { container } = renderBubble(Date.now());
     const ltr = container.querySelector('[dir="ltr"]') as HTMLElement;
-    expect(ARABIC.test(ltr.textContent ?? "")).toBe(false);
+    expect(ltr.textContent?.includes(YESTERDAY_LABEL)).toBe(false);
     // No prefix for today, so the whole stamp is the isolated time.
-    expect(container.textContent).not.toContain("أمس");
+    expect(container.textContent).not.toContain(YESTERDAY_LABEL);
   });
 });

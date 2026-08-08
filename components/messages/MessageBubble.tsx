@@ -4,7 +4,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import { Check, CheckCheck } from "lucide-react";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { formatMessageStampParts } from "@/lib/messageStamp";
+import { formatMessageStamp, formatMessageStampParts } from "@/lib/messageStamp";
 
 type MessageStatus = "sent" | "delivered" | "seen" | "received";
 
@@ -71,6 +71,11 @@ export function MessageBubble({
       <bdi dir="ltr">{stamp.body}</bdi>
     </>
   );
+  // Full stamp as one logical string for the tooltip — the visible stamp is
+  // abbreviated ("14:32" for today), so hovering still resolves the exact day.
+  const stampTitle = formatMessageStamp(_creationTime, {
+    yesterdayLabel: t("MessagesYesterday"),
+  });
 
   return (
     <div
@@ -118,7 +123,7 @@ export function MessageBubble({
               isMine ? "flex-row-reverse" : "flex-row"
             )}
           >
-            <span className="text-[10px] text-slate-400 whitespace-nowrap">
+            <span className="text-[10px] text-slate-400 whitespace-nowrap" title={stampTitle}>
               {stampContent}
             </span>
             {isMine && <StatusIcon status={status} />}
@@ -128,7 +133,7 @@ export function MessageBubble({
         {/* Group read receipts — mini avatars of who's seen the message */}
         {isGroup && isMine && (
           <div className={cn("flex items-center gap-1 mt-1", "flex-row-reverse")}>
-            <span className="text-[10px] text-slate-400 me-1 whitespace-nowrap">
+            <span className="text-[10px] text-slate-400 me-1 whitespace-nowrap" title={stampTitle}>
               {stampContent}
             </span>
 

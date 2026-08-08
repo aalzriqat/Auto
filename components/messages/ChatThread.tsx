@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { MessageBubble } from "./MessageBubble";
+import { useChatAutoScroll } from "./useChatAutoScroll";
 import { playSound } from "@/lib/messageSounds";
 import { cn } from "@/lib/utils";
 import { Send, BellOff, Bell, ChevronDown } from "lucide-react";
@@ -22,7 +23,6 @@ export function ChatThread({ conversationId, currentUserId }: Props) {
   const { t, isRtl } = useLanguage();
   const [body, setBody] = useState("");
   const [isTyping, setIsTyping] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevLastMessageAtRef = useRef<number>(0);
@@ -62,10 +62,9 @@ export function ChatThread({ conversationId, currentUserId }: Props) {
     }
   }, [messages]);
 
-  // Scroll to bottom when messages first load or new message arrives
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages?.length]);
+  const { paneRef, scrollToBottom } = useChatAutoScroll({
+    newestMessageId: messages?.[0]?._id,
+  });
 
   const handleTyping = useCallback(() => {
     if (!isTyping) {
@@ -88,7 +87,7 @@ export function ChatThread({ conversationId, currentUserId }: Props) {
     setTypingMutation({ conversationId, isTyping: false }).catch(() => null);
     await sendMessage({ conversationId, body: trimmed });
     playSound("sent");
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    scrollToBottom(true);
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -168,7 +167,10 @@ export function ChatThread({ conversationId, currentUserId }: Props) {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4 space-y-1 flex flex-col">
+      <div
+        ref={paneRef}
+        className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4 flex flex-col"
+      >
         {status === "CanLoadMore" && (
           <div className="flex justify-center pb-2">
             <Button
@@ -189,43 +191,46 @@ export function ChatThread({ conversationId, currentUserId }: Props) {
           </div>
         )}
 
-        {chronological.map((msg, i) => {
-          const isMine = msg.senderId === currentUserId;
-          const nextMsg = chronological[i + 1];
-          // Show avatar when next message is from different sender (last in a run)
-          const showAvatar = !nextMsg || nextMsg.senderId !== msg.senderId;
+        {/* mt-auto keeps a short thread resting on the composer instead of
+            stranding it at the top of a tall pane; it collapses to 0 once the
+            thread overflows, so nothing is clipped. */}
+        <div className="mt-auto space-y-1">
+          {chronological.map((msg, i) => {
+            const isMine = msg.senderId === currentUserId;
+            const nextMsg = chronological[i + 1];
+            // Show avatar when next message is from different sender (last in a run)
+            const showAvatar = !nextMsg || nextMsg.senderId !== msg.senderId;
 
-          return (
-            <MessageBubble
-              key={msg._id}
-              _id={msg._id}
-              body={msg.body}
-              senderName={msg.senderName}
-              senderImageUrl={msg.senderImageUrl}
-              senderId={msg.senderId}
-              _creationTime={msg._creationTime}
-              status={msg.status}
-              seenBy={msg.seenBy ?? []}
-              isMine={isMine}
-              showAvatar={showAvatar}
-              isGroup={!isDm}
-            />
-          );
-        })}
+            return (
+              <MessageBubble
+                key={msg._id}
+                _id={msg._id}
+                body={msg.body}
+                senderName={msg.senderName}
+                senderImageUrl={msg.senderImageUrl}
+                senderId={msg.senderId}
+                _creationTime={msg._creationTime}
+                status={msg.status}
+                seenBy={msg.seenBy ?? []}
+                isMine={isMine}
+                showAvatar={showAvatar}
+                isGroup={!isDm}
+              />
+            );
+          })}
 
-        {/* Typing indicator */}
-        {typingText && (
-          <div className="flex items-center gap-2 text-xs text-slate-400 italic px-2">
-            <span className="inline-flex gap-0.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:0ms]" />
-              <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:150ms]" />
-              <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:300ms]" />
-            </span>
-            {typingText}
-          </div>
-        )}
-
-        <div ref={bottomRef} />
+          {/* Typing indicator */}
+          {typingText && (
+            <div className="flex items-center gap-2 text-xs text-slate-400 italic px-2">
+              <span className="inline-flex gap-0.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:0ms]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:150ms]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:300ms]" />
+              </span>
+              {typingText}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Input */}
