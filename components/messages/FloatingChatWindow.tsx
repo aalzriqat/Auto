@@ -26,7 +26,8 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
   const isMinimized = minimizedChats.includes(conversationId);
 
   const [body, setBody] = useState("");
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const hasScrolledRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevMsgCountRef = useRef(0);
@@ -63,12 +64,20 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
     prevMsgCountRef.current = count;
   }, [conversation?.isMuted, currentUserId, messages]);
 
-  // Scroll to bottom on new messages
+  // Scroll the messages pane itself — never scrollIntoView, which would also
+  // scroll the dashboard page behind this fixed window.
+  const scrollToBottom = useCallback((smooth: boolean) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+  }, []);
+
+  // Scroll to bottom on new messages (jump on first paint, glide afterwards)
   useEffect(() => {
-    if (!isMinimized) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [messages?.length, isMinimized]);
+    if (isMinimized) return;
+    scrollToBottom(hasScrolledRef.current);
+    hasScrolledRef.current = true;
+  }, [messages?.length, isMinimized, scrollToBottom]);
 
   const handleTyping = useCallback(() => {
     setTypingMutation({ conversationId, isTyping: true }).catch(() => null);
@@ -86,7 +95,7 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
     setTypingMutation({ conversationId, isTyping: false }).catch(() => null);
     await sendMessage({ conversationId, body: trimmed });
     playSound("sent");
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    scrollToBottom(true);
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -137,6 +146,10 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
       className={cn(
         "fixed bottom-0 z-50 flex flex-col shadow-2xl rounded-t-2xl overflow-hidden transition-all duration-200",
         "w-[336px]",
+        // Expanded windows must be bounded, otherwise the flex column grows to
+        // fit the whole thread and — being anchored to bottom-0 — pushes its own
+        // header off the top of the screen.
+        !isMinimized && "h-[480px] max-h-[calc(100dvh-1.5rem)]",
         hasUnread && "autoflow-chat-attention"
       )}
       style={positionStyle}
@@ -211,7 +224,10 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
       {!isMinimized && (
         <>
           {/* Messages */}
-          <div className="flex-1 h-[380px] overflow-y-auto px-3 py-3 space-y-1 bg-white flex flex-col">
+          <div
+            ref={scrollRef}
+            className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 py-3 space-y-1 bg-white flex flex-col"
+          >
             {status === "CanLoadMore" && (
               <button
                 onClick={() => loadMore(30)}
@@ -260,8 +276,6 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
                 {typingText}
               </div>
             )}
-
-            <div ref={bottomRef} />
           </div>
 
           {/* Input */}

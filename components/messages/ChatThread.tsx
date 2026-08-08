@@ -168,7 +168,7 @@ export function ChatThread({ conversationId, currentUserId }: Props) {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-1 flex flex-col">
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4 space-y-1 flex flex-col">
         {status === "CanLoadMore" && (
           <div className="flex justify-center pb-2">
             <Button

@@ -4,6 +4,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import { Check, CheckCheck } from "lucide-react";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { formatMessageStamp } from "@/lib/messageStamp";
 
 type MessageStatus = "sent" | "delivered" | "seen" | "received";
 
@@ -27,9 +28,6 @@ interface Props {
   isGroup: boolean;
 }
 
-function formatTime(ts: number) {
-  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
 
 function StatusIcon({ status }: { status: MessageStatus }) {
   if (status === "sent") {
@@ -56,7 +54,10 @@ export function MessageBubble({
   showAvatar,
   isGroup,
 }: Props) {
-  const { isRtl } = useLanguage();
+  const { t } = useLanguage();
+  const stamp = formatMessageStamp(_creationTime, {
+    yesterdayLabel: t("MessagesYesterday"),
+  });
 
   return (
     <div
@@ -100,11 +101,17 @@ export function MessageBubble({
         {!isGroup && (
           <div
             className={cn(
-              "flex items-center gap-1 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity",
+              "flex items-center gap-1 mt-0.5",
               isMine ? "flex-row-reverse" : "flex-row"
             )}
           >
-            <span className="text-[10px] text-slate-400">{formatTime(_creationTime)}</span>
+            <span
+              dir="ltr"
+              style={{ unicodeBidi: "isolate" }}
+              className="text-[10px] text-slate-400 whitespace-nowrap"
+            >
+              {stamp}
+            </span>
             {isMine && <StatusIcon status={status} />}
           </div>
         )}
@@ -112,9 +119,12 @@ export function MessageBubble({
         {/* Group read receipts — mini avatars of who's seen the message */}
         {isGroup && isMine && (
           <div className={cn("flex items-center gap-1 mt-1", "flex-row-reverse")}>
-            {/* Timestamp shown on hover */}
-            <span className="text-[10px] text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity me-1">
-              {formatTime(_creationTime)}
+            <span
+              dir="ltr"
+              style={{ unicodeBidi: "isolate" }}
+              className="text-[10px] text-slate-400 me-1 whitespace-nowrap"
+            >
+              {stamp}
             </span>
 
             {seenBy.length > 0 ? (
