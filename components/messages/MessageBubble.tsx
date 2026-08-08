@@ -4,7 +4,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import { Check, CheckCheck } from "lucide-react";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { formatMessageStamp, formatMessageStampParts } from "@/lib/messageStamp";
+import { formatMessageStampParts, formatMessageStampTitle } from "@/lib/messageStamp";
 
 type MessageStatus = "sent" | "delivered" | "seen" | "received";
 
@@ -71,11 +71,9 @@ export function MessageBubble({
       <bdi dir="ltr">{stamp.body}</bdi>
     </>
   );
-  // Full stamp as one logical string for the tooltip — the visible stamp is
-  // abbreviated ("14:32" for today), so hovering still resolves the exact day.
-  const stampTitle = formatMessageStamp(_creationTime, {
-    yesterdayLabel: t("MessagesYesterday"),
-  });
+  // The visible stamp abbreviates ("14:32" for today), so the tooltip carries
+  // the full date. Repeating the visible string here would tell nobody anything.
+  const stampTitle = formatMessageStampTitle(_creationTime);
 
   return (
     <div

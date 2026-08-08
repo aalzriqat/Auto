@@ -84,11 +84,23 @@ export function formatMessageStampParts(
 }
 
 /**
- * The stamp as one logical string. Correct for assertions, `title`/`aria-label`
- * and any non-visual use — but do NOT render it as a single bidi-isolated run
- * under an RTL UI; use {@link formatMessageStampParts} for that.
+ * The unabbreviated timestamp, for a tooltip on the abbreviated stamp —
+ * e.g. "Friday, August 8, 2026 at 2:32 PM".
+ *
+ * Deliberately NOT the visible stamp joined back together: that string is
+ * identical to what is already on screen, so a tooltip carrying it tells the
+ * reader nothing. This resolves the day for a bare "14:32" instead.
+ *
+ * It is also single-locale by construction — no dictionary label is mixed in —
+ * so it needs no bidi isolation, which a native tooltip could not provide.
  */
-export function formatMessageStamp(ts: number, options: FormatStampOptions): string {
-  const { prefix, body } = formatMessageStampParts(ts, options);
-  return prefix ? `${prefix} ${body}` : body;
+export function formatMessageStampTitle(
+  ts: number,
+  options: Pick<FormatStampOptions, "locale"> = {}
+): string {
+  const { locale = [] } = options;
+  return new Date(ts).toLocaleString(locale, {
+    dateStyle: "full",
+    timeStyle: "short",
+  });
 }

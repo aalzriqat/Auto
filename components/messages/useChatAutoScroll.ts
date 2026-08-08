@@ -53,13 +53,17 @@ export function useChatAutoScroll({ newestMessageId, enabled = true }: Options) 
   );
 
   useEffect(() => {
-    if (!enabled) {
-      // The pane unmounts while hidden, so the next reveal starts at scroll-top
-      // 0 and needs an instant jump rather than a long smooth scroll.
+    if (!enabled || !pane) {
+      // Any time the pane is gone the next one starts at scroll-top 0 and needs
+      // an instant jump, not a long smooth scroll. That covers both a minimized
+      // window AND switching conversations on /messages, where ChatThread is
+      // rendered without a `key` and briefly unmounts its pane while the newly
+      // selected conversation loads. Keying this on `enabled` alone left the
+      // switch case gliding, because ChatThread never passes `enabled`.
       hasScrolledRef.current = false;
       return;
     }
-    if (!newestMessageId || !pane) return;
+    if (!newestMessageId) return;
     // Only record the initial scroll once there was actually a pane to scroll.
     if (scrollToBottom(hasScrolledRef.current)) {
       hasScrolledRef.current = true;

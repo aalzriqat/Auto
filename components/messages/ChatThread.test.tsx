@@ -137,6 +137,32 @@ describe("ChatThread scroll contract", () => {
     expect(scrollCalls.at(-1)?.behavior).toBe("smooth");
   });
 
+  it("jumps, not glides, when the user switches to another conversation", () => {
+    // MessagesPageClient renders ChatThread without a `key`, so selecting a
+    // different conversation reuses this instance. The pane unmounts only
+    // briefly while the new conversation loads; if the initial-scroll flag
+    // survives that, the second thread animates ~1200px from its oldest
+    // message instead of opening at the newest.
+    const { rerender } = renderThread();
+    scrollCalls = [];
+
+    // Loading window for the newly selected conversation.
+    conversation = undefined;
+    state.results = [];
+    rerender(<ChatThread conversationId={"conv2" as never} currentUserId={CURRENT_USER} />);
+
+    conversation = {
+      type: "DM",
+      members: [{ _id: "user3", name: "Someone else" }],
+      isMuted: false,
+      typingUsers: [],
+    };
+    state.results = [message("n1", "user3"), message("n2", "user3")];
+    rerender(<ChatThread conversationId={"conv2" as never} currentUserId={CURRENT_USER} />);
+
+    expect(scrollCalls.at(-1)?.behavior).toBe("auto");
+  });
+
   it("keeps a short thread resting on the composer", () => {
     const { container } = renderThread();
     // Without mt-auto a two-message thread is stranded at the top of the pane.

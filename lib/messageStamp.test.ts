@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatMessageStamp, formatMessageStampParts } from "./messageStamp";
+import { formatMessageStampParts, formatMessageStampTitle } from "./messageStamp";
 
 const YESTERDAY = "Yesterday";
 // Pinned so assertions about digits, month names and the year do not depend on
@@ -15,8 +15,14 @@ function timeOf(ts: number) {
   return new Date(ts).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" });
 }
 
+/** The stamp as the bubble renders it: prefix, a space, then the date/time run. */
 function format(ts: number, now: number, yesterdayLabel = YESTERDAY) {
-  return formatMessageStamp(ts, { yesterdayLabel, now, locale: LOCALE });
+  const { prefix, body } = formatMessageStampParts(ts, {
+    yesterdayLabel,
+    now,
+    locale: LOCALE,
+  });
+  return prefix ? `${prefix} ${body}` : body;
 }
 
 describe("formatMessageStamp", () => {
@@ -118,8 +124,43 @@ describe("formatMessageStamp", () => {
   it("defaults `now` to the current clock — the only path production uses", () => {
     // MessageBubble omits `now`, so this default must work unaided.
     const justNow = Date.now();
-    expect(formatMessageStamp(justNow, { yesterdayLabel: YESTERDAY, locale: LOCALE })).toBe(
+    const { prefix, body } = formatMessageStampParts(justNow, {
+      yesterdayLabel: YESTERDAY,
+      locale: LOCALE,
+    });
+    expect(prefix).toBeNull();
+    expect(body).toBe(
       new Date(justNow).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" })
+    );
+  });
+});
+
+describe("formatMessageStampTitle", () => {
+  it("carries information the abbreviated stamp does not", () => {
+    const ts = at(2026, 7, 8, 14, 32);
+    const title = formatMessageStampTitle(ts, { locale: LOCALE });
+    const visible = format(ts, ts);
+
+    // A tooltip repeating the visible text tells the reader nothing — the whole
+    // point is resolving which day a bare "02:32 PM" belongs to.
+    expect(title).not.toBe(visible);
+    expect(title).toContain("2026");
+    expect(title).toContain("August");
+  });
+
+  it("resolves the day for a yesterday stamp without a dictionary label", () => {
+    const ts = at(2026, 7, 7, 16, 53);
+    const title = formatMessageStampTitle(ts, { locale: LOCALE });
+    // Single-locale by construction, so it needs no bidi isolation — a native
+    // tooltip could not provide any.
+    expect(title).not.toContain(YESTERDAY);
+    expect(title).toContain("August");
+  });
+
+  it("defaults the locale, the only path production uses", () => {
+    const ts = at(2026, 7, 8, 14, 32);
+    expect(formatMessageStampTitle(ts)).toBe(
+      new Date(ts).toLocaleString([], { dateStyle: "full", timeStyle: "short" })
     );
   });
 });

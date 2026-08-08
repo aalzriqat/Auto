@@ -86,7 +86,7 @@ function pane(container: HTMLElement) {
   return container.querySelector(".overflow-y-auto") as HTMLElement | null;
 }
 
-let scrollCalls: ScrollToOptions[] = [];
+let scrollCalls: Array<{ via: string; behavior?: string }> = [];
 
 beforeEach(() => {
   scrollCalls = [];
@@ -102,11 +102,17 @@ beforeEach(() => {
   };
   // jsdom implements neither scrollTo nor real layout.
   Element.prototype.scrollTo = function (options?: ScrollToOptions | number) {
-    scrollCalls.push(options as ScrollToOptions);
+    scrollCalls.push({ via: "scrollTo", behavior: (options as ScrollToOptions)?.behavior });
   } as typeof Element.prototype.scrollTo;
-  // Also absent from jsdom. Stubbed so that if this component ever regresses to
-  // scrollIntoView, these tests fail on the contract rather than on a TypeError.
-  Element.prototype.scrollIntoView = vi.fn();
+  // Also absent from jsdom. Recorded rather than merely stubbed, so a regression
+  // back to scrollIntoView fails on an assertion that names the contract instead
+  // of on an incidental count.
+  Element.prototype.scrollIntoView = function (arg?: boolean | ScrollIntoViewOptions) {
+    scrollCalls.push({
+      via: "scrollIntoView",
+      behavior: typeof arg === "object" ? arg?.behavior : undefined,
+    });
+  } as typeof Element.prototype.scrollIntoView;
   window.matchMedia = ((q: string) => ({
     matches: false,
     media: q,
@@ -236,6 +242,42 @@ describe("FloatingChatWindow scroll contract", () => {
 
     expect(scrollCalls.length).toBeGreaterThan(0);
     expect(scrollCalls.at(-1)?.behavior).toBe("auto");
+  });
+
+  it("jumps, not glides, when re-expanded from minimized", () => {
+    // The whole reason the hook takes `enabled`. The body unmounts while
+    // minimized, so the re-expanded pane starts at scroll-top 0; without
+    // clearing the initial-scroll flag it animates the entire thread.
+    const { rerender } = renderWindow();
+
+    minimizedChats = [CONVERSATION_ID as unknown as string];
+    rerender(
+      <FloatingChatWindow
+        conversationId={CONVERSATION_ID}
+        currentUserId={CURRENT_USER}
+        index={0}
+      />
+    );
+
+    scrollCalls = [];
+    minimizedChats = [];
+    rerender(
+      <FloatingChatWindow
+        conversationId={CONVERSATION_ID}
+        currentUserId={CURRENT_USER}
+        index={0}
+      />
+    );
+
+    expect(scrollCalls.at(-1)?.behavior).toBe("auto");
+  });
+
+  it("scrolls the pane itself, never scrollIntoView", () => {
+    renderWindow();
+    // scrollIntoView walks every scrollable ancestor, which would also move the
+    // dashboard behind this fixed window.
+    expect(scrollCalls.length).toBeGreaterThan(0);
+    expect(scrollCalls.every((c) => c.via === "scrollTo")).toBe(true);
   });
 
   it("does not arm the initial-scroll flag before the pane exists", () => {
