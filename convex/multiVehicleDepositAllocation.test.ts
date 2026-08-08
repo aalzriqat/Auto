@@ -176,10 +176,19 @@ async function sell(
 const allocationView = (s: Seed) =>
   s.asUser.query(api.deposits.quoteAllocation, { orgId: s.orgId, quoteId: s.quoteId });
 
+/**
+ * The LIVE sale row for a car. Cancelling a sale soft-deletes its cashflow row,
+ * and a car can be sold again afterwards — so taking the first match read the
+ * cancelled sale's figures and made a re-sale look correct by coincidence.
+ */
 const saleTransactionFor = async (s: Seed, vehicleId: Id<"vehicles">) =>
   await s.t.run(async (ctx) =>
     (await ctx.db.query("transactions").collect()).find(
-      (tx) => tx.orgId === s.orgId && tx.category === "VEHICLE_SALE" && tx.vehicleId === vehicleId
+      (tx) =>
+        tx.orgId === s.orgId &&
+        tx.category === "VEHICLE_SALE" &&
+        tx.vehicleId === vehicleId &&
+        tx.isDeleted !== true
     )
   );
 
@@ -2401,6 +2410,75 @@ describe("a deposit with money assigned to no car at all", () => {
     const view = await expectConservation(s);
     expect(view.unallocatedMinor).toBe(5_000 * SCALE);
     expect(view.appliedMinor).toBe(0);
+  });
+
+  test("survives a cancellation and still credits the re-sale", async () => {
+    // A row with money left over keeps HELD so the remainder stays refundable —
+    // but its hold side closes all the same, and sale completion skips any
+    // deposit whose hold is closed. So after a cancellation the row was
+    // invisible: the car was re-sold at full price with the customer's own
+    // money uncredited, and its share left active on a vehicle marked SOLD.
+    //
+    // Conservation held and the liability reconciled throughout, because the
+    // money genuinely never moved. Every control agreed the books were fine.
+    const s = await bothCarsSoldLeavingRemainder("remainderResell");
+    const saleB = await s.t.run(async (ctx) =>
+      (await ctx.db.query("sales").collect()).find(
+        (sale) => sale.orgId === s.orgId && sale.vehicleId === s.vehicleB && sale.status === "COMPLETED"
+      )
+    );
+
+    await cancel(s, saleB!._id);
+
+    const deposit = await s.t.run(async (ctx) =>
+      (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)
+    );
+    expect(deposit!.status).toBe("HELD");
+    expect(deposit!.holdActive).toBe(true);
+
+    const releasedB = (await holdsFor(s, s.vehicleB!)).filter(
+      (h) => h.allocationStatus === "RELEASED_AWAITING_DECISION"
+    );
+    for (const hold of releasedB) {
+      await s.asUser.mutation(api.deposits.resolveReleasedAllocation, {
+        orgId: s.orgId,
+        holdId: hold._id,
+        treatment: "RETURN_TO_UNALLOCATED" as const,
+      });
+    }
+    await allocate(s, [{ vehicleId: s.vehicleB!, amount: 1_000 }]);
+    await sell(s, s.vehicleB!, PRICE_B);
+
+    // Credited, not billed in full.
+    expect((await saleTransactionFor(s, s.vehicleB!))!.amount).toBe(PRICE_B - 1_000);
+    // And nothing is left live on a car that is now sold.
+    expect((await holdsFor(s, s.vehicleB!)).filter((h) => h.active)).toEqual([]);
+    await expectConservation(s);
+  });
+
+  test("the same holds when every car carried nothing", async () => {
+    const s = await seed("allZeroResell");
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 0 },
+      { vehicleId: s.vehicleB!, amount: 0 },
+    ]);
+    const saleA = await sell(s, s.vehicleA, PRICE_A);
+    await sell(s, s.vehicleB!, PRICE_B);
+
+    await cancel(s, saleA);
+
+    const deposit = await s.t.run(async (ctx) =>
+      (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)
+    );
+    expect(deposit!.holdActive).toBe(true);
+
+    await allocate(s, [{ vehicleId: s.vehicleA, amount: 2_000 }]);
+    await sell(s, s.vehicleA, PRICE_A);
+
+    expect((await saleTransactionFor(s, s.vehicleA))!.amount).toBe(PRICE_A - 2_000);
+    expect((await holdsFor(s, s.vehicleA)).filter((h) => h.active)).toEqual([]);
+    await expectConservation(s);
   });
 
   test("a treatment the system does not post leaves the liability on the books", async () => {

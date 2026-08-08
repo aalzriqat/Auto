@@ -379,6 +379,39 @@ describe("a deposit paid in two instalments, on screen", () => {
   });
 });
 
+describe("the suggested split", () => {
+  test("does not hand money to a car whose share is already spent", async () => {
+    // Suggest walked every car and filled the first up to its own price,
+    // including one already applied to a completed sale — and Save filters that
+    // car out. So two clicks submitted zero for the car that still had an
+    // agreed share, the footer read "0 remaining", and the customer's money
+    // quietly went from 2,000 to nothing.
+    const s = await seedQuote("suggestApplied");
+    await payDeposit(s, 5_000);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 3_000 },
+      { vehicleId: s.vehicleB, amount: 2_000 },
+    ]);
+    await sell(s, s.vehicleA, PRICE_A);
+    const allocation = await renderWith(s, PERMS_MANAGER);
+    expect(allocation!.vehicles.find((v) => v.vehicleId === s.vehicleA)!.status).toBe(
+      "APPLIED"
+    );
+
+    fireEvent.click(screen.getByText("DepositAllocationSuggest").closest("button")!);
+    fireEvent.click(screen.getByText("DepositAllocationSave").closest("button")!);
+
+    expect(mutationCalls).toHaveLength(1);
+    expect(mutationCalls[0]!.name).toBe(getFunctionName(api.deposits.allocateToVehicles));
+    const submitted = mutationCalls[0]!.args.allocations as Array<{
+      vehicleId: string;
+      amount: number;
+    }>;
+    // Only the car that can still be set, and it keeps the whole available 2,000.
+    expect(submitted).toEqual([{ vehicleId: s.vehicleB, amount: 2_000 }]);
+  });
+});
+
 describe("a share whose reversal is still queued", () => {
   test("is shown as waiting on the ledger, with nothing to decide", async () => {
     // Cancelling into a closed period leaves the reversing journal in the

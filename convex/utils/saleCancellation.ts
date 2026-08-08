@@ -331,6 +331,24 @@ async function reopenDepositAfterReversal(
 ): Promise<Doc<"deposits"> | null> {
   const deposit = await ctx.db.get(depositId);
   if (!deposit) return null;
+  // A row with money left over never closes as APPLIED — it keeps HELD so the
+  // remainder stays refundable — but its hold side is closed all the same, and
+  // `resolveDepositsForQuote` skips any deposit whose `holdActive` is false. So
+  // after a cancellation the row was invisible to the next completion: the car
+  // was re-sold at full price with the customer's own money uncredited, and its
+  // share left active on a vehicle now marked SOLD. Every control agreed the
+  // books were fine, because they were — the money simply never moved.
+  if (deposit.status === "HELD" && deposit.holdActive === false) {
+    await ctx.db.patch(deposit._id, {
+      holdActive: true,
+      resolvedBy: undefined,
+      resolvedAt: undefined,
+      resolutionTreatment: undefined,
+      resolutionReason: undefined,
+      resolutionSaleId: undefined,
+    });
+    return await ctx.db.get(depositId);
+  }
   if (deposit.status !== "APPLIED") return deposit;
   await ctx.db.patch(deposit._id, {
     status: "HELD",
@@ -449,15 +467,14 @@ async function reinstateAppliedDeposits(
         resolvedAt: undefined,
         resolvedBy: undefined,
       });
-      // If this sale was the one that closed the row, reopen it. A zero slice
-      // posts no journal and so has no application row, and the legacy loop
-      // below skips any deposit that has application rows from OTHER cars — so
-      // the row stayed APPLIED with a live hold pointing at it. That put the
-      // car back on RESERVED (the hold is active) with no way out: releasing a
-      // share requires a HELD deposit, and the row had nothing left to release.
-      if (deposit.resolutionSaleId === args.saleId) {
-        await reopenDepositAfterReversal(ctx, deposit._id);
-      }
+      // Reopen the row's hold side, because a hold that is active again is
+      // meaningless on a deposit that is closed — sale completion skips those
+      // entirely, so the next sale of this car would ignore the money.
+      //
+      // Not gated on which sale closed the row: a zero slice posts no journal
+      // and so has no application row, so whichever car was sold LAST closed
+      // it, and that is rarely the one being cancelled.
+      await reopenDepositAfterReversal(ctx, deposit._id);
       await syncVehicleHoldStatus(ctx, hold.vehicleId, args.actorId);
     }
   }

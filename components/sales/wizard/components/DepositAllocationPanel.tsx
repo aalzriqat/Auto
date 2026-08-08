@@ -96,7 +96,13 @@ export function DepositAllocationPanel({
     // filled into the inputs, not saved.
     let left = available;
     const next: Record<string, string> = {};
+    // Only the cars this screen can actually set — the same predicate the seed
+    // and the save use. Distributing across a car whose share is already
+    // applied handed it money that Save then filtered out, so two clicks could
+    // silently zero another car's agreed share while the footer read "0
+    // remaining".
     for (const v of allocation.vehicles) {
+      if (v.status !== undefined && v.status !== "ALLOCATED") continue;
       const priceMinor = Math.round(v.unitPrice * scale);
       const take = Math.max(0, Math.min(left, priceMinor));
       next[v.vehicleId] = String(take / scale);

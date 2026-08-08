@@ -915,9 +915,15 @@ async function outstandingDepositMinor(
     .collect();
   // OTHER is deliberately NOT here. It records a treatment the system does not
   // post, so the GL keeps the credit — dropping it from this side would leave
-  // the two permanently apart, which is the noise this function exists to
-  // remove. Mirrors recordUnpostedDepositTreatment: the liability stays on the
-  // books awaiting a manual journal.
+  // the two apart from the moment it is chosen. Mirrors
+  // recordUnpostedDepositTreatment: the liability stays on the books awaiting a
+  // manual journal.
+  //
+  // Known limit: this is right until that manual journal is posted. Once an
+  // accountant debits Customer Deposits by hand the GL drops and this side does
+  // not, and nothing records that it happened — so the pair goes out of balance
+  // with no way to clear it. No UI sends OTHER today (QuoteDepositManager's
+  // treatments omit it), so the state is reachable only through the API.
   const slicesFinalized = holds
     .filter(
       (hold) =>
