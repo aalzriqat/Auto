@@ -2502,6 +2502,17 @@ export default defineSchema({
     // the vehicle immediately while the deposit itself stays HELD pending a
     // manager's manual refund/forfeit decision.
     holdActive: v.boolean(),
+    /**
+     * How much of this row has actually been paid back out or written off
+     * through `deposits.release`.
+     *
+     * A row is not all-or-nothing once its quote carries several cars: part can
+     * be credited against one car's live invoice while the remainder is
+     * refunded. `status` records only whichever happened last, so it cannot say
+     * how much money is still owed to the customer — and releasing on the row's
+     * face value paid out amounts that had already come off an invoice.
+     */
+    releasedAmountMinor: v.optional(v.number()),
     canonicalPaymentId: v.optional(v.id("canonicalPayments")),
     idempotencyKey: v.optional(v.string()),
     notes: v.optional(v.string()),
@@ -2586,8 +2597,15 @@ export default defineSchema({
      * What became of this vehicle's slice.
      *
      *  - ALLOCATED — assigned and still held.
-     *  - APPLIED — consumed by that vehicle's completed sale.
-     *  - RELEASED — the vehicle left the deal and the slice needs an explicit
+     *  - APPLIED — consumed by that vehicle's completed sale. An applied slice
+     *    is real money already credited against a live invoice: it can be
+     *    neither refunded nor re-allocated while that sale stands.
+     *  - REVERSING — the sale was cancelled and this slice's own accounting
+     *    entry is being backed out. Durable rather than momentary, because the
+     *    reversal goes to the outbox when no period is open, and a slice whose
+     *    journal has not actually been reversed must not yet be spendable.
+     *  - RELEASED_AWAITING_DECISION — the slice is off its sale (or its vehicle
+     *    left the deal) and the journal is reversed. It needs an explicit
      *    decision. It is deliberately NOT returned to the pool automatically:
      *    money silently moving from the car it was allocated against to
      *    another one is precisely what an allocation exists to prevent.
@@ -2595,15 +2613,21 @@ export default defineSchema({
      *    `resolutionTreatment`. Terminal.
      *
      * RESOLVED exists because the alternative — expressing a decision by
-     * zeroing the amount and leaving the status at RELEASED — made refunded and
-     * forfeited money re-enter the quote's unallocated balance, and left the
-     * slice eligible to be resolved a second time.
+     * zeroing the amount and leaving the status at RELEASED_AWAITING_DECISION —
+     * made refunded and forfeited money re-enter the quote's unallocated
+     * balance, and left the slice eligible to be resolved a second time.
+     *
+     * A terminal row is never rewritten into a new life. RETURN_TO_UNALLOCATED
+     * and REALLOCATE_TO_VEHICLE both INSERT a fresh hold and leave the old one
+     * where it is, so both histories survive and the vehicle a slice was taken
+     * off is immediately eligible to be allocated and sold again.
      */
     allocationStatus: v.optional(
       v.union(
         v.literal("ALLOCATED"),
         v.literal("APPLIED"),
-        v.literal("RELEASED"),
+        v.literal("REVERSING"),
+        v.literal("RELEASED_AWAITING_DECISION"),
         v.literal("RESOLVED")
       )
     ),
@@ -2619,6 +2643,13 @@ export default defineSchema({
     ),
     /** Which sale consumed it, when APPLIED. */
     appliedSaleId: v.optional(v.id("sales")),
+    /**
+     * The terminal slice this one was created out of — a released share
+     * re-allocated to another car, or returned to the pool and re-opened
+     * against the same one. Both rows are kept: the old one records what was
+     * decided, this one records what happened next.
+     */
+    sourceHoldId: v.optional(v.id("depositVehicleHolds")),
     /** Why it was released, and what a human decided to do with it. */
     releaseReason: v.optional(v.string()),
     resolvedAt: v.optional(v.number()),
@@ -2627,6 +2658,79 @@ export default defineSchema({
     .index("by_deposit", ["depositId"])
     .index("by_vehicle_active", ["vehicleId", "active"])
     .index("by_deposit_vehicle", ["depositId", "vehicleId"]),
+
+  /**
+   * One immutable row per application of deposit money to a sale.
+   *
+   * ## Why an identity, and not a lookup
+   *
+   * A reservation deposit is quote-scoped and a quote can carry several cars,
+   * so one `deposits` row can be applied several times — once per car, each
+   * against a different sale, each its own movement of money. Reversal used to
+   * find its journal by `(orgId, sourceType: "deposits", sourceId: depositId)`
+   * and take the FIRST match, which meant cancelling car B's sale reversed
+   * whichever application posted first — car A's, against an invoice that is
+   * still live. Nothing in the data could tell the two apart.
+   *
+   * So every application records the full identity of what it did, including
+   * the exact accounting-event coordinates AS WRITTEN. Reversal reads them back
+   * rather than re-deriving them: a derivation that drifts from what was posted
+   * finds nothing, and `reverseEventIfPosted` answers "nothing to reverse" the
+   * same way it answers "already reversed" — silently.
+   *
+   * Rows are append-only apart from their own status transition
+   * APPLIED → REVERSING → REVERSED.
+   */
+  depositApplications: defineTable({
+    orgId: v.id("organizations"),
+    depositId: v.id("deposits"),
+    quoteId: v.optional(v.id("quotes")),
+    /** Position of the car on `quote.vehicleItems` — the quote line. */
+    quoteLineIndex: v.optional(v.number()),
+    vehicleId: v.id("vehicles"),
+    saleId: v.id("sales"),
+    customerId: v.id("customers"),
+    /**
+     * The allocation consumed. Absent on a single-vehicle quote, where
+     * `deposits.create` writes no hold rows because there is one place the
+     * money can go and no decision to make.
+     */
+    holdId: v.optional(v.id("depositVehicleHolds")),
+    amountMinor: v.number(),
+    currency: v.string(),
+    /**
+     * Which account the application credited. The two settle entirely
+     * different things, so a reversal that targets the wrong one reverses
+     * nothing at all.
+     */
+    treatment: v.union(
+      v.literal("CUSTOMER_RECEIVABLE"),
+      v.literal("SUPPLIER_SETTLEMENT")
+    ),
+    // ── the accounting identity, exactly as posted ──────────────────────────
+    eventType: v.string(),
+    eventSourceType: v.string(),
+    eventSourceId: v.string(),
+    eventVersion: v.number(),
+    eventIdempotencyKey: v.string(),
+    status: v.union(
+      v.literal("APPLIED"),
+      v.literal("REVERSING"),
+      v.literal("REVERSED")
+    ),
+    appliedAt: v.number(),
+    appliedBy: v.id("users"),
+    reversalStartedAt: v.optional(v.number()),
+    reversedAt: v.optional(v.number()),
+    reversedBy: v.optional(v.id("users")),
+    reversalReason: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_sale", ["saleId"])
+    .index("by_deposit", ["depositId"])
+    .index("by_quote", ["quoteId"])
+    .index("by_hold", ["holdId"])
+    .index("by_org_customer", ["orgId", "customerId"]),
 
   // Receipt voucher (سند قبض) auto-generated as proof of payment whenever a
   // deposit is recorded — one per deposit.
@@ -2947,17 +3051,27 @@ export default defineSchema({
     /**
      * Accounting turnover for this row, when it differs from `amount`.
      *
-     * `amount` is what the deal was worth — the gross transaction value. On a
-     * consigned sale that is a car the dealership never owned, so it is NOT its
-     * revenue. Both numbers are real and neither substitutes for the other: the
-     * dealership genuinely handled a 12,500 transaction and genuinely earned
-     * 3,000 on it.
+     * `amount` is the cash side of the row — the sale price less anything
+     * already collected against the deal. On a consigned sale the deal is a car
+     * the dealership never owned, so its value is NOT its revenue. All three
+     * numbers are real and none substitutes for another: the dealership
+     * genuinely handled a 12,500 transaction, genuinely earned 3,000 on it, and
+     * genuinely banked 9,500 at completion after a 3,000 deposit.
      *
      * Absent means the two are the same, which is every owned sale and every
      * row written before consigned accounting existed — so a reader that falls
      * back to `amount` gets the right answer for all of them.
      */
     recognizedRevenueAmount: v.optional(v.number()),
+    /**
+     * The full ticket the deal was transacted at, before anything already
+     * collected was netted off `amount`.
+     *
+     * `amount` is net of deposits, so reading it as gross transaction value
+     * made a deposit REDUCE the reported size of a deal. See
+     * utils/grossTransactionValue for the one definition all three reports use.
+     */
+    grossTransactionValueAmount: v.optional(v.number()),
     orgId: v.id("organizations"),
     type: v.union(v.literal("IN"), v.literal("OUT")),
     amount: v.number(),

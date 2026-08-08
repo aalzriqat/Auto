@@ -1731,7 +1731,18 @@ export const consignedSalePreview = query({
   args: {
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
-    salePrice: v.number(),
+    /**
+     * Preview one LINE of a quote.
+     *
+     * When given, the price comes from that line and nothing quote-level is
+     * used. A multi-vehicle quote's `vehiclePrice` is the total of the whole
+     * deal, so pairing it with one car's supplier cost produced a margin that
+     * belonged to no vehicle at all — the first car's cost subtracted from
+     * every car's price, shown to the operator as that car's profit.
+     */
+    quoteId: v.optional(v.id("quotes")),
+    /** Only honoured when no quote is named — the sale form knows its own price. */
+    salePrice: v.optional(v.number()),
     settlementRoute: v.optional(supplierSettlementRouteValidator),
   },
   handler: async (ctx, args) => {
@@ -1758,11 +1769,40 @@ export const consignedSalePreview = query({
     if (!vehicle || vehicle.orgId !== args.orgId || vehicle.isDeleted) return null;
     if (vehicle.sourceType !== "SOURCED") return null;
 
-    assertFiniteNumber(args.salePrice, "sale price");
+    // The price this preview is about, derived on the server where a quote is
+    // named. A client passing a quote-level total for one line item is exactly
+    // the mistake this closes, so the caller does not get to supply it.
+    let salePrice: number;
+    let quoteLineIndex: number | undefined;
+    if (args.quoteId) {
+      const quote = await ctx.db.get(args.quoteId);
+      if (!quote || quote.orgId !== args.orgId) return null;
+      const items = quote.vehicleItems ?? [
+        { vehicleId: quote.vehicleId, unitPrice: quote.vehiclePrice },
+      ];
+      const index = items.findIndex((item) => item.vehicleId === args.vehicleId);
+      if (index < 0) return null;
+      const line = items[index]!;
+      // `unitPrice` is optional on the legacy single-line shape only, where the
+      // quote total IS the line. On a multi-line quote a missing unit price is
+      // an unanswerable question, not an excuse to fall back to the total.
+      if (line.unitPrice === undefined) {
+        if (items.length > 1) return null;
+        salePrice = quote.vehiclePrice;
+      } else {
+        salePrice = line.unitPrice;
+      }
+      quoteLineIndex = index;
+    } else {
+      if (args.salePrice === undefined) return null;
+      salePrice = args.salePrice;
+    }
+
+    assertFiniteNumber(salePrice, "sale price");
 
     const capitalizedCost = await computeVehicleCapitalizedCost(ctx, vehicle);
     const economics = saleEconomics({
-      salePrice: args.salePrice,
+      salePrice,
       vehicle,
       capitalizedCost,
       supplierSettlementRoute: args.settlementRoute,
@@ -1773,12 +1813,16 @@ export const consignedSalePreview = query({
     return {
       supplierName: vehicle.sourcedFromName ?? null,
       settlementRoute: route,
+      /** Which line of the quote this is about, so the UI cannot mislabel it. */
+      quoteLineIndex,
+      vehicleLabel: `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim(),
+      salePrice,
       grossTransactionValue: economics.grossTransactionValue,
       supplierEntitlement: economics.supplierSettlement,
       dealershipMargin: economics.dealershipMargin,
       recognizedRevenue: economics.recognizedRevenue,
       /** What the customer is invoiced for the car. Nothing, when the buyer paid the supplier. */
-      customerVehicleReceivable: collectsGross ? args.salePrice : 0,
+      customerVehicleReceivable: collectsGross ? salePrice : 0,
       /** Set on the route where gross ran through the dealership: it owes him his share. */
       supplierPayable: collectsGross ? economics.supplierSettlement : 0,
       /** Set on the other route: he holds the dealership's margin until he settles it. */

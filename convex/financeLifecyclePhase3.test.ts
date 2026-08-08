@@ -166,7 +166,10 @@ describe("Finance lifecycle phase 3 deposit application hooks", () => {
 
     const appliedRecords = await listDepositAppliedRecords(t, orgId);
     expect(appliedRecords).toHaveLength(1);
-    expect(appliedRecords[0].sourceId).toBe(depositId.toString());
+    // The event is sourced on the APPLICATION — this deposit against this car —
+    // not on the deposit alone. One row can be applied once per car it was
+    // allocated across, and a shared source made every reversal ambiguous.
+    expect(appliedRecords[0].sourceId).toContain(depositId.toString());
     expect(appliedRecords[0].payload).toMatchObject({
       depositId: depositId.toString(),
       amountMinor: 150000,
@@ -185,9 +188,11 @@ describe("Finance lifecycle phase 3 deposit application hooks", () => {
 
     const appliedRecords = await listDepositAppliedRecords(t, orgId);
     expect(appliedRecords).toHaveLength(2);
-    expect(appliedRecords.map((record) => record.sourceId).sort()).toEqual(
-      [firstDepositId.toString(), secondDepositId.toString()].sort()
-    );
+    // Each application's source names its own deposit; the vehicle suffix is
+    // what keeps two applications of the SAME deposit apart.
+    expect(
+      appliedRecords.map((record) => record.sourceId.split(":")[0]).sort()
+    ).toEqual([firstDepositId.toString(), secondDepositId.toString()].sort());
 
     await t.run(async (ctx) => {
       const firstDeposit = await ctx.db.get(firstDepositId);

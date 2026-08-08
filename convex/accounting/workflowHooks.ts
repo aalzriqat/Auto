@@ -184,16 +184,45 @@ async function reverseEventIfPosted(
     reversalDate: number;
     reversalIdempotencyKey: string;
     pendingPostIdempotencyKey: string;
+    /**
+     * Pins the reversal to ONE event when several share a source.
+     *
+     * A source that can move money more than once — a deposit applied to each
+     * car on its quote, a claim collected in instalments — writes several
+     * events under one `sourceId`, distinguished only by version. Without this
+     * the lookup below takes `.first()`, so a reversal aimed at the third
+     * movement backs out the first: a live invoice loses its credit and the
+     * cancelled one keeps it. Omit it only where the source genuinely posts
+     * once.
+     */
+    eventVersion?: number;
   }
 ): Promise<void> {
-  const originalEvent = await ctx.db
-    .query("accountingEvents")
-    .withIndex("by_org_source", (q) =>
-      q.eq("orgId", args.orgId).eq("sourceType", args.sourceType).eq("sourceId", args.sourceId)
-    )
-    .filter((q) => q.eq(q.field("eventType"), args.eventType))
-    .filter((q) => q.eq(q.field("status"), "POSTED"))
-    .first();
+  const originalEvent =
+    args.eventVersion === undefined
+      ? await ctx.db
+          .query("accountingEvents")
+          .withIndex("by_org_source", (q) =>
+            q
+              .eq("orgId", args.orgId)
+              .eq("sourceType", args.sourceType)
+              .eq("sourceId", args.sourceId)
+          )
+          .filter((q) => q.eq(q.field("eventType"), args.eventType))
+          .filter((q) => q.eq(q.field("status"), "POSTED"))
+          .first()
+      : await ctx.db
+          .query("accountingEvents")
+          .withIndex("by_org_event_source_version", (q) =>
+            q
+              .eq("orgId", args.orgId)
+              .eq("eventType", args.eventType)
+              .eq("sourceType", args.sourceType)
+              .eq("sourceId", args.sourceId)
+              .eq("eventVersion", args.eventVersion!)
+          )
+          .filter((q) => q.eq(q.field("status"), "POSTED"))
+          .first();
 
   if (originalEvent) {
     const period = await getOpenPeriodForDate(ctx, args.orgId, args.reversalDate);
@@ -259,6 +288,23 @@ export async function hookDepositReceived(
   });
 }
 
+/**
+ * The exact accounting coordinates of one application of deposit money.
+ *
+ * Passed in rather than derived, and stored on the `depositApplications` row
+ * that owns it, so the reversal reads back precisely what was posted. A
+ * reversal that re-derives its target and gets it wrong does not fail — it
+ * finds no event and returns quietly, leaving the subledger reinstated and the
+ * ledger still showing the liability discharged.
+ */
+export type DepositApplicationIdentity = {
+  eventType: "DEPOSIT_APPLIED" | "DEPOSIT_APPLIED_TO_SETTLEMENT";
+  sourceType: string;
+  sourceId: string;
+  eventVersion: number;
+  idempotencyKey: string;
+};
+
 export async function hookDepositApplied(
   ctx: MutationCtx,
   args: {
@@ -270,30 +316,28 @@ export async function hookDepositApplied(
     actorId: Id<"users">;
     occurredAt: number;
     saleId?: Id<"sales">;
+    /** Which car on a multi-vehicle quote consumed its share. */
+    allocationVehicleId?: Id<"vehicles">;
     /**
-     * Which car on a multi-vehicle quote is consuming its share.
+     * The identity this application was recorded under.
      *
      * One deposit row can be applied several times — once per car it was
-     * allocated across — and each is its own movement of money. Without this
-     * the second car's application collides with the first on both the
-     * idempotency key and the (eventType, sourceType, sourceId, eventVersion)
-     * identity, and silently posts nothing: the ledger records one application
-     * where the subledger records several.
+     * allocated across — and each is its own movement of money against its own
+     * sale. Sharing an identity makes the second application collide with the
+     * first on both the key and the (eventType, sourceType, sourceId,
+     * eventVersion) tuple and silently post nothing, and makes every reversal
+     * ambiguous. Omitted only by callers that predate the application record.
      */
-    allocationVehicleId?: Id<"vehicles">;
-    /** Which application against this deposit this is. Defaults to 1. */
-    allocationSeq?: number;
+    identity?: DepositApplicationIdentity;
   }
 ) {
   await postDomainEvent(ctx, {
     orgId: args.orgId,
     eventType: "DEPOSIT_APPLIED",
-    sourceType: "deposits",
-    sourceId: args.depositId.toString(),
-    idempotencyKey: args.allocationVehicleId
-      ? `deposit_applied_${args.depositId}_${args.allocationVehicleId}`
-      : `deposit_applied_${args.depositId}`,
-    eventVersion: args.allocationSeq ?? 1,
+    sourceType: args.identity?.sourceType ?? "deposits",
+    sourceId: args.identity?.sourceId ?? args.depositId.toString(),
+    idempotencyKey: args.identity?.idempotencyKey ?? `deposit_applied_${args.depositId}`,
+    eventVersion: args.identity?.eventVersion ?? 1,
     currency: args.currency,
     occurredAt: args.occurredAt,
     actorId: args.actorId,
@@ -305,6 +349,36 @@ export async function hookDepositApplied(
       saleId: args.saleId?.toString(),
       allocationVehicleId: args.allocationVehicleId?.toString(),
     },
+  });
+}
+
+/**
+ * Backs out ONE recorded application, using the identity it was posted under.
+ *
+ * Deliberately takes no depositId: reversing "the deposit" is what let a
+ * cancellation on one car unwind another car's live credit.
+ */
+export async function reverseDepositApplication(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    identity: DepositApplicationIdentity;
+    reason: string;
+    actorId: Id<"users">;
+    reversalDate: number;
+  }
+): Promise<void> {
+  await reverseEventIfPosted(ctx, {
+    orgId: args.orgId,
+    sourceType: args.identity.sourceType,
+    sourceId: args.identity.sourceId,
+    eventType: args.identity.eventType,
+    eventVersion: args.identity.eventVersion,
+    reason: args.reason,
+    actorId: args.actorId,
+    reversalDate: args.reversalDate,
+    reversalIdempotencyKey: `reversed_${args.identity.idempotencyKey}`,
+    pendingPostIdempotencyKey: args.identity.idempotencyKey,
   });
 }
 
@@ -326,17 +400,21 @@ export async function hookDepositAppliedToSettlement(
     actorId: Id<"users">;
     occurredAt: number;
     saleId?: Id<"sales">;
+    /** See hookDepositApplied — one row, one identity per application. */
+    identity?: DepositApplicationIdentity;
   }
 ) {
   await postDomainEvent(ctx, {
     orgId: args.orgId,
     eventType: "DEPOSIT_APPLIED_TO_SETTLEMENT",
-    sourceType: "deposits",
-    sourceId: args.depositId.toString(),
+    sourceType: args.identity?.sourceType ?? "deposits",
+    sourceId: args.identity?.sourceId ?? args.depositId.toString(),
     // Distinct from `deposit_applied_*`: a deposit resolves exactly once, but
     // the two treatments credit different accounts, so sharing a key would let
     // whichever posted first silently suppress the other.
-    idempotencyKey: `deposit_applied_settlement_${args.depositId}`,
+    idempotencyKey:
+      args.identity?.idempotencyKey ?? `deposit_applied_settlement_${args.depositId}`,
+    eventVersion: args.identity?.eventVersion ?? 1,
     currency: args.currency,
     occurredAt: args.occurredAt,
     actorId: args.actorId,
@@ -446,6 +524,16 @@ type DepositResolutionHookArgs = {
   occurredAt: number;
   /** Only meaningful for DEPOSIT_REFUNDED — forfeiture never moves cash. */
   paymentMethod?: string;
+  /**
+   * Scopes the entry to ONE vehicle's slice of a shared quote deposit.
+   *
+   * Refunding part of a multi-vehicle deposit is a different movement from
+   * resolving the whole row, and the two must not share an identity: keyed on
+   * the deposit alone, the first partial refund would make every later one —
+   * and the eventual release of the remainder — return "already posted" and
+   * move no money at all.
+   */
+  sliceHoldId?: Id<"depositVehicleHolds">;
 };
 
 /** Refund and forfeiture post identical event shapes — only the event type (and thus the posting rule) differs. */
@@ -454,9 +542,11 @@ function makeDepositResolutionHook(eventType: "DEPOSIT_REFUNDED" | "DEPOSIT_FORF
     postDomainEvent(ctx, {
       orgId: args.orgId,
       eventType,
-      sourceType: "deposits",
-      sourceId: args.depositId.toString(),
-      idempotencyKey: `${keyPrefix}_${args.depositId}`,
+      sourceType: args.sliceHoldId ? "depositVehicleHolds" : "deposits",
+      sourceId: (args.sliceHoldId ?? args.depositId).toString(),
+      idempotencyKey: args.sliceHoldId
+        ? `${keyPrefix}_slice_${args.sliceHoldId}`
+        : `${keyPrefix}_${args.depositId}`,
       currency: args.currency,
       occurredAt: args.occurredAt,
       actorId: args.actorId,
@@ -466,6 +556,7 @@ function makeDepositResolutionHook(eventType: "DEPOSIT_REFUNDED" | "DEPOSIT_FORF
         currency: args.currency,
         customerId: args.customerId.toString(),
         paymentMethod: args.paymentMethod,
+        holdId: args.sliceHoldId?.toString(),
       },
     });
 }

@@ -10,6 +10,8 @@ import {
   releaseAllVehiclesForDeposit,
   releaseHeldDeposit,
   maybeReleaseVehicleHold,
+  payOutDepositSlice,
+  syncVehicleHoldStatus,
 } from "./utils/depositHelpers";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
@@ -22,7 +24,11 @@ import {
   recordHeldDeposit,
 } from "./utils/depositRecording";
 import { voidCanonicalPayment } from "./subledger";
-import { quoteDepositAllocation, validateAllocationTotals } from "./utils/depositAllocation";
+import {
+  quoteDepositAllocation,
+  validateAllocationTotals,
+  assertQuoteDepositConservation,
+} from "./utils/depositAllocation";
 import { toMinorUnits, assertFiniteNumber, scaleForCurrency } from "./utils/money";
 import { auditLog } from "./financialAudit";
 
@@ -421,34 +427,72 @@ export const allocateToVehicles = mutation({
       .filter(
         (a) =>
           a.active &&
-          a.status !== "APPLIED" &&
-          a.status !== "RELEASED" &&
-          a.status !== "RESOLVED" &&
+          (a.status === undefined || a.status === "ALLOCATED") &&
           a.allocatedMinor !== undefined &&
           !proposedByVehicle.has(a.vehicleId.toString())
       )
       .reduce((sum, a) => sum + (a.allocatedMinor ?? 0), 0);
 
     const check = validateAllocationTotals({
-      heldTotalMinor: summary.heldTotalMinor,
-      appliedMinor: summary.appliedMinor,
-      releasedAwaitingDecisionMinor: summary.releasedAwaitingDecisionMinor,
-      proposedMinor: [...proposedByVehicle.values(), retainedMinor],
+      availableForAllocationMinor: summary.availableForAllocationMinor,
+      retainedMinor,
+      proposedMinor: [...proposedByVehicle.values()],
     });
     if (!check.ok) throw new ConvexError(check.reason);
 
     // Every named vehicle must have a hold row to write the allocation onto.
     // Silently skipping one meant the caller was told the allocation saved
     // while that car stayed unallocated and unsellable.
+    //
+    // Checked against terminal rows first, so a car whose share is already spent
+    // is told so rather than being reported as having no hold at all — an
+    // applied slice's row is inactive, which looks identical from here.
     const holdVehicleIds = new Set(
       summary.allocations.filter((a) => a.active).map((a) => a.vehicleId.toString())
     );
     for (const vehicleId of proposedByVehicle.keys()) {
-      if (!holdVehicleIds.has(vehicleId)) {
+      if (holdVehicleIds.has(vehicleId)) continue;
+      const settled = summary.allocations.filter(
+        (a) => a.vehicleId.toString() === vehicleId && !a.active
+      );
+      if (settled.some((a) => a.status === "APPLIED")) {
         throw new ConvexError(
-          "One of the vehicles named has no active hold on this quote's deposit, so an allocation cannot be recorded against it."
+          "That vehicle's share of the deposit has already been applied to its completed sale and cannot be re-allocated. Cancel the sale first."
         );
       }
+      if (settled.some((a) => a.status === "REVERSING")) {
+        throw new ConvexError(
+          "That vehicle's share is still being backed out of the ledger after its sale was cancelled. It cannot be re-allocated until that reversal has posted."
+        );
+      }
+      if (settled.some((a) => a.status === "RELEASED_AWAITING_DECISION")) {
+        throw new ConvexError(
+          "That vehicle's share was released when it left the deal and needs an explicit decision before it can be used again."
+        );
+      }
+      throw new ConvexError(
+        "One of the vehicles named has no active hold on this quote's deposit, so an allocation cannot be recorded against it."
+      );
+    }
+
+    // How much of each individual payment is still free to assign. Cars left
+    // out of this call keep their share, so theirs is subtracted here too.
+    const capacity = new Map<string, number>();
+    for (const row of summary.depositRows) {
+      const retainedOnRow = summary.allocations
+        .filter(
+          (a) =>
+            a.depositId === row.depositId &&
+            a.active &&
+            (a.status === undefined || a.status === "ALLOCATED") &&
+            a.allocatedMinor !== undefined &&
+            !proposedByVehicle.has(a.vehicleId.toString())
+        )
+        .reduce((sum, a) => sum + (a.allocatedMinor ?? 0), 0);
+      capacity.set(
+        row.depositId.toString(),
+        Math.max(0, row.amountMinor - row.committedMinor - retainedOnRow)
+      );
     }
 
     const now = Date.now();
@@ -463,7 +507,12 @@ export const allocateToVehicles = mutation({
             "That vehicle's share of the deposit has already been applied to its completed sale and cannot be re-allocated. Cancel the sale first."
           );
         }
-        if (allocation.status === "RELEASED") {
+        if (allocation.status === "REVERSING") {
+          throw new ConvexError(
+            "That vehicle's share is still being backed out of the ledger after its sale was cancelled. It cannot be re-allocated until that reversal has posted."
+          );
+        }
+        if (allocation.status === "RELEASED_AWAITING_DECISION") {
           throw new ConvexError(
             "That vehicle's share was released when it left the deal and needs an explicit decision before it can be used again."
           );
@@ -475,15 +524,20 @@ export const allocateToVehicles = mutation({
         }
       }
 
-      // The amount is the VEHICLE's, not each payment's. Where the customer
-      // paid in instalments the car has one hold row per payment, and writing
-      // the requested figure onto every one of them allocated it several times
-      // over. It is carried on the first and the rest are set to nothing —
-      // which payment the money came from does not change what the car owes.
+      // The amount is the VEHICLE's, not each payment's — and it is spread
+      // across the payments that can actually cover it.
+      //
+      // Where the customer paid the عربون in instalments, the car has one hold
+      // row per payment. Writing the requested figure onto every row allocated
+      // it several times over; writing it all onto the first asked a 3,000
+      // payment to settle a 5,000 share, and the subledger refused the sale
+      // outright. Each row carries only what is left of it.
       let remaining = proposed;
       for (const allocation of holdsForVehicle) {
-        const share = remaining;
-        remaining = 0;
+        const room = capacity.get(allocation.depositId.toString()) ?? 0;
+        const share = Math.min(remaining, room);
+        remaining -= share;
+        capacity.set(allocation.depositId.toString(), room - share);
         await ctx.db.patch(allocation.holdId, {
           allocatedAmountMinor: share,
           allocationStatus: "ALLOCATED",
@@ -491,8 +545,15 @@ export const allocateToVehicles = mutation({
           allocatedBy: user._id,
         });
       }
+      if (remaining > 0) {
+        throw new ConvexError(
+          "That split cannot be settled against the payments received: one vehicle's share is larger than what is left of the deposits it is held against."
+        );
+      }
       if (holdsForVehicle.length > 0) written += 1;
     }
+
+    await assertQuoteDepositConservation(ctx, { quoteId: args.quoteId, currency });
 
     await auditLog(ctx, {
       orgId: args.orgId,
@@ -547,8 +608,10 @@ export const resolveReleasedAllocation = mutation({
   },
   handler: async (ctx, args) => {
     // Refund and forfeiture move or keep a customer's money, so they carry the
-    // same approval bar as `deposits.release`. Re-allocating within the same
-    // quote does not, and is deal work.
+    // same approval bar as `deposits.release` — re-checked inside
+    // `payOutDepositSlice` against the actor, along with the separation between
+    // whoever took the deposit and whoever disposes of it. Re-allocating within
+    // the same quote does not, and is deal work.
     const needsApproval =
       args.treatment === "REFUND_TO_CUSTOMER" || args.treatment === "FORFEITED";
     const { user } = await requireTenantAuth(
@@ -561,7 +624,12 @@ export const resolveReleasedAllocation = mutation({
     if (!hold || hold.orgId !== args.orgId) {
       throw new ConvexError("Deposit allocation not found in this organization.");
     }
-    if (hold.allocationStatus !== "RELEASED") {
+    if (hold.allocationStatus === "REVERSING") {
+      throw new ConvexError(
+        "This share is still being backed out of the ledger after its sale was cancelled. Wait for that reversal to post before deciding what happens to the money."
+      );
+    }
+    if (hold.allocationStatus !== "RELEASED_AWAITING_DECISION") {
       throw new ConvexError(
         "That allocation has not been released, so there is nothing to decide about it."
       );
@@ -571,6 +639,9 @@ export const resolveReleasedAllocation = mutation({
       throwAppError(AppErrorCode.DEPOSIT_NOT_FOUND, "Deposit not found in this organization.");
     }
 
+    const currency = normalizeCurrency(
+      deposit.currency ?? (await getOrgCurrency(ctx, args.orgId))
+    );
     const amountMinor = hold.allocatedAmountMinor ?? 0;
     const now = Date.now();
 
@@ -578,50 +649,91 @@ export const resolveReleasedAllocation = mutation({
       if (!args.toVehicleId) {
         throw new ConvexError("Name the vehicle that is to receive the released amount.");
       }
-      const target = await ctx.db
+      if (args.toVehicleId === hold.vehicleId) {
+        throw new ConvexError(
+          "Re-allocating a share to the vehicle it came from is not a decision. Return it to the quote's unallocated balance instead, and allocate from there."
+        );
+      }
+      const quote = deposit.quoteId ? await ctx.db.get(deposit.quoteId) : null;
+      const quoteVehicleIds = new Set(
+        (quote?.vehicleItems ?? (quote ? [{ vehicleId: quote.vehicleId }] : [])).map((item) =>
+          item.vehicleId.toString()
+        )
+      );
+      if (!quoteVehicleIds.has(args.toVehicleId.toString())) {
+        throw new ConvexError(
+          "That vehicle is not a line on this deposit's quote, so it cannot receive the released amount."
+        );
+      }
+      const targetHolds = await ctx.db
         .query("depositVehicleHolds")
         .withIndex("by_deposit_vehicle", (q) =>
           q.eq("depositId", hold.depositId).eq("vehicleId", args.toVehicleId!)
         )
-        .first();
-      if (!target || !target.active) {
-        throw new ConvexError(
-          "That vehicle is not an active line on this deposit's quote, so it cannot receive the released amount."
-        );
-      }
-      if (target.allocationStatus === "APPLIED") {
+        .collect();
+      if (targetHolds.some((h) => h.allocationStatus === "APPLIED")) {
         throw new ConvexError(
           "That vehicle's sale is already complete; its share cannot be increased after the fact."
         );
       }
-      await ctx.db.patch(target._id, {
-        allocatedAmountMinor: (target.allocatedAmountMinor ?? 0) + amountMinor,
-        allocationStatus: "ALLOCATED",
+      // A NEW allocation, not an edit of the old one. Rewriting the released
+      // row to point at the receiving car would erase the fact that the money
+      // was ever against the first one — the audit question a re-allocation
+      // exists to answer.
+      await ctx.db.insert("depositVehicleHolds", {
+        orgId: args.orgId,
+        depositId: hold.depositId,
+        vehicleId: args.toVehicleId,
+        active: true,
+        createdAt: now,
+        allocatedAmountMinor: amountMinor,
         allocatedAt: now,
         allocatedBy: user._id,
+        allocationStatus: "ALLOCATED",
+        sourceHoldId: hold._id,
       });
-    } else if (args.treatment === "REFUND_TO_CUSTOMER") {
-      // Deliberately NOT posted here. A partial refund of a shared deposit row
-      // is a different movement from releasing the whole deposit, and
-      // `releaseHeldDeposit` resolves the entire row — posting a partial
-      // release through a whole-row path would take the other cars' money with
-      // it. The decision is recorded; the payout is an explicit entry.
-      if (!args.refundMethod) {
-        throw new ConvexError(
-          "A refund needs the method the money is going out by — the deposit's own method may be one that cannot be paid out."
-        );
-      }
-    } else if (args.treatment === "OTHER") {
+      await syncVehicleHoldStatus(ctx, args.toVehicleId, user._id);
+    } else if (args.treatment === "RETURN_TO_UNALLOCATED") {
+      // No cash movement and no revenue: the money never left, it simply stops
+      // being against this car. A fresh, unallocated hold re-opens the vehicle
+      // so it can be allocated and sold again — without one, the car was
+      // permanently unsellable on this quote, because an allocation can only be
+      // written onto an active hold row and every path out of RESOLVED is
+      // terminal.
+      await ctx.db.insert("depositVehicleHolds", {
+        orgId: args.orgId,
+        depositId: hold.depositId,
+        vehicleId: hold.vehicleId,
+        active: true,
+        createdAt: now,
+        sourceHoldId: hold._id,
+      });
+      await syncVehicleHoldStatus(ctx, hold.vehicleId, user._id);
+    } else if (args.treatment === "REFUND_TO_CUSTOMER" || args.treatment === "FORFEITED") {
+      // The money actually moves. Recording the decision and posting nothing
+      // left the customer's share sitting on the books as a liability against a
+      // car that had left the deal, with a refund nobody ever paid.
+      await payOutDepositSlice(ctx, {
+        orgId: args.orgId,
+        deposit,
+        holdId: hold._id,
+        vehicleId: hold.vehicleId,
+        amountMinor,
+        currency,
+        resolution: args.treatment === "FORFEITED" ? "FORFEITED" : "REFUNDED",
+        refundMethod: args.refundMethod,
+        actorId: user._id,
+        notes: args.reason,
+        occurredAt: now,
+        idempotencyKey: args.idempotencyKey,
+      });
+    } else {
       if (!args.reason?.trim()) {
         throw new ConvexError(
           "An 'other' treatment has to say what it is. Record the approved treatment and the reason for it."
         );
       }
     }
-    // RETURN_TO_UNALLOCATED and FORFEITED need nothing extra here: clearing the
-    // released slice below is exactly what returns it to the quote-level
-    // unallocated balance, and a forfeiture is recorded rather than posted for
-    // the same partial-row reason as a refund.
 
     // Terminal, and the amount is preserved rather than zeroed. Zeroing it made
     // a refunded slice disappear from the released bucket and reappear in the
@@ -634,6 +746,10 @@ export const resolveReleasedAllocation = mutation({
       resolvedAt: now,
       resolvedBy: user._id,
     });
+
+    if (deposit.quoteId) {
+      await assertQuoteDepositConservation(ctx, { quoteId: deposit.quoteId, currency });
+    }
 
     await auditLog(ctx, {
       orgId: args.orgId,
@@ -673,20 +789,36 @@ export const quoteAllocation = query({
     const vehicles = await Promise.all(
       items.map(async (item) => {
         const vehicle = await ctx.db.get(item.vehicleId);
-        // The active hold if there is one, otherwise whatever became of it —
-        // a released slice has `active: false` and is exactly the row somebody
+        // Summed across every live hold for the car, because it can have more
+        // than one: a deposit paid in instalments writes a hold per payment,
+        // and money re-allocated from another car arrives as its own row rather
+        // than being added onto an existing one. Reading a single row showed
+        // one instalment's share and called it the car's allocation.
+        const live = summary.allocations.filter((a) => a.vehicleId === item.vehicleId && a.active);
+        // A released slice has `active: false` and is exactly the row somebody
         // has to make a decision about, so it cannot be filtered out of the
         // screen where that decision is made.
-        const allocation =
-          summary.allocations.find((a) => a.vehicleId === item.vehicleId && a.active) ??
-          summary.allocations.find((a) => a.vehicleId === item.vehicleId);
+        const awaitingDecision = summary.allocations.filter(
+          (a) =>
+            a.vehicleId === item.vehicleId &&
+            !a.active &&
+            (a.status === "RELEASED_AWAITING_DECISION" || a.status === "REVERSING")
+        );
+        const shown = live.length > 0 ? live : awaitingDecision;
+        const fallback = summary.allocations.find((a) => a.vehicleId === item.vehicleId);
+        const allocatedMinor = shown.reduce<number | undefined>(
+          (sum, a) => (a.allocatedMinor === undefined ? sum : (sum ?? 0) + a.allocatedMinor),
+          undefined
+        );
         return {
           vehicleId: item.vehicleId,
           label: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim() : "Vehicle",
           unitPrice: item.unitPrice,
-          allocatedMinor: allocation?.allocatedMinor,
-          status: allocation?.status,
-          holdId: allocation?.holdId,
+          allocatedMinor: shown.length > 0 ? allocatedMinor : fallback?.allocatedMinor,
+          status: shown[0]?.status ?? fallback?.status,
+          holdId: shown[0]?.holdId ?? fallback?.holdId,
+          /** Every slice awaiting a decision on this car, each resolved on its own. */
+          awaitingDecisionHoldIds: awaitingDecision.map((a) => a.holdId),
         };
       })
     );
@@ -698,12 +830,21 @@ export const quoteAllocation = query({
       // error, and a duplicated list drifts.
       scale: scaleForCurrency(currency),
       isMultiVehicle: summary.isMultiVehicle,
+      // Every dinar received, in exactly one bucket. The screen shows the whole
+      // picture rather than a net figure, because "5,000 held" is the same
+      // number whether 2,000 of it was refunded or is still available.
       heldTotalMinor: summary.heldTotalMinor,
+      totalReceivedMinor: summary.totalReceivedMinor,
       allocatedMinor: summary.allocatedMinor,
       appliedMinor: summary.appliedMinor,
+      reversingMinor: summary.reversingMinor,
       releasedAwaitingDecisionMinor: summary.releasedAwaitingDecisionMinor,
+      refundedMinor: summary.refundedMinor,
+      forfeitedMinor: summary.forfeitedMinor,
+      otherFinalizedMinor: summary.otherFinalizedMinor,
       resolvedOutMinor: summary.resolvedOutMinor,
       unallocatedMinor: summary.unallocatedMinor,
+      availableForAllocationMinor: summary.availableForAllocationMinor,
       vehicles,
       /** Cars that cannot be sold until somebody allocates their share. */
       vehiclesWithoutAllocation: summary.vehiclesWithoutAllocation,
@@ -759,7 +900,7 @@ export const releaseVehicleAllocation = mutation({
       }
       await ctx.db.patch(hold._id, {
         active: false,
-        allocationStatus: "RELEASED",
+        allocationStatus: "RELEASED_AWAITING_DECISION",
         releaseReason: args.reason?.trim(),
       });
       releasedMinor += hold.allocatedAmountMinor ?? 0;

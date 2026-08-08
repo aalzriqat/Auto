@@ -100,6 +100,9 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // existed: on a FAILED run the surviving rows reference a deleted company,
   // which is the lesser of the two dangling directions.
   { kind: "orgRows", table: "financeCompanyRuleVersions", index: "by_org" },
+  // Before `deposits`: an application is the record of money moving off a
+  // deposit, so it must not outlive the row it points at.
+  { kind: "orgRows", table: "depositApplications", index: "by_org" },
   { kind: "orgRows", table: "deposits", index: "by_org" },
   { kind: "orgRows", table: "receivables", index: "by_org" },
   { kind: "orgRows", table: "collectionPayments", index: "by_org" },

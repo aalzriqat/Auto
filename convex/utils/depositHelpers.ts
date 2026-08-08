@@ -7,6 +7,7 @@ import { PERMISSIONS } from "./permissions";
 import { assertDifferentActors } from "./financialGuards";
 import { normalizeCurrency, amountToMinorOrThrow, type DepositMethod } from "./depositRecording";
 import { fromMinorUnits } from "./money";
+import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { createCanonicalPayment } from "../subledger";
 import {
   getOrgCurrency,
@@ -52,15 +53,17 @@ type ResolvedDepositsForQuoteResult = {
     customerId: Id<"customers">;
     amount: number;
     vehicleId: Id<"vehicles">;
+    /** The allocation consumed. Absent on a single-vehicle quote, which has no hold rows. */
+    holdId?: Id<"depositVehicleHolds">;
   }>;
   appliedDeposits: Array<{
     depositId: Id<"deposits">;
     customerId: Id<"customers">;
     amount: number;
-    /** Which car's allocated slice this was — the GL event is keyed on it. */
+    /** Which car's allocated slice this was — the application is recorded against it. */
     vehicleId: Id<"vehicles">;
-    /** Which application against this deposit row this is. 1 for a single-vehicle quote. */
-    allocationSeq?: number;
+    /** The allocation consumed. Absent on a single-vehicle quote. */
+    holdId?: Id<"depositVehicleHolds">;
   }>;
 };
 
@@ -166,9 +169,28 @@ export async function getActiveDepositHolds(
   const secondary = await Promise.all(secondaryHolds.map((hold) => ctx.db.get(hold.depositId)));
 
   const byId = new Map<string, Doc<"deposits">>();
-  for (const deposit of [...direct, ...secondary]) {
+  for (const deposit of secondary) {
     if (!deposit || deposit.isDeleted === true) continue;
     if (deposit.status !== "HELD" || deposit.holdActive !== true) continue;
+    byId.set(deposit._id, deposit);
+  }
+  for (const deposit of direct) {
+    if (!deposit || deposit.isDeleted === true) continue;
+    if (deposit.status !== "HELD" || deposit.holdActive !== true) continue;
+    if (byId.has(deposit._id)) continue;
+    // Where a deposit carries hold rows, those rows are the whole truth about
+    // which cars it is holding — including the one named on the deposit itself,
+    // which is only ever the quote's FIRST line item.
+    //
+    // Without this, a multi-vehicle deposit that is still held for car B kept
+    // car A reserved through this direct index even after A's own share had
+    // been consumed, released, or refunded. The car could not be freed by any
+    // means short of resolving the whole deposit.
+    const holds = await ctx.db
+      .query("depositVehicleHolds")
+      .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
+      .take(50);
+    if (holds.length > 0) continue;
     byId.set(deposit._id, deposit);
   }
   return Array.from(byId.values());
@@ -179,20 +201,15 @@ export async function hasActiveDepositHold(
   ctx: MutationCtx,
   vehicleId: Id<"vehicles">
 ): Promise<boolean> {
-  const deposits = await ctx.db
-    .query("deposits")
-    .withIndex("by_vehicle_hold", (q) => q.eq("vehicleId", vehicleId).eq("holdActive", true))
-    .take(50);
-
-  if (deposits.some((deposit) => deposit.isDeleted !== true)) return true;
-
-  // Covers secondary vehicles on a multi-vehicle deposit, which only ever
-  // snapshot their primary vehicleId on the `deposits` row itself.
-  const secondaryHolds = await ctx.db
-    .query("depositVehicleHolds")
-    .withIndex("by_vehicle_active", (q) => q.eq("vehicleId", vehicleId).eq("active", true))
-    .take(50);
-  return secondaryHolds.length > 0;
+  // One definition of "who is holding this car", shared with
+  // getActiveDepositHolds. This used to carry its own copy, which answered
+  // differently: it treated a deposit's own `vehicleId` as a hold on that car
+  // unconditionally, so on a multi-vehicle quote the FIRST line item stayed
+  // reserved off the shared row even after its own share had been consumed,
+  // released or refunded — and no path could free it while any other car on the
+  // quote still held part of the deposit.
+  const holders = await getActiveDepositHolds(ctx, vehicleId);
+  return holders.length > 0;
 }
 
 /** Exported for saleCancellation.ts's trade-in-reversal safety guard, in addition to internal use by syncVehicleHoldStatus below. */
@@ -330,6 +347,14 @@ export async function reactivateAllVehiclesForDeposit(
     .collect();
 
   for (const hold of secondaryHolds) {
+    // Only slices that are still simply held. A slice consumed by another car's
+    // sale that still stands, or released and awaiting a decision, or already
+    // resolved, has been settled on its own terms — putting it back on hold
+    // would re-reserve a car that was sold and resurrect money that was
+    // refunded.
+    const settled =
+      hold.allocationStatus !== undefined && hold.allocationStatus !== "ALLOCATED";
+    if (settled) continue;
     if (!hold.active) {
       await ctx.db.patch(hold._id, { active: true });
     }
@@ -489,11 +514,9 @@ export async function resolveDepositsForQuote(
     if (!mine || mine.allocatedAmountMinor === undefined) continue;
 
     const sliceMinor = mine.allocatedAmountMinor;
-    // Counted BEFORE this slice is marked applied, so the first application is
-    // version 1 and the second version 2.
-    const alreadyApplied = holds.filter((h) => h.allocationStatus === "APPLIED").length;
     await ctx.db.patch(mine._id, {
-      allocationStatus: args.resolution === "APPLIED" ? "APPLIED" : "RELEASED",
+      allocationStatus:
+        args.resolution === "APPLIED" ? "APPLIED" : "RELEASED_AWAITING_DECISION",
       active: false,
       ...(args.saleId ? { appliedSaleId: args.saleId } : {}),
       resolvedAt: now,
@@ -508,6 +531,7 @@ export async function resolveDepositsForQuote(
         customerId: deposit.customerId,
         amount: fromMinorUnits(sliceMinor, args.currency),
         vehicleId: args.vehicleId,
+        holdId: mine._id,
       });
     }
     if (args.resolution === "APPLIED" && appliesToCustomerAr && sliceMinor > 0) {
@@ -516,7 +540,7 @@ export async function resolveDepositsForQuote(
         customerId: deposit.customerId,
         amount: fromMinorUnits(sliceMinor, args.currency),
         vehicleId: args.vehicleId,
-        allocationSeq: alreadyApplied + 1,
+        holdId: mine._id,
       });
     }
 
@@ -665,6 +689,154 @@ export async function releaseHoldForApplicationQuote(
 }
 
 /**
+ * Pays out — or writes off — ONE vehicle's slice of a shared quote deposit.
+ *
+ * The whole-row path (`releaseHeldDeposit`) cannot do this: it resolves the
+ * entire `deposits` row, and on a multi-vehicle quote that row is also holding
+ * the other cars' money. So the slice case used to record a decision and move
+ * nothing — a REFUND treatment that produced no payment, no cashflow row and no
+ * journal, leaving the customer's money on the books as a liability against a
+ * car that had left the deal.
+ *
+ * Every control the whole-row release carries applies here too, because they
+ * belong to the decision and not to the size of it: approval permission,
+ * separation between whoever took the deposit and whoever gives it back, a
+ * refund method that can actually be paid out, and a record in the places
+ * people look for cash leaving the business.
+ */
+export async function payOutDepositSlice(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    deposit: Doc<"deposits">;
+    holdId: Id<"depositVehicleHolds">;
+    vehicleId: Id<"vehicles">;
+    amountMinor: number;
+    currency: string;
+    resolution: "REFUNDED" | "FORFEITED";
+    refundMethod?: DepositMethod;
+    actorId: Id<"users">;
+    notes?: string;
+    occurredAt: number;
+    idempotencyKey?: string;
+  }
+): Promise<void> {
+  if (args.amountMinor <= 0) return;
+
+  if (args.resolution === "REFUNDED") {
+    if (!args.refundMethod) {
+      throw new ConvexError(
+        "A refund needs the method the money is going out by — the deposit's own method may be one that cannot be paid out."
+      );
+    }
+    if (args.refundMethod === "OTHER") {
+      throw new ConvexError(
+        "Select a specific refund method — OTHER is not accepted for a deposit refund."
+      );
+    }
+  }
+
+  await requireActorPermission(
+    ctx,
+    args.orgId,
+    args.actorId,
+    PERMISSIONS.APPROVE_REQUESTS,
+    "Refunding or forfeiting a reservation deposit requires approval permission."
+  );
+  assertDifferentActors(
+    args.actorId,
+    args.deposit.createdBy,
+    "Deposit creator cannot resolve their own deposit refund or forfeiture."
+  );
+
+  const amountMajor = fromMinorUnits(args.amountMinor, args.currency);
+
+  if (args.resolution === "FORFEITED") {
+    await hookDepositForfeited(ctx, {
+      orgId: args.orgId,
+      depositId: args.deposit._id,
+      customerId: args.deposit.customerId,
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      actorId: args.actorId,
+      occurredAt: args.occurredAt,
+      sliceHoldId: args.holdId,
+    });
+    return;
+  }
+
+  const [vehicle, customer] = await Promise.all([
+    ctx.db.get(args.vehicleId),
+    ctx.db.get(args.deposit.customerId),
+  ]);
+  const vehicleLabel = vehicle
+    ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim()
+    : "Vehicle";
+  const customerLabel = customer
+    ? `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim() || "Customer"
+    : "Customer";
+
+  await ctx.db.insert("transactions", {
+    orgId: args.orgId,
+    type: "OUT",
+    amount: amountMajor,
+    date: args.occurredAt,
+    category: "DEPOSIT",
+    description: `Deposit refund (vehicle share) - ${vehicleLabel} - ${customerLabel}`,
+    vehicleId: args.vehicleId,
+    depositId: args.deposit._id,
+    idempotencyKey: args.idempotencyKey,
+  });
+
+  const collectionPaymentId = await ctx.db.insert("collectionPayments", {
+    orgId: args.orgId,
+    customerId: args.deposit.customerId,
+    vehicleId: args.vehicleId,
+    direction: "OUT",
+    method: "REFUND",
+    amount: amountMajor,
+    paymentDate: args.occurredAt,
+    status: "POSTED",
+    idempotencyKey: args.idempotencyKey,
+    reference: `Deposit slice refund ${args.holdId}`,
+    cashierId: args.actorId,
+    notes: args.notes,
+    createdAt: args.occurredAt,
+  });
+
+  const canonicalPaymentId = await createCanonicalPayment(ctx, {
+    orgId: args.orgId,
+    direction: "OUT",
+    payerType: "CUSTOMER",
+    customerId: args.deposit.customerId,
+    method: args.refundMethod!,
+    amountMinor: args.amountMinor,
+    currency: args.currency,
+    // Keyed on the slice, not the deposit: a quote can refund several shares of
+    // one row, and a shared key would make every refund after the first return
+    // the first one's payment and move no money.
+    idempotencyKey: `deposit_slice_refund_${args.holdId}`,
+    actorId: args.actorId,
+    status: "SETTLED",
+    externalReference: `Deposit slice refund ${args.holdId}`,
+    receivedAt: args.occurredAt,
+  });
+  await ctx.db.patch(collectionPaymentId, { canonicalPaymentId });
+
+  await hookDepositRefunded(ctx, {
+    orgId: args.orgId,
+    depositId: args.deposit._id,
+    customerId: args.deposit.customerId,
+    amountMinor: args.amountMinor,
+    currency: args.currency,
+    actorId: args.actorId,
+    occurredAt: args.occurredAt,
+    paymentMethod: args.refundMethod,
+    sliceHoldId: args.holdId,
+  });
+}
+
+/**
  * Releases one HELD deposit as a refund or a forfeiture, with every control
  * that decision carries.
  *
@@ -729,18 +901,70 @@ export async function releaseHeldDeposit(
 
   const now = args.occurredAt ?? Date.now();
   const currency = normalizeCurrency(deposit.currency ?? (await getOrgCurrency(ctx, args.orgId)));
-  const amountMinor = deposit.amountMinor ?? amountToMinorOrThrow(deposit.amount, currency);
+  const rowMinor = deposit.amountMinor ?? amountToMinorOrThrow(deposit.amount, currency);
 
+  // Only the part of the row nobody has a claim on.
+  //
+  // A quote-scoped deposit is applied per car, so a 5,000 row can have 3,000
+  // already credited against car A's live invoice while car B is still open.
+  // Refunding the row's face value paid the customer that 3,000 a second time —
+  // once off their invoice and once in cash — and posted a DEPOSIT_REFUNDED
+  // journal for the whole amount on top. The row's own status cannot catch it:
+  // it stays HELD until the LAST slice is consumed.
+  const claimedByLiveSalesMinor = await liveAppliedMinorForDeposit(ctx, args.depositId);
+  const alreadyPaidOutMinor = deposit.releasedAmountMinor ?? 0;
+  const holds = await ctx.db
+    .query("depositVehicleHolds")
+    .withIndex("by_deposit", (q) => q.eq("depositId", args.depositId))
+    .collect();
+  const slicesFinalizedMinor = holds
+    .filter(
+      (h) =>
+        h.allocationStatus === "RESOLVED" &&
+        (h.resolutionTreatment === "REFUND_TO_CUSTOMER" ||
+          h.resolutionTreatment === "FORFEITED" ||
+          h.resolutionTreatment === "OTHER")
+    )
+    .reduce((sum, h) => sum + (h.allocatedAmountMinor ?? 0), 0);
+  // Money assigned to a car that is still on the deal is not free either. This
+  // path resolves the ROW, and it used to take every vehicle's hold down with
+  // it — refunding one car's unallocated remainder silently cancelled another
+  // car's agreed share and left it unsellable. A car's share is released
+  // deliberately (deposits.releaseVehicleAllocation) and decided on its own.
+  const stillAllocatedMinor = holds
+    .filter((h) => h.active && h.allocationStatus !== "APPLIED")
+    .reduce((sum, h) => sum + (h.allocatedAmountMinor ?? 0), 0);
+  // A slice awaiting a decision is deliberately left in: `deposits.release`
+  // resolving the whole row IS an explicit decision about it, and the amount
+  // has not gone anywhere.
+  const amountMinor =
+    rowMinor -
+    claimedByLiveSalesMinor -
+    alreadyPaidOutMinor -
+    slicesFinalizedMinor -
+    stillAllocatedMinor;
+
+  if (amountMinor <= 0) {
+    throw new ConvexError(
+      "There is nothing left of this deposit to refund or forfeit — every part of it is either applied to a completed sale, allocated to a vehicle still on the deal, or already paid out. Cancel the sale, or release the vehicle's share, first."
+    );
+  }
+
+  // Whether anything of this row survives the payout decides how much of it
+  // closes. A row that is still carrying a live application or another car's
+  // allocation stays HELD with its holds intact — only the free part has left.
+  const closesTheRow = claimedByLiveSalesMinor + stillAllocatedMinor === 0;
   await ctx.db.patch(args.depositId, {
-    status: args.resolution,
-    holdActive: false,
+    ...(closesTheRow ? { status: args.resolution, holdActive: false } : {}),
+    releasedAmountMinor: alreadyPaidOutMinor + amountMinor,
     resolvedBy: args.actorId,
     resolvedAt: now,
     notes: args.notes ?? deposit.notes,
     ...(args.treatment ? { resolutionTreatment: args.treatment } : {}),
     ...(args.saleId ? { resolutionSaleId: args.saleId } : {}),
   });
-  await releaseAllVehiclesForDeposit(ctx, deposit);
+  if (closesTheRow) await releaseAllVehiclesForDeposit(ctx, deposit);
+  const amountMajor = fromMinorUnits(amountMinor, currency);
 
   if (args.resolution === "REFUNDED") {
     const [vehicle, customer] = await Promise.all([
@@ -762,7 +986,7 @@ export async function releaseHeldDeposit(
     await ctx.db.insert("transactions", {
       orgId: args.orgId,
       type: "OUT",
-      amount: deposit.amount,
+      amount: amountMajor,
       date: now,
       category: "DEPOSIT",
       description: `Deposit refund for ${sourceLabel} - ${vehicleLabel} - ${customerLabel}`,
@@ -777,7 +1001,7 @@ export async function releaseHeldDeposit(
       vehicleId: deposit.vehicleId,
       direction: "OUT",
       method: "REFUND",
-      amount: deposit.amount,
+      amount: amountMajor,
       paymentDate: now,
       status: "POSTED",
       idempotencyKey: args.idempotencyKey,

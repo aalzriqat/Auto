@@ -362,6 +362,57 @@ describe("every revenue consumer agrees on the same month", () => {
     expect(dash.grossTransactionValueThisMonth).toBe(expectedGross);
   });
 
+  test("a deposit does not change what the deal was transacted for", async () => {
+    // Gross transaction value is the size of the deal, and a deposit is a
+    // payment against a deal rather than a deal itself. Two customers buying
+    // identical 8,000 cars transacted for the same amount whether or not one of
+    // them put 3,000 down first.
+    //
+    // The P&L read the figure off the VEHICLE_SALE cashflow row's `amount`,
+    // which is NET of anything already collected, while the sales report and
+    // the dashboard read `sales.salePrice`. A deposit therefore made "gross"
+    // transaction value SMALLER on one screen than on the other two, by exactly
+    // what the customer had already paid.
+    const s = await seedDealer("gtvDeposit");
+    const vehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin: "VINGTVDEP1", make: "Kia", model: "Rio", year: 2023,
+        mileage: 5, color: "Red", fuelType: "Gas", transmission: "Auto",
+        sellingPrice: OWNED_PRICE, status: "AVAILABLE", sourceType: "STOCK",
+        purchasePrice: OWNED_COST,
+      })
+    );
+    const quoteId = await s.t.run((ctx) =>
+      ctx.db.insert("quotes", {
+        orgId: s.orgId, customerId: s.customerId, vehicleId,
+        vehiclePrice: OWNED_PRICE, downPayment: 0, termMonths: 0,
+        status: "ACCEPTED", createdBy: s.userId, createdAt: Date.now(),
+      })
+    );
+    await s.asUser.mutation(api.deposits.create, {
+      orgId: s.orgId, quoteId, amount: 3_000, method: "CASH" as const,
+    });
+    await s.asUser.mutation(api.sales.create, {
+      orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
+      salePrice: OWNED_PRICE, saleDate: Date.now(), status: "COMPLETED" as const,
+      quoteId,
+    });
+
+    const sales = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId, ...range(),
+    });
+    const pl = await s.asUser.query(api.reports.getProfitAndLoss, {
+      orgId: s.orgId, ...range(),
+    });
+    const dash = await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId, timeRange: "YEAR" as const,
+    });
+
+    expect(sales.totalGrossTransactionValue).toBe(OWNED_PRICE);
+    expect(pl.grossTransactionValue).toBe(OWNED_PRICE);
+    expect(dash.grossTransactionValueThisMonth).toBe(OWNED_PRICE);
+  });
+
   test("a salesperson's revenue matches the same basis on both surfaces", async () => {
     const s = await seedDealer("crossRep");
     await sellConsigned(s, "VINREPX3");
@@ -564,5 +615,112 @@ describe("historical consigned sales after the migration", () => {
       (await ctx.db.query("transactions").collect()).filter((tx) => tx.orgId === s.orgId)
     );
     expect(rows.every((tx) => tx.recognizedRevenueAmount === undefined)).toBe(true);
+  });
+});
+
+/**
+ * The settlement preview on a quote that carries more than one car.
+ *
+ * A quote's `vehiclePrice` is the total of the whole deal. Pairing it with one
+ * car's supplier cost produces a margin belonging to no vehicle at all — the
+ * first car's cost subtracted from every car's price — and that number was
+ * shown to the operator, beside that car's name, as its profit.
+ */
+describe("the consigned preview on a multi-vehicle quote", () => {
+  const SECOND_PRICE = 20_000;
+  const SECOND_ENTITLEMENT = 17_000;
+
+  async function twoCarQuote(tag: string) {
+    const s = await seedDealer(tag);
+    const first = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin: `VINPREV${tag}A`, make: "Toyota", model: "Camry", year: 2024,
+        mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto",
+        sellingPrice: SALE_PRICE, status: "AVAILABLE", sourceType: "SOURCED",
+        sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+      })
+    );
+    const second = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin: `VINPREV${tag}B`, make: "Lexus", model: "ES", year: 2024,
+        mileage: 12, color: "Black", fuelType: "Gas", transmission: "Auto",
+        sellingPrice: SECOND_PRICE, status: "AVAILABLE", sourceType: "SOURCED",
+        sourcedFromName: "Amman Importer Co", sourceCost: SECOND_ENTITLEMENT,
+      })
+    );
+    const quoteId = await s.t.run((ctx) =>
+      ctx.db.insert("quotes", {
+        orgId: s.orgId, customerId: s.customerId, vehicleId: first,
+        vehiclePrice: SALE_PRICE + SECOND_PRICE,
+        vehicleItems: [
+          { vehicleId: first, unitPrice: SALE_PRICE },
+          { vehicleId: second, unitPrice: SECOND_PRICE },
+        ],
+        downPayment: 0, termMonths: 0,
+        status: "ACCEPTED", createdBy: s.userId, createdAt: Date.now(),
+      })
+    );
+    return { s, quoteId, first, second };
+  }
+
+  test("prices each car off its own line, not off the quote total", async () => {
+    const { s, quoteId, first, second } = await twoCarQuote("prevLine");
+
+    const previewA = await s.asUser.query(api.sales.consignedSalePreview, {
+      orgId: s.orgId, vehicleId: first, quoteId,
+    });
+    const previewB = await s.asUser.query(api.sales.consignedSalePreview, {
+      orgId: s.orgId, vehicleId: second, quoteId,
+    });
+
+    expect(previewA!.salePrice).toBe(SALE_PRICE);
+    expect(previewA!.grossTransactionValue).toBe(SALE_PRICE);
+    expect(previewA!.supplierEntitlement).toBe(ENTITLEMENT);
+    expect(previewA!.dealershipMargin).toBe(MARGIN);
+    expect(previewA!.quoteLineIndex).toBe(0);
+
+    expect(previewB!.salePrice).toBe(SECOND_PRICE);
+    expect(previewB!.dealershipMargin).toBe(SECOND_PRICE - SECOND_ENTITLEMENT);
+    expect(previewB!.quoteLineIndex).toBe(1);
+
+    // The tell-tale of the old behaviour: the first car's margin computed off
+    // the whole quote's price.
+    expect(previewA!.dealershipMargin).not.toBe(SALE_PRICE + SECOND_PRICE - ENTITLEMENT);
+  });
+
+  test("refuses a vehicle that is not a line on the quote", async () => {
+    const { s, quoteId } = await twoCarQuote("prevOther");
+    const stranger = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin: "VINPREVSTRANGE", make: "Kia", model: "Rio", year: 2023,
+        mileage: 5, color: "Red", fuelType: "Gas", transmission: "Auto",
+        sellingPrice: OWNED_PRICE, status: "AVAILABLE", sourceType: "SOURCED",
+        sourcedFromName: "Amman Importer Co", sourceCost: 1_000,
+      })
+    );
+
+    expect(
+      await s.asUser.query(api.sales.consignedSalePreview, {
+        orgId: s.orgId, vehicleId: stranger, quoteId,
+      })
+    ).toBeNull();
+  });
+
+  test("the receivable follows the line as well as the margin", async () => {
+    const { s, quoteId, second } = await twoCarQuote("prevReceivable");
+
+    const through = await s.asUser.query(api.sales.consignedSalePreview, {
+      orgId: s.orgId, vehicleId: second, quoteId,
+      settlementRoute: "THROUGH_DEALERSHIP" as const,
+    });
+    expect(through!.customerVehicleReceivable).toBe(SECOND_PRICE);
+    expect(through!.supplierPayable).toBe(SECOND_ENTITLEMENT);
+
+    const direct = await s.asUser.query(api.sales.consignedSalePreview, {
+      orgId: s.orgId, vehicleId: second, quoteId,
+      settlementRoute: "DIRECT_TO_SUPPLIER" as const,
+    });
+    expect(direct!.customerVehicleReceivable).toBe(0);
+    expect(direct!.supplierReceivable).toBe(SECOND_PRICE - SECOND_ENTITLEMENT);
   });
 });

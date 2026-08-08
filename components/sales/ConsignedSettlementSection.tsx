@@ -33,26 +33,45 @@ type Route = "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER";
 interface Props {
   orgId: Id<"organizations">;
   vehicleId: Id<"vehicles"> | undefined;
-  salePrice: number;
+  /**
+   * Preview this car's LINE of the quote. The price then comes from the server,
+   * off that line — a quote's own `vehiclePrice` is the total of every car on
+   * it, and pairing it with one car's supplier cost showed an operator a margin
+   * that belonged to no vehicle.
+   */
+  quoteId?: Id<"quotes">;
+  /** Used only when no quote is named — the sale form knows its own price. */
+  salePrice?: number;
   value: Route;
   onChange: (route: Route) => void;
   disabled?: boolean;
+  /** The route is one decision for the whole quote, so it is asked for once. */
+  showRouteSelector?: boolean;
 }
 
 export function ConsignedSettlementSection({
   orgId,
   vehicleId,
+  quoteId,
   salePrice,
   value,
   onChange,
   disabled,
+  showRouteSelector = true,
 }: Props) {
   const { t, isRtl } = useLanguage();
 
   const preview = useQuery(
     api.sales.consignedSalePreview,
     vehicleId
-      ? { orgId, vehicleId, salePrice: Number.isFinite(salePrice) ? salePrice : 0, settlementRoute: value }
+      ? {
+          orgId,
+          vehicleId,
+          settlementRoute: value,
+          ...(quoteId
+            ? { quoteId }
+            : { salePrice: Number.isFinite(salePrice) ? (salePrice as number) : 0 }),
+        }
       : "skip"
   );
 
@@ -86,6 +105,9 @@ export function ConsignedSettlementSection({
         <h3 className="text-sm font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">
           {t("ConsignedSaleSettlement" as any)}
         </h3>
+        {preview.quoteLineIndex === undefined ? null : (
+          <p className="text-sm font-medium">{preview.vehicleLabel}</p>
+        )}
         <p className="text-xs leading-relaxed text-muted-foreground">
           {t("ConsignedSaleSettlementDesc" as any).replace("{supplier}", supplier)}
         </p>
@@ -98,7 +120,7 @@ export function ConsignedSettlementSection({
         </p>
       ) : null}
 
-      <fieldset disabled={disabled} className="space-y-2">
+      <fieldset disabled={disabled} className={cn("space-y-2", !showRouteSelector && "hidden")}>
         <legend className="sr-only">{t("SupplierSettlementRoute" as any)}</legend>
         <div className="grid gap-2 sm:grid-cols-2">
           {routes.map((route) => {

@@ -79,11 +79,11 @@ export function DepositAllocationPanel({
   // go and no decision to make.
   if (!allocation || !allocation.isMultiVehicle || allocation.heldTotalMinor === 0) return null;
 
-  const available =
-    allocation.heldTotalMinor -
-    allocation.appliedMinor -
-    allocation.releasedAwaitingDecisionMinor -
-    allocation.resolvedOutMinor;
+  // Computed by the server, which owns the bucket arithmetic. A second copy of
+  // it here drifts the moment a bucket is added — money mid-reversal was not in
+  // the subtraction above, so a slice whose journal had not yet been backed out
+  // read as available to spend.
+  const available = allocation.availableForAllocationMinor;
   const remainingMinor = available - draftTotalMinor;
   const overAllocated = remainingMinor < 0;
   const money = (minor: number) =>

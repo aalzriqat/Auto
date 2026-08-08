@@ -146,6 +146,7 @@ import type * as utils_commissionSourceLedger from "../utils/commissionSourceLed
 import type * as utils_dedup from "../utils/dedup.js";
 import type * as utils_defaultChart from "../utils/defaultChart.js";
 import type * as utils_depositAllocation from "../utils/depositAllocation.js";
+import type * as utils_depositApplications from "../utils/depositApplications.js";
 import type * as utils_depositHelpers from "../utils/depositHelpers.js";
 import type * as utils_depositRecording from "../utils/depositRecording.js";
 import type * as utils_env from "../utils/env.js";
@@ -155,6 +156,7 @@ import type * as utils_facebookApi from "../utils/facebookApi.js";
 import type * as utils_financialGuards from "../utils/financialGuards.js";
 import type * as utils_financingEconomics from "../utils/financingEconomics.js";
 import type * as utils_geoProvider from "../utils/geoProvider.js";
+import type * as utils_grossTransactionValue from "../utils/grossTransactionValue.js";
 import type * as utils_idempotency from "../utils/idempotency.js";
 import type * as utils_instagramApi from "../utils/instagramApi.js";
 import type * as utils_leadActivity from "../utils/leadActivity.js";
@@ -351,6 +353,7 @@ declare const fullApi: ApiFromModules<{
   "utils/dedup": typeof utils_dedup;
   "utils/defaultChart": typeof utils_defaultChart;
   "utils/depositAllocation": typeof utils_depositAllocation;
+  "utils/depositApplications": typeof utils_depositApplications;
   "utils/depositHelpers": typeof utils_depositHelpers;
   "utils/depositRecording": typeof utils_depositRecording;
   "utils/env": typeof utils_env;
@@ -360,6 +363,7 @@ declare const fullApi: ApiFromModules<{
   "utils/financialGuards": typeof utils_financialGuards;
   "utils/financingEconomics": typeof utils_financingEconomics;
   "utils/geoProvider": typeof utils_geoProvider;
+  "utils/grossTransactionValue": typeof utils_grossTransactionValue;
   "utils/idempotency": typeof utils_idempotency;
   "utils/instagramApi": typeof utils_instagramApi;
   "utils/leadActivity": typeof utils_leadActivity;

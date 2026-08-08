@@ -5,6 +5,10 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { isSystemOwnerRole, PERMISSIONS, type Permission } from "./utils/permissions";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import {
+  grossTransactionValueForSale,
+  grossTransactionValueForTransaction,
+} from "./utils/grossTransactionValue";
+import {
   ABSENT,
   customersByOrg,
   DIRECT,
@@ -256,9 +260,15 @@ export const stats = query({
     // Gross transaction value: what the dealership handled, agent deals at full
     // ticket. Turnover is computed further down, once the consigned vehicles are
     // known — the two are different numbers and both are reported.
+    // Same definition as the P&L and the sales report — see
+    // utils/grossTransactionValue. The fallback path reads the cashflow row's
+    // gross rather than its `amount`, which is net of deposits.
     const grossTransactionValue = activeSales.length > 0
-      ? activeSales.reduce((acc, sale) => acc + sale.salePrice, 0)
-      : saleTransactions.reduce((acc, transaction) => acc + transaction.amount, 0);
+      ? activeSales.reduce((acc, sale) => acc + grossTransactionValueForSale(sale), 0)
+      : saleTransactions.reduce(
+          (acc, transaction) => acc + grossTransactionValueForTransaction(transaction),
+          0
+        );
     const salesCount = activeSales.length > 0 ? activeSales.length : saleTransactions.length;
     const salesTruncated = activeSales.length === SALES_CAP || saleTransactions.length === SALES_CAP;
 

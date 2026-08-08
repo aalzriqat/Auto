@@ -16,6 +16,7 @@ import {
   hasActiveDepositHold,
   hasActiveReservationHold,
 } from "./depositHelpers";
+import { reverseDepositApplicationsForSale } from "./depositApplications";
 
 async function getActiveReceivableAllocations(
   ctx: MutationCtx,
@@ -316,46 +317,126 @@ async function cancelPendingSupplierPayables(
   }
 }
 
+/**
+ * Puts a deposit row back to HELD after one of its applications was reversed.
+ *
+ * Only from APPLIED. A row that was refunded or forfeited has had real money
+ * leave the business, and re-opening it as held would make that money spendable
+ * a second time — the reversed slice is accounted for on its own hold row,
+ * which is where the decision about it now belongs.
+ */
+async function reopenDepositAfterReversal(
+  ctx: MutationCtx,
+  depositId: Id<"deposits">
+): Promise<Doc<"deposits"> | null> {
+  const deposit = await ctx.db.get(depositId);
+  if (!deposit) return null;
+  if (deposit.status !== "APPLIED") return deposit;
+  await ctx.db.patch(deposit._id, {
+    status: "HELD",
+    holdActive: true,
+    resolvedBy: undefined,
+    resolvedAt: undefined,
+    // Cleared alongside the status. Leaving them set pointed a live deposit
+    // at the treatment and the sale of a deal that no longer exists, and the
+    // settlement re-hook reads `resolutionTreatment` to decide what to post.
+    resolutionTreatment: undefined,
+    resolutionReason: undefined,
+    resolutionSaleId: undefined,
+  });
+  return await ctx.db.get(depositId);
+}
+
+/**
+ * Backs out the deposit money THIS sale consumed, and nothing else.
+ *
+ * Every application carries the accounting coordinates it was posted under (see
+ * utils/depositApplications), so the reversal targets one movement exactly.
+ * Reversing "the deposit" instead used to take `.first()` among the events
+ * sharing its id, which on a two-car quote meant cancelling the second car
+ * reversed the first car's entry — stripping a credit from an invoice that was
+ * still live while leaving the cancelled one intact.
+ *
+ * The slice does not flow back to its car. It lands in
+ * RELEASED_AWAITING_DECISION, where somebody says what happens to it: back to
+ * the quote's unallocated pool, onto another car, refunded, or forfeited. The
+ * car itself is freed by `restoreVehicleFromSale` regardless, so nothing about
+ * the money's fate blocks re-selling it.
+ */
 async function reinstateAppliedDeposits(
   ctx: MutationCtx,
   args: {
     orgId: Id<"organizations">;
+    saleId: Id<"sales">;
     quoteId: Id<"quotes"> | undefined;
     actorId: Id<"users">;
     reason: string;
     reversalDate: number;
   }
 ) {
+  const reversed = await reverseDepositApplicationsForSale(ctx, {
+    orgId: args.orgId,
+    saleId: args.saleId,
+    reason: args.reason,
+    actorId: args.actorId,
+    reversalDate: args.reversalDate,
+  });
+
+  const touchedDeposits = new Set<string>();
+  for (const application of reversed) {
+    touchedDeposits.add(application.depositId.toString());
+    const deposit = await reopenDepositAfterReversal(ctx, application.depositId);
+    if (!deposit) continue;
+
+    if (application.holdId) {
+      // Multi-vehicle: the slice comes off its sale and waits for a decision.
+      // It is NOT silently returned to the pool — the customer put that money
+      // against this specific car, and moving it is their call.
+      await ctx.db.patch(application.holdId, {
+        active: false,
+        allocationStatus: "RELEASED_AWAITING_DECISION",
+        appliedSaleId: undefined,
+        releaseReason: args.reason,
+        resolvedAt: undefined,
+        resolvedBy: undefined,
+      });
+      await syncVehicleHoldStatus(ctx, application.vehicleId, args.actorId);
+    } else {
+      // Single-vehicle quote: no hold rows exist, the whole row is the slice,
+      // and the long-standing behaviour — the deposit goes back on hold against
+      // its car — is exactly right.
+      await reactivateAllVehiclesForDeposit(ctx, deposit);
+    }
+  }
+
   if (!args.quoteId) return;
-  const deposits = await ctx.db
+
+  // Deposits applied before applications were recorded. Their journals were
+  // posted under the old identity (sourceType "deposits", the deposit's own
+  // id), so they are reversed the old way — re-deriving a new-style identity
+  // for them would look for an event that was never written, find nothing, and
+  // return quietly, leaving the deposit reinstated in the subledger while the
+  // GL still showed its liability discharged.
+  const legacyDeposits = await ctx.db
     .query("deposits")
     .withIndex("by_quote", (q) => q.eq("quoteId", args.quoteId!))
     .filter((q) => q.eq(q.field("status"), "APPLIED"))
     .collect();
 
-  for (const deposit of deposits) {
-    await ctx.db.patch(deposit._id, {
-      status: "HELD",
-      holdActive: true,
-      resolvedBy: undefined,
-      resolvedAt: undefined,
-      // Cleared alongside the status. Leaving them set pointed a live deposit
-      // at the treatment and the sale of a deal that no longer exists, and the
-      // settlement re-hook reads `resolutionTreatment` to decide what to post.
-      resolutionTreatment: undefined,
-      resolutionReason: undefined,
-      resolutionSaleId: undefined,
-    });
-    // Puts every vehicle on the deposit's quote back on hold, not just
-    // whichever vehicle belongs to the sale row being cancelled — a
-    // multi-vehicle quote's other vehicles would otherwise stay AVAILABLE
-    // despite the deposit being active again.
-    await reactivateAllVehiclesForDeposit(ctx, deposit);
-    // Reverse the entry that was actually posted. Both treatments leave the
-    // deposit APPLIED but credit different accounts, so reversing the wrong one
-    // is not a partial undo — `reverseEventIfPosted` finds no matching event
-    // and silently no-ops, leaving the deposit live in the subledger while the
-    // GL still shows its liability discharged.
+  for (const deposit of legacyDeposits) {
+    if (touchedDeposits.has(deposit._id.toString())) continue;
+    const applications = await ctx.db
+      .query("depositApplications")
+      .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
+      .collect();
+    // A deposit that has application rows is governed by them, even if none of
+    // them belongs to this sale — reversing it wholesale here is precisely the
+    // cross-car reversal this rewrite exists to stop.
+    if (applications.length > 0) continue;
+
+    await reopenDepositAfterReversal(ctx, deposit._id);
+    const reopened = await ctx.db.get(deposit._id);
+    if (reopened) await reactivateAllVehiclesForDeposit(ctx, reopened);
     const reverse =
       deposit.resolutionTreatment === "APPLY_TO_TRANSACTION_SETTLEMENT"
         ? hookDepositSettlementApplicationReversed
@@ -469,6 +550,7 @@ export async function cancelCompletedSaleOperationalRecords(
   await restoreVehicleFromSale(ctx, args.sale.vehicleId);
   await reinstateAppliedDeposits(ctx, {
     orgId: args.orgId,
+    saleId: args.sale._id,
     quoteId: args.sale.quoteId,
     actorId: args.actorId,
     reason: args.reason,

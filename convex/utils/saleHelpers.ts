@@ -93,6 +93,11 @@ export async function createSaleTransaction(
     args.recognizedRevenue !== args.salePrice - (args.previouslyCollected ?? 0)
       ? { recognizedRevenueAmount: args.recognizedRevenue }
       : {}),
+    // The deal at face value, kept separately because `amount` above is net of
+    // whatever was already collected. Without it the P&L had to infer the gross
+    // from a net figure and reported a smaller deal for every customer who put
+    // money down.
+    grossTransactionValueAmount: args.salePrice,
     date: args.saleDate,
     category: "VEHICLE_SALE",
     description: `Sale of vehicle ${vehicleLabel} to ${customerLabel}${vinLabel}`,

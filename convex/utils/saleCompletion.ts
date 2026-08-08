@@ -20,8 +20,6 @@ import { requireOrgMember } from "./tenancy";
 import {
   hookSaleCompleted,
   hookCommissionAccrued,
-  hookDepositApplied,
-  hookDepositAppliedToSettlement,
   hookTradeInAccepted,
   getOrgCurrency,
   commissionAccountingDate,
@@ -33,7 +31,9 @@ import { openSupplierReceivable } from "../supplierReceivables";
 import {
   allocatedDepositForVehicle,
   throwAllocationRequired,
+  assertQuoteDepositConservation,
 } from "./depositAllocation";
+import { recordDepositApplication } from "./depositApplications";
 import {
   consignedSettlementRoute,
   dealershipCollectsGross,
@@ -93,6 +93,24 @@ type SaleCompletionArgs = {
   // draft; undefined for freshly-created sales.
   existingCommissionAmount?: number;
 };
+
+/**
+ * Which line of the quote this car is — part of the identity of an application,
+ * so an auditor can tie a slice of the deposit back to the line the customer
+ * signed for rather than to a bare vehicle id.
+ */
+async function quoteLineIndexFor(
+  ctx: MutationCtx,
+  quoteId: Id<"quotes"> | undefined,
+  vehicleId: Id<"vehicles">
+): Promise<number | undefined> {
+  if (!quoteId) return undefined;
+  const quote = await ctx.db.get(quoteId);
+  if (!quote) return undefined;
+  const items = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId }];
+  const index = items.findIndex((item) => item.vehicleId === vehicleId);
+  return index >= 0 ? index : undefined;
+}
 
 type PreparedSaleCompletion = {
   vehicle: Doc<"vehicles">;
@@ -467,17 +485,22 @@ async function resolveReservationDeposits(
       // The slices this call actually consumed. Re-reading the deposits table
       // and filtering on `deposit.vehicleId` reported the quote's FIRST line
       // item, which on a multi-vehicle quote is not the car being sold.
-      for (const { depositId, customerId, amount } of resolved.consumedSlices) {
-        await hookDepositAppliedToSettlement(ctx, {
+      for (const { depositId, customerId, amount, holdId } of resolved.consumedSlices) {
+        await recordDepositApplication(ctx, {
           orgId: args.orgId,
           depositId,
+          quoteId: args.quoteId,
+          quoteLineIndex: await quoteLineIndexFor(ctx, args.quoteId, args.vehicleId),
+          vehicleId: args.vehicleId,
+          saleId,
           customerId,
+          holdId,
           amountMinor: toMinorUnits(amount, currency),
           currency,
+          treatment: "SUPPLIER_SETTLEMENT",
           supplierName: prepared.vehicle.sourcedFromName,
           actorId: args.actorId,
           occurredAt: args.saleDate,
-          saleId,
         });
       }
       // Not collected against the customer's balance — it settled the
@@ -614,21 +637,24 @@ async function applyDepositsToCustomerAr(
     treatment,
     saleId,
   });
-  for (const { depositId, customerId, amount, vehicleId, allocationSeq } of resolved.appliedDeposits) {
-    await hookDepositApplied(ctx, {
+  // One immutable record per application, carrying the accounting identity it
+  // posts under. A cancellation reverses THAT record, so backing out one car
+  // can never disturb another car's live credit.
+  for (const { depositId, customerId, amount, vehicleId, holdId } of resolved.appliedDeposits) {
+    await recordDepositApplication(ctx, {
       orgId: args.orgId,
       depositId,
+      quoteId: args.quoteId,
+      quoteLineIndex: await quoteLineIndexFor(ctx, args.quoteId, vehicleId),
+      vehicleId,
+      saleId,
       customerId,
+      holdId,
       amountMinor: toMinorUnits(amount, prepared.currency),
       currency: prepared.currency,
+      treatment: "CUSTOMER_RECEIVABLE",
       actorId: args.actorId,
       occurredAt: args.saleDate,
-      saleId,
-      // One deposit row can be applied once per car it was allocated across,
-      // and each is its own movement. Without the vehicle in the key the second
-      // car's application dedupes against the first and posts nothing.
-      allocationVehicleId: vehicleId,
-      allocationSeq,
     });
   }
   return {
@@ -699,6 +725,16 @@ async function applySaleCompletionSideEffects(
     customerBillableMinor,
       marginMinor,
     });
+
+  // Every dinar of the quote's deposit must still be in exactly one bucket.
+  // A mutation is one transaction, so a mismatch here rolls the whole
+  // completion back rather than leaving the customer's money half-counted.
+  if (args.quoteId) {
+    await assertQuoteDepositConservation(ctx, {
+      quoteId: args.quoteId,
+      currency: prepared.currency,
+    });
+  }
 
   await createSaleTransaction(ctx, {
     orgId: args.orgId,

@@ -2,6 +2,7 @@ import { ConvexError } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import { toMinorUnits } from "./money";
+import { liveApplicationsForDeposit } from "./depositApplications";
 
 /**
  * How much of a quote's reservation deposit belongs to each car on it.
@@ -29,13 +30,24 @@ import { toMinorUnits } from "./money";
  * `depositVehicleHolds`. The UI may suggest a split; a suggestion is not an
  * allocation until it is confirmed and stored.
  *
- * ## The invariant
+ * ## The conservation invariant
  *
- *     sum(active allocations) <= held quote deposit
+ * Every dinar the customer paid sits in exactly one bucket:
  *
- * The difference is the quote-level unallocated balance. It stays a customer
- * deposit liability — not spare change to be swept into whichever sale closes
- * next — until it is explicitly allocated or resolved.
+ *     unallocated
+ *   + allocated but not applied
+ *   + applied to sales that still stand
+ *   + mid-reversal
+ *   + released and awaiting a decision
+ *   + refunded
+ *   + forfeited
+ *   + other explicitly finalized treatments
+ *   = total received
+ *
+ * `assertQuoteDepositConservation` recomputes it after anything moves deposit
+ * money. Nothing is inferred from a deposit row's own status: a row can be
+ * partly applied to one car and partly refunded, so its status describes the
+ * last thing that happened to it and not where the money is.
  *
  * ## Single-vehicle quotes
  *
@@ -44,37 +56,78 @@ import { toMinorUnits } from "./money";
  * and this module treats that shape as fully allocated to the one car.
  */
 
+export type AllocationStatus =
+  | "ALLOCATED"
+  | "APPLIED"
+  | "REVERSING"
+  | "RELEASED_AWAITING_DECISION"
+  | "RESOLVED";
+
+export type ResolutionTreatment =
+  | "REALLOCATE_TO_VEHICLE"
+  | "RETURN_TO_UNALLOCATED"
+  | "REFUND_TO_CUSTOMER"
+  | "FORFEITED"
+  | "OTHER";
+
 export type VehicleAllocation = {
   vehicleId: Id<"vehicles">;
   /** Absent when no allocation has been entered for this car yet. */
   allocatedMinor: number | undefined;
-  status: "ALLOCATED" | "APPLIED" | "RELEASED" | "RESOLVED" | undefined;
+  status: AllocationStatus | undefined;
   /** What was decided about a RESOLVED slice. */
-  resolutionTreatment:
-    | "REALLOCATE_TO_VEHICLE"
-    | "RETURN_TO_UNALLOCATED"
-    | "REFUND_TO_CUSTOMER"
-    | "FORFEITED"
-    | "OTHER"
-    | undefined;
+  resolutionTreatment: ResolutionTreatment | undefined;
   active: boolean;
   holdId: Id<"depositVehicleHolds">;
+  depositId: Id<"deposits">;
 };
 
 export type QuoteDepositAllocation = {
-  /** Every HELD deposit on the quote, summed. */
+  /** Every dinar the customer has paid on this quote and not had voided. */
+  totalReceivedMinor: number;
+  /**
+   * Kept as an alias of the total received, because that is what the phrase
+   * means to everything that reads it: the ceiling an allocation may not
+   * exceed. It is NOT the same as the sum of rows whose status says HELD — a
+   * row can be part-applied and part-refunded, and its status only records
+   * whichever happened last.
+   */
   heldTotalMinor: number;
   /** True when the quote carries hold rows, i.e. more than one car. */
   isMultiVehicle: boolean;
   allocations: VehicleAllocation[];
-  /** Allocated to a car and not yet consumed or released. */
-  allocatedMinor: number;
-  /** Consumed by a completed sale. */
-  appliedMinor: number;
-  /** Released by a cancellation and awaiting an explicit decision. */
-  releasedAwaitingDecisionMinor: number;
   /**
-   * Refunded to the customer or forfeited — money that has LEFT the quote.
+   * The payments themselves, and how much of each is already spoken for.
+   *
+   * A quote can be paid in instalments, and each payment is a separate row with
+   * its own receipt voucher and its own canonical payment. An allocation is
+   * settled against the payment it comes out of, so a car's share has to be
+   * spread across rows that can actually cover it — writing a car's whole share
+   * onto one row asked a 3,000 payment to settle 5,000 and the subledger
+   * refused it, from a total that was perfectly valid.
+   */
+  depositRows: Array<{
+    depositId: Id<"deposits">;
+    amountMinor: number;
+    /** Applied, refunded, forfeited or otherwise finalized out of this row. */
+    committedMinor: number;
+  }>;
+  /** Assigned to a car and not yet consumed, released or resolved. */
+  allocatedMinor: number;
+  /** Consumed by sales that still stand. */
+  appliedMinor: number;
+  /** Consumed by a sale that was cancelled, whose journal reversal is still in flight. */
+  reversingMinor: number;
+  /** Off its car and awaiting an explicit decision. */
+  releasedAwaitingDecisionMinor: number;
+  /** Paid back to the customer. Gone. */
+  refundedMinor: number;
+  /** Kept by the dealership under an approved forfeiture. Gone from the pool. */
+  forfeitedMinor: number;
+  /** Finalized under an explicitly recorded treatment the system does not post. */
+  otherFinalizedMinor: number;
+  /**
+   * Refunded + forfeited + otherwise finalized — money that has LEFT the quote.
    *
    * Counted out of the available pool for good. Expressing these by zeroing the
    * slice let refunded money reappear as allocatable, which is the same defect
@@ -83,6 +136,17 @@ export type QuoteDepositAllocation = {
   resolvedOutMinor: number;
   /** Held but assigned to no car. Still a customer deposit liability. */
   unallocatedMinor: number;
+  /**
+   * What an allocation may divide up: the unallocated balance PLUS everything
+   * currently allocated but not yet consumed.
+   *
+   * Allocating is an edit of the whole split, not an addition to it — a car's
+   * existing share is released back into the pot before the new numbers are
+   * checked. Leaving it out made a fully allocated quote impossible to
+   * re-balance: moving 1,000 from one car to another read as an overdraw
+   * because the money being moved was counted as still spent.
+   */
+  availableForAllocationMinor: number;
   /** Cars on the quote that have no allocation entered at all. */
   vehiclesWithoutAllocation: Id<"vehicles">[];
 };
@@ -100,14 +164,15 @@ async function heldDepositsForQuote(
 }
 
 /**
- * Every deposit whose money is still on the quote — held OR already applied to
- * one of its sales.
+ * Every deposit the customer actually paid on this quote.
  *
- * The summary has to keep counting a deposit after the last car consumed it,
- * or the allocation view reads as if the customer never paid anything. Only
- * money that genuinely left (refunded, forfeited, voided) drops out.
+ * Only money that was never really received drops out — a soft-deleted row, or
+ * one voided as recorded-in-error. Refunds and forfeitures stay in, because
+ * they are money that came in and then left, and the buckets below are what say
+ * where it went. Filtering them out here made the total shrink underneath the
+ * allocations still pointing at it.
  */
-async function liveDepositsForQuote(
+async function receivedDepositsForQuote(
   ctx: QueryCtx | MutationCtx,
   quoteId: Id<"quotes">
 ): Promise<Doc<"deposits">[]> {
@@ -115,28 +180,7 @@ async function liveDepositsForQuote(
     .query("deposits")
     .withIndex("by_quote", (q) => q.eq("quoteId", quoteId))
     .collect();
-  return deposits.filter(
-    (d) => d.isDeleted !== true && (d.status === "HELD" || d.status === "APPLIED")
-  );
-}
-
-/**
- * How many slices of this deposit have already been applied.
- *
- * Carried into the GL event's version, because `postAccountingEvent` dedupes on
- * (eventType, sourceType, sourceId, eventVersion) as well as the idempotency
- * key. One deposit row applied once per car is several movements of money, and
- * without a distinct version the second silently returns "already posted".
- */
-export async function appliedAllocationCount(
-  ctx: QueryCtx | MutationCtx,
-  depositId: Id<"deposits">
-): Promise<number> {
-  const holds = await ctx.db
-    .query("depositVehicleHolds")
-    .withIndex("by_deposit", (q) => q.eq("depositId", depositId))
-    .collect();
-  return holds.filter((h) => h.allocationStatus === "APPLIED").length;
+  return deposits.filter((d) => d.isDeleted !== true && d.status !== "VOIDED");
 }
 
 function depositMinor(deposit: Doc<"deposits">, currency: string): number {
@@ -144,23 +188,57 @@ function depositMinor(deposit: Doc<"deposits">, currency: string): number {
 }
 
 /**
- * The whole allocation picture for a quote: what is held, what is assigned to
- * which car, and what is still floating.
+ * The whole allocation picture for a quote: what was paid, what is assigned to
+ * which car, what has been consumed, and what is still floating.
  */
 export async function quoteDepositAllocation(
   ctx: QueryCtx | MutationCtx,
   args: { quoteId: Id<"quotes">; currency: string }
 ): Promise<QuoteDepositAllocation> {
-  const deposits = await liveDepositsForQuote(ctx, args.quoteId);
-  const heldTotalMinor = deposits.reduce((sum, d) => sum + depositMinor(d, args.currency), 0);
+  const deposits = await receivedDepositsForQuote(ctx, args.quoteId);
+  const totalReceivedMinor = deposits.reduce(
+    (sum, d) => sum + depositMinor(d, args.currency),
+    0
+  );
 
   const allocations: VehicleAllocation[] = [];
+  const depositRows: QuoteDepositAllocation["depositRows"] = [];
+  let appliedMinor = 0;
+  let reversingMinor = 0;
+  // Whole-row refunds and forfeitures recorded through `deposits.release`,
+  // which pays out the part of a row that no sale has claimed.
+  let rowLevelRefundedMinor = 0;
+  let rowLevelForfeitedMinor = 0;
+
   for (const deposit of deposits) {
+    // Applications are the only record of money consumed by a sale. The
+    // deposit's own status cannot say: one row is applied once per car it was
+    // allocated across, on different dates, against different invoices.
+    let committedMinor = 0;
+    for (const application of await liveApplicationsForDeposit(ctx, deposit._id)) {
+      if (application.status === "REVERSING") reversingMinor += application.amountMinor;
+      else appliedMinor += application.amountMinor;
+      committedMinor += application.amountMinor;
+    }
+    if (deposit.releasedAmountMinor !== undefined && deposit.releasedAmountMinor > 0) {
+      if (deposit.status === "FORFEITED") rowLevelForfeitedMinor += deposit.releasedAmountMinor;
+      else rowLevelRefundedMinor += deposit.releasedAmountMinor;
+      committedMinor += deposit.releasedAmountMinor;
+    }
+
     const holds = await ctx.db
       .query("depositVehicleHolds")
       .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
       .collect();
     for (const hold of holds) {
+      if (
+        hold.allocationStatus === "RESOLVED" &&
+        (hold.resolutionTreatment === "REFUND_TO_CUSTOMER" ||
+          hold.resolutionTreatment === "FORFEITED" ||
+          hold.resolutionTreatment === "OTHER")
+      ) {
+        committedMinor += hold.allocatedAmountMinor ?? 0;
+      }
       allocations.push({
         vehicleId: hold.vehicleId,
         allocatedMinor: hold.allocatedAmountMinor,
@@ -168,53 +246,114 @@ export async function quoteDepositAllocation(
         resolutionTreatment: hold.resolutionTreatment,
         active: hold.active,
         holdId: hold._id,
+        depositId: deposit._id,
       });
     }
+    depositRows.push({
+      depositId: deposit._id,
+      amountMinor: depositMinor(deposit, args.currency),
+      committedMinor,
+    });
   }
 
   let allocated = 0;
-  let applied = 0;
   let released = 0;
-  let resolvedOut = 0;
+  let sliceRefunded = 0;
+  let sliceForfeited = 0;
+  let otherFinalized = 0;
   const withoutAllocation: Id<"vehicles">[] = [];
   for (const a of allocations) {
     if (a.allocatedMinor === undefined) {
       if (a.active) withoutAllocation.push(a.vehicleId);
       continue;
     }
-    if (a.status === "APPLIED") applied += a.allocatedMinor;
-    else if (a.status === "RELEASED") released += a.allocatedMinor;
-    else if (a.status === "RESOLVED") {
-      // Only money that actually left the quote is subtracted. A slice
-      // re-allocated to another car, or returned to the unallocated balance, is
-      // still on the quote and is already counted where it now lives.
-      if (
-        a.resolutionTreatment === "REFUND_TO_CUSTOMER" ||
-        a.resolutionTreatment === "FORFEITED"
-      ) {
-        resolvedOut += a.allocatedMinor;
-      }
-    } else allocated += a.allocatedMinor;
+    switch (a.status) {
+      case "APPLIED":
+      case "REVERSING":
+        // Counted from the application rows above, which know the amount that
+        // actually posted. Counting the hold too would double it.
+        break;
+      case "RELEASED_AWAITING_DECISION":
+        released += a.allocatedMinor;
+        break;
+      case "RESOLVED":
+        // A slice re-allocated to another car, or returned to the pool, is
+        // still the customer's money on this quote — it is already counted
+        // wherever it now lives. Only the treatments that end the money's life
+        // on this deal come out.
+        if (a.resolutionTreatment === "REFUND_TO_CUSTOMER") sliceRefunded += a.allocatedMinor;
+        else if (a.resolutionTreatment === "FORFEITED") sliceForfeited += a.allocatedMinor;
+        else if (a.resolutionTreatment === "OTHER") otherFinalized += a.allocatedMinor;
+        break;
+      default:
+        // Only while the hold is live. A hold deactivated because the deal was
+        // rejected, or because the rest of the row was paid back, is no longer
+        // an allocation of anything — counting it kept the money assigned to a
+        // car it could no longer be spent on, and pushed the buckets past the
+        // amount the customer actually paid.
+        if (a.active) allocated += a.allocatedMinor;
+    }
   }
 
+  const refundedMinor = sliceRefunded + rowLevelRefundedMinor;
+  const forfeitedMinor = sliceForfeited + rowLevelForfeitedMinor;
+  const resolvedOutMinor = refundedMinor + forfeitedMinor + otherFinalized;
+  // Released slices are deliberately NOT counted as available: they are
+  // awaiting a decision, and treating them as spare would move a customer's
+  // money from the car it was allocated against to another one by default.
+  const unallocatedMinor =
+    totalReceivedMinor - allocated - appliedMinor - reversingMinor - released - resolvedOutMinor;
+
   return {
-    heldTotalMinor,
+    totalReceivedMinor,
+    heldTotalMinor: totalReceivedMinor,
     isMultiVehicle: allocations.length > 0,
     allocations,
+    depositRows,
     allocatedMinor: allocated,
-    appliedMinor: applied,
+    appliedMinor,
+    reversingMinor,
     releasedAwaitingDecisionMinor: released,
-    resolvedOutMinor: resolvedOut,
-    // Released slices are deliberately NOT counted as available: they are
-    // awaiting a decision, and treating them as spare would move a customer's
-    // money from the car it was allocated against to another one by default.
-    // Refunded and forfeited slices are gone for good.
-    unallocatedMinor: Math.max(
-      0,
-      heldTotalMinor - allocated - applied - released - resolvedOut
-    ),
+    refundedMinor,
+    forfeitedMinor,
+    otherFinalizedMinor: otherFinalized,
+    resolvedOutMinor,
+    unallocatedMinor: Math.max(0, unallocatedMinor),
+    availableForAllocationMinor: Math.max(0, unallocatedMinor) + allocated,
     vehiclesWithoutAllocation: withoutAllocation,
   };
+}
+
+/**
+ * Recomputes the conservation invariant and refuses to let a mutation commit
+ * that has broken it.
+ *
+ * Called at the END of anything that moves deposit money. A Convex mutation is
+ * one transaction, so a throw here rolls the whole movement back — the
+ * arithmetic cannot be left inconsistent and reported as fine, which is exactly
+ * what happened when a refund and an application both claimed the same slice.
+ */
+export async function assertQuoteDepositConservation(
+  ctx: QueryCtx | MutationCtx,
+  args: { quoteId: Id<"quotes">; currency: string }
+): Promise<QuoteDepositAllocation> {
+  const summary = await quoteDepositAllocation(ctx, args);
+  const buckets =
+    summary.allocatedMinor +
+    summary.appliedMinor +
+    summary.reversingMinor +
+    summary.releasedAwaitingDecisionMinor +
+    summary.refundedMinor +
+    summary.forfeitedMinor +
+    summary.otherFinalizedMinor +
+    summary.unallocatedMinor;
+
+  if (buckets !== summary.totalReceivedMinor) {
+    throw new ConvexError(
+      `Deposit accounting for this quote does not balance: ${buckets} accounted for against ${summary.totalReceivedMinor} received. The operation was rolled back.`
+    );
+  }
+  return summary;
 }
 
 export type VehicleDepositAllocation =
@@ -327,11 +466,10 @@ export async function depositFullyConsumed(
  * identical answer the mutation will give.
  */
 export function validateAllocationTotals(args: {
-  heldTotalMinor: number;
-  /** Already consumed by completed sales — not available to re-allocate. */
-  appliedMinor: number;
-  /** Awaiting an explicit decision after a cancellation — also not available. */
-  releasedAwaitingDecisionMinor: number;
+  /** What is genuinely free to assign: see QuoteDepositAllocation.availableForAllocationMinor. */
+  availableForAllocationMinor: number;
+  /** Allocations on cars this edit is not touching, which keep their share. */
+  retainedMinor: number;
   proposedMinor: number[];
 }): { ok: true; unallocatedMinor: number } | { ok: false; reason: string } {
   for (const amount of args.proposedMinor) {
@@ -339,9 +477,12 @@ export function validateAllocationTotals(args: {
       return { ok: false, reason: "Each allocation must be a whole, non-negative amount." };
     }
   }
-  const proposedTotal = args.proposedMinor.reduce((sum, a) => sum + a, 0);
-  const available =
-    args.heldTotalMinor - args.appliedMinor - args.releasedAwaitingDecisionMinor;
+  // Cars left out of this call keep what they had, so they are counted against
+  // the same pot — the invariant holds across the whole quote, not just the
+  // part being edited.
+  const proposedTotal =
+    args.proposedMinor.reduce((sum, a) => sum + a, 0) + args.retainedMinor;
+  const available = args.availableForAllocationMinor;
   if (proposedTotal > available) {
     return {
       ok: false,

@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { query, QueryCtx } from "./_generated/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
+import { grossTransactionValueForTransaction } from "./utils/grossTransactionValue";
 import { PERMISSIONS } from "./utils/permissions";
 import { rateLimiter } from "./rateLimit";
 import {
@@ -868,15 +869,15 @@ export const getProfitAndLoss = query({
         // ones it could not — so the remaining overstatement is bounded and
         // enumerable rather than silent. Do not read this fallback as exact.
         totalRevenue += tx.recognizedRevenueAmount ?? tx.amount;
-        // Vehicle sales only, so this means the same thing here as it does in
-        // getSalesAndProfitReport and on the dashboard: the value of the deals
-        // the dealership handled, agent sales at full ticket.
-        //
-        // REVENUE_CATEGORIES also contains DEPOSIT, and counting those inflated
-        // the figure by money that is a payment against a deal rather than a
-        // deal — so the same month reported two different "gross transaction
-        // values" depending on which screen was asked.
-        if (tx.category === "VEHICLE_SALE") grossTransactionValue += tx.amount;
+        // Vehicle sales only, at the full ticket. One definition, shared with
+        // getSalesAndProfitReport and the dashboard — see
+        // utils/grossTransactionValue for why all three have to agree, and for
+        // the two ways this used to disagree: DEPOSIT rows were counted as
+        // deals, and `amount` is net of anything already collected, so taking a
+        // deposit both inflated the figure once and deflated it again.
+        if (tx.category === "VEHICLE_SALE") {
+          grossTransactionValue += grossTransactionValueForTransaction(tx);
+        }
       } else if (tx.type === "OUT") {
         if (tx.category === "VEHICLE_PURCHASE" || (tx.category === "EXPENSE" && tx.vehicleId)) {
           costOfGoodsSold += tx.amount;

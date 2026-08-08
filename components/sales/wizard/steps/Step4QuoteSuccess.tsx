@@ -267,13 +267,23 @@ export function Step4QuoteSuccess({
       {activeOrgId ? (
         <div className="space-y-4">
           <DepositAllocationPanel orgId={activeOrgId} quoteId={quoteId} />
-          <ConsignedSettlementSection
-            orgId={activeOrgId}
-            vehicleId={quote?.vehicleId}
-            salePrice={quote?.vehiclePrice ?? 0}
-            value={settlementRoute}
-            onChange={setSettlementRoute}
-          />
+          {/* One per car on the quote, each priced off its own line. Feeding
+              the quote total into a single preview showed the first car's
+              supplier cost against every car's price. The route is a single
+              decision for the deal, so it is asked for once, on the first. */}
+          {(quote?.vehicleItems ?? (quote ? [{ vehicleId: quote.vehicleId }] : [])).map(
+            (item, index) => (
+              <ConsignedSettlementSection
+                key={item.vehicleId}
+                orgId={activeOrgId}
+                vehicleId={item.vehicleId}
+                quoteId={quoteId}
+                value={settlementRoute}
+                onChange={setSettlementRoute}
+                showRouteSelector={index === 0}
+              />
+            )
+          )}
         </div>
       ) : null}
 

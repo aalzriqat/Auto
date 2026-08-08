@@ -97,6 +97,14 @@ export const CUSTOMER_REFERENCING_TABLES = [
         .collect(),
   },
   {
+    table: "depositApplications" as const,
+    find: (ctx: QueryCtx, orgId: Id<"organizations">, customerId: Id<"customers">) =>
+      ctx.db
+        .query("depositApplications")
+        .withIndex("by_org_customer", (q) => q.eq("orgId", orgId).eq("customerId", customerId))
+        .collect(),
+  },
+  {
     table: "deposits" as const,
     find: (ctx: QueryCtx, orgId: Id<"organizations">, customerId: Id<"customers">) =>
       ctx.db
