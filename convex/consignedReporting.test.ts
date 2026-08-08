@@ -744,8 +744,11 @@ describe("the consigned preview on a multi-vehicle quote", () => {
  * at the mutation boundary or it is conditional on the accounting calendar.
  */
 describe("tax on an agency sale, with no open accounting period", () => {
-  async function sellSourcedWithTax(tag: string, withAccounting: boolean) {
-    const s = await seedDealer(tag, { withAccounting });
+  async function sellSourced(
+    tag: string,
+    opts: { withAccounting: boolean; taxAmount?: number; salePrice?: number }
+  ) {
+    const s = await seedDealer(tag, { withAccounting: opts.withAccounting });
     const vehicleId = await s.t.run((ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin: `VINTAX${tag}`, make: "Toyota", model: "Camry", year: 2024,
@@ -760,11 +763,14 @@ describe("tax on an agency sale, with no open accounting period", () => {
       attempt: () =>
         s.asUser.mutation(api.sales.create, {
           orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
-          salePrice: SALE_PRICE, saleDate: Date.now(), status: "COMPLETED" as const,
-          taxAmount: 500,
+          salePrice: opts.salePrice ?? SALE_PRICE, saleDate: Date.now(),
+          status: "COMPLETED" as const,
+          ...(opts.taxAmount !== undefined ? { taxAmount: opts.taxAmount } : {}),
         }),
     };
   }
+  const sellSourcedWithTax = (tag: string, withAccounting: boolean) =>
+    sellSourced(tag, { withAccounting, taxAmount: 500 });
 
   test("is refused even though no posting rule runs", async () => {
     const { attempt } = await sellSourcedWithTax("taxNoPeriod", false);
@@ -791,6 +797,56 @@ describe("tax on an agency sale, with no open accounting period", () => {
   test("is refused with a period open too, so the two paths agree", async () => {
     const { attempt } = await sellSourcedWithTax("taxWithPeriod", true);
     await expect(attempt()).rejects.toThrow(/tax/i);
+  });
+
+  /**
+   * The same defect, in the refusal three lines away.
+   *
+   * `consignedAgentSaleLines` also refuses a sale below the supplier's
+   * entitlement, and that refusal was equally calendar-dependent: with no open
+   * period covering the sale date — an org still setting accounting up, or any
+   * BACKDATED sale into a closed month — nothing evaluated it either.
+   *
+   * This one is worse than the tax case, because it does not merely skip a
+   * journal. `applySaleCompletionSideEffects` writes a `vehicleSupplierPayables`
+   * row for the FULL entitlement, so the dealership owes the supplier 9,500 on
+   * a deal that collected 9,000, with no journal recording the shortfall. When
+   * finance later pays it, `ruleSupplierPaymentSettled` debits an
+   * ACCOUNTS_PAYABLE_SUPPLIERS that the sale never credited — real cash out
+   * against a payable the ledger never recognized.
+   */
+  const BELOW_ENTITLEMENT = ENTITLEMENT - 500;
+
+  test("a sale below the supplier's entitlement is refused with no open period", async () => {
+    const { attempt } = await sellSourced("belowEntNoPeriod", {
+      withAccounting: false, salePrice: BELOW_ENTITLEMENT,
+    });
+    await expect(attempt()).rejects.toThrow(/entitlement/i);
+  });
+
+  test("and leaves no payable standing for money the ledger never recognized", async () => {
+    const { s, vehicleId, attempt } = await sellSourced("belowEntState", {
+      withAccounting: false, salePrice: BELOW_ENTITLEMENT,
+    });
+    await expect(attempt()).rejects.toThrow();
+
+    const state = await s.t.run(async (ctx) => ({
+      sales: (await ctx.db.query("sales").collect()).length,
+      queued: (await ctx.db.query("pendingAccountingEvents").collect()).length,
+      payables: (await ctx.db.query("vehicleSupplierPayables").collect()).length,
+      status: (await ctx.db.get(vehicleId))?.status,
+    }));
+    expect(state.sales).toBe(0);
+    expect(state.queued).toBe(0);
+    expect(state.payables).toBe(0);
+    expect(state.status).toBe("AVAILABLE");
+  });
+
+  test("is refused with a period open too, so acceptance never depends on the calendar", async () => {
+    const { attempt } = await sellSourced("belowEntWithPeriod", {
+      withAccounting: true, salePrice: BELOW_ENTITLEMENT,
+    });
+    await expect(attempt()).rejects.toThrow(/entitlement/i);
   });
 });
 

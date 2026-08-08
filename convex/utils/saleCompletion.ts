@@ -820,19 +820,31 @@ async function applySaleCompletionSideEffects(
             "This vehicle is sourced, so it belongs to the supplier and the sale is an agency sale — but no supplier cost is recorded, so the dealership's margin cannot be determined. Record the agreed supplier amount, or convert the vehicle to dealer-owned stock first."
           );
         }
-        // Refused HERE, not only in the posting rule.
+        // Both agency refusals are made HERE, not only in the posting rule.
         //
-        // `consignedAgentSaleLines` also throws on tax, but that rule is only
-        // evaluated when the event posts immediately. `postOrEnqueue` posts
-        // only when a chart and an OPEN PERIOD exist; otherwise it enqueues
-        // the raw payload, and no rule sees it until the outbox drains. So
-        // with no open period the sale was fully recorded — vehicle marked
-        // SOLD, cashflow row, receivable document, commission accrued — and
-        // the journal failed later, out of sight of whoever sold the car.
+        // `consignedAgentSaleLines` throws on each of these, but that rule is
+        // only evaluated when the event posts immediately. `postOrEnqueue`
+        // posts only when a chart exists AND an open period covers the sale's
+        // date; otherwise it enqueues the raw payload and no rule sees it
+        // until the outbox drains. That is not just an org still setting
+        // accounting up — it is any BACKDATED sale into a closed month. In
+        // those cases the sale was fully recorded — vehicle SOLD, cashflow
+        // row, receivable, commission, supplier payable — and the journal
+        // failed later, out of sight of whoever sold the car.
         //
         // A refusal that depends on the accounting calendar is not a refusal.
-        // This is the same boundary, and the same reasoning, as the missing
-        // supplier cost immediately above.
+        // Same boundary, same reasoning, as the missing supplier cost above.
+        //
+        // The shortfall case is the more dangerous of the two, because it does
+        // not merely skip a journal: the payable below is written for the FULL
+        // entitlement, so the dealership owes the supplier more than the deal
+        // collected with nothing on the books saying so. Paying it later
+        // debits an AP that the sale never credited.
+        if (toMinorUnits(args.salePrice, prepared.currency) < costMinor) {
+          throw new ConvexError(
+            `This car is ${prepared.vehicle.sourcedFromName ?? "the supplier"}'s and the dealership sells it as his agent, but the sale price is below the supplier's entitlement of ${costAmount} — the amount he is owed for it. The deal would lose money the dealership has to fund, which is a real situation but not one that can be assumed. Record the shortfall against the supplier agreement, or agree a lower supplier amount, before completing the sale.`
+          );
+        }
         if (args.taxAmount != null && args.taxAmount > 0) {
           throw new ConvexError(
             `This is an agency sale — the dealership sells this car as ${prepared.vehicle.sourcedFromName ?? "the supplier"}'s agent — and agency sales have no agreed tax treatment yet, so whether the tax is his liability or the dealership's changes who owes the money. Record the tax against the supplier agreement, or sell the car as dealership stock, before completing the sale.`
