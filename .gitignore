@@ -86,6 +86,7 @@ sentry-wizard-installation-error-*.log
 /CLAUDE.md
 /PROJECT_PLAN.md
 /handoff.md
+/DEAL-FINANCIALS-SPEC.md
 /.claude/
 /.agents/
 /graphify-out/
