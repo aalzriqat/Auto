@@ -417,7 +417,6 @@ async function resolveReservationDeposits(
     });
     return empty;
   }
-  const heldTotal = fromMinorUnits(heldTotalMinor, currency);
   const allocationHoldId = allocation.kind === "ALLOCATED" ? allocation.holdId : undefined;
 
   const stated = args.depositResolution?.treatment;
@@ -522,11 +521,11 @@ async function resolveReservationDeposits(
       // Not collected against the customer's balance — it settled the
       // supplier's claim instead, which the claim below must open net of.
       //
-      // Summed from the slices actually consumed, NOT from `heldTotal`.
+      // Summed from the slices actually consumed, NOT from the allocated cap.
       //
       // This is a structural guarantee, not a fix for a reproducible bug — and
       // the distinction is worth stating, because the two figures cannot
-      // currently disagree: `heldTotal` is the allocated cap and
+      // currently disagree: the allocated cap `heldTotalMinor` and
       // `consumedSlices` are the holds that cap was computed from, filtered by
       // the same predicate, so `Σ consumed ≤ cap` always and they are equal on
       // every path I could reach. I could not build a fixture where they differ
