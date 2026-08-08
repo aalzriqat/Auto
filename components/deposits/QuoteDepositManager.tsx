@@ -24,6 +24,7 @@ import { PERMISSIONS } from "@/convex/utils/permissions";
 import { getErrorMessage } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { DepositAllocationPanel } from "@/components/sales/wizard/components/DepositAllocationPanel";
+import { DepositSettlementDecision } from "@/components/deposits/DepositSettlementDecision";
 import { AlertTriangle, Undo2 } from "lucide-react";
 
 /**
@@ -75,12 +76,32 @@ type RefundMethod = PaymentMethod;
 const movesMoney = (treatment: Treatment) =>
   treatment === "REFUND_TO_CUSTOMER" || treatment === "FORFEITED";
 
+/**
+ * The pre-completion decision, supplied only where a sale is about to be
+ * completed (the wizard's Step 4). Left out on the customer's quote card, where
+ * there is no sale to settle against and the question would be meaningless.
+ *
+ * Kept as a prop rather than read from context so this screen stays mountable
+ * from anywhere the same decision has to be made — the financing application's
+ * deal-parties table being the next one.
+ */
+export interface QuoteDepositSettlement {
+  /** The lines this quote will complete. The عربون's share is decided per car. */
+  vehicleIds: Id<"vehicles">[];
+  settlementRoute: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER";
+  value: boolean;
+  onChange: (applied: boolean) => void;
+  disabled?: boolean;
+}
+
 export function QuoteDepositManager({
   orgId,
   quoteId,
+  settlement,
 }: {
   orgId: Id<"organizations">;
   quoteId: Id<"quotes">;
+  settlement?: QuoteDepositSettlement;
 }) {
   const { t, isRtl } = useLanguage();
   const { hasPermission } = usePermissions();
@@ -189,6 +210,24 @@ export function QuoteDepositManager({
       {/* Editing the split. Unchanged from the wizard — one definition of what
           an allocation is, wherever it is made. */}
       <DepositAllocationPanel orgId={orgId} quoteId={quoteId} />
+
+      {/* What happens to the deposit when the sale completes. Only rendered
+          where a sale is actually about to complete, and only for consigned
+          lines — the component returns null for dealer-owned stock, where
+          "applied" has only ever meant one thing. It sits after the split
+          because the split is what decides the amount it is about. */}
+      {settlement?.vehicleIds.map((vehicleId) => (
+        <DepositSettlementDecision
+          key={vehicleId}
+          orgId={orgId}
+          quoteId={quoteId}
+          vehicleId={vehicleId}
+          settlementRoute={settlement.settlementRoute}
+          value={settlement.value}
+          onChange={settlement.onChange}
+          disabled={settlement.disabled}
+        />
+      ))}
 
       {allocation.isMultiVehicle && (
         <div className="space-y-2">

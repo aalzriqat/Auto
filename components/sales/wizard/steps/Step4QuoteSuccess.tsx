@@ -97,6 +97,12 @@ export function Step4QuoteSuccess({
     "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER"
   >("THROUGH_DEALERSHIP");
 
+  // Whether the operator has confirmed the عربون forms part of this deal's
+  // final settlement. One decision for the deal, like the route above it — the
+  // mutation takes a single treatment for the whole quote, so asking per line
+  // would offer a choice the server cannot honour.
+  const [depositInSettlement, setDepositInSettlement] = useState(false);
+
   const handleSubmitSale = async () => {
     if (!activeOrgId || !quote || !me) return;
     setIsCompletingSale(true);
@@ -110,6 +116,13 @@ export function Step4QuoteSuccess({
         // through the dealership's own receivable — so a deal the supplier was
         // paid for directly was being booked as though it had not been.
         supplierSettlementRoute: settlementRoute,
+        // Sent only when confirmed. Omitted, the server keeps its long-standing
+        // behaviour: the deposit comes off what the customer owes whenever it
+        // fits, and the sale is refused when it does not — which is the state
+        // this control exists to give the operator a way out of.
+        ...(depositInSettlement
+          ? { depositResolution: { treatment: "APPLY_TO_TRANSACTION_SETTLEMENT" as const } }
+          : {}),
         idempotencyKey: completeSaleIdempotencyKeyRef.current,
       });
       setSaleId(ids[0]);
@@ -121,6 +134,14 @@ export function Step4QuoteSuccess({
       setIsCompletingSale(false);
     }
   };
+
+  // The cars this quote will complete, in line order. A multi-vehicle quote
+  // carries `vehicleItems`; the legacy single-line shape carries only
+  // `vehicleId`, and reading the first from `vehicleItems` on one of those
+  // returns nothing at all.
+  const quoteVehicleIds = (
+    quote?.vehicleItems ?? (quote ? [{ vehicleId: quote.vehicleId }] : [])
+  ).map((item) => item.vehicleId);
 
   const orgBranding = {
     name: orgSettings?.dealershipName,
@@ -266,24 +287,39 @@ export function Step4QuoteSuccess({
 
       {activeOrgId ? (
         <div className="space-y-4">
-          <QuoteDepositManager orgId={activeOrgId} quoteId={quoteId} />
+          <QuoteDepositManager
+            orgId={activeOrgId}
+            quoteId={quoteId}
+            settlement={
+              // Only while the sale can still be completed. Once it has, the
+              // decision is made and offering it again would be a control that
+              // does nothing.
+              paymentType === "CASH" && !saleId
+                ? {
+                    vehicleIds: quoteVehicleIds,
+                    settlementRoute,
+                    value: depositInSettlement,
+                    onChange: setDepositInSettlement,
+                    disabled: isCompletingSale,
+                  }
+                : undefined
+            }
+          />
           {/* One per car on the quote, each priced off its own line. Feeding
               the quote total into a single preview showed the first car's
               supplier cost against every car's price. The route is a single
               decision for the deal, so it is asked for once, on the first. */}
-          {(quote?.vehicleItems ?? (quote ? [{ vehicleId: quote.vehicleId }] : [])).map(
-            (item, index) => (
-              <ConsignedSettlementSection
-                key={item.vehicleId}
-                orgId={activeOrgId}
-                vehicleId={item.vehicleId}
-                quoteId={quoteId}
-                value={settlementRoute}
-                onChange={setSettlementRoute}
-                showRouteSelector={index === 0}
-              />
-            )
-          )}
+          {quoteVehicleIds.map((vehicleId, index) => (
+            <ConsignedSettlementSection
+              key={vehicleId}
+              orgId={activeOrgId}
+              vehicleId={vehicleId}
+              quoteId={quoteId}
+              value={settlementRoute}
+              onChange={setSettlementRoute}
+              showRouteSelector={index === 0}
+            />
+          ))}
         </div>
       ) : null}
 

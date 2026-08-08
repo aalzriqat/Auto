@@ -151,6 +151,18 @@ export const salesEn = {
     "The customer is invoiced nothing for the car. {supplier} is holding the dealership's margin until he settles it — collect it from Supplier Receivables.",
   ConsignedNoSupplierCost:
     "No supplier amount is recorded for this vehicle, so the dealership's margin cannot be determined and the sale cannot be completed. Record the agreed supplier amount, or convert the vehicle to dealer-owned stock first.",
+  DepositSettlementTitle: "The reservation deposit on this deal",
+  DepositSettlementDesc:
+    "The customer already paid this against the deal. Confirm it forms part of the final settlement and the rest is worked out for you.",
+  DepositSettlementConfirm: "This deposit forms part of the final settlement of this deal",
+  DepositSettlementHeldAmount: "Deposit held on this car",
+  DepositSettlementRequired:
+    "This sale cannot be completed until it is recorded what happens to this deposit.",
+  DepositSettlementCustomerOwes: "The customer would still owe",
+  DepositSettlementSupplierOwes: "{supplier} would still owe the dealership",
+  DepositSettlementNotDecided:
+    "This car's share of the deposit has not been decided yet. Record the split above first.",
+  DepositSettlementUnavailable: "This deposit cannot be treated that way",
   Taxes: "Taxes (JOD)",
   FinancingAndTradeIn: "Financing & Trade-In",
   SelectTradeIn: "Select trade-in (optional)",
@@ -714,6 +726,17 @@ export const salesAr = {
     "يصدر المعرض فاتورة بكامل المبلغ على العميل، ويبقى مدينًا لـ{supplier} بحصته. سدّدها من ذمم الموردين الدائنة.",
   ConsignedDirectConsequence:
     "لا يُفوتر العميل بثمن المركبة. يحتفظ {supplier} بهامش المعرض حتى يسدّده — حصّله من ذمم الموردين المدينة.",
+  DepositSettlementTitle: "العربون في هذه الصفقة",
+  DepositSettlementDesc:
+    "دفع العميل هذا المبلغ مقدمًا على الصفقة. أكّد أنه جزء من التسوية النهائية، وسيُحتسب الباقي تلقائيًا.",
+  DepositSettlementConfirm: "هذا العربون جزء من التسوية النهائية لهذه الصفقة",
+  DepositSettlementHeldAmount: "العربون المحجوز على هذه المركبة",
+  DepositSettlementRequired: "لا يمكن إتمام هذا البيع قبل تسجيل ما سيحدث لهذا العربون.",
+  DepositSettlementCustomerOwes: "يبقى على العميل",
+  DepositSettlementSupplierOwes: "يبقى على {supplier} للمعرض",
+  DepositSettlementNotDecided:
+    "لم تُحدَّد بعد حصة هذه المركبة من العربون. سجّل التوزيع أعلاه أولًا.",
+  DepositSettlementUnavailable: "لا يمكن معالجة هذا العربون بهذه الطريقة",
   ConsignedNoSupplierCost:
     "لا يوجد مبلغ مورّد مسجّل لهذه المركبة، لذا لا يمكن تحديد هامش المعرض ولا إتمام البيع. سجّل المبلغ المتفق عليه مع المورّد، أو حوّل المركبة إلى ملكية المعرض أولًا.",
   Taxes: "الضرائب (دينار اردني)",
