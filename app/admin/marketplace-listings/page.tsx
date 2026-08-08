@@ -20,6 +20,7 @@ import { toast } from "@/components/ui/sonner";
 import { PageHeader, EmptyState } from "@/components/admin/ui";
 import { ShieldCheck, CheckCircle2, XCircle } from "lucide-react";
 import { getErrorMessage } from "@/lib/errors";
+import { safeImageSrc } from "@/lib/imageUrl";
 
 type PendingListingRow = {
   _id: Id<"marketplaceListings">;
@@ -67,7 +68,7 @@ function ListingCard({ listing, onReject }: { readonly listing: PendingListingRo
             // eslint-disable-next-line @next/next/no-img-element
             <img
               key={`${listing._id}-${i}`}
-              src={url}
+              src={safeImageSrc(url)}
               alt={`${listing.make} ${listing.model}`}
               className="h-20 w-28 rounded-md border border-border object-cover"
             />

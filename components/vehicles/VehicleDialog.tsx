@@ -42,6 +42,7 @@ import { vehicleSchema, VehicleFormValues, VehicleDialogProps } from "./vehicle.
 import { CustomFieldsSection, useSaveCustomFieldValues } from "@/components/custom-fields/CustomFieldsSection";
 import { decodeVinYear, toCarBrand, cleanMfrName, validateVinChecksum } from "@/lib/vinHelpers";
 import { getErrorMessage } from "@/lib/errors";
+import { safeImageSrc } from "@/lib/imageUrl";
 
 export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, canEdit = false }: VehicleDialogProps) {
   const { activeOrgId } = useOrg();
@@ -840,7 +841,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-2">
                   {imageUrls.map((url, index) => (
                     <div key={index} className="relative group aspect-video bg-muted rounded-md overflow-hidden border">
-                      <img src={url} alt={`Vehicle ${index + 1}`} className="object-cover w-full h-full" />
+                      <img src={safeImageSrc(url)} alt={`Vehicle ${index + 1}`} className="object-cover w-full h-full" />
                       <button
                         type="button"
                         onClick={() => handleRemoveImage(index)}

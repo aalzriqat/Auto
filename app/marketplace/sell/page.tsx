@@ -27,6 +27,7 @@ import {
   type Translations,
 } from "../marketplaceShell";
 import { getErrorMessage } from "@/lib/errors";
+import { safeImageSrc } from "@/lib/imageUrl";
 
 // Mirrors convex/utils/storageValidation.ts's MARKETPLACE_LISTING_IMAGE_CONTENT_TYPES
 // / max size — checked client-side too so a rejected file is caught before an
@@ -455,7 +456,7 @@ export default function MarketplaceSellPage() {
                       {image.previewUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element -- Convex storage URL, not a local/static asset next/image can optimize
                         <img
-                          src={image.previewUrl}
+                          src={safeImageSrc(image.previewUrl)}
                           alt={`Upload ${index + 1}`}
                           className="object-cover w-full h-full"
                         />

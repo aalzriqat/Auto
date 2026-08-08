@@ -1,4 +1,5 @@
 import { calculateUnifiedMurabaha } from "@/lib/financing";
+import { safeImageSrc } from "@/lib/imageUrl";
 import type { Lang, PublicSite, PublicVehicle } from "./theme-props";
 
 /** Generic illustrative terms used when the seller hasn't picked one of their
@@ -62,7 +63,7 @@ export function KineticVehicleImage({
   iconClassName?: string;
 }) {
   if (vehicle.imageUrls[0]) {
-    return <img className={className} src={vehicle.imageUrls[0]} alt={vehicleTitle(vehicle)} />;
+    return <img className={className} src={safeImageSrc(vehicle.imageUrls[0])} alt={vehicleTitle(vehicle)} />;
   }
   return (
     <div className={`flex items-center justify-center bg-surface-container text-outline-variant ${className ?? ""}`}>
@@ -89,7 +90,7 @@ export function KineticBrand({
     const heightClass = size === "lg" ? "h-20" : size === "sm" ? "h-11" : "h-14";
     return (
       <img
-        src={profile.logoUrl}
+        src={safeImageSrc(profile.logoUrl)}
         alt={profile.dealershipName}
         className={`${heightClass} w-auto max-w-[300px] object-contain ${className ?? ""}`}
       />

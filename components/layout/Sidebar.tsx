@@ -10,6 +10,7 @@ import { api } from "@/convex/_generated/api";
 import { cn } from "@/lib/utils";
 import { mainNavigation as navigation, settingsNavigation } from "@/lib/navigation";
 import { Badge } from "@/components/ui/badge";
+import { safeImageSrc } from "@/lib/imageUrl";
 
 export function Sidebar() {
   const { t, isRtl } = useLanguage();
@@ -77,7 +78,7 @@ export function Sidebar() {
       <div className="flex items-center justify-center px-6 py-3 border-b border-slate-200/50 shrink-0">
         <Link href={`/${activeOrgId}/dashboard`} className="flex items-center justify-center">
           {logoUrl ? (
-            <img src={logoUrl} alt="Organization Logo" className="h-24 w-auto max-w-[180px] object-contain" />
+            <img src={safeImageSrc(logoUrl)} alt="Organization Logo" className="h-24 w-auto max-w-[180px] object-contain" />
           ) : (
             <Image src="/logo.png" alt="AutoFlow Logo" width={180} height={80} className="h-24 w-auto max-w-[180px] object-contain" priority />
           )}

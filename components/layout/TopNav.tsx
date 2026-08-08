@@ -20,6 +20,7 @@ import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from "@/co
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 import { mainNavigation, settingsNavigation, type NavItem } from "@/lib/navigation";
+import { safeImageSrc } from "@/lib/imageUrl";
 
 // Flat list (main + settings) used only to resolve the current page title —
 // the drawer itself renders the two sections separately, same as the desktop Sidebar.
@@ -112,7 +113,7 @@ export function TopNav() {
               <SheetHeader className="p-4 border-b border-slate-100 text-start shrink-0">
                 <SheetTitle className="flex items-center justify-center">
                   {logoUrl ? (
-                    <img src={logoUrl} alt="Organization Logo" className="h-20 w-auto max-w-[180px] object-contain" />
+                    <img src={safeImageSrc(logoUrl)} alt="Organization Logo" className="h-20 w-auto max-w-[180px] object-contain" />
                   ) : (
                     <Image src="/logo.png" alt="AutoFlow Logo" width={180} height={80} className="h-20 w-auto max-w-[180px] object-contain" priority />
                   )}

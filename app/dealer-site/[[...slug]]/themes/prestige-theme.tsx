@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowRight, Car, CheckCircle2, Globe2, Mail, MapPin, Menu, Phone, ShieldCheck, X } from "lucide-react";
 import type { ThemeProps, PublicVehicle, FormState, SiteStrings } from "./theme-props";
 import { TurnstileWidget } from "../turnstile-widget";
+import { safeImageSrc } from "@/lib/imageUrl";
 
 export function PrestigeTheme(props: ThemeProps) {
   const {
@@ -64,7 +65,7 @@ export function PrestigeTheme(props: ThemeProps) {
         <div style={{ maxWidth: 1280, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "0 24px", height: 64 }}>
           <Link href="/" style={{ display: "flex", alignItems: "center", gap: 12, textDecoration: "none" }}>
             {profile.logoUrl ? (
-              <img src={profile.logoUrl} alt={profile.dealershipName} style={{ height: 36, width: "auto", maxWidth: 140, objectFit: "contain" }} />
+              <img src={safeImageSrc(profile.logoUrl)} alt={profile.dealershipName} style={{ height: 36, width: "auto", maxWidth: 140, objectFit: "contain" }} />
             ) : (
               <>
                 <div style={{ width: 36, height: 36, background: primary, borderRadius: 4, display: "grid", placeItems: "center" }}>
@@ -129,7 +130,7 @@ export function PrestigeTheme(props: ThemeProps) {
           <section style={{ position: "relative", minHeight: "100vh", display: "flex", alignItems: "center" }}>
             {featuredVehicles[0]?.imageUrls[0] ? (
               <img
-                src={featuredVehicles[0].imageUrls[0]}
+                src={safeImageSrc(featuredVehicles[0].imageUrls[0])}
                 alt=""
                 style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", filter: "brightness(0.55)" }}
               />
@@ -227,7 +228,7 @@ export function PrestigeTheme(props: ThemeProps) {
           <div style={{ display: "grid", gap: 48, gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" }}>
             <div style={{ borderRadius: 4, overflow: "hidden", background: "#111", aspectRatio: "4/3" }}>
               {detailVehicle.imageUrls[0] ? (
-                <img src={detailVehicle.imageUrls[0]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                <img src={safeImageSrc(detailVehicle.imageUrls[0])} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
               ) : (
                 <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", color: "#555" }}>
                   <Car size={48} />
@@ -385,7 +386,7 @@ export function PrestigeTheme(props: ThemeProps) {
         <div style={{ maxWidth: 1280, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20, alignItems: "center" }}>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
             {profile.logoUrl ? (
-              <img src={profile.logoUrl} alt={profile.dealershipName} style={{ height: 28, width: "auto", objectFit: "contain", opacity: 0.6 }} />
+              <img src={safeImageSrc(profile.logoUrl)} alt={profile.dealershipName} style={{ height: 28, width: "auto", objectFit: "contain", opacity: 0.6 }} />
             ) : (
               <p style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.25em", textTransform: "uppercase", color: "#555" }}>{profile.dealershipName}</p>
             )}
@@ -425,7 +426,7 @@ function PrestigeVehicleGrid({ vehicles, primary, formatPrice, noVehiclesLabel }
         <a key={v.id} href={`/inventory/${v.slug}`} className="pt-card-vehicle" style={{ display: "block", textDecoration: "none" }}>
           <div style={{ aspectRatio: "16/10", overflow: "hidden", position: "relative", background: "#1a1a1a" }}>
             {v.imageUrls[0] ? (
-              <img src={v.imageUrls[0]} alt="" className="pt-vehicle-img" />
+              <img src={safeImageSrc(v.imageUrls[0])} alt="" className="pt-vehicle-img" />
             ) : (
               <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", color: "#333" }}>
                 <Car size={40} />

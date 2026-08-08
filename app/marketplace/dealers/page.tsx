@@ -5,6 +5,7 @@ import { useQuery } from "convex/react";
 import Link from "next/link";
 import { api } from "@/convex/_generated/api";
 import { Car, Globe2, MapPin, Phone, ShieldCheck, Store } from "lucide-react";
+import { safeImageSrc } from "@/lib/imageUrl";
 
 type Lang = "en" | "ar";
 
@@ -89,7 +90,7 @@ export default function MarketplaceDealersPage() {
                 {dealer.logoUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
-                    src={dealer.logoUrl}
+                    src={safeImageSrc(dealer.logoUrl)}
                     alt={dealer.dealershipName}
                     className="h-10 w-10 rounded-full object-cover border border-slate-200"
                   />

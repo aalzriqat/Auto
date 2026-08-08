@@ -6,6 +6,7 @@ import Link from "next/link";
 import { api } from "@/convex/_generated/api";
 import { Car, Globe2, MapPin, MessageCircle, Phone, Plus, Search, ShieldCheck, Store, User, Wallet, Zap } from "lucide-react";
 import { buildWhatsAppDeepLink } from "@/lib/whatsappDeepLink";
+import { safeImageSrc } from "@/lib/imageUrl";
 
 type Lang = "en" | "ar";
 
@@ -237,7 +238,7 @@ function VehicleCard({
       <div className="relative aspect-video bg-slate-100 flex items-center justify-center">
         {vehicle.imageUrls[0] ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={vehicle.imageUrls[0]} alt={`${vehicle.make} ${vehicle.model}`} className="h-full w-full object-cover" />
+          <img src={safeImageSrc(vehicle.imageUrls[0])} alt={`${vehicle.make} ${vehicle.model}`} className="h-full w-full object-cover" />
         ) : (
           <Car className="h-10 w-10 text-slate-300" />
         )}
