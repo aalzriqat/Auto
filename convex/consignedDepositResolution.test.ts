@@ -68,7 +68,7 @@ async function seed(
      * — the shape a fleet quote really has — instead of the legacy single-line
      * fields.
      */
-    extraLine?: { price: number; sourceCost?: number };
+    extraLine?: { price: number; sourceCost?: number; sourceType?: "SOURCED" | "STOCK" };
     /**
      * Records the deposit through `deposits.create`, once per amount, instead of
      * inserting a row directly. A customer paying the عربون in instalments is
@@ -174,9 +174,13 @@ async function seed(
           orgId, vin: `VINDEP2${tag}`, make: "Toyota", model: "Corolla", year: 2024, mileage: 12,
           color: "Grey", fuelType: "Gas", transmission: "Auto", sellingPrice: opts.extraLine!.price,
           status: "AVAILABLE",
-          sourceType: "SOURCED",
-          sourcedFromName: "Amman Importer Co",
-          sourceCost: opts.extraLine!.sourceCost ?? opts.extraLine!.price - MARGIN,
+          sourceType: opts.extraLine!.sourceType ?? "SOURCED",
+          ...(opts.extraLine!.sourceType === "STOCK"
+            ? { purchasePrice: opts.extraLine!.sourceCost ?? opts.extraLine!.price - MARGIN }
+            : {
+                sourcedFromName: "Amman Importer Co",
+                sourceCost: opts.extraLine!.sourceCost ?? opts.extraLine!.price - MARGIN,
+              }),
         })
       )
     : undefined;
@@ -578,11 +582,11 @@ describe("APPLY_TO_TRANSACTION_SETTLEMENT across the shapes a real deal takes", 
     expect(applications[0]!.amountMinor).toBe(600 * SCALE);
     expect(applications[0]!.vehicleId).toBe(s.vehicleId);
 
-    // And the collectable claim agrees with the GL. The cap that authorises the
-    // treatment and the slices that are actually spent are different figures
-    // from different places; crediting the claim with the cap would tell the
-    // dealership it is holding 1,000 of the supplier's margin when it is
-    // holding 600 — the other 400 still belongs to the customer.
+    // And the collectable claim agrees with the GL: 600 consumed, 600 credited
+    // against the claim, 2,400 still to collect from the supplier. This is the
+    // side nobody looks at — `supplierReceivables.recordReceipt` settles the
+    // subledger row, not the journal — so a GL-only assertion here would pass
+    // while the claim said something else.
     const claims = await s.t.run(async (ctx) =>
       (await ctx.db.query("vehicleSupplierReceivables").collect()).filter(
         (r) => r.orgId === s.orgId
@@ -626,11 +630,11 @@ describe("APPLY_TO_TRANSACTION_SETTLEMENT across the shapes a real deal takes", 
     }
 
     // The claim on the supplier has to agree with what was actually consumed.
-    // These are computed from two different places — the allocated total that
-    // caps the treatment, and the slices the resolution really spent — and when
-    // they disagree the GL says 2,000 outstanding while the subledger somebody
-    // collects against says 2,400. Both balance; the dealership bills the
-    // supplier for 400 dinars of its own money.
+    // The cap that authorises the treatment and the slices really spent come
+    // from two places, and the cap can only ever be the larger — so a
+    // divergence credits the claim with MORE than the GL did, the row reads as
+    // more settled than it is, and the dealership stops short of collecting its
+    // own margin. Both books balance while it happens.
     const claims = await s.t.run(async (ctx) =>
       (await ctx.db.query("vehicleSupplierReceivables").collect()).filter(
         (r) => r.orgId === s.orgId
@@ -717,6 +721,132 @@ describe("APPLY_TO_TRANSACTION_SETTLEMENT across the shapes a real deal takes", 
     const posted = await postedBySystemKey(s.t, s.orgId);
     expect(posted[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY]).toBe(-400 * SCALE);
     expect(posted[SYSTEM_KEYS.CASH_ON_HAND]).toBe(1_000 * SCALE);
+  });
+});
+
+describe("a quote-wide treatment on a quote whose lines are not all consigned", () => {
+  test("completes both lines: the treatment means the same thing on owned stock", async () => {
+    // `completeFromQuote` takes ONE `depositResolution` and forwards it to every
+    // line, exactly as it does the settlement route. So a quote mixing a
+    // consigned car with the dealership's own stock sends
+    // APPLY_TO_TRANSACTION_SETTLEMENT to both.
+    //
+    // Refusing it on the owned line put the deal in a state where NOTHING
+    // completed it: send the treatment and the owned line throws, withhold it
+    // and the consigned line throws because its share exceeds the nothing it
+    // was billed. The screen offered a checkbox whose only effect was to move
+    // the failure.
+    //
+    // The operator's statement is route-independent — this money is part of
+    // this deal's settlement — and on owned stock that has exactly one meaning:
+    // it comes off what the customer owes. Which is what the treatment already
+    // does everywhere the dealership collected the gross.
+    const s = await seed("mixedLines", {
+      extraLine: { price: 8_000, sourceType: "STOCK" },
+    });
+    await s.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      allocations: [
+        { vehicleId: s.vehicleId, amount: 600 },
+        { vehicleId: s.secondVehicleId!, amount: 400 },
+      ],
+    });
+
+    const saleIds = await s.asUser.mutation(api.sales.completeFromQuote, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      depositResolution: { treatment: "APPLY_TO_TRANSACTION_SETTLEMENT" },
+    });
+    expect(saleIds).toHaveLength(2);
+
+    // Each line's share went where that line's facts say it goes.
+    const applications = await s.t.run(async (ctx) =>
+      (await ctx.db.query("depositApplications").collect()).filter((a) => a.orgId === s.orgId)
+    );
+    const consigned = applications.find((a) => a.vehicleId === s.vehicleId);
+    const owned = applications.find((a) => a.vehicleId === s.secondVehicleId);
+    expect(consigned?.treatment).toBe("SUPPLIER_SETTLEMENT");
+    expect(consigned?.amountMinor).toBe(600 * SCALE);
+    expect(owned?.treatment).toBe("CUSTOMER_RECEIVABLE");
+    expect(owned?.amountMinor).toBe(400 * SCALE);
+
+    // The whole عربون is spent, and the customer is billed for the owned car
+    // less their own money.
+    const posted = await postedBySystemKey(s.t, s.orgId);
+    expect(posted[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY]).toBe(0);
+    expect(posted[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS]).toBe((8_000 - 400) * SCALE);
+  });
+});
+
+describe("the refusals the settlement treatment can still make", () => {
+  test("a share larger than that car's own bill is refused on the gross route", async () => {
+    // Reaching this needs a MULTI-line quote. `deposits.create` already refuses
+    // a عربون larger than the whole quote, so on a single-car deal the share can
+    // never exceed the bill. Across two cars it can: the total stays under the
+    // quote while one car's stored share overshoots its own line.
+    //
+    // 15,000 عربون on a 20,500 quote, 14,000 of it put against the 12,500 car.
+    // Applying that to its bill would take the receivable through zero and show
+    // the customer in credit for money nobody billed them, leaving 1,500
+    // unaccounted for — which is the very thing a stated treatment exists to
+    // pin down.
+    const s = await seed("grossExcess", {
+      extraLine: { price: 8_000 },
+      instalments: [15_000],
+    });
+    await s.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      allocations: [
+        { vehicleId: s.vehicleId, amount: 14_000 },
+        { vehicleId: s.secondVehicleId!, amount: 1_000 },
+      ],
+    });
+
+    await expect(
+      completeWith(s, "THROUGH_DEALERSHIP", {
+        treatment: "APPLY_TO_TRANSACTION_SETTLEMENT",
+      })
+    ).rejects.toThrow(/exceeds what the dealership billed/i);
+
+    // Nothing moved: the whole عربون is still the customer's money.
+    const posted = await postedBySystemKey(s.t, s.orgId);
+    expect(posted[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY]).toBe(-15_000 * SCALE);
+  });
+
+  test("a consigned car with no recorded supplier cost is refused, not offered", async () => {
+    // The margin is unknowable rather than zero, and those are different facts.
+    // Only one of them is safe to post against.
+    const s = await seed("noCost", { sourceCost: 0 });
+    // Asserted on the message, not just on "it threw". A sale with no cost
+    // basis is refused for several independent reasons, and a bare `toThrow()`
+    // here would go green on any of them — including ones that have nothing to
+    // do with the deposit.
+    await expect(
+      completeWith(s, "DIRECT_TO_SUPPLIER", {
+        treatment: "APPLY_TO_TRANSACTION_SETTLEMENT",
+      })
+    ).rejects.toThrow(/no recorded supplier cost|cost basis/i);
+  });
+
+  test("the gross route records what the money did, not what was stated", async () => {
+    // The operator states a route-independent intent and the server derives the
+    // destination. On this route that destination is the customer's bill, so
+    // the deposit row must say APPLY_TO_DEALER_AMOUNT — a row claiming
+    // APPLY_TO_TRANSACTION_SETTLEMENT over a journal that credited the customer
+    // receivable would send `saleCancellation`'s legacy reversal after an event
+    // that was never posted, and `reverseEventIfPosted` reports "nothing
+    // posted" exactly as it reports "already reversed": silently.
+    const s = await seed("statedVsDone");
+    await completeWith(s, "THROUGH_DEALERSHIP", {
+      treatment: "APPLY_TO_TRANSACTION_SETTLEMENT",
+    });
+
+    const deposit = await s.t.run((ctx) => ctx.db.get(s.depositId));
+    expect(deposit?.status).toBe("APPLIED");
+    expect(deposit?.resolutionTreatment).toBe("APPLY_TO_DEALER_AMOUNT");
   });
 });
 

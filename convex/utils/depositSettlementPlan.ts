@@ -85,19 +85,22 @@ export function planDepositSettlementApplication(
 ): DepositSettlementPlan {
   const { isSourced, settlementRoute, depositMinor, customerBillableMinor, marginMinor } = input;
 
-  if (!isSourced) {
-    return {
-      ok: false,
-      reason:
-        "This vehicle is the dealership's own stock, so there is no supplier settlement for a deposit to be applied to.",
-    };
-  }
-
-  if (dealershipCollectsGross(settlementRoute)) {
-    // The dealership holds the gross, so "part of the settlement" means part of
-    // what the customer paid it. Capped at what it actually billed: applying
-    // more would credit a receivable past zero and show the customer in credit
-    // for money nobody billed them.
+  // Two cases, one destination.
+  //
+  // THROUGH_DEALERSHIP: the dealership collected the gross, so the عربون is
+  // part of what the customer paid IT.
+  //
+  // Owned stock: there is no supplier and the route is meaningless — the
+  // customer owes the dealership the whole price, so "part of this deal's
+  // settlement" has exactly one possible meaning. This used to refuse, and
+  // refusing protected nothing: `completeFromQuote` takes ONE treatment for the
+  // whole quote and forwards it to every line, so a quote mixing a consigned
+  // car with owned stock had no completable state at all — state the treatment
+  // and the owned line threw, withhold it and the consigned line threw.
+  const againstTheCustomersBill = (): DepositSettlementPlan => {
+    // Capped at what the dealership actually billed: applying more would credit
+    // a receivable past zero and show the customer in credit for money nobody
+    // billed them.
     if (depositMinor > customerBillableMinor) {
       return {
         ok: false,
@@ -109,11 +112,15 @@ export function planDepositSettlementApplication(
       ok: true,
       destination: "CUSTOMER_RECEIVABLE",
       customerReceivableAfterMinor: customerBillableMinor - depositMinor,
-      // Untouched on this route, and deliberately so — see the header.
+      // No claim on a supplier arises on either of these paths. Reported as
+      // zero rather than "unchanged" because zero is what it is.
       supplierReceivableAfterMinor: 0,
     };
-  }
+  };
 
+  if (!isSourced) return againstTheCustomersBill();
+  // Written as two returns rather than one `||` so the compiler can see that
+  // `marginMinor` is non-null past this point.
   if (marginMinor === null) {
     return {
       ok: false,
@@ -121,7 +128,10 @@ export function planDepositSettlementApplication(
         "This vehicle has no recorded supplier cost, so the dealership's margin cannot be determined and a deposit cannot be applied against it.",
     };
   }
+  if (dealershipCollectsGross(settlementRoute)) return againstTheCustomersBill();
 
+  // DIRECT_TO_SUPPLIER on a consigned car.
+  //
   // Deposits run 5-10% of the price and consignment margins are often smaller,
   // so a deposit exceeding the margin is ordinary rather than exotic — and
   // applying it whole would drive Receivable from Suppliers to a credit

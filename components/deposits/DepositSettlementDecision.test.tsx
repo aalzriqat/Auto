@@ -228,6 +228,24 @@ describe("DepositSettlementDecision", () => {
     expect(screen.queryByRole("checkbox")).toBeNull();
   });
 
+  test("withdraws a confirmation that the route change has invalidated", async () => {
+    // The route lives in a sibling panel and the parent holds ONE boolean for
+    // the whole deal. Tick this on a route where the عربون fits, correct the
+    // route to one where it exceeds the margin, and the checkbox vanishes while
+    // the parent's `true` survives — so submitting still sends the treatment and
+    // the sale is refused for a reason already on screen, from a control no
+    // longer on it to untick.
+    const seeded = await seedPreview("stale", {
+      deposit: 1_000,
+      route: "DIRECT_TO_SUPPLIER",
+      sourceCost: SALE_PRICE - 350,
+    });
+    expect(seeded.preview?.depositSettlement?.canApplyToSettlement).toBe(false);
+
+    const onChange = renderDecision(seeded, "DIRECT_TO_SUPPLIER", true);
+    expect(onChange).toHaveBeenCalledWith(false);
+  });
+
   test("renders nothing at all for the dealership's own stock", async () => {
     // There is no supplier to settle with, and on owned stock "applied" has only
     // ever meant one thing. A section here would be a question with one answer.

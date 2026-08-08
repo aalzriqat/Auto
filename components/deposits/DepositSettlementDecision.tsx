@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
@@ -68,13 +69,29 @@ export function DepositSettlementDecision({
     settlementRoute,
   });
 
+  const deposit = preview?.depositSettlement ?? null;
+  const canApply = deposit?.canApplyToSettlement ?? null;
+
+  // A confirmation can outlive the thing it confirmed.
+  //
+  // The route is chosen in a sibling panel and the parent holds ONE boolean for
+  // the whole deal, so an operator could tick this on THROUGH_DEALERSHIP (where
+  // the عربون fits the customer's bill), then correct the route to
+  // DIRECT_TO_SUPPLIER (where it exceeds the margin). The checkbox disappears
+  // and the refusal renders — but the parent's `true` survives, and submitting
+  // still sends the treatment, so the sale is refused for a reason the screen
+  // already displayed, from a control no longer on it to untick.
+  useEffect(() => {
+    if (value && canApply === false) onChange(false);
+  }, [value, canApply, onChange]);
+
   // `null` is dealer-owned stock or a line this preview cannot speak for;
   // `undefined` is "not answered yet". Neither should reserve space.
-  if (!preview) return null;
-  const deposit = preview.depositSettlement;
-  // No عربون on this quote — there is nothing to decide, and rendering an empty
-  // section is how operators learn to click past the ones that matter.
-  if (!deposit) return null;
+  //
+  // No عربون on this quote is the same: there is nothing to decide, and
+  // rendering an empty section is how operators learn to click past the ones
+  // that matter.
+  if (!preview || !deposit) return null;
 
   const money = (n: number) =>
     n.toLocaleString(isRtl ? "ar-JO" : "en-JO", { maximumFractionDigits: 2 });
@@ -101,12 +118,18 @@ export function DepositSettlementDecision({
         </p>
       </header>
 
-      <div className="flex items-baseline justify-between gap-4">
-        <span className="text-sm">{t("DepositSettlementHeldAmount" as any)}</span>
-        <span className="text-base font-semibold tabular-nums">
-          {money(deposit.depositAmount)}
-        </span>
-      </div>
+      {/* Suppressed while the split is undecided. The server sends 0 there
+          because no share exists yet, and rendering it read "Deposit held on
+          this car — 0" directly above "this car's share has not been decided",
+          which states a figure and then denies it. */}
+      {deposit.allocationDecided && (
+        <div className="flex items-baseline justify-between gap-4">
+          <span className="text-sm">{t("DepositSettlementHeldAmount" as any)}</span>
+          <span className="text-base font-semibold tabular-nums">
+            {money(deposit.depositAmount)}
+          </span>
+        </div>
+      )}
 
       {!deposit.allocationDecided ? (
         // A share nobody has decided is not a number this screen may invent.

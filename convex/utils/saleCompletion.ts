@@ -522,15 +522,24 @@ async function resolveReservationDeposits(
       // Not collected against the customer's balance — it settled the
       // supplier's claim instead, which the claim below must open net of.
       //
-      // Summed from the slices actually consumed, NOT from `heldTotal`. The two
-      // are computed in different places — `heldTotal` is the allocated cap read
-      // before anything moved, `consumedSlices` is what the resolution really
-      // spent — and returning the cap made the claim's `alreadyReceivedAmount`
-      // an assumption rather than a fact. Where they disagree the GL nets the
-      // deposit off the receivable while the subledger somebody actually
-      // collects against does not, so the dealership goes and bills the supplier
-      // for money it is already holding. Both books balance while it happens,
-      // which is why this is derived rather than asserted.
+      // Summed from the slices actually consumed, NOT from `heldTotal`.
+      //
+      // This is a structural guarantee, not a fix for a reproducible bug — and
+      // the distinction is worth stating, because the two figures cannot
+      // currently disagree: `heldTotal` is the allocated cap and
+      // `consumedSlices` are the holds that cap was computed from, filtered by
+      // the same predicate, so `Σ consumed ≤ cap` always and they are equal on
+      // every path I could reach. I could not build a fixture where they differ
+      // without breaking one of them by hand.
+      //
+      // What it removes is the possibility. The GL debits/credits iterate
+      // `consumedSlices` (just above); the claim's `alreadyReceivedAmount` used
+      // to take the cap. Since the cap can only ever be the LARGER of the two,
+      // a divergence would tell the subledger MORE had been received than the
+      // GL credited — the claim would read as more settled than it is and the
+      // dealership would stop short of collecting its own margin from the
+      // supplier. Both books balance while it happens. Deriving both sides from
+      // one array means the question cannot arise.
       const appliedMinor = resolved.consumedSlices.reduce(
         (sum, slice) => sum + toMinorUnits(slice.amount, currency),
         0
