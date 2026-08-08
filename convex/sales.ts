@@ -23,6 +23,8 @@ import { getOrgCurrency, hookCommissionAccrued, hookCommissionAdjusted, hookComm
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 import { depositMethodValidator } from "./utils/depositRecording";
 import { toMinorUnits, fromMinorUnits, assertFiniteNumber } from "./utils/money";
+import { allocatedDepositForVehicle } from "./utils/depositAllocation";
+import { planDepositSettlementApplication } from "./utils/depositSettlementPlan";
 import { checkPostingAllowed } from "./accountingPeriods";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
@@ -1727,6 +1729,107 @@ export const recalculateCommission = mutation({
  * vehicle's bare `sourceCost` — a client multiplying the fields it happens to
  * have would show a margin the ledger then contradicts.
  */
+/**
+ * The deposit half of `consignedSalePreview`.
+ *
+ * Answers, for one quote line: how much of the customer's عربون is riding on
+ * this car, whether the sale can complete without anybody saying what happens
+ * to it, and what confirming "it forms part of this deal's settlement" would
+ * leave owing on each side.
+ *
+ * The eligibility and the resulting amounts both come from
+ * `planDepositSettlementApplication` — the same call `resolveReservationDeposits`
+ * makes when the sale actually completes. Recomputing them here would be a
+ * second implementation of a financial rule, and the first time the two drifted
+ * an operator would be shown a figure the ledger then contradicts.
+ */
+async function previewDepositSettlement(
+  ctx: QueryCtx,
+  args: {
+    orgId: Id<"organizations">;
+    quoteId: Id<"quotes"> | undefined;
+    vehicleId: Id<"vehicles">;
+    salePrice: number;
+    capitalizedCost: number;
+    settlementRoute: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER";
+    collectsGross: boolean;
+  }
+) {
+  if (!args.quoteId) return null;
+
+  const currency = await getOrgCurrency(ctx, args.orgId);
+  const allocation = await allocatedDepositForVehicle(ctx, {
+    quoteId: args.quoteId,
+    vehicleId: args.vehicleId,
+    currency,
+  });
+  // No عربون on this quote at all — there is no decision to offer, and
+  // rendering the section anyway is how an operator learns to click past it.
+  if (allocation.kind === "NO_DEPOSIT") return null;
+
+  const salePriceMinor = toMinorUnits(args.salePrice, currency);
+  // Mirrors `applySaleCompletionSideEffects` exactly. `completeFromQuote` passes
+  // no dealer fees, warranty or GAP, so on the quote path the customer's bill
+  // for this line IS the vehicle receivable — nothing, when the buyer paid the
+  // supplier and the dealership invoiced nothing for the car.
+  const customerBillableMinor = args.collectsGross ? salePriceMinor : 0;
+  const marginMinor =
+    args.capitalizedCost > 0
+      ? salePriceMinor - toMinorUnits(args.capitalizedCost, currency)
+      : null;
+
+  // The split has not been recorded yet, so the amount riding on this car is
+  // not a number anybody has decided. The sale refuses to complete in that
+  // state; saying so beats showing a figure derived from a guess.
+  if (allocation.kind === "NOT_ALLOCATED") {
+    return {
+      currency,
+      depositAmount: 0,
+      allocationDecided: false,
+      treatmentRequired: true,
+      canApplyToSettlement: false,
+      blockedReason:
+        "This vehicle's share of the reservation deposit has not been decided yet. Record the split before completing the sale.",
+      destination: null,
+      customerReceivableAfter: fromMinorUnits(customerBillableMinor, currency),
+      supplierReceivableAfter: fromMinorUnits(Math.max(0, marginMinor ?? 0), currency),
+    };
+  }
+
+  const depositMinor = allocation.allocatedMinor;
+  const plan = planDepositSettlementApplication({
+    isSourced: true,
+    settlementRoute: args.settlementRoute,
+    depositMinor,
+    customerBillableMinor,
+    marginMinor,
+  });
+
+  return {
+    currency,
+    depositAmount: fromMinorUnits(depositMinor, currency),
+    allocationDecided: true,
+    /**
+     * True when completing WITHOUT a stated treatment would be refused, which
+     * is exactly when the deposit is bigger than what the dealership billed —
+     * always, on DIRECT_TO_SUPPLIER, where it billed nothing for the car. This
+     * is the flag that decides whether the operator must be asked at all.
+     */
+    treatmentRequired: depositMinor > customerBillableMinor,
+    canApplyToSettlement: plan.ok,
+    blockedReason: plan.ok ? null : plan.reason,
+    destination: plan.ok ? plan.destination : null,
+    customerReceivableAfter: fromMinorUnits(
+      plan.ok ? plan.customerReceivableAfterMinor : customerBillableMinor,
+      currency
+    ),
+    supplierReceivableAfter: fromMinorUnits(
+      plan.ok ? plan.supplierReceivableAfterMinor : Math.max(0, marginMinor ?? 0),
+      currency
+    ),
+  };
+}
+
 export const consignedSalePreview = query({
   args: {
     orgId: v.id("organizations"),
@@ -1810,6 +1913,19 @@ export const consignedSalePreview = query({
     const route = economics.settlementRoute ?? "THROUGH_DEALERSHIP";
     const collectsGross = dealershipCollectsGross(route);
 
+    // What confirming the settlement treatment would do to this line, answered
+    // by the same function the completion posts through so the two cannot
+    // disagree. Quote-only: see the field comment on `depositSettlement`.
+    const depositSettlement = await previewDepositSettlement(ctx, {
+      orgId: args.orgId,
+      quoteId: args.quoteId,
+      vehicleId: args.vehicleId,
+      salePrice,
+      capitalizedCost,
+      settlementRoute: route,
+      collectsGross,
+    });
+
     return {
       supplierName: vehicle.sourcedFromName ?? null,
       settlementRoute: route,
@@ -1833,6 +1949,15 @@ export const consignedSalePreview = query({
        * than letting the mutation reject it after the fact.
        */
       missingSupplierCost: capitalizedCost <= 0,
+      /**
+       * What confirming "this deposit forms part of the settlement of this
+       * deal" would actually do. Null when this preview is not about a quote
+       * line: the deposit is quote-scoped, so without a quote there is no share
+       * to speak of, and the sale form may add dealer fees this query cannot
+       * see — reporting a bill it cannot compute is how a preview starts
+       * disagreeing with the posting.
+       */
+      depositSettlement,
     };
   },
 });
