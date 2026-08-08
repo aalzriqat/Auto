@@ -509,41 +509,53 @@ export async function resolveDepositsForQuote(
       continue;
     }
 
-    // Multi-vehicle: consume only this car's stored slice, and leave every
+    // Multi-vehicle: consume only this car's stored slices, and leave every
     // other car's slice and hold exactly where they are.
-    const mine = holds.find((h) => h.vehicleId === args.vehicleId && h.active);
-    if (!mine || mine.allocatedAmountMinor === undefined) continue;
+    //
+    // Slices, plural. A car can hold more than one at once — a re-allocation
+    // opens a NEW hold on the receiving car rather than rewriting the released
+    // one, so both histories survive. Consuming the first match credited one
+    // slice and left the rest behind: the customer was billed for a deposit the
+    // allocation screen had already told them was against that car, and the
+    // remainder stayed active on a car that was now SOLD, where no path could
+    // reach it again.
+    const mine = holds.filter(
+      (h) => h.vehicleId === args.vehicleId && h.active && h.allocatedAmountMinor !== undefined
+    );
+    if (mine.length === 0) continue;
 
-    const sliceMinor = mine.allocatedAmountMinor;
-    await ctx.db.patch(mine._id, {
-      allocationStatus:
-        args.resolution === "APPLIED" ? "APPLIED" : "RELEASED_AWAITING_DECISION",
-      active: false,
-      ...(args.saleId ? { appliedSaleId: args.saleId } : {}),
-      resolvedAt: now,
-      resolvedBy: args.actorId,
-    });
+    for (const slice of mine) {
+      const sliceMinor = slice.allocatedAmountMinor ?? 0;
+      await ctx.db.patch(slice._id, {
+        allocationStatus:
+          args.resolution === "APPLIED" ? "APPLIED" : "RELEASED_AWAITING_DECISION",
+        active: false,
+        ...(args.saleId ? { appliedSaleId: args.saleId } : {}),
+        resolvedAt: now,
+        resolvedBy: args.actorId,
+      });
+
+      resolvedTotal += fromMinorUnits(sliceMinor, args.currency);
+      if (sliceMinor > 0) {
+        consumedSlices.push({
+          depositId: deposit._id,
+          customerId: deposit.customerId,
+          amount: fromMinorUnits(sliceMinor, args.currency),
+          vehicleId: args.vehicleId,
+          holdId: slice._id,
+        });
+      }
+      if (args.resolution === "APPLIED" && appliesToCustomerAr && sliceMinor > 0) {
+        appliedDeposits.push({
+          depositId: deposit._id,
+          customerId: deposit.customerId,
+          amount: fromMinorUnits(sliceMinor, args.currency),
+          vehicleId: args.vehicleId,
+          holdId: slice._id,
+        });
+      }
+    }
     await maybeReleaseVehicleHold(ctx, args.vehicleId);
-
-    resolvedTotal += fromMinorUnits(sliceMinor, args.currency);
-    if (sliceMinor > 0) {
-      consumedSlices.push({
-        depositId: deposit._id,
-        customerId: deposit.customerId,
-        amount: fromMinorUnits(sliceMinor, args.currency),
-        vehicleId: args.vehicleId,
-        holdId: mine._id,
-      });
-    }
-    if (args.resolution === "APPLIED" && appliesToCustomerAr && sliceMinor > 0) {
-      appliedDeposits.push({
-        depositId: deposit._id,
-        customerId: deposit.customerId,
-        amount: fromMinorUnits(sliceMinor, args.currency),
-        vehicleId: args.vehicleId,
-        holdId: mine._id,
-      });
-    }
 
     // The deposit row itself only closes when nothing on the quote still has a
     // live claim on it. A row cannot be half-APPLIED, so its status follows the
@@ -939,14 +951,18 @@ export async function releaseHeldDeposit(
   // sitting at RELEASED_AWAITING_DECISION with its money already gone, ready to
   // be refunded a second time or quietly returned to the pool.
   //
-  // APPLIED holds are excluded here because the application rows already
-  // account for that money; counting both would subtract it twice.
+  // APPLIED and REVERSING holds are excluded here because their application
+  // rows already account for that money — `liveAppliedMinorForDeposit` counts
+  // both statuses — and subtracting the hold as well took the same amount off
+  // twice. That refused a genuinely free refund for as long as a deferred
+  // reversal was waiting on an accounting period, with a message saying there
+  // was nothing left when there was.
   const stillAllocatedMinor = holds
     .filter(
       (h) =>
         h.allocationStatus !== "APPLIED" &&
-        (h.allocationStatus === "REVERSING" ||
-          h.allocationStatus === "RELEASED_AWAITING_DECISION" ||
+        h.allocationStatus !== "REVERSING" &&
+        (h.allocationStatus === "RELEASED_AWAITING_DECISION" ||
           (h.active && h.allocationStatus !== undefined))
     )
     .reduce((sum, h) => sum + (h.allocatedAmountMinor ?? 0), 0);

@@ -179,6 +179,14 @@ export const release = mutation({
           refundMethod: args.refundMethod ?? null,
           notes: args.notes ?? null,
         }),
+        // Deliberately NOT discriminated by how much of the row is left.
+        //
+        // A retry of one release and a second, genuinely different release both
+        // arrive after the first has committed, so nothing in the row's state
+        // can tell them apart — adding it would turn every retry into a hard
+        // error. The key identifies ONE attempt, and a caller that reuses it
+        // across two payouts gets the first one's result. That is why the
+        // deposit screen sends no key at all: see VehicleDetailsDialog.
       },
       async () => {
         const deposit = await ctx.db.get(args.depositId);
@@ -919,25 +927,32 @@ export const releaseVehicleAllocation = mutation({
     let releasedHolds = 0;
     for (const deposit of deposits) {
       if (deposit.isDeleted === true || deposit.status !== "HELD") continue;
-      const hold = await ctx.db
+      // Every live share of this car, not the oldest one. A re-allocation, or a
+      // share returned to the pool and assigned again, opens a NEW hold beside
+      // the terminal original — so `.first()` returned a settled row, skipped
+      // it, and reported that the car held nothing while its money sat there
+      // with no way out.
+      const vehicleHolds = await ctx.db
         .query("depositVehicleHolds")
         .withIndex("by_deposit_vehicle", (q) =>
           q.eq("depositId", deposit._id).eq("vehicleId", args.vehicleId)
         )
-        .first();
-      if (!hold || !hold.active) continue;
-      if (hold.allocationStatus === "APPLIED") {
+        .collect();
+      if (vehicleHolds.some((h) => h.active && h.allocationStatus === "APPLIED")) {
         throw new ConvexError(
           "That vehicle's share has already been applied to its completed sale. Cancel the sale before removing the vehicle from the deal."
         );
       }
-      await ctx.db.patch(hold._id, {
-        active: false,
-        allocationStatus: "RELEASED_AWAITING_DECISION",
-        releaseReason: args.reason?.trim(),
-      });
-      releasedMinor += hold.allocatedAmountMinor ?? 0;
-      releasedHolds += 1;
+      for (const hold of vehicleHolds) {
+        if (!hold.active) continue;
+        await ctx.db.patch(hold._id, {
+          active: false,
+          allocationStatus: "RELEASED_AWAITING_DECISION",
+          releaseReason: args.reason?.trim(),
+        });
+        releasedMinor += hold.allocatedAmountMinor ?? 0;
+        releasedHolds += 1;
+      }
     }
 
     if (releasedHolds === 0) {

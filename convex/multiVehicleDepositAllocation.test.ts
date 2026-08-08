@@ -22,6 +22,8 @@
  * row's own `vehicleId`. A quote with more than one car cannot finalize any of
  * them until somebody says how the money divides.
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
@@ -1281,13 +1283,15 @@ const outPayments = (s: Seed) =>
 const release = (
   s: Seed,
   depositId: Id<"deposits">,
-  resolution: "REFUNDED" | "FORFEITED" = "REFUNDED"
+  resolution: "REFUNDED" | "FORFEITED" = "REFUNDED",
+  idempotencyKey?: string
 ) =>
   s.asManager.mutation(api.deposits.release, {
     orgId: s.orgId,
     depositId,
     resolution,
     ...(resolution === "REFUNDED" ? { refundMethod: "CASH" as const } : {}),
+    ...(idempotencyKey ? { idempotencyKey } : {}),
   });
 
 describe("releasing a deposit row more than once", () => {
@@ -1588,5 +1592,213 @@ describe("finalizing a share under an approved 'other' treatment", () => {
           reason: "Transferred to another deal by agreement",
         })
     ).rejects.toThrow();
+  });
+});
+
+// ─── A car holding more than one share at once ───────────────────────────────
+//
+// A re-allocation opens a NEW hold on the receiving car rather than rewriting
+// the released one, so both histories survive. Everything that reads "the car's
+// hold" therefore has to read all of them.
+
+describe("a car that holds two shares of the same deposit", () => {
+  async function reallocatedOntoB(tag: string) {
+    const s = await seed(tag);
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 2_000 },
+      { vehicleId: s.vehicleB!, amount: 1_000 },
+    ]);
+    await s.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      vehicleId: s.vehicleA,
+    });
+    const [holdA] = await holdsFor(s, s.vehicleA);
+    await s.asUser.mutation(api.deposits.resolveReleasedAllocation, {
+      orgId: s.orgId,
+      holdId: holdA!._id,
+      treatment: "REALLOCATE_TO_VEHICLE" as const,
+      toVehicleId: s.vehicleB!,
+    });
+    return s;
+  }
+
+  test("credits the sale with everything the allocation screen showed", async () => {
+    // The screen said 3,000 against B — its own 1,000 plus A's re-allocated
+    // 2,000. Completion consumed the first hold it found and billed the
+    // customer 2,000 more than the deposit they had been told was theirs.
+    const s = await reallocatedOntoB("reallocSell");
+    const view = await allocationView(s);
+    expect(view!.vehicles.find((v) => v.vehicleId === s.vehicleB)!.allocatedMinor).toBe(
+      3_000 * SCALE
+    );
+
+    await sell(s, s.vehicleB!, PRICE_B);
+
+    expect((await saleTransactionFor(s, s.vehicleB!))!.amount).toBe(PRICE_B - 3_000);
+    await expectConservation(s);
+  });
+
+  test("leaves nothing active behind on a car that has been sold", async () => {
+    // The un-consumed share stayed active on a SOLD vehicle, where no path
+    // could reach it: release wants an active hold it cannot find, resolve
+    // wants a status it can never reach, and the row release excludes it as
+    // still allocated. The customer's money was frozen for good.
+    const s = await reallocatedOntoB("reallocStrand");
+    await sell(s, s.vehicleB!, PRICE_B);
+
+    const live = (await holdsFor(s, s.vehicleB!)).filter((h) => h.active);
+    expect(live).toEqual([]);
+    const view = await expectConservation(s);
+    expect(view.allocatedMinor).toBe(0);
+    expect(view.appliedMinor).toBe(3_000 * SCALE);
+  });
+
+  test("can still be taken off the deal after a re-allocation", async () => {
+    const s = await reallocatedOntoB("reallocRelease");
+
+    await expect(
+      s.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+        orgId: s.orgId,
+        quoteId: s.quoteId,
+        vehicleId: s.vehicleB!,
+      })
+    ).resolves.toBeDefined();
+
+    const view = await expectConservation(s);
+    expect(view.releasedAwaitingDecisionMinor).toBe(3_000 * SCALE);
+  });
+
+  test("a share returned to the pool and allocated again can be released again", async () => {
+    const s = await seed("returnThenRelease");
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 2_000 },
+      { vehicleId: s.vehicleB!, amount: 1_000 },
+    ]);
+    await s.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      vehicleId: s.vehicleA,
+    });
+    const [holdA] = await holdsFor(s, s.vehicleA);
+    await s.asUser.mutation(api.deposits.resolveReleasedAllocation, {
+      orgId: s.orgId,
+      holdId: holdA!._id,
+      treatment: "RETURN_TO_UNALLOCATED" as const,
+    });
+    await allocate(s, [{ vehicleId: s.vehicleA, amount: 2_000 }]);
+
+    await expect(
+      s.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+        orgId: s.orgId,
+        quoteId: s.quoteId,
+        vehicleId: s.vehicleA,
+      })
+    ).resolves.toBeDefined();
+    await expectConservation(s);
+  });
+});
+
+describe("releasing the same row twice from the same screen", () => {
+  async function freePartRefunded(tag: string) {
+    const s = await seed(tag);
+    await payDeposit(s);
+    await allocate(s, [{ vehicleId: s.vehicleA, amount: 3_000 }]);
+    const depositId = await depositRowId(s);
+    const key = `deposit_release_${depositId}_REFUNDED`;
+
+    await release(s, depositId, "REFUNDED", key); // the free 2,000
+    await s.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      vehicleId: s.vehicleA,
+    });
+    const [holdA] = await holdsFor(s, s.vehicleA);
+    await s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
+      orgId: s.orgId,
+      holdId: holdA!._id,
+      treatment: "RETURN_TO_UNALLOCATED" as const,
+    });
+    return { s, depositId, key };
+  }
+
+  test("the deposit screen sends no fixed key, because a row can be released again", async () => {
+    // The screen used to send `deposit_release_<depositId>_<resolution>`. A row
+    // can now be released more than once — the free part today, the rest when
+    // the cars it was held against fall away — so the SECOND genuine payout
+    // matched the first's stored command: the mutation returned without
+    // running, no money moved, and the operator was told the customer had been
+    // refunded 3,000 JOD.
+    //
+    // There is nothing the server can do about it: a retry of one release and a
+    // second, different release both arrive after the first has committed, so
+    // no fingerprint can separate them. The key has to identify one attempt,
+    // which means the screen must not derive it from the deposit alone.
+    const source = readFileSync(
+      join(process.cwd(), "components/vehicles/VehicleDetailsDialog.tsx"),
+      "utf8"
+    );
+    const releaseCall = source.slice(
+      source.indexOf("await releaseDeposit({"),
+      source.indexOf("});", source.indexOf("await releaseDeposit({"))
+    );
+    expect(releaseCall).not.toContain("idempotencyKey");
+  });
+
+  test("a genuine retry of the SAME release replays rather than paying twice", async () => {
+    const s = await seed("clientKeyRetry");
+    await payDeposit(s);
+    await allocate(s, [{ vehicleId: s.vehicleA, amount: 3_000 }]);
+    const depositId = await depositRowId(s);
+    const key = `deposit_release_${depositId}_attempt1`;
+
+    await release(s, depositId, "REFUNDED", key);
+    await release(s, depositId, "REFUNDED", key);
+
+    expect(await cashOut(s)).toEqual([2_000]);
+    await expectConservation(s);
+  });
+
+  test("and without a key the second release goes through on its own merits", async () => {
+    const { s, depositId } = await freePartRefunded("clientKeyNone");
+
+    await release(s, depositId, "REFUNDED"); // the remaining 3,000
+
+    expect(await cashOut(s)).toEqual([2_000, 3_000]);
+    expect((await postedRefunds(s)).reduce((a, b) => a + b, 0)).toBe(5_000 * SCALE);
+    await expectConservation(s);
+  });
+});
+
+describe("a deferred reversal and the money beside it", () => {
+  test("does not make a genuinely free balance unrefundable", async () => {
+    // The slice mid-reversal was subtracted twice — once through its
+    // application row, once through its hold — so a free 2,000 was reported as
+    // nothing left, for as long as the reversal waited on an accounting period.
+    const s = await seed("reversingDoubleCount");
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 2_000 },
+      { vehicleId: s.vehicleB!, amount: 1_000 },
+    ]);
+    const saleA = await sell(s, s.vehicleA, PRICE_A);
+    const period = (await s.asUser.query(api.accountingPeriods.list, { orgId: s.orgId }))[0];
+    await closePeriod(s, period._id);
+    await cancel(s, saleA);
+
+    const [holdA] = await holdsFor(s, s.vehicleA);
+    expect(holdA!.allocationStatus).toBe("REVERSING");
+
+    await s.asUser.mutation(api.accountingPeriods.reopen, {
+      orgId: s.orgId,
+      periodId: period._id,
+      reason: "Refund the unallocated remainder",
+    });
+    await release(s, await depositRowId(s));
+
+    expect(await cashOut(s)).toEqual([2_000]);
+    await expectConservation(s);
   });
 });

@@ -227,9 +227,15 @@ export function VehicleDetailsDialog({
         depositId,
         resolution,
         refundMethod: resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : undefined,
-        // A double submit is a second real payout: a row can now be released
-        // more than once, so nothing upstream would collapse the two.
-        idempotencyKey: `deposit_release_${depositId}_${resolution}`,
+        // Deliberately no idempotency key. A row can now be released more than
+        // once — the free part today, the rest when the cars it was held
+        // against fall away — and a key derived from the deposit and the
+        // resolution made the SECOND genuine payout match the first's stored
+        // command: the mutation returned without running, moved no money, and
+        // the operator was told the customer had been refunded.
+        //
+        // A double submit is already safe without one: the two calls serialize,
+        // and the second recomputes the free balance as zero and is refused.
       });
       toast.success(
         resolution === "REFUNDED"
