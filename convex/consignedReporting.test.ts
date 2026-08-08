@@ -46,7 +46,13 @@ const OWNED_PRICE = 8_000;
 const OWNED_COST = 6_000;
 const OWNED_MARGIN = OWNED_PRICE - OWNED_COST;
 
-async function seedDealer(tag: string) {
+/**
+ * `withAccounting: false` leaves the org with no chart and no open period —
+ * the state in which `postOrEnqueue` queues the event instead of posting it,
+ * so no posting rule is evaluated at completion time. It is not an exotic
+ * fixture: it is every org that has not finished accounting setup.
+ */
+async function seedDealer(tag: string, opts: { withAccounting?: boolean } = {}) {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: `Rep ${tag}`, createdAt: Date.now() })
@@ -70,17 +76,19 @@ async function seedDealer(tag: string) {
   );
 
   const asUser = t.withIdentity({ subject: `${tag}_u`, clerkId: `${tag}_u` });
-  await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+  if (opts.withAccounting !== false) {
+    await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
 
-  const fiscalYear = new Date().getUTCFullYear();
-  await asUser.mutation(api.accountingPeriods.create, {
-    orgId,
-    startDate: Date.UTC(fiscalYear, 0, 1),
-    endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
-    fiscalYear, periodNumber: 1,
-  });
-  const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
-  await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+    const fiscalYear = new Date().getUTCFullYear();
+    await asUser.mutation(api.accountingPeriods.create, {
+      orgId,
+      startDate: Date.UTC(fiscalYear, 0, 1),
+      endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+      fiscalYear, periodNumber: 1,
+    });
+    const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
+    await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+  }
 
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Buyer", lastName: tag })
@@ -726,6 +734,67 @@ describe("the consigned preview on a multi-vehicle quote", () => {
 });
 
 /**
+ * Where the agency-tax refusal has to live.
+ *
+ * `consignedAgentSaleLines` throws on tax, and that reads like enforcement.
+ * It is not, on its own: `postOrEnqueue` evaluates a posting rule only when a
+ * chart and an open period exist. Without one it enqueues the raw payload, so
+ * the sale completes — vehicle SOLD, cashflow row, receivable, commission —
+ * and the journal fails privately in the outbox later. The refusal has to be
+ * at the mutation boundary or it is conditional on the accounting calendar.
+ */
+describe("tax on an agency sale, with no open accounting period", () => {
+  async function sellSourcedWithTax(tag: string, withAccounting: boolean) {
+    const s = await seedDealer(tag, { withAccounting });
+    const vehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin: `VINTAX${tag}`, make: "Toyota", model: "Camry", year: 2024,
+        mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto",
+        sellingPrice: SALE_PRICE, status: "AVAILABLE", sourceType: "SOURCED",
+        sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+      })
+    );
+    return {
+      s,
+      vehicleId,
+      attempt: () =>
+        s.asUser.mutation(api.sales.create, {
+          orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
+          salePrice: SALE_PRICE, saleDate: Date.now(), status: "COMPLETED" as const,
+          taxAmount: 500,
+        }),
+    };
+  }
+
+  test("is refused even though no posting rule runs", async () => {
+    const { attempt } = await sellSourcedWithTax("taxNoPeriod", false);
+    await expect(attempt()).rejects.toThrow(/tax/i);
+  });
+
+  test("leaves no sale, no sold vehicle and nothing queued behind it", async () => {
+    // A Convex mutation is one transaction, so the throw must take the whole
+    // completion with it. Otherwise the refusal simply relocates the damage:
+    // a car marked SOLD against a sale that does not exist.
+    const { s, vehicleId, attempt } = await sellSourcedWithTax("taxNoPeriodState", false);
+    await expect(attempt()).rejects.toThrow();
+
+    const state = await s.t.run(async (ctx) => ({
+      sales: (await ctx.db.query("sales").collect()).length,
+      queued: (await ctx.db.query("pendingAccountingEvents").collect()).length,
+      status: (await ctx.db.get(vehicleId))?.status,
+    }));
+    expect(state.sales).toBe(0);
+    expect(state.queued).toBe(0);
+    expect(state.status).toBe("AVAILABLE");
+  });
+
+  test("is refused with a period open too, so the two paths agree", async () => {
+    const { attempt } = await sellSourcedWithTax("taxWithPeriod", true);
+    await expect(attempt()).rejects.toThrow(/tax/i);
+  });
+});
+
+/**
  * The dashboard costs at most 500 distinct sold vehicles per window, because
  * `computeVehicleCapitalizedCost` reads every expense logged against a car and
  * running it unbounded on a live subscription is what the cap exists to stop.
@@ -748,12 +817,12 @@ describe("turnover past the dashboard's costing cap", () => {
    * `vehicles`, and putting 502 deals through `api.sales.create` would post 502
    * journals to prove something about a read path.
    */
-  async function dealerPastTheCap(tag: string) {
+  async function dealerPastTheCap(tag: string, baseAt?: number) {
     const s = await seedDealer(tag);
     // Ascending `saleDate`, because the dashboard's window query returns them
     // in that order and the cap is applied to that order. The last two are the
     // ones past it, deterministically.
-    const base = Date.now() - 600_000;
+    const base = baseAt ?? Date.now() - 600_000;
     const pastCap = await s.t.run(async (ctx) => {
       const insert = async (
         i: number,
@@ -792,22 +861,68 @@ describe("turnover past the dashboard's costing cap", () => {
 
     // The dealership owned this car. Nothing about its turnover was ever
     // uncertain — only its PROFIT needed a cost, and profit is reported
-    // separately with its own truncation flag.
-    expect(dash.salesVolumeThisMonth).toBe(CAP * OWNED_PRICE + PAST_CAP_OWNED_PRICE);
+    // separately with its own truncation flag. The consigned car behind it
+    // contributes its margin, which the next test is about.
+    expect(dash.salesVolumeThisMonth).toBe(
+      CAP * OWNED_PRICE + PAST_CAP_OWNED_PRICE + MARGIN
+    );
   });
 
-  test("a consigned sale past the cap is still excluded, and says so", async () => {
+  test("a consigned sale past the cap contributes its MARGIN, not nothing", async () => {
     const { s } = await dealerPastTheCap("capConsigned");
 
     const dash = await s.asUser.query(api.dashboard.stats, {
       orgId: s.orgId, timeRange: "YEAR" as const,
     });
 
-    // Fail-closed is preserved where it is actually earned: this car's turnover
-    // is its margin, the margin needs the cost, and the cost was not read. Its
-    // gross is NOT folded in — that would put part of one figure on the agent
-    // basis and part on the principal basis with nothing saying which.
+    // `computeVehicleCapitalizedCost` returns `sourceCost` for a SOURCED
+    // vehicle before it reads a single expense, so the margin costs one field
+    // access off a row already in hand. This was briefly excluded on the
+    // stated grounds that "the margin needs the cost" — wrong about that
+    // function, and on a consigned-heavy lot it discarded the larger half of
+    // the tail while reporting the figure as merely truncated.
+    expect(dash.salesVolumeThisMonth).toBe(
+      CAP * OWNED_PRICE + PAST_CAP_OWNED_PRICE + MARGIN
+    );
+    // And nothing is short, so the flag must not claim otherwise.
+    expect(dash.truncated.turnover).toBe(false);
+  });
+
+  test("a consigned sale with no recorded supplier cost is excluded, and says so", async () => {
+    // The one case that genuinely cannot be answered. Zero counts as missing,
+    // exactly as `hasVehicleCostBasis` treats it: a 0 basis would report the
+    // supplier's entire share as the dealership's turnover.
+    const { s, pastCap } = await dealerPastTheCap("capNoCost");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(pastCap.consigned, { sourceCost: undefined });
+    });
+
+    const dash = await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId, timeRange: "YEAR" as const,
+    });
+
     expect(dash.salesVolumeThisMonth).toBe(CAP * OWNED_PRICE + PAST_CAP_OWNED_PRICE);
+    expect(dash.truncated.turnover).toBe(true);
+  });
+
+  test("a past-cap vehicle belonging to another org is excluded, never booked at gross", async () => {
+    // A tenancy guard with no regression test is a tenancy guard that will be
+    // refactored away. `sourceType` absent would read as owned stock, so the
+    // check that must hold is the org one.
+    const { s, pastCap } = await dealerPastTheCap("capForeign");
+    const otherOrgId = await s.t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Somebody else", createdAt: Date.now() })
+    );
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(pastCap.owned, { orgId: otherOrgId });
+    });
+
+    const dash = await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId, timeRange: "YEAR" as const,
+    });
+
+    // The foreign car's price is gone from turnover; the consigned one still counts.
+    expect(dash.salesVolumeThisMonth).toBe(CAP * OWNED_PRICE + MARGIN);
     expect(dash.truncated.turnover).toBe(true);
   });
 
@@ -821,6 +936,33 @@ describe("turnover past the dashboard's costing cap", () => {
     // `revenueBySalesperson` runs through the same `recognizedRevenueOfSale`,
     // so a tail dropped from turnover was dropped from the leaderboard too —
     // and commission disputes start with a salesperson reading this number.
-    expect(dash.topPerformer?.revenue).toBe(CAP * OWNED_PRICE + PAST_CAP_OWNED_PRICE);
+    expect(dash.topPerformer?.revenue).toBe(
+      CAP * OWNED_PRICE + PAST_CAP_OWNED_PRICE + MARGIN
+    );
+  });
+
+  test("the COMPARISON window gets the same treatment, so a basis change is not read as growth", async () => {
+    // The previous window only exists for DAY and MONTH (`comparesPeriods`),
+    // so a YEAR test never executes a line of it. Every test above is YEAR —
+    // which left the whole previous-window path, and the invariant it was
+    // written for, asserted by nothing.
+    //
+    // MONTH is a ROLLING 30 days here, not a calendar month: the current
+    // window is `now - 30d`, the previous one `now - 60d`. 45 days back sits
+    // squarely inside the previous window and is relative to `now`, so no
+    // calendar boundary can move it.
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const { s } = await dealerPastTheCap("capPrevWindow", Date.now() - 45 * DAY_MS);
+
+    const dash = await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId, timeRange: "MONTH" as const,
+    });
+
+    // Had the previous window kept excluding its tail while the current window
+    // counted its own, the delta between them would have reported the
+    // difference in treatment as a change in trade.
+    expect(dash.previousPeriod?.sales).toBe(
+      CAP * OWNED_PRICE + PAST_CAP_OWNED_PRICE + MARGIN
+    );
   });
 });

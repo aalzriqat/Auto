@@ -820,6 +820,24 @@ async function applySaleCompletionSideEffects(
             "This vehicle is sourced, so it belongs to the supplier and the sale is an agency sale — but no supplier cost is recorded, so the dealership's margin cannot be determined. Record the agreed supplier amount, or convert the vehicle to dealer-owned stock first."
           );
         }
+        // Refused HERE, not only in the posting rule.
+        //
+        // `consignedAgentSaleLines` also throws on tax, but that rule is only
+        // evaluated when the event posts immediately. `postOrEnqueue` posts
+        // only when a chart and an OPEN PERIOD exist; otherwise it enqueues
+        // the raw payload, and no rule sees it until the outbox drains. So
+        // with no open period the sale was fully recorded — vehicle marked
+        // SOLD, cashflow row, receivable document, commission accrued — and
+        // the journal failed later, out of sight of whoever sold the car.
+        //
+        // A refusal that depends on the accounting calendar is not a refusal.
+        // This is the same boundary, and the same reasoning, as the missing
+        // supplier cost immediately above.
+        if (args.taxAmount != null && args.taxAmount > 0) {
+          throw new ConvexError(
+            `This is an agency sale — the dealership sells this car as ${prepared.vehicle.sourcedFromName ?? "the supplier"}'s agent — and agency sales have no agreed tax treatment yet, so whether the tax is his liability or the dealership's changes who owes the money. Record the tax against the supplier agreement, or sell the car as dealership stock, before completing the sale.`
+          );
+        }
         return {
           supplierEntitlementMinor: costMinor,
           supplierName: prepared.vehicle.sourcedFromName,

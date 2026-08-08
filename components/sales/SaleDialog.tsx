@@ -222,7 +222,14 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     // SOURCED — so it is answered `false` rather than left unknown.
     isSourced: selectedVehicle ? selectedVehicle.sourceType === "SOURCED" : undefined,
     taxAmount: Number(taxAmount),
-    status: watchAll.status === "PENDING" ? "PENDING" : "COMPLETED",
+    // Only the transition that POSTS is refused. Written the other way round
+    // first — anything that was not PENDING counted as COMPLETED — which
+    // caught CANCELLED too, so cancelling a consigned draft that carried tax
+    // was blocked by a message telling the operator to clear the tax "to
+    // record the sale", on a deal they were trying not to record. Cancelling a
+    // draft posts nothing at all (sales.ts gates every reversal on COMPLETED),
+    // so there is nothing there to refuse.
+    status: watchAll.status === "COMPLETED" ? "COMPLETED" : "PENDING",
   });
 
   const onSubmit = async (values: SaleFormValues) => {

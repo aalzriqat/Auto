@@ -73,7 +73,11 @@ function vehicle(id: Id<"vehicles">, sourceType: "STOCK" | "SOURCED") {
  * both directly. It is also the real shape of the risk — a draft consigned sale
  * being completed.
  */
-function saleOn(vehicleId: Id<"vehicles">, taxAmount: number) {
+function saleOn(
+  vehicleId: Id<"vehicles">,
+  taxAmount: number,
+  status: "COMPLETED" | "PENDING" | "CANCELLED" = "COMPLETED"
+) {
   return {
     _id: "sale1" as Id<"sales">,
     _creationTime: Date.now(),
@@ -83,9 +87,9 @@ function saleOn(vehicleId: Id<"vehicles">, taxAmount: number) {
     salespersonId: "user1" as Id<"users">,
     salePrice: 12_500,
     saleDate: Date.now(),
-    // COMPLETED, because that is the status that posts. A draft is deliberately
-    // let through — `consignedTaxGuard`'s own tests pin that half.
-    status: "COMPLETED" as const,
+    // COMPLETED by default, because that is the status that posts. A draft is
+    // deliberately let through — `consignedTaxGuard`'s own tests pin that half.
+    status,
     taxAmount,
   } as unknown as Doc<"sales">;
 }
@@ -120,6 +124,21 @@ describe("tax on a consigned sale, in the form", () => {
     // The principal rule posts tax on owned sales and always has. A guard that
     // fired here would break every ordinary taxed deal.
     openWith(saleOn(OWNED, 500));
+
+    await waitFor(() => {
+      expect(screen.queryByText("ConsignedTaxUnsupported")).toBeNull();
+    });
+    expect(submitButton().disabled).toBe(false);
+  });
+
+  test("does not block CANCELLING a consigned deal that carries tax", async () => {
+    // Cancelling posts nothing at all — sales.ts gates every reversal on
+    // COMPLETED — so there is no journal to refuse. The guard originally read
+    // "anything that is not PENDING is a completion", which caught CANCELLED
+    // too and told the operator to clear the tax "to record the sale" on a
+    // deal they were trying not to record. Clearing it would then have written
+    // the zero to the row on the way out, destroying the recorded tax.
+    openWith(saleOn(SOURCED, 500, "CANCELLED"));
 
     await waitFor(() => {
       expect(screen.queryByText("ConsignedTaxUnsupported")).toBeNull();

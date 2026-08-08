@@ -382,61 +382,81 @@ export const stats = query({
     }
 
     /**
-     * The BASIS of the sales the costing cap skipped — consigned or owned —
-     * and nothing else about them.
+     * Turnover for the sales the costing cap skipped, from the vehicle row
+     * alone.
      *
-     * Turnover on the dealership's own stock is the price on the sale row and
-     * needs no cost at all; only a consigned car's turnover is its margin. So
-     * excluding every uncosted sale discarded figures that were never in
-     * doubt, and an org past the cap read a headline revenue, a monthly chart
-     * and a salesperson ranking silently short by the whole tail.
+     * Excluding every uncosted sale discarded figures that were never in
+     * doubt: an org past the cap read a headline revenue, a monthly chart and
+     * a salesperson ranking silently short by the whole tail.
      *
-     * One `ctx.db.get` per skipped vehicle is a single document read. The cap
-     * above exists for `computeVehicleCapitalizedCost`, which reads every
-     * expense logged against the car — the basis is cheap to know and the
-     * margin is not, so they are read separately and only the margin is
-     * capped. Nothing is read at all until an org actually exceeds the cap.
+     * Both bases are answerable from the row this loop already reads, and
+     * neither needs the expense walk the cap exists for. Owned stock: turnover
+     * IS the sale price. Consigned: turnover is the margin, and
+     * `computeVehicleCapitalizedCost` returns `sourceCost` for a SOURCED
+     * vehicle BEFORE it touches expenses (see utils/vehicleCost.ts) — so the
+     * margin costs one field access, not a scan. An earlier version of this
+     * excluded the consigned tail on the grounds that "the margin needs the
+     * cost", which was simply wrong about that function, and threw away the
+     * larger half of the tail on a consigned-heavy lot.
+     *
+     * A SOURCED row with no usable `sourceCost` is still excluded: zero is
+     * treated as missing here exactly as `hasVehicleCostBasis` treats it,
+     * because a 0 basis would book the whole ticket as margin — the supplier's
+     * entire share reported as the dealership's turnover.
      */
-    const uncostedBasisByVehicle = new Map<string, "SOURCED" | "OWNED">();
+    const TURNOVER_BASIS_CAP = 2_000;
+    type UncostedBasis = { consigned: false } | { consigned: true; supplierCost: number };
+    const uncostedBasisByVehicle = new Map<string, UncostedBasis>();
+    // Explicitly bounded. `periodSales` uses `.collect()` on every dated
+    // window, so `soldVehicleIds` has no ceiling of its own, and an unbounded
+    // fan-out of whole vehicle documents on a live subscription does not
+    // shorten a number — it exceeds the read limit and the dashboard goes
+    // blank. Past this cap the sales stay excluded and `turnoverTruncated`
+    // says so.
     if (canViewProfitMetrics && profitTruncated) {
       await Promise.all(
-        soldVehicleIds.slice(PROFIT_VEHICLE_CAP).map(async (vehicleId) => {
-          const vehicle = await ctx.db.get(vehicleId);
-          if (!vehicle || vehicle.orgId !== args.orgId) return;
-          uncostedBasisByVehicle.set(
-            vehicleId,
-            vehicle.sourceType === "SOURCED" ? "SOURCED" : "OWNED"
-          );
-        })
+        soldVehicleIds
+          .slice(PROFIT_VEHICLE_CAP, PROFIT_VEHICLE_CAP + TURNOVER_BASIS_CAP)
+          .map(async (vehicleId) => {
+            const vehicle = await ctx.db.get(vehicleId);
+            if (!vehicle || vehicle.orgId !== args.orgId) return;
+            if (vehicle.sourceType !== "SOURCED") {
+              uncostedBasisByVehicle.set(vehicleId, { consigned: false });
+              return;
+            }
+            const supplierCost = vehicle.sourceCost;
+            if (supplierCost == null || supplierCost <= 0) return;
+            uncostedBasisByVehicle.set(vehicleId, { consigned: true, supplierCost });
+          })
       );
     }
 
     /**
      * Accounting turnover for one sale: the margin on a consigned car, the
      * price on the dealership's own stock.
-     *
-     * A consigned vehicle past PROFIT_VEHICLE_CAP still cannot be answered —
-     * its turnover is its margin and the margin needs the cost. Contributing
-     * its gross would put part of the figure on one basis and part on another
-     * with nothing saying which, a number that is neither turnover nor deal
-     * volume. It stays excluded, and `truncated.turnover` says so.
      */
     let turnoverTruncated = false;
+    const turnoverFromBasis = (
+      basis: UncostedBasis | undefined,
+      salePrice: number
+    ): number | null => {
+      if (!basis) return null;
+      if (!basis.consigned) return salePrice;
+      return Math.max(0, salePrice - basis.supplierCost);
+    };
     const recognizedRevenueOfSale = (sale: { vehicleId: Id<"vehicles">; salePrice: number }): number => {
       if (!canViewProfitMetrics) return sale.salePrice;
-      // Two different absences, and both have to be excluded rather than
-      // booked at gross: past the costing cap, and a vehicle row that is gone
-      // or belongs to another org. In the second case `consignedVehicleIds`
-      // says "not consigned" only because nothing was ever read — which is not
-      // the same as knowing the dealership owned it.
       const cost = capitalizedCostByVehicle.get(sale.vehicleId);
       if (!costedVehicleIdSet.has(sale.vehicleId) || cost === undefined) {
-        // Dealer-owned stock past the cap: turnover is the sale price, and no
-        // cost was ever needed to say so. A vehicle whose row is gone or
-        // belongs to another org has no entry here at all and stays excluded —
-        // "not consigned" would mean nothing was read, which is not the same
-        // as knowing the dealership owned it.
-        if (uncostedBasisByVehicle.get(sale.vehicleId) === "OWNED") return sale.salePrice;
+        // Answered from the vehicle row where it could be. What remains is a
+        // row that is gone, belongs to another org, sits past the basis cap,
+        // or is consigned with no recorded supplier cost — none of which is
+        // "the dealership owned it", so none may be booked at gross.
+        const fromBasis = turnoverFromBasis(
+          uncostedBasisByVehicle.get(sale.vehicleId),
+          sale.salePrice
+        );
+        if (fromBasis !== null) return fromBasis;
         turnoverTruncated = true;
         return 0;
       }
@@ -725,21 +745,25 @@ export const stats = query({
           )
         : []
     );
-    // The comparison window's tail, on the same terms as the current window's:
-    // owned stock needs no cost to state its turnover, consigned does.
-    // Skipping this here would compare a complete current period against a
-    // shortened previous one and report the difference as growth.
-    const previousUncostedBasisByVehicle = new Map<string, "SOURCED" | "OWNED">();
+    // The comparison window's tail, on exactly the current window's terms —
+    // same cap, same bases, same exclusions. Anything else compares a complete
+    // period against a shortened one and reports the difference as growth.
+    const previousUncostedBasisByVehicle = new Map<string, UncostedBasis>();
     if (canViewProfitMetrics && previousSoldVehicleIdsForRevenue.length > PROFIT_VEHICLE_CAP) {
       await Promise.all(
-        previousSoldVehicleIdsForRevenue.slice(PROFIT_VEHICLE_CAP).map(async (vehicleId) => {
-          const vehicle = await ctx.db.get(vehicleId);
-          if (!vehicle || vehicle.orgId !== args.orgId) return;
-          previousUncostedBasisByVehicle.set(
-            vehicleId,
-            vehicle.sourceType === "SOURCED" ? "SOURCED" : "OWNED"
-          );
-        })
+        previousSoldVehicleIdsForRevenue
+          .slice(PROFIT_VEHICLE_CAP, PROFIT_VEHICLE_CAP + TURNOVER_BASIS_CAP)
+          .map(async (vehicleId) => {
+            const vehicle = await ctx.db.get(vehicleId);
+            if (!vehicle || vehicle.orgId !== args.orgId) return;
+            if (vehicle.sourceType !== "SOURCED") {
+              previousUncostedBasisByVehicle.set(vehicleId, { consigned: false });
+              return;
+            }
+            const supplierCost = vehicle.sourceCost;
+            if (supplierCost == null || supplierCost <= 0) return;
+            previousUncostedBasisByVehicle.set(vehicleId, { consigned: true, supplierCost });
+          })
       );
     }
 
@@ -755,7 +779,11 @@ export const stats = query({
       // if it were growth.
       const basis = previousRevenueBasisByVehicle.get(sale.vehicleId);
       if (!basis) {
-        if (previousUncostedBasisByVehicle.get(sale.vehicleId) === "OWNED") return sale.salePrice;
+        const fromBasis = turnoverFromBasis(
+          previousUncostedBasisByVehicle.get(sale.vehicleId),
+          sale.salePrice
+        );
+        if (fromBasis !== null) return fromBasis;
         previousTurnoverTruncated = true;
         return 0;
       }
