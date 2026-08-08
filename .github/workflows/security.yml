@@ -80,12 +80,25 @@ jobs:
       # green. Fail loudly instead so the omission is visible.
       - name: Fail if an unlisted runtime lockfile appeared
         run: |
+          # Every manifest OSV-Scanner can parse. The two runtime ones are
+          # scanned by this job; the Gradle ledger is handled by osv-toolchain.
+          # Anything else appearing here is unscanned by BOTH, which is the
+          # condition this step exists to surface.
           expected=$(printf '%s\n' \
+            "./apps/mobile/android/gradle/verification-metadata.xml" \
             "./dealer-worker/package-lock.json" \
             "./pnpm-lock.yaml" | sort)
           actual=$(find . \
             \( -name node_modules -o -name .git -o -name .next \) -prune -o \
-            \( -name 'pnpm-lock.yaml' -o -name 'package-lock.json' -o -name 'yarn.lock' \) \
+            \( -name 'pnpm-lock.yaml' -o -name 'package-lock.json' -o -name 'yarn.lock' \
+               -o -name 'bun.lock' -o -name 'gradle.lockfile' -o -name 'buildscript-gradle.lockfile' \
+               -o -name 'verification-metadata.xml' -o -name 'pom.xml' -o -name 'go.mod' \
+               -o -name 'Cargo.lock' -o -name 'requirements.txt' -o -name 'poetry.lock' \
+               -o -name 'uv.lock' -o -name 'pylock.toml' -o -name 'Pipfile.lock' -o -name 'pdm.lock' \
+               -o -name 'composer.lock' -o -name 'Gemfile.lock' -o -name 'gems.locked' \
+               -o -name 'packages.lock.json' -o -name 'packages.config' -o -name 'deps.json' \
+               -o -name 'pubspec.lock' -o -name 'mix.lock' -o -name 'renv.lock' -o -name 'conan.lock' \
+               -o -name 'cabal.project.freeze' -o -name 'stack.yaml.lock' \) \
             -print | sort)
           if [ "$expected" != "$actual" ]; then
             echo "::error::Runtime lockfile set changed. Update the osv-runtime scan-args below."
@@ -119,7 +132,14 @@ jobs:
           # under the new key — more open alerts than before, which is the exact
           # opposite of the point. Pinning the old key updates the analysis in
           # place, so the gradle findings close with a real `fixed` transition.
-          category: osv-scanner
+          # NOTE: this string is used VERBATIM as the analysis category --
+          # upload-sarif does not prepend the workflow path to it. So it has to
+          # be the full existing key, not the bare job name. Verified live:
+          # main's analysis carries
+          # category=".github/workflows/security.yml:osv-scanner", while a
+          # bare `osv-scanner` produced category="osv-scanner" -- a THIRD
+          # category that would have orphaned all 307 alerts and added 18 more.
+          category: .github/workflows/security.yml:osv-scanner
 
   # SCA (build toolchain) — supply-chain visibility for the Gradle build
   # classpath. Deliberately NOT uploaded to code scanning: these are artifacts
@@ -147,6 +167,21 @@ jobs:
             --output=osv-toolchain.json
             --format=json
             --lockfile=apps/mobile/android/gradle/verification-metadata.xml
+
+      # Without this, a crashed scanner and a clean scan are indistinguishable:
+      # on a hard error osv-scanner returns before writing the report, so the
+      # summary below would print "No report produced" and the job would stay
+      # green forever. This job is the entire justification for keeping the
+      # Gradle findings off the dashboard, so it has to fail when it did not
+      # actually run.
+      - name: Fail if the toolchain scan produced no report
+        if: always()
+        run: |
+          if [ ! -s osv-toolchain.json ]; then
+            echo "::error::osv-toolchain produced no report — the scan failed rather than finding nothing."
+            exit 1
+          fi
+          echo "Toolchain report present ($(wc -c < osv-toolchain.json) bytes)."
 
       - name: Summarise toolchain findings
         if: always()

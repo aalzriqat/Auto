@@ -20,11 +20,11 @@ Scanned:
 
 These are listed explicitly rather than scanned with `--recursive ./`. An
 explicit list can go stale silently, so the job first fails loudly if the set of
-lockfiles in the repo no longer matches the set being scanned. Adding a new
-workspace or worker will break that step on purpose — update the `scan-args`
-when it does.
-
-## 2. Build-toolchain SCA — reporting only, never gating
+OSV-parsable manifests in the repo no longer matches the set accounted for. It
+watches the **full** list of filenames OSV-Scanner supports, not just the
+npm-family ones, so a future `gradle.lockfile` or `requirements.txt` cannot land
+unscanned and unnoticed. Adding a new workspace, worker or ecosystem breaks that
+step on purpose; update `scan-args` when it does.
 
 Job: `osv-toolchain`. Scans
 `apps/mobile/android/gradle/verification-metadata.xml`. It writes a job summary
