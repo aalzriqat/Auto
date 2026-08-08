@@ -789,4 +789,46 @@ describe("public lead blocklist", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].reason).toBe("Second strike");
   });
+  test("saveDraft_rejects_logoUrl_with_a_non_http_scheme", async () => {
+    // logoUrl is the one image URL on the public dealer site that is a
+    // caller-supplied string rather than a ctx.storage.getUrl() result, and
+    // websiteProjection prefers it over the storage-derived logo. resolveDomain
+    // then serves it to anonymous visitors, so a bad scheme stored here reaches
+    // every visitor of the published site.
+    const { orgId, asOwner } = await seedDealer();
+    await asOwner.mutation(api.websites.startSetup, { orgId });
+
+    for (const bad of [
+      "javascript:alert(1)",
+      "JaVaScRiPt:alert(1)",
+      "  javascript:alert(1)",
+      "java\tscript:alert(1)",
+      "java\u0000script:alert(1)",
+      "vbscript:msgbox(1)",
+      "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+      "file:///etc/passwd",
+    ]) {
+      await expect(
+        asOwner.mutation(api.websites.saveDraft, { orgId, logoUrl: bad }),
+      ).rejects.toThrow();
+    }
+  });
+
+  test("saveDraft_accepts_the_logoUrl_shapes_a_dealer_legitimately_uses", async () => {
+    const { convex, orgId, asOwner } = await seedDealer();
+    await asOwner.mutation(api.websites.startSetup, { orgId });
+
+    for (const good of [
+      "https://kindly-hound-172.convex.cloud/api/storage/9f1c2b7e-4d3a-4a71-9c0e-2b5f6a8d1e34",
+      "https://cdn.example.com/logo.png",
+      "http://localhost:3000/logo.png",
+      "/images/logo.png",
+    ]) {
+      await asOwner.mutation(api.websites.saveDraft, { orgId, logoUrl: good });
+      const row = await convex.run((ctx) =>
+        ctx.db.query("websiteSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique(),
+      );
+      expect(row?.logoUrl).toBe(good);
+    }
+  });
 });
