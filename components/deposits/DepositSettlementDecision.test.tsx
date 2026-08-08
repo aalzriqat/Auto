@@ -184,7 +184,7 @@ describe("DepositSettlementDecision", () => {
 
     const confirm = screen.getByRole("checkbox");
     fireEvent.click(confirm);
-    expect(onChange).toHaveBeenCalledWith(true);
+    expect(onChange).toHaveBeenCalledWith(seeded.vehicleId, true);
   });
 
   test("once confirmed it shows what the supplier still owes, net of the deposit", async () => {
@@ -243,7 +243,7 @@ describe("DepositSettlementDecision", () => {
     expect(seeded.preview?.depositSettlement?.canApplyToSettlement).toBe(false);
 
     const onChange = renderDecision(seeded, "DIRECT_TO_SUPPLIER", true);
-    expect(onChange).toHaveBeenCalledWith(false);
+    expect(onChange).toHaveBeenCalledWith(seeded.vehicleId, false);
   });
 
   test("renders nothing at all for the dealership's own stock", async () => {
@@ -267,6 +267,53 @@ describe("DepositSettlementDecision", () => {
       />
     );
     expect(container.firstChild).toBeNull();
+  });
+
+  test("does not withdraw a confirmation while the preview is still loading", async () => {
+    // The withdrawal keys on `canApply === false`, and `canApply` is
+    // `deposit?.canApplyToSettlement ?? null` — so the loading state is `null`,
+    // not `false`. One character (`?? false`) would make every mount silently
+    // untick a box the operator had already ticked, before the server has said
+    // anything at all.
+    queryResults.set("sales:consignedSalePreview", undefined);
+    const onChange = vi.fn();
+    render(
+      <DepositSettlementDecision
+        orgId={"o" as Id<"organizations">}
+        quoteId={"q" as Id<"quotes">}
+        vehicleId={"v" as Id<"vehicles">}
+        settlementRoute="DIRECT_TO_SUPPLIER"
+        value={true}
+        onChange={onChange}
+      />
+    );
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  test("hides the held amount until the split has been decided", async () => {
+    // The server sends 0 there because no share exists yet, and rendering it
+    // read "Deposit held on this car — 0" directly above "this car's share has
+    // not been decided": a figure stated and then denied.
+    const seeded = await seedPreview("undecided", {
+      deposit: 1_000,
+      route: "DIRECT_TO_SUPPLIER",
+    });
+    // Force the undecided shape the server produces for a multi-car quote whose
+    // split nobody has recorded yet.
+    queryResults.set("sales:consignedSalePreview", {
+      ...seeded.preview,
+      depositSettlement: {
+        ...seeded.preview!.depositSettlement,
+        allocationDecided: false,
+        depositAmount: 0,
+        canApplyToSettlement: false,
+        blockedReason: "share not decided",
+      },
+    });
+    renderDecision(seeded, "DIRECT_TO_SUPPLIER", false);
+
+    expect(screen.getByText("DepositSettlementNotDecided")).toBeTruthy();
+    expect(screen.queryByText("DepositSettlementHeldAmount")).toBeNull();
   });
 
   test("renders nothing while the preview has not answered", async () => {

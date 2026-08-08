@@ -89,8 +89,18 @@ export interface QuoteDepositSettlement {
   /** The lines this quote will complete. The عربون's share is decided per car. */
   vehicleIds: Id<"vehicles">[];
   settlementRoute: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER";
-  value: boolean;
-  onChange: (applied: boolean) => void;
+  /**
+   * Confirmations per line, never one boolean for the quote. The treatment is
+   * quote-wide on the wire, but the ELIGIBILITY is per car — so a shared
+   * boolean let one refusing line untick a box the operator had just clicked on
+   * a different, perfectly eligible car.
+   */
+  value: Record<string, boolean>;
+  onChange: (vehicleId: Id<"vehicles">, applied: boolean) => void;
+  onEligibility?: (
+    vehicleId: Id<"vehicles">,
+    state: { canApply: boolean; required: boolean; reason: string | null; label: string }
+  ) => void;
   disabled?: boolean;
 }
 
@@ -223,8 +233,9 @@ export function QuoteDepositManager({
           quoteId={quoteId}
           vehicleId={vehicleId}
           settlementRoute={settlement.settlementRoute}
-          value={settlement.value}
+          value={settlement.value[vehicleId] ?? false}
           onChange={settlement.onChange}
+          onEligibility={settlement.onEligibility}
           disabled={settlement.disabled}
         />
       ))}

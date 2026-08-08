@@ -828,7 +828,36 @@ describe("the refusals the settlement treatment can still make", () => {
       completeWith(s, "DIRECT_TO_SUPPLIER", {
         treatment: "APPLY_TO_TRANSACTION_SETTLEMENT",
       })
-    ).rejects.toThrow(/no recorded supplier cost|cost basis/i);
+    ).rejects.toThrow(/no recorded supplier cost/i);
+  });
+
+  test("the gross route does not refuse for a missing supplier cost it never consults", async () => {
+    // THROUGH_DEALERSHIP settles the عربون against the customer's own bill, so
+    // the dealership's margin has no bearing on it. Checking the margin here
+    // refused deals for want of a cost the route never reads — and replaced an
+    // accurate refusal with a misleading one: told "no recorded supplier cost",
+    // an operator records the cost and the sale is STILL refused, because the
+    // real problem was that the share exceeds the bill. The remedy the message
+    // named unblocked nothing.
+    const s = await seed("grossNoCost", {
+      sourceCost: 0,
+      extraLine: { price: 8_000 },
+      instalments: [15_000],
+    });
+    await s.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      allocations: [
+        { vehicleId: s.vehicleId, amount: 14_000 },
+        { vehicleId: s.secondVehicleId!, amount: 1_000 },
+      ],
+    });
+
+    await expect(
+      completeWith(s, "THROUGH_DEALERSHIP", {
+        treatment: "APPLY_TO_TRANSACTION_SETTLEMENT",
+      })
+    ).rejects.toThrow(/exceeds what the dealership billed/i);
   });
 
   test("the gross route records what the money did, not what was stated", async () => {

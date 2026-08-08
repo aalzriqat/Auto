@@ -98,10 +98,55 @@ export function Step4QuoteSuccess({
   >("THROUGH_DEALERSHIP");
 
   // Whether the operator has confirmed the عربون forms part of this deal's
-  // final settlement. One decision for the deal, like the route above it — the
-  // mutation takes a single treatment for the whole quote, so asking per line
-  // would offer a choice the server cannot honour.
-  const [depositInSettlement, setDepositInSettlement] = useState(false);
+  // final settlement — held PER LINE.
+  //
+  // The treatment is quote-wide on the wire, but eligibility is per car: one
+  // line's share can exceed its own margin while another's does not. A single
+  // shared boolean meant the refusing line silently unticked a box the operator
+  // had just clicked on a different, perfectly eligible car, with the
+  // explanation attached to some other panel.
+  const [depositInSettlement, setDepositInSettlement] = useState<Record<string, boolean>>({});
+  const handleDepositConfirm = useCallback(
+    (vehicleId: Id<"vehicles">, applied: boolean) =>
+      setDepositInSettlement((prev) =>
+        prev[vehicleId] === applied ? prev : { ...prev, [vehicleId]: applied }
+      ),
+    []
+  );
+
+  // What each line's server preview says about the treatment. Needed because
+  // the mutation takes ONE treatment for the quote: if any line refuses it,
+  // sending it fails the whole deal, so the deal must not send it — and the
+  // operator has to be told which car is in the way.
+  const [depositEligibility, setDepositEligibility] = useState<
+    Record<string, { canApply: boolean; required: boolean; reason: string | null; label: string }>
+  >({});
+  const handleDepositEligibility = useCallback(
+    (
+      vehicleId: Id<"vehicles">,
+      state: { canApply: boolean; required: boolean; reason: string | null; label: string }
+    ) =>
+      setDepositEligibility((prev) => {
+        const existing = prev[vehicleId];
+        if (
+          existing &&
+          existing.canApply === state.canApply &&
+          existing.required === state.required &&
+          existing.reason === state.reason &&
+          existing.label === state.label
+        ) {
+          return prev;
+        }
+        return { ...prev, [vehicleId]: state };
+      }),
+    []
+  );
+
+  const blockingLine = Object.values(depositEligibility).find((line) => !line.canApply);
+  const anyLineConfirmed = Object.values(depositInSettlement).some(Boolean);
+  // Sent only when every line that has an opinion can accept it. Sending a
+  // treatment one line refuses throws and rolls the entire completion back.
+  const sendDepositTreatment = anyLineConfirmed && blockingLine === undefined;
 
   const handleSubmitSale = async () => {
     if (!activeOrgId || !quote || !me) return;
@@ -120,7 +165,7 @@ export function Step4QuoteSuccess({
         // behaviour: the deposit comes off what the customer owes whenever it
         // fits, and the sale is refused when it does not — which is the state
         // this control exists to give the operator a way out of.
-        ...(depositInSettlement
+        ...(sendDepositTreatment
           ? { depositResolution: { treatment: "APPLY_TO_TRANSACTION_SETTLEMENT" as const } }
           : {}),
         idempotencyKey: completeSaleIdempotencyKeyRef.current,
@@ -312,7 +357,8 @@ export function Step4QuoteSuccess({
                     vehicleIds: quoteVehicleIds,
                     settlementRoute,
                     value: depositInSettlement,
-                    onChange: setDepositInSettlement,
+                    onChange: handleDepositConfirm,
+                    onEligibility: handleDepositEligibility,
                     disabled: isCompletingSale,
                   }
                 : undefined

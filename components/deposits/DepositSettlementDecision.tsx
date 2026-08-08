@@ -43,8 +43,20 @@ interface Props {
   /** The line this decision is about — the عربون's share is per car. */
   vehicleId: Id<"vehicles">;
   settlementRoute: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER";
+  /** THIS line's confirmation. Never a boolean shared with other lines. */
   value: boolean;
-  onChange: (applied: boolean) => void;
+  onChange: (vehicleId: Id<"vehicles">, applied: boolean) => void;
+  /**
+   * Reported up whenever the server's answer for this line changes, so the
+   * caller can decide what the QUOTE can be submitted as. The treatment is
+   * quote-wide on the wire, so a caller has to know that one line refuses it
+   * before letting the deal be submitted — and it has to know WHICH line, or
+   * the operator gets a refusal with no address.
+   */
+  onEligibility?: (
+    vehicleId: Id<"vehicles">,
+    state: { canApply: boolean; required: boolean; reason: string | null; label: string }
+  ) => void;
   disabled?: boolean;
 }
 
@@ -55,6 +67,7 @@ export function DepositSettlementDecision({
   settlementRoute,
   value,
   onChange,
+  onEligibility,
   disabled,
 }: Props) {
   const { t, isRtl } = useLanguage();
@@ -72,18 +85,34 @@ export function DepositSettlementDecision({
   const deposit = preview?.depositSettlement ?? null;
   const canApply = deposit?.canApplyToSettlement ?? null;
 
+  // Reported up so the caller knows what the whole quote can be submitted as.
+  useEffect(() => {
+    if (!preview || !deposit) return;
+    onEligibility?.(vehicleId, {
+      canApply: deposit.canApplyToSettlement,
+      required: deposit.treatmentRequired,
+      reason: deposit.blockedReason,
+      label: preview.vehicleLabel,
+    });
+  }, [preview, deposit, vehicleId, onEligibility]);
+
   // A confirmation can outlive the thing it confirmed.
   //
-  // The route is chosen in a sibling panel and the parent holds ONE boolean for
-  // the whole deal, so an operator could tick this on THROUGH_DEALERSHIP (where
-  // the عربون fits the customer's bill), then correct the route to
-  // DIRECT_TO_SUPPLIER (where it exceeds the margin). The checkbox disappears
-  // and the refusal renders — but the parent's `true` survives, and submitting
-  // still sends the treatment, so the sale is refused for a reason the screen
-  // already displayed, from a control no longer on it to untick.
+  // The route is chosen in a sibling panel, so an operator can tick this on
+  // THROUGH_DEALERSHIP (where the عربون fits the customer's bill), then correct
+  // the route to DIRECT_TO_SUPPLIER (where it exceeds the margin). The checkbox
+  // disappears and the refusal renders — but a surviving `true` would still be
+  // submitted, and the sale refused for a reason the screen already displayed,
+  // from a control no longer on it to untick.
+  //
+  // Scoped to THIS line's own confirmation. It was briefly a single boolean for
+  // the whole quote, which meant an ineligible line silently unticked a box the
+  // operator had just clicked on a DIFFERENT, perfectly eligible car — a
+  // control that visibly does nothing, with the explanation attached to some
+  // other car's panel.
   useEffect(() => {
-    if (value && canApply === false) onChange(false);
-  }, [value, canApply, onChange]);
+    if (value && canApply === false) onChange(vehicleId, false);
+  }, [value, canApply, onChange, vehicleId]);
 
   // `null` is dealer-owned stock or a line this preview cannot speak for;
   // `undefined` is "not answered yet". Neither should reserve space.
@@ -146,7 +175,7 @@ export function DepositSettlementDecision({
           <label className="flex cursor-pointer items-start gap-2.5 text-sm">
             <Checkbox
               checked={value}
-              onCheckedChange={(checked) => onChange(checked === true)}
+              onCheckedChange={(checked) => onChange(vehicleId, checked === true)}
               disabled={disabled}
               className="mt-0.5"
             />

@@ -119,8 +119,19 @@ export function planDepositSettlementApplication(
   };
 
   if (!isSourced) return againstTheCustomersBill();
-  // Written as two returns rather than one `||` so the compiler can see that
-  // `marginMinor` is non-null past this point.
+  if (dealershipCollectsGross(settlementRoute)) return againstTheCustomersBill();
+
+  // Only past here does the margin matter, and only here is it checked.
+  //
+  // Hoisting this above the gross branch — as an earlier revision did, purely
+  // to help the compiler narrow — turned a missing supplier cost into an
+  // accounting restriction on a route that never consults it. Worse than the
+  // false refusal was the false remedy: an operator told "no recorded supplier
+  // cost" records the cost, and the sale is still refused, because the real
+  // problem was that the share exceeds the customer's bill.
+  //
+  // Written as separate returns rather than one `||` so the compiler can still
+  // see `marginMinor` is non-null below.
   if (marginMinor === null) {
     return {
       ok: false,
@@ -128,7 +139,6 @@ export function planDepositSettlementApplication(
         "This vehicle has no recorded supplier cost, so the dealership's margin cannot be determined and a deposit cannot be applied against it.",
     };
   }
-  if (dealershipCollectsGross(settlementRoute)) return againstTheCustomersBill();
 
   // DIRECT_TO_SUPPLIER on a consigned car.
   //
