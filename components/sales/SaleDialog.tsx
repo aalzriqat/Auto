@@ -10,6 +10,7 @@ import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { consignedTaxRefusal } from "@/lib/consignedTaxGuard";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { toast } from "@/components/ui/sonner";
 import {
@@ -201,6 +202,28 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     const total = (Number(salePrice) || 0) + (Number(taxAmount) || 0) + (Number(dealerFees) || 0) + (Number(warrantySold) || 0) + (Number(gapSold) || 0) - (Number(downPayment) || 0) - (Number(tradeInValue) || 0);
     form.setValue("loanAmount", total > 0 ? total : 0);
   }, [salePrice, taxAmount, dealerFees, downPayment, tradeInValue, warrantySold, gapSold, form]);
+
+  // An agency sale has no agreed tax treatment, so the ledger refuses to post
+  // one. Asked here rather than discovered on save: see `consignedTaxRefusal`
+  // for why the server's refusal alone is not enough — with no open period the
+  // sale is accepted and its journal dead-letters silently.
+  //
+  // `undefined` when the vehicle is not among the ones loaded, which is the
+  // case for an already-sold car on an edit. That is deliberately not a
+  // refusal: the server still holds the line, and guessing here would block an
+  // edit that changes nothing about the tax.
+  const selectedVehicleId = sale ? sale.vehicleId : watchAll.vehicleId;
+  const selectedVehicle = availableVehicles?.find(
+    (v: Doc<"vehicles">) => v._id === selectedVehicleId
+  );
+  const taxRefusal = consignedTaxRefusal({
+    // Only a vehicle actually in hand answers this. A row with no recorded
+    // basis is not consigned — the server reaches the agency rule only for
+    // SOURCED — so it is answered `false` rather than left unknown.
+    isSourced: selectedVehicle ? selectedVehicle.sourceType === "SOURCED" : undefined,
+    taxAmount: Number(taxAmount),
+    status: watchAll.status === "PENDING" ? "PENDING" : "COMPLETED",
+  });
 
   const onSubmit = async (values: SaleFormValues) => {
     if (!activeOrgId) return;
@@ -454,6 +477,14 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                       <FormItem>
                         <FormLabel>{t("Taxes" as any)}</FormLabel>
                         <FormControl><Input type="number" step="0.01" {...field} /></FormControl>
+                        {/* On the field that is wrong, in the slot the form
+                            already uses for field errors — not a banner
+                            somewhere else explaining a failure after the fact. */}
+                        {taxRefusal ? (
+                          <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-500">
+                            {t("ConsignedTaxUnsupported" as any)}
+                          </p>
+                        ) : null}
                         <FormMessage />
                       </FormItem>
                     )}
@@ -704,7 +735,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 {t("Cancel" as any)}
               </Button>
-              <Button type="submit" disabled={isSubmitting}>
+              <Button type="submit" disabled={isSubmitting || taxRefusal !== null}>
                 {isSubmitting ? (t("Saving" as any)) : sale ? (t("SaveChanges" as any)) : (t("LogSale" as any))}
               </Button>
             </div>

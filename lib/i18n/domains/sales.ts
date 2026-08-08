@@ -166,6 +166,8 @@ export const salesEn = {
   DepositSettlementConfirmAllLines:
     "This deposit decision applies to the whole deal, so confirm it on every vehicle on this quote — or on none of them.",
   Taxes: "Taxes (JOD)",
+  ConsignedTaxUnsupported:
+    "This car is the supplier's, and tax on an agency sale has no agreed treatment yet — so the sale cannot be posted with it. Clear the tax to record the sale, or sell the car as dealership stock.",
   FinancingAndTradeIn: "Financing & Trade-In",
   SelectTradeIn: "Select trade-in (optional)",
   None: "None",
@@ -744,6 +746,8 @@ export const salesAr = {
   ConsignedNoSupplierCost:
     "لا يوجد مبلغ مورّد مسجّل لهذه المركبة، لذا لا يمكن تحديد هامش المعرض ولا إتمام البيع. سجّل المبلغ المتفق عليه مع المورّد، أو حوّل المركبة إلى ملكية المعرض أولًا.",
   Taxes: "الضرائب (دينار اردني)",
+  ConsignedTaxUnsupported:
+    "هذه المركبة ملك المورّد، ولا توجد بعد معالجة متفق عليها لضريبة البيع بالوكالة، لذا لا يمكن ترحيل البيع بوجودها. امسح الضريبة لتسجيل البيع، أو بِع المركبة كمخزون للمعرض.",
   FinancingAndTradeIn: "التمويل والاستبدال",
   SelectTradeIn: "اختر مركبة الاستبدال (اختياري)",
   None: "لا يوجد",

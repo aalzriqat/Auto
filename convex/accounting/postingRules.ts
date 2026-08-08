@@ -543,26 +543,39 @@ function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
   // saying it owed it. The entry balanced throughout, which is why nothing
   // caught it. That silent drop is what this refusal closes.
   //
-  // It is a refusal rather than a posting because the codebase currently holds
-  // TWO contradictory tax conventions, and picking one here would be inventing
-  // policy inside a posting rule:
+  // It is a refusal rather than a posting because the codebase holds TWO
+  // contradictory tax conventions, and every way of posting tax here either
+  // misstates money or invents policy. Settled deliberately, with the evidence:
   //
-  //   - the principal rule treats `saleAmountMinor` as tax-INCLUSIVE — its AR
-  //     debit excludes tax and revenue is `saleAmount - tax` (see
-  //     `ruleSaleCompleted` below, and the SALES_TAX_PAYABLE line under it);
-  //   - the sale form treats it as tax-EXCLUSIVE — `SaleDialog` computes
-  //     `salePrice + taxAmount + fees + …`, and `customerBillableMinor` in
-  //     saleCompletion (which drives the AR subledger document) omits tax
-  //     entirely.
+  // What the amount actually is: `saleAmountMinor` is tax-EXCLUSIVE.
+  // `saleCompletion` passes `args.salePrice` straight through, and `SaleDialog`
+  // bills the customer `salePrice + taxAmount + fees + …`. So the tax is added
+  // on top of the price, not contained in it.
   //
-  // Under the inclusive reading the tax comes out of the dealership's own
-  // margin; under the exclusive one it is billed on top and the margin is
-  // untouched. On an agency sale the two give materially different commission
-  // revenue, and the exclusive reading also makes tax routinely EXCEED an
-  // agent's spread — so a rule that carved tax out of the margin would refuse
-  // ordinary taxed consigned deals, or dead-letter them through the outbox when
-  // no period is open. Resolving that contradiction is a business decision
-  // about tax treatment, not a posting detail.
+  // What the principal rule does with it: treats it as INCLUSIVE — revenue is
+  // `saleAmount - tax` and the AR debit omits the tax, so the dealership funds
+  // the customer's tax out of its own revenue and never bills anyone for it.
+  // That is wrong, it is wrong on `main` today, and it is wrong on the
+  // dealership's OWN sales — which is why it is not corrected here. Fixing it
+  // moves `customerBillableMinor`, the AR subledger document and every owned
+  // sale's revenue, and that is a change to make on its own evidence, not a
+  // side effect of enabling agent basis.
+  //
+  // So the three candidate postings, and why each is refused:
+  //
+  //   - Bill the tax on top (correct): needs `customerBillableMinor` to include
+  //     it, or the GL's AR debit and the AR subledger diverge by the tax. That
+  //     is the owned-sale change above.
+  //   - Carve it out of the margin (the principal rule's convention): a 16% tax
+  //     routinely EXCEEDS an agent's spread, so this refuses ordinary taxed
+  //     consigned deals — a conditional refusal that fires nearly always is
+  //     worse than an explicit one.
+  //   - Charge it to the supplier: he is the principal, so it is arguable — and
+  //     it is exactly the tax policy this rule may not invent.
+  //
+  // Production carries no taxed sale at all, so nothing real is blocked by
+  // waiting for that decision. The sale form warns before submit rather than
+  // letting an operator meet this as a failed save; see `consignedTaxRefusal`.
   const taxMinor = p.taxMinor && p.taxMinor > 0 ? p.taxMinor : 0;
   if (taxMinor > 0) {
     // `ConvexError`, not `Error`. Convex redacts a plain Error's message from a
@@ -606,10 +619,13 @@ function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
           // credited.
           line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, p.saleAmountMinor, 0, "Consigned sale proceeds receivable", dims),
           line(SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, 0, entitlementMinor, `Owed to ${supplier}`, dims),
-          // The customer's tax, collected by the dealership with the gross.
-          ...(taxMinor > 0
-            ? [line(SYSTEM_KEYS.SALES_TAX_PAYABLE, 0, taxMinor, "Sales tax payable", { vehicleId: p.vehicleId })]
-            : []),
+          // No tax line: `taxMinor` cannot be non-zero here, because the
+          // refusal above returns first. One used to sit at this point, and it
+          // was worse than dead — it credited SALES_TAX_PAYABLE without a
+          // matching debit anywhere, so the entry was short by exactly the tax
+          // and only the refusal above kept it from ever posting. Whoever
+          // lifts that refusal must add the debit side too; see the note there
+          // for which one.
           // Omitted at zero margin for the same reason as above; the AR and AP
           // lines already balance each other when the entitlement is the whole
           // price, so the entry stays valid without it.

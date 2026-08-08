@@ -724,3 +724,103 @@ describe("the consigned preview on a multi-vehicle quote", () => {
     expect(direct!.supplierReceivable).toBe(SECOND_PRICE - SECOND_ENTITLEMENT);
   });
 });
+
+/**
+ * The dashboard costs at most 500 distinct sold vehicles per window, because
+ * `computeVehicleCapitalizedCost` reads every expense logged against a car and
+ * running it unbounded on a live subscription is what the cap exists to stop.
+ *
+ * Turnover then has to say what a sale past that cap contributed. A consigned
+ * one genuinely cannot be answered — its turnover IS its margin, and the margin
+ * needs the cost. But a car the dealership owned needs no cost at all: its
+ * turnover is the price on the sale row, which was already read. Excluding both
+ * threw away figures that were never in doubt, and an org past the cap had its
+ * headline revenue, its monthly chart and its per-salesperson ranking silently
+ * shortened by the whole tail.
+ */
+describe("turnover past the dashboard's costing cap", () => {
+  const CAP = 500;
+  const PAST_CAP_OWNED_PRICE = 7_777;
+
+  /**
+   * Fills the cap with owned sales, then adds one owned and one consigned sale
+   * behind it. Rows are inserted directly: the dashboard reads `sales` and
+   * `vehicles`, and putting 502 deals through `api.sales.create` would post 502
+   * journals to prove something about a read path.
+   */
+  async function dealerPastTheCap(tag: string) {
+    const s = await seedDealer(tag);
+    // Ascending `saleDate`, because the dashboard's window query returns them
+    // in that order and the cap is applied to that order. The last two are the
+    // ones past it, deterministically.
+    const base = Date.now() - 600_000;
+    const pastCap = await s.t.run(async (ctx) => {
+      const insert = async (
+        i: number,
+        sourceType: "STOCK" | "SOURCED",
+        price: number
+      ) => {
+        const vehicleId = await ctx.db.insert("vehicles", {
+          orgId: s.orgId, vin: `CAP${tag}${i}`, make: "Kia", model: "Rio", year: 2023,
+          mileage: 5, color: "Red", fuelType: "Gas", transmission: "Auto",
+          sellingPrice: price, status: "SOLD", sourceType,
+          ...(sourceType === "STOCK"
+            ? { purchasePrice: OWNED_COST }
+            : { sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT }),
+        });
+        await ctx.db.insert("sales", {
+          orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
+          salePrice: price, saleDate: base + i, status: "COMPLETED" as const,
+        });
+        return vehicleId;
+      };
+      for (let i = 0; i < CAP; i++) await insert(i, "STOCK", OWNED_PRICE);
+      return {
+        owned: await insert(CAP, "STOCK", PAST_CAP_OWNED_PRICE),
+        consigned: await insert(CAP + 1, "SOURCED", SALE_PRICE),
+      };
+    });
+    return { s, pastCap };
+  }
+
+  test("an owned sale past the cap still contributes its price", async () => {
+    const { s } = await dealerPastTheCap("capOwned");
+
+    const dash = await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId, timeRange: "YEAR" as const,
+    });
+
+    // The dealership owned this car. Nothing about its turnover was ever
+    // uncertain — only its PROFIT needed a cost, and profit is reported
+    // separately with its own truncation flag.
+    expect(dash.salesVolumeThisMonth).toBe(CAP * OWNED_PRICE + PAST_CAP_OWNED_PRICE);
+  });
+
+  test("a consigned sale past the cap is still excluded, and says so", async () => {
+    const { s } = await dealerPastTheCap("capConsigned");
+
+    const dash = await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId, timeRange: "YEAR" as const,
+    });
+
+    // Fail-closed is preserved where it is actually earned: this car's turnover
+    // is its margin, the margin needs the cost, and the cost was not read. Its
+    // gross is NOT folded in — that would put part of one figure on the agent
+    // basis and part on the principal basis with nothing saying which.
+    expect(dash.salesVolumeThisMonth).toBe(CAP * OWNED_PRICE + PAST_CAP_OWNED_PRICE);
+    expect(dash.truncated.turnover).toBe(true);
+  });
+
+  test("the salesperson ranking counts the same sale the headline does", async () => {
+    const { s } = await dealerPastTheCap("capRanking");
+
+    const dash = await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId, timeRange: "YEAR" as const,
+    });
+
+    // `revenueBySalesperson` runs through the same `recognizedRevenueOfSale`,
+    // so a tail dropped from turnover was dropped from the leaderboard too —
+    // and commission disputes start with a salesperson reading this number.
+    expect(dash.topPerformer?.revenue).toBe(CAP * OWNED_PRICE + PAST_CAP_OWNED_PRICE);
+  });
+});
