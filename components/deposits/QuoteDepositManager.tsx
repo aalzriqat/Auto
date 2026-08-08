@@ -99,7 +99,7 @@ export interface QuoteDepositSettlement {
   onChange: (vehicleId: Id<"vehicles">, applied: boolean) => void;
   onEligibility?: (
     vehicleId: Id<"vehicles">,
-    state: { canApply: boolean; required: boolean; reason: string | null; label: string }
+    state: { canApply: boolean; required: boolean; reason: string | null; label: string } | null
   ) => void;
   disabled?: boolean;
 }

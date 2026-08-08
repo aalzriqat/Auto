@@ -316,6 +316,54 @@ describe("DepositSettlementDecision", () => {
     expect(screen.queryByText("DepositSettlementHeldAmount")).toBeNull();
   });
 
+  test("withdraws its eligibility answer when it stops having one", async () => {
+    // The lockout this closes: the parent disables Submit while any line
+    // reports `canApply: false`, and the component used to return early when
+    // its preview went away — freezing that blocking answer forever.
+    //
+    // It fired on the remedy the screen itself prescribes. The blocked message
+    // says "refund the excess to the customer before completing"; doing so
+    // closes the deposit row, the preview drops to NO_DEPOSIT, this component
+    // stops rendering — and the stale refusal kept the deal unsubmittable,
+    // naming a car whose blocker no longer existed. The server would have
+    // accepted the sale; only client state refused it, and nothing on step 4
+    // could clear it.
+    const seeded = await seedPreview("withdrawn", {
+      deposit: 1_000,
+      route: "DIRECT_TO_SUPPLIER",
+      sourceCost: SALE_PRICE - 350,
+    });
+    expect(seeded.preview?.depositSettlement?.canApplyToSettlement).toBe(false);
+
+    const onEligibility = vi.fn();
+    const props = {
+      orgId: seeded.orgId as Id<"organizations">,
+      quoteId: seeded.quoteId as Id<"quotes">,
+      vehicleId: seeded.vehicleId as Id<"vehicles">,
+      settlementRoute: "DIRECT_TO_SUPPLIER" as const,
+      value: false,
+      onChange: vi.fn(),
+      onEligibility,
+    };
+
+    const { rerender } = render(<DepositSettlementDecision {...props} />);
+    expect(onEligibility).toHaveBeenCalledWith(
+      seeded.vehicleId,
+      expect.objectContaining({ canApply: false })
+    );
+
+    // The deposit is resolved: the server now says this line has nothing to
+    // decide. `null`, not silence.
+    onEligibility.mockClear();
+    queryResults.set("sales:consignedSalePreview", {
+      ...seeded.preview,
+      depositSettlement: null,
+    });
+    rerender(<DepositSettlementDecision {...props} />);
+
+    expect(onEligibility).toHaveBeenCalledWith(seeded.vehicleId, null);
+  });
+
   test("renders nothing while the preview has not answered", async () => {
     // convex/react returns undefined before the first result. Reserving space
     // for a section that may not exist is a layout shift on every deal.

@@ -55,7 +55,7 @@ interface Props {
    */
   onEligibility?: (
     vehicleId: Id<"vehicles">,
-    state: { canApply: boolean; required: boolean; reason: string | null; label: string }
+    state: { canApply: boolean; required: boolean; reason: string | null; label: string } | null
   ) => void;
   disabled?: boolean;
 }
@@ -86,8 +86,24 @@ export function DepositSettlementDecision({
   const canApply = deposit?.canApplyToSettlement ?? null;
 
   // Reported up so the caller knows what the whole quote can be submitted as.
+  //
+  // ABSENCE is reported too, as `null`. Returning early instead froze this
+  // line's last answer in the parent forever — and once a blocking answer
+  // disabled the submit button, that became an unrecoverable lockout fired by
+  // the very remedy this screen prescribes. Refund the excess the blocked
+  // message asks for: the deposit row closes, the preview drops to NO_DEPOSIT,
+  // this component stops rendering — and the stale `canApply: false` kept the
+  // deal unsubmittable, naming a car whose blocker no longer existed. The
+  // server would have accepted that sale; only client state refused it, and
+  // nothing on step 4 could clear it.
+  //
+  // `undefined` is still not reported: that is "not answered yet", not absence.
   useEffect(() => {
-    if (!preview || !deposit) return;
+    if (preview === undefined) return;
+    if (!preview || !deposit) {
+      onEligibility?.(vehicleId, null);
+      return;
+    }
     onEligibility?.(vehicleId, {
       canApply: deposit.canApplyToSettlement,
       required: deposit.treatmentRequired,

@@ -1,3 +1,4 @@
+import { ConvexError } from "convex/values";
 import { SYSTEM_KEYS, SystemKey } from "../utils/defaultChart";
 import { scaleForCurrency } from "../utils/money";
 
@@ -564,7 +565,12 @@ function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
   // about tax treatment, not a posting detail.
   const taxMinor = p.taxMinor && p.taxMinor > 0 ? p.taxMinor : 0;
   if (taxMinor > 0) {
-    throw new Error(
+    // `ConvexError`, not `Error`. Convex redacts a plain Error's message from a
+    // production deployment, and `lib/errors.ts` then shows "An unexpected
+    // error occurred" — on a form whose only fix is clearing a tax field the
+    // operator has no reason to suspect. A refusal that cannot say what it
+    // wants is a dead end, not a decision point.
+    throw new ConvexError(
       `Consigned sale ${p.saleId} carries ${taxMinor} minor units of sales tax, and agency sales have no agreed tax treatment yet: the dealership sells this car as ${supplier}'s agent, so whether the tax is his liability or its own changes which of them the money is owed by. Record the tax against the supplier agreement, or sell the car as dealership stock, before completing the sale.`
     );
   }

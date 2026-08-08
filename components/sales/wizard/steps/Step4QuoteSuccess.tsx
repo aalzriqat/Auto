@@ -125,9 +125,18 @@ export function Step4QuoteSuccess({
   const handleDepositEligibility = useCallback(
     (
       vehicleId: Id<"vehicles">,
-      state: { canApply: boolean; required: boolean; reason: string | null; label: string }
+      state: { canApply: boolean; required: boolean; reason: string | null; label: string } | null
     ) =>
       setDepositEligibility((prev) => {
+        // `null` is a line withdrawing its answer — its deposit was resolved,
+        // or it turned out not to be consigned. Without the DELETE the last
+        // answer stayed forever, and a blocking one permanently disabled the
+        // submit button on a deal the server would have accepted.
+        if (state === null) {
+          if (!(vehicleId in prev)) return prev;
+          const { [vehicleId]: _removed, ...rest } = prev;
+          return rest;
+        }
         const existing = prev[vehicleId];
         if (
           existing &&
