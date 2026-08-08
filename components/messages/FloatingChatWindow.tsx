@@ -10,6 +10,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MessageBubble } from "./MessageBubble";
+import { useChatAutoScroll } from "./useChatAutoScroll";
 import { playSound } from "@/lib/messageSounds";
 import { cn } from "@/lib/utils";
 import { X, Minus, Send, BellOff, Bell, ChevronDown } from "lucide-react";
@@ -26,7 +27,6 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
   const isMinimized = minimizedChats.includes(conversationId);
 
   const [body, setBody] = useState("");
-  const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevMsgCountRef = useRef(0);
@@ -63,12 +63,10 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
     prevMsgCountRef.current = count;
   }, [conversation?.isMuted, currentUserId, messages]);
 
-  // Scroll to bottom on new messages
-  useEffect(() => {
-    if (!isMinimized) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [messages?.length, isMinimized]);
+  const { paneRef, scrollToBottom } = useChatAutoScroll({
+    newestMessageId: messages?.[0]?._id,
+    enabled: !isMinimized,
+  });
 
   const handleTyping = useCallback(() => {
     setTypingMutation({ conversationId, isTyping: true }).catch(() => null);
@@ -86,7 +84,7 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
     setTypingMutation({ conversationId, isTyping: false }).catch(() => null);
     await sendMessage({ conversationId, body: trimmed });
     playSound("sent");
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    scrollToBottom(true);
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -137,6 +135,10 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
       className={cn(
         "fixed bottom-0 z-50 flex flex-col shadow-2xl rounded-t-2xl overflow-hidden transition-all duration-200",
         "w-[336px]",
+        // Expanded windows must be bounded, otherwise the flex column grows to
+        // fit the whole thread and — being anchored to bottom-0 — pushes its own
+        // header off the top of the screen.
+        !isMinimized && "h-[480px] max-h-[calc(100dvh-1.5rem)]",
         hasUnread && "autoflow-chat-attention"
       )}
       style={positionStyle}
@@ -211,7 +213,16 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
       {!isMinimized && (
         <>
           {/* Messages */}
-          <div className="flex-1 h-[380px] overflow-y-auto px-3 py-3 space-y-1 bg-white flex flex-col">
+          <div
+            ref={paneRef}
+            // This pane only became scrollable in this change, so it also needs
+            // to become reachable: without tabIndex a keyboard-only user cannot
+            // scroll back through history at all.
+            tabIndex={0}
+            role="log"
+            aria-label={t("Messages")}
+            className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 py-3 bg-white flex flex-col"
+          >
             {status === "CanLoadMore" && (
               <button
                 onClick={() => loadMore(30)}
@@ -228,40 +239,45 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
               </div>
             )}
 
-            {chronological.map((msg, i) => {
-              const isMine = msg.senderId === currentUserId;
-              const nextMsg = chronological[i + 1];
-              const showAvatar = !nextMsg || nextMsg.senderId !== msg.senderId;
-              return (
-                <MessageBubble
-                  key={msg._id}
-                  _id={msg._id}
-                  body={msg.body}
-                  senderName={msg.senderName}
-                  senderImageUrl={msg.senderImageUrl}
-                  senderId={msg.senderId}
-                  _creationTime={msg._creationTime}
-                  status={msg.status}
-                  seenBy={msg.seenBy ?? []}
-                  isMine={isMine}
-                  showAvatar={showAvatar}
-                  isGroup={!isDm}
-                />
-              );
-            })}
+            {/* mt-auto pins a short thread to the bottom, the way every
+                messenger does. Without it a two-message DM strands its bubbles
+                at the top of a 480px box under ~290px of blank white. It
+                collapses to 0 once the thread overflows, so nothing is clipped
+                (unlike justify-end, which cuts off the top in Chromium). */}
+            <div className="mt-auto space-y-1">
+              {chronological.map((msg, i) => {
+                const isMine = msg.senderId === currentUserId;
+                const nextMsg = chronological[i + 1];
+                const showAvatar = !nextMsg || nextMsg.senderId !== msg.senderId;
+                return (
+                  <MessageBubble
+                    key={msg._id}
+                    _id={msg._id}
+                    body={msg.body}
+                    senderName={msg.senderName}
+                    senderImageUrl={msg.senderImageUrl}
+                    senderId={msg.senderId}
+                    _creationTime={msg._creationTime}
+                    status={msg.status}
+                    seenBy={msg.seenBy ?? []}
+                    isMine={isMine}
+                    showAvatar={showAvatar}
+                    isGroup={!isDm}
+                  />
+                );
+              })}
 
-            {typingText && (
-              <div className="flex items-center gap-1.5 text-xs text-slate-400 italic px-1">
-                <span className="inline-flex gap-0.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:0ms]" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:150ms]" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:300ms]" />
-                </span>
-                {typingText}
-              </div>
-            )}
-
-            <div ref={bottomRef} />
+              {typingText && (
+                <div className="flex items-center gap-1.5 text-xs text-slate-400 italic px-1">
+                  <span className="inline-flex gap-0.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:0ms]" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:150ms]" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:300ms]" />
+                  </span>
+                  {typingText}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Input */}

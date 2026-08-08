@@ -4,6 +4,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import { Check, CheckCheck } from "lucide-react";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { formatMessageStampParts, formatMessageStampTitle } from "@/lib/messageStamp";
 
 type MessageStatus = "sent" | "delivered" | "seen" | "received";
 
@@ -27,9 +28,6 @@ interface Props {
   isGroup: boolean;
 }
 
-function formatTime(ts: number) {
-  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
 
 function StatusIcon({ status }: { status: MessageStatus }) {
   if (status === "sent") {
@@ -56,12 +54,31 @@ export function MessageBubble({
   showAvatar,
   isGroup,
 }: Props) {
-  const { isRtl } = useLanguage();
+  const { t } = useLanguage();
+  const stamp = formatMessageStampParts(_creationTime, {
+    yesterdayLabel: t("MessagesYesterday"),
+  });
+
+  /**
+   * The prefix ("أمس") and the date/time run ("04:53 PM") are isolated
+   * separately. Wrapping the joined string in a single `dir="ltr"` run makes
+   * the bidi algorithm reorder it to `04:53 أمس PM`, tearing AM/PM off its
+   * time; leaving it unisolated under RTL renders the time as `PM 04:53`.
+   */
+  const stampContent = (
+    <>
+      {stamp.prefix && <bdi>{stamp.prefix} </bdi>}
+      <bdi dir="ltr">{stamp.body}</bdi>
+    </>
+  );
+  // The visible stamp abbreviates ("14:32" for today), so the tooltip carries
+  // the full date. Repeating the visible string here would tell nobody anything.
+  const stampTitle = formatMessageStampTitle(_creationTime);
 
   return (
     <div
       className={cn(
-        "flex items-end gap-2 group",
+        "flex items-end gap-2",
         isMine ? "flex-row-reverse" : "flex-row"
       )}
     >
@@ -100,11 +117,13 @@ export function MessageBubble({
         {!isGroup && (
           <div
             className={cn(
-              "flex items-center gap-1 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity",
+              "flex items-center gap-1 mt-0.5",
               isMine ? "flex-row-reverse" : "flex-row"
             )}
           >
-            <span className="text-[10px] text-slate-400">{formatTime(_creationTime)}</span>
+            <span className="text-[10px] text-slate-400 whitespace-nowrap" title={stampTitle}>
+              {stampContent}
+            </span>
             {isMine && <StatusIcon status={status} />}
           </div>
         )}
@@ -112,9 +131,8 @@ export function MessageBubble({
         {/* Group read receipts — mini avatars of who's seen the message */}
         {isGroup && isMine && (
           <div className={cn("flex items-center gap-1 mt-1", "flex-row-reverse")}>
-            {/* Timestamp shown on hover */}
-            <span className="text-[10px] text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity me-1">
-              {formatTime(_creationTime)}
+            <span className="text-[10px] text-slate-400 me-1 whitespace-nowrap" title={stampTitle}>
+              {stampContent}
             </span>
 
             {seenBy.length > 0 ? (
