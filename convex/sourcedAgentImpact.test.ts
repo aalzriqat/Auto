@@ -23,6 +23,8 @@ interface SeedOptions {
   purchasePrice?: number;
   reliefToInventory?: boolean;
   cogsOverride?: number;
+  /** A second, perfectly readable sale in the same org — proves the scan continues. */
+  secondSalePrice?: number;
 }
 
 async function seed(options: SeedOptions = {}) {
@@ -59,7 +61,9 @@ async function seed(options: SeedOptions = {}) {
       salePrice, saleDate: Date.now(), status: "COMPLETED", financingType: "FINANCED",
     });
 
-    if (options.postJournal !== false) {
+    // An unreadable price cannot have posted a journal — `jod(NaN)` is NaN, and
+    // seeding lines from it would be asserting about entries nobody could make.
+    if (options.postJournal !== false && Number.isFinite(salePrice)) {
       const entryId = await ctx.db.insert("journalEntries", {
         orgId, journalNumber: "JE-1", accountingDate: Date.now(),
         sourceType: "sales", sourceId: saleId, category: "SYSTEM",
@@ -87,6 +91,40 @@ async function seed(options: SeedOptions = {}) {
         });
       }
     }
+    if (options.secondSalePrice !== undefined) {
+      const vehicle2 = await ctx.db.insert("vehicles", {
+        orgId, vin: "VINSRC2", make: "Toyota", model: "Corolla", year: 2024, mileage: 8,
+        color: "Grey", fuelType: "Gas", transmission: "Auto", sellingPrice: options.secondSalePrice,
+        status: "SOLD", sourceType: "SOURCED", sourcedFromName: "Amman Importer Co",
+        sourceCost: 9_500,
+      });
+      const sale2 = await ctx.db.insert("sales", {
+        orgId, vehicleId: vehicle2, customerId, salespersonId: userId,
+        salePrice: options.secondSalePrice, saleDate: Date.now(), status: "COMPLETED",
+        financingType: "FINANCED",
+      });
+      const entry2 = await ctx.db.insert("journalEntries", {
+        orgId, journalNumber: "JE-2", accountingDate: Date.now(),
+        sourceType: "sales", sourceId: sale2, category: "SYSTEM",
+        memo: "Vehicle sale completed", status: "POSTED", currency: "JOD",
+        postedBy: userId, postedAt: Date.now(), createdAt: Date.now(),
+      });
+      const secondLines: Array<[string, number, number]> = [
+        [SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, jod(options.secondSalePrice), 0],
+        [SYSTEM_KEYS.SALES_REVENUE, 0, jod(options.secondSalePrice)],
+        [SYSTEM_KEYS.COST_OF_VEHICLES_SOLD, jod(9_500), 0],
+        [SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, 0, jod(9_500)],
+      ];
+      let secondLineNumber = 1;
+      for (const [key, debitMinor, creditMinor] of secondLines) {
+        await ctx.db.insert("journalLines", {
+          orgId, journalEntryId: entry2, lineNumber: secondLineNumber++,
+          accountId: accountIds.get(key)!, debitMinor, creditMinor,
+          currency: "JOD", scale: 3, accountingDate: Date.now(),
+        });
+      }
+    }
+
     return { orgId, saleId, vehicleId };
   });
 
@@ -179,6 +217,39 @@ describe("sourced-sale impact report", () => {
     expect(row.flags).toContain("NO_POSTED_JOURNAL");
     expect(row.posted.revenueMinor).toBe(0);
     expect(org.migratableCount).toBe(0);
+  });
+
+  test("flags an unreadable amount instead of aborting the whole report", async () => {
+    // Convex accepts NaN for a `v.number()` field, so a sale price can be
+    // genuinely unreadable on a live row. `toMinorUnits` throws on it, and the
+    // throw escaped the per-sale loop: the entire production impact report
+    // returned nothing, for every org, naming no sale. An accountant preparing
+    // a migration got an error instead of the 41 rows that were perfectly fine.
+    //
+    // The row itself must still fail closed — any flag disqualifies it from
+    // automatic correction — but it must be REPORTED, not hidden by killing the
+    // scan around it.
+    const { org } = await seed({ salePrice: Number.NaN });
+    const row = org.rows[0]!;
+
+    expect(org.sourcedSalesFound).toBe(1);
+    expect(row.flags).toContain("UNREADABLE_AMOUNT");
+    // Nothing derived from an amount nobody can read is asserted as a number.
+    expect(row.grossTransactionMinor).toBeNull();
+    expect(row.dealershipMarginMinor).toBeNull();
+  });
+
+  test("keeps scanning the rows either side of a bad one", async () => {
+    // The point of the flag: one unreadable sale must cost you that sale, not
+    // the report. Two sales in one org, the first unreadable.
+    const { org } = await seed({ salePrice: Number.NaN, secondSalePrice: 12_500 });
+
+    expect(org.sourcedSalesFound).toBe(2);
+    const bad = org.rows.find((r) => r.flags.includes("UNREADABLE_AMOUNT"));
+    const good = org.rows.find((r) => !r.flags.includes("UNREADABLE_AMOUNT"));
+    expect(bad).toBeTruthy();
+    expect(good?.grossTransactionMinor).toBe(jod(12_500));
+    expect(good?.dealershipMarginMinor).toBe(jod(3_000));
   });
 
   test("leaves owned stock out of the report entirely", async () => {

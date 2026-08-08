@@ -523,13 +523,16 @@ async function resolveReservationDeposits(
       //
       // Summed from the slices actually consumed, NOT from the allocated cap.
       //
-      // This is a structural guarantee, not a fix for a reproducible bug — and
-      // the distinction is worth stating, because the two figures cannot
-      // currently disagree: the allocated cap `heldTotalMinor` and
-      // `consumedSlices` are the holds that cap was computed from, filtered by
-      // the same predicate, so `Σ consumed ≤ cap` always and they are equal on
-      // every path I could reach. I could not build a fixture where they differ
-      // without breaking one of them by hand.
+      // This is a structural guarantee, not a fix for a reproducible bug, and
+      // the distinction is worth stating precisely: the cap `heldTotalMinor`
+      // and `consumedSlices` are computed from THE SAME hold rows under THE
+      // SAME predicate (this vehicle ∧ active ∧ an allocated amount), so they
+      // are EQUAL — not merely ordered. Saying "≤ always", as this comment
+      // first did, asserts an ordering the code does not actually guarantee and
+      // would quietly stop being true if quotes ever became mutable: a quote
+      // carrying both hold-bearing and hold-less deposits would let the
+      // resolution consume more than the cap authorised. Quotes are
+      // insert-only today, so that shape is not constructible.
       //
       // What it removes is the possibility. The GL debits/credits iterate
       // `consumedSlices` (just above); the claim's `alreadyReceivedAmount` used

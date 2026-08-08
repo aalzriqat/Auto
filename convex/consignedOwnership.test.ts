@@ -15,7 +15,9 @@ import {
  * beyond the agreed margin.
  */
 
-async function seed(overrides: { status?: "AVAILABLE" | "SOLD" } = {}) {
+async function seed(
+  overrides: { status?: "AVAILABLE" | "SOLD"; sourceType?: "SOURCED" | "STOCK" } = {}
+) {
   const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
   // `vehicles.update` goes through checkTenantWriteLimit, so this suite is one
   // of the few that genuinely reaches the rate limiter.
@@ -34,7 +36,10 @@ async function seed(overrides: { status?: "AVAILABLE" | "SOLD" } = {}) {
       orgId, vin: "VINOWN9", make: "Toyota", model: "Camry", year: 2024, mileage: 10,
       color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: 12_500,
       status: overrides.status ?? "AVAILABLE",
-      sourceType: "SOURCED", sourcedFromName: "Amman Importer Co", sourceCost: 9_500,
+      sourceType: overrides.sourceType ?? "SOURCED",
+      ...(overrides.sourceType === "STOCK"
+        ? { purchasePrice: 9_500 }
+        : { sourcedFromName: "Amman Importer Co", sourceCost: 9_500 }),
     });
     return { orgId, userId, vehicleId };
   });
@@ -155,6 +160,52 @@ describe("conversion to dealer-owned stock", () => {
         purchasePaymentMethod: "CASH",
       })
     ).rejects.toThrow(/already been sold/i);
+
+    const vehicle = await s.t.run((ctx) => ctx.db.get(s.vehicleId));
+    expect(vehicle?.sourceType).toBe("SOURCED");
+  });
+
+  test("owned stock that has already been SOLD cannot be converted to consigned either", async () => {
+    // The mirror of the case above, and the one the code claimed was "caught by
+    // the acquisition-exposure lock below" — it was not. That lock keys on
+    // `"sourceType" in patch && patch.sourceType !== "SOURCED"`, so setting
+    // sourceType TO "SOURCED" never triggered it.
+    //
+    // The damage runs the other way: the sale posted as principal — gross
+    // revenue, COGS, inventory relieved. Declaring the car consigned afterwards
+    // says the dealership never owned what it has already recognised revenue
+    // and cost of sales on, and asserts a supplier is owed an entitlement out
+    // of a completed deal nobody will ever settle. Ownership basis is not
+    // retroactively editable; a historical correction goes through the audited
+    // migration, which is exactly what `consignedSaleCorrections` exists for.
+    const s = await seed({ status: "SOLD", sourceType: "STOCK" });
+
+    await expect(
+      s.asUser.mutation(api.vehicles.update, {
+        orgId: s.orgId,
+        vehicleId: s.vehicleId,
+        sourceType: "SOURCED",
+        sourcedFromName: "Amman Importer Co",
+        sourceCost: 9_500,
+      })
+    ).rejects.toThrow(/already been sold/i);
+
+    const vehicle = await s.t.run((ctx) => ctx.db.get(s.vehicleId));
+    expect(vehicle?.sourceType).toBe("STOCK");
+  });
+
+  test("an unsold owned car can still be reclassified as consigned", async () => {
+    // The guard is about the SALE, not about the direction. Before a sale there
+    // is nothing recognised to contradict.
+    const s = await seed({ status: "AVAILABLE", sourceType: "STOCK" });
+
+    await s.asUser.mutation(api.vehicles.update, {
+      orgId: s.orgId,
+      vehicleId: s.vehicleId,
+      sourceType: "SOURCED",
+      sourcedFromName: "Amman Importer Co",
+      sourceCost: 9_500,
+    });
 
     const vehicle = await s.t.run((ctx) => ctx.db.get(s.vehicleId));
     expect(vehicle?.sourceType).toBe("SOURCED");

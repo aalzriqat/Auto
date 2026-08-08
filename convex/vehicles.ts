@@ -1010,24 +1010,40 @@ export const update = mutation({
       }
     }
 
-    // Buying in a consigned car is a real transaction, but only before it is
-    // sold. Afterwards it rewrites history: the sale already posted on agent
-    // basis — commission on the margin, no COGS, no inventory — and converting
-    // now capitalizes Vehicle Inventory for a vehicle that has already left the
-    // lot. Nothing will ever relieve that asset, because the sale that would
-    // have is in the past, so it sits on the balance sheet permanently while
-    // the completed sale's basis is silently contradicted underneath it.
+    // Changing what a vehicle IS, after it has been sold, rewrites history in
+    // whichever direction it runs. Both are refused.
     //
-    // The reverse direction is left alone: STOCK→SOURCED on a sold vehicle is
-    // caught by the acquisition-exposure lock below.
+    // SOURCED→STOCK: the sale posted on agent basis — commission on the margin,
+    // no COGS, no inventory — and converting now capitalizes Vehicle Inventory
+    // for a car that has already left the lot. Nothing will ever relieve that
+    // asset, because the sale that would have is in the past, so it sits on the
+    // balance sheet permanently while the completed sale's basis is silently
+    // contradicted underneath it.
+    //
+    // STOCK→SOURCED: the sale posted as principal — gross revenue, COGS,
+    // inventory relieved. Declaring the car consigned afterwards says the
+    // dealership never owned what it has already recognised revenue and cost of
+    // sales on, and asserts a supplier entitlement out of a completed deal that
+    // nobody will ever settle.
+    //
+    // This direction was previously left open on the belief that the
+    // acquisition-exposure lock below caught it. It does not: that lock keys on
+    // `"sourceType" in patch && patch.sourceType !== "SOURCED"`, so a patch
+    // setting sourceType TO "SOURCED" never reaches it.
+    //
+    // A genuine historical correction goes through the audited migration path
+    // (`consignedSaleCorrections`), which posts a correcting journal and leaves
+    // a record, rather than editing the basis out from under a posted sale.
+    const effectiveNewSourceType = args.sourceType ?? vehicle.sourceType;
     if (
-      vehicle.sourceType === "SOURCED" &&
       args.sourceType !== undefined &&
-      args.sourceType !== "SOURCED" &&
+      effectiveNewSourceType !== vehicle.sourceType &&
       vehicle.status === "SOLD"
     ) {
       throw new ConvexError(
-        "This vehicle has already been sold on the supplier's behalf, so it cannot be converted to dealership stock now. Convert it before the sale, or correct the sale first."
+        vehicle.sourceType === "SOURCED"
+          ? "This vehicle has already been sold on the supplier's behalf, so it cannot be converted to dealership stock now. Convert it before the sale, or correct the sale first."
+          : "This vehicle has already been sold as the dealership's own stock, so it cannot be reclassified as a supplier's vehicle now — the completed sale already recognized revenue and cost of sales on it. Correct the sale through the consigned-sale correction instead."
       );
     }
 

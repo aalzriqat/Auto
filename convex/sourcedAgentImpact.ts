@@ -57,22 +57,45 @@ export async function systemKeyByAccountId(
 }
 
 /**
+ * A monetary field converted to minor units, or null when it cannot be.
+ *
+ * `toMinorUnits` THROWS on a value it cannot represent, and Convex accepts NaN
+ * for a `v.number()` field — so one malformed row on a live table threw out of
+ * the per-sale loop and the entire impact report returned nothing, for every
+ * org, naming no sale. An accountant preparing a migration got an error instead
+ * of the forty rows that were perfectly readable.
+ *
+ * The affected row still fails closed: its caller flags it, and any flag
+ * disqualifies a row from automatic correction. What changes is that it is
+ * REPORTED rather than hidden by killing the scan around it.
+ */
+function safeMinor(value: number | undefined | null, currency: string): number | null {
+  if (value === undefined || value === null) return null;
+  if (!Number.isFinite(value) || value < 0) return null;
+  try {
+    return toMinorUnits(value, currency);
+  } catch {
+    // Representable as a JS number but not as minor units — an overflow of the
+    // safe-integer range. Unreadable for this purpose either way.
+    return null;
+  }
+}
+
+/**
  * The supplier's entitlement on a sourced vehicle.
  *
  * `sourceCost` is what the dealership agreed the supplier gets — the figure the
- * existing posting already credits to AP-Suppliers. Absent, there is no
- * entitlement to net against and no margin can be derived. That is reported as
- * an anomaly rather than defaulted to zero: zero would silently claim the whole
- * transaction as the dealership's margin, which is the same overstatement this
- * report exists to find, just in the opposite direction.
+ * existing posting already credits to AP-Suppliers. Absent or unreadable, there
+ * is no entitlement to net against and no margin can be derived. That is
+ * reported as an anomaly rather than defaulted to zero: zero would silently
+ * claim the whole transaction as the dealership's margin, which is the same
+ * overstatement this report exists to find, just in the opposite direction.
  */
 function supplierEntitlementMinor(
   vehicle: Doc<"vehicles">,
   currency: string
 ): number | null {
-  if (vehicle.sourceCost === undefined || vehicle.sourceCost === null) return null;
-  if (!Number.isFinite(vehicle.sourceCost) || vehicle.sourceCost < 0) return null;
-  return toMinorUnits(vehicle.sourceCost, currency);
+  return safeMinor(vehicle.sourceCost, currency);
 }
 
 export type ConsignedSaleAssessment = {
@@ -84,7 +107,8 @@ export type ConsignedSaleAssessment = {
   supplierName: string | null;
   currency: string;
   financingType: string | null;
-  grossTransactionMinor: number;
+  /** Null when the sale price is unreadable — see UNREADABLE_AMOUNT. */
+  grossTransactionMinor: number | null;
   supplierEntitlementMinor: number | null;
   dealershipMarginMinor: number | null;
   posted: {
@@ -171,7 +195,7 @@ export async function assessConsignedSale(
   }
 
   const currency = live[0]?.currency ?? "JOD";
-  const grossMinor = toMinorUnits(sale.salePrice, currency);
+  const grossMinor = safeMinor(sale.salePrice, currency);
   const entitlementMinor = supplierEntitlementMinor(vehicle, currency);
 
   const postedRevenue = totals[SYSTEM_KEYS.SALES_REVENUE]?.creditMinor ?? 0;
@@ -180,7 +204,8 @@ export async function assessConsignedSale(
   const postedSupplierAp = totals[SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS]?.creditMinor ?? 0;
   const postedInventoryRelief = totals[SYSTEM_KEYS.VEHICLE_INVENTORY]?.creditMinor ?? 0;
 
-  const marginMinor = entitlementMinor === null ? null : grossMinor - entitlementMinor;
+  const marginMinor =
+    entitlementMinor === null || grossMinor === null ? null : grossMinor - entitlementMinor;
   const postedGrossProfit = postedRevenue - postedCogs;
   // Already on agent basis either because it was posted that way, or because a
   // recorded correction put it there. A sale with NO posted journal at all is
@@ -190,6 +215,10 @@ export async function assessConsignedSale(
     alreadyCorrected || (live.length > 0 && postedRevenue === 0 && postedCogs === 0);
 
   const flags: string[] = [];
+  // A monetary field nobody can read. Reported so the row reaches a human, and
+  // disqualifying (any flag is) so nothing is corrected off a figure that does
+  // not exist.
+  if (grossMinor === null) flags.push("UNREADABLE_AMOUNT");
   if (live.length === 0) flags.push("NO_POSTED_JOURNAL");
   if (live.length > 1) flags.push("MULTIPLE_POSTED_JOURNALS");
   if (entitlementMinor === null) flags.push("NO_SOURCE_COST");
