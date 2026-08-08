@@ -8,6 +8,11 @@ overrides:
   # Pinned exact (not a range) so it can't drift onto a release that trips the
   # CI minimumReleaseAge (<24h) supply-chain gate; 8.5.22 is patched (>=8.5.18).
   postcss: 8.5.22
+  # GHSA-28wg-ghj8-5hjv (>=3.3.16) and GHSA-2v37-7h3g-55p8 (>=3.3.17): loops in
+  # the non-secure and custom generators. Pinned exact for the same reason as
+  # postcss above — a range would resolve to 3.3.18, which is under 24h old and
+  # trips the CI minimumReleaseAge gate.
+  nanoid: 3.3.17
   fast-uri: ">=4.1.2"
   ip-address: ">=10.3.1"
   "js-yaml@>=4.0.0 <4.3.0": ">=4.3.0 <5.0.0"
@@ -37,3 +42,20 @@ allowBuilds:
   unrs-resolver: true
 patchedDependencies:
   expo-sharing: patches/expo-sharing.patch
+auditConfig:
+  # image-size parser DoS (ICNS, and JXL/HEIF). Both advisories name >=2.0.3 as
+  # the patched version, but that release does not exist — npm's latest is
+  # 2.0.2, which is itself in the vulnerable range — so no override or bump can
+  # clear these. They reach us only through
+  #   apps/mobile > @clerk/expo > @clerk/clerk-js > @solana/wallet-adapter-react
+  #   > @solana-mobile/... > react-native > metro > image-size
+  # where Metro reads image dimensions at build time from assets in this repo,
+  # not from attacker-supplied input at runtime. The cost of a parser DoS there
+  # is a hung build, not production availability.
+  #
+  # Ignored individually rather than by lowering --audit-level, so every other
+  # high advisory still fails the required dependency-audit check. Remove these
+  # once image-size 2.0.3 ships and Metro picks it up.
+  ignoreGhsas:
+    - GHSA-w3rx-r6r6-pgpr
+    - GHSA-5p2g-fcmc-qvqq
