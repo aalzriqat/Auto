@@ -24,6 +24,7 @@ import { prepaidPostingBlockedReason } from "./utils/prepaidSourceLedger";
 import { payrollPostingBlockedReason } from "./utils/payrollSourceLedger";
 import { commissionPostingBlockedReason } from "./utils/commissionSourceLedger";
 import { reverseAccountingEvent } from "./accounting/reversals";
+import { completeDeferredReversal } from "./utils/depositApplications";
 import { checkPostingAllowed } from "./accountingPeriods";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -208,6 +209,17 @@ async function markEntryPosted(
   resultEventId: Id<"accountingEvents">
 ): Promise<void> {
   await ctx.db.patch(p._id, { status: "POSTED", resolvedAt: Date.now(), resultEventId, attempts: p.attempts + 1 });
+  // A deferred deposit reversal is only finished once its journal exists. The
+  // application and its slice sit at REVERSING until here, so that a share
+  // whose original entry is still POSTED cannot be refunded or re-allocated in
+  // the meantime.
+  if (p.kind === "REVERSE") {
+    await completeDeferredReversal(ctx, {
+      orgId: p.orgId,
+      reversalIdempotencyKey: p.idempotencyKey,
+      postedAt: Date.now(),
+    });
+  }
 }
 
 /**

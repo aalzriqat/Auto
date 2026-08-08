@@ -8,6 +8,7 @@ import { assertDifferentActors } from "./financialGuards";
 import { normalizeCurrency, amountToMinorOrThrow, type DepositMethod } from "./depositRecording";
 import { fromMinorUnits } from "./money";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
+import { assertQuoteDepositConservation } from "./depositAllocation";
 import { createCanonicalPayment } from "../subledger";
 import {
   getOrgCurrency,
@@ -931,12 +932,25 @@ export async function releaseHeldDeposit(
   // it — refunding one car's unallocated remainder silently cancelled another
   // car's agreed share and left it unsellable. A car's share is released
   // deliberately (deposits.releaseVehicleAllocation) and decided on its own.
+  //
+  // A slice awaiting a decision, or still mid-reversal, is excluded for the
+  // same reason: it belongs to `deposits.resolveReleasedAllocation`, which pays
+  // out that share against its own identity. Paying it here left the hold
+  // sitting at RELEASED_AWAITING_DECISION with its money already gone, ready to
+  // be refunded a second time or quietly returned to the pool.
+  //
+  // APPLIED holds are excluded here because the application rows already
+  // account for that money; counting both would subtract it twice.
   const stillAllocatedMinor = holds
-    .filter((h) => h.active && h.allocationStatus !== "APPLIED")
+    .filter(
+      (h) =>
+        h.allocationStatus !== "APPLIED" &&
+        (h.allocationStatus === "REVERSING" ||
+          h.allocationStatus === "RELEASED_AWAITING_DECISION" ||
+          (h.active && h.allocationStatus !== undefined))
+    )
     .reduce((sum, h) => sum + (h.allocatedAmountMinor ?? 0), 0);
-  // A slice awaiting a decision is deliberately left in: `deposits.release`
-  // resolving the whole row IS an explicit decision about it, and the amount
-  // has not gone anywhere.
+
   const amountMinor =
     rowMinor -
     claimedByLiveSalesMinor -
@@ -946,7 +960,7 @@ export async function releaseHeldDeposit(
 
   if (amountMinor <= 0) {
     throw new ConvexError(
-      "There is nothing left of this deposit to refund or forfeit — every part of it is either applied to a completed sale, allocated to a vehicle still on the deal, or already paid out. Cancel the sale, or release the vehicle's share, first."
+      "There is nothing left of this deposit to refund or forfeit — every part of it is applied to a completed sale, allocated to a vehicle still on the deal, awaiting its own decision, or already paid out. Cancel the sale, or resolve the vehicle's share, first."
     );
   }
 
@@ -954,9 +968,16 @@ export async function releaseHeldDeposit(
   // closes. A row that is still carrying a live application or another car's
   // allocation stays HELD with its holds intact — only the free part has left.
   const closesTheRow = claimedByLiveSalesMinor + stillAllocatedMinor === 0;
+  // Every release is its own movement of money and needs its own identity. The
+  // first keeps the original key so nothing already posted changes.
+  const releaseSeq = (deposit.releaseCount ?? 0) + 1;
   await ctx.db.patch(args.depositId, {
     ...(closesTheRow ? { status: args.resolution, holdActive: false } : {}),
     releasedAmountMinor: alreadyPaidOutMinor + amountMinor,
+    ...(args.resolution === "FORFEITED"
+      ? { forfeitedAmountMinor: (deposit.forfeitedAmountMinor ?? 0) + amountMinor }
+      : { refundedAmountMinor: (deposit.refundedAmountMinor ?? 0) + amountMinor }),
+    releaseCount: releaseSeq,
     resolvedBy: args.actorId,
     resolvedAt: now,
     notes: args.notes ?? deposit.notes,
@@ -1019,7 +1040,10 @@ export async function releaseHeldDeposit(
       method: args.refundMethod!,
       amountMinor,
       currency,
-      idempotencyKey: `deposit_refund_${args.depositId}`,
+      idempotencyKey:
+        releaseSeq > 1
+          ? `deposit_refund_${args.depositId}_${releaseSeq}`
+          : `deposit_refund_${args.depositId}`,
       actorId: args.actorId,
       status: "SETTLED",
       externalReference: `Deposit refund ${args.depositId}`,
@@ -1036,6 +1060,7 @@ export async function releaseHeldDeposit(
       actorId: args.actorId,
       occurredAt: now,
       paymentMethod: args.refundMethod,
+      releaseSeq,
     });
   } else {
     await hookDepositForfeited(ctx, {
@@ -1046,7 +1071,15 @@ export async function releaseHeldDeposit(
       currency,
       actorId: args.actorId,
       occurredAt: now,
+      releaseSeq,
     });
+  }
+
+  // Every dinar still has to be in exactly one bucket. This is the path that
+  // moves cash out of the business, so it is the last place an imbalance may
+  // be allowed to commit.
+  if (deposit.quoteId) {
+    await assertQuoteDepositConservation(ctx, { quoteId: deposit.quoteId, currency });
   }
 
   return { amountMinor, currency };

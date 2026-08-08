@@ -216,6 +216,12 @@ export type ReversedApplication = {
   vehicleId: Id<"vehicles">;
   holdId: Id<"depositVehicleHolds"> | undefined;
   amountMinor: number;
+  /**
+   * False while the reversing journal is only queued, because no accounting
+   * period was open. The money is not back yet: the original entry is still
+   * POSTED, and anything that pays it out now pays it out twice.
+   */
+  journalReversed: boolean;
 };
 
 /**
@@ -250,7 +256,7 @@ export async function reverseDepositApplicationsForSale(
       reversalStartedAt: args.reversalDate,
     });
 
-    await reverseDepositApplication(ctx, {
+    const outcome = await reverseDepositApplication(ctx, {
       orgId: args.orgId,
       identity: recordedIdentity(application),
       reason: args.reason,
@@ -258,12 +264,22 @@ export async function reverseDepositApplicationsForSale(
       reversalDate: args.reversalDate,
     });
 
-    await ctx.db.patch(application._id, {
-      status: "REVERSED",
-      reversedAt: args.reversalDate,
-      reversedBy: args.actorId,
-      reversalReason: args.reason,
-    });
+    // DEFERRED means the reversing entry is queued and the original is still
+    // POSTED. The application stays REVERSING until the outbox drains — see
+    // completeDeferredReversal — so nothing downstream can treat the amount as
+    // recovered while the ledger still shows it spent.
+    const journalReversed = outcome !== "DEFERRED";
+    await ctx.db.patch(
+      application._id,
+      journalReversed
+        ? {
+            status: "REVERSED",
+            reversedAt: args.reversalDate,
+            reversedBy: args.actorId,
+            reversalReason: args.reason,
+          }
+        : { reversedBy: args.actorId, reversalReason: args.reason }
+    );
 
     reversed.push({
       applicationId: application._id,
@@ -271,7 +287,52 @@ export async function reverseDepositApplicationsForSale(
       vehicleId: application.vehicleId,
       holdId: application.holdId,
       amountMinor: application.amountMinor,
+      journalReversed,
     });
   }
   return reversed;
+}
+
+/**
+ * Finishes a reversal that had to wait for an accounting period.
+ *
+ * Called by the outbox when a queued REVERSE entry actually posts. Until then
+ * the application sits at REVERSING and its slice is unspendable — which is the
+ * whole reason the state exists, and why nothing may transition out of it on a
+ * timer or on a read.
+ *
+ * Keyed on the reversal's idempotency key, which `reverseDepositApplication`
+ * derives as `reversed_<the application's own key>`. Returns the ids it
+ * advanced so the caller can free their holds.
+ */
+export async function completeDeferredReversal(
+  ctx: MutationCtx,
+  args: { orgId: Id<"organizations">; reversalIdempotencyKey: string; postedAt: number }
+): Promise<Id<"depositVehicleHolds">[]> {
+  const prefix = "reversed_";
+  if (!args.reversalIdempotencyKey.startsWith(prefix)) return [];
+  const applicationKey = args.reversalIdempotencyKey.slice(prefix.length);
+
+  const application = await ctx.db
+    .query("depositApplications")
+    .withIndex("by_org_event_key", (q) =>
+      q.eq("orgId", args.orgId).eq("eventIdempotencyKey", applicationKey)
+    )
+    .unique();
+  if (!application || application.status !== "REVERSING") return [];
+
+  await ctx.db.patch(application._id, {
+    status: "REVERSED",
+    reversedAt: args.postedAt,
+  });
+
+  const freed: Id<"depositVehicleHolds">[] = [];
+  if (application.holdId) {
+    const hold = await ctx.db.get(application.holdId);
+    if (hold && hold.allocationStatus === "REVERSING") {
+      await ctx.db.patch(hold._id, { allocationStatus: "RELEASED_AWAITING_DECISION" });
+      freed.push(hold._id);
+    }
+  }
+  return freed;
 }

@@ -1,3 +1,5 @@
+import { grossTransactionValueForSale } from "./grossTransactionValue";
+
 /**
  * Who owns a vehicle, and what the dealership is when it sells one.
  *
@@ -120,6 +122,12 @@ export interface SaleEconomics {
  * cost basis the GL and commissions also use. For a SOURCED vehicle that IS the
  * supplier's entitlement, so nothing here re-derives it.
  */
+/**
+ * Gross transaction value comes from the shared definition rather than being
+ * spelled `salePrice` again here, so the reports that read this object and the
+ * ones that read the cashflow ledger cannot drift apart. See
+ * utils/grossTransactionValue.
+ */
 export function saleEconomics(args: {
   salePrice: number;
   vehicle: OwnershipFacts;
@@ -134,7 +142,7 @@ export function saleEconomics(args: {
     return {
       isAgentSale: false,
       settlementRoute: null,
-      grossTransactionValue: salePrice,
+      grossTransactionValue: grossTransactionValueForSale({ salePrice }),
       supplierSettlement: 0,
       dealershipMargin: margin,
       recognizedRevenue: salePrice,
@@ -145,7 +153,7 @@ export function saleEconomics(args: {
   return {
     isAgentSale: true,
     settlementRoute: consignedSettlementRoute(args),
-    grossTransactionValue: salePrice,
+    grossTransactionValue: grossTransactionValueForSale({ salePrice }),
     supplierSettlement: capitalizedCost,
     dealershipMargin: margin,
     // The whole point. Turnover is what the dealership sold, and on a consigned

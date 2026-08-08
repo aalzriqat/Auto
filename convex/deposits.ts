@@ -83,7 +83,13 @@ export const create = mutation({
         const existingActiveMinor = existingDeposits.reduce((sum, deposit) => {
           if (deposit.isDeleted === true) return sum;
           if (deposit.status !== "HELD" && deposit.status !== "APPLIED") return sum;
-          return sum + (deposit.amountMinor ?? amountToMinorOrThrow(deposit.amount, currency));
+          const rowMinor =
+            deposit.amountMinor ?? amountToMinorOrThrow(deposit.amount, currency);
+          // Less whatever has been handed back. A row can now be released in
+          // part and stay HELD, and counting it at face value meant a customer
+          // whose deposit was partly refunded could not put the money down
+          // again — the quote read as fully deposited when it was not.
+          return sum + Math.max(0, rowMinor - (deposit.releasedAmountMinor ?? 0));
         }, 0);
         if (existingActiveMinor + amountMinor > quoteAmountMinor) {
           throw new ConvexError("Total deposits cannot exceed the quote amount.");
@@ -220,6 +226,28 @@ export const voidDeposit = mutation({
     }
     if (deposit.status !== "HELD") {
       throwAppError(AppErrorCode.DEPOSIT_ALREADY_RESOLVED, "Only HELD deposits can be voided.");
+    }
+    // A row can now be released in part and stay HELD, so the status above no
+    // longer means "nothing has happened to this money". Voiding says the
+    // payment was recorded in error and reverses the receipt — which, after a
+    // refund, leaves the books showing cash that went out against a receipt
+    // that never came in, and soft-deletes the row out of every allocation
+    // view while another car's share still points at it.
+    if ((deposit.releasedAmountMinor ?? 0) > 0) {
+      throw new ConvexError(
+        "Part of this deposit has already been refunded or forfeited, so it cannot be voided as recorded in error. Voiding would reverse a receipt whose money has already left the business."
+      );
+    }
+    const liveApplications = (
+      await ctx.db
+        .query("depositApplications")
+        .withIndex("by_deposit", (q) => q.eq("depositId", args.depositId))
+        .collect()
+    ).filter((a) => a.status === "APPLIED" || a.status === "REVERSING");
+    if (liveApplications.length > 0) {
+      throw new ConvexError(
+        "This deposit has been applied to a completed sale, so it cannot be voided as recorded in error. Cancel that sale first."
+      );
     }
 
     const now = Date.now();
@@ -612,8 +640,13 @@ export const resolveReleasedAllocation = mutation({
     // `payOutDepositSlice` against the actor, along with the separation between
     // whoever took the deposit and whoever disposes of it. Re-allocating within
     // the same quote does not, and is deal work.
+    // OTHER belongs here too. It takes the share out of the pool permanently
+    // under a free-text reason — the schema calls it "an approved treatment",
+    // and nothing was checking for an approval.
     const needsApproval =
-      args.treatment === "REFUND_TO_CUSTOMER" || args.treatment === "FORFEITED";
+      args.treatment === "REFUND_TO_CUSTOMER" ||
+      args.treatment === "FORFEITED" ||
+      args.treatment === "OTHER";
     const { user } = await requireTenantAuth(
       ctx,
       args.orgId,

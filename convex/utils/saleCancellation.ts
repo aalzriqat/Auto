@@ -392,9 +392,16 @@ async function reinstateAppliedDeposits(
       // Multi-vehicle: the slice comes off its sale and waits for a decision.
       // It is NOT silently returned to the pool — the customer put that money
       // against this specific car, and moving it is their call.
+      //
+      // REVERSING while the reversing journal is only queued. A slice whose
+      // original entry is still POSTED is not money anybody may decide about:
+      // refunding it then pays the customer an amount the ledger still shows
+      // credited against their invoice.
       await ctx.db.patch(application.holdId, {
         active: false,
-        allocationStatus: "RELEASED_AWAITING_DECISION",
+        allocationStatus: application.journalReversed
+          ? "RELEASED_AWAITING_DECISION"
+          : "REVERSING",
         appliedSaleId: undefined,
         releaseReason: args.reason,
         resolvedAt: undefined,

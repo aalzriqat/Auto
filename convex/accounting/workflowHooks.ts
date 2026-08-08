@@ -166,6 +166,23 @@ async function postDomainEvent(
 }
 
 /**
+ * What actually became of a reversal.
+ *
+ *  - REVERSED — the reversing journal is posted. The money is back.
+ *  - DEFERRED — no period was open, so the reversal is queued. The original
+ *    entry is STILL POSTED until the outbox drains, and anything that treats
+ *    the amount as recovered before then is spending money the ledger still
+ *    shows as spent.
+ *  - NOT_POSTED — there was nothing to reverse (the forward entry never posted,
+ *    and any queued copy of it has been cancelled).
+ *
+ * Returned rather than swallowed because the caller has to tell DEFERRED from
+ * REVERSED. Collapsing the two is what let a slice be refunded in cash while
+ * its original application was still live in the general ledger.
+ */
+export type ReversalOutcome = "REVERSED" | "DEFERRED" | "NOT_POSTED";
+
+/**
  * Generic "undo this posted event, or drop it if it never posted" used when
  * voiding an upstream operation (a cancelled sale, a voided finance deal, a
  * deposit recorded in error). Reverses the posted journal inside an open
@@ -197,7 +214,7 @@ async function reverseEventIfPosted(
      */
     eventVersion?: number;
   }
-): Promise<void> {
+): Promise<ReversalOutcome> {
   const originalEvent =
     args.eventVersion === undefined
       ? await ctx.db
@@ -235,25 +252,26 @@ async function reverseEventIfPosted(
         actorId: args.actorId,
         idempotencyKey: args.reversalIdempotencyKey,
       });
-    } else {
-      // No open period — defer the reversal to the outbox instead of skipping it.
-      await enqueuePendingReversal(ctx, {
-        orgId: args.orgId,
-        originalEventId: originalEvent._id,
-        reversalDate: args.reversalDate,
-        reason: args.reason,
-        actorId: args.actorId,
-        idempotencyKey: args.reversalIdempotencyKey,
-        sourceType: args.sourceType,
-        sourceId: args.sourceId,
-      });
+      return "REVERSED";
     }
-    return;
+    // No open period — defer the reversal to the outbox instead of skipping it.
+    await enqueuePendingReversal(ctx, {
+      orgId: args.orgId,
+      originalEventId: originalEvent._id,
+      reversalDate: args.reversalDate,
+      reason: args.reason,
+      actorId: args.actorId,
+      idempotencyKey: args.reversalIdempotencyKey,
+      sourceType: args.sourceType,
+      sourceId: args.sourceId,
+    });
+    return "DEFERRED";
   }
 
   // No posted GL entry. If it's still sitting unposted in the outbox, cancel
   // it so it never posts (net GL effect of the round trip is zero).
   await cancelPendingPostByKey(ctx, args.orgId, args.pendingPostIdempotencyKey);
+  return "NOT_POSTED";
 }
 
 export async function hookDepositReceived(
@@ -367,8 +385,8 @@ export async function reverseDepositApplication(
     actorId: Id<"users">;
     reversalDate: number;
   }
-): Promise<void> {
-  await reverseEventIfPosted(ctx, {
+): Promise<ReversalOutcome> {
+  return await reverseEventIfPosted(ctx, {
     orgId: args.orgId,
     sourceType: args.identity.sourceType,
     sourceId: args.identity.sourceId,
@@ -534,6 +552,15 @@ type DepositResolutionHookArgs = {
    * move no money at all.
    */
   sliceHoldId?: Id<"depositVehicleHolds">;
+  /**
+   * Which release of this row it is. Defaults to 1.
+   *
+   * A quote-scoped deposit can be released more than once — the free part now,
+   * the rest when the cars it was held against fall away. Keyed on the row
+   * alone, every release after the first returned "already posted" and moved
+   * cash with no journal behind it.
+   */
+  releaseSeq?: number;
 };
 
 /** Refund and forfeiture post identical event shapes — only the event type (and thus the posting rule) differs. */
@@ -544,9 +571,14 @@ function makeDepositResolutionHook(eventType: "DEPOSIT_REFUNDED" | "DEPOSIT_FORF
       eventType,
       sourceType: args.sliceHoldId ? "depositVehicleHolds" : "deposits",
       sourceId: (args.sliceHoldId ?? args.depositId).toString(),
+      // The first release of a row keeps the original key, so nothing already
+      // posted in production changes identity.
       idempotencyKey: args.sliceHoldId
         ? `${keyPrefix}_slice_${args.sliceHoldId}`
-        : `${keyPrefix}_${args.depositId}`,
+        : `${keyPrefix}_${args.depositId}${
+            args.releaseSeq && args.releaseSeq > 1 ? `_${args.releaseSeq}` : ""
+          }`,
+      eventVersion: args.sliceHoldId ? 1 : (args.releaseSeq ?? 1),
       currency: args.currency,
       occurredAt: args.occurredAt,
       actorId: args.actorId,

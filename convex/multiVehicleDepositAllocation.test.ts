@@ -25,7 +25,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 
 vi.mock("./rateLimit", () => ({
@@ -41,6 +41,7 @@ const PERMS = [
   "view:customers", "create:customers",
   "approve:requests",
   "manage:finance", "view:finance", "view:expenses", "view:reports",
+  "reopen:accounting_periods",
 ];
 
 const PRICE_A = 3_000;
@@ -1238,5 +1239,354 @@ describe("instalments through the whole lifecycle", () => {
     const view = await expectConservation(s);
     expect(view.appliedMinor).toBe(2_000 * SCALE);
     expect(view.releasedAwaitingDecisionMinor).toBe(3_000 * SCALE);
+  });
+});
+
+// ─── Releasing the row itself ────────────────────────────────────────────────
+//
+// A `deposits` row is no longer all-or-nothing: part of it can be paid back
+// while the rest is still committed to a car. Everything that used to be safe
+// because the row flipped out of HELD on the first release has to be checked
+// again.
+
+const depositRowId = (s: Seed) =>
+  s.t.run(async (ctx) =>
+    (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)!._id
+  );
+
+const cashOut = (s: Seed) =>
+  s.t.run(async (ctx) =>
+    (await ctx.db.query("transactions").collect())
+      .filter((tx) => tx.orgId === s.orgId && tx.type === "OUT" && tx.category === "DEPOSIT")
+      .map((tx) => tx.amount)
+  );
+
+const postedRefunds = (s: Seed) =>
+  s.t.run(async (ctx) =>
+    (await ctx.db.query("accountingEvents").collect())
+      .filter(
+        (e) =>
+          e.orgId === s.orgId && e.eventType === "DEPOSIT_REFUNDED" && e.status === "POSTED"
+      )
+      .map((e) => (e.payload as { amountMinor: number }).amountMinor)
+  );
+
+const outPayments = (s: Seed) =>
+  s.t.run(async (ctx) =>
+    (await ctx.db.query("canonicalPayments").collect()).filter(
+      (p) => p.orgId === s.orgId && p.direction === "OUT"
+    )
+  );
+
+const release = (
+  s: Seed,
+  depositId: Id<"deposits">,
+  resolution: "REFUNDED" | "FORFEITED" = "REFUNDED"
+) =>
+  s.asManager.mutation(api.deposits.release, {
+    orgId: s.orgId,
+    depositId,
+    resolution,
+    ...(resolution === "REFUNDED" ? { refundMethod: "CASH" as const } : {}),
+  });
+
+describe("releasing a deposit row more than once", () => {
+  test("every payout has its own journal and its own payment", async () => {
+    // Both keys used to be per-row and the event version was always 1, so the
+    // second release found "already posted", moved 3,000 JOD of real cash, and
+    // wrote no ledger entry at all — while its collectionPayments row pointed
+    // at the FIRST release's canonical payment.
+    const s = await seed("releaseTwice");
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 3_000 },
+      { vehicleId: s.vehicleB!, amount: 1_000 },
+    ]);
+    const depositId = await depositRowId(s);
+
+    await release(s, depositId); // the free 1,000
+    await s.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      vehicleId: s.vehicleA,
+    });
+    // A's 3,000 is now awaiting its own decision, so the row has nothing free.
+    await expect(release(s, depositId)).rejects.toThrow(/nothing left of this deposit/i);
+
+    const cash = await cashOut(s);
+    const journals = await postedRefunds(s);
+    expect(cash).toEqual([1_000]);
+    expect(journals).toEqual([1_000 * SCALE]);
+    await expectConservation(s);
+  });
+
+  test("two genuine releases both post, and the cash matches the ledger", async () => {
+    const s = await seed("releaseTwiceReal");
+    await payDeposit(s);
+    await allocate(s, [{ vehicleId: s.vehicleA, amount: 3_000 }]);
+    const depositId = await depositRowId(s);
+
+    await release(s, depositId); // the free 2,000
+    // A leaves the deal and its share is decided separately; then what is left
+    // of the row is genuinely free again.
+    await s.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      vehicleId: s.vehicleA,
+    });
+    const [holdA] = await holdsFor(s, s.vehicleA);
+    await s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
+      orgId: s.orgId,
+      holdId: holdA!._id,
+      treatment: "REFUND_TO_CUSTOMER" as const,
+      refundMethod: "CASH" as const,
+    });
+
+    const cash = await cashOut(s);
+    const journals = await postedRefunds(s);
+    expect(cash.reduce((a, b) => a + b, 0)).toBe(5_000);
+    expect(journals.reduce((a, b) => a + b, 0)).toBe(5_000 * SCALE);
+    // One payment per payout, not one shared between them.
+    expect((await outPayments(s))).toHaveLength(2);
+    await expectConservation(s);
+  });
+
+  test("a refund and a forfeiture on one row are not reported as the same thing", async () => {
+    // `status` records only whichever release happened last, so reading the
+    // treatment off it made a 2,000 refund followed by a 1,000 forfeiture
+    // report all 3,000 as forfeited.
+    const s = await seed("refundThenForfeit");
+    await payDeposit(s);
+    await allocate(s, [{ vehicleId: s.vehicleA, amount: 3_000 }]);
+    const depositId = await depositRowId(s);
+
+    await release(s, depositId); // refunds the free 2,000
+    await s.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      vehicleId: s.vehicleA,
+    });
+    const [holdA] = await holdsFor(s, s.vehicleA);
+    await s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
+      orgId: s.orgId,
+      holdId: holdA!._id,
+      treatment: "FORFEITED" as const,
+      reason: "Customer walked away",
+    });
+
+    const view = await expectConservation(s);
+    expect(view.refundedMinor).toBe(2_000 * SCALE);
+    expect(view.forfeitedMinor).toBe(3_000 * SCALE);
+  });
+
+  test("a share awaiting its own decision is not swept up by a row release", async () => {
+    const s = await seed("awaitingNotSwept");
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 3_000 },
+      { vehicleId: s.vehicleB!, amount: 2_000 },
+    ]);
+    await s.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      vehicleId: s.vehicleA,
+    });
+
+    await expect(release(s, await depositRowId(s))).rejects.toThrow(
+      /awaiting its own decision/i
+    );
+    const [holdA] = await holdsFor(s, s.vehicleA);
+    expect(holdA!.allocationStatus).toBe("RELEASED_AWAITING_DECISION");
+    expect(await cashOut(s)).toEqual([]);
+  });
+
+  test("a partly refunded deposit lets the customer put the money down again", async () => {
+    const s = await seed("reDeposit");
+    await payDeposit(s);
+    await allocate(s, [{ vehicleId: s.vehicleA, amount: 3_000 }]);
+    await release(s, await depositRowId(s)); // refunds the free 2,000
+
+    await expect(payDeposit(s, 2_000)).resolves.toBeUndefined();
+    await expectConservation(s);
+  });
+});
+
+describe("voiding a deposit that has already moved money", () => {
+  test("is refused after part of it was refunded", async () => {
+    // Voiding says the payment was recorded in error and reverses the receipt.
+    // After a refund that leaves the books showing cash out against a receipt
+    // that never came in — and soft-deletes the row out of every allocation
+    // view while another car's share still points at it.
+    const s = await seed("voidAfterRefund");
+    await payDeposit(s);
+    await allocate(s, [{ vehicleId: s.vehicleB!, amount: 2_000 }]);
+    const depositId = await depositRowId(s);
+    await release(s, depositId); // refunds the free 3,000
+
+    await expect(
+      s.asManager.mutation(api.deposits.voidDeposit, { orgId: s.orgId, depositId })
+    ).rejects.toThrow(/already been refunded or forfeited/i);
+
+    const deposit = await s.t.run((ctx) => ctx.db.get(depositId));
+    expect(deposit!.isDeleted).not.toBe(true);
+  });
+
+  test("is refused while a completed sale still holds part of it", async () => {
+    const s = await seed("voidAfterApply");
+    await payDeposit(s);
+    await allocate(s, [{ vehicleId: s.vehicleA, amount: 3_000 }]);
+    await sell(s, s.vehicleA, PRICE_A);
+    const depositId = await depositRowId(s);
+
+    await expect(
+      s.asManager.mutation(api.deposits.voidDeposit, { orgId: s.orgId, depositId })
+    ).rejects.toThrow(/applied to a completed sale/i);
+  });
+});
+
+/** Closing needs every current warning acknowledged, exactly as the UI does. */
+async function closePeriod(s: Seed, periodId: Id<"accountingPeriods">) {
+  const checklist = await s.asUser.query(api.accountingPeriods.closeChecklist, {
+    orgId: s.orgId,
+    periodId,
+  });
+  await s.asUser.mutation(api.accountingPeriods.close, {
+    orgId: s.orgId,
+    periodId,
+    acknowledgedWarnings: checklist.warnings,
+  });
+}
+
+describe("a reversal that has to wait for an accounting period", () => {
+  test("leaves the share unspendable until the journal is actually reversed", async () => {
+    // The state exists precisely for this. With the period closed the reversing
+    // entry is only queued and the original DEPOSIT_APPLIED is still POSTED, so
+    // paying the share out now pays the customer money the ledger still shows
+    // credited against their invoice.
+    const s = await seed("deferredReversal");
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 3_000 },
+      { vehicleId: s.vehicleB!, amount: 2_000 },
+    ]);
+    const saleA = await sell(s, s.vehicleA, PRICE_A);
+
+    const period = (await s.asUser.query(api.accountingPeriods.list, { orgId: s.orgId }))[0];
+    await closePeriod(s, period._id);
+
+    await cancel(s, saleA);
+
+    const [holdA] = await holdsFor(s, s.vehicleA);
+    expect(holdA!.allocationStatus).toBe("REVERSING");
+    const application = await s.t.run(async (ctx) =>
+      (await ctx.db.query("depositApplications").collect()).find(
+        (a) => a.orgId === s.orgId && a.vehicleId === s.vehicleA
+      )
+    );
+    expect(application!.status).toBe("REVERSING");
+    // Still POSTED — the money has not come back yet.
+    const applied = await depositApplicationEvents(s);
+    expect(applied.find((e) => e.vehicleId === s.vehicleA)!.status).toBe("POSTED");
+
+    await expect(
+      s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
+        orgId: s.orgId,
+        holdId: holdA!._id,
+        treatment: "REFUND_TO_CUSTOMER" as const,
+        refundMethod: "CASH" as const,
+      })
+    ).rejects.toThrow(/still being backed out/i);
+    expect(await cashOut(s)).toEqual([]);
+  });
+
+  test("finishes when the outbox drains, and only then", async () => {
+    const s = await seed("deferredDrain");
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 3_000 },
+      { vehicleId: s.vehicleB!, amount: 2_000 },
+    ]);
+    const saleA = await sell(s, s.vehicleA, PRICE_A);
+    const period = (await s.asUser.query(api.accountingPeriods.list, { orgId: s.orgId }))[0];
+    await closePeriod(s, period._id);
+    await cancel(s, saleA);
+
+    await s.asUser.mutation(api.accountingPeriods.reopen, {
+      orgId: s.orgId,
+      periodId: period._id,
+      reason: "Backdated cancellation needs its reversal posted",
+    });
+    await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, {
+      orgId: s.orgId,
+    });
+
+    const application = await s.t.run(async (ctx) =>
+      (await ctx.db.query("depositApplications").collect()).find(
+        (a) => a.orgId === s.orgId && a.vehicleId === s.vehicleA
+      )
+    );
+    expect(application!.status).toBe("REVERSED");
+    const [holdA] = await holdsFor(s, s.vehicleA);
+    expect(holdA!.allocationStatus).toBe("RELEASED_AWAITING_DECISION");
+    expect(
+      (await depositApplicationEvents(s)).find((e) => e.vehicleId === s.vehicleA)!.status
+    ).toBe("REVERSED");
+
+    // And now the decision is allowed.
+    await expect(
+      s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
+        orgId: s.orgId,
+        holdId: holdA!._id,
+        treatment: "REFUND_TO_CUSTOMER" as const,
+        refundMethod: "CASH" as const,
+      })
+    ).resolves.toBeDefined();
+    expect(await cashOut(s)).toEqual([3_000]);
+  });
+});
+
+describe("finalizing a share under an approved 'other' treatment", () => {
+  test("carries the same approval bar as a refund", async () => {
+    // OTHER takes the money out of the pool for good under a free-text reason.
+    // It was available to any salesperson.
+    const s = await seed("otherApproval");
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 3_000 },
+      { vehicleId: s.vehicleB!, amount: 2_000 },
+    ]);
+    await s.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      vehicleId: s.vehicleA,
+    });
+    const [holdA] = await holdsFor(s, s.vehicleA);
+
+    const salesOnly = await s.t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", {
+        clerkId: "otherApproval_s",
+        email: "otherApproval_s@e.com",
+        name: "Sales Only",
+      });
+      const roleId = await ctx.db.insert("roles", {
+        orgId: s.orgId,
+        name: "SalesOnly",
+        permissions: ["view:sales"],
+      });
+      await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
+      return userId;
+    });
+    void salesOnly;
+
+    await expect(
+      s.t
+        .withIdentity({ subject: "otherApproval_s", clerkId: "otherApproval_s" })
+        .mutation(api.deposits.resolveReleasedAllocation, {
+          orgId: s.orgId,
+          holdId: holdA!._id,
+          treatment: "OTHER" as const,
+          reason: "Transferred to another deal by agreement",
+        })
+    ).rejects.toThrow();
   });
 });

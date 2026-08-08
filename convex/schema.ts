@@ -2513,6 +2513,21 @@ export default defineSchema({
      * face value paid out amounts that had already come off an invoice.
      */
     releasedAmountMinor: v.optional(v.number()),
+    /**
+     * The refunded and forfeited parts of `releasedAmountMinor`, kept apart.
+     *
+     * `status` cannot tell them apart once a row can be released more than
+     * once: it records only the last thing that happened, so a 3,000 cash
+     * refund followed by a 2,000 forfeiture reported all 5,000 as forfeited.
+     */
+    refundedAmountMinor: v.optional(v.number()),
+    forfeitedAmountMinor: v.optional(v.number()),
+    /**
+     * How many times this row has been released. Drives the accounting identity
+     * of each release: keyed on the row alone, every release after the first
+     * returned "already posted" and moved cash with no journal behind it.
+     */
+    releaseCount: v.optional(v.number()),
     canonicalPaymentId: v.optional(v.id("canonicalPayments")),
     idempotencyKey: v.optional(v.string()),
     notes: v.optional(v.string()),
@@ -2730,6 +2745,7 @@ export default defineSchema({
     .index("by_deposit", ["depositId"])
     .index("by_quote", ["quoteId"])
     .index("by_hold", ["holdId"])
+    .index("by_org_event_key", ["orgId", "eventIdempotencyKey"])
     .index("by_org_customer", ["orgId", "customerId"]),
 
   // Receipt voucher (سند قبض) auto-generated as proof of payment whenever a

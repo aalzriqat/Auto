@@ -221,8 +221,19 @@ export async function quoteDepositAllocation(
       committedMinor += application.amountMinor;
     }
     if (deposit.releasedAmountMinor !== undefined && deposit.releasedAmountMinor > 0) {
-      if (deposit.status === "FORFEITED") rowLevelForfeitedMinor += deposit.releasedAmountMinor;
-      else rowLevelRefundedMinor += deposit.releasedAmountMinor;
+      // From the recorded split, never from `status`. A row can be released
+      // more than once, and its status records only whichever release was last
+      // — so a 3,000 refund followed by a 2,000 forfeiture reported all 5,000
+      // as forfeited.
+      const forfeited = deposit.forfeitedAmountMinor ?? 0;
+      const refunded =
+        deposit.refundedAmountMinor ??
+        (deposit.status === "FORFEITED" && forfeited === 0
+          ? 0
+          : deposit.releasedAmountMinor - forfeited);
+      rowLevelForfeitedMinor +=
+        forfeited || (deposit.status === "FORFEITED" ? deposit.releasedAmountMinor : 0);
+      rowLevelRefundedMinor += Math.max(0, refunded);
       committedMinor += deposit.releasedAmountMinor;
     }
 

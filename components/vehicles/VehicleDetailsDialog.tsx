@@ -227,6 +227,9 @@ export function VehicleDetailsDialog({
         depositId,
         resolution,
         refundMethod: resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : undefined,
+        // A double submit is a second real payout: a row can now be released
+        // more than once, so nothing upstream would collapse the two.
+        idempotencyKey: `deposit_release_${depositId}_${resolution}`,
       });
       toast.success(
         resolution === "REFUNDED"
@@ -494,6 +497,15 @@ export function VehicleDetailsDialog({
                                 {deposit.status}
                               </span>
                             </p>
+                            {/* What has already been handed back. A row can be
+                                released in part and stay HELD, so its face
+                                value alone would tell an operator they are
+                                about to refund money that has already gone. */}
+                            {(deposit.releasedAmountMinor ?? 0) > 0 && (
+                              <p className="text-xs font-medium text-amber-700 dark:text-amber-500 mt-0.5">
+                                {t("DepositAlreadyReleased" as any)}
+                              </p>
+                            )}
                             {deposit.notes && <p className="text-xs text-muted-foreground mt-0.5 italic">"{deposit.notes}"</p>}
                           </div>
                           {deposit.status === "HELD" && !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_REQUESTS) && (
