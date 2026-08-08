@@ -157,10 +157,18 @@ describe("formatMessageStampTitle", () => {
     expect(title).toContain("August");
   });
 
-  it("defaults the locale, the only path production uses", () => {
+  it("works on the default-locale path, the only one production uses", () => {
+    // Asserts observable properties rather than re-implementing the body:
+    // MessageBubble passes no locale, so this call must not throw (dateStyle +
+    // timeStyle are illegal alongside individual component options) and must
+    // still carry a full date rather than a bare time.
     const ts = at(2026, 7, 8, 14, 32);
-    expect(formatMessageStampTitle(ts)).toBe(
-      new Date(ts).toLocaleString([], { dateStyle: "full", timeStyle: "short" })
+    const title = formatMessageStampTitle(ts);
+
+    expect(() => formatMessageStampTitle(ts)).not.toThrow();
+    expect(title).toContain("2026");
+    expect(title.length).toBeGreaterThan(
+      new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }).length
     );
   });
 });

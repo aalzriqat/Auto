@@ -100,6 +100,19 @@ describe("MessageBubble stamp", () => {
     expect(ltr.textContent).not.toContain(YESTERDAY_LABEL);
   });
 
+  it("gives the stamp a tooltip that says more than the stamp itself", () => {
+    // The defect this guards: the tooltip previously re-rendered the exact
+    // string already visible beneath it, so it resolved nothing. A bare
+    // "02:32 PM" must resolve to a full date on hover.
+    const { container } = renderBubble(Date.now());
+    const titled = container.querySelector("[title]") as HTMLElement;
+    expect(titled).toBeTruthy();
+
+    const title = titled.getAttribute("title") ?? "";
+    expect(title).not.toBe(titled.textContent?.trim());
+    expect(title).toContain(String(new Date().getFullYear()));
+  });
+
   it("uses a single isolated run for a same-day message", () => {
     const { container } = renderBubble(Date.now());
     const ltr = container.querySelector('[dir="ltr"]') as HTMLElement;

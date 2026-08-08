@@ -245,9 +245,10 @@ describe("FloatingChatWindow scroll contract", () => {
   });
 
   it("jumps, not glides, when re-expanded from minimized", () => {
-    // The whole reason the hook takes `enabled`. The body unmounts while
-    // minimized, so the re-expanded pane starts at scroll-top 0; without
-    // clearing the initial-scroll flag it animates the entire thread.
+    // The body unmounts while minimized, so the re-expanded pane starts at
+    // scroll-top 0; without clearing the initial-scroll flag it animates the
+    // entire thread. Note this is carried by the `!pane` branch, not `enabled`
+    // — the callback ref fires with null when the body unmounts.
     const { rerender } = renderWindow();
 
     minimizedChats = [CONVERSATION_ID as unknown as string];

@@ -11,7 +11,12 @@ interface Options {
    * to the bottom, making "Load older" a closed loop.
    */
   newestMessageId: string | undefined;
-  /** False while the thread is hidden (e.g. a minimized floating window). */
+  /**
+   * False while the thread is hidden (e.g. a minimized floating window).
+   * Belt-and-braces: unmounting the pane already resets state via the `!pane`
+   * branch below, so this only avoids one no-op scroll against a detached node
+   * during the hiding commit.
+   */
   enabled?: boolean;
 }
 
