@@ -135,36 +135,45 @@ export function DepositSettlementDecision({
           )}
 
           {value && (
-            /* The consequence, in the same directional idiom the supplier
-               settlement panel uses — so the deposit reads as part of one
-               settlement story rather than a separate calculation. */
-            <div className="flex items-center gap-2 rounded-md bg-muted/50 px-3 py-2.5 text-sm">
-              <span className="font-medium">
-                {directToSupplier ? supplier : t("TheDealership" as any)}
+            /* Stated as a change, not as a standing figure.
+             *
+             * The supplier-settlement panel sits directly below this one and
+             * shows the SAME parties owing the GROSS — 3,000 where this shows
+             * 2,000. Rendered in that panel's `party → party  amount` idiom the
+             * two read as a contradiction, and a salesperson scanning down the
+             * screen has no way to tell which is the real number. Both are: one
+             * before the عربون, one after. So this says exactly that, and
+             * borrows nothing that could be mistaken for the other. */
+            <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-md bg-muted/50 px-3 py-2.5 text-sm">
+              <span>
+                {directToSupplier
+                  ? t("DepositSettlementSupplierOwes" as any).replace("{supplier}", supplier)
+                  : t("DepositSettlementCustomerOwes" as any)}
               </span>
-              <ArrowRight
-                className={cn("h-4 w-4 shrink-0 text-muted-foreground", isRtl && "rotate-180")}
-                aria-hidden
-              />
-              <span className="font-medium">
-                {directToSupplier ? t("TheDealership" as any) : supplier}
-              </span>
-              <span className="ms-auto tabular-nums font-semibold">
-                {money(
-                  directToSupplier
-                    ? deposit.supplierReceivableAfter
-                    : deposit.customerReceivableAfter
-                )}
+              <span className="flex items-baseline gap-2 tabular-nums">
+                <span className="text-muted-foreground">
+                  {money(
+                    directToSupplier
+                      ? preview.supplierReceivable
+                      : preview.customerVehicleReceivable
+                  )}
+                </span>
+                <ArrowRight
+                  className={cn(
+                    "h-3.5 w-3.5 shrink-0 self-center text-muted-foreground",
+                    isRtl && "rotate-180"
+                  )}
+                  aria-hidden
+                />
+                <span className="text-base font-semibold">
+                  {money(
+                    directToSupplier
+                      ? deposit.supplierReceivableAfter
+                      : deposit.customerReceivableAfter
+                  )}
+                </span>
               </span>
             </div>
-          )}
-
-          {value && (
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              {directToSupplier
-                ? t("DepositSettlementSupplierOwes" as any).replace("{supplier}", supplier)
-                : t("DepositSettlementCustomerOwes" as any)}
-            </p>
           )}
         </>
       )}
