@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import type { FormState, PublicVehicle, SiteStrings, ThemeProps } from "./theme-props";
 import { TurnstileWidget } from "../turnstile-widget";
+import { safeImageSrc } from "@/lib/imageUrl";
 
 type ShowcaseDesignId =
   | "obsidian"
@@ -805,7 +806,7 @@ function ShowcaseHeader({
       <div className="wf-shell wf-nav-inner">
         <Link href="/" className="wf-brand">
           {profile.logoUrl ? (
-            <img className="wf-logo" src={profile.logoUrl} alt={profile.dealershipName} />
+            <img className="wf-logo" src={safeImageSrc(profile.logoUrl)} alt={profile.dealershipName} />
           ) : (
             <span className="wf-brand-mark">
               <Car size={18} />
@@ -2530,7 +2531,7 @@ function ShowcaseFooter({
 
 function HeroImage({ vehicle, copy }: { vehicle: PublicVehicle | null; copy: ShowcaseCopy }) {
   if (vehicle?.imageUrls[0]) {
-    return <img src={vehicle.imageUrls[0]} alt={vehicleName(vehicle)} className="wf-hero-image" />;
+    return <img src={safeImageSrc(vehicle.imageUrls[0])} alt={vehicleName(vehicle)} className="wf-hero-image" />;
   }
   return (
     <div className="wf-image-fallback">
@@ -2542,7 +2543,7 @@ function HeroImage({ vehicle, copy }: { vehicle: PublicVehicle | null; copy: Sho
 
 function VehicleImage({ vehicle, copy }: { vehicle: PublicVehicle; copy: ShowcaseCopy }) {
   if (vehicle.imageUrls[0]) {
-    return <img src={vehicle.imageUrls[0]} alt={vehicleName(vehicle)} />;
+    return <img src={safeImageSrc(vehicle.imageUrls[0])} alt={vehicleName(vehicle)} />;
   }
   return (
     <div className="wf-image-fallback">

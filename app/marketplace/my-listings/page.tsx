@@ -26,6 +26,7 @@ import {
   type Translations,
 } from "../marketplaceShell";
 import { getErrorMessage } from "@/lib/errors";
+import { safeImageSrc } from "@/lib/imageUrl";
 
 // getMyListings returns each raw listing doc plus a resolved thumbnailUrl
 // (first image only) that doesn't exist on the underlying schema doc.
@@ -310,7 +311,7 @@ function ListingCard({ listing, lang, t }: { readonly listing: ListingDoc; reado
             <>
               {/* eslint-disable-next-line @next/next/no-img-element -- Convex-hosted storage URL, not a static/local asset next/image can optimize */}
               <img
-                src={listing.thumbnailUrl}
+                src={safeImageSrc(listing.thumbnailUrl)}
                 alt={`${listing.make} ${listing.model}`}
                 className="absolute inset-0 h-full w-full object-cover"
               />

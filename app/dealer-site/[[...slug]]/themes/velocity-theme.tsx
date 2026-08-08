@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowRight, Car, CheckCircle2, Globe2, Mail, MapPin, Menu, Phone, ShieldCheck, X, Zap } from "lucide-react";
 import type { ThemeProps, PublicVehicle, FormState, SiteStrings } from "./theme-props";
 import { TurnstileWidget } from "../turnstile-widget";
+import { safeImageSrc } from "@/lib/imageUrl";
 
 export function VelocityTheme(props: ThemeProps) {
   const {
@@ -65,7 +66,7 @@ export function VelocityTheme(props: ThemeProps) {
         <div style={{ maxWidth: 1280, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "0 24px", height: 68 }}>
           <Link href="/" style={{ display: "flex", alignItems: "center", gap: 12, textDecoration: "none" }}>
             {profile.logoUrl ? (
-              <img src={profile.logoUrl} alt={profile.dealershipName} style={{ height: 38, width: "auto", maxWidth: 150, objectFit: "contain" }} />
+              <img src={safeImageSrc(profile.logoUrl)} alt={profile.dealershipName} style={{ height: 38, width: "auto", maxWidth: 150, objectFit: "contain" }} />
             ) : (
               <>
                 <div style={{ width: 38, height: 38, background: primary, borderRadius: 8, display: "grid", placeItems: "center" }}>
@@ -140,7 +141,7 @@ export function VelocityTheme(props: ThemeProps) {
               </div>
               <div className="vl-hero-panel" style={{ overflow: "hidden", minHeight: 360, background: "#e2e8f0", position: "relative" }}>
                 {featuredVehicles[0]?.imageUrls[0] ? (
-                  <img src={featuredVehicles[0].imageUrls[0]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", position: "absolute", inset: 0 }} />
+                  <img src={safeImageSrc(featuredVehicles[0].imageUrls[0])} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", position: "absolute", inset: 0 }} />
                 ) : (
                   <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: "#cbd5e1" }}>
                     <Car size={64} />
@@ -217,7 +218,7 @@ export function VelocityTheme(props: ThemeProps) {
           <div style={{ display: "grid", gap: 48, gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" }}>
             <div style={{ borderRadius: 12, overflow: "hidden", background: "#f1f5f9", aspectRatio: "4/3" }}>
               {detailVehicle.imageUrls[0] ? (
-                <img src={detailVehicle.imageUrls[0]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                <img src={safeImageSrc(detailVehicle.imageUrls[0])} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
               ) : (
                 <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", color: "#cbd5e1" }}>
                   <Car size={48} />
@@ -374,7 +375,7 @@ export function VelocityTheme(props: ThemeProps) {
           <div style={{ display: "flex", flexWrap: "wrap", gap: 40, justifyContent: "space-between", marginBottom: 36 }}>
             <div>
               {profile.logoUrl ? (
-                <img src={profile.logoUrl} alt={profile.dealershipName} style={{ height: 30, width: "auto", objectFit: "contain", opacity: 0.7, marginBottom: 8 }} />
+                <img src={safeImageSrc(profile.logoUrl)} alt={profile.dealershipName} style={{ height: 30, width: "auto", objectFit: "contain", opacity: 0.7, marginBottom: 8 }} />
               ) : (
                 <p style={{ fontSize: 15, fontWeight: 700, color: "#f1f5f9", marginBottom: 6 }}>{profile.dealershipName}</p>
               )}
@@ -425,7 +426,7 @@ function VelocityVehicleGrid({ vehicles, primary, secondary, formatPrice, noVehi
         <a key={v.id} href={`/inventory/${v.slug}`} className="vl-card">
           <div style={{ aspectRatio: "16/10", overflow: "hidden", background: "#f1f5f9", position: "relative" }}>
             {v.imageUrls[0] ? (
-              <img src={v.imageUrls[0]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", transition: "transform 0.4s ease", display: "block" }}
+              <img src={safeImageSrc(v.imageUrls[0])} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", transition: "transform 0.4s ease", display: "block" }}
                 onMouseEnter={e => (e.currentTarget.style.transform = "scale(1.04)")}
                 onMouseLeave={e => (e.currentTarget.style.transform = "scale(1)")}
               />

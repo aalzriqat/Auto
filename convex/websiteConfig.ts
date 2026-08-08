@@ -166,3 +166,38 @@ export function validateCustomDomain(domain: string): { ok: true; domain: string
   }
   return { ok: true, domain: normalizedDomain };
 }
+
+/**
+ * Rejects a stored image URL whose scheme could turn a public page into an
+ * attacker-controlled request.
+ *
+ * Almost every image URL in AutoFlow is produced by `ctx.storage.getUrl()` and
+ * is therefore safe by construction. `websiteSettings.logoUrl` is the exception:
+ * it is a caller-supplied string, `websiteProjection` prefers it over the
+ * storage-derived logo, and `websites.resolveDomain` serves it to anonymous
+ * visitors of the published dealer site. A stored URL pointing at an attacker
+ * host would make every visitor to that site leak IP/User-Agent/Referer to it.
+ *
+ * Mirrors the allowlist in `lib/imageUrl.ts` (`safeImageSrc`) deliberately: the
+ * client guard stops a bad value rendering, this one stops it being stored at
+ * all. `blob:` is intentionally NOT accepted here -- a blob URL is meaningful
+ * only inside the browser tab that minted it and can never be a valid persisted
+ * value.
+ */
+export function validateStoredImageUrl(
+  url: string
+): { ok: true; url: string } | { ok: false; error: string } {
+  // Browsers ignore ASCII whitespace and C0 control characters when parsing a
+  // URL, so the scheme has to be inspected after stripping them: otherwise
+  // "java\tscript:alert(1)" is stored and later parses as javascript:.
+  const normalized = url.replace(/[\u0000-\u0020\u007f]/g, "");
+  if (!normalized) return { ok: false, error: "Image URL cannot be empty." };
+  if (normalized.startsWith("/")) return { ok: true, url: url.trim() };
+
+  const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(normalized)?.[1]?.toLowerCase();
+  if (!scheme) return { ok: false, error: "Image URL must be absolute or start with '/'." };
+  if (scheme !== "http" && scheme !== "https") {
+    return { ok: false, error: "Image URL must use http or https." };
+  }
+  return { ok: true, url: url.trim() };
+}

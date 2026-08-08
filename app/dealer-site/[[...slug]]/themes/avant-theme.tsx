@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowRight, Car, CheckCircle2, Globe2, Mail, MapPin, Menu, Phone, ShieldCheck, X } from "lucide-react";
 import type { ThemeProps, PublicVehicle, FormState, SiteStrings } from "./theme-props";
 import { TurnstileWidget } from "../turnstile-widget";
+import { safeImageSrc } from "@/lib/imageUrl";
 
 export function AvantTheme(props: ThemeProps) {
   const {
@@ -68,7 +69,7 @@ export function AvantTheme(props: ThemeProps) {
         <div style={{ maxWidth: 1280, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "0 24px", height: 64 }}>
           <Link href="/" style={{ display: "flex", alignItems: "center", gap: 12, textDecoration: "none" }}>
             {profile.logoUrl ? (
-              <img src={profile.logoUrl} alt={profile.dealershipName} style={{ height: 36, width: "auto", maxWidth: 140, objectFit: "contain", filter: "brightness(0) invert(1)" }} />
+              <img src={safeImageSrc(profile.logoUrl)} alt={profile.dealershipName} style={{ height: 36, width: "auto", maxWidth: 140, objectFit: "contain", filter: "brightness(0) invert(1)" }} />
             ) : (
               <>
                 <div style={{ width: 36, height: 36, background: "rgba(255,255,255,0.2)", borderRadius: 8, display: "grid", placeItems: "center" }}>
@@ -143,7 +144,7 @@ export function AvantTheme(props: ThemeProps) {
               <div style={{ position: "relative" }}>
                 {featuredVehicles[0]?.imageUrls[0] ? (
                   <img
-                    src={featuredVehicles[0].imageUrls[0]}
+                    src={safeImageSrc(featuredVehicles[0].imageUrls[0])}
                     alt=""
                     className="av-float"
                     style={{ width: "100%", maxHeight: 360, objectFit: "cover", borderRadius: 20, boxShadow: "0 24px 64px rgba(0,0,0,0.3)" }}
@@ -206,7 +207,7 @@ export function AvantTheme(props: ThemeProps) {
           <div style={{ display: "grid", gap: 48, gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" }}>
             <div style={{ borderRadius: 20, overflow: "hidden", boxShadow: "0 8px 32px rgba(0,0,0,0.12)", aspectRatio: "4/3", background: "#f1f5f9" }}>
               {detailVehicle.imageUrls[0] ? (
-                <img src={detailVehicle.imageUrls[0]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                <img src={safeImageSrc(detailVehicle.imageUrls[0])} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
               ) : (
                 <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", color: "#cbd5e1" }}>
                   <Car size={48} />
@@ -359,7 +360,7 @@ export function AvantTheme(props: ThemeProps) {
           <div style={{ display: "flex", flexWrap: "wrap", gap: 40, justifyContent: "space-between", marginBottom: 40 }}>
             <div>
               {profile.logoUrl ? (
-                <img src={profile.logoUrl} alt={profile.dealershipName} style={{ height: 32, width: "auto", objectFit: "contain", filter: "brightness(0) invert(1)", opacity: 0.75, marginBottom: 10 }} />
+                <img src={safeImageSrc(profile.logoUrl)} alt={profile.dealershipName} style={{ height: 32, width: "auto", objectFit: "contain", filter: "brightness(0) invert(1)", opacity: 0.75, marginBottom: 10 }} />
               ) : (
                 <p style={{ fontSize: 16, fontWeight: 800, color: "#f1f5f9", marginBottom: 8 }}>{profile.dealershipName}</p>
               )}
@@ -416,7 +417,7 @@ function AvantVehicleGrid({ vehicles, primary, secondary, formatPrice, noVehicle
         >
           <div style={{ aspectRatio: featured && i === 0 ? "21/9" : "16/10", overflow: "hidden", position: "relative", background: "#f1f5f9" }}>
             {v.imageUrls[0] ? (
-              <img src={v.imageUrls[0]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+              <img src={safeImageSrc(v.imageUrls[0])} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
             ) : (
               <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", color: "#cbd5e1" }}>
                 <Car size={48} />

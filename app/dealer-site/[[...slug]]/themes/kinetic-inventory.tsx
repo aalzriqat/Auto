@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import type { PublicSite, PublicVehicle, ThemeProps } from "./theme-props";
+import { safeImageSrc } from "@/lib/imageUrl";
 import { DEFAULT_FINANCE_TERMS, KineticBrand, KineticVehicleImage, estimateMonthlyInstallment, telLink, useKineticStrings, vehicleTitle, waLink } from "./kinetic-shared";
 
 function KineticTopNav({ props, activeInventory, activeFinance }: { props: ThemeProps; activeInventory?: boolean; activeFinance?: boolean }) {
@@ -303,7 +304,7 @@ export function KineticVehicleDetail(props: ThemeProps) {
             <section className="space-y-4">
               <div className="relative aspect-[16/9] overflow-hidden rounded-xl bg-surface-container shadow-lg">
                 {images[activeImage] ? (
-                  <img className="w-full h-full object-cover" src={images[activeImage]} alt={vehicleTitle(v)} />
+                  <img className="w-full h-full object-cover" src={safeImageSrc(images[activeImage])} alt={vehicleTitle(v)} />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-outline-variant">
                     <span className="material-symbols-outlined text-6xl">directions_car</span>
@@ -320,7 +321,7 @@ export function KineticVehicleDetail(props: ThemeProps) {
                         i === activeImage ? "border-secondary" : "border-outline-variant hover:border-secondary"
                       }`}
                     >
-                      <img className="w-full h-full object-cover" src={url} alt="" />
+                      <img className="w-full h-full object-cover" src={safeImageSrc(url)} alt="" />
                     </button>
                   ))}
                 </div>

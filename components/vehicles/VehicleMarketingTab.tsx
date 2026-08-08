@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { getErrorMessage } from "@/lib/errors";
+import { safeImageSrc } from "@/lib/imageUrl";
 
 interface VehicleMarketingTabProps {
   vehicleId: Id<"vehicles">;
@@ -148,7 +149,7 @@ export function VehicleMarketingTab({ vehicleId }: VehicleMarketingTabProps) {
                 key={id}
                 className="relative aspect-square rounded-md overflow-hidden border cursor-pointer group"
               >
-                {url && <img src={url} alt="" className="object-cover w-full h-full" />}
+                {url && <img src={safeImageSrc(url)} alt="" className="object-cover w-full h-full" />}
                 <div className="absolute top-1.5 left-1.5 bg-white/90 rounded p-0.5">
                   <Checkbox checked={checked} onCheckedChange={() => toggleImage(id)} />
                 </div>

@@ -14,6 +14,7 @@ import {
   platformDomainForSlug,
   sectionKeyForWebsiteForm,
   validateCustomDomain,
+  validateStoredImageUrl,
   validateSubdomainSlug,
 } from "./websiteConfig";
 import { websitePublicProjection, websiteSectionMap } from "./websiteProjection";
@@ -695,6 +696,18 @@ export const saveDraft = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.WEBSITE_MANAGE]);
     await requireFeature(ctx, args.orgId, "websiteBuilder");
+
+    // `logoUrl` is the one image URL on the public dealer site that is a
+    // caller-supplied string rather than a `ctx.storage.getUrl()` result:
+    // websiteProjection.ts prefers it over the storage-derived logo, and
+    // `resolveDomain` serves it to anonymous visitors. Validate the scheme
+    // here, at the write, so a stored value can never become a beacon or a
+    // script-bearing URI for every visitor to that site. The render-side
+    // `safeImageSrc` guard is defence in depth, not the control.
+    if (args.logoUrl !== undefined && args.logoUrl !== "") {
+      const logoCheck = validateStoredImageUrl(args.logoUrl);
+      if (!logoCheck.ok) throw new ConvexError(logoCheck.error);
+    }
 
     if (args.activeFinanceCompanyId) {
       const company = await ctx.db.get(args.activeFinanceCompanyId);

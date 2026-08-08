@@ -37,6 +37,7 @@ import {
 import { KineticLuxuryTheme, KineticModernEvTheme, KineticSalesTheme } from "./themes/kinetic-themes";
 import { TurnstileWidget } from "./turnstile-widget";
 import { DEFAULT_WEBSITE_TEMPLATE_ID } from "@/lib/website/websiteTemplates";
+import { safeImageSrc } from "@/lib/imageUrl";
 import type { PublicVehicle } from "./themes/theme-props";
 import { useSiteVisitorTracking } from "@/hooks/useSiteVisitorTracking";
 
@@ -555,7 +556,7 @@ export default function DealerSitePage() {
           <Link href="/" className="flex items-center gap-3 shrink-0">
             {profile.logoUrl ? (
               <img
-                src={profile.logoUrl}
+                src={safeImageSrc(profile.logoUrl)}
                 alt={profile.dealershipName}
                 className="h-12 w-auto max-w-[160px] object-contain md:h-14 md:max-w-[200px]"
               />
@@ -646,7 +647,7 @@ export default function DealerSitePage() {
               </div>
               <div className="order-first overflow-hidden rounded-md border bg-slate-100 lg:order-last">
                 {featuredVehicles[0]?.imageUrls[0] ? (
-                  <img src={featuredVehicles[0].imageUrls[0]} alt="" className="aspect-[4/3] h-full w-full object-cover" />
+                  <img src={safeImageSrc(featuredVehicles[0].imageUrls[0])} alt="" className="aspect-[4/3] h-full w-full object-cover" />
                 ) : (
                   <div className="grid aspect-[4/3] place-items-center text-slate-400">
                     <Car className="h-16 w-16" />
@@ -687,7 +688,7 @@ export default function DealerSitePage() {
             <div className="overflow-hidden rounded-md border bg-slate-100">
               {detailVehicle.imageUrls[0] ? (
                 <img
-                  src={detailVehicle.imageUrls[0]}
+                  src={safeImageSrc(detailVehicle.imageUrls[0])}
                   alt={`${detailVehicle.year} ${detailVehicle.make} ${detailVehicle.model}`}
                   className="aspect-[4/3] w-full object-cover"
                 />
@@ -919,7 +920,7 @@ function VehicleGrid({
           <div className="bg-slate-100">
             {vehicle.imageUrls[0] ? (
               <img
-                src={vehicle.imageUrls[0]}
+                src={safeImageSrc(vehicle.imageUrls[0])}
                 alt={`${vehicle.year} ${vehicle.make} ${vehicle.model}`}
                 className="aspect-[4/3] w-full object-cover"
               />

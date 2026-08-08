@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { getErrorMessage } from "@/lib/errors";
+import { safeImageSrc } from "@/lib/imageUrl";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 type AgingFilter = "ALL" | "0-30" | "31-60" | "61-90" | "90+";
@@ -597,7 +598,7 @@ export default function VehiclesPage() {
                   <div key={index} className="relative aspect-video rounded-md overflow-hidden bg-muted group">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={url}
+                      src={safeImageSrc(url)}
                       alt={`Vehicle image ${index + 1}`}
                       className="object-cover w-full h-full"
                     />
