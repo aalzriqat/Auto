@@ -11,7 +11,6 @@ import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { consignedTaxRefusal } from "@/lib/consignedTaxGuard";
-import { consignedRouteRefusal } from "@/lib/consignedRouteGuard";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { toast } from "@/components/ui/sonner";
 import {
@@ -233,26 +232,11 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     status: watchAll.status === "COMPLETED" ? "COMPLETED" : "PENDING",
   });
 
-  // The same reasoning for the settlement route. The section shows why it is
-  // refused; this is what stops the deal going in. It must be gated here and
-  // not resolved inside the section, because a route the screen changes on the
-  // operator's behalf is a route the server never gets to refuse — and
-  // THROUGH_DEALERSHIP is the one value it accepts, so the silent correction
-  // posted a supplier payable the dealership does not owe.
-  const routeRefusal = consignedRouteRefusal({
-    financed: financingType === "FINANCED" || financingType === "LEASE",
-    route: watchAll.supplierSettlementRoute ?? "THROUGH_DEALERSHIP",
-    isConsigned: selectedVehicle ? selectedVehicle.sourceType === "SOURCED" : undefined,
-    // Scoped exactly like the tax guard above. Unscoped, this blocked the
-    // CANCELLED transition on a draft it had itself refused — the operator
-    // could neither record the deal nor unrecord it.
-    status:
-      watchAll.status === "COMPLETED"
-        ? "COMPLETED"
-        : watchAll.status === "CANCELLED"
-          ? "CANCELLED"
-          : "PENDING",
-  });
+  // No settlement-route gate here any more. The direct route on a financed
+  // consigned deal used to be refused because the finance company's side had
+  // nowhere to record it; it is recorded now, and both routes are accepted at
+  // the mutation boundary. The section still never rewrites the operator's
+  // choice — that was the defect, and it is unchanged.
 
   const onSubmit = async (values: SaleFormValues) => {
     if (!activeOrgId) return;
@@ -540,9 +524,6 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                 orgId={activeOrgId}
                 vehicleId={(sale ? sale.vehicleId : watchAll.vehicleId) as Id<"vehicles"> | undefined}
                 salePrice={Number(watchAll.salePrice) || 0}
-                // Financing is chosen further down this same form, so this has
-                // to track it live rather than be read once.
-                financed={financingType === "FINANCED" || financingType === "LEASE"}
                 value={watchAll.supplierSettlementRoute ?? "THROUGH_DEALERSHIP"}
                 onChange={(route) => form.setValue("supplierSettlementRoute", route)}
                 // Locked once the sale is completed: the journal, the payable
@@ -769,7 +750,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
               </Button>
               <Button
                 type="submit"
-                disabled={isSubmitting || taxRefusal !== null || routeRefusal !== null}
+                disabled={isSubmitting || taxRefusal !== null}
               >
                 {isSubmitting ? (t("Saving" as any)) : sale ? (t("SaveChanges" as any)) : (t("LogSale" as any))}
               </Button>

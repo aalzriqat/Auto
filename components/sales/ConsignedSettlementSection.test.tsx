@@ -74,7 +74,7 @@ function renderSection(onApplicable = vi.fn()) {
   return onApplicable;
 }
 
-function renderRoute(props: { financed: boolean; value: Route; onChange?: () => void }) {
+function renderRoute(props: { value: Route; onChange?: () => void }) {
   const onChange = props.onChange ?? vi.fn();
   const view = render(
     <ConsignedSettlementSection
@@ -82,7 +82,6 @@ function renderRoute(props: { financed: boolean; value: Route; onChange?: () => 
       vehicleId={CAR}
       quoteId={QUOTE}
       value={props.value}
-      financed={props.financed}
       onChange={onChange}
       onApplicable={vi.fn()}
     />
@@ -123,43 +122,46 @@ describe("ConsignedSettlementSection reports whether its line is consigned", () 
 });
 
 /**
- * A financed deal may not settle direct-to-supplier, and the screen must say so
- * rather than quietly choosing for the operator.
+ * The section never chooses the settlement route for the operator.
  *
- * This component used to correct the stale selection itself: switching a deal to
+ * This component used to correct a stale selection itself: switching a deal to
  * FINANCED with DIRECT_TO_SUPPLIER already chosen fired an effect that called
  * `onChange("THROUGH_DEALERSHIP")`. The financing control sits below this
  * section in the same form, so the route flipped off-screen with no toast and no
- * field error, and the server refusal — the thing that exists to stop exactly
- * this deal — never fired, because by submit time the value was the one route
- * the server accepts.
+ * field error, and the server refusal — the thing that existed to stop exactly
+ * that deal — never fired, because by submit time the value was the one route
+ * the server accepted.
  *
- * What posts instead is not a smaller mistake than a failed save. The sale books
- * a supplier payable for the whole entitlement the dealership does not owe, a
- * customer receivable at the gross it will never collect, and no supplier
- * receivable for the margin the supplier owes it. A refusal the operator can see
- * is worth more than a correction they cannot.
+ * What posted instead was not a smaller mistake than a failed save. The sale
+ * booked a supplier payable for the whole entitlement the dealership does not
+ * owe, a customer receivable at the gross it will never collect, and no supplier
+ * receivable for the margin the supplier owes it.
+ *
+ * The refusal that motivated the effect is gone — a financed consigned deal can
+ * now settle directly, with the finance company's side recorded on the
+ * application. **The prohibition on rewriting the operator's choice is not**,
+ * and it never depended on the refusal: a control that silently changes a
+ * financial decision is wrong whether or not the server would have caught it.
+ * `financed` is no longer a prop precisely so that no future condition can be
+ * hung off it here.
  */
-describe("a financed deal never has its settlement route chosen for it", () => {
+describe("the settlement route is never chosen for the operator", () => {
   beforeEach(() => {
     queryResults.set("sales:consignedSalePreview", CONSIGNED_PREVIEW);
   });
 
-  test("switching a DIRECT deal to financed does not rewrite the route", async () => {
-    const { onChange, rerender } = renderRoute({
-      financed: false,
-      value: "DIRECT_TO_SUPPLIER",
-    });
+  test("re-rendering does not rewrite the route", async () => {
+    const { onChange, rerender } = renderRoute({ value: "DIRECT_TO_SUPPLIER" });
     await screen.findByText("RouteDirectToSupplier");
 
-    // The operator sets Financing to FINANCED somewhere below this section.
+    // Whatever changes elsewhere in the form, this section re-renders without
+    // touching the selection.
     rerender(
       <ConsignedSettlementSection
         orgId={ORG}
         vehicleId={CAR}
         quoteId={QUOTE}
         value="DIRECT_TO_SUPPLIER"
-        financed
         onChange={onChange}
         onApplicable={vi.fn()}
       />
@@ -170,25 +172,16 @@ describe("a financed deal never has its settlement route chosen for it", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  test("the refused route stays visibly selected, and says why", async () => {
-    renderRoute({ financed: true, value: "DIRECT_TO_SUPPLIER" });
+  test("both routes are selectable, and the operator's stays selected", async () => {
+    const { onChange } = renderRoute({ value: "DIRECT_TO_SUPPLIER" });
 
     const direct = await screen.findByRole("radio", { name: /RouteDirectToSupplier/ });
-    // Still the operator's selection — not silently moved to the other option.
-    expect(direct.getAttribute("aria-checked")).toBe("true");
-    expect(
-      screen.getByRole("radio", { name: /RouteThroughDealership/ }).getAttribute("aria-checked")
-    ).toBe("false");
-    // And the reason is on screen, not only in a server error after saving.
-    expect(screen.getAllByText("RouteDirectUnavailableFinanced").length).toBeGreaterThan(0);
-  });
-
-  test("a cash deal keeps both routes selectable", async () => {
-    const { onChange } = renderRoute({ financed: false, value: "DIRECT_TO_SUPPLIER" });
-
-    const direct = await screen.findByRole("radio", { name: /RouteDirectToSupplier/ });
+    const through = screen.getByRole("radio", { name: /RouteThroughDealership/ });
+    // Neither is disabled: the deal being financed no longer removes a route.
     expect((direct as HTMLButtonElement).disabled).toBe(false);
+    expect((through as HTMLButtonElement).disabled).toBe(false);
     expect(direct.getAttribute("aria-checked")).toBe("true");
+    expect(through.getAttribute("aria-checked")).toBe("false");
     expect(onChange).not.toHaveBeenCalled();
   });
 });

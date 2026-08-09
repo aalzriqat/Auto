@@ -19,6 +19,7 @@ import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useCurrency } from "@/hooks/useCurrency";
 import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
 import { DisbursementConfirmationDialog } from "./DisbursementConfirmationDialog";
+import { ConsignedSettlementSection } from "@/components/sales/ConsignedSettlementSection";
 import { VehicleHandoverDialog } from "./VehicleHandoverDialog";
 import { RegisterExpectedPaymentDialog, type ExpectedPaymentMethod } from "./RegisterExpectedPaymentDialog";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
@@ -52,6 +53,7 @@ export function ApplicationDetailsDialog({
   const canRegisterHandover = hasPermission(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
   const canRegisterExpectedPayment = hasPermission(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
   const canResolveDeposits = hasPermission(PERMISSIONS.APPROVE_REQUESTS);
+  const canManageFinance = hasPermission(PERMISSIONS.MANAGE_FINANCE);
   const [previewFile, setPreviewFile] = useState<{ url: string; name: string } | null>(null);
   const [isCancelDialogOpen, setIsCancelDialogOpen] = useState(false);
   const [isDisbursementDialogOpen, setIsDisbursementDialogOpen] = useState(false);
@@ -67,6 +69,8 @@ export function ApplicationDetailsDialog({
   const finalizeDealIdempotencyKeyRef = useRef<string | null>(null);
   const cancelApplicationIdempotencyKeyRef = useRef<string | null>(null);
   const confirmDisbursementIdempotencyKeyRef = useRef<string | null>(null);
+  const confirmSupplierDisbursementIdempotencyKeyRef = useRef<string | null>(null);
+  const [isSupplierDisbursementDialogOpen, setIsSupplierDisbursementDialogOpen] = useState(false);
 
   const app = useQuery(api.applications.get, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
   const documents = useQuery(api.documents.getForApplication, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
@@ -76,6 +80,8 @@ export function ApplicationDetailsDialog({
   const cancelApplication = useMutation(api.applications.cancelApplication);
   const finalizeDeal = useMutation(api.applications.finalizeDeal);
   const confirmDisbursement = useMutation(api.applications.confirmDisbursement);
+  const confirmSupplierDisbursement = useMutation(api.applications.confirmSupplierDisbursement);
+  const setSupplierSettlementRoute = useMutation(api.applications.setSupplierSettlementRoute);
   const registerVehicleHandover = useMutation(api.applications.registerVehicleHandover);
   const registerExpectedPayment = useMutation(api.applications.registerExpectedPayment);
   const releaseDeposit = useMutation(api.deposits.release);
@@ -245,11 +251,39 @@ export function ApplicationDetailsDialog({
     ? currency.format(app.disbursedAmountMinor / currencyFactor)
     : null;
   const expectedDisbursementLabel = currency.format(expectedDisbursementMinor / currencyFactor);
+  // A consigned car is the supplier's, so this deal has a settlement route: the
+  // finance company's cheque is made out to the dealership or to him, depending
+  // on who owns the car. Absent reads as THROUGH_DEALERSHIP, matching the server.
+  const isConsignedDeal = app.vehicle?.sourceType === "SOURCED";
+  const settlesDirectToSupplier =
+    isConsignedDeal && app.supplierSettlementRoute === "DIRECT_TO_SUPPLIER";
+  const supplierName = app.vehicle?.sourcedFromName;
+  // The route is a decision about a deal that has not posted yet. Once the
+  // application closes, the sale has booked either a payable to the supplier or
+  // a claim on him, and changing it is a correction rather than an edit — the
+  // server refuses it there too.
+  const canChooseSettlementRoute =
+    canManageFinance &&
+    isConsignedDeal &&
+    app.status !== "CLOSED" &&
+    app.status !== "CANCELLED";
+
+  // On the direct route the company pays the supplier, so there is no
+  // dealership receipt to confirm — `confirmDisbursement` posts DR Bank and
+  // would invent cash. Offering it would be offering an action the server
+  // refuses; the supplier confirmation below is the one that applies.
   const canConfirmDisbursement =
     canConfirmFinanceDisbursement &&
     app.status === "CLOSED" &&
     expectsFinanceCompanyDisbursement &&
+    !settlesDirectToSupplier &&
     !app.disbursedAt;
+
+  const canConfirmSupplierDisbursement =
+    canConfirmFinanceDisbursement &&
+    app.status === "CLOSED" &&
+    settlesDirectToSupplier &&
+    !app.supplierDisbursementConfirmedAt;
 
   const handleConfirmDisbursement = async () => {
     if (!activeOrgId || !expectedDisbursementMinor) return;
@@ -272,6 +306,36 @@ export function ApplicationDetailsDialog({
       setIsConfirmingDisbursement(false);
     }
   };
+  const handleChooseSettlementRoute = async (route: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER") => {
+    if (!activeOrgId) return;
+    try {
+      await setSupplierSettlementRoute({ orgId: activeOrgId, applicationId, route });
+    } catch {
+      toast.error(t("UnexpectedError" as any));
+    }
+  };
+
+  const handleConfirmSupplierDisbursement = async () => {
+    if (!activeOrgId || !expectedDisbursementMinor) return;
+    setIsConfirmingDisbursement(true);
+    try {
+      confirmSupplierDisbursementIdempotencyKeyRef.current ??= `confirm-supplier-disbursement:${crypto.randomUUID()}`;
+      await confirmSupplierDisbursement({
+        orgId: activeOrgId,
+        applicationId,
+        disbursedAmountMinor: expectedDisbursementMinor,
+        idempotencyKey: confirmSupplierDisbursementIdempotencyKeyRef.current,
+      });
+      confirmSupplierDisbursementIdempotencyKeyRef.current = null;
+      toast.success(t("SupplierDisbursementConfirmedSuccess" as any));
+      setIsSupplierDisbursementDialogOpen(false);
+    } catch {
+      toast.error(t("UnexpectedError" as any));
+    } finally {
+      setIsConfirmingDisbursement(false);
+    }
+  };
+
   const applicationDeposits = app.deposits ?? [];
   const pendingDeposits = applicationDeposits.filter((deposit) => deposit.status === "HELD");
   const showDepositResolution =
@@ -395,9 +459,19 @@ export function ApplicationDetailsDialog({
                     {expectsFinanceCompanyDisbursement && (
                       <p>
                         <strong>{t("DisbursementStatus" as any)}:</strong>{" "}
-                        {app.disbursedAt
-                          ? `${t("DisbursementReceived" as any)} - ${confirmedDisbursementLabel}`
-                          : t("AwaitingDisbursement" as any)}
+                        {settlesDirectToSupplier
+                          ? app.supplierDisbursementConfirmedAt
+                            ? t("SupplierPaidByFinanceCompany" as any).replace(
+                                "{supplier}",
+                                supplierName ?? t("TheSupplier" as any)
+                              )
+                            : t("AwaitingSupplierDisbursement" as any).replace(
+                                "{supplier}",
+                                supplierName ?? t("TheSupplier" as any)
+                              )
+                          : app.disbursedAt
+                            ? `${t("DisbursementReceived" as any)} - ${confirmedDisbursementLabel}`
+                            : t("AwaitingDisbursement" as any)}
                       </p>
                     )}
                   </>
@@ -409,6 +483,25 @@ export function ApplicationDetailsDialog({
                 )}
               </div>
             </div>
+
+            {/* The car is the supplier's, so who the finance company pays is a
+                decision this deal cannot infer — and it decides whether the
+                dealership ends up owing him his entitlement or holding a claim
+                on him for its margin. Asked before finalization, because
+                afterwards the sale has already posted one of the two.
+
+                The same control as the sale form, on purpose: one explanation
+                of what each route means, in one place, rather than a second
+                phrasing an operator has to reconcile with the first. */}
+            {canChooseSettlementRoute && activeOrgId && (
+              <ConsignedSettlementSection
+                orgId={activeOrgId}
+                vehicleId={app.vehicleId}
+                quoteId={app.quoteId}
+                value={app.supplierSettlementRoute ?? "THROUGH_DEALERSHIP"}
+                onChange={handleChooseSettlementRoute}
+              />
+            )}
 
             <div>
               <h4 className="font-semibold text-sm mb-2">{t("AppActions" as any)}</h4>
@@ -511,6 +604,35 @@ export function ApplicationDetailsDialog({
                     t={(key) => t(key as any)}
                     onOpenChange={setIsDisbursementDialogOpen}
                     onConfirm={handleConfirmDisbursement}
+                  />
+                )}
+
+                {/* The direct route's counterpart. Deliberately a separate
+                    action rather than the same button behaving differently:
+                    this one records that somebody ELSE was paid, moves no
+                    dealership money, and posts no journal. Collapsing the two
+                    would make "confirm the disbursement" mean two different
+                    things depending on a field further up the screen. */}
+                {settlesDirectToSupplier && app.status === "CLOSED" && app.supplierDisbursementConfirmedAt && (
+                  <Badge variant="outline" className="justify-center py-2">
+                    {t("SupplierPaidByFinanceCompany" as any).replace(
+                      "{supplier}",
+                      supplierName ?? t("TheSupplier" as any)
+                    )}
+                  </Badge>
+                )}
+
+                {canConfirmSupplierDisbursement && (
+                  <DisbursementConfirmationDialog
+                    mode="SUPPLIER"
+                    supplierName={supplierName}
+                    open={isSupplierDisbursementDialogOpen}
+                    disabled={isConfirmingDisbursement}
+                    submitting={isConfirmingDisbursement}
+                    amountLabel={expectedDisbursementLabel}
+                    t={(key) => t(key as any)}
+                    onOpenChange={setIsSupplierDisbursementDialogOpen}
+                    onConfirm={handleConfirmSupplierDisbursement}
                   />
                 )}
 

@@ -6,7 +6,6 @@ import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { cn } from "@/lib/utils";
-import { consignedRouteRefusal } from "@/lib/consignedRouteGuard";
 import { ArrowRight, AlertTriangle } from "lucide-react";
 
 /**
@@ -57,12 +56,6 @@ interface Props {
    * loses the control entirely and posts the default route.
    */
   onApplicable?: (vehicleId: Id<"vehicles">, applicable: boolean) => void;
-  /**
-   * The deal is going through a finance company. Paying the supplier directly
-   * has no representation on that side of the settlement yet, and the server
-   * refuses it — so the option is disabled here rather than offered and failed.
-   */
-  financed?: boolean;
 }
 
 export function ConsignedSettlementSection({
@@ -75,26 +68,27 @@ export function ConsignedSettlementSection({
   disabled,
   showRouteSelector = true,
   onApplicable,
-  financed = false,
 }: Props) {
   const { t, isRtl } = useLanguage();
 
-  // A route can outlive the deal shape that allowed it: the financing type is
-  // chosen further down the same form, so an operator can pick
-  // DIRECT_TO_SUPPLIER on a cash deal and then switch it to FINANCED.
+  // Both routes are available on every consigned deal, financed or not. The
+  // direct route used to be refused on a financed deal because the finance
+  // company's side of the settlement had nowhere to record it; it is recorded
+  // now, on the finance application, and `finalizeDeal` skips the postings that
+  // assumed the money arrived here.
   //
-  // This used to correct itself, with an effect that called
-  // `onChange("THROUGH_DEALERSHIP")`. That is the one thing it must not do. The
-  // route flipped off-screen with no toast and no field error, so the server
-  // refusal — which exists to stop exactly this deal — never fired, because by
-  // submit time the value was the one route the server accepts. The sale then
-  // booked a supplier payable the dealership does not owe, a customer
+  // What has not changed, and must not: **this component never rewrites the
+  // operator's choice.** An earlier version corrected a stale selection with an
+  // effect that called `onChange("THROUGH_DEALERSHIP")` when the deal turned
+  // financed. The route flipped off-screen with no toast and no field error, so
+  // the server refusal that existed to stop exactly that deal never fired —
+  // by submit time the value was the one route the server accepted. The sale
+  // then booked a supplier payable the dealership does not owe, a customer
   // receivable at the gross it will never collect, and no supplier receivable
   // for the margin the supplier owes it.
   //
-  // The stale selection is kept, shown as selected, and explained; submit is
-  // gated on `consignedRouteRefusal` in both callers. A refusal the operator
-  // can see is worth more than a correction they cannot.
+  // The selection is the operator's. The obligation line below states what it
+  // means, and changing the financing type does not silently change it.
 
   const preview = useQuery(
     api.sales.consignedSalePreview,
@@ -130,28 +124,7 @@ export function ConsignedSettlementSection({
   const directToSupplier = preview.settlementRoute === "DIRECT_TO_SUPPLIER";
   const supplier = preview.supplierName || t("TheSupplier" as any);
 
-  // Past the early return, so the car is known to be consigned.
-  // The section itself has no status: it explains the refusal wherever the
-  // route is being chosen, and the callers decide whether that refusal blocks
-  // their particular transition.
-  const routeRefused =
-    consignedRouteRefusal({
-      financed,
-      route: value,
-      isConsigned: true,
-      status: "COMPLETED",
-    }) !== null;
-
-  // Paying the supplier directly is not supported on a FINANCED deal yet: the
-  // finance company's side of the settlement has nowhere to record it. The
-  // server refuses it outright (see saleCompletion), so offering it here would
-  // be offering a choice that fails on submit — which is the exact defect the
-  // deposit-settlement work spent this whole PR removing.
-  //
-  // Disabled and explained rather than hidden. A missing option reads as a bug
-  // to an operator who used it on a cash deal an hour ago; a disabled one with
-  // a reason reads as a limitation.
-  const routes: Array<{ id: Route; label: string; hint: string; unavailable?: string }> = [
+  const routes: Array<{ id: Route; label: string; hint: string }> = [
     {
       id: "THROUGH_DEALERSHIP",
       label: t("RouteThroughDealership" as any),
@@ -161,7 +134,6 @@ export function ConsignedSettlementSection({
       id: "DIRECT_TO_SUPPLIER",
       label: t("RouteDirectToSupplier" as any),
       hint: t("RouteDirectToSupplierHint" as any),
-      ...(financed ? { unavailable: t("RouteDirectUnavailableFinanced" as any) } : {}),
     },
   ];
 
@@ -186,20 +158,6 @@ export function ConsignedSettlementSection({
         </p>
       ) : null}
 
-      {/* The selection stands and the deal is blocked, rather than the route
-          being changed for the operator. `role="alert"` so the reason reaches a
-          screen reader too: the financing control that causes this sits below
-          this section, so the change that triggers it happens off-screen. */}
-      {routeRefused ? (
-        <p
-          role="alert"
-          className="flex items-start gap-2 text-xs font-medium text-destructive"
-        >
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
-          <span>{t("RouteDirectRefusedFinanced" as any)}</span>
-        </p>
-      ) : null}
-
       <fieldset disabled={disabled} className={cn("space-y-2", !showRouteSelector && "hidden")}>
         <legend className="sr-only">{t("SupplierSettlementRoute" as any)}</legend>
         <div className="grid gap-2 sm:grid-cols-2">
@@ -211,7 +169,6 @@ export function ConsignedSettlementSection({
                 type="button"
                 role="radio"
                 aria-checked={selected}
-                disabled={route.unavailable !== undefined}
                 onClick={() => onChange(route.id)}
                 className={cn(
                   "rounded-md border p-3 text-start transition-colors",
@@ -224,7 +181,7 @@ export function ConsignedSettlementSection({
               >
                 <span className="block text-sm font-medium">{route.label}</span>
                 <span className="mt-0.5 block text-xs leading-snug text-muted-foreground">
-                  {route.unavailable ?? route.hint}
+                  {route.hint}
                 </span>
               </button>
             );

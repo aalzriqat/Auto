@@ -165,10 +165,6 @@ export const salesEn = {
   DepositSettlementUnavailable: "This deposit cannot be treated that way",
   DepositSettlementConfirmAllLines:
     "This deposit decision applies to the whole deal, so confirm it on every vehicle on this quote — or on none of them.",
-  RouteDirectUnavailableFinanced:
-    "Not available on financed deals yet — the finance company's side of the settlement cannot record a direct payment to the supplier.",
-  RouteDirectRefusedFinanced:
-    "This deal is financed, and paying the supplier directly is not supported yet. Your choice has been kept — switch the route to “Through the dealership”, or make the deal a cash sale, to record it.",
   Taxes: "Taxes (JOD)",
   ConsignedTaxUnsupported:
     "This car is the supplier's, and tax on an agency sale has no agreed treatment yet — so the sale cannot be posted with it. Clear the tax to record the sale, or sell the car as dealership stock.",
@@ -335,6 +331,14 @@ export const salesEn = {
   ConfirmDisbursementDesc: "Record receipt of the finance-company funds for this closed deal.",
   DisbursementAmount: "Disbursement Amount",
   ConfirmReceipt: "Confirm Receipt",
+  ConfirmSupplierDisbursement: "Record payment to the supplier",
+  ConfirmSupplierDisbursementDesc:
+    "The finance company paid {supplier} directly for this car. No money reaches the dealership and nothing is posted to the accounts — this only records what the settlement advice says. Your margin stays a claim on {supplier} until he pays it.",
+  SupplierDisbursementAmount: "Amount paid to {supplier}",
+  ConfirmRecorded: "Record it",
+  SupplierPaidByFinanceCompany: "Finance company paid {supplier}",
+  AwaitingSupplierDisbursement: "Awaiting the finance company's payment to {supplier}",
+  SupplierDisbursementConfirmedSuccess: "Recorded. Your margin is still owed by the supplier.",
   DisbursementConfirmedSuccess: "Disbursement receipt confirmed.",
   DisbursementStatus: "Disbursement Status",
   DisbursementReceived: "Received",
@@ -749,10 +753,6 @@ export const salesAr = {
     "قرار العربون يسري على الصفقة كاملة، لذا أكّده على كل مركبة في هذا العرض — أو لا تؤكّده على أي منها.",
   ConsignedNoSupplierCost:
     "لا يوجد مبلغ مورّد مسجّل لهذه المركبة، لذا لا يمكن تحديد هامش المعرض ولا إتمام البيع. سجّل المبلغ المتفق عليه مع المورّد، أو حوّل المركبة إلى ملكية المعرض أولًا.",
-  RouteDirectUnavailableFinanced:
-    "غير متاح بعد في البيع بالتمويل — لا يمكن تسجيل الدفع المباشر للمورّد في تسوية شركة التمويل.",
-  RouteDirectRefusedFinanced:
-    "هذه الصفقة بالتمويل، والدفع المباشر للمورّد غير مدعوم بعد. تم الإبقاء على اختيارك — غيّر مسار التسوية إلى «عن طريق المعرض»، أو اجعل الصفقة بيعًا نقديًا، لتتمكن من تسجيلها.",
   Taxes: "الضرائب (دينار اردني)",
   ConsignedTaxUnsupported:
     "هذه المركبة ملك المورّد، ولا توجد بعد معالجة متفق عليها لضريبة البيع بالوكالة، لذا لا يمكن ترحيل البيع بوجودها. امسح الضريبة لتسجيل البيع، أو بِع المركبة كمخزون للمعرض.",
@@ -918,6 +918,14 @@ export const salesAr = {
   ConfirmDisbursementDesc: "تسجيل استلام مبلغ شركة التمويل لهذه الصفقة المغلقة.",
   DisbursementAmount: "مبلغ الصرف",
   ConfirmReceipt: "تأكيد الاستلام",
+  ConfirmSupplierDisbursement: "تسجيل الدفع للمورّد",
+  ConfirmSupplierDisbursementDesc:
+    "دفعت شركة التمويل إلى {supplier} مباشرةً ثمن هذه المركبة. لا يصل أي مبلغ إلى المعرض ولا يُرحَّل أي قيد — هذا تسجيل لما ورد في إشعار التسوية فقط. يبقى هامشك مطالبة على {supplier} حتى يسدّده.",
+  SupplierDisbursementAmount: "المبلغ المدفوع إلى {supplier}",
+  ConfirmRecorded: "تسجيل",
+  SupplierPaidByFinanceCompany: "دفعت شركة التمويل إلى {supplier}",
+  AwaitingSupplierDisbursement: "بانتظار دفع شركة التمويل إلى {supplier}",
+  SupplierDisbursementConfirmedSuccess: "تم التسجيل. هامشك ما زال مستحقًا على المورّد.",
   DisbursementConfirmedSuccess: "تم تأكيد استلام مبلغ الصرف.",
   DisbursementStatus: "حالة الصرف",
   DisbursementReceived: "تم الاستلام",
