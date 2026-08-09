@@ -338,6 +338,14 @@ describe("a legacy عربون that a completed sale later takes over", () => {
 
     expect(jan.totalRevenue).toBe(0);
     expect(feb.totalRevenue).toBe(MARGIN);
+
+    // Turnover and gross are separate answers, and the deposit's month must
+    // not carry either. Asserted because the whole point of separating
+    // recognized revenue from the deal's face value is that a consigned sale
+    // reports the margin as revenue while still recording what the deal was
+    // worth — in the sale's month, not the عربون's.
+    expect(jan.grossTransactionValue).toBe(0);
+    expect(feb.grossTransactionValue).toBe(SALE_PRICE);
   });
 
   test("B — STOCK: same transition, full owned-sale revenue in the sale's month", async () => {
