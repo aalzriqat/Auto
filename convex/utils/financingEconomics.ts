@@ -667,3 +667,219 @@ export function defaultAppraisalFeeResponsibility(
       return "UNRESOLVED";
   }
 }
+
+// ---------------------------------------------------------------------------
+// Deal cockpit — the stage rail and the management profit figure
+// ---------------------------------------------------------------------------
+
+/**
+ * The eight stages the cockpit renders, in order.
+ *
+ * Driven off the lifecycle dimensions rather than `status`, which is a workflow
+ * enum with a different job: a deal can be APPROVED while its appraisal gap is
+ * unresolved and its documents are missing, and a single enum cannot say so.
+ */
+export type DealStageKey =
+  | "APPLICATION"
+  | "CREDIT_DECISION"
+  | "APPRAISAL"
+  | "GAP_RESOLUTION"
+  | "APPROVED_PURCHASE"
+  | "DELIVERY_ACTIONS"
+  | "HANDOVER"
+  | "SETTLEMENT";
+
+export const DEAL_STAGE_ORDER: DealStageKey[] = [
+  "APPLICATION",
+  "CREDIT_DECISION",
+  "APPRAISAL",
+  "GAP_RESOLUTION",
+  "APPROVED_PURCHASE",
+  "DELIVERY_ACTIONS",
+  "HANDOVER",
+  "SETTLEMENT",
+];
+
+/**
+ * `STOPPED` is not a synonym for BLOCKED. A blocked stage waits on something
+ * somebody can still do; a stopped one belongs to a deal that was rejected or
+ * cancelled, where the remaining stages will never happen at all. Rendering
+ * those as merely "pending" invites an operator to work a dead deal.
+ */
+export type DealStageState = "COMPLETE" | "CURRENT" | "BLOCKED" | "PENDING" | "STOPPED";
+
+export type DealStageBlocker =
+  | "AwaitingCreditDecision"
+  | "AwaitingAppraisal"
+  | "GapUnresolved"
+  | "GapNegotiationFailed"
+  | "NoApprovedPurchaseAmount"
+  | "DocumentsIncomplete"
+  | "HandoverBlocked"
+  | "AwaitingSettlement";
+
+export interface DealStage {
+  key: DealStageKey;
+  state: DealStageState;
+  /** A key, never a sentence — the screen owns the wording in both locales. */
+  blocker?: DealStageBlocker;
+}
+
+export interface DealStageFacts extends LifecycleFacts {
+  creditDecision?: CreditDecision;
+  appraisalStatus?: AppraisalStatus;
+  gapResolution?: GapResolution;
+  settlementStatus?: SettlementStatus;
+  handoverStatus?: HandoverStatus;
+  rawAppraisalGapMinor?: number;
+  approvedDealerPurchaseAmountMinor?: number;
+  /** Every required document uploaded, verified or waived. */
+  requiredDocumentsComplete: boolean;
+}
+
+/**
+ * The stage rail for one deal.
+ *
+ * All five lifecycle dimensions are OPTIONAL on `financeApplications`, so every
+ * application created before they existed answers none of them. Falling back to
+ * the same `*ForFacts` helpers the backfill uses — rather than reading an unset
+ * dimension as "not done" — is what keeps a completed historical deal from
+ * rendering as a deal that never started.
+ *
+ * Each stage is judged on its OWN evidence rather than on the stage before it,
+ * so a legacy row that was handed over and settled while its document checklist
+ * was never filled in still shows both of those complete. The alternative —
+ * marking everything after the first gap as pending — would tell a dealership
+ * its delivered car had not been delivered.
+ */
+export function deriveDealStages(facts: DealStageFacts): DealStage[] {
+  const credit = facts.creditDecision ?? creditDecisionForStatus(facts.status);
+  const handover = facts.handoverStatus ?? handoverStatusForFacts(facts);
+  const settlement = facts.settlementStatus ?? settlementStatusForFacts(facts);
+  const appraisal = facts.appraisalStatus;
+  const gap = facts.gapResolution;
+
+  const stopped = credit === "REJECTED" || credit === "CANCELLED";
+  // A gap of zero is not a gap, and `undefined` means none was ever recorded.
+  const hasGap = (facts.rawAppraisalGapMinor ?? 0) !== 0;
+
+  const complete: Record<DealStageKey, boolean> = {
+    APPLICATION: credit !== "DRAFT",
+    CREDIT_DECISION: credit === "APPROVED",
+    // A legacy row records no appraisal dimension at all. An approved credit
+    // decision on such a row means the appraisal happened off-system, so
+    // reading it as "not appraised" would assert something about the past that
+    // the data does not support.
+    APPRAISAL:
+      appraisal === "COMPLETED" ||
+      appraisal === "FINALIZED" ||
+      (appraisal === undefined && credit === "APPROVED"),
+    GAP_RESOLUTION:
+      gap === "NOT_REQUIRED" ||
+      gap === "CUSTOMER_ABSORBS" ||
+      gap === "DEALER_ABSORBS" ||
+      gap === "SPLIT" ||
+      (gap === undefined && !hasGap),
+    APPROVED_PURCHASE: facts.approvedDealerPurchaseAmountMinor !== undefined,
+    DELIVERY_ACTIONS: facts.requiredDocumentsComplete,
+    HANDOVER: handover === "HANDED_OVER",
+    SETTLEMENT: settlement === "FULLY_SETTLED" || settlement === "RECONCILED",
+  };
+
+  const blockers: Partial<Record<DealStageKey, DealStageBlocker>> = {
+    CREDIT_DECISION: "AwaitingCreditDecision",
+    APPRAISAL: "AwaitingAppraisal",
+    GAP_RESOLUTION: gap === "FAILED" ? "GapNegotiationFailed" : "GapUnresolved",
+    APPROVED_PURCHASE: "NoApprovedPurchaseAmount",
+    DELIVERY_ACTIONS: "DocumentsIncomplete",
+    HANDOVER: handover === "BLOCKED" ? "HandoverBlocked" : undefined,
+    SETTLEMENT: "AwaitingSettlement",
+  };
+
+  const firstIncomplete = DEAL_STAGE_ORDER.find((key) => !complete[key]);
+
+  return DEAL_STAGE_ORDER.map((key): DealStage => {
+    if (complete[key]) return { key, state: "COMPLETE" };
+    if (stopped) return { key, state: "STOPPED" };
+    if (key !== firstIncomplete) return { key, state: "PENDING" };
+    const blocker = blockers[key];
+    return blocker ? { key, state: "BLOCKED", blocker } : { key, state: "CURRENT" };
+  });
+}
+
+/**
+ * How settled the headline figure's inputs are.
+ *
+ * `ACTUAL_UNPOSTABLE` is deliberately not called "settled" or "final": even
+ * once every input has stopped moving, this figure still has no journal behind
+ * it and never will. A name that suggested otherwise is what would let it drift
+ * into a report.
+ */
+export type ManagementProfitClassification =
+  | "ESTIMATED_AWAITING_SETTLEMENT"
+  | "ACTUAL_UNPOSTABLE";
+
+export type ManagementProfitLine =
+  | { key: "APPROVED_PURCHASE"; sign: 1; amountMinor: number }
+  | { key: "SUPPLIER_SETTLEMENT"; sign: -1; amountMinor: number }
+  | { key: "ACTUAL_EXPENSES"; sign: -1; amountMinor: number };
+
+/**
+ * `صافي ربح المعرض` — a MANAGEMENT figure, never an accounting result.
+ *
+ * Derived from the finance company's approved purchase amount, NOT from the
+ * price the customer was sold at. On a consigned financed deal those differ by a
+ * spread that appears on no invoice and no receipt, which is precisely why this
+ * number must never be posted, reconciled against the GL, or shown without its
+ * classification. Amount and classification travel in ONE object so a caller
+ * cannot render the figure having dropped the qualifier — the shape is the
+ * enforcement, not a convention someone has to remember.
+ */
+export type ManagementProfit =
+  | {
+      available: true;
+      amountMinor: number;
+      currency: string;
+      classification: ManagementProfitClassification;
+      lines: ManagementProfitLine[];
+      /** Structural, not advisory. This figure has no journal and never will. */
+      postable: false;
+    }
+  | { available: false; reason: "NoApprovedPurchaseAmount" | "NoSupplierSettlement" };
+
+/**
+ * Returns `available: false` rather than a zero when an input is missing.
+ *
+ * A profit of zero and a profit nobody can compute are different claims, and on
+ * the screen a dealership reads to decide whether a deal made money, showing
+ * the first in place of the second is the more damaging of the two errors.
+ */
+export function deriveManagementProfit(args: {
+  approvedDealerPurchaseAmountMinor?: number;
+  supplierSettlementMinor?: number;
+  actualExpensesMinor: number;
+  currency: string;
+  fullySettled: boolean;
+}): ManagementProfit {
+  if (args.approvedDealerPurchaseAmountMinor === undefined)
+    return { available: false, reason: "NoApprovedPurchaseAmount" };
+  if (args.supplierSettlementMinor === undefined)
+    return { available: false, reason: "NoSupplierSettlement" };
+
+  const lines: ManagementProfitLine[] = [
+    { key: "APPROVED_PURCHASE", sign: 1, amountMinor: args.approvedDealerPurchaseAmountMinor },
+    { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: args.supplierSettlementMinor },
+    { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: args.actualExpensesMinor },
+  ];
+
+  return {
+    available: true,
+    // Summed from the same lines the screen renders, so the headline and its
+    // derivation cannot disagree — the arithmetic happens once, here.
+    amountMinor: lines.reduce((total, line) => total + line.sign * line.amountMinor, 0),
+    currency: args.currency,
+    classification: args.fullySettled ? "ACTUAL_UNPOSTABLE" : "ESTIMATED_AWAITING_SETTLEMENT",
+    lines,
+    postable: false,
+  };
+}

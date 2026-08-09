@@ -923,3 +923,164 @@ describe("the applications list always has something to show for the financier",
     });
   }
 });
+
+/**
+ * The cockpit screen's single query.
+ *
+ * Its whole reason to exist is that the client must not do this arithmetic:
+ * `صافي ربح المعرض` is derived from the finance company's approved purchase
+ * amount, not from what the customer paid, and it is a MANAGEMENT figure with
+ * no journal behind it. So these assert the SHAPE of the answer as much as the
+ * numbers — a figure that can be rendered without its qualifier, or a party row
+ * the client has to interpret for itself, is the defect.
+ */
+describe("the deal cockpit query", () => {
+  test("a deal from another org is not readable, even with a valid id", async () => {
+    const s = await seedDealership("cockpitTenant");
+    const { applicationId } = await runDeal(s, { finalize: false });
+    const other = await seedDealership("cockpitTenantOther");
+
+    const seen = await other.asUser.query(api.applications.dealCockpit, {
+      orgId: other.orgId,
+      applicationId,
+    });
+    expect(seen).toBeNull();
+  });
+
+  test("the money panel is withheld from a role without view:finance", async () => {
+    const s = await seedDealership("cockpitPerm");
+    const { applicationId } = await runDeal(s, { finalize: false });
+
+    // Withheld on the SERVER, not hidden by the component: a salesperson can
+    // follow their own deal without seeing what the dealership makes on it.
+    await s.t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === s.orgId)!;
+      await ctx.db.patch(role._id, {
+        permissions: role.permissions.filter((p) => p !== "view:finance"),
+        isSystemOwnerRole: false,
+      });
+    });
+
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    expect(view!.money).toBeNull();
+    // ...but the deal itself still renders. A permission that blanks the whole
+    // screen turns "you cannot see the profit" into "this deal is broken".
+    expect(view!.stages.length).toBeGreaterThan(0);
+  });
+
+  test("THROUGH_DEALERSHIP: the dealership owes the supplier and is owed by the financier", async () => {
+    const s = await seedDealership("cockpitThrough");
+    const { applicationId } = await runDeal(s, { route: "THROUGH_DEALERSHIP", finalize: true });
+
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    const by = (party: string) => view!.money!.parties.find((p) => p.party === party)!;
+
+    expect(view!.money!.settlesDirectToSupplier).toBe(false);
+    expect(by("SUPPLIER").position).toBe("DEALERSHIP_OWES");
+    expect(by("FINANCIER").position).toBe("OWED_TO_DEALERSHIP");
+  });
+
+  test("DIRECT_TO_SUPPLIER inverts both rows — the same three parties, opposite directions", async () => {
+    const s = await seedDealership("cockpitDirect");
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    const by = (party: string) => view!.money!.parties.find((p) => p.party === party)!;
+
+    expect(view!.money!.settlesDirectToSupplier).toBe(true);
+    // The supplier now owes the dealership its agency margin...
+    expect(by("SUPPLIER").position).toBe("OWED_TO_DEALERSHIP");
+    expect(by("SUPPLIER").amountMinor).toBe(MARGIN * SCALE);
+    // ...and the financier never owed the dealership anything on this deal.
+    // NOT_INVOLVED rather than a zero balance: a zero reads as a debt that was
+    // settled, and there was never one to settle.
+    expect(by("FINANCIER").position).toBe("NOT_INVOLVED");
+  });
+
+  test("the supplier payable is converted from major units at the currency's own scale", async () => {
+    // The trap: `amountDue` is stored in MAJOR units on both supplier tables,
+    // while every `*Minor` field on the application is minor. JOD is a
+    // three-decimal currency, so reading one as the other is off by 1,000.
+    const s = await seedDealership("cockpitScale");
+    const { applicationId } = await runDeal(s, { route: "THROUGH_DEALERSHIP", finalize: true });
+
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    const supplier = view!.money!.parties.find((p) => p.party === "SUPPLIER")!;
+    expect(supplier.amountMinor).toBe(SUPPLIER_ENTITLEMENT * SCALE);
+  });
+
+  test("the headline figure never travels without its classification", async () => {
+    const s = await seedDealership("cockpitProfit");
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+
+    // Set directly rather than through `approveDealerPurchaseAmount`, which
+    // needs a recorded quotation, an appraisal and an LTV basis to reach —
+    // machinery this read query does not touch and which has its own suite. The
+    // field is the only input the derivation takes from the application.
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, {
+        approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+      });
+    });
+
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    const profit = view!.money!.managementProfit;
+    expect(profit.available).toBe(true);
+    if (!profit.available) return;
+
+    // On the direct route the economics reduce to the agency margin less
+    // expenses: the financier pays the supplier the gross and the supplier owes
+    // the margin back, so approved − (approved − margin) = margin. Computing it
+    // the long way and landing on the short answer is the cross-check.
+    expect(profit.amountMinor).toBe(MARGIN * SCALE);
+
+    // Amount and qualifier are one object, so a caller cannot render the first
+    // having dropped the second.
+    expect(profit).toHaveProperty("classification");
+    expect(profit.postable).toBe(false);
+    // And the headline is the sum of the lines the screen renders, never a
+    // second computation that could disagree with them.
+    expect(profit.lines.reduce((t, l) => t + l.sign * l.amountMinor, 0)).toBe(profit.amountMinor);
+  });
+
+  test("an unstarted deal reports that the profit cannot be computed, not that it is zero", async () => {
+    const s = await seedDealership("cockpitNoProfit");
+    const { applicationId } = await runDeal(s, { finalize: false });
+
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    const profit = view!.money!.managementProfit;
+    // Zero profit and unknowable profit are different claims, and this is the
+    // screen where a dealership decides whether a deal made money.
+    expect(profit).toEqual({ available: false, reason: "NoApprovedPurchaseAmount" });
+  });
+
+  test("the stage rail always names exactly one place to act", async () => {
+    const s = await seedDealership("cockpitStages");
+    const { applicationId } = await runDeal(s, { finalize: false });
+
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    const live = view!.stages.filter((st) => st.state === "CURRENT" || st.state === "BLOCKED");
+    expect(live).toHaveLength(1);
+  });
+});

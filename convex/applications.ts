@@ -25,7 +25,10 @@ import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/pr
 import {
   buildRuleSnapshot,
   creditDecisionForStatus,
+  deriveDealStages,
+  deriveManagementProfit,
   handoverStatusForFacts,
+  settlementStatusForFacts,
   type FinanceCompanyRuleSnapshot,
 } from "./utils/financingEconomics";
 import {
@@ -322,6 +325,255 @@ const VALID_STATUS_TRANSITIONS: Record<FinanceApplicationStatus, readonly Financ
   CANCELLED: [],
 };
 
+/**
+ * The money half of the cockpit: `أطراف الصفقة` and the headline figure.
+ *
+ * Every row arrives already classified — who holds the money, which way it is
+ * owed, and whether an action is available — rather than as a raw balance the
+ * screen has to interpret. A client deciding for itself that a positive balance
+ * on one table means "owed to us" and on another means "we owe" is how the same
+ * deal ends up described two different ways on two different screens.
+ */
+async function buildCockpitMoney(
+  ctx: QueryCtx,
+  app: Doc<"financeApplications">,
+  quote: Doc<"quotes"> | null
+) {
+  const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, app.orgId));
+  const vehicle = await ctx.db.get(app.vehicleId);
+  const consigned = vehicle != null && isConsignedAgentSale(vehicle);
+  const supplierName = vehicle?.sourcedFromName ?? "";
+
+  // Which way this deal settles. The SALE is the authority once it exists —
+  // `sales.update` locks the route on completion, so re-deriving from the live
+  // vehicle afterwards would let a later edit flip the answer under a deal that
+  // has already posted.
+  //
+  // Unlike the mutation-side guard, a missing sale does NOT throw here. This is
+  // a read: refusing would blank the operator's whole screen at the moment they
+  // most need to see what is wrong. It reports the route as unknown instead, and
+  // withholds every action that depends on knowing it — the same fail-closed
+  // outcome, without destroying the diagnostic.
+  let routeKnown = true;
+  let settlesDirect = false;
+  if (app.finalizedSaleId) {
+    const sale = await ctx.db.get(app.finalizedSaleId);
+    if (!sale || sale.orgId !== app.orgId) routeKnown = false;
+    else settlesDirect = !dealershipCollectsGross(consignedSettlementRoute(sale)) && consigned;
+  } else {
+    settlesDirect = !dealershipCollectsGross(consignedSettlementRoute(app)) && consigned;
+  }
+
+  // --- actual expenses --------------------------------------------------
+  const fees = await ctx.db
+    .query("financeDealFees")
+    .withIndex("by_application", (q) => q.eq("applicationId", app._id))
+    .collect();
+  const liveFees = fees.filter((fee) => fee.voidedAt === undefined);
+  // `actualAmountMinor` unset means unpaid or unrecorded — NOT zero. Only lines
+  // with a real actual are summed, and the count of those without one is
+  // reported so the screen can say the total is still incomplete rather than
+  // presenting a partial sum as the final cost.
+  const feeLines = liveFees.map((fee) => ({
+    id: fee._id,
+    feeType: fee.feeType,
+    description: fee.description,
+    estimatedAmountMinor: fee.estimatedAmountMinor,
+    actualAmountMinor: fee.actualAmountMinor,
+    currency: fee.currency,
+    reconciled: fee.reconciledAt !== undefined,
+  }));
+  // A fee recorded in another currency cannot be added to this total. Counted
+  // as unrecorded rather than converted at a rate nobody agreed.
+  const sameCurrencyFees = liveFees.filter((fee) => fee.currency === currency);
+  const actualExpensesMinor = sameCurrencyFees.reduce(
+    (total, fee) => total + (fee.actualAmountMinor ?? 0),
+    0
+  );
+  const feesAwaitingActuals =
+    liveFees.length - sameCurrencyFees.filter((fee) => fee.actualAmountMinor !== undefined).length;
+
+  // --- the supplier's position -----------------------------------------
+  /** `amountDue` is stored in MAJOR units on both supplier tables, unlike every
+   *  `*Minor` field on the application. Converting at the ROW's own currency,
+   *  and refusing to mix currencies, is what keeps a 3-decimal JOD figure from
+   *  being read as a 2-decimal one. */
+  const toMinorSameCurrency = (amount: number, rowCurrency: string): number | undefined =>
+    rowCurrency === currency ? toMinorUnits(amount, rowCurrency) : undefined;
+
+  const payables = app.finalizedSaleId
+    ? await ctx.db
+        .query("vehicleSupplierPayables")
+        .withIndex("by_sale", (q) => q.eq("saleId", app.finalizedSaleId))
+        .collect()
+    : await ctx.db
+        .query("vehicleSupplierPayables")
+        .withIndex("by_vehicle", (q) => q.eq("vehicleId", app.vehicleId))
+        .collect();
+  const payable = payables.find((row) => row.orgId === app.orgId && row.status !== "CANCELLED");
+
+  const receivables = app.finalizedSaleId
+    ? await ctx.db
+        .query("vehicleSupplierReceivables")
+        .withIndex("by_org_sale", (q) =>
+          q.eq("orgId", app.orgId).eq("saleId", app.finalizedSaleId!)
+        )
+        .collect()
+    : [];
+  const supplierClaim = receivables.find((row) => row.status !== "CANCELLED");
+  const supplierClaimOutstandingMinor =
+    supplierClaim &&
+    toMinorSameCurrency(
+      Math.max(0, supplierClaim.amountDue - (supplierClaim.amountReceived ?? 0)),
+      supplierClaim.currency
+    );
+
+  // --- the finance company's position ----------------------------------
+  const financeReceivables = await ctx.db
+    .query("receivableDocuments")
+    .withIndex("by_org_source", (q) =>
+      q
+        .eq("orgId", app.orgId)
+        .eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE)
+        .eq("sourceId", app._id)
+    )
+    .collect();
+  const financeReceivable = financeReceivables.find((row) => row.status !== "CANCELLED");
+  // No allocated total is stored on the document — a second copy of a figure
+  // derivable from the allocations is a figure that can disagree with them — so
+  // the outstanding balance is summed from the ACTIVE allocations, the same way
+  // the mutation side computes it. Reversed allocations must not count as paid.
+  let financeOutstandingMinor: number | undefined;
+  if (financeReceivable && financeReceivable.currency === currency) {
+    const allocations = await ctx.db
+      .query("paymentAllocations")
+      .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", financeReceivable._id))
+      .collect();
+    const allocatedMinor = allocations
+      .filter((allocation) => allocation.status === "ACTIVE")
+      .reduce((total, allocation) => total + allocation.amountMinor, 0);
+    financeOutstandingMinor = Math.max(0, financeReceivable.originalAmountMinor - allocatedMinor);
+  }
+
+  // --- the customer's position -----------------------------------------
+  const deposits = quote ? await getQuoteDeposits(ctx, app.quoteId) : [];
+  const heldDeposits = deposits.filter((deposit) => deposit.status === "HELD");
+  // `amountMinor` is stored on the deposit itself, so nothing is converted here
+  // — and a deposit taken in another currency is excluded rather than summed at
+  // a rate nobody agreed. Legacy rows predate `currency`; those carry the org's,
+  // which is what `currency` already resolves to.
+  const heldDepositMinor = heldDeposits.reduce(
+    (total, deposit) =>
+      total + ((deposit.currency ?? currency) === currency ? (deposit.amountMinor ?? 0) : 0),
+    0
+  );
+  // The mockup shows a receipt number against the customer row. It lives on the
+  // canonical payment, not the deposit.
+  const depositPaymentId = heldDeposits.find((deposit) => deposit.canonicalPaymentId)?.canonicalPaymentId;
+  const depositPayment = depositPaymentId ? await ctx.db.get(depositPaymentId) : null;
+
+  const parties = [
+    {
+      party: "CUSTOMER" as const,
+      name: "",
+      position:
+        heldDepositMinor > 0 ? ("DEALERSHIP_HOLDS" as const) : ("NOT_INVOLVED" as const),
+      amountMinor: heldDepositMinor,
+      currency,
+      reference: depositPayment?.externalReference,
+    },
+    settlesDirect
+      ? {
+          party: "SUPPLIER" as const,
+          name: supplierName,
+          // On the direct route the financier pays the supplier, so nothing is
+          // owed TO him — what remains is the dealership's agency margin, owed
+          // BY him. Same row, opposite direction, which is exactly why the
+          // screen cannot hard-code the mockup's THROUGH_DEALERSHIP layout.
+          position:
+            supplierClaimOutstandingMinor === undefined
+              ? ("UNKNOWN" as const)
+              : supplierClaimOutstandingMinor > 0
+                ? ("OWED_TO_DEALERSHIP" as const)
+                : ("SETTLED" as const),
+          amountMinor: supplierClaimOutstandingMinor ?? 0,
+          currency,
+          reference: supplierClaim?.receiptReference,
+        }
+      : {
+          party: "SUPPLIER" as const,
+          name: supplierName,
+          position: !payable
+            ? ("NOT_INVOLVED" as const)
+            : payable.status === "PAID"
+              ? ("SETTLED" as const)
+              : ("DEALERSHIP_OWES" as const),
+          amountMinor: payable ? (toMinorSameCurrency(payable.amountDue, payable.currency) ?? 0) : 0,
+          currency,
+          reference: undefined,
+        },
+    {
+      party: "FINANCIER" as const,
+      name: app.manualFinanceSnapshot?.providerName ?? "",
+      position: settlesDirect
+        ? // It paid the supplier directly, so it never owed the dealership
+          // anything on this deal. Reporting a zero receivable would suggest a
+          // debt that was settled; there was never one to settle.
+          ("NOT_INVOLVED" as const)
+        : !financeReceivable
+          ? ("NOT_INVOLVED" as const)
+          : financeReceivable.status === "PAID"
+            ? ("SETTLED" as const)
+            : ("OWED_TO_DEALERSHIP" as const),
+      amountMinor: settlesDirect ? 0 : (financeOutstandingMinor ?? 0),
+      currency,
+    },
+  ];
+
+  // What the supplier ends up with, which is what the headline subtracts.
+  // THROUGH_DEALERSHIP: the payable the dealership owes him. DIRECT: the
+  // approved amount minus the dealership's margin claim, because the financier
+  // pays him the gross and he owes the margin back. Both reduce to the same
+  // economics — margin less expenses — which is the point of computing it here
+  // once rather than twice on the client.
+  let supplierSettlementMinor: number | undefined;
+  if (!routeKnown) supplierSettlementMinor = undefined;
+  else if (settlesDirect) {
+    supplierSettlementMinor =
+      app.approvedDealerPurchaseAmountMinor !== undefined && supplierClaimOutstandingMinor !== undefined
+        ? app.approvedDealerPurchaseAmountMinor - supplierClaimOutstandingMinor
+        : undefined;
+  } else if (payable) {
+    supplierSettlementMinor = toMinorSameCurrency(payable.amountDue, payable.currency);
+  }
+
+  const settlement = app.settlementStatus ?? settlementStatusForFacts(app);
+  const fullySettled =
+    (settlement === "FULLY_SETTLED" || settlement === "RECONCILED") && feesAwaitingActuals === 0;
+
+  return {
+    currency,
+    settlesDirectToSupplier: settlesDirect,
+    routeKnown,
+    managementProfit: deriveManagementProfit({
+      approvedDealerPurchaseAmountMinor: app.approvedDealerPurchaseAmountMinor,
+      supplierSettlementMinor,
+      actualExpensesMinor,
+      currency,
+      fullySettled,
+    }),
+    expenses: {
+      lines: feeLines,
+      actualTotalMinor: actualExpensesMinor,
+      /** Non-zero means the total above is not the whole cost yet. */
+      awaitingActuals: feesAwaitingActuals,
+    },
+    parties,
+    /** `فرق تخمين` — a read of what was recorded, never a fresh computation. */
+    appraisalGapMinor: app.rawAppraisalGapMinor,
+  };
+}
+
 async function assertRequiredApplicationDocumentsComplete(
   ctx: MutationCtx,
   app: Doc<"financeApplications">,
@@ -513,6 +765,144 @@ export const get = query({
             ? "HeldDeposit"
             : null,
     };
+  },
+});
+
+/**
+ * Everything the financed-deal cockpit renders, from one query.
+ *
+ * Deliberately not six queries with the arithmetic done in React. The screen's
+ * headline is `صافي ربح المعرض`, a MANAGEMENT figure derived from the finance
+ * company's approved purchase amount rather than from what the customer paid —
+ * a number the books do not support and must never be asked to. Computing it on
+ * the client would make it trivially separable from the qualifier that says so,
+ * and would give the screen a second opinion about money the ledger already has
+ * an opinion about. One assembly, server-side, is the enforcement.
+ *
+ * Returns `null` for an application that does not exist or belongs to another
+ * org — the same shape `get` uses, so the screen has one not-found path.
+ */
+export const dealCockpit = query({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+  },
+  handler: async (ctx, args) => {
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+
+    const app = await ctx.db.get(args.applicationId);
+    if (!app || app.orgId !== args.orgId) return null;
+
+    // The money panel is a separate permission from the deal itself: a
+    // salesperson tracks their own deal's progress without seeing what the
+    // dealership makes on it. Withheld on the SERVER rather than hidden in the
+    // component, because a permission enforced by rendering is not enforced.
+    const canSeeMoney =
+      isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_FINANCE);
+
+    const [customer, vehicle, company, salesperson, quote] = await Promise.all([
+      ctx.db.get(app.customerId),
+      ctx.db.get(app.vehicleId),
+      app.companyId ? ctx.db.get(app.companyId) : Promise.resolve(null),
+      ctx.db.get(app.salespersonId),
+      ctx.db.get(app.quoteId),
+    ]);
+
+    // --- documents, which drive both the checklist and the delivery stage ----
+    const rules = await ctx.db
+      .query("companyDocumentRules")
+      .withIndex("by_org", (q) => q.eq("orgId", app.orgId))
+      .collect();
+    // Same filter `assertRequiredApplicationDocumentsComplete` applies before
+    // approval: an org-wide rule, or one for this deal's company. A screen that
+    // counted rules the approval gate ignores would show a checklist the
+    // dealership can never finish.
+    const applicableRules = rules.filter(
+      (rule) => !rule.companyId || rule.companyId === quote?.companyId
+    );
+    const docRows = await ctx.db
+      .query("applicationDocuments")
+      .withIndex("by_application", (q) => q.eq("applicationId", app._id))
+      .collect();
+    const docByRule = new Map(docRows.map((doc) => [doc.ruleId, doc]));
+
+    const documents = applicableRules.map((rule) => {
+      const doc = docByRule.get(rule._id);
+      return {
+        ruleId: rule._id,
+        name: rule.documentName,
+        required: rule.isRequired === true,
+        // A rule with no row yet is MISSING, not absent — the checklist exists
+        // to name what has not been done.
+        status: doc?.status ?? ("MISSING" as const),
+        uploadedAt: doc?.uploadedAt,
+      };
+    });
+    const requiredDocs = documents.filter((doc) => doc.required);
+    const requiredDocumentsComplete = requiredDocs.every(
+      (doc) => doc.status === "VERIFIED" || doc.status === "WAIVED"
+    );
+
+    // --- the stage rail --------------------------------------------------
+    const stages = deriveDealStages({
+      status: app.status,
+      vehicleHandoverAt: app.vehicleHandoverAt,
+      finalizedSaleId: app.finalizedSaleId,
+      disbursedAt: app.disbursedAt,
+      creditDecision: app.creditDecision,
+      appraisalStatus: app.appraisalStatus,
+      gapResolution: app.gapResolution,
+      settlementStatus: app.settlementStatus,
+      handoverStatus: app.handoverStatus,
+      rawAppraisalGapMinor: app.rawAppraisalGapMinor,
+      approvedDealerPurchaseAmountMinor: app.approvedDealerPurchaseAmountMinor,
+      requiredDocumentsComplete,
+    });
+
+    const timeline = await ctx.db
+      .query("applicationStatusLog")
+      .withIndex("by_application", (q) => q.eq("applicationId", app._id))
+      .collect();
+    const actorNames = new Map<string, string>();
+    for (const entry of timeline) {
+      if (actorNames.has(entry.changedBy)) continue;
+      const actor = await ctx.db.get(entry.changedBy);
+      actorNames.set(entry.changedBy, actor?.name ?? "");
+    }
+
+    const base = {
+      applicationId: app._id,
+      status: app.status,
+      createdAt: app.createdAt,
+      updatedAt: app.updatedAt,
+      customer: customer && { id: customer._id, name: `${customer.firstName} ${customer.lastName}`.trim(), phone: customer.phone },
+      vehicle: vehicle && {
+        id: vehicle._id,
+        label: `${vehicle.make} ${vehicle.model} ${vehicle.year}`.trim(),
+        vin: vehicle.vin,
+        /** `لدى المورد` vs dealership-owned. The screen says whose car this is. */
+        consigned: isConsignedAgentSale(vehicle),
+        supplierName: vehicle.sourcedFromName,
+      },
+      salespersonName: salesperson?.name ?? "",
+      financeCompanyName: company?.name ?? app.manualFinanceSnapshot?.providerName ?? "",
+      stages,
+      documents,
+      timeline: timeline
+        .slice()
+        .sort((a, b) => a.changedAt - b.changedAt)
+        .map((entry) => ({
+          fromStatus: entry.fromStatus,
+          toStatus: entry.toStatus,
+          changedAt: entry.changedAt,
+          actorName: actorNames.get(entry.changedBy) ?? "",
+          note: entry.note,
+        })),
+    };
+
+    if (!canSeeMoney) return { ...base, money: null };
+
+    return { ...base, money: await buildCockpitMoney(ctx, app, quote) };
   },
 });
 
