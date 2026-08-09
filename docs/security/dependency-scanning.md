@@ -26,6 +26,8 @@ npm-family ones, so a future `gradle.lockfile` or `requirements.txt` cannot land
 unscanned and unnoticed. Adding a new workspace, worker or ecosystem breaks that
 step on purpose; update `scan-args` when it does.
 
+## 2. Build-toolchain SCA — reporting only, never gating
+
 Job: `osv-toolchain`. Scans
 `apps/mobile/android/gradle/verification-metadata.xml`. It writes a job summary
 and uploads `osv-toolchain.json` as an artifact. It has **no**
