@@ -141,6 +141,7 @@ export const salesEn = {
   RouteDirectToSupplier: "Direct to the supplier",
   RouteDirectToSupplierHint: "The buyer paid the supplier. The dealership never handled the money.",
   UnnamedFinanceProvider: "Finance provider (not named)",
+  NotRecorded: "Not recorded",
   RouteDirectUnavailableHeldDeposit:
     "A reservation deposit is still held. On this route the dealership bills the customer nothing for the car, so settle the deposit first.",
   RouteDirectUnavailableNoExternalFinancier:
@@ -743,6 +744,7 @@ export const salesAr = {
   RouteDirectToSupplier: "مباشرة إلى المورّد",
   RouteDirectToSupplierHint: "دفع المشتري للمورّد، ولم يستلم المعرض المبلغ إطلاقًا.",
   UnnamedFinanceProvider: "جهة التمويل (غير مسمّاة)",
+  NotRecorded: "غير مسجّل",
   RouteDirectUnavailableHeldDeposit:
     "ما زال هناك عربون محجوز. في هذا المسار لا يُطالب المعرض المشتري بثمن السيارة، لذا يجب معالجة العربون أولًا.",
   RouteDirectUnavailableNoExternalFinancier:

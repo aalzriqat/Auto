@@ -256,6 +256,14 @@ export function ApplicationDetailsDialog({
     ? currency.format(app.disbursedAmountMinor / currencyFactor)
     : null;
   const expectedDisbursementLabel = currency.format(expectedDisbursementMinor / currencyFactor);
+  // What the finance company approved to pay for the CAR, which is what it
+  // sends the supplier. Absent on deals whose approved amount was never
+  // recorded, where showing a confident-looking zero would be worse than
+  // saying nothing.
+  const expectedSupplierDisbursementLabel =
+    app.approvedDealerPurchaseAmountMinor !== undefined
+      ? currency.format(app.approvedDealerPurchaseAmountMinor / currencyFactor)
+      : t("NotRecorded" as any);
   // A consigned car is the supplier's, so this deal has a settlement route: the
   // finance company's cheque is made out to the dealership or to him, depending
   // on who owns the car. Absent reads as THROUGH_DEALERSHIP, matching the server.
@@ -745,7 +753,14 @@ export function ApplicationDetailsDialog({
                     open={isSupplierDisbursementDialogOpen}
                     disabled={isConfirmingDisbursement}
                     submitting={isConfirmingDisbursement}
-                    amountLabel={expectedDisbursementLabel}
+                    // The same figure the field is prefilled with. This label
+                    // was showing `totalFinancedAmount` — the customer's
+                    // principal — beside a prefill deliberately taken from the
+                    // approved purchase amount, so on any deal with a down
+                    // payment the dialog stated one number and offered another,
+                    // inviting the operator to "correct" the right one to the
+                    // wrong one.
+                    amountLabel={expectedSupplierDisbursementLabel}
                     // Prefilled from what the company APPROVED to pay for the
                     // car, which is the figure the advice should carry — not
                     // `totalFinancedAmount`, the customer's principal, which

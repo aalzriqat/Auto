@@ -202,7 +202,12 @@ export function DisbursementConfirmationDialog({
                 // so in Amman (UTC+3) every advice recorded before 15:00 local
                 // and dated today was rejected by the server's own
                 // "not in the future" check — for the date its picker offered.
-                disbursedAt: paidOn ? Math.min(dateInputToUtcMs(paidOn), Date.now()) : undefined,
+                // Sent unchanged. Clamping a future date to `Date.now()` filed
+                // a settlement advice under a date the operator never entered,
+                // and did it silently — the record whose entire job is to say
+                // what the advice said. The server rejects a future date with a
+                // message naming what to change, and the caller surfaces it.
+                disbursedAt: paidOn ? dateInputToUtcMs(paidOn) : undefined,
               });
             }}
             // `!(x > 0)`, not `x <= 0` — SonarCloud suggests the latter and they
