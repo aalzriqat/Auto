@@ -1,20 +1,23 @@
 import { describe, expect, test } from "vitest";
 import {
-  AUTO_CONFIRM_FLAGS,
+  ALLOWED_DEPLOY_ARGS,
+  bundleOffenders,
   describeTargetSelection,
   evaluateProdDeploy,
-  parsePorcelain,
+  extractDeploymentName,
+  looksLikeProduction,
   type RepoSnapshot,
 } from "./deployGuard";
 
 /**
- * Each case here is a state that actually reached production, or the exact
- * state that would have prevented it.
+ * Each case is a state that actually reached production, a bypass reproduced
+ * against this guard, or the exact condition that would have stopped either.
  *
- * The incident, in one line: `CONVEX_DEPLOYMENT=dev:vibrant-cat-418 npx convex
- * deploy -y` pushed unmerged code plus an untracked scratch module to prod. The
- * `-y` suppressed a prompt that names the production deployment; the untracked
- * file was bundled from disk and so appeared in no diff, review or CI check.
+ * The incident: `CONVEX_DEPLOYMENT=dev:vibrant-cat-418 npx convex deploy -y`
+ * pushed unmerged code plus an untracked scratch module to prod. `-y` (an
+ * undocumented flag) suppressed the confirmation naming the production
+ * deployment; the untracked file was bundled from disk and so appeared in no
+ * diff, review or CI check.
  */
 
 const CLEAN: RepoSnapshot = {
@@ -23,7 +26,8 @@ const CLEAN: RepoSnapshot = {
   originMainSha: "284e3e35e171313620c94f29a377c2ff6e1f4f78",
   headIsAncestorOfOriginMain: true,
   trackedChanges: [],
-  untrackedPaths: [],
+  bundleFilesOnDisk: ["convex/schema.ts", "convex/socialInbox.ts"],
+  trackedBundleFiles: ["convex/schema.ts", "convex/socialInbox.ts"],
   forwardedArgs: [],
   env: {},
 };
@@ -39,52 +43,81 @@ describe("production deploy preconditions", () => {
   });
 
   test("THE INCIDENT: an untracked module under convex/ is refused", () => {
-    // `convex/` is bundled from disk, not from git. `probe211.ts` was untracked,
-    // so it shipped to production while appearing in no diff and no review.
-    const result = evaluateProdDeploy({
+    const snapshot = {
       ...CLEAN,
-      untrackedPaths: ["convex/probe211.ts"],
-    });
-    expect(result.ok).toBe(false);
-    expect(failureIds({ ...CLEAN, untrackedPaths: ["convex/probe211.ts"] })).toContain(
-      "no-untracked-in-bundle"
+      bundleFilesOnDisk: [...CLEAN.bundleFilesOnDisk, "convex/probe211.ts"],
+    };
+    expect(failureIds(snapshot)).toContain("bundle-is-tracked");
+    const failure = evaluateProdDeploy(snapshot).failures.find(
+      (f) => f.id === "bundle-is-tracked"
     );
-    // The message has to name the file; "something is untracked" sends the
-    // operator hunting through `git status` for it.
-    const failure = result.failures.find((f) => f.id === "no-untracked-in-bundle");
+    // Naming the file matters; "something is untracked" sends the operator
+    // hunting through git status for it.
     expect(failure?.detail).toContain("convex/probe211.ts");
   });
 
-  test("untracked files outside the bundled directory are not the deploy's problem", () => {
-    // Scratch notes, local env files and spec drafts sit in every worktree here.
-    // Refusing on those would train people to ignore the guard.
+  test("a .gitignored module under convex/ is refused too", () => {
+    // Reproduced against this repo: `.gitignore` carries an unanchored
+    // `fix_*.js`, so `convex/fix_probe.js` is invisible to `git status
+    // --porcelain` — the guard's original question — while Convex still bundles
+    // it off disk. Strictly more invisible than the file that caused the
+    // incident, because even `git status` stays silent.
+    expect(
+      failureIds({
+        ...CLEAN,
+        bundleFilesOnDisk: [...CLEAN.bundleFilesOnDisk, "convex/fix_probe.js"],
+      })
+    ).toContain("bundle-is-tracked");
+  });
+
+  test("non-ASCII filenames are compared as-is, not through porcelain quoting", () => {
+    // git quotes these in --porcelain=v1 as "conv\303\251x/x.ts", which broke a
+    // convex/ prefix test and mangled the name in the message.
+    expect(
+      failureIds({
+        ...CLEAN,
+        bundleFilesOnDisk: [...CLEAN.bundleFilesOnDisk, "convex/probé.ts"],
+      })
+    ).toContain("bundle-is-tracked");
+  });
+
+  test("a tracked bundle file is not an offender", () => {
+    expect(evaluateProdDeploy(CLEAN).ok).toBe(true);
+  });
+
+  test.each(["-y", "--yes", "-vy", "-yv", "--yes=true", "--force", "-f", "--no-verify"])(
+    "%s is refused",
+    (flag) => {
+      // `-vy` is the one that matters: commander expands combined short flags,
+      // so it sets verbose AND yes while matching neither `-y` nor `--yes`
+      // exactly. An exact-match denylist passed it, which is why this is an
+      // allowlist.
+      expect(failureIds({ ...CLEAN, forwardedArgs: [flag] })).toContain("allowed-args-only");
+    }
+  );
+
+  test("known-safe flags and their values still pass through", () => {
     expect(
       evaluateProdDeploy({
         ...CLEAN,
-        untrackedPaths: ["DEAL-FINANCIALS-SPEC.md", ".env.local", "handoff.md"],
+        forwardedArgs: ["--typecheck", "disable", "-v", "--cmd", "pnpm build"],
       }).ok
     ).toBe(true);
   });
 
-  test("nested untracked paths under convex/ are caught too", () => {
+  test("a flag value is never mistaken for a flag", () => {
+    // `--cmd "npx convex deploy -y"` would be alarming, but the value belongs to
+    // --cmd; what matters is that a bare `-y` in flag position is still caught.
     expect(
-      failureIds({ ...CLEAN, untrackedPaths: ["convex/utils/scratchProbe.ts"] })
-    ).toContain("no-untracked-in-bundle");
+      evaluateProdDeploy({ ...CLEAN, forwardedArgs: ["--cmd", "pnpm build", "-y"] }).ok
+    ).toBe(false);
   });
 
-  test.each(AUTO_CONFIRM_FLAGS)("%s is refused — it silences the production prompt", (flag) => {
-    const snapshot = { ...CLEAN, forwardedArgs: [flag] };
-    expect(failureIds(snapshot)).toContain("no-auto-confirm");
-    const failure = evaluateProdDeploy(snapshot).failures.find(
-      (f) => f.id === "no-auto-confirm"
-    );
-    expect(failure?.detail).toContain(flag);
-  });
-
-  test("ordinary forwarded flags still pass through", () => {
-    expect(
-      evaluateProdDeploy({ ...CLEAN, forwardedArgs: ["--typecheck", "disable", "-v"] }).ok
-    ).toBe(true);
+  test("the allowlist does not quietly contain an auto-confirm flag", () => {
+    for (const flag of ALLOWED_DEPLOY_ARGS) {
+      expect(flag).not.toMatch(/^-[a-z]*y$/i);
+      expect(flag).not.toBe("--yes");
+    }
   });
 
   test("uncommitted tracked changes are refused", () => {
@@ -94,7 +127,6 @@ describe("production deploy preconditions", () => {
   });
 
   test("unmerged code is refused", () => {
-    // The state on 2026-08-07: a PR branch, not an ancestor of origin/main.
     expect(
       failureIds({
         ...CLEAN,
@@ -105,151 +137,162 @@ describe("production deploy preconditions", () => {
     ).toContain("merged-into-main");
   });
 
-  test("a merged commit behind the tip needs --allow-behind", () => {
-    const behind: RepoSnapshot = {
-      ...CLEAN,
-      headSha: "52be7b4f".padEnd(40, "0"),
-      headIsAncestorOfOriginMain: true,
-    };
-    // This is the rollback shape — redeploying an older merged commit. It is a
-    // legitimate operation and must stay possible, but never by accident.
-    expect(failureIds(behind)).toContain("at-origin-main-tip");
-    expect(evaluateProdDeploy(behind, { allowBehind: true }).ok).toBe(true);
-  });
-
   test("a diverged branch is not called 'behind', and is not offered --allow-behind", () => {
-    // Caught by running the guard against its own branch. Saying "behind …
-    // pass --allow-behind" to someone on an unmerged branch is advice that
-    // cannot work: merged-into-main refuses regardless. A guard that names the
-    // state wrongly teaches the wrong flag.
     const diverged: RepoSnapshot = {
       ...CLEAN,
       branch: "agent/deploy-target-guard",
       headSha: "0c57293e".padEnd(40, "0"),
       headIsAncestorOfOriginMain: false,
     };
-    const tip = evaluateProdDeploy(diverged).checks.find(
-      (c) => c.id === "at-origin-main-tip"
-    );
-    expect(tip?.ok).toBe(false);
+    const tip = evaluateProdDeploy(diverged).checks.find((c) => c.id === "at-origin-main-tip");
     expect(tip?.detail).toMatch(/diverged/);
     expect(tip?.detail).not.toMatch(/pass --allow-behind/);
-
     // And --allow-behind must not launder unmerged code into a deploy.
     expect(evaluateProdDeploy(diverged, { allowBehind: true }).ok).toBe(false);
   });
 
-  test("--allow-behind does not excuse anything else", () => {
-    // A rollback still may not carry an untracked bundle file or a dirty tree.
+  test("a merged commit behind the tip needs --allow-behind", () => {
+    const behind: RepoSnapshot = {
+      ...CLEAN,
+      headSha: "52be7b4f".padEnd(40, "0"),
+      headIsAncestorOfOriginMain: true,
+    };
+    expect(failureIds(behind)).toContain("at-origin-main-tip");
+    expect(evaluateProdDeploy(behind, { allowBehind: true }).ok).toBe(true);
+  });
+
+  test("--allow-behind excuses only the tip check", () => {
     const ids = failureIds(
       {
         ...CLEAN,
         headSha: "52be7b4f".padEnd(40, "0"),
-        untrackedPaths: ["convex/probe211.ts"],
+        bundleFilesOnDisk: [...CLEAN.bundleFilesOnDisk, "convex/probe211.ts"],
         trackedChanges: ["convex/schema.ts"],
       },
       { allowBehind: true }
     );
-    expect(ids).toContain("no-untracked-in-bundle");
+    expect(ids).toContain("bundle-is-tracked");
     expect(ids).toContain("clean-worktree");
     expect(ids).not.toContain("at-origin-main-tip");
   });
 
+  test("there is no override flag — a --force is itself refused", () => {
+    // Deliberately otherwise-clean, so the refusal is attributable to the flag
+    // rather than to some other failure in the fixture.
+    const result = evaluateProdDeploy({ ...CLEAN, forwardedArgs: ["--force"] });
+    expect(result.ok).toBe(false);
+    expect(result.failures.map((f) => f.id)).toEqual(["allowed-args-only"]);
+  });
+
   test("every failure is reported at once, not one per attempt", () => {
-    // Four things wrong; the operator should learn all four now rather than
-    // rerun the guard four times.
     const ids = failureIds({
       branch: "agent/convex-io-conversations",
       headSha: "ba939af6".padEnd(40, "0"),
       originMainSha: "284e3e35".padEnd(40, "0"),
       headIsAncestorOfOriginMain: false,
       trackedChanges: ["convex/schema.ts"],
-      untrackedPaths: ["convex/probe211.ts"],
+      bundleFilesOnDisk: ["convex/probe211.ts"],
+      trackedBundleFiles: [],
       forwardedArgs: ["-y"],
       env: { CONVEX_DEPLOYMENT: "dev:vibrant-cat-418" },
     });
     expect(ids).toEqual(
       expect.arrayContaining([
-        "no-auto-confirm",
-        "no-untracked-in-bundle",
+        "allowed-args-only",
+        "bundle-is-tracked",
         "clean-worktree",
         "merged-into-main",
         "at-origin-main-tip",
       ])
     );
   });
+});
 
-  test("there is no override flag", () => {
-    // Every check has a cheap honest resolution. A --force would be reached for
-    // by habit, and this guard exists because a habit is what caused the
-    // incident.
-    const snapshot = {
-      ...CLEAN,
-      untrackedPaths: ["convex/probe211.ts"],
-      forwardedArgs: ["--force", "-f", "--no-verify"],
-    };
-    expect(evaluateProdDeploy(snapshot).ok).toBe(false);
+describe("bundleOffenders", () => {
+  test("reports on-disk files that git does not track", () => {
+    expect(
+      bundleOffenders(["convex/a.ts", "convex/fix_probe.js"], ["convex/a.ts"])
+    ).toEqual(["convex/fix_probe.js"]);
+  });
+
+  test("a tracked file deleted from disk is not an offender", () => {
+    // Deleting a file is the clean-worktree check's business, not the bundle's.
+    expect(bundleOffenders(["convex/a.ts"], ["convex/a.ts", "convex/gone.ts"])).toEqual([]);
+  });
+
+  test("separators are normalised on both sides before comparison", () => {
+    expect(bundleOffenders(["convex\\utils\\a.ts"], ["convex/utils/a.ts"])).toEqual([]);
+  });
+
+  test("an empty tracked list makes every on-disk file an offender", () => {
+    expect(bundleOffenders(["convex/a.ts", "convex/b.ts"], [])).toEqual([
+      "convex/a.ts",
+      "convex/b.ts",
+    ]);
   });
 });
 
-describe("porcelain parsing", () => {
-  test("a leading space is not eaten — the reported path is the real path", () => {
-    // The bug this pins: the first version trimmed the git command's whole
-    // output, which removed the leading space that porcelain uses for
-    // "unstaged". `slice(3)` then cut one character into the name and the guard
-    // announced "ackage.json". A guard whose message names the wrong file sends
-    // the operator looking for something that is not there.
-    const raw = " M package.json\n?? convex/probeScratch.ts";
-    const { trackedChanges, untrackedPaths } = parsePorcelain(raw);
-    expect(trackedChanges).toEqual(["package.json"]);
-    expect(untrackedPaths).toEqual(["convex/probeScratch.ts"]);
+describe("reading the target back out of the dry run", () => {
+  const REAL_DRY_RUN = [
+    "▌ Deploying code to deployment:",
+    "▌ [Production] aalzriqat:auto:production (prod) (dashboard: https://dashboard.convex.dev/t/aalzriqat/auto/kindly-hound-172)",
+    "▌ └─ https://kindly-hound-172.convex.cloud",
+    "- Deploying to https://kindly-hound-172.convex.cloud... [dry run]",
+  ].join("\n");
+
+  test("the deployment name comes from the CLI's own announcement", () => {
+    // Read back rather than inferred from CONVEX_DEPLOYMENT, because inferring
+    // the target from that variable is the mistake that caused the incident.
+    expect(extractDeploymentName(REAL_DRY_RUN)).toBe("kindly-hound-172");
   });
 
-  test.each([
-    [" M convex/schema.ts", "convex/schema.ts"],
-    ["M  convex/schema.ts", "convex/schema.ts"],
-    ["MM convex/schema.ts", "convex/schema.ts"],
-    ["A  convex/new.ts", "convex/new.ts"],
-    ["D  convex/gone.ts", "convex/gone.ts"],
-  ])("%s is read as a tracked change to %s", (line, expected) => {
-    expect(parsePorcelain(line).trackedChanges).toEqual([expected]);
+  test("production is recognised from the announcement", () => {
+    expect(looksLikeProduction(REAL_DRY_RUN)).toBe(true);
+    expect(looksLikeProduction("▌ [Preview] some-preview-123")).toBe(false);
   });
 
-  test("a rename reports the destination, which is what would deploy", () => {
+  test("output with no target line yields null so the caller can refuse", () => {
+    // A confirmation that cannot name the target is not a confirmation.
+    expect(extractDeploymentName("some unrelated error")).toBeNull();
+  });
+
+  test("the dashboard URL is a fallback when the cloud URL is absent", () => {
     expect(
-      parsePorcelain("R  convex/old.ts -> convex/new.ts").trackedChanges
-    ).toEqual(["convex/new.ts"]);
-  });
-
-  test("windows separators are normalised so the convex/ prefix still matches", () => {
-    const { untrackedPaths } = parsePorcelain("?? convex\\utils\\scratch.ts");
-    expect(untrackedPaths).toEqual(["convex/utils/scratch.ts"]);
-    expect(
-      evaluateProdDeploy({ ...CLEAN, untrackedPaths }).failures.map((f) => f.id)
-    ).toContain("no-untracked-in-bundle");
-  });
-
-  test("empty output is a clean tree", () => {
-    expect(parsePorcelain("")).toEqual({ trackedChanges: [], untrackedPaths: [] });
+      extractDeploymentName("(dashboard: https://dashboard.convex.dev/t/a/auto/vibrant-cat-418)")
+    ).toBe("vibrant-cat-418");
   });
 });
 
 describe("target selection is described, not inferred", () => {
   test("a dev CONVEX_DEPLOYMENT is called out as NOT redirecting the deploy", () => {
-    // The precise misreading behind the incident: this looks like a dev target.
     const text = describeTargetSelection({ CONVEX_DEPLOYMENT: "dev:vibrant-cat-418" });
     expect(text).toContain("dev:vibrant-cat-418");
     expect(text).toMatch(/does NOT redirect/i);
     expect(text).toMatch(/PRODUCTION/i);
   });
 
-  test("a deploy key is described as the CI shape", () => {
-    expect(describeTargetSelection({ CONVEX_DEPLOY_KEY: "prod:xxx" })).toMatch(
-      /CONVEX_DEPLOY_KEY/
+  test("a prod CONVEX_DEPLOYMENT is called out as silencing the prompt", () => {
+    // Verified with --dry-run: when the configured deployment IS the target,
+    // Convex asks nothing at all.
+    expect(describeTargetSelection({ CONVEX_DEPLOYMENT: "prod:kindly-hound-172" })).toMatch(
+      /will NOT prompt/i
     );
   });
 
-  test("an unset environment still resolves to production", () => {
-    expect(describeTargetSelection({})).toMatch(/production/i);
+  test("a deploy key is called out as silencing the prompt", () => {
+    expect(describeTargetSelection({ CONVEX_DEPLOY_KEY: "prod:xxx" })).toMatch(/will NOT prompt/i);
+  });
+
+  test("the source of the value is reported when it came from a file", () => {
+    // The CLI reads .env.local and .env itself, so a key can be in force
+    // without appearing in process.env.
+    expect(
+      describeTargetSelection({ CONVEX_DEPLOY_KEY: "prod:xxx", source: ".env.local" })
+    ).toContain(".env.local");
+  });
+
+  test("an unset environment is described as refusing, not as defaulting", () => {
+    // Verified: with neither set the CLI errors rather than guessing.
+    expect(describeTargetSelection({})).toMatch(/refuse/i);
   });
 });

@@ -5,31 +5,35 @@
  *
  * On 2026-08-07 unmerged code and an untracked scratch module were deployed to
  * production. The Social Inbox then reported zero conversations for an org
- * holding over a thousand live events, because the reader had shipped ahead of
- * its backfill.
+ * holding over a thousand live events, because the materialised reader shipped
+ * ahead of its backfill.
  *
- * The tempting lesson was "the CLI hides which deployment it targets". That is
- * false, and worth stating plainly because it changes the fix. `convex deploy`
- * prints the resolved production deployment and then asks:
+ * ## What the first version of this file got wrong
  *
- *     [Production] aalzriqat:auto:production (prod)  -> kindly-hound-172
- *     You're currently developing against your dev deployment
- *       vibrant-cat-418 (set in CONVEX_DEPLOYMENT)
- *     Do you want to push your code to your prod deployment kindly-hound-172 now?
+ * It delegated the final "are you sure this is production" question to Convex,
+ * on the strength of having watched the CLI ask it once. Convex asks
+ * **conditionally**. Verified with `--dry-run` against the real CLI:
  *
- * It even names the dev deployment you believed you were targeting, directly
- * beside the production one it is about to write. That prompt would have stopped
- * the incident. It was suppressed by `-y` — an accepted flag that appears in
- * neither `convex deploy --help` nor `convex --help`.
+ *   - `CONVEX_DEPLOYMENT=dev:…`  → it prints the prod deployment and asks.
+ *   - `CONVEX_DEPLOYMENT=prod:…` → **no prompt at all**; it deploys.
+ *   - `CONVEX_DEPLOY_KEY` set    → no prompt (the CI shape).
+ *   - neither set                → refuses outright, which is at least safe.
  *
- * So the guard's first job is not to reinvent that confirmation. It is to make
- * `-y` impossible to pass, and to add the checks Convex has no way to make:
- * whether the working tree is clean, whether anything untracked is about to be
- * bundled, and whether this commit is actually merged.
+ * A wrapper that prints "Convex will now ask you to confirm" and then does not
+ * get asked is worse than no wrapper: it manufactures confidence. So the
+ * confirmation is owned here — the operator types the deployment name, and
+ * nothing is spawned until they do.
  *
- * Kept as pure functions over an injected snapshot so every rule is testable
- * without shelling out or touching a real deployment. `scripts/deployProd.mjs`
- * collects the snapshot and owns the side effects.
+ * The same review found the two rules that mattered were each one small
+ * variation from useless: `-vy` slipped past an exact-match check on `-y`
+ * (commander expands combined short flags), and a `.gitignore`d file under
+ * `convex/` is not "untracked" to `git status`, so it passed the bundle check
+ * while Convex would still have bundled it off disk. Both are reproduced in
+ * `deployGuard.test.ts`.
+ *
+ * Rules are pure functions over an injected snapshot so each one is testable
+ * without shelling out or touching a deployment. `scripts/deployProd.mjs`
+ * gathers the snapshot and owns the side effects.
  */
 
 /** One precondition and how it landed. */
@@ -40,7 +44,6 @@ export type DeployCheck = {
   detail: string;
 };
 
-/** Everything the rules need, gathered by the caller. */
 export type RepoSnapshot = {
   branch: string;
   headSha: string;
@@ -49,12 +52,14 @@ export type RepoSnapshot = {
   headIsAncestorOfOriginMain: boolean;
   /** Tracked paths with staged or unstaged modifications. */
   trackedChanges: string[];
-  /** Untracked paths, repo-relative, forward-slashed. */
-  untrackedPaths: string[];
+  /** Deployable files present on disk under `convex/` (see `bundleOffenders`). */
+  bundleFilesOnDisk: string[];
+  /** `git ls-files convex/` — what is actually committed. */
+  trackedBundleFiles: string[];
   /** Arguments the caller intends to forward to `convex deploy`. */
   forwardedArgs: string[];
-  /** Ambient deployment-selecting env, for display. */
-  env: { CONVEX_DEPLOYMENT?: string; CONVEX_DEPLOY_KEY?: string };
+  /** Deployment-selecting configuration, resolved the way the CLI resolves it. */
+  env: { CONVEX_DEPLOYMENT?: string; CONVEX_DEPLOY_KEY?: string; source?: string };
 };
 
 export type DeployOptions = {
@@ -63,65 +68,73 @@ export type DeployOptions = {
 };
 
 /**
- * Flags that answer Convex's production confirmation on the operator's behalf.
+ * The only arguments that may reach `convex deploy`.
  *
- * `-y` is undocumented, which is precisely why it needs naming here: someone
- * reaching for a non-interactive deploy will not find it in `--help` and will
- * not learn what it turns off. `--yes` is included because an undocumented flag
- * has no contract and its long form may exist or appear later.
+ * An allowlist, not a denylist, because a denylist on this CLI was already
+ * defeated once. `-y` is undocumented — it appears in neither `convex deploy
+ * --help` nor `convex --help` — and commander expands combined short flags, so
+ * `-vy` sets both verbose and yes while matching neither `-y` nor `--yes`
+ * exactly. Enumerating what is permitted means the next undocumented flag is
+ * refused by default rather than discovered by an incident.
  */
-export const AUTO_CONFIRM_FLAGS = ["-y", "--yes"] as const;
+export const ALLOWED_DEPLOY_ARGS = new Set([
+  "-v",
+  "--verbose",
+  "--typecheck",
+  "--typecheck-components",
+  "--codegen",
+  "--cmd",
+  "--cmd-url-env-var-name",
+  "--debug-bundle-path",
+]);
 
-/** Convex bundles this directory. Anything untracked here ships. */
-const BUNDLED_DIR = "convex/";
+/** Values these flags take, which must pass through without being read as flags. */
+const ARGS_TAKING_VALUES = new Set([
+  "--typecheck",
+  "--codegen",
+  "--cmd",
+  "--cmd-url-env-var-name",
+  "--debug-bundle-path",
+]);
 
 /**
- * Splits `git status --porcelain=v1` into tracked changes and untracked paths.
- *
- * Lives here rather than in the CLI shell because parsing it wrong is not
- * theoretical: the first version trimmed the command's whole output, which ate
- * the **leading space** that porcelain uses for "unstaged", so `" M package.json"`
- * became `"M package.json"` and the path was reported as `"ackage.json"`. A
- * format with significant leading whitespace does not survive a convenience
- * trim, and the guard's messages are only useful if they name the real file.
- *
- * Pass the raw output with only the trailing newline removed.
+ * Extensions Convex treats as deployable entry points, from its bundler.
+ * Anything with one of these under `convex/` ships.
  */
-export function parsePorcelain(raw: string): {
-  trackedChanges: string[];
-  untrackedPaths: string[];
-} {
-  const trackedChanges: string[] = [];
-  const untrackedPaths: string[] = [];
+export const BUNDLED_EXTENSIONS = [
+  ".js",
+  ".mjs",
+  ".cjs",
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".jsx",
+];
 
-  for (const line of raw.split("\n")) {
-    if (line.length < 4) continue;
-    // Two status columns, then a space, then the path.
-    const path = line.slice(3).trim().replace(/\\/g, "/");
-    if (!path) continue;
-    if (line.startsWith("??")) {
-      untrackedPaths.push(path);
-    } else {
-      // Renames read as "R  old -> new"; the destination is what would deploy.
-      const arrow = path.indexOf(" -> ");
-      trackedChanges.push(arrow === -1 ? path : path.slice(arrow + 4));
+function checkForwardedArgs(snapshot: RepoSnapshot): DeployCheck {
+  const rejected: string[] = [];
+  const args = snapshot.forwardedArgs;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (!arg.startsWith("-")) continue; // a value for the flag before it
+    // `--flag=value` is the same flag as `--flag`.
+    const name = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+    if (!ALLOWED_DEPLOY_ARGS.has(name)) {
+      rejected.push(arg);
+      continue;
     }
+    if (ARGS_TAKING_VALUES.has(name) && !arg.includes("=")) i += 1; // skip its value
   }
 
-  return { trackedChanges, untrackedPaths };
-}
-
-function checkNoAutoConfirm(snapshot: RepoSnapshot): DeployCheck {
-  const found = snapshot.forwardedArgs.filter((arg) =>
-    (AUTO_CONFIRM_FLAGS as readonly string[]).includes(arg)
-  );
   return {
-    id: "no-auto-confirm",
-    ok: found.length === 0,
+    id: "allowed-args-only",
+    ok: rejected.length === 0,
     detail:
-      found.length === 0
-        ? "Convex's production confirmation will be shown"
-        : `refusing to pass ${found.join(" ")} — that suppresses the prompt naming the production deployment, which is what turned the 2026-08-07 incident from a question into a deploy`,
+      rejected.length === 0
+        ? "only known-safe arguments are forwarded"
+        : `refusing ${rejected.join(" ")} — only ${[...ALLOWED_DEPLOY_ARGS].join(", ")} may be forwarded. '-y' (and any combined form such as '-vy') suppresses the production confirmation and is never allowed`,
   };
 }
 
@@ -138,24 +151,42 @@ function checkCleanTree(snapshot: RepoSnapshot): DeployCheck {
 }
 
 /**
- * The specific hole that put a scratch probe module on production.
+ * Deployable files on disk that git does not track.
  *
- * `convex deploy` bundles the `convex/` directory from disk, not from git, so an
- * untracked file there is deployed as readily as a committed one — and being
- * untracked, it is invisible to every review, diff and CI check that looked at
- * the change. No escape flag: the fix is to commit the file or delete it, and a
- * bypass on this particular rule would reinstate exactly the failure it exists
- * to prevent.
+ * Asking git "what is untracked?" was the wrong question, and the difference is
+ * the whole finding: `git status --porcelain` omits **ignored** files, so
+ * `convex/fix_probe.js` — matched by `.gitignore`'s unanchored `fix_*.js` —
+ * was reported as "nothing untracked under convex/" while Convex would have
+ * bundled it off disk. That is strictly more invisible than the module which
+ * caused the incident, since even `git status` stays silent.
+ *
+ * So the comparison is the deployable set on disk against the git index. Also
+ * sidesteps porcelain's path quoting, which mangles non-ASCII names
+ * (`"conv\303\251x/x.ts"`) and would break a `convex/` prefix test.
  */
-function checkNoUntrackedBundled(snapshot: RepoSnapshot): DeployCheck {
-  const offenders = snapshot.untrackedPaths.filter((p) => p.startsWith(BUNDLED_DIR));
+export function bundleOffenders(
+  onDisk: string[],
+  tracked: string[]
+): string[] {
+  const trackedSet = new Set(tracked.map((p) => p.replace(/\\/g, "/")));
+  return onDisk
+    .map((p) => p.replace(/\\/g, "/"))
+    .filter((p) => !trackedSet.has(p))
+    .sort();
+}
+
+function checkBundleIsTracked(snapshot: RepoSnapshot): DeployCheck {
+  const offenders = bundleOffenders(
+    snapshot.bundleFilesOnDisk,
+    snapshot.trackedBundleFiles
+  );
   return {
-    id: "no-untracked-in-bundle",
+    id: "bundle-is-tracked",
     ok: offenders.length === 0,
     detail:
       offenders.length === 0
-        ? `nothing untracked under ${BUNDLED_DIR}`
-        : `untracked file(s) under ${BUNDLED_DIR} would be bundled and deployed unreviewed: ${offenders.join(", ")} — commit or delete them`,
+        ? "every deployable file under convex/ is tracked by git"
+        : `deployable file(s) under convex/ are not in git and would ship unreviewed: ${offenders.join(", ")} — commit or delete them (note: .gitignore does NOT stop Convex bundling them)`,
   };
 }
 
@@ -170,16 +201,12 @@ function checkMerged(snapshot: RepoSnapshot): DeployCheck {
 }
 
 function checkAtTip(snapshot: RepoSnapshot, options: DeployOptions): DeployCheck {
-  const atTip = snapshot.headSha === snapshot.originMainSha;
-  if (atTip) {
+  if (snapshot.headSha === snapshot.originMainSha) {
     return { id: "at-origin-main-tip", ok: true, detail: "HEAD is origin/main" };
   }
-
-  // "Behind" only means something for a commit that is actually on main. A
-  // diverged branch is not behind the tip, it is somewhere else entirely, and
-  // telling its author to pass --allow-behind is advice that cannot work:
-  // `merged-into-main` would still refuse. Naming the state wrongly is how a
-  // guard teaches people to reach for the wrong flag.
+  // "Behind" only means something for a commit that is on main. Telling a
+  // diverged branch's author to pass --allow-behind is advice that cannot work,
+  // because merged-into-main refuses regardless.
   if (!snapshot.headIsAncestorOfOriginMain) {
     return {
       id: "at-origin-main-tip",
@@ -187,9 +214,6 @@ function checkAtTip(snapshot: RepoSnapshot, options: DeployOptions): DeployCheck
       detail: `HEAD ${snapshot.headSha.slice(0, 8)} has diverged from origin/main ${snapshot.originMainSha.slice(0, 8)} — merge it first; --allow-behind does not apply to unmerged work`,
     };
   }
-
-  // A rollback deploys an older, already-merged commit on purpose. Allowed, but
-  // never by default and never silently — the operator has to say so.
   return {
     id: "at-origin-main-tip",
     ok: options.allowBehind === true,
@@ -203,16 +227,15 @@ function checkAtTip(snapshot: RepoSnapshot, options: DeployOptions): DeployCheck
  * Every precondition, in the order an operator should read them.
  *
  * Runs them all rather than short-circuiting: someone whose tree is dirty
- * usually wants to know about the untracked bundle file in the same breath,
- * not one failure per attempt.
+ * usually wants to hear about the stray bundle file in the same breath.
  */
 export function evaluateProdDeploy(
   snapshot: RepoSnapshot,
   options: DeployOptions = {}
 ): { ok: boolean; checks: DeployCheck[]; failures: DeployCheck[] } {
   const checks = [
-    checkNoAutoConfirm(snapshot),
-    checkNoUntrackedBundled(snapshot),
+    checkForwardedArgs(snapshot),
+    checkBundleIsTracked(snapshot),
     checkCleanTree(snapshot),
     checkMerged(snapshot),
     checkAtTip(snapshot, options),
@@ -222,17 +245,50 @@ export function evaluateProdDeploy(
 }
 
 /**
- * How the ambient environment will steer `convex deploy`, in words.
+ * The deployment `convex deploy` resolved, read back out of its own dry run.
  *
- * Printed before anything runs because this is the sentence the incident turned
- * on: `CONVEX_DEPLOYMENT=dev:…` reads like a dev target and is not one.
+ * Taken from the CLI's announcement rather than inferred from configuration,
+ * because inferring it from `CONVEX_DEPLOYMENT` is precisely the mistake that
+ * caused the incident. Returns null when no target line is present, and the
+ * caller must treat that as a refusal — a confirmation prompt that cannot name
+ * the target is not a confirmation.
+ */
+export function extractDeploymentName(dryRunOutput: string): string | null {
+  // e.g. "▌ └─ https://kindly-hound-172.convex.cloud"
+  const url = dryRunOutput.match(/https:\/\/([a-z0-9-]+)\.convex\.cloud/i);
+  if (url) return url[1];
+  const dash = dryRunOutput.match(/dashboard\.convex\.dev\/t\/[^/]+\/[^/]+\/([a-z0-9-]+)/i);
+  return dash ? dash[1] : null;
+}
+
+/**
+ * Whether the dry run says this is a production deployment.
+ *
+ * Belt and braces beside the typed confirmation: the operator can mistype
+ * their way into agreeing with a name, but they cannot make a preview
+ * deployment announce itself as production.
+ */
+export function looksLikeProduction(dryRunOutput: string): boolean {
+  return /\[Production\]|\(prod\)/i.test(dryRunOutput);
+}
+
+/**
+ * How the environment will steer `convex deploy`, in words.
+ *
+ * `source` is reported because the CLI loads `.env.local` and `.env` itself, so
+ * a value can be in force without appearing in `process.env` — and a deploy key
+ * is exactly the case where Convex asks nothing.
  */
 export function describeTargetSelection(env: RepoSnapshot["env"]): string {
+  const from = env.source ? ` (from ${env.source})` : "";
   if (env.CONVEX_DEPLOY_KEY) {
-    return "CONVEX_DEPLOY_KEY is set — the target is whatever deployment that key belongs to (this is the CI shape).";
+    return `CONVEX_DEPLOY_KEY is set${from} — the target is whatever deployment that key belongs to, and Convex will NOT prompt in this configuration.`;
+  }
+  if (env.CONVEX_DEPLOYMENT?.startsWith("prod:")) {
+    return `CONVEX_DEPLOYMENT=${env.CONVEX_DEPLOYMENT}${from} — this names production directly, and Convex will NOT prompt when the configured deployment is the target.`;
   }
   if (env.CONVEX_DEPLOYMENT) {
-    return `CONVEX_DEPLOYMENT=${env.CONVEX_DEPLOYMENT} is set. It does NOT redirect a deploy: 'convex deploy' targets the project's PRODUCTION deployment regardless of the dev deployment named here.`;
+    return `CONVEX_DEPLOYMENT=${env.CONVEX_DEPLOYMENT}${from} is a dev deployment. It does NOT redirect a deploy: 'convex deploy' targets the project's PRODUCTION deployment regardless.`;
   }
-  return "Neither CONVEX_DEPLOYMENT nor CONVEX_DEPLOY_KEY is set — the CLI will resolve the project's production deployment.";
+  return "Neither CONVEX_DEPLOYMENT nor CONVEX_DEPLOY_KEY is set — the CLI will refuse rather than guess.";
 }
