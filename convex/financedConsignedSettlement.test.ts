@@ -152,6 +152,12 @@ async function runDeal(
       | "LEASE";
     /** The manual financier's name, which is the only identity that mode has. */
     manualProviderName?: string;
+    /**
+     * The legacy shape: `mode` is optional on both the quote and the
+     * application, and `saveQuote` explicitly permits a `companyId` without
+     * one. Rows written before the field existed look exactly like this.
+     */
+    omitMode?: boolean;
     depositResolution?: {
       treatment: "APPLY_TO_DEALER_AMOUNT" | "APPLY_TO_TRANSACTION_SETTLEMENT" | "REFUND_TO_CUSTOMER" | "FORFEITED" | "OTHER";
       reason?: string;
@@ -167,7 +173,7 @@ async function runDeal(
     vehiclePrice: VEHICLE_PRICE,
     downPayment,
     termMonths: 48,
-    mode,
+    ...(opts.omitMode ? {} : { mode }),
     ...(mode === "CONFIGURED_FINANCE_COMPANY" ? { companyId: s.companyId } : {}),
     ...(mode === "MANUAL_FINANCE_COMPANY" && opts.manualProviderName !== undefined
       ? { manualProviderName: opts.manualProviderName }
@@ -798,5 +804,38 @@ describe("a lease, which is external but has no provider identity", () => {
     const s = await seedDealership("lease3");
     const { saleId } = await runDeal(s, { mode: "LEASE", route: "THROUGH_DEALERSHIP" });
     expect(saleId).toBeTruthy();
+  });
+});
+
+/**
+ * `mode` is optional on both the quote and the application, and `saveQuote`
+ * explicitly allows a `companyId` with no mode at all — so a deal written before
+ * the field existed carries a real configured financier and nothing to identify
+ * it by mode.
+ *
+ * Deriving "is there an external financier?" purely from the mode therefore
+ * regressed exactly the population the mode fallback was supposed to protect:
+ * a legacy consigned deal stopped being asked the route question and defaulted
+ * THROUGH_DEALERSHIP, while the direct route it may genuinely need was refused.
+ * The snapshotted company IS the answer when the mode cannot give one.
+ */
+describe("a legacy deal that has a finance company but no recorded mode", () => {
+  test("is still asked the settlement route before finalizing", async () => {
+    const s = await seedDealership("legacy1");
+    await expect(runDeal(s, { omitMode: true })).rejects.toThrow(/record the settlement route/i);
+  });
+
+  test("can still take the direct route", async () => {
+    const s = await seedDealership("legacy2");
+    const { applicationId } = await runDeal(s, { omitMode: true, route: "DIRECT_TO_SUPPLIER" });
+
+    const posted = await ledgerBySystemKey(s);
+    expect(posted[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES] ?? 0).toBe(0);
+    expect(posted[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS] ?? 0).toBeGreaterThan(0);
+
+    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId, applicationId, disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+    });
+    expect(result.disbursedAmountMinor).toBe(VEHICLE_PRICE * SCALE);
   });
 });

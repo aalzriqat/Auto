@@ -167,14 +167,32 @@ export function settlementPayer(facts: SettlementPayerFacts): SettlementPayer {
     case "LEASE":
       return { external: true, counterparty: null, unidentifiedReason: "LEASE" };
 
-    // CASH is the customer paying, INTERNAL_INSTALLMENT is the DEALERSHIP
+    // CASH is the customer paying, and INTERNAL_INSTALLMENT is the DEALERSHIP
     // financing the customer — it owes the supplier itself, so no outside party
-    // pays him. An absent mode predates the field and is treated as neither,
-    // which preserves what every historical row already posted.
+    // pays him.
     case "CASH":
     case "INTERNAL_INSTALLMENT":
-    default:
       return { external: false };
+
+    // No mode recorded at all. `mode` is optional on both the quote and the
+    // application and `saveQuote` explicitly permits a `companyId` without one,
+    // so this is a real legacy shape rather than a corrupt row — and when it
+    // carries a configured finance company, that company IS the answer the mode
+    // cannot give.
+    //
+    // Falling through to `external: false` here regressed exactly the
+    // population the mode fallback exists to protect: before the resolver, a
+    // populated `companyId` was what made `finalizeDeal` demand a route, so a
+    // legacy consigned deal would have stopped being asked and defaulted
+    // THROUGH_DEALERSHIP while the direct route it may genuinely need was
+    // refused.
+    default:
+      return facts.financeCompanyId
+        ? {
+            external: true,
+            counterparty: { kind: "FINANCE_COMPANY", financeCompanyId: facts.financeCompanyId },
+          }
+        : { external: false };
   }
 }
 
