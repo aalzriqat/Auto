@@ -805,9 +805,15 @@ async function applySaleCompletionSideEffects(
     // time, in getProfitAndLoss — because deducting it here would have kept
     // BOTH periods wrong: the deposit's month keeps revenue for a car nobody
     // had sold, and the sale's month recognizes less than it earned.
+    // Derived from `marginMinor`, the same integer the journal posts from —
+    // never recomputed in major units. `salePrice - costAmount` is a float
+    // subtraction, and at three decimals 12,500.7 − 9,500.5 is
+    // 3000.2000000000007 while the ledger credits 3000.2. The report could
+    // then never tie to the journal, off by an amount too small to chase and
+    // too persistent to ignore.
     recognizedRevenue:
       isSourced && marginMinor !== null
-        ? Math.max(0, args.salePrice - costAmount)
+        ? fromMinorUnits(Math.max(0, marginMinor), prepared.currency)
         : args.salePrice,
     idempotencyKey: args.idempotencyKey,
   });

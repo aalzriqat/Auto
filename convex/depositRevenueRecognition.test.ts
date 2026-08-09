@@ -656,6 +656,68 @@ describe("the back-book keeps the arithmetic it was written under", () => {
     expect(report.heldLegacyDeposits).toBe(1);
   });
 
+  test("a receipt whose deposit row is gone is counted once, not twice", async () => {
+    // The awkward middle case: `depositId` is set and its applications still
+    // exist, but the deposits row itself has been hard-deleted. The receipt was
+    // attributed by slice through the surviving applications AND then counted
+    // again for its full value as an orphan — the same money in two classes, in
+    // the report the back-book migration decision is made from.
+    //
+    // An orphan is decided by the absence of the deposits row alone, before any
+    // application is read.
+    const s = await seed("gonerow");
+    const v = await vehicle(s, "gonerow", false);
+    const at = Date.now();
+
+    const depositId = await s.t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId: s.orgId, vehicleId: v, customerId: s.customerId,
+        amount: DEPOSIT, amountMinor: DEPOSIT * 1000, currency: "JOD", method: "CASH",
+        status: "APPLIED", holdActive: false, createdAt: at, createdBy: s.userId,
+      })
+    );
+    await s.t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId: s.orgId, type: "IN", amount: DEPOSIT, date: at, category: "DEPOSIT",
+        description: "Legacy receipt whose deposit row was later purged",
+        vehicleId: v, depositId,
+      })
+    );
+    const saleId = await s.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: s.orgId, vehicleId: v, customerId: s.customerId,
+        salespersonId: s.userId, salePrice: SALE_PRICE, saleDate: at,
+        status: "COMPLETED" as const,
+      })
+    );
+    await s.t.run((ctx) =>
+      ctx.db.insert("depositApplications", {
+        orgId: s.orgId, depositId, saleId, vehicleId: v, customerId: s.customerId,
+        amountMinor: DEPOSIT * 1000, currency: "JOD",
+        treatment: "CUSTOMER_RECEIVABLE" as const,
+        eventType: "DEPOSIT_APPLIED", eventSourceType: "sale",
+        eventSourceId: saleId, eventVersion: 1,
+        eventIdempotencyKey: `gonerow_${at}`,
+        status: "APPLIED" as const,
+        appliedAt: at, appliedBy: s.userId,
+      })
+    );
+    // The row disappears; its applications and its receipt do not.
+    await s.t.run((ctx) => ctx.db.delete(depositId));
+
+    const report = await s.t.query(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (await import("./_generated/api")).internal.depositRevenueImpact.depositRevenueImpact as any,
+      { orgId: s.orgId }
+    );
+
+    expect(report.orphanReceipts).toBe(1);
+    expect(report.orphanAmount).toBe(DEPOSIT);
+    // Counted ONCE: not also attributed as a slice through the applications.
+    expect(report.crossPeriodAmount + report.samePeriodAmount).toBe(0);
+    expect(report.perOrg[0].rows).toHaveLength(1);
+  });
+
   test("the impact report counts a cross-period legacy deposit and writes nothing", async () => {
     const s = await seed("impact");
     const v = await vehicle(s, "impact", false);

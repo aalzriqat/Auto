@@ -108,6 +108,35 @@ export const depositRevenueImpact = internalQuery({
         const depositMonth = monthOf(tx.date);
         const scale = currencyScale(deposit?.currency ?? "JOD");
 
+        // No deposits row behind it at all. Production has nine of these,
+        // sharing a single import timestamp, with no status and no resolution
+        // history — real deposits, applied, refunded and opening balances are
+        // indistinguishable from one another at this point. They are reported
+        // as their own class rather than folded into `unresolved`, because a
+        // migration can act on an unresolved deposit and cannot act on one of
+        // these without first being told what it is.
+        //
+        // Classified HERE, before any application is read. Done further down,
+        // a receipt whose deposit row had been hard-deleted was attributed by
+        // slice through its surviving applications AND then counted again as
+        // an orphan for the whole receipt — the same money in two classes, in
+        // the one report the back-book migration decision rests on.
+        if (!deposit) {
+          orphanReceipts += 1;
+          orphanAmount += tx.amount;
+          rows.push({
+            depositId: depositId ?? null,
+            depositMonth,
+            receiptAmount: tx.amount,
+            amount: tx.amount,
+            saleMonth: null,
+            state: "REQUIRES_RECONCILIATION",
+            crossPeriod: false,
+            note: "UNATTRIBUTABLE_LEGACY_RECEIPT — no deposits row; not inferred, not corrected.",
+          });
+          continue;
+        }
+
         // Attributed by SLICE, never by receipt.
         //
         // One عربون can be split across several cars, and an earlier version of
@@ -167,28 +196,6 @@ export const depositRevenueImpact = internalQuery({
         const remainder = Math.max(0, round2(tx.amount - appliedTotal));
         const state = deposit?.status ?? "UNKNOWN";
 
-        // No deposits row behind it at all. Production has nine of these,
-        // sharing a single import timestamp, with no status and no resolution
-        // history — real deposits, applied, refunded and opening balances are
-        // indistinguishable from one another at this point. They are reported
-        // as their own class rather than folded into `unresolved`, because a
-        // migration can act on an unresolved deposit and cannot act on one of
-        // these without first being told what it is.
-        if (!deposit) {
-          orphanReceipts += 1;
-          orphanAmount += tx.amount;
-          rows.push({
-            depositId: null,
-            depositMonth,
-            receiptAmount: tx.amount,
-            amount: tx.amount,
-            saleMonth: null,
-            state: "REQUIRES_RECONCILIATION",
-            crossPeriod: false,
-            note: "UNATTRIBUTABLE_LEGACY_RECEIPT — no deposits row; not inferred, not corrected.",
-          });
-          continue;
-        }
 
         if (state === "APPLIED" && live.length > 0) applied += 1;
         if (state === "HELD") held += 1;
@@ -235,8 +242,11 @@ export const depositRevenueImpact = internalQuery({
           orgId: org._id,
           orgName: org.name,
           legacyDepositRows: legacyDepositRows.length,
-          crossPeriodAmount: crossPeriodMinor,
-          samePeriodAmount: samePeriodMinor,
+          // Rounded like every other money figure here. Left raw, these two
+          // were the only per-org amounts carrying float drift from repeated
+          // slice addition, so an org's rows did not sum to its own total.
+          crossPeriodAmount: round2(crossPeriodMinor),
+          samePeriodAmount: round2(samePeriodMinor),
           unresolvedLegacyDeposits: unresolved,
           unresolvedAmount: round2(unresolvedMinor),
           refundedLegacyDeposits: refunded,

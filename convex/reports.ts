@@ -877,7 +877,15 @@ export const getProfitAndLoss = query({
       // Bounded like every other scan in this file. Past the cap a legacy
       // receipt simply keeps its old treatment, which is the same answer the
       // report gives today — short of the correction, never short of revenue.
-      const REPORT_SCAN_CAP = 50_000;
+      //
+      // Held BELOW the platform's per-execution document limit, deliberately.
+      // At 50,000 that graceful degradation was unreachable: the function
+      // would exceed the limit and throw first, so the report returned nothing
+      // at all instead of the slightly-stale answer described above — and this
+      // scan runs on top of the transactions read below, not instead of it.
+      // A cap that only takes effect after the runtime has already given up is
+      // not a cap.
+      const REPORT_SCAN_CAP = 8_000;
       const applications = await ctx.db
         .query("depositApplications")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))

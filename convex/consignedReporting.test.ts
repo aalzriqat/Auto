@@ -772,6 +772,46 @@ describe("tax on an agency sale, with no open accounting period", () => {
   const sellSourcedWithTax = (tag: string, withAccounting: boolean) =>
     sellSourced(tag, { withAccounting, taxAmount: 500 });
 
+  /**
+   * The recognized margin is the journal's margin, to the minor unit.
+   *
+   * Recognition used to recompute the spread in MAJOR units — `salePrice -
+   * costAmount` — while the accounting path derived it in integer minor units
+   * (`toMinorUnits(salePrice) - costMinor`). In JOD, at three decimals, those
+   * are not the same number: 12,500.7 − 9,500.5 evaluates to
+   * 3000.2000000000007, so the P&L stored float noise while the journal
+   * credited 3000.2, and the two could never be tied exactly.
+   *
+   * Sub-unit money is still wrong money: it is the difference between a report
+   * that reconciles to the ledger and one that is off by "almost nothing" on
+   * every consigned sale, which is the kind of discrepancy nobody can ever
+   * close. `fromMinorUnits(marginMinor)` is the same figure the claim path
+   * already uses in this file.
+   */
+  test("recognizes the margin the journal posted, without float drift", async () => {
+    const s = await seedDealer("marginScale", { withAccounting: false });
+    const vehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin: "VINSCALE1", make: "Toyota", model: "Camry", year: 2024,
+        mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto",
+        sellingPrice: 12_500.7, status: "AVAILABLE", sourceType: "SOURCED",
+        sourcedFromName: "Amman Importer Co", sourceCost: 9_500.5,
+      })
+    );
+    await s.asUser.mutation(api.sales.create, {
+      orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
+      salePrice: 12_500.7, saleDate: Date.now(), status: "COMPLETED" as const,
+    });
+
+    const tx = await s.t.run(async (ctx) =>
+      (await ctx.db.query("transactions").collect()).find(
+        (r) => r.category === "VEHICLE_SALE" && r.vehicleId === vehicleId
+      )
+    );
+    // Exactly 3000.2 — not 3000.2000000000007.
+    expect(tx?.recognizedRevenueAmount).toBe(3_000.2);
+  });
+
   test("is refused even though no posting rule runs", async () => {
     const { attempt } = await sellSourcedWithTax("taxNoPeriod", false);
     await expect(attempt()).rejects.toThrow(/tax/i);
