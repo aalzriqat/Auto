@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -129,6 +129,7 @@ export function DealCockpit({
           receiptMethod: receipt.receiptMethod,
           receiptReference: receipt.receiptReference,
           receivedAt: receipt.receivedAt,
+          idempotencyKey: receipt.idempotencyKey,
         });
       }}
     />
@@ -148,6 +149,7 @@ export function DealCockpitView({
       receiptMethod?: PaymentMethod;
       receiptReference?: string;
       receivedAt?: number;
+      idempotencyKey?: string;
     }
   ) => Promise<void>;
 }>) {
@@ -156,12 +158,25 @@ export function DealCockpitView({
 
   const [settlingSupplier, setSettlingSupplier] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // CX-6. `recordReceipt` is ADDITIVE — it adds to `amountReceived` — so a lost
+  // outcome or a double invocation records a second receipt and posts a second
+  // cash/receivable journal. `submitting` is UI state and cannot deduplicate a
+  // commit that already landed. One key per attempt, held in a ref so a retry
+  // reuses it, and cleared only once the server has confirmed.
+  const receiptKeyRef = useRef<string | null>(null);
   const [showCompleted, setShowCompleted] = useState(false);
 
   // Never a hardcoded ÷1000. JOD, KWD, BHD and OMR are three-decimal; most
   // currencies are two. Baking one scale in would be a 100x error everywhere
   // else — the same trap the accounting screens already solved with this helper.
-  const factor = useMemo(() => Math.pow(10, scaleForCurrency(currency.code)), [currency.code]);
+  // CX-3. The scale comes from the currency the SERVER pinned on this deal, not
+  // from whatever the org is configured with today. `economicsCurrency` is
+  // snapshotted per application, so an in-flight JOD deal on an org that later
+  // switches to USD would otherwise be rescaled at the wrong power of ten —
+  // 5,000,000 minor units rendering as 50,000 USD instead of 5,000 JOD, and the
+  // same wrong factor feeding the receipt dialog.
+  const dealCurrency = deal?.money?.currency ?? currency.code;
+  const factor = useMemo(() => Math.pow(10, scaleForCurrency(dealCurrency)), [dealCurrency]);
   // A SHORT currency marker, and a locale-appropriate one.
   //
   // `currency.format` renders "دينار اردني" in Arabic, which on a screen
@@ -171,8 +186,11 @@ export function DealCockpitView({
   // next to Latin digits on the English screen — an RTL run beside an LTR one,
   // which is the bidi case this file is careful about everywhere else. Each
   // locale gets the short form that belongs to it.
-  const money = (minor: number) =>
-    `${(minor / factor).toLocaleString()} ${locale === "ar" ? currency.symbol : currency.code}`;
+  // The org's symbol only stands for the org's own currency; on a deal pinned to
+  // a different one it would label the amount as something it is not.
+  const marker =
+    locale === "ar" && dealCurrency === currency.code ? currency.symbol : dealCurrency;
+  const money = (minor: number) => `${(minor / factor).toLocaleString()} ${marker}`;
 
   if (deal === undefined) {
     return (
@@ -220,10 +238,14 @@ export function DealCockpitView({
     try {
       // Keyed to THIS claim, whose id the server resolved. The screen never
       // lets a client name a receivable of its own choosing.
+      receiptKeyRef.current ??= crypto.randomUUID();
       await onRecordSupplierReceipt(
         supplierRow!.receivableId as Id<"vehicleSupplierReceivables">,
-        receipt
+        { ...receipt, idempotencyKey: receiptKeyRef.current }
       );
+      // Only now: a failed attempt keeps its key so retrying is the same
+      // receipt rather than a second one.
+      receiptKeyRef.current = null;
       toast.success(t("RecordReceipt"));
       setSettlingSupplier(false);
     } catch (error) {
