@@ -1,7 +1,10 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Loader2, Landmark, HandCoins } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
@@ -38,6 +41,15 @@ type DisbursementConfirmationDialogProps = {
   mode?: DisbursementConfirmationMode;
   /** Substituted into the SUPPLIER copy, which names him. */
   supplierName?: string;
+  /**
+   * SUPPLIER mode only. What the company paid the supplier is a transaction
+   * between two other parties, so it is read off the settlement advice rather
+   * than assumed — the operator types the amount, its reference and its date.
+   * `amountLabel` is the dealership's own expectation, shown for comparison.
+   */
+  onConfirmSupplier?: (advice: { amountMajor: number; reference?: string; disbursedAt?: number }) => void;
+  /** Prefill for the advice amount, in major units. */
+  defaultAmountMajor?: number;
   t: (key: string) => string;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
@@ -50,12 +62,30 @@ export function DisbursementConfirmationDialog({
   amountLabel,
   mode = "DEALERSHIP",
   supplierName,
+  onConfirmSupplier,
+  defaultAmountMajor,
   t,
   onOpenChange,
   onConfirm,
 }: Readonly<DisbursementConfirmationDialogProps>) {
+  const [amount, setAmount] = useState("");
+  const [reference, setReference] = useState("");
+  const [paidOn, setPaidOn] = useState("");
+
+  // Reset to the prefill each time the dialog opens, so a corrected figure from
+  // an abandoned attempt is never silently carried into the next one.
+  useEffect(() => {
+    if (!open) return;
+    setAmount(defaultAmountMajor !== undefined ? String(defaultAmountMajor) : "");
+    setReference("");
+    setPaidOn("");
+  }, [open, defaultAmountMajor]);
+
   const supplier = mode === "SUPPLIER" ? supplierName ?? t("TheSupplier") : "";
-  const withSupplier = (key: string) => t(key).replace("{supplier}", supplier);
+  // `replaceAll`, not `replace`. A string pattern replaces the FIRST match only,
+  // and the description names the supplier twice in both locales — so the second
+  // one rendered as the literal text `{supplier}` on a money confirmation.
+  const withSupplier = (key: string) => t(key).replaceAll("{supplier}", supplier);
 
   const copy =
     mode === "SUPPLIER"
@@ -97,17 +127,73 @@ export function DisbursementConfirmationDialog({
           <DialogTitle>{copy.title}</DialogTitle>
           <DialogDescription>{copy.description}</DialogDescription>
         </DialogHeader>
-        <div className="rounded-md border bg-muted/50 p-3">
-          <p className="text-xs text-muted-foreground">{copy.amountLabel}</p>
-          <p className="mt-1 text-lg font-semibold tabular-nums">{amountLabel}</p>
-        </div>
+        {isReceipt ? (
+          <div className="rounded-md border bg-muted/50 p-3">
+            <p className="text-xs text-muted-foreground">{copy.amountLabel}</p>
+            <p className="mt-1 text-lg font-semibold tabular-nums">{amountLabel}</p>
+          </div>
+        ) : (
+          /* The advice is a document about two other parties, so it is typed in
+             rather than assumed. The dealership's own expectation is shown
+             beside the field for comparison, never substituted for it: the two
+             differ whenever there is a down payment, an LTV split, or a
+             renegotiated purchase amount, and recording the expectation as the
+             fact is wrong on every such deal. */
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="supplier-advice-amount">{copy.amountLabel}</Label>
+              <Input
+                id="supplier-advice-amount"
+                inputMode="decimal"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                className="tabular-nums"
+              />
+              <p className="text-xs text-muted-foreground">
+                {t("DealershipExpected")}: <span className="tabular-nums">{amountLabel}</span>
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="supplier-advice-reference">{t("AdviceReference")}</Label>
+                <Input
+                  id="supplier-advice-reference"
+                  value={reference}
+                  onChange={(e) => setReference(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="supplier-advice-date">{t("AdviceDate")}</Label>
+                <Input
+                  id="supplier-advice-date"
+                  type="date"
+                  value={paidOn}
+                  max={new Date().toISOString().slice(0, 10)}
+                  onChange={(e) => setPaidOn(e.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t("Cancel")}
           </Button>
           <Button
-            onClick={onConfirm}
-            disabled={submitting}
+            onClick={() => {
+              if (isReceipt) return onConfirm();
+              const amountMajor = Number(amount);
+              if (!Number.isFinite(amountMajor) || amountMajor <= 0) return;
+              onConfirmSupplier?.({
+                amountMajor,
+                reference: reference.trim() || undefined,
+                // Parsed as UTC midday so a timezone offset cannot roll the
+                // stated day backwards — and never sent as a future date, which
+                // the server refuses.
+                disbursedAt: paidOn ? Date.parse(`${paidOn}T12:00:00Z`) : undefined,
+              });
+            }}
+            disabled={submitting || (!isReceipt && !(Number(amount) > 0))}
             variant={isReceipt ? "default" : "outline"}
             className={accentClass}
           >

@@ -20,6 +20,7 @@ import { useCurrency } from "@/hooks/useCurrency";
 import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
 import { DisbursementConfirmationDialog } from "./DisbursementConfirmationDialog";
 import { ConsignedSettlementSection } from "@/components/sales/ConsignedSettlementSection";
+import { getErrorMessage } from "@/lib/errors";
 import { VehicleHandoverDialog } from "./VehicleHandoverDialog";
 import { RegisterExpectedPaymentDialog, type ExpectedPaymentMethod } from "./RegisterExpectedPaymentDialog";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
@@ -53,7 +54,6 @@ export function ApplicationDetailsDialog({
   const canRegisterHandover = hasPermission(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
   const canRegisterExpectedPayment = hasPermission(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
   const canResolveDeposits = hasPermission(PERMISSIONS.APPROVE_REQUESTS);
-  const canManageFinance = hasPermission(PERMISSIONS.MANAGE_FINANCE);
   const [previewFile, setPreviewFile] = useState<{ url: string; name: string } | null>(null);
   const [isCancelDialogOpen, setIsCancelDialogOpen] = useState(false);
   const [isDisbursementDialogOpen, setIsDisbursementDialogOpen] = useState(false);
@@ -71,6 +71,13 @@ export function ApplicationDetailsDialog({
   const confirmDisbursementIdempotencyKeyRef = useRef<string | null>(null);
   const confirmSupplierDisbursementIdempotencyKeyRef = useRef<string | null>(null);
   const [isSupplierDisbursementDialogOpen, setIsSupplierDisbursementDialogOpen] = useState(false);
+  // What becomes of a held عربون when the customer owes the dealership nothing
+  // for the car. No default that moves money silently: applying it to the
+  // settlement is the one treatment that changes no party's position — the
+  // dealership already holds the cash and the supplier already owes it the
+  // margin — so it leads, and a refund is the deliberate alternative.
+  const [depositTreatment, setDepositTreatment] =
+    useState<"APPLY_TO_TRANSACTION_SETTLEMENT" | "REFUND_TO_CUSTOMER">("APPLY_TO_TRANSACTION_SETTLEMENT");
 
   const app = useQuery(api.applications.get, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
   const documents = useQuery(api.documents.getForApplication, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
@@ -199,13 +206,27 @@ export function ApplicationDetailsDialog({
       await finalizeDeal({
         orgId: activeOrgId,
         applicationId,
+        // On the direct route the dealership bills the customer nothing for the
+        // car, so a held عربون necessarily exceeds what it billed and the server
+        // refuses to guess what becomes of it. Without this the deal could not
+        // be completed at all — and the only apparent way forward was to change
+        // the route, posting the deal the wrong way round.
+        ...(needsDepositTreatment
+          ? { depositResolution: { treatment: depositTreatment } }
+          : {}),
         idempotencyKey: finalizeDealIdempotencyKeyRef.current,
       });
       finalizeDealIdempotencyKeyRef.current = null;
       toast.success(t("DealFinalizedSuccess" as any));
       onOpenChange(false);
-    } catch {
-      toast.error(t("UnexpectedError" as any));
+    } catch (error) {
+      // Every refusal reachable from this button is actionable and names what
+      // to change — an unrecorded settlement route, an unresolved عربون, a
+      // missing approved purchase amount. Collapsing them all into "unexpected
+      // error" left the operator with a deal they could neither complete nor
+      // diagnose, and the only apparent way forward was to change the route and
+      // post the deal the wrong way round.
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -262,8 +283,13 @@ export function ApplicationDetailsDialog({
   // application closes, the sale has booked either a payable to the supplier or
   // a claim on him, and changing it is a correction rather than an edit — the
   // server refuses it there too.
+  //
+  // Keyed on FINALIZE_FINANCED_DEAL, matching the server. It was MANAGE_FINANCE,
+  // which the default MANAGER and SALES templates do not hold — so the selector
+  // was hidden from exactly the people who close these deals and know which way
+  // the cheque was made out, and they would finalize with no route recorded.
   const canChooseSettlementRoute =
-    canManageFinance &&
+    canFinalizeApplication &&
     isConsignedDeal &&
     app.status !== "CLOSED" &&
     app.status !== "CANCELLED";
@@ -279,10 +305,16 @@ export function ApplicationDetailsDialog({
     !settlesDirectToSupplier &&
     !app.disbursedAt;
 
+  // Gated on the same facts the server enforces. Without
+  // `expectsFinanceCompanyDisbursement` the button appeared on a closed direct
+  // deal with no finance company, where the handler returned silently and the
+  // server would have refused anyway — a control that looks available and does
+  // nothing.
   const canConfirmSupplierDisbursement =
     canConfirmFinanceDisbursement &&
     app.status === "CLOSED" &&
     settlesDirectToSupplier &&
+    expectsFinanceCompanyDisbursement &&
     !app.supplierDisbursementConfirmedAt;
 
   const handleConfirmDisbursement = async () => {
@@ -315,22 +347,32 @@ export function ApplicationDetailsDialog({
     }
   };
 
-  const handleConfirmSupplierDisbursement = async () => {
-    if (!activeOrgId || !expectedDisbursementMinor) return;
+  const handleConfirmSupplierDisbursement = async (advice: {
+    amountMajor: number;
+    reference?: string;
+    disbursedAt?: number;
+  }) => {
+    if (!activeOrgId) return;
     setIsConfirmingDisbursement(true);
     try {
       confirmSupplierDisbursementIdempotencyKeyRef.current ??= `confirm-supplier-disbursement:${crypto.randomUUID()}`;
       await confirmSupplierDisbursement({
         orgId: activeOrgId,
         applicationId,
-        disbursedAmountMinor: expectedDisbursementMinor,
+        // The advice's own figure, not the dealership's expectation.
+        disbursedAmountMinor: Math.round(advice.amountMajor * currencyFactor),
+        reference: advice.reference,
+        disbursedAt: advice.disbursedAt,
         idempotencyKey: confirmSupplierDisbursementIdempotencyKeyRef.current,
       });
       confirmSupplierDisbursementIdempotencyKeyRef.current = null;
       toast.success(t("SupplierDisbursementConfirmedSuccess" as any));
       setIsSupplierDisbursementDialogOpen(false);
-    } catch {
-      toast.error(t("UnexpectedError" as any));
+    } catch (error) {
+      // The server's refusals here name the amount, the route or the date the
+      // operator has to change. Replacing them with "unexpected error" turns a
+      // decision point into a dead end.
+      toast.error(getErrorMessage(error));
     } finally {
       setIsConfirmingDisbursement(false);
     }
@@ -338,6 +380,22 @@ export function ApplicationDetailsDialog({
 
   const applicationDeposits = app.deposits ?? [];
   const pendingDeposits = applicationDeposits.filter((deposit) => deposit.status === "HELD");
+  // Only the direct route creates the question. Through the dealership the
+  // customer is billed the gross, so the deposit is simply absorbed by what
+  // they owe and the server needs no instruction.
+  const needsDepositTreatment = settlesDirectToSupplier && pendingDeposits.length > 0;
+
+  const supplierLabel = supplierName ?? t("TheSupplier" as any);
+  const disbursementStatusLabel = (() => {
+    if (settlesDirectToSupplier) {
+      const key = app.supplierDisbursementConfirmedAt
+        ? "SupplierPaidByFinanceCompany"
+        : "AwaitingSupplierDisbursement";
+      return t(key as any).replace("{supplier}", supplierLabel);
+    }
+    if (app.disbursedAt) return `${t("DisbursementReceived" as any)} - ${confirmedDisbursementLabel}`;
+    return t("AwaitingDisbursement" as any);
+  })();
   const showDepositResolution =
     (app.status === "REJECTED" || app.status === "CANCELLED") && pendingDeposits.length > 0;
   const showApplicationDeposits =
@@ -459,19 +517,7 @@ export function ApplicationDetailsDialog({
                     {expectsFinanceCompanyDisbursement && (
                       <p>
                         <strong>{t("DisbursementStatus" as any)}:</strong>{" "}
-                        {settlesDirectToSupplier
-                          ? app.supplierDisbursementConfirmedAt
-                            ? t("SupplierPaidByFinanceCompany" as any).replace(
-                                "{supplier}",
-                                supplierName ?? t("TheSupplier" as any)
-                              )
-                            : t("AwaitingSupplierDisbursement" as any).replace(
-                                "{supplier}",
-                                supplierName ?? t("TheSupplier" as any)
-                              )
-                          : app.disbursedAt
-                            ? `${t("DisbursementReceived" as any)} - ${confirmedDisbursementLabel}`
-                            : t("AwaitingDisbursement" as any)}
+                        {disbursementStatusLabel}
                       </p>
                     )}
                   </>
@@ -574,6 +620,36 @@ export function ApplicationDetailsDialog({
 
                 {app.status === "APPROVED" && canFinalizeApplication && (
                   <>
+                    {/* The buyer paid the supplier, so the dealership billed
+                        them nothing for the car — which means the عربون it is
+                        holding is larger than anything the customer owes it, and
+                        what becomes of it is a decision nobody else can make.
+                        Asked here rather than guessed, and asked only on the
+                        route that creates the question. */}
+                    {needsDepositTreatment && (
+                      <fieldset className="mt-2 space-y-2 rounded-md border border-amber-500/30 bg-amber-500/[0.04] p-3">
+                        <legend className="px-1 text-xs font-medium text-amber-700 dark:text-amber-400">
+                          {t("DepositTreatmentTitle" as any)}
+                        </legend>
+                        {(
+                          [
+                            ["APPLY_TO_TRANSACTION_SETTLEMENT", "DepositApplyToSettlement"],
+                            ["REFUND_TO_CUSTOMER", "DepositRefundToCustomer"],
+                          ] as const
+                        ).map(([value, labelKey]) => (
+                          <label key={value} className="flex items-start gap-2 text-sm">
+                            <input
+                              type="radio"
+                              name="deposit-treatment"
+                              className="mt-1"
+                              checked={depositTreatment === value}
+                              onChange={() => setDepositTreatment(value)}
+                            />
+                            <span>{t(labelKey as any)}</span>
+                          </label>
+                        ))}
+                      </fieldset>
+                    )}
                     <Button
                       onClick={handleFinalizeDeal}
                       className="bg-blue-600 hover:bg-blue-700 text-white mt-2"
@@ -615,10 +691,7 @@ export function ApplicationDetailsDialog({
                     things depending on a field further up the screen. */}
                 {settlesDirectToSupplier && app.status === "CLOSED" && app.supplierDisbursementConfirmedAt && (
                   <Badge variant="outline" className="justify-center py-2">
-                    {t("SupplierPaidByFinanceCompany" as any).replace(
-                      "{supplier}",
-                      supplierName ?? t("TheSupplier" as any)
-                    )}
+                    {t("SupplierPaidByFinanceCompany" as any).replace("{supplier}", supplierLabel)}
                   </Badge>
                 )}
 
@@ -630,9 +703,19 @@ export function ApplicationDetailsDialog({
                     disabled={isConfirmingDisbursement}
                     submitting={isConfirmingDisbursement}
                     amountLabel={expectedDisbursementLabel}
+                    // Prefilled from what the company APPROVED to pay for the
+                    // car, which is the figure the advice should carry — not
+                    // `totalFinancedAmount`, the customer's principal, which
+                    // differs by the down payment on every deal that has one.
+                    defaultAmountMajor={
+                      app.approvedDealerPurchaseAmountMinor !== undefined
+                        ? app.approvedDealerPurchaseAmountMinor / currencyFactor
+                        : undefined
+                    }
                     t={(key) => t(key as any)}
                     onOpenChange={setIsSupplierDisbursementDialogOpen}
-                    onConfirm={handleConfirmSupplierDisbursement}
+                    onConfirm={() => undefined}
+                    onConfirmSupplier={handleConfirmSupplierDisbursement}
                   />
                 )}
 

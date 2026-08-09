@@ -136,9 +136,18 @@ async function runDeal(
     route?: Route;
     downPayment?: number;
     finalize?: boolean;
+    /** A reservation deposit (عربون) held on the quote before the deal closes. */
+    deposit?: number;
+    /** Omit the finance company, as an INTERNAL_INSTALLMENT deal does. */
+    mode?: "CONFIGURED_FINANCE_COMPANY" | "INTERNAL_INSTALLMENT";
+    depositResolution?: {
+      treatment: "APPLY_TO_DEALER_AMOUNT" | "APPLY_TO_TRANSACTION_SETTLEMENT" | "REFUND_TO_CUSTOMER" | "FORFEITED" | "OTHER";
+      reason?: string;
+    };
   } = {}
 ) {
   const downPayment = opts.downPayment ?? 0;
+  const mode = opts.mode ?? "CONFIGURED_FINANCE_COMPANY";
   const quoteId = await s.asUser.mutation(api.quotes.saveQuote, {
     orgId: s.orgId,
     customerId: s.customerId,
@@ -146,10 +155,18 @@ async function runDeal(
     vehiclePrice: VEHICLE_PRICE,
     downPayment,
     termMonths: 48,
-    mode: "CONFIGURED_FINANCE_COMPANY",
-    companyId: s.companyId,
+    mode,
+    ...(mode === "CONFIGURED_FINANCE_COMPANY" ? { companyId: s.companyId } : {}),
     totalFinancedAmount: VEHICLE_PRICE - downPayment,
   });
+
+  if (opts.deposit) {
+    await s.asUser.mutation(api.deposits.create, {
+      orgId: s.orgId,
+      quoteId,
+      amount: opts.deposit,
+    });
+  }
 
   const applicationId = await s.asUser.mutation(api.applications.createFromQuote, {
     orgId: s.orgId,
@@ -176,7 +193,9 @@ async function runDeal(
   if (opts.finalize === false) return { quoteId, applicationId, saleId: null };
 
   const saleId = await s.asUser.mutation(api.applications.finalizeDeal, {
-    orgId: s.orgId, applicationId,
+    orgId: s.orgId,
+    applicationId,
+    ...(opts.depositResolution ? { depositResolution: opts.depositResolution } : {}),
   });
   return { quoteId, applicationId, saleId };
 }
@@ -433,15 +452,19 @@ describe("THROUGH_DEALERSHIP is unchanged by any of this", () => {
     expect(receivable?.originalAmountMinor).toBe((VEHICLE_PRICE - 3_000) * SCALE);
   });
 
-  test("recording no route at all posts identically to naming THROUGH_DEALERSHIP", async () => {
-    const named = await seedDealership("thd2");
-    await runDeal(named, { route: "THROUGH_DEALERSHIP" });
-    const omitted = await seedDealership("thd3");
-    await runDeal(omitted, {});
+  test("a new consigned financed deal cannot be finalized without choosing a route", async () => {
+    const s = await seedDealership("thd2");
+    const { applicationId } = await runDeal(s, { finalize: false });
 
-    // Every financed consigned deal finalized before the route existed took the
-    // absent path. If the two ever diverge, this change restated them.
-    expect(await ledgerBySystemKey(omitted)).toEqual(await ledgerBySystemKey(named));
+    // Absent still READS as THROUGH_DEALERSHIP — that is what every deal
+    // finalized before the field existed actually posted, and
+    // `consignedSettlementRoute.test.ts` pins that reading so history is never
+    // restated. But it is a dangerous DEFAULT for a new deal: the two routes
+    // produce opposite balance sheets from the same sale, and simply forgetting
+    // would post one of them silently. So the question is asked once, here.
+    await expect(
+      s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId })
+    ).rejects.toThrow(/settlement route/i);
   });
 
   test("it still owes the supplier his entitlement out of the gross it collected", async () => {
@@ -453,6 +476,121 @@ describe("THROUGH_DEALERSHIP is unchanged by any of this", () => {
     expect(posted[SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE]).toBe(-MARGIN * SCALE);
     expect(posted[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS] ?? 0).toBe(0);
     expect(await supplierClaimsOf(s)).toHaveLength(0);
+  });
+});
+
+/**
+ * Findings from the adversarial review of this PR, each pinned by the behaviour
+ * that was wrong rather than by the shape of its fix.
+ */
+describe("a reservation deposit on the direct route", () => {
+  test("a held عربون does not make the deal unfinalizable", async () => {
+    const s = await seedDealership("dep1");
+
+    // The dominant real shape, not an edge: the supplied mockup shows exactly
+    // this — عربون 300 محجوز لدى المعرض on a financed consigned deal.
+    //
+    // On this route the dealership bills the customer nothing for the car, so
+    // the deposit necessarily exceeds what it billed. Before the fix that threw
+    // out of `resolveReservationDeposits`, and `finalizeDeal`'s only UI caller
+    // passes no treatment — so the deal could not be completed at all, and the
+    // operator's only way forward was to flip the route and post the deal the
+    // wrong way round. That is the inversion this whole change exists to stop.
+    const { saleId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      deposit: 3_000,
+      depositResolution: { treatment: "APPLY_TO_TRANSACTION_SETTLEMENT" },
+    });
+
+    expect(saleId).toBeTruthy();
+
+    // The deposit is the dealership holding customer cash against the margin
+    // the supplier owes it, so the claim opens already part-collected rather
+    // than at the full margin.
+    const claims = await supplierClaimsOf(s);
+    expect(claims).toHaveLength(1);
+    expect(claims[0]!.amountReceived).toBe(3_000);
+    expect(claims[0]!.status).toBe("PARTIALLY_PAID");
+  });
+});
+
+describe("a deal with no external financier", () => {
+  test("the direct route is refused — nobody outside the dealership pays the supplier", async () => {
+    const s = await seedDealership("noco1");
+    const { applicationId } = await runDeal(s, { mode: "INTERNAL_INSTALLMENT", finalize: false });
+
+    // INTERNAL_INSTALLMENT means the DEALERSHIP finances the buyer, so the
+    // customer pays it over time and it owes the supplier. "The buyer's money
+    // went straight to the supplier" is incoherent — and accepting it zeroed
+    // the customer's vehicle receivable, erasing the record of instalments the
+    // customer genuinely owes.
+    await expect(
+      s.asUser.mutation(api.applications.setSupplierSettlementRoute, {
+        orgId: s.orgId, applicationId, route: "DIRECT_TO_SUPPLIER",
+      })
+    ).rejects.toThrow(/finance company/i);
+  });
+});
+
+describe("cancelling after the finance company has paid the supplier", () => {
+  test("is refused, the way it is once the dealership itself has been paid", async () => {
+    const s = await seedDealership("canc2");
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER" });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId, applicationId, disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+    });
+
+    // The mirror of the `disbursedAt` refusal. Real money moved between the
+    // company and the supplier, and the customer has the car — handover is a
+    // precondition of finalization. Cancelling would restore a financed,
+    // paid-for, delivered car to sellable inventory and write off a margin the
+    // dealership is still owed.
+    await expect(
+      s.asUser.mutation(api.applications.cancelApplication, {
+        orgId: s.orgId, applicationId, reason: "Customer withdrew",
+      })
+    ).rejects.toThrow(/already paid/i);
+
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId as never)) as { status: string };
+    expect(app.status).toBe("CLOSED");
+  });
+});
+
+describe("the settlement advice is recorded as stated", () => {
+  test("an amount that differs from the customer's financing principal is stored verbatim", async () => {
+    const s = await seedDealership("adv1");
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", downPayment: 3_000 });
+
+    // What the company pays the supplier is a transaction between two other
+    // parties. It is NOT `totalFinancedAmount`, which is the customer's
+    // principal and differs from it by the down payment — so recording the
+    // dealership's own expectation in place of the advice is systematically
+    // wrong on any deal with one.
+    const advised = 17_450 * SCALE;
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId, applicationId, disbursedAmountMinor: advised, reference: "CHQ-771",
+    });
+
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId as never)) as {
+      supplierDisbursedAmountMinor?: number;
+    };
+    expect(app.supplierDisbursedAmountMinor).toBe(advised);
+  });
+
+  test("a nonsensical disbursement date is refused rather than stored", async () => {
+    const s = await seedDealership("adv2");
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER" });
+
+    // Convex accepts NaN as a v.number(), and every other timestamp on this
+    // record comes from Date.now(). The documented purpose is backdating an
+    // advice that already arrived, so a future date is not a valid one.
+    await expect(
+      s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+        orgId: s.orgId, applicationId,
+        disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+        disbursedAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      })
+    ).rejects.toThrow(/future/i);
   });
 });
 

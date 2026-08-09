@@ -154,6 +154,46 @@ async function settlesDirectToSupplier(
   return vehicle != null && isConsignedAgentSale(vehicle);
 }
 
+/**
+ * The same question, asked of a deal that has already posted.
+ *
+ * `settlesDirectToSupplier` re-derives the route from the live vehicle, which is
+ * right before the sale exists and wrong afterwards: the sale is the thing that
+ * committed to one side or the other, and `sales.update` locks its route once
+ * completed. Re-deriving post-sale means a later edit to the vehicle can flip
+ * the answer under a deal that already posted.
+ *
+ * It also fails CLOSED. In `confirmDisbursement` a `false` answer PERMITS the
+ * mutation, so a vehicle row that has gone missing — the super-admin panel can
+ * hard-delete one — would have let a direct-route deal post DR Bank / CR
+ * AR-Finance-Companies, inventing bank cash the dealership never received. A
+ * guard whose evidence has disappeared must refuse, not wave the caller through.
+ */
+async function closedDealSettlesDirectToSupplier(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">
+): Promise<boolean> {
+  if (app.finalizedSaleId) {
+    const sale = await ctx.db.get(app.finalizedSaleId);
+    // A sale this application NAMES but which cannot be loaded is missing
+    // evidence, not absent evidence. Falling through would let the caller
+    // proceed on a guess about money that has already posted.
+    if (!sale || sale.orgId !== app.orgId) {
+      throw new ConvexError(
+        "The sale behind this deal could not be loaded, so which way it settles cannot be established. Resolve that before recording any settlement against it."
+      );
+    }
+    return !dealershipCollectsGross(consignedSettlementRoute(sale));
+  }
+
+  // No sale was ever linked. That is a legacy shape rather than a broken one —
+  // `confirmDisbursement` already tolerates deals closed before the canonical
+  // receivable existed — so refusing here would strand them. The application's
+  // own route is what `finalizeDeal` acted on, and absent reads as
+  // THROUGH_DEALERSHIP, which is exactly what those deals posted.
+  return !dealershipCollectsGross(consignedSettlementRoute(app));
+}
+
 async function hasHeldQuoteDeposit(ctx: QueryCtx, quoteId: Id<"quotes">): Promise<boolean> {
   for await (const deposit of ctx.db
     .query("deposits")
@@ -748,6 +788,23 @@ export const cancelApplication = mutation({
             );
           }
 
+          // The direct route's mirror of the refusal above, and NOT the same
+          // fact as the supplier-receipt refusal inside
+          // `cancelSupplierReceivablesForSale`. That one fires when the supplier
+          // has paid the DEALERSHIP its margin; this fires when the finance
+          // company has paid the SUPPLIER. A deal where the company has paid but
+          // the supplier has not yet remitted passed every guard and cancelled
+          // cleanly — reversing the sale, cancelling the margin claim, and
+          // returning a financed, paid-for, already-handed-over car to sellable
+          // inventory while the dealership silently wrote off a margin it is
+          // still owed. Handover is a precondition of finalization, so the
+          // customer always has the car by this point.
+          if (app.supplierDisbursementConfirmedAt !== undefined) {
+            throw new ConvexError(
+              "The finance company has already paid the supplier on this deal. That payment is between the company and the supplier and can't be reversed from here — unwind it with them and record a manual accounting correction instead."
+            );
+          }
+
           if (app.finalizedSaleId) {
             const sale = await ctx.db.get(app.finalizedSaleId);
             if (sale && sale.orgId === args.orgId) {
@@ -796,20 +853,29 @@ export const cancelApplication = mutation({
                 )
                 .unique()
             : null;
-          // On the direct route `finalizeDeal` posted no FINANCE_DISBURSED event
-          // and opened no finance-company receivable, so there is nothing here
-          // to reverse — `financeReceivable` is null and the reversal would be
-          // aimed at an entry that was never written. The condition keys off
-          // `totalFinancedAmount` as well, which IS set on these deals, so
-          // without this the reversal fired anyway.
+          // Deliberately NOT gated on the settlement route.
           //
-          // What the sale DID open is the supplier margin claim, and
-          // `cancelCompletedSaleOperationalRecords` above already cancels it —
-          // refusing outright if the supplier has paid against it, which is the
-          // direct-route equivalent of the `disbursedAt` refusal further up.
-          const directToSupplier = await settlesDirectToSupplier(ctx, app);
+          // It looks like it should be: on the direct route `finalizeDeal`
+          // posted no FINANCE_DISBURSED event and opened no finance-company
+          // receivable, so there is nothing to reverse. But the block is already
+          // a no-op in that case — `reverseEventIfPosted` returns NOT_POSTED
+          // when nothing was posted, `cancelPendingPostByKey` finds no queued
+          // row, and `financeReceivable` is null so the patch is skipped. The
+          // guard bought nothing.
+          //
+          // What it DID buy was a hole. It re-derived the route from the LIVE
+          // vehicle, while finalization acted on the state as it was months
+          // earlier. A vehicle converted SOURCED -> STOCK before finalization
+          // (allowed: `retroactiveOwnershipChangeRefusal` only refuses once the
+          // vehicle is SOLD) posts the ordinary finance receivable, and being
+          // converted back to SOURCED afterwards made this branch skip the
+          // reversal that `origin/main` performs — leaving AR-Finance-Companies
+          // debited and an OPEN receivable on a voided deal, permanently.
+          //
+          // Same reasoning as `sales.ts`: "reverseEventIfPosted no-ops when
+          // there is nothing on the books and cancels anything still queued, so
+          // gating on the live amount only created holes."
           if (
-            !directToSupplier &&
             app.companyId &&
             ((quote?.totalFinancedAmount ?? 0) > 0 || financeReceivable)
           ) {
@@ -1029,7 +1095,19 @@ export const setSupplierSettlementRoute = mutation({
     route: consignedSettlementRouteValidator,
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // `FINALIZE_FINANCED_DEAL`, not `MANAGE_FINANCE`. The decision has to belong
+    // to whoever triggers the posting, and the default MANAGER and SALES
+    // templates hold the former and not the latter — so gating this on
+    // MANAGE_FINANCE hid the selector from exactly the people who close these
+    // deals and know which way the cheque was made out. They would finalize
+    // with no route recorded, an absent route reads as THROUGH_DEALERSHIP, and
+    // the deal posts the inversion this whole change exists to remove.
+    //
+    // Chosen over adding MANAGE_FINANCE to the MANAGER template, which would
+    // widen access to every other finance mutation and needs a role backfill.
+    const { user } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.FINALIZE_FINANCED_DEAL,
+    ]);
 
     const app = await ctx.db.get(args.applicationId);
     if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found.");
@@ -1048,6 +1126,21 @@ export const setSupplierSettlementRoute = mutation({
     if (!isConsignedAgentSale(vehicle)) {
       throw new ConvexError(
         "This vehicle is dealership stock, so there is no supplier to settle with and no settlement route to choose."
+      );
+    }
+    // Somebody outside the dealership has to be the one paying the supplier.
+    //
+    // An INTERNAL_INSTALLMENT deal is financed BY THE DEALERSHIP: the customer
+    // pays it over time and it owes the supplier, so no external party pays him
+    // and the direct route is incoherent. Accepting it was not merely
+    // meaningless — `completeSale` reads the route to decide the customer's
+    // vehicle receivable, so it zeroed the record of instalments the customer
+    // genuinely owes, and `confirmSupplierDisbursement` then refused the deal
+    // forever because it has no finance company. A dead end with the customer's
+    // debt erased on the way in.
+    if (args.route === "DIRECT_TO_SUPPLIER" && !app.companyId) {
+      throw new ConvexError(
+        "This deal has no finance company, so nobody outside the dealership pays the supplier — the direct route does not apply. If the dealership is financing the customer itself, settle through the dealership."
       );
     }
 
@@ -1124,6 +1217,32 @@ export const finalizeDeal = mutation({
         // stopping a sale being completed on economics nothing supports.
         assertDealerEconomicsRecorded(app, "finalizing");
 
+        // On a consigned car financed by an external company, the route decides
+        // opposite balance sheets from the same sale — a payable to the supplier
+        // for his whole entitlement, or a claim on him for the margin. An absent
+        // route reads as THROUGH_DEALERSHIP, which is the right reading for
+        // history but a dangerous default for a NEW deal: forgetting to choose
+        // posts one of the two silently.
+        //
+        // Scoped to the population where the question is both meaningful and
+        // new — consigned vehicle, external financier. Dealer-owned stock has no
+        // supplier, and a deal with no finance company cannot take the direct
+        // route at all. Nothing already CLOSED is touched, so no history is
+        // restated; an in-flight deal is asked the question once.
+        {
+          const vehicle = await ctx.db.get(app.vehicleId);
+          if (
+            vehicle &&
+            isConsignedAgentSale(vehicle) &&
+            app.companyId &&
+            app.supplierSettlementRoute === undefined
+          ) {
+            throw new ConvexError(
+              `This car belongs to ${vehicle.sourcedFromName ?? "the supplier"} and the deal is financed, so who the finance company pays decides whether the dealership owes him his entitlement or holds a claim on him for its margin. Record the settlement route before finalizing.`
+            );
+          }
+        }
+
         const quote = await ctx.db.get(app.quoteId);
         if (!quote || quote.orgId !== args.orgId) throw new ConvexError("Quote not found");
         if (quote.customerId !== app.customerId || quote.vehicleId !== app.vehicleId) {
@@ -1186,6 +1305,11 @@ export const finalizeDeal = mutation({
         });
 
         const now = Date.now();
+        // Resolved once, before anything reads it: the patch below and the
+        // posting block further down must agree about which way this deal
+        // settles, and re-deriving it twice invites them to disagree.
+        const directToSupplier = await settlesDirectToSupplier(ctx, app);
+
         // The finance-company receivable below is still opened for
         // quote.totalFinancedAmount — the customer's principal — while this PR
         // computes expectedDealerRemittanceMinor from the approved purchase
@@ -1217,6 +1341,13 @@ export const finalizeDeal = mutation({
           // finance company owes the dealership money.
           creditDecision: "APPROVED",
           settlementStatus: "EXPECTED",
+          // …except on the direct route, where it owes the dealership nothing.
+          // The expected remittance is what the COMPANY will send HERE, and on
+          // this route it sends it to the supplier instead. Left at a positive
+          // figure it asserts a remittance that will never arrive, and puts the
+          // deal into the reconciliation triage queue describing the wrong
+          // arrangement — the queue a later settlement PR reconciles against.
+          ...(directToSupplier ? { expectedDealerRemittanceMinor: 0 } : {}),
         });
 
         // On the direct route the finance company pays the SUPPLIER, so none of
@@ -1243,7 +1374,6 @@ export const finalizeDeal = mutation({
         //
         // The dealership's asset on this deal is that supplier margin claim.
         // It is already open by the time this runs.
-        const directToSupplier = await settlesDirectToSupplier(ctx, app);
 
         // Post the finance receivable transfer when a finance company is on the deal
         if (!directToSupplier && app.companyId && quote.totalFinancedAmount && quote.totalFinancedAmount > 0) {
@@ -1340,7 +1470,7 @@ export const confirmDisbursement = mutation({
         // The two record different facts about different money, and an operator
         // who reaches for the wrong one is telling us their understanding of the
         // deal disagrees with what was recorded — which is worth stopping on.
-        if (await settlesDirectToSupplier(ctx, app)) {
+        if (await closedDealSettlesDirectToSupplier(ctx, app)) {
           throw new ConvexError(
             "This deal settles directly with the supplier, so the finance company's payment never reaches the dealership's account and there is nothing here to receive. Record the company's payment to the supplier instead, and collect the dealership's margin from the supplier when he pays it."
           );
@@ -1524,6 +1654,18 @@ export const confirmSupplierDisbursement = mutation({
   },
   handler: async (ctx, args) => {
     assertValidMinorAmount(args.disbursedAmountMinor, "disbursed amount");
+    // Convex accepts NaN as a `v.number()`, and every other timestamp on this
+    // record comes from `Date.now()`. This one is operator-supplied, and its
+    // documented purpose is backdating an advice that already arrived — so a
+    // future date is not a valid one, and a NaN would be stored and returned.
+    if (args.disbursedAt !== undefined) {
+      if (!Number.isSafeInteger(args.disbursedAt) || args.disbursedAt <= 0) {
+        throw new ConvexError("That disbursement date is not a valid date.");
+      }
+      if (args.disbursedAt > Date.now()) {
+        throw new ConvexError("The disbursement date cannot be in the future.");
+      }
+    }
     const { user } = await requireTenantAuth(ctx, args.orgId, [
       PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
     ]);
@@ -1535,9 +1677,17 @@ export const confirmSupplierDisbursement = mutation({
         operation: "applications.confirmSupplierDisbursement",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        // Every field that gets PERSISTED belongs here. `runWithIdempotency`
+        // rejects key reuse only when fingerprints differ, so omitting the
+        // reference and the date meant a replay carrying a corrected cheque
+        // number returned the prior result and silently discarded the
+        // correction — leaving stale evidence on a record whose whole purpose
+        // is to hold what the settlement advice said.
         fingerprint: JSON.stringify({
           applicationId: args.applicationId,
           disbursedAmountMinor: args.disbursedAmountMinor,
+          reference: args.reference ?? null,
+          disbursedAt: args.disbursedAt ?? null,
         }),
       },
       async () => {
@@ -1554,7 +1704,7 @@ export const confirmSupplierDisbursement = mutation({
         if (args.disbursedAmountMinor <= 0) {
           throw new ConvexError("Disbursement amount must be positive.");
         }
-        if (!(await settlesDirectToSupplier(ctx, app))) {
+        if (!(await closedDealSettlesDirectToSupplier(ctx, app))) {
           throw new ConvexError(
             "This deal settles through the dealership, so the finance company pays the dealership rather than the supplier. Confirm the disbursement on the deal instead."
           );

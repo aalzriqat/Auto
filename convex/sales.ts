@@ -11,7 +11,11 @@ import { validateInput } from "./utils/validation";
 import { CreateDraftSaleSchema, CreateSaleSchema, UpdateSaleSchema } from "./validations/sales";
 import { restoreVehicleFromSale } from "./utils/saleHelpers";
 import { vehicleHasCostBasis, computeVehicleCapitalizedCost } from "./utils/vehicleCost";
-import { saleEconomics, dealershipCollectsGross } from "./utils/vehicleOwnership";
+import {
+  saleEconomics,
+  dealershipCollectsGross,
+  consignedSettlementRouteValidator,
+} from "./utils/vehicleOwnership";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
 import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale } from "./utils/saleCompletion";
@@ -40,10 +44,10 @@ const saleStatus = v.union(
  * there; sale completion drops it for dealer-owned stock. Omitted means
  * THROUGH_DEALERSHIP — see `consignedSettlementRoute` in utils/vehicleOwnership.
  */
-const supplierSettlementRouteValidator = v.union(
-  v.literal("THROUGH_DEALERSHIP"),
-  v.literal("DIRECT_TO_SUPPLIER")
-);
+// The shared one, not a third hand-written copy. Declaring it here again is
+// exactly what `consignedSettlementRouteValidator` exists to prevent, and
+// leaving both meant the deduplication it documents had not actually happened.
+const supplierSettlementRouteValidator = consignedSettlementRouteValidator;
 
 /**
  * What happens to the customer's reservation deposit (عربون) when the deal
