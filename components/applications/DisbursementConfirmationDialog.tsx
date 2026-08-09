@@ -81,8 +81,13 @@ export function DisbursementConfirmationDialog({
   // silently wiped the amount, cheque reference and date they had just typed
   // off a settlement advice. Reset belongs to the open transition, not to every
   // value change behind it.
+  // Synced in an effect rather than assigned during render — writing a ref
+  // while rendering is what `react-hooks` forbids, and it is the shape the
+  // suggested fix arrived in.
   const prefillRef = useRef(defaultAmountMajor);
-  prefillRef.current = defaultAmountMajor;
+  useEffect(() => {
+    prefillRef.current = defaultAmountMajor;
+  }, [defaultAmountMajor]);
 
   // Reset to the prefill each time the dialog opens, so a corrected figure from
   // an abandoned attempt is never silently carried into the next one.
