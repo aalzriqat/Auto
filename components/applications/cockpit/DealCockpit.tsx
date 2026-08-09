@@ -73,6 +73,21 @@ const POSITION_LABEL: Record<string, string> = {
   UNKNOWN: "PositionUnknown",
 };
 
+/**
+ * The workflow enum is not user-facing copy. Rendered raw, the badge said
+ * "APPROVED" and the timeline said "PENDING_DOCS" on an otherwise fully Arabic
+ * screen — visible the moment it was rendered, and invisible to every test.
+ */
+const STATUS_LABEL: Record<string, string> = {
+  DRAFT: "Draft",
+  PENDING_DOCS: "PendingDocs",
+  UNDER_REVIEW: "UnderReview",
+  APPROVED: "Approved",
+  REJECTED: "Rejected",
+  CLOSED: "Closed",
+  CANCELLED: "Cancelled",
+};
+
 const PROFIT_LINE_LABEL: Record<string, string> = {
   APPROVED_PURCHASE: "LineApprovedPurchase",
   SUPPLIER_SETTLEMENT: "LineSupplierSettlement",
@@ -84,14 +99,60 @@ function Money({ children }: Readonly<{ children: React.ReactNode }>) {
   return <bdi className="tabular-nums">{children}</bdi>;
 }
 
+export type DealCockpitData = NonNullable<
+  (typeof api.applications.dealCockpit)["_returnType"]
+>;
+
+/**
+ * The data half: one query, one mutation, no presentation.
+ *
+ * Split from the view so the screen can be rendered against server-shaped
+ * fixtures — the RTL and bidi behaviour is only checkable on rendered output,
+ * and a component welded to `useQuery` can only be checked against whatever
+ * happens to be in a deployment.
+ */
 export function DealCockpit({
   orgId,
   applicationId,
 }: Readonly<{ orgId: Id<"organizations">; applicationId: Id<"financeApplications"> }>) {
-  const { t } = useLanguage();
-  const currency = useCurrency();
   const deal = useQuery(api.applications.dealCockpit, { orgId, applicationId });
   const recordReceipt = useMutation(api.supplierReceivables.recordReceipt);
+
+  return (
+    <DealCockpitView
+      deal={deal}
+      onRecordSupplierReceipt={async (receivableId, receipt) => {
+        await recordReceipt({
+          orgId,
+          receivableId,
+          amount: receipt.amount,
+          receiptMethod: receipt.receiptMethod,
+          receiptReference: receipt.receiptReference,
+          receivedAt: receipt.receivedAt,
+        });
+      }}
+    />
+  );
+}
+
+export function DealCockpitView({
+  deal,
+  onRecordSupplierReceipt,
+}: Readonly<{
+  /** `undefined` while loading, `null` when the deal is not readable. */
+  deal: DealCockpitData | null | undefined;
+  onRecordSupplierReceipt: (
+    receivableId: Id<"vehicleSupplierReceivables">,
+    receipt: {
+      amount: number;
+      receiptMethod?: PaymentMethod;
+      receiptReference?: string;
+      receivedAt?: number;
+    }
+  ) => Promise<void>;
+}>) {
+  const { t, locale } = useLanguage();
+  const currency = useCurrency();
 
   const [settlingSupplier, setSettlingSupplier] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -101,7 +162,17 @@ export function DealCockpit({
   // currencies are two. Baking one scale in would be a 100x error everywhere
   // else — the same trap the accounting screens already solved with this helper.
   const factor = useMemo(() => Math.pow(10, scaleForCurrency(currency.code)), [currency.code]);
-  const money = (minor: number) => currency.format(minor / factor);
+  // A SHORT currency marker, and a locale-appropriate one.
+  //
+  // `currency.format` renders "دينار اردني" in Arabic, which on a screen
+  // carrying a dozen amounts wrapped every figure onto two lines on mobile and
+  // buried the headline; the approved mockup uses "د.أ". But the symbol is
+  // configured per org and is Arabic, so using it unconditionally put "د.أ"
+  // next to Latin digits on the English screen — an RTL run beside an LTR one,
+  // which is the bidi case this file is careful about everywhere else. Each
+  // locale gets the short form that belongs to it.
+  const money = (minor: number) =>
+    `${(minor / factor).toLocaleString()} ${locale === "ar" ? currency.symbol : currency.code}`;
 
   if (deal === undefined) {
     return (
@@ -147,17 +218,12 @@ export function DealCockpit({
   }) => {
     setSubmitting(true);
     try {
-      // The receivable id is not exposed on the row: the mutation is keyed to
-      // the claim, and the screen resolves it from the deal rather than letting
-      // a client name an arbitrary receivable.
-      await recordReceipt({
-        orgId,
-        receivableId: supplierRow!.receivableId as Id<"vehicleSupplierReceivables">,
-        amount: receipt.amount,
-        receiptMethod: receipt.receiptMethod,
-        receiptReference: receipt.receiptReference,
-        receivedAt: receipt.receivedAt,
-      });
+      // Keyed to THIS claim, whose id the server resolved. The screen never
+      // lets a client name a receivable of its own choosing.
+      await onRecordSupplierReceipt(
+        supplierRow!.receivableId as Id<"vehicleSupplierReceivables">,
+        receipt
+      );
       toast.success(t("RecordReceipt"));
       setSettlingSupplier(false);
     } catch (error) {
@@ -177,7 +243,7 @@ export function DealCockpit({
               {t("DealCockpitTitle")} <bdi className="text-muted-foreground">#{String(deal.applicationId).slice(-4)}</bdi>
             </h1>
             <Badge variant={deal.status === "APPROVED" || deal.status === "CLOSED" ? "default" : "secondary"}>
-              {deal.status}
+              {t(STATUS_LABEL[deal.status] ?? deal.status)}
             </Badge>
           </div>
           <p className="text-sm text-muted-foreground">
@@ -487,9 +553,7 @@ export function DealCockpit({
                 <div key={`${entry.changedAt}-${index}`} className="flex gap-3 text-sm">
                   <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                   <div className="min-w-0">
-                    <p>
-                      <bdi>{entry.toStatus}</bdi>
-                    </p>
+                    <p>{t(STATUS_LABEL[entry.toStatus] ?? entry.toStatus)}</p>
                     <p className="text-xs text-muted-foreground">
                       <bdi>{entry.actorName}</bdi>
                       {" · "}
