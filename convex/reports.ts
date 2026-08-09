@@ -883,9 +883,21 @@ export const getProfitAndLoss = query({
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
         .take(REPORT_SCAN_CAP);
       for (const app of applications) {
-        // A REVERSED application is a cancelled sale: the money went back to
-        // the deposit, so the old receipt is the only record of it again.
-        if (app.status === "REVERSED") continue;
+        // EVERY status, reversals included.
+        //
+        // Skipping REVERSED resurrected the original receipt as revenue when a
+        // sale was later cancelled: January booked 300, February recognised the
+        // full sale, and cancelling in March put January's 300 back. Cancelling
+        // a sale returns the money to the deposit liability — it does not make
+        // a receipt from two months earlier into earned revenue, and a
+        // cancellation is not a recognition event.
+        //
+        // Once a legacy receipt has entered an authoritative application
+        // lifecycle it stays out of revenue permanently. What happens next is
+        // decided by the disposition, on the disposition's own date: still held
+        // is a liability, a refund is not revenue, a re-application means that
+        // sale recognises its own full revenue, and forfeiture income belongs
+        // to the forfeiture event — never to the original receipt's date.
         legacyDepositsTakenOverBySale.add(app.depositId);
       }
     }

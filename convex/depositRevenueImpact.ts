@@ -61,6 +61,10 @@ export const depositRevenueImpact = internalQuery({
     let totalForfeited = 0;
     let totalReversed = 0;
     let totalPartial = 0;
+    let totalOrphan = 0;
+    let totalOrphanAmount = 0;
+    let totalHeld = 0;
+    let totalApplied = 0;
     let totalLegacyRows = 0;
     let totalLegacyAmount = 0;
     let anyTruncated = false;
@@ -91,6 +95,10 @@ export const depositRevenueImpact = internalQuery({
       let forfeited = 0;
       let reversedApplications = 0;
       let partialOrMultiSale = 0;
+      let orphanReceipts = 0;
+      let orphanAmount = 0;
+      let held = 0;
+      let applied = 0;
       const periods = new Set<string>();
       const rows = [];
 
@@ -158,6 +166,32 @@ export const depositRevenueImpact = internalQuery({
         // migration has left to do.
         const remainder = Math.max(0, round2(tx.amount - appliedTotal));
         const state = deposit?.status ?? "UNKNOWN";
+
+        // No deposits row behind it at all. Production has nine of these,
+        // sharing a single import timestamp, with no status and no resolution
+        // history — real deposits, applied, refunded and opening balances are
+        // indistinguishable from one another at this point. They are reported
+        // as their own class rather than folded into `unresolved`, because a
+        // migration can act on an unresolved deposit and cannot act on one of
+        // these without first being told what it is.
+        if (!deposit) {
+          orphanReceipts += 1;
+          orphanAmount += tx.amount;
+          rows.push({
+            depositId: null,
+            depositMonth,
+            receiptAmount: tx.amount,
+            amount: tx.amount,
+            saleMonth: null,
+            state: "REQUIRES_RECONCILIATION",
+            crossPeriod: false,
+            note: "UNATTRIBUTABLE_LEGACY_RECEIPT — no deposits row; not inferred, not corrected.",
+          });
+          continue;
+        }
+
+        if (state === "APPLIED" && live.length > 0) applied += 1;
+        if (state === "HELD") held += 1;
         if (state === "REFUNDED") {
           refunded += 1;
         } else if (state === "FORFEITED") {
@@ -187,6 +221,10 @@ export const depositRevenueImpact = internalQuery({
       totalForfeited += forfeited;
       totalReversed += reversedApplications;
       totalPartial += partialOrMultiSale;
+      totalOrphan += orphanReceipts;
+      totalOrphanAmount += orphanAmount;
+      totalHeld += held;
+      totalApplied += applied;
       totalLegacyRows += legacyDepositRows.length;
       totalLegacyAmount += legacyDepositRows.reduce((sum, r) => sum + r.amount, 0);
       if (receipts.length === (args.limit ?? 2000)) anyTruncated = true;
@@ -205,6 +243,11 @@ export const depositRevenueImpact = internalQuery({
           forfeitedLegacyDeposits: forfeited,
           reversedApplications,
           partialOrMultiSaleDeposits: partialOrMultiSale,
+          attributableLegacyDeposits: legacyDepositRows.length - orphanReceipts,
+          orphanReceipts,
+          orphanAmount: round2(orphanAmount),
+          heldLegacyDeposits: held,
+          appliedLegacyDeposits: applied,
           legacyDepositAmount: round2(
             legacyDepositRows.reduce((sum, r) => sum + r.amount, 0)
           ),
@@ -233,6 +276,13 @@ export const depositRevenueImpact = internalQuery({
       reversedApplications: totalReversed,
       /** Deposits split across more than one sale — the inflation case. */
       partialOrMultiSaleDeposits: totalPartial,
+      /** Real deposits row behind the receipt — the correctable population. */
+      attributableLegacyDeposits: totalLegacyRows - totalOrphan,
+      /** No deposits row. Reported, never inferred, never corrected here. */
+      orphanReceipts: totalOrphan,
+      orphanAmount: round2(totalOrphanAmount),
+      heldLegacyDeposits: totalHeld,
+      appliedLegacyDeposits: totalApplied,
       periodsAffected: allPeriods.size,
       truncated: anyTruncated,
       perOrg,

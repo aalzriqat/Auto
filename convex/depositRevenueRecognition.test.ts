@@ -425,6 +425,66 @@ describe("a legacy عربون that a completed sale later takes over", () => {
     expect(pl.totalRevenue).toBe(0);
   });
 
+  test("H — cancelling the sale does NOT give the deposit's month its revenue back", async () => {
+    // The resurrection this closes. Jan books 300, Feb recognises the full
+    // sale and Jan drops to zero — then the sale is cancelled in March and Jan
+    // got its 300 back, two months after the fact, because the application had
+    // become REVERSED. Cancelling a sale returns the money to the deposit
+    // liability; it does not make a receipt from January into earned revenue,
+    // and a cancellation is not a recognition event.
+    const s = await seed("cancelled");
+    const v = await vehicle(s, "cancelled", false);
+    const janAt = Date.now() - 40 * DAY;
+    const febAt = Date.now();
+
+    const depositId = await legacyDepositWithRow(s, { vehicleId: v, at: janAt, amount: DEPOSIT });
+    const saleId = await completedSale(s, v, OWNED_PRICE, febAt);
+    await applyToSale(s, {
+      depositId, vehicleId: v, saleId, amount: DEPOSIT, key: "k-h", status: "REVERSED",
+    });
+
+    const jan = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(janAt) });
+    expect(jan.totalRevenue).toBe(0);
+  });
+
+  test("H2 — nor does a refund or a re-application to another sale restore it", async () => {
+    const s = await seed("afterReversal");
+    const v = await vehicle(s, "afterReversal", false);
+    const janAt = Date.now() - 40 * DAY;
+    const febAt = Date.now();
+
+    // Refunded after the reversal: still not revenue on the receipt's date.
+    const depositId = await legacyDepositWithRow(s, {
+      vehicleId: v, at: janAt, amount: DEPOSIT, status: "REFUNDED",
+    });
+    const saleId = await completedSale(s, v, OWNED_PRICE, febAt);
+    await applyToSale(s, {
+      depositId, vehicleId: v, saleId, amount: DEPOSIT, key: "k-h2a", status: "REVERSED",
+    });
+    // And re-applied to a second sale, which recognises its OWN revenue.
+    const saleId2 = await completedSale(s, v, OWNED_PRICE, febAt);
+    await applyToSale(s, { depositId, vehicleId: v, saleId: saleId2, amount: DEPOSIT, key: "k-h2b" });
+
+    const jan = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(janAt) });
+    expect(jan.totalRevenue).toBe(0);
+  });
+
+  test("H3 — three applications on one receipt exclude it once, never below zero", async () => {
+    const s = await seed("excludeOnce");
+    const v = await vehicle(s, "excludeOnce", false);
+    const at = Date.now();
+    const depositId = await legacyDepositWithRow(s, { vehicleId: v, at, amount: DEPOSIT });
+    for (const i of [1, 2, 3]) {
+      const saleId = await completedSale(s, v, OWNED_PRICE, at);
+      await applyToSale(s, { depositId, vehicleId: v, saleId, amount: 100, key: `k-h3-${i}` });
+    }
+
+    const pl = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(at) });
+    // The receipt is one row: it leaves revenue once, and nothing subtracts it
+    // a second time. Exclusion is set membership, not arithmetic.
+    expect(pl.totalRevenue).toBe(0);
+  });
+
   test("G — a post-deploy deposit is already flagged and untouched by this path", async () => {
     const s = await seed("newDeposit");
     const v = await vehicle(s, "newDeposit", false);
@@ -556,6 +616,46 @@ describe("the back-book keeps the arithmetic it was written under", () => {
     }
   });
 
+  test("the impact report classifies orphan receipts apart from unresolved deposits", async () => {
+    // The nine production rows with no deposits row are a different problem
+    // from a real deposit still held: a migration can act on the second and
+    // cannot act on the first without being told what it is. Folding them
+    // together would hand the follow-up PR one number covering two decisions.
+    const s = await seed("classify");
+    const v = await vehicle(s, "classify", false);
+    const at = Date.now();
+
+    // One orphan (no deposits row) and one real HELD deposit.
+    await depositReceipt(s, { vehicleId: v, at, amount: 70, legacy: true });
+    const depositId = await s.t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId: s.orgId, vehicleId: v, customerId: s.customerId,
+        amount: DEPOSIT, amountMinor: DEPOSIT * 1000, currency: "JOD", method: "CASH",
+        status: "HELD", holdActive: true, createdAt: at, createdBy: s.userId,
+      })
+    );
+    await s.t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId: s.orgId, type: "IN", amount: DEPOSIT, date: at, category: "DEPOSIT",
+        description: "Real legacy deposit", vehicleId: v, depositId,
+      })
+    );
+
+    const report = await s.t.query(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (await import("./_generated/api")).internal.depositRevenueImpact.depositRevenueImpact as any,
+      { orgId: s.orgId }
+    );
+
+    expect(report.orphanReceipts).toBe(1);
+    expect(report.orphanAmount).toBe(70);
+    // The orphan must NOT inflate the correctable population.
+    expect(report.unresolvedLegacyDeposits).toBe(1);
+    expect(report.unresolvedAmount).toBe(DEPOSIT);
+    expect(report.attributableLegacyDeposits).toBe(1);
+    expect(report.heldLegacyDeposits).toBe(1);
+  });
+
   test("the impact report counts a cross-period legacy deposit and writes nothing", async () => {
     const s = await seed("impact");
     const v = await vehicle(s, "impact", false);
@@ -574,8 +674,11 @@ describe("the back-book keeps the arithmetic it was written under", () => {
 
     expect(report.orgsAffected).toBe(1);
     expect(report.perOrg[0].legacyDepositRows).toBe(1);
-    // No completed sale behind it, so it is revenue with nothing to offset it.
-    expect(report.unresolvedLegacyDeposits).toBe(1);
+    // This fixture has no deposits row, so it is an UNATTRIBUTABLE receipt —
+    // reported, never inferred, and deliberately not counted as a deposit a
+    // migration could correct.
+    expect(report.orphanReceipts).toBe(1);
+    expect(report.unresolvedLegacyDeposits).toBe(0);
 
     // Read-only, and asserted rather than assumed — this report exists to
     // inform a migration decision, not to make one.
