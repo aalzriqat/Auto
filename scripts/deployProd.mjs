@@ -47,6 +47,27 @@ const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
   encoding: "utf8",
 }).trim();
 
+/**
+ * The Convex CLI is launched as `node node_modules/convex/bin/main.js`, not via
+ * npx.
+ *
+ * `shell: true` was how the first version reached `npx` on Windows, and it
+ * concatenates arguments into a cmd.exe string rather than escaping them —
+ * which split `--cmd "pnpm build"` on its space and let an argument chain a
+ * second, unguarded command with `&`. Dropping the shell then hit the opposite
+ * wall: Node refuses to spawn a `.cmd` without one (EINVAL, the CVE-2024-27980
+ * hardening), so `npx.cmd` could not launch at all.
+ *
+ * Running the entry point with `process.execPath` escapes both. Arguments stay
+ * argv, and the binary is the one this repo installed rather than whatever npx
+ * resolves — which also means the guard cannot be pointed at a different CLI.
+ */
+const CONVEX_CLI = path.join(repoRoot, "node_modules", "convex", "bin", "main.js");
+if (!existsSync(CONVEX_CLI)) {
+  console.error(`Convex CLI not found at ${CONVEX_CLI}. Run pnpm install first.`);
+  process.exit(1);
+}
+
 function git(args) {
   return execFileSync("git", args, { encoding: "utf8", cwd: repoRoot }).trim();
 }
@@ -174,13 +195,23 @@ if (!first.ok) {
 
 // Resolve the target using the deploy's own resolution, captured rather than
 // inherited so the name can be read back and confirmed against.
+//
+// `-y` is passed HERE and only here. Convex asks its production question before
+// it branches on --dry-run, so without this the operator answers the same
+// alarming prompt twice per deploy and the first answer decides nothing — which
+// is how a prompt gets trained into a reflex, the exact dynamic that produced
+// habitual `-y` in the first place. It is safe on a dry run because a dry run
+// pushes nothing (verified), and it is never forwarded to the real deploy: the
+// allowlist refuses it from the operator, and the spawn below omits it.
 console.log("Resolving the target deployment (dry run, nothing is pushed)…\n");
-const dry = spawnSync("npx", ["convex", "deploy", "--dry-run", ...forwardedArgs], {
+const dry = spawnSync(process.execPath, [CONVEX_CLI, "deploy", "--dry-run", "-y", ...forwardedArgs], {
   encoding: "utf8",
   cwd: repoRoot,
 });
 const dryOutput = `${dry.stdout ?? ""}${dry.stderr ?? ""}`;
 process.stdout.write(dryOutput);
+if (dry.error) console.error(`
+Could not run the dry run: ${dry.error.message}`);
 if (dry.status !== 0) {
   console.error("\nDry run failed. Not deploying.\n");
   process.exit(dry.status ?? 1);
@@ -229,8 +260,7 @@ if (!recheck.ok) {
 // No `shell`, so arguments are passed as argv rather than concatenated into a
 // cmd.exe string — that both broke `--cmd "pnpm build"` on Windows and let an
 // argument chain a second unguarded command with `&`.
-const npx = process.platform === "win32" ? "npx.cmd" : "npx";
-const deploy = spawnSync(npx, ["convex", "deploy", ...forwardedArgs], {
+const deploy = spawnSync(process.execPath, [CONVEX_CLI, "deploy", ...forwardedArgs], {
   stdio: "inherit",
   cwd: repoRoot,
 });
