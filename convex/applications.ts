@@ -1913,7 +1913,15 @@ export const confirmSupplierDisbursement = mutation({
         // deliberately rather than a second payment on the same deal.
         if (app.supplierDisbursementConfirmedAt !== undefined) {
           throw new ConvexError(
-            "The company's payment to the supplier has already been recorded on this deal."
+            // Names where a correction goes, rather than stopping dead. Once
+            // this is recorded, a corrected reference or date cannot be
+            // resubmitted here at all: the same idempotency key fails on the
+            // fingerprint and a new key fails on this guard. That is deliberate
+            // — a second advice on one deal must not be a routine action — but
+            // an operator who mistyped a cheque number still needs somewhere to
+            // go, and silence sent them nowhere. A first-class amend path with
+            // its own audit record is tracked separately.
+            "The company's payment to the supplier has already been recorded on this deal. To correct the amount, reference or date on a recorded advice, ask an administrator to amend it — it cannot be re-submitted here."
           );
         }
 

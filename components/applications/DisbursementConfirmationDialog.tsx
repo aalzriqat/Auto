@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2, Landmark, HandCoins } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -73,14 +73,26 @@ export function DisbursementConfirmationDialog({
   const [reference, setReference] = useState("");
   const [paidOn, setPaidOn] = useState("");
 
+  // The prefill is read through a ref so this effect depends on `open` ALONE.
+  //
+  // `defaultAmountMajor` comes from a live Convex query — the application's
+  // approved purchase amount. With it in the dependency array, anything that
+  // changed that figure while the operator was mid-entry re-ran the reset and
+  // silently wiped the amount, cheque reference and date they had just typed
+  // off a settlement advice. Reset belongs to the open transition, not to every
+  // value change behind it.
+  const prefillRef = useRef(defaultAmountMajor);
+  prefillRef.current = defaultAmountMajor;
+
   // Reset to the prefill each time the dialog opens, so a corrected figure from
   // an abandoned attempt is never silently carried into the next one.
   useEffect(() => {
     if (!open) return;
-    setAmount(defaultAmountMajor !== undefined ? String(defaultAmountMajor) : "");
+    const prefill = prefillRef.current;
+    setAmount(prefill !== undefined ? String(prefill) : "");
     setReference("");
     setPaidOn("");
-  }, [open, defaultAmountMajor]);
+  }, [open]);
 
   const amountInvalid = mode === "SUPPLIER" && amount.trim() !== "" && !(Number(amount) > 0);
   const supplier = mode === "SUPPLIER" ? supplierName ?? t("TheSupplier") : "";

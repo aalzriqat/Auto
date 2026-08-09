@@ -82,3 +82,52 @@ describe("the date a supplier advice is recorded under", () => {
     expect(captured[0]!.disbursedAt).toBe(Date.UTC(2026, 7, 1));
   });
 });
+
+/**
+ * `defaultAmountMajor` comes from a live Convex query — the application's
+ * approved purchase amount. While it sat in the reset effect's dependency
+ * array, anything that changed that figure mid-entry silently wiped the amount,
+ * reference and date the operator had just read off a settlement advice.
+ */
+describe("what happens when the prefill changes while the dialog is open", () => {
+  test("typed advice data survives", () => {
+    const { rerender } = render(
+      <DisbursementConfirmationDialog
+        mode="SUPPLIER"
+        supplierName="Amman Importer Co"
+        open
+        disabled={false}
+        submitting={false}
+        amountLabel="JD 28,000"
+        defaultAmountMajor={28_000}
+        t={(key: string) => key}
+        onOpenChange={() => {}}
+        onConfirm={() => {}}
+        onConfirmSupplier={() => {}}
+      />
+    );
+
+    const reference = screen.getByLabelText(/reference/i) as HTMLInputElement;
+    fireEvent.change(reference, { target: { value: "CHQ-99182" } });
+
+    // The approved purchase amount changes underneath — an edit elsewhere, or
+    // simply the query resolving again.
+    rerender(
+      <DisbursementConfirmationDialog
+        mode="SUPPLIER"
+        supplierName="Amman Importer Co"
+        open
+        disabled={false}
+        submitting={false}
+        amountLabel="JD 29,000"
+        defaultAmountMajor={29_000}
+        t={(key: string) => key}
+        onOpenChange={() => {}}
+        onConfirm={() => {}}
+        onConfirmSupplier={() => {}}
+      />
+    );
+
+    expect((screen.getByLabelText(/reference/i) as HTMLInputElement).value).toBe("CHQ-99182");
+  });
+});

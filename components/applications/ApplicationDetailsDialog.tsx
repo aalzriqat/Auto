@@ -402,10 +402,21 @@ export function ApplicationDetailsDialog({
   // name is reachable (`saveQuote` applies no trim) and would otherwise render
   // as an empty label beside "Company", while the server's own resolver
   // correctly calls that payer unnamed.
+  // A lease has an external financier and no name for it anywhere, so it fell
+  // to "Finance provider (not named)" here while the applications list called
+  // the same deal "Lease" — two descriptions of one deal, and this was the
+  // inaccurate one: it has a leasing provider, not an unnamed finance company.
+  //
+  // `|| undefined` on the trimmed name, not `??`: a whitespace-only provider
+  // name is reachable (`saveQuote` applies no trim) and would otherwise render
+  // as an empty label beside "Company", while the server's own resolver
+  // correctly calls that payer unnamed.
   const financierLabel =
     app.company?.name ||
     app.manualFinanceSnapshot?.providerName?.trim() ||
-    t("UnnamedFinanceProvider" as any);
+    (app.directRouteRefusal === "LEASE"
+      ? t("LeaseFinancing" as any)
+      : t("UnnamedFinanceProvider" as any));
   // The dealership-side disbursement compares against the customer's principal,
   // so it keeps `expectsFinanceCompanyDisbursement`. The supplier-side status is
   // about a payment that never touches that figure, so it must not.

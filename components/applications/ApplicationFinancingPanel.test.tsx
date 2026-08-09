@@ -138,3 +138,26 @@ describe("a deal with no outside financier", () => {
     expect(screen.getByText(/CashDeal/)).toBeTruthy();
   });
 });
+
+/**
+ * A lease has an external financier and no name for it anywhere in the model,
+ * so the dialog fell to "Finance provider (not named)" while the applications
+ * list called the same deal "Lease". Two descriptions of one deal, and this was
+ * the inaccurate one — it has a leasing provider, not an unnamed finance
+ * company.
+ */
+describe("a consigned deal financed by a lease", () => {
+  test("is described as a lease, the same way the list describes it", () => {
+    renderDialog(
+      manualFinancedApplication({
+        quoteModeAtSubmission: "LEASE",
+        manualFinanceSnapshot: undefined,
+        canSettleDirectToSupplier: false,
+        directRouteRefusal: "LEASE",
+      })
+    );
+
+    expect(screen.getByText(/LeaseFinancing/)).toBeTruthy();
+    expect(screen.queryByText(/UnnamedFinanceProvider/)).toBeNull();
+  });
+});
