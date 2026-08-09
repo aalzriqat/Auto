@@ -104,6 +104,12 @@ export async function recordHeldDeposit(
     amount: args.amount,
     date: now,
     category: "DEPOSIT",
+    // Cash in, but not revenue: this is the customer's money held against a
+    // liability until the deal resolves it. The row stays on the operational
+    // ledger — the dealership did receive it — and is kept out of the P&L,
+    // which used to count it as turnover the moment it arrived and then wrote
+    // the eventual sale net of it to compensate.
+    excludedFromRevenue: true,
     description: `Deposit for ${args.sourceLabel} - ${vehicleLabel} - ${customerLabel}`,
     vehicleId: args.vehicleId,
     depositId,

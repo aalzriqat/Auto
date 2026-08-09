@@ -857,6 +857,20 @@ export const getProfitAndLoss = query({
 
     for (const tx of txInDateRange) {
       if (tx.isDeleted) continue;
+      // Cash received against a liability is not revenue, and a عربون is
+      // exactly that. Counting it on arrival, then writing the sale net of it
+      // to compensate, only balances when both land in one period: a deposit
+      // on 31 January against a sale on 1 February reported revenue in January
+      // for a car nobody had sold, and understated February by the same amount.
+      // The lifetime total came out right, which is why it survived this long.
+      //
+      // Scoped to rows that carry the flag, which is only rows written since
+      // recognition was separated from cash movement. Excluding every DEPOSIT
+      // row would understate the back-book instead, because those sales are
+      // still recorded net of what was collected — so history keeps the
+      // arithmetic it was written under and reads exactly as it does today.
+      // `depositRevenueImpact` measures what correcting it would move.
+      if (tx.excludedFromRevenue === true) continue;
       if (tx.type === "IN" && REVENUE_CATEGORIES.has(tx.category ?? "")) {
         // `recognizedRevenueAmount` where the row carries one — a consigned
         // sale, whose gross belongs to the supplier.

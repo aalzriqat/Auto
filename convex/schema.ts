@@ -3080,6 +3080,26 @@ export default defineSchema({
      */
     recognizedRevenueAmount: v.optional(v.number()),
     /**
+     * Cash received that is NOT revenue — a عربون against a liability.
+     *
+     * Written only on rows created after revenue recognition was separated
+     * from cash movement, and it is what makes that separation deployable
+     * without rewriting the back-book. `getProfitAndLoss` counted DEPOSIT as
+     * revenue and compensated by writing the sale net of what was already
+     * collected, which only reconciles when deposit and sale fall in one
+     * period: a عربون in January and its sale in February reported revenue in
+     * January for a car that had not been sold, and understated February by
+     * the same amount.
+     *
+     * Simply dropping DEPOSIT from the revenue set would have understated every
+     * historical period instead, because those sale rows are still net. So the
+     * P&L excludes only the rows carrying this flag; anything without it keeps
+     * the arithmetic it was written under and reads exactly as it does today.
+     * Correcting the back-book is a separate, reviewed migration — see
+     * `depositRevenueImpact`.
+     */
+    excludedFromRevenue: v.optional(v.boolean()),
+    /**
      * The full ticket the deal was transacted at, before anything already
      * collected was netted off `amount`.
      *

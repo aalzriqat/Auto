@@ -89,10 +89,20 @@ export async function createSaleTransaction(
     // worth. What must NOT come from it is turnover: getProfitAndLoss sums this
     // category as revenue, which reported a consigned sale at its sticker price
     // while the sales report reported the margin — the same month, two answers.
-    ...(args.recognizedRevenue !== undefined &&
-    args.recognizedRevenue !== args.salePrice - (args.previouslyCollected ?? 0)
-      ? { recognizedRevenueAmount: args.recognizedRevenue }
-      : {}),
+    // Revenue recognized in THIS period, independent of when the cash arrived.
+    //
+    // Written always now, on both bases, and never netted down by a عربون:
+    // the full sale price on the dealership's own stock, the full agency
+    // margin on a consigned car. `amount` above stays net, because that is the
+    // operational cash figure other screens read — the two are different
+    // questions and were previously answered with one number.
+    //
+    // It used to be omitted whenever it equalled `salePrice - previouslyCollected`,
+    // which meant an owned sale with a deposit fell back to that net `amount`
+    // and recognized less revenue than it earned, in a period chosen by when
+    // the customer happened to pay.
+    recognizedRevenueAmount:
+      args.recognizedRevenue ?? args.salePrice,
     // The deal at face value, kept separately because `amount` above is net of
     // whatever was already collected. Without it the P&L had to infer the gross
     // from a net figure and reported a smaller deal for every customer who put

@@ -759,6 +759,41 @@ async function applySaleCompletionSideEffects(
       ? toMinorUnits(args.salePrice, prepared.currency) - costMinor
       : null;
 
+  // The transitional case, and the only one that still nets a deposit off
+  // recognized revenue.
+  //
+  // A عربون taken BEFORE recognition was separated from cash movement was
+  // booked as revenue the day it arrived, and its transaction row carries no
+  // `excludedFromRevenue` flag to take it back out. Its sale completing now
+  // would recognize the full amount a second time. So the part already counted
+  // is deducted here — measured from the deposit's own receipt row rather than
+  // assumed — which leaves the total correct without rewriting a historical
+  // row. Deposits taken after the change are flagged, were never revenue, and
+  // are not deducted.
+  //
+  // Naturally empties as the pre-change deposits resolve; `depositRevenueImpact`
+  // reports how many remain.
+  async function alreadyRecognizedFor(
+    deposits: Array<{ depositId: Id<"deposits">; amount: number }>
+  ): Promise<number> {
+    let total = 0;
+    for (const { depositId, amount } of deposits) {
+      const receipt = await ctx.db
+        .query("transactions")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .filter((q) =>
+          q.and(
+            q.eq(q.field("depositId"), depositId),
+            q.eq(q.field("type"), "IN"),
+            q.neq(q.field("isDeleted"), true)
+          )
+        )
+        .first();
+      if (receipt && receipt.excludedFromRevenue !== true) total += amount;
+    }
+    return total;
+  }
+
   const { previouslyCollected, appliedDeposits, appliedToSupplierSettlement } =
     await resolveReservationDeposits(ctx, {
     args,
@@ -769,6 +804,8 @@ async function applySaleCompletionSideEffects(
     customerBillableMinor,
       marginMinor,
     });
+
+  const alreadyRecognizedDeposits = await alreadyRecognizedFor(appliedDeposits);
 
   // Every dinar of the quote's deposit must still be in exactly one bucket.
   // A mutation is one transaction, so a mismatch here rolls the whole
@@ -789,10 +826,23 @@ async function applySaleCompletionSideEffects(
     customer: prepared.customer,
     previouslyCollected,
     // Agent basis recognizes the margin only; the gross stays on the row as
+    // (see alreadyRecognizedDeposits above for the one deduction that remains)
     // `amount`. Computed from the same cost basis the GL and commissions use.
-    recognizedRevenue: isSourced && marginMinor !== null
-      ? Math.max(0, args.salePrice - costAmount) - previouslyCollected
-      : undefined,
+    //
+    // NOT reduced by `previouslyCollected`. It was, and that made recognized
+    // revenue depend on when the customer paid rather than on when the
+    // dealership earned it: a 3,000 margin with a 300 عربون taken the previous
+    // month recognized 2,700 in the month of the sale, and the missing 300 had
+    // been booked as revenue in the month the deposit arrived — against a car
+    // that had not been sold. Recognition is an accrual question; the cash
+    // movement is already recorded on `amount`.
+    //
+    // The one deduction that remains is a deposit ALREADY counted as revenue
+    // under the old rule — see `alreadyRecognizedDeposits`.
+    recognizedRevenue:
+      (isSourced && marginMinor !== null
+        ? Math.max(0, args.salePrice - costAmount)
+        : args.salePrice) - alreadyRecognizedDeposits,
     idempotencyKey: args.idempotencyKey,
   });
 
