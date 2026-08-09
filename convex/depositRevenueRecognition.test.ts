@@ -251,6 +251,191 @@ describe("a عربون is not revenue when the cash arrives", () => {
   });
 });
 
+/**
+ * The deployment transition, which is the only place old and new rules meet.
+ *
+ * A عربون taken BEFORE recognition was separated was booked as revenue on
+ * arrival. Its sale completing afterwards recognizes the full amount earned —
+ * so the old receipt has to stop being revenue, or the same money is counted
+ * twice. Deducting it from the sale instead (the first attempt) left BOTH
+ * periods wrong: the deposit's month kept revenue for a car nobody had sold,
+ * and the sale's month recognized less than it earned. It is dropped at read
+ * time instead, and no historical row is rewritten.
+ */
+describe("a legacy عربون that a completed sale later takes over", () => {
+  /** A pre-change receipt WITH a real deposits row — the attributable case. */
+  async function legacyDepositWithRow(
+    s: Seeded,
+    opts: { vehicleId: any; at: number; amount: number; status?: "HELD" | "REFUNDED" }
+  ) {
+    const depositId = await s.t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId: s.orgId, vehicleId: opts.vehicleId, customerId: s.customerId,
+        amount: opts.amount, amountMinor: opts.amount * 1000, currency: "JOD", method: "CASH",
+        status: opts.status ?? "HELD", holdActive: opts.status === "REFUNDED" ? false : true,
+        createdAt: opts.at, createdBy: s.userId,
+      })
+    );
+    await s.t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId: s.orgId, type: "IN", amount: opts.amount, date: opts.at,
+        category: "DEPOSIT", description: "Legacy deposit",
+        vehicleId: opts.vehicleId, depositId,
+      })
+    );
+    return depositId;
+  }
+
+  /** The authoritative relationship: an application tying deposit to sale. */
+  async function applyToSale(
+    s: Seeded,
+    opts: { depositId: any; vehicleId: any; saleId: any; amount: number; key: string; status?: "APPLIED" | "REVERSED" }
+  ) {
+    await s.t.run((ctx) =>
+      ctx.db.insert("depositApplications", {
+        orgId: s.orgId, depositId: opts.depositId, vehicleId: opts.vehicleId,
+        saleId: opts.saleId, customerId: s.customerId,
+        amountMinor: opts.amount * 1000, currency: "JOD",
+        treatment: "CUSTOMER_RECEIVABLE" as const,
+        eventType: "DEPOSIT_APPLIED", eventSourceType: "sale",
+        eventSourceId: opts.saleId, eventVersion: 1,
+        eventIdempotencyKey: opts.key,
+        status: opts.status ?? ("APPLIED" as const),
+        appliedAt: Date.now(), appliedBy: s.userId,
+      })
+    );
+  }
+
+  async function completedSale(s: Seeded, vehicleId: any, price: number, at: number) {
+    return await s.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
+        salePrice: price, saleDate: at, status: "COMPLETED" as const,
+      })
+    );
+  }
+
+  test("A — SOURCED: the deposit's month drops to zero and the sale's month gets the full margin", async () => {
+    const s = await seed("transSourced");
+    const v = await vehicle(s, "transSourced", true);
+    const janAt = Date.now() - 40 * DAY;
+    const febAt = Date.now();
+
+    const depositId = await legacyDepositWithRow(s, { vehicleId: v, at: janAt, amount: DEPOSIT });
+    const saleId = await completedSale(s, v, SALE_PRICE, febAt);
+    await s.t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId: s.orgId, type: "IN", amount: SALE_PRICE - DEPOSIT, date: febAt,
+        category: "VEHICLE_SALE", description: "Sale",
+        vehicleId: v, recognizedRevenueAmount: MARGIN,
+        grossTransactionValueAmount: SALE_PRICE,
+      })
+    );
+    await applyToSale(s, { depositId, vehicleId: v, saleId, amount: DEPOSIT, key: "k-a" });
+
+    const jan = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(janAt) });
+    const feb = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(febAt) });
+
+    expect(jan.totalRevenue).toBe(0);
+    expect(feb.totalRevenue).toBe(MARGIN);
+  });
+
+  test("B — STOCK: same transition, full owned-sale revenue in the sale's month", async () => {
+    const s = await seed("transOwned");
+    const v = await vehicle(s, "transOwned", false);
+    const janAt = Date.now() - 40 * DAY;
+    const febAt = Date.now();
+
+    const depositId = await legacyDepositWithRow(s, { vehicleId: v, at: janAt, amount: DEPOSIT });
+    const saleId = await completedSale(s, v, OWNED_PRICE, febAt);
+    await s.t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId: s.orgId, type: "IN", amount: OWNED_PRICE - DEPOSIT, date: febAt,
+        category: "VEHICLE_SALE", description: "Sale",
+        vehicleId: v, recognizedRevenueAmount: OWNED_PRICE,
+        grossTransactionValueAmount: OWNED_PRICE,
+      })
+    );
+    await applyToSale(s, { depositId, vehicleId: v, saleId, amount: DEPOSIT, key: "k-b" });
+
+    const jan = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(janAt) });
+    const feb = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(febAt) });
+
+    expect(jan.totalRevenue).toBe(0);
+    expect(feb.totalRevenue).toBe(OWNED_PRICE);
+  });
+
+  test("C — an orphan receipt with no deposits row is NEVER excluded automatically", async () => {
+    // Nine of these exist in production, sharing one import timestamp, with no
+    // status and no resolution history. Whether they were real deposits,
+    // applied, refunded or opening data is not knowable from their shape, and
+    // shape is not permission to reinterpret them.
+    const s = await seed("orphan");
+    const v = await vehicle(s, "orphan", false);
+    const at = Date.now();
+    await depositReceipt(s, { vehicleId: v, at, amount: DEPOSIT, legacy: true });
+    // A completed sale on the same car — the tempting heuristic.
+    await completedSale(s, v, OWNED_PRICE, at);
+
+    const pl = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(at) });
+    expect(pl.totalRevenue).toBe(DEPOSIT);
+  });
+
+  test("D — a legacy deposit still HELD keeps its legacy treatment", async () => {
+    const s = await seed("stillHeld");
+    const v = await vehicle(s, "stillHeld", false);
+    const at = Date.now();
+    await legacyDepositWithRow(s, { vehicleId: v, at, amount: DEPOSIT });
+
+    const pl = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(at) });
+    expect(pl.totalRevenue).toBe(DEPOSIT);
+  });
+
+  test("E — a REFUNDED legacy deposit is not reinterpreted through the transition path", async () => {
+    const s = await seed("refunded");
+    const v = await vehicle(s, "refunded", false);
+    const at = Date.now();
+    await legacyDepositWithRow(s, { vehicleId: v, at, amount: DEPOSIT, status: "REFUNDED" });
+
+    const pl = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(at) });
+    // Correcting it belongs to the follow-up historical PR, not to this path.
+    expect(pl.totalRevenue).toBe(DEPOSIT);
+  });
+
+  test("F — one deposit across two vehicles is excluded ONCE, not once per sale", async () => {
+    const s = await seed("multiApply");
+    const a = await vehicle(s, "multiA", false);
+    const b = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin: "VINMULTIB", make: "Kia", model: "Rio", year: 2023,
+        mileage: 5, color: "Red", fuelType: "Gas", transmission: "Auto",
+        sellingPrice: OWNED_PRICE, status: "AVAILABLE",
+        sourceType: "STOCK" as const, purchasePrice: OWNED_COST,
+      })
+    );
+    const at = Date.now();
+    const depositId = await legacyDepositWithRow(s, { vehicleId: a, at, amount: DEPOSIT });
+    const saleA = await completedSale(s, a, OWNED_PRICE, at);
+    const saleB = await completedSale(s, b, OWNED_PRICE, at);
+    await applyToSale(s, { depositId, vehicleId: a, saleId: saleA, amount: 200, key: "k-f1" });
+    await applyToSale(s, { depositId, vehicleId: b, saleId: saleB, amount: 100, key: "k-f2" });
+
+    const pl = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(at) });
+    // The receipt is one row; it leaves revenue once. Nothing goes negative.
+    expect(pl.totalRevenue).toBe(0);
+  });
+
+  test("G — a post-deploy deposit is already flagged and untouched by this path", async () => {
+    const s = await seed("newDeposit");
+    const v = await vehicle(s, "newDeposit", false);
+    const at = Date.now();
+    await depositReceipt(s, { vehicleId: v, at, amount: DEPOSIT });
+
+    const pl = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(at) });
+    expect(pl.totalRevenue).toBe(0);
+  });
+});
+
 describe("the back-book keeps the arithmetic it was written under", () => {
   test("a pre-change deposit row still counts, so historical periods do not drop", async () => {
     // The trap in removing DEPOSIT from revenue outright: those sales are

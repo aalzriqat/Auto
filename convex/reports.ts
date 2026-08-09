@@ -855,8 +855,51 @@ export const getProfitAndLoss = query({
     // Generic type="IN" rows (e.g. CLAIM_PAYMENT, REFUND-in) are also excluded.
     const REVENUE_CATEGORIES = new Set(["VEHICLE_SALE", "DEPOSIT"]);
 
+    // Legacy عربون receipts that a completed sale has since taken over.
+    //
+    // A deposit taken BEFORE recognition was separated from cash movement was
+    // booked as revenue on arrival and carries no `excludedFromRevenue` flag.
+    // Once its sale completes under the new rule, that sale recognizes the FULL
+    // amount it earned — so leaving the old receipt in revenue would count the
+    // same money twice, and deducting it from the sale instead would leave BOTH
+    // periods wrong (revenue in the deposit's month for a car nobody had sold,
+    // and a short month for the sale). It is dropped here, at read time,
+    // without rewriting a historical row.
+    //
+    // The relationship must be AUTHORITATIVE: an application row tying this
+    // deposit to a real sale. Never a matching vehicle, customer, amount or
+    // nearby date — a receipt that merely looks like it belongs to a sale is
+    // exactly what the follow-up correction PR exists to adjudicate.
+    //
+    // One query for the whole report rather than a lookup per transaction.
+    const legacyDepositsTakenOverBySale = new Set<string>();
+    {
+      // Bounded like every other scan in this file. Past the cap a legacy
+      // receipt simply keeps its old treatment, which is the same answer the
+      // report gives today — short of the correction, never short of revenue.
+      const REPORT_SCAN_CAP = 50_000;
+      const applications = await ctx.db
+        .query("depositApplications")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .take(REPORT_SCAN_CAP);
+      for (const app of applications) {
+        // A REVERSED application is a cancelled sale: the money went back to
+        // the deposit, so the old receipt is the only record of it again.
+        if (app.status === "REVERSED") continue;
+        legacyDepositsTakenOverBySale.add(app.depositId);
+      }
+    }
+
     for (const tx of txInDateRange) {
       if (tx.isDeleted) continue;
+      if (
+        tx.category === "DEPOSIT" &&
+        tx.excludedFromRevenue !== true &&
+        tx.depositId !== undefined &&
+        legacyDepositsTakenOverBySale.has(tx.depositId)
+      ) {
+        continue;
+      }
       // Cash received against a liability is not revenue, and a عربون is
       // exactly that. Counting it on arrival, then writing the sale net of it
       // to compensate, only balances when both land in one period: a deposit
