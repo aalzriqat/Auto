@@ -867,37 +867,31 @@ async function applySaleCompletionSideEffects(
             `This car is ${prepared.vehicle.sourcedFromName ?? "the supplier"}'s and the dealership sells it as his agent, but the sale price is below the supplier's entitlement of ${costAmount} — the amount he is owed for it. The deal would lose money the dealership has to fund, which is a real situation but not one that can be assumed. Record the shortfall against the supplier agreement, or agree a lower supplier amount, before completing the sale.`
           );
         }
-        // A financed deal cannot be settled directly with the supplier — yet.
+        // A financed deal settled directly with the supplier used to be refused
+        // here, because the finance company's side of the settlement had no way
+        // to record it. It does now, so the refusal is gone rather than
+        // weakened — but what it was protecting against is worth keeping in
+        // view, because none of it is enforced by this function.
         //
-        // Refused rather than silently redirected. `finalizeDeal` calls
-        // `completeSale` with no `supplierSettlementRoute` at all, and an
-        // absent route reads as THROUGH_DEALERSHIP (`consignedSettlementRoute`).
-        // So an operator who chose DIRECT_TO_SUPPLIER on a financed quote had
-        // the deal posted the opposite way: the dealership booked a receivable
-        // from the customer for the gross and a payable to the supplier, when
-        // the buyer's financier had in fact paid the supplier and the supplier
-        // owed the dealership only its margin. Both sides of the settlement
-        // were inverted, quietly.
+        // The hazard was never the journal. This rule posts from
+        // `settlementRoute` and always has: on the direct route it debits the
+        // supplier claim and credits commission, and nothing about financing
+        // changes that. The hazard was everything `finalizeDeal` does AFTER the
+        // sale — a finance-company receivable for the principal, a
+        // customer-receivable transfer, and a DR AR-Finance / CR AR-Customers
+        // posting — all of which describe money coming to the dealership on a
+        // deal where it comes to the supplier. Those are now skipped on this
+        // route, in `applications.settlesDirectToSupplier`.
         //
-        // Supporting the route properly is not one persisted field: the
-        // finance-company receivable, the expected dealer remittance,
-        // disbursement confirmation, the customer contribution, the supplier
-        // receivable, cancellation/reversal and settlement reconciliation all
-        // have to agree. That is the settlement work this PR deliberately does
-        // not contain. Until it exists, the honest answer is a refusal —
-        // enforced HERE and not by hiding a radio button, because the form is
-        // not the only caller.
+        // The other half was that the route could not be expressed at all:
+        // `finalizeDeal` called `completeSale` with no `supplierSettlementRoute`,
+        // so an absent route read as THROUGH_DEALERSHIP and posted the deal the
+        // opposite way from what was agreed. It is now recorded on the
+        // application and carried through.
         //
-        // Cash consigned sales keep both routes.
-        const financed =
-          args.financingType === "FINANCED" ||
-          args.financingType === "LEASE" ||
-          args.applicationId != null;
-        if (financed && !dealershipCollectsGross(settlementRoute)) {
-          throw new ConvexError(
-            `This is a financed deal on ${prepared.vehicle.sourcedFromName ?? "the supplier"}'s car, and paying the supplier directly is not supported on financed sales yet — the finance company's side of the settlement has no way to record it. Settle it through the dealership, or complete the sale as a cash deal.`
-          );
-        }
+        // Everything else in this block still refuses, and deliberately: a
+        // missing supplier entitlement, a sale below it, and a taxed agency
+        // sale are unchanged by who financed the buyer.
         if (args.taxAmount != null && args.taxAmount > 0) {
           throw new ConvexError(
             `This is an agency sale — the dealership sells this car as ${prepared.vehicle.sourcedFromName ?? "the supplier"}'s agent — and agency sales have no agreed tax treatment yet, so whether the tax is his liability or the dealership's changes who owes the money. Record the tax against the supplier agreement, or sell the car as dealership stock, before completing the sale.`

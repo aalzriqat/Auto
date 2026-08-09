@@ -22,6 +22,7 @@ import {
   quotationSourceValidator,
   settlementStatusValidator,
 } from "./utils/financingEconomics";
+import { consignedSettlementRouteValidator } from "./utils/vehicleOwnership";
 
 const organizationDeletionRequestStatus = v.union(
   v.literal("PENDING_REVIEW"),
@@ -456,6 +457,8 @@ export default defineSchema({
       // Multi-vehicle reservation-deposit allocation — see depositAllocation.ts.
       v.literal("ALLOCATE_DEPOSIT"),
       v.literal("RESOLVE_DEPOSIT_ALLOCATION"),
+      v.literal("SET_SUPPLIER_SETTLEMENT_ROUTE"),
+      v.literal("CONFIRM_SUPPLIER_DISBURSEMENT"),
     ),
     resourceType: v.string(),
     resourceId: v.string(),
@@ -2118,6 +2121,34 @@ export default defineSchema({
     dealerContributionMinor: v.optional(v.number()),
     dealerContributionSettlement: v.optional(dealerContributionSettlementValidator),
     customerContributionSettlement: v.optional(customerContributionSettlementValidator),
+
+    // Who the finance company actually pays when the car is the supplier's.
+    //
+    // Not derivable, and not the same question as who owns the car: the same
+    // consigned vehicle can be financed with the cheque made out to the
+    // dealership or made out to the supplier, and only the agreement says
+    // which (`حسب ملكية السيارة`). Recorded here rather than on the sale
+    // because the sale does not exist yet when the deal is arranged, and
+    // `finalizeDeal` is what carries it onto the sale.
+    //
+    // Absent means THROUGH_DEALERSHIP — the same reading `consignedSettlementRoute`
+    // gives an absent route on a sale, and what every financed consigned deal
+    // finalized before this field existed actually posted. Reading absent as
+    // anything else would restate them.
+    supplierSettlementRoute: v.optional(consignedSettlementRouteValidator),
+
+    // The finance company's disbursement TO THE SUPPLIER, on the direct route.
+    //
+    // Kept apart from `disbursedAt`/`disbursedAmountMinor` above, which mean
+    // money that arrived in the dealership's own bank. This money never touches
+    // the dealership's books: it is a fact read off the settlement advice,
+    // recorded because it is what makes the supplier's margin collectable, and
+    // it posts no journal. Folding the two together would let a disbursement
+    // the dealership never received satisfy a check for one it did.
+    supplierDisbursementConfirmedAt: v.optional(v.number()),
+    supplierDisbursedAmountMinor: v.optional(v.number()),
+    supplierDisbursementReference: v.optional(v.string()),
+    supplierDisbursementConfirmedBy: v.optional(v.id("users")),
 
     // Settlement. `expected` is what the company owes; `actual` is what turned
     // up. Keeping them apart is the whole reason confirmDisbursement could not

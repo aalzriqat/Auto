@@ -891,18 +891,27 @@ describe("tax on an agency sale, with no open accounting period", () => {
 });
 
 /**
- * A financed consigned deal cannot be settled directly with the supplier.
+ * A financed consigned deal settled directly with the supplier.
  *
- * `finalizeDeal` calls `completeSale` with no `supplierSettlementRoute`, and an
- * absent route reads as THROUGH_DEALERSHIP. So the wizard offered the choice,
- * the operator picked DIRECT_TO_SUPPLIER, and the deal posted the opposite way
- * — dealership owing the supplier the gross and the customer owing the
- * dealership, when the financier had paid the supplier and the supplier owed
- * the dealership its margin. Both sides inverted, with nothing on screen or in
- * the ledger saying so.
+ * This was refused outright until the finance company's side of the settlement
+ * could be represented. The refusal existed because `finalizeDeal` called
+ * `completeSale` with no `supplierSettlementRoute` at all, and an absent route
+ * reads as THROUGH_DEALERSHIP — so the wizard offered the choice, the operator
+ * picked DIRECT_TO_SUPPLIER, and the deal posted the opposite way: dealership
+ * owing the supplier the gross and the customer owing the dealership, when the
+ * financier had paid the supplier and the supplier owed the dealership its
+ * margin. Both sides inverted, with nothing on screen or in the ledger saying so.
  *
- * The refusal is enforced at the mutation boundary rather than by hiding the
- * control, because the form is not the only caller.
+ * What changed is not the refusal being relaxed. The route is now recorded on
+ * the finance application and carried onto the sale, and the three postings
+ * `finalizeDeal` makes afterwards — the finance-company receivable, the
+ * customer-receivable transfer and the AR-Finance/AR-Customers journal — are
+ * skipped on this route, because all three describe money arriving at the
+ * dealership. See `financedConsignedSettlement.test.ts`, which covers that half.
+ *
+ * These tests cover the sale boundary itself: what `sales.create` does when a
+ * financed deal names the direct route. The posting is identical to the cash
+ * case, because who financed the buyer has never changed whose car it was.
  */
 describe("a financed consigned sale settled directly with the supplier", () => {
   async function financedDirect(
@@ -931,9 +940,26 @@ describe("a financed consigned sale settled directly with the supplier", () => {
     };
   }
 
-  test("is refused rather than posted the other way round", async () => {
-    const { attempt } = await financedDirect("finDirect");
-    await expect(attempt()).rejects.toThrow(/financed/i);
+  test("posts the margin as a claim on the supplier, exactly as a cash deal does", async () => {
+    const { s, vehicleId, attempt } = await financedDirect("finDirect");
+    const saleId = await attempt();
+
+    const route = await s.t.run(async (ctx) => (await ctx.db.get(saleId))?.supplierSettlementRoute);
+    expect(route).toBe("DIRECT_TO_SUPPLIER");
+
+    // The claim runs from the supplier to the dealership, and there is no
+    // payable — the buyer's financier paid him, so the dealership owes him
+    // nothing. This is the pair of facts the old inversion got backwards.
+    const claims = await s.t.run(async (ctx) =>
+      (await ctx.db.query("vehicleSupplierReceivables").collect()).filter((r) => r.vehicleId === vehicleId)
+    );
+    expect(claims).toHaveLength(1);
+    expect(claims[0]!.amountDue).toBe(SALE_PRICE - ENTITLEMENT);
+
+    const payables = await s.t.run(async (ctx) =>
+      (await ctx.db.query("vehicleSupplierPayables").collect()).filter((p) => p.vehicleId === vehicleId)
+    );
+    expect(payables).toHaveLength(0);
   });
 
   /**
@@ -1011,23 +1037,32 @@ describe("a financed consigned sale settled directly with the supplier", () => {
     expect(payable?.amountDue).toBe(9_500.5);
   });
 
-  test("leaves nothing behind — no sale, no sold vehicle, no supplier payable", async () => {
+  test("completes the deal and marks the car sold, owing the supplier nothing", async () => {
     const { s, vehicleId, attempt } = await financedDirect("finDirectState");
-    await expect(attempt()).rejects.toThrow();
+    await attempt();
 
     const state = await s.t.run(async (ctx) => ({
       sales: (await ctx.db.query("sales").collect()).length,
       payables: (await ctx.db.query("vehicleSupplierPayables").collect()).length,
       status: (await ctx.db.get(vehicleId))?.status,
     }));
-    expect(state.sales).toBe(0);
+    expect(state.sales).toBe(1);
+    // Still zero, and for the original reason rather than because the sale was
+    // refused: a payable here would be a debt no payment can settle, since the
+    // supplier was already paid by the buyer's financier.
     expect(state.payables).toBe(0);
-    expect(state.status).toBe("AVAILABLE");
+    expect(state.status).toBe("SOLD");
   });
 
-  test("a LEASE is treated as financed too", async () => {
-    const { attempt } = await financedDirect("finLease", { financingType: "LEASE" });
-    await expect(attempt()).rejects.toThrow(/financed/i);
+  test("a LEASE settles the same way — it is financed for this purpose too", async () => {
+    const { s, vehicleId, attempt } = await financedDirect("finLease", { financingType: "LEASE" });
+    await attempt();
+
+    const claims = await s.t.run(async (ctx) =>
+      (await ctx.db.query("vehicleSupplierReceivables").collect()).filter((r) => r.vehicleId === vehicleId)
+    );
+    expect(claims).toHaveLength(1);
+    expect(claims[0]!.amountDue).toBe(SALE_PRICE - ENTITLEMENT);
   });
 
   test("a CASH consigned sale keeps the direct route", async () => {

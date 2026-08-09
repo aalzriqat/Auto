@@ -414,10 +414,22 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // behind a `loadOwnedReceivable` helper, which read better and this analyzer
   // could not see through — it flagged `recordReceipt` immediately, which is
   // the guard doing precisely its job.
+  // Then 470→472 / 312→314 by the two mutations in `applications` that carry a
+  // financed consigned deal's settlement: `setSupplierSettlementRoute`, which
+  // records whether the finance company pays the dealership or the supplier,
+  // and `confirmSupplierDisbursement`, which records that it paid the supplier.
+  // Both take an `orgId` and a caller-supplied `applicationId`, so both land in
+  // `analysed` and are held to the ownership rule.
+  //
+  // Both satisfy it with the load-and-compare written out inline, matching every
+  // other handler in that module. `settlesDirectToSupplier` reads the vehicle
+  // behind the application, but only after the application itself has been
+  // proved to belong to the named org — so the vehicle is reached through an
+  // owned row rather than from a caller-supplied id.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 470,
-      analysed: 312,
+      totalMutations: 472,
+      analysed: 314,
       skippedNoArgsBlock: 13,
       skippedNoOrgId: 145,
     });

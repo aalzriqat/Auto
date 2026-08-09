@@ -33,6 +33,13 @@ import {
   createCanonicalPayment,
   ensureReceivableDocument,
 } from "./subledger";
+import {
+  consignedSettlementRoute,
+  consignedSettlementRouteValidator,
+  dealershipCollectsGross,
+  isConsignedAgentSale,
+} from "./utils/vehicleOwnership";
+import { auditLog } from "./financialAudit";
 
 /** sourceType used for the canonical finance-company receivable opened at finalizeDeal. */
 const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
@@ -120,6 +127,31 @@ function assertDealerEconomicsRecorded(
       `This deal's funding split could not be calculated. Resolve the reconciliation note on it before ${action}.`
     );
   }
+}
+
+/**
+ * Whether this deal's money goes straight from the finance company to the
+ * supplier, so nothing gross ever reaches the dealership's books.
+ *
+ * Both halves are required and neither is derivable from the other. The route
+ * says who the cheque is made out to; the vehicle says whether there is a
+ * supplier at all. A route naming a supplier settlement on dealer-owned stock
+ * is a contradiction rather than a direct deal, and reading it as direct would
+ * suppress the finance-company receivable on an ordinary financed sale — the
+ * dealership would simply stop recording that the company owes it the money.
+ * So this fails closed onto the ordinary path.
+ *
+ * `consignedSettlementRoute` supplies the absent-means-THROUGH_DEALERSHIP
+ * reading, which is what keeps every deal finalized before the field existed
+ * behaving exactly as it did.
+ */
+async function settlesDirectToSupplier(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">
+): Promise<boolean> {
+  if (dealershipCollectsGross(consignedSettlementRoute(app))) return false;
+  const vehicle = await ctx.db.get(app.vehicleId);
+  return vehicle != null && isConsignedAgentSale(vehicle);
 }
 
 async function hasHeldQuoteDeposit(ctx: QueryCtx, quoteId: Id<"quotes">): Promise<boolean> {
@@ -764,7 +796,20 @@ export const cancelApplication = mutation({
                 )
                 .unique()
             : null;
+          // On the direct route `finalizeDeal` posted no FINANCE_DISBURSED event
+          // and opened no finance-company receivable, so there is nothing here
+          // to reverse — `financeReceivable` is null and the reversal would be
+          // aimed at an entry that was never written. The condition keys off
+          // `totalFinancedAmount` as well, which IS set on these deals, so
+          // without this the reversal fired anyway.
+          //
+          // What the sale DID open is the supplier margin claim, and
+          // `cancelCompletedSaleOperationalRecords` above already cancels it —
+          // refusing outright if the supplier has paid against it, which is the
+          // direct-route equivalent of the `disbursedAt` refusal further up.
+          const directToSupplier = await settlesDirectToSupplier(ctx, app);
           if (
+            !directToSupplier &&
             app.companyId &&
             ((quote?.totalFinancedAmount ?? 0) > 0 || financeReceivable)
           ) {
@@ -957,6 +1002,79 @@ export const registerExpectedPayment = mutation({
   },
 });
 
+/**
+ * Records who the finance company pays on a consigned deal.
+ *
+ * A decision, not a derivation. The finance company sends the cheque in full
+ * with no deduction, made out to the supplier or to the dealership depending on
+ * who owns the car, and only the agreement says which — so it is captured
+ * before finalization the same way the handover and the expected payment are,
+ * and `finalizeDeal` carries it onto the sale.
+ *
+ * Refused on dealer-owned stock rather than stored and ignored. There is no
+ * supplier to settle with, and a stored route on such a deal would make every
+ * later reader re-derive whether the vehicle was consigned before it could
+ * trust the field — the same reasoning that keeps it off dealer-owned sales.
+ *
+ * Refused once the application is CLOSED because that is the point the ledger
+ * committed: the sale has posted either a supplier payable or a supplier
+ * receivable, and flipping the route afterwards would leave the subledger
+ * describing the opposite deal from the journal. Correcting a posted deal is a
+ * correction, not an edit.
+ */
+export const setSupplierSettlementRoute = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    route: consignedSettlementRouteValidator,
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+
+    const app = await ctx.db.get(args.applicationId);
+    if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found.");
+
+    if (app.status === "CLOSED") {
+      throw new ConvexError(
+        "This deal is already finalized and its settlement has posted, so the route cannot be changed. Correct the sale instead."
+      );
+    }
+    if (app.status === "CANCELLED") {
+      throw new ConvexError("This application was cancelled.");
+    }
+
+    const vehicle = await ctx.db.get(app.vehicleId);
+    if (!vehicle || vehicle.orgId !== args.orgId) throw new ConvexError("Vehicle not found.");
+    if (!isConsignedAgentSale(vehicle)) {
+      throw new ConvexError(
+        "This vehicle is dealership stock, so there is no supplier to settle with and no settlement route to choose."
+      );
+    }
+
+    const previous = consignedSettlementRoute(app);
+    await ctx.db.patch(args.applicationId, {
+      supplierSettlementRoute: args.route,
+      updatedAt: Date.now(),
+    });
+
+    await auditLog(ctx, {
+      orgId: args.orgId,
+      actorId: user._id,
+      actionType: "SET_SUPPLIER_SETTLEMENT_ROUTE",
+      resourceType: "financeApplications",
+      resourceId: args.applicationId,
+      description:
+        args.route === "DIRECT_TO_SUPPLIER"
+          ? `Financed consigned deal will settle DIRECT to ${vehicle.sourcedFromName ?? "the supplier"}: the finance company pays him, and the dealership holds only a claim for its margin.`
+          : `Financed consigned deal will settle THROUGH the dealership: gross arrives here on ${vehicle.sourcedFromName ?? "the supplier"}'s behalf and his entitlement is owed to him.`,
+      before: { supplierSettlementRoute: previous },
+      after: { supplierSettlementRoute: args.route },
+    });
+
+    return { route: args.route };
+  },
+});
+
 export const finalizeDeal = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -1054,6 +1172,12 @@ export const finalizeDeal = mutation({
           termMonths: quote.termMonths,
           applicationId: args.applicationId,
           quoteId: app.quoteId,
+          // Carried from the application onto the sale. Without this every
+          // financed consigned deal posted THROUGH_DEALERSHIP no matter what
+          // was agreed, because an absent route reads as that — so a deal whose
+          // buyer's financier paid the supplier booked a payable to him and a
+          // receivable at the gross, both inverted.
+          supplierSettlementRoute: app.supplierSettlementRoute,
           depositResolution: args.depositResolution as
             | { treatment: DepositTreatment; reason?: string; refundMethod?: DepositMethod }
             | undefined,
@@ -1095,8 +1219,34 @@ export const finalizeDeal = mutation({
           settlementStatus: "EXPECTED",
         });
 
+        // On the direct route the finance company pays the SUPPLIER, so none of
+        // the three postings below apply — and each would be wrong in its own
+        // way rather than merely redundant:
+        //
+        //  - `transferFinancedAmountFromCustomerReceivable` reduces the customer
+        //    receivable to `sale − financed`, which is zero or negative here. On
+        //    the direct route that document holds only the dealership's OWN
+        //    charges (documentation fees, warranty, GAP), because the car was
+        //    invoiced to the buyer by the supplier. It would zero a fee the
+        //    customer genuinely owes and mark it PAID, while the GL still
+        //    carries the matching AR debit — subledger and ledger disagreeing by
+        //    the whole fee.
+        //  - `hookFinanceDisbursed` posts DR AR-Finance / CR AR-Customers for
+        //    the full principal against a customer AR that was never debited
+        //    with it, driving that account to a large credit balance for a
+        //    customer who owes nothing.
+        //  - the canonical finance-company receivable would record the company
+        //    owing the dealership money it will pay to the supplier instead —
+        //    a claim nothing can ever settle, sitting beside the real claim,
+        //    which runs the other way and is opened against the supplier by
+        //    `completeSale`.
+        //
+        // The dealership's asset on this deal is that supplier margin claim.
+        // It is already open by the time this runs.
+        const directToSupplier = await settlesDirectToSupplier(ctx, app);
+
         // Post the finance receivable transfer when a finance company is on the deal
-        if (app.companyId && quote.totalFinancedAmount && quote.totalFinancedAmount > 0) {
+        if (!directToSupplier && app.companyId && quote.totalFinancedAmount && quote.totalFinancedAmount > 0) {
           const currency = await getOrgCurrency(ctx, args.orgId);
           const loanAmountMinor = toMinorUnits(quote.totalFinancedAmount, currency);
           const saleAmountMinor = toMinorUnits(quote.vehiclePrice, currency);
@@ -1178,6 +1328,23 @@ export const confirmDisbursement = mutation({
         if (app.disbursedAt) throw new ConvexError("Disbursement has already been confirmed for this application.");
         if (!app.companyId) throw new ConvexError("This application has no finance company — no disbursement expected.");
         if (args.disbursedAmountMinor <= 0) throw new ConvexError("Disbursement amount must be positive.");
+
+        // This mutation books DR Bank / CR AR-Finance Companies: money that
+        // arrived in the dealership's own account, settling a receivable it
+        // holds. On the direct route neither exists — the cheque went to the
+        // supplier and no finance-company receivable was ever opened. Running it
+        // anyway would create bank cash out of nothing and drive AR-Finance
+        // Companies negative.
+        //
+        // Refused rather than quietly redirected to the supplier confirmation.
+        // The two record different facts about different money, and an operator
+        // who reaches for the wrong one is telling us their understanding of the
+        // deal disagrees with what was recorded — which is worth stopping on.
+        if (await settlesDirectToSupplier(ctx, app)) {
+          throw new ConvexError(
+            "This deal settles directly with the supplier, so the finance company's payment never reaches the dealership's account and there is nothing here to receive. Record the company's payment to the supplier instead, and collect the dealership's margin from the supplier when he pays it."
+          );
+        }
 
         const quote = await ctx.db.get(app.quoteId);
         if (quote?.totalFinancedAmount !== undefined) {
@@ -1316,6 +1483,126 @@ export const confirmDisbursement = mutation({
           actorName,
           amount: String(args.disbursedAmountMinor),
         }, { link: `/${args.orgId}/accounting` });
+      }
+    );
+  },
+});
+
+/**
+ * Records that the finance company paid the SUPPLIER, on the direct route.
+ *
+ * This money never touches the dealership. It is read off the settlement advice
+ * and recorded because it is the event that makes the supplier's margin
+ * genuinely collectable — before it, the dealership is owed by a supplier who
+ * has not himself been paid.
+ *
+ * **It posts no journal and creates no payment.** Every existing disbursement
+ * path books cash into the dealership's bank; doing that here would invent
+ * money the dealership never received. The dealership's asset on this deal is
+ * the supplier margin claim `completeSale` already opened, and the only thing
+ * that discharges it is `supplierReceivables.recordReceipt` when the supplier
+ * actually hands the margin over. Settling the claim here instead would report
+ * the money as collected on the day somebody else was paid.
+ *
+ * The amount is recorded as stated rather than checked against the deal's own
+ * figures. What the company pays the supplier is a transaction between two
+ * other parties, and the dealership's approved purchase amount is its
+ * expectation of it, not its terms — refusing a mismatch would block recording
+ * a fact that is true whether or not it matches.
+ */
+export const confirmSupplierDisbursement = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    /** What the settlement advice says the company paid the supplier. */
+    disbursedAmountMinor: v.number(),
+    /** Cheque number or transfer reference from the advice. */
+    reference: v.optional(v.string()),
+    /** Defaults to now; set it when recording an advice that arrived earlier. */
+    disbursedAt: v.optional(v.number()),
+    idempotencyKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    assertValidMinorAmount(args.disbursedAmountMinor, "disbursed amount");
+    const { user } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+    ]);
+
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "applications.confirmSupplierDisbursement",
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        fingerprint: JSON.stringify({
+          applicationId: args.applicationId,
+          disbursedAmountMinor: args.disbursedAmountMinor,
+        }),
+      },
+      async () => {
+        const app = await ctx.db.get(args.applicationId);
+        if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found.");
+        if (app.status !== "CLOSED") {
+          throw new ConvexError(
+            "The company's payment to the supplier can only be recorded once the deal is finalized."
+          );
+        }
+        if (!app.companyId) {
+          throw new ConvexError("This application has no finance company — no disbursement expected.");
+        }
+        if (args.disbursedAmountMinor <= 0) {
+          throw new ConvexError("Disbursement amount must be positive.");
+        }
+        if (!(await settlesDirectToSupplier(ctx, app))) {
+          throw new ConvexError(
+            "This deal settles through the dealership, so the finance company pays the dealership rather than the supplier. Confirm the disbursement on the deal instead."
+          );
+        }
+        // Not folded into the idempotency key's job. A retry with the same key
+        // is suppressed upstream; this catches a SECOND advice recorded under a
+        // different key, which is a correction somebody has to make
+        // deliberately rather than a second payment on the same deal.
+        if (app.supplierDisbursementConfirmedAt !== undefined) {
+          throw new ConvexError(
+            "The company's payment to the supplier has already been recorded on this deal."
+          );
+        }
+
+        const vehicle = await ctx.db.get(app.vehicleId);
+        const supplierName = vehicle?.sourcedFromName ?? "the supplier";
+        const confirmedAt = args.disbursedAt ?? Date.now();
+
+        await ctx.db.patch(args.applicationId, {
+          supplierDisbursementConfirmedAt: confirmedAt,
+          supplierDisbursedAmountMinor: args.disbursedAmountMinor,
+          supplierDisbursementReference: args.reference,
+          supplierDisbursementConfirmedBy: user._id,
+          updatedAt: Date.now(),
+          // Deliberately NOT FULLY_SETTLED. Nothing has been settled to the
+          // dealership: the company has paid the supplier, and the dealership's
+          // margin is still outstanding on the supplier claim. Marking this
+          // settled would report the deal as collected on the strength of
+          // somebody else's receipt.
+          settlementStatus: "EXPECTED",
+        });
+
+        await auditLog(ctx, {
+          orgId: args.orgId,
+          actorId: user._id,
+          actionType: "CONFIRM_SUPPLIER_DISBURSEMENT",
+          resourceType: "financeApplications",
+          resourceId: args.applicationId,
+          description: `Finance company paid ${supplierName} ${args.disbursedAmountMinor} minor units directly${args.reference ? ` (ref ${args.reference})` : ""}. No dealership cash moved; the dealership's margin remains a claim on ${supplierName}.`,
+          before: { supplierDisbursementConfirmedAt: null },
+          after: {
+            supplierDisbursementConfirmedAt: confirmedAt,
+            supplierDisbursedAmountMinor: args.disbursedAmountMinor,
+          },
+          idempotencyKey: args.idempotencyKey,
+        });
+
+        return { confirmedAt, disbursedAmountMinor: args.disbursedAmountMinor };
       }
     );
   },

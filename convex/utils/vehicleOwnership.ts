@@ -1,3 +1,4 @@
+import { v } from "convex/values";
 import { grossTransactionValueForSale } from "./grossTransactionValue";
 
 /**
@@ -58,6 +59,20 @@ export function isConsignedAgentSale(vehicle: OwnershipFacts): boolean {
  * sale, and this is the one place that reads it.
  */
 export type ConsignedSettlementRoute = "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER";
+
+/**
+ * The same two literals as an argument/schema validator.
+ *
+ * Exported from beside the type rather than declared a third time, because the
+ * route now has to agree across three surfaces — the sale that posts it, the
+ * finance application that decides it before the sale exists, and the schema
+ * that stores both. Two of those already spelled the union out by hand; a third
+ * copy is the point at which one of them silently stops matching.
+ */
+export const consignedSettlementRouteValidator = v.union(
+  v.literal("THROUGH_DEALERSHIP"),
+  v.literal("DIRECT_TO_SUPPLIER")
+);
 
 /** The subset of a sale the route question depends on. */
 export interface SettlementRouteFacts {
