@@ -6,6 +6,7 @@ import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { cn } from "@/lib/utils";
+import { consignedRouteRefusal } from "@/lib/consignedRouteGuard";
 import { ArrowRight, AlertTriangle } from "lucide-react";
 
 /**
@@ -78,17 +79,22 @@ export function ConsignedSettlementSection({
 }: Props) {
   const { t, isRtl } = useLanguage();
 
-  // A route can outlive the deal shape that allowed it.
+  // A route can outlive the deal shape that allowed it: the financing type is
+  // chosen further down the same form, so an operator can pick
+  // DIRECT_TO_SUPPLIER on a cash deal and then switch it to FINANCED.
   //
-  // The financing type is chosen in a different part of the same form, so an
-  // operator can pick DIRECT_TO_SUPPLIER on a cash deal and then switch it to
-  // FINANCED. The option disables itself, but a surviving DIRECT value would
-  // still be submitted — and refused by the server for a reason the screen was
-  // already showing, from a control that can no longer be clicked to change it.
-  // Exactly the lockout the deposit confirmation shipped once already.
-  useEffect(() => {
-    if (financed && value === "DIRECT_TO_SUPPLIER") onChange("THROUGH_DEALERSHIP");
-  }, [financed, value, onChange]);
+  // This used to correct itself, with an effect that called
+  // `onChange("THROUGH_DEALERSHIP")`. That is the one thing it must not do. The
+  // route flipped off-screen with no toast and no field error, so the server
+  // refusal — which exists to stop exactly this deal — never fired, because by
+  // submit time the value was the one route the server accepts. The sale then
+  // booked a supplier payable the dealership does not owe, a customer
+  // receivable at the gross it will never collect, and no supplier receivable
+  // for the margin the supplier owes it.
+  //
+  // The stale selection is kept, shown as selected, and explained; submit is
+  // gated on `consignedRouteRefusal` in both callers. A refusal the operator
+  // can see is worth more than a correction they cannot.
 
   const preview = useQuery(
     api.sales.consignedSalePreview,
@@ -123,6 +129,10 @@ export function ConsignedSettlementSection({
 
   const directToSupplier = preview.settlementRoute === "DIRECT_TO_SUPPLIER";
   const supplier = preview.supplierName || t("TheSupplier" as any);
+
+  // Past the early return, so the car is known to be consigned.
+  const routeRefused =
+    consignedRouteRefusal({ financed, route: value, isConsigned: true }) !== null;
 
   // Paying the supplier directly is not supported on a FINANCED deal yet: the
   // finance company's side of the settlement has nowhere to record it. The
@@ -165,6 +175,20 @@ export function ConsignedSettlementSection({
         <p className="flex items-start gap-2 text-xs font-medium text-destructive">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
           <span>{t("ConsignedNoSupplierCost" as any)}</span>
+        </p>
+      ) : null}
+
+      {/* The selection stands and the deal is blocked, rather than the route
+          being changed for the operator. `role="alert"` so the reason reaches a
+          screen reader too: the financing control that causes this sits below
+          this section, so the change that triggers it happens off-screen. */}
+      {routeRefused ? (
+        <p
+          role="alert"
+          className="flex items-start gap-2 text-xs font-medium text-destructive"
+        >
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span>{t("RouteDirectRefusedFinanced" as any)}</span>
         </p>
       ) : null}
 

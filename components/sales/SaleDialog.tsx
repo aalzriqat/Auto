@@ -11,6 +11,7 @@ import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { consignedTaxRefusal } from "@/lib/consignedTaxGuard";
+import { consignedRouteRefusal } from "@/lib/consignedRouteGuard";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { toast } from "@/components/ui/sonner";
 import {
@@ -230,6 +231,18 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     // draft posts nothing at all (sales.ts gates every reversal on COMPLETED),
     // so there is nothing there to refuse.
     status: watchAll.status === "COMPLETED" ? "COMPLETED" : "PENDING",
+  });
+
+  // The same reasoning for the settlement route. The section shows why it is
+  // refused; this is what stops the deal going in. It must be gated here and
+  // not resolved inside the section, because a route the screen changes on the
+  // operator's behalf is a route the server never gets to refuse — and
+  // THROUGH_DEALERSHIP is the one value it accepts, so the silent correction
+  // posted a supplier payable the dealership does not owe.
+  const routeRefusal = consignedRouteRefusal({
+    financed: financingType === "FINANCED" || financingType === "LEASE",
+    route: watchAll.supplierSettlementRoute ?? "THROUGH_DEALERSHIP",
+    isConsigned: selectedVehicle ? selectedVehicle.sourceType === "SOURCED" : undefined,
   });
 
   const onSubmit = async (values: SaleFormValues) => {
@@ -745,7 +758,10 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 {t("Cancel" as any)}
               </Button>
-              <Button type="submit" disabled={isSubmitting || taxRefusal !== null}>
+              <Button
+                type="submit"
+                disabled={isSubmitting || taxRefusal !== null || routeRefusal !== null}
+              >
                 {isSubmitting ? (t("Saving" as any)) : sale ? (t("SaveChanges" as any)) : (t("LogSale" as any))}
               </Button>
             </div>

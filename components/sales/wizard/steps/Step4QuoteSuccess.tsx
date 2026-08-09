@@ -20,6 +20,7 @@ import { toast } from "@/components/ui/sonner";
 import { downloadElementAsPdf } from "@/lib/htmlToPdf";
 import { getErrorMessage } from "@/lib/errors";
 import { decideDepositSubmission } from "@/lib/depositSettlementSubmission";
+import { consignedRouteRefusal } from "@/lib/consignedRouteGuard";
 
 interface Step4QuoteSuccessProps {
   paymentType: PaymentType;
@@ -212,6 +213,18 @@ export function Step4QuoteSuccess({
   );
   const firstConsignedVehicleId = quoteVehicleIds.find((id) => consignedLines[id]);
 
+  // An INSTALLMENT quote on a consigned car cannot settle direct-to-supplier.
+  // Gated here rather than corrected inside the section: a route the screen
+  // rewrites on the operator's behalf is a route the server never refuses,
+  // because THROUGH_DEALERSHIP is the one value it accepts. `undefined` while
+  // no line has reported yet, which is not a refusal — the server still holds
+  // the line at the mutation boundary.
+  const routeRefusal = consignedRouteRefusal({
+    financed: paymentType === "INSTALLMENT",
+    route: settlementRoute,
+    isConsigned: firstConsignedVehicleId !== undefined ? true : undefined,
+  });
+
   const orgBranding = {
     name: orgSettings?.dealershipName,
     legalName: orgSettings?.legalCompanyName,
@@ -342,7 +355,10 @@ export function Step4QuoteSuccess({
                   // some of them are confirmed. Either way the deal cannot be
                   // submitted coherently — and letting it through produced a
                   // refusal naming no vehicle, on a multi-car quote.
-                  !depositDecision.canSubmit
+                  !depositDecision.canSubmit ||
+                  // Financed + consigned + direct-to-supplier. The section says
+                  // why; this is what stops it.
+                  routeRefusal !== null
                 }
                 variant="outline"
                 size="lg"

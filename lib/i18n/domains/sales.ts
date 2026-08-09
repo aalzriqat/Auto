@@ -167,6 +167,8 @@ export const salesEn = {
     "This deposit decision applies to the whole deal, so confirm it on every vehicle on this quote — or on none of them.",
   RouteDirectUnavailableFinanced:
     "Not available on financed deals yet — the finance company's side of the settlement cannot record a direct payment to the supplier.",
+  RouteDirectRefusedFinanced:
+    "This deal is financed, and paying the supplier directly is not supported yet. Your choice has been kept — switch the route to “Through the dealership”, or make the deal a cash sale, to record it.",
   Taxes: "Taxes (JOD)",
   ConsignedTaxUnsupported:
     "This car is the supplier's, and tax on an agency sale has no agreed treatment yet — so the sale cannot be posted with it. Clear the tax to record the sale, or sell the car as dealership stock.",
@@ -749,6 +751,8 @@ export const salesAr = {
     "لا يوجد مبلغ مورّد مسجّل لهذه المركبة، لذا لا يمكن تحديد هامش المعرض ولا إتمام البيع. سجّل المبلغ المتفق عليه مع المورّد، أو حوّل المركبة إلى ملكية المعرض أولًا.",
   RouteDirectUnavailableFinanced:
     "غير متاح بعد في البيع بالتمويل — لا يمكن تسجيل الدفع المباشر للمورّد في تسوية شركة التمويل.",
+  RouteDirectRefusedFinanced:
+    "هذه الصفقة بالتمويل، والدفع المباشر للمورّد غير مدعوم بعد. تم الإبقاء على اختيارك — غيّر مسار التسوية إلى «عبر المعرض»، أو اجعل الصفقة بيعًا نقديًا، لتتمكن من تسجيلها.",
   Taxes: "الضرائب (دينار اردني)",
   ConsignedTaxUnsupported:
     "هذه المركبة ملك المورّد، ولا توجد بعد معالجة متفق عليها لضريبة البيع بالوكالة، لذا لا يمكن ترحيل البيع بوجودها. امسح الضريبة لتسجيل البيع، أو بِع المركبة كمخزون للمعرض.",

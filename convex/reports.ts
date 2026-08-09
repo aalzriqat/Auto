@@ -895,9 +895,20 @@ export const getProfitAndLoss = query({
         // Once a legacy receipt has entered an authoritative application
         // lifecycle it stays out of revenue permanently. What happens next is
         // decided by the disposition, on the disposition's own date: still held
-        // is a liability, a refund is not revenue, a re-application means that
-        // sale recognises its own full revenue, and forfeiture income belongs
-        // to the forfeiture event — never to the original receipt's date.
+        // is a liability, a refund is not revenue, and a re-application means
+        // that sale recognises its own full revenue.
+        //
+        // Forfeiture is the known gap, and is stated here rather than implied.
+        // Forfeited income belongs to the forfeiture event and never to the
+        // original receipt's date — but THIS report does not surface it. The
+        // GL does: `postingRules` credits DEPOSIT_FORFEITURE_INCOME on the
+        // forfeiture date. The forfeiture path in `utils/depositHelpers` writes
+        // no `transactions` row, so a forfeited deposit is revenue in the GL
+        // and absent from this ledger-derived P&L. Before this change it was
+        // revenue on the receipt's date — mis-dated, but present in the annual
+        // total; now the annual total is short by it. Deliberately not fixed
+        // here: inventing a posting inside a read-time compatibility path is
+        // how the original defect happened. Tracked as reporting follow-up.
         legacyDepositsTakenOverBySale.add(app.depositId);
       }
     }
