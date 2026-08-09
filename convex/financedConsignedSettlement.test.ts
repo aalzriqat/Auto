@@ -888,3 +888,38 @@ describe("the screen's answer and the server's answer are the same answer", () =
     });
   }
 });
+
+/**
+ * The mobile applications list renders `companyName` directly and knows nothing
+ * about `companyLabelKey`, so an empty string leaves a dangling separator on the
+ * phone — and the mobile bundle publishes over the air on merge. The contract
+ * test only checks that mobile's function references resolve; `""` is still a
+ * string, so nothing else pins this.
+ */
+describe("the applications list always has something to show for the financier", () => {
+  const shapes = [
+    { name: "a configured finance company", opts: {} },
+    { name: "an internal installment", opts: { mode: "INTERNAL_INSTALLMENT" as const } },
+    { name: "a lease", opts: { mode: "LEASE" as const } },
+    { name: "an unnamed manual provider", opts: { mode: "MANUAL_FINANCE_COMPANY" as const } },
+    {
+      name: "a manual provider named only with whitespace",
+      opts: { mode: "MANUAL_FINANCE_COMPANY" as const, manualProviderName: "   " },
+    },
+    { name: "a legacy deal with no mode", opts: { omitMode: true } },
+  ];
+
+  for (const [index, shape] of shapes.entries()) {
+    test(`${shape.name}: companyName is never blank`, async () => {
+      const s = await seedDealership(`label${index}`);
+      await runDeal(s, { ...shape.opts, finalize: false });
+
+      const page = await s.asUser.query(api.applications.list, {
+        orgId: s.orgId,
+        paginationOpts: { numItems: 10, cursor: null },
+      });
+      expect(page.page).toHaveLength(1);
+      expect(page.page[0]!.companyName.trim()).not.toBe("");
+    });
+  }
+});

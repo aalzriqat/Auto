@@ -397,6 +397,11 @@ export const list = query({
           financeCompanyId: app.companyId,
           manualProviderName: app.manualFinanceSnapshot?.providerName,
         });
+        // Trimmed, matching `settlementPayer` — `saveQuote` applies no trim, so
+        // a whitespace-only provider name is reachable, and raw truthiness
+        // would render it as a blank cell while the resolver correctly called
+        // the payer unnamed.
+        const manualProviderName = app.manualFinanceSnapshot?.providerName?.trim() || undefined;
 
         return {
           ...app,
@@ -408,14 +413,28 @@ export const list = query({
           // whole subject is financed deals, and where "Direct" is now also the
           // name of the other settlement route. The operator finds the deal
           // here before opening it.
-          // A real financier's name, or "" when there is none to show. Kept as
-          // a name rather than a label because the list searches this field —
-          // operators can now find a deal by its manual provider.
-          companyName: company?.name ?? app.manualFinanceSnapshot?.providerName ?? "",
-          // The nameless cases come back as a key the client translates.
-          // Returning English here put "Finance provider" and "Lease" into the
+          // The nameless cases come back as a key the client translates —
+          // returning English here put "Finance provider" and "Lease" into the
           // Arabic UI.
-          companyLabelKey: (company?.name ?? app.manualFinanceSnapshot?.providerName)
+          //
+          // `companyName` still carries a displayable string in every case, and
+          // must never be empty: the MOBILE list renders it directly
+          // (`apps/mobile/src/features/workspace/modules/applications.tsx`)
+          // and knows nothing about the key, so an empty string would leave a
+          // dangling separator there — and the mobile bundle publishes over
+          // the air on merge. The web client prefers the key and translates.
+          //
+          // It is also what the list searches, so a manual provider's name
+          // being the value here is what lets an operator find the deal by it.
+          companyName:
+            company?.name ??
+            manualProviderName ??
+            (!payer.external
+              ? "Cash / Direct"
+              : payer.counterparty === null && payer.unidentifiedReason === "LEASE"
+                ? "Lease"
+                : "Finance provider"),
+          companyLabelKey: (company?.name ?? manualProviderName)
             ? null
             : !payer.external
               ? "CashOrDirect"
