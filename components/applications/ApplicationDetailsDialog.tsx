@@ -19,7 +19,6 @@ import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useCurrency } from "@/hooks/useCurrency";
 import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
 import { DisbursementConfirmationDialog } from "./DisbursementConfirmationDialog";
-import { ConsignedSettlementSection } from "@/components/sales/ConsignedSettlementSection";
 import { getErrorMessage } from "@/lib/errors";
 import { VehicleHandoverDialog } from "./VehicleHandoverDialog";
 import { RegisterExpectedPaymentDialog, type ExpectedPaymentMethod } from "./RegisterExpectedPaymentDialog";
@@ -71,13 +70,6 @@ export function ApplicationDetailsDialog({
   const confirmDisbursementIdempotencyKeyRef = useRef<string | null>(null);
   const confirmSupplierDisbursementIdempotencyKeyRef = useRef<string | null>(null);
   const [isSupplierDisbursementDialogOpen, setIsSupplierDisbursementDialogOpen] = useState(false);
-  // What becomes of a held عربون when the customer owes the dealership nothing
-  // for the car. No default that moves money silently: applying it to the
-  // settlement is the one treatment that changes no party's position — the
-  // dealership already holds the cash and the supplier already owes it the
-  // margin — so it leads, and a refund is the deliberate alternative.
-  const [depositTreatment, setDepositTreatment] =
-    useState<"APPLY_TO_TRANSACTION_SETTLEMENT" | "REFUND_TO_CUSTOMER">("APPLY_TO_TRANSACTION_SETTLEMENT");
 
   const app = useQuery(api.applications.get, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
   const documents = useQuery(api.documents.getForApplication, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
@@ -206,14 +198,6 @@ export function ApplicationDetailsDialog({
       await finalizeDeal({
         orgId: activeOrgId,
         applicationId,
-        // On the direct route the dealership bills the customer nothing for the
-        // car, so a held عربون necessarily exceeds what it billed and the server
-        // refuses to guess what becomes of it. Without this the deal could not
-        // be completed at all — and the only apparent way forward was to change
-        // the route, posting the deal the wrong way round.
-        ...(needsDepositTreatment
-          ? { depositResolution: { treatment: depositTreatment } }
-          : {}),
         idempotencyKey: finalizeDealIdempotencyKeyRef.current,
       });
       finalizeDealIdempotencyKeyRef.current = null;
@@ -342,8 +326,11 @@ export function ApplicationDetailsDialog({
     if (!activeOrgId) return;
     try {
       await setSupplierSettlementRoute({ orgId: activeOrgId, applicationId, route });
-    } catch {
-      toast.error(t("UnexpectedError" as any));
+    } catch (error) {
+      // MEDIUM-4's refusals live behind this button — no finance company, or a
+      // held deposit that has to be settled first. Both name what to do next,
+      // and both were being discarded into "an unexpected error occurred".
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -380,10 +367,6 @@ export function ApplicationDetailsDialog({
 
   const applicationDeposits = app.deposits ?? [];
   const pendingDeposits = applicationDeposits.filter((deposit) => deposit.status === "HELD");
-  // Only the direct route creates the question. Through the dealership the
-  // customer is billed the gross, so the deposit is simply absorbed by what
-  // they owe and the server needs no instruction.
-  const needsDepositTreatment = settlesDirectToSupplier && pendingDeposits.length > 0;
 
   const supplierLabel = supplierName ?? t("TheSupplier" as any);
   const disbursementStatusLabel = (() => {
@@ -539,14 +522,49 @@ export function ApplicationDetailsDialog({
                 The same control as the sale form, on purpose: one explanation
                 of what each route means, in one place, rather than a second
                 phrasing an operator has to reconcile with the first. */}
-            {canChooseSettlementRoute && activeOrgId && (
-              <ConsignedSettlementSection
-                orgId={activeOrgId}
-                vehicleId={app.vehicleId}
-                quoteId={app.quoteId}
-                value={app.supplierSettlementRoute ?? "THROUGH_DEALERSHIP"}
-                onChange={handleChooseSettlementRoute}
-              />
+            {canChooseSettlementRoute && (
+              <fieldset className="space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.04] p-4">
+                <legend className="px-1 text-xs font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">
+                  {t("SupplierSettlementRoute" as any)}
+                </legend>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  {t("ConsignedSaleSettlementDesc" as any).replace("{supplier}", supplierLabel)}
+                </p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {(
+                    [
+                      ["THROUGH_DEALERSHIP", "RouteThroughDealership", "RouteThroughDealershipHint"],
+                      ["DIRECT_TO_SUPPLIER", "RouteDirectToSupplier", "RouteDirectToSupplierHint"],
+                    ] as const
+                  ).map(([route, labelKey, hintKey]) => {
+                    // Nothing is preselected when no route has been recorded.
+                    // Defaulting the control to THROUGH_DEALERSHIP showed it as
+                    // already chosen while the server still considered the deal
+                    // unanswered, so an operator who wanted it saw no reason to
+                    // click and hit the refusal at finalization.
+                    const selected = app.supplierSettlementRoute === route;
+                    return (
+                      <button
+                        key={route}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => handleChooseSettlementRoute(route)}
+                        className={`rounded-md border p-3 text-start transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 ${
+                          selected
+                            ? "border-amber-500 bg-background shadow-sm"
+                            : "border-border bg-background/40 hover:bg-background"
+                        }`}
+                      >
+                        <span className="block text-sm font-medium">{t(labelKey as any)}</span>
+                        <span className="mt-0.5 block text-xs leading-snug text-muted-foreground">
+                          {t(hintKey as any)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </fieldset>
             )}
 
             <div>
@@ -620,36 +638,6 @@ export function ApplicationDetailsDialog({
 
                 {app.status === "APPROVED" && canFinalizeApplication && (
                   <>
-                    {/* The buyer paid the supplier, so the dealership billed
-                        them nothing for the car — which means the عربون it is
-                        holding is larger than anything the customer owes it, and
-                        what becomes of it is a decision nobody else can make.
-                        Asked here rather than guessed, and asked only on the
-                        route that creates the question. */}
-                    {needsDepositTreatment && (
-                      <fieldset className="mt-2 space-y-2 rounded-md border border-amber-500/30 bg-amber-500/[0.04] p-3">
-                        <legend className="px-1 text-xs font-medium text-amber-700 dark:text-amber-400">
-                          {t("DepositTreatmentTitle" as any)}
-                        </legend>
-                        {(
-                          [
-                            ["APPLY_TO_TRANSACTION_SETTLEMENT", "DepositApplyToSettlement"],
-                            ["REFUND_TO_CUSTOMER", "DepositRefundToCustomer"],
-                          ] as const
-                        ).map(([value, labelKey]) => (
-                          <label key={value} className="flex items-start gap-2 text-sm">
-                            <input
-                              type="radio"
-                              name="deposit-treatment"
-                              className="mt-1"
-                              checked={depositTreatment === value}
-                              onChange={() => setDepositTreatment(value)}
-                            />
-                            <span>{t(labelKey as any)}</span>
-                          </label>
-                        ))}
-                      </fieldset>
-                    )}
                     <Button
                       onClick={handleFinalizeDeal}
                       className="bg-blue-600 hover:bg-blue-700 text-white mt-2"

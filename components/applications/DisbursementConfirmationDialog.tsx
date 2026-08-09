@@ -5,6 +5,7 @@ import { Loader2, Landmark, HandCoins } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
 import {
   Dialog,
   DialogContent,
@@ -168,7 +169,7 @@ export function DisbursementConfirmationDialog({
                   id="supplier-advice-date"
                   type="date"
                   value={paidOn}
-                  max={new Date().toISOString().slice(0, 10)}
+                  max={todayDateInput()}
                   onChange={(e) => setPaidOn(e.target.value)}
                 />
               </div>
@@ -187,10 +188,12 @@ export function DisbursementConfirmationDialog({
               onConfirmSupplier?.({
                 amountMajor,
                 reference: reference.trim() || undefined,
-                // Parsed as UTC midday so a timezone offset cannot roll the
-                // stated day backwards — and never sent as a future date, which
-                // the server refuses.
-                disbursedAt: paidOn ? Date.parse(`${paidOn}T12:00:00Z`) : undefined,
+                // UTC midnight of the picked day, via the shared parser. The
+                // hand-rolled `T12:00:00Z` pushed the value 12 hours forward,
+                // so in Amman (UTC+3) every advice recorded before 15:00 local
+                // and dated today was rejected by the server's own
+                // "not in the future" check — for the date its picker offered.
+                disbursedAt: paidOn ? Math.min(dateInputToUtcMs(paidOn), Date.now()) : undefined,
               });
             }}
             disabled={submitting || (!isReceipt && !(Number(amount) > 0))}

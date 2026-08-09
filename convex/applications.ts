@@ -1143,6 +1143,29 @@ export const setSupplierSettlementRoute = mutation({
         "This deal has no finance company, so nobody outside the dealership pays the supplier — the direct route does not apply. If the dealership is financing the customer itself, settle through the dealership."
       );
     }
+    // A held عربون and the direct route together are refused, deliberately and
+    // for now.
+    //
+    // On this route the dealership bills the customer nothing for the car, so
+    // the deposit always exceeds what it billed and what becomes of it is a
+    // decision the sale cannot make for itself. The treatments available are
+    // genuinely constrained: applying it to the supplier settlement is refused
+    // whenever it exceeds the margin — which `depositSettlementPlan` calls
+    // ordinary, since deposits run 5-10% of the price and consignment margins
+    // are often smaller — and refunding it needs a method, an approver
+    // different from whoever took it, and the deposit permissions.
+    //
+    // That is a whole product surface, and the mockup gives it one: a
+    // `معالجة العربون` action of its own. Building half of it inside the
+    // finalize button produced two dead ends in review. So the combination
+    // fails closed here, at the point where the operator is choosing, with
+    // somewhere to go — rather than at finalization, where they would be stuck
+    // holding a deal they can neither complete nor unwind.
+    if (args.route === "DIRECT_TO_SUPPLIER" && (await hasHeldQuoteDeposit(ctx, app.quoteId))) {
+      throw new ConvexError(
+        "This deal is holding a reservation deposit, and on the direct route the dealership bills the customer nothing for the car — so what happens to that deposit has to be settled first. Resolve the deposit, then choose this route."
+      );
+    }
 
     const previous = consignedSettlementRoute(app);
     await ctx.db.patch(args.applicationId, {

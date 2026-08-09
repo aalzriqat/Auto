@@ -484,33 +484,47 @@ describe("THROUGH_DEALERSHIP is unchanged by any of this", () => {
  * that was wrong rather than by the shape of its fix.
  */
 describe("a reservation deposit on the direct route", () => {
-  test("a held عربون does not make the deal unfinalizable", async () => {
+  test("the route is refused while the deposit is unresolved, at the point of choosing", async () => {
+    const s = await seedDealership("dep0");
+    const { applicationId } = await runDeal(s, { deposit: 3_000, finalize: false });
+
+    // Refused HERE rather than at finalization. On this route the dealership
+    // bills the customer nothing for the car, so the deposit always exceeds
+    // what it billed — and the treatments available are genuinely constrained:
+    // applying it to the settlement is refused once it exceeds the margin
+    // (ordinary, since deposits run 5-10% of price and consignment margins are
+    // often smaller), and refunding needs a method, the deposit permission and
+    // a different approver from whoever took it.
+    //
+    // Failing closed where the operator is choosing leaves them somewhere to
+    // go. Failing at finalization left them holding a deal they could neither
+    // complete nor unwind — which is what an earlier version of this PR did.
+    await expect(
+      s.asUser.mutation(api.applications.setSupplierSettlementRoute, {
+        orgId: s.orgId, applicationId, route: "DIRECT_TO_SUPPLIER",
+      })
+    ).rejects.toThrow(/reservation deposit/i);
+
+    // The other route is unaffected: the customer is billed the gross there, so
+    // the deposit is simply absorbed by what they owe.
+    await expect(
+      s.asUser.mutation(api.applications.setSupplierSettlementRoute, {
+        orgId: s.orgId, applicationId, route: "THROUGH_DEALERSHIP",
+      })
+    ).resolves.toBeDefined();
+  });
+
+  test("a deposit deal still finalizes through the dealership, exactly as before", async () => {
     const s = await seedDealership("dep1");
 
-    // The dominant real shape, not an edge: the supplied mockup shows exactly
-    // this — عربون 300 محجوز لدى المعرض on a financed consigned deal.
-    //
-    // On this route the dealership bills the customer nothing for the car, so
-    // the deposit necessarily exceeds what it billed. Before the fix that threw
-    // out of `resolveReservationDeposits`, and `finalizeDeal`'s only UI caller
-    // passes no treatment — so the deal could not be completed at all, and the
-    // operator's only way forward was to flip the route and post the deal the
-    // wrong way round. That is the inversion this whole change exists to stop.
-    const { saleId } = await runDeal(s, {
-      route: "DIRECT_TO_SUPPLIER",
-      deposit: 3_000,
-      depositResolution: { treatment: "APPLY_TO_TRANSACTION_SETTLEMENT" },
-    });
-
+    // The descope's guarantee: nothing about deposits changes on the route that
+    // already handled them. The customer is billed the gross, so the عربون is
+    // absorbed by what they owe and no treatment has to be stated.
+    const { saleId } = await runDeal(s, { route: "THROUGH_DEALERSHIP", deposit: 3_000, downPayment: 3_000 });
     expect(saleId).toBeTruthy();
 
-    // The deposit is the dealership holding customer cash against the margin
-    // the supplier owes it, so the claim opens already part-collected rather
-    // than at the full margin.
-    const claims = await supplierClaimsOf(s);
-    expect(claims).toHaveLength(1);
-    expect(claims[0]!.amountReceived).toBe(3_000);
-    expect(claims[0]!.status).toBe("PARTIALLY_PAID");
+    const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
+    expect(deposits.some((d) => d.status === "HELD")).toBe(false);
   });
 });
 
