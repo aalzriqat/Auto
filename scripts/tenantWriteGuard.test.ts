@@ -296,14 +296,91 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // reached by walking `financeCompanies.by_org` from that same `orgId`, so no
   // document id is caller-supplied and there is nothing for a caller to point
   // elsewhere.
-  // Then 439→440 / skippedNoOrgId 143→144 by one mutation, with `analysed`
-  // deliberately unchanged at 287:
+  // Then 439→443 by the four mutations that model the dealer side of a
+  // financed sale:
+  //
+  // `financingEconomics.recordSubmittedQuotation`, `.recordAppraisal` and
+  // `.approveDealerPurchaseAmount` each take an `orgId` and a caller-supplied
+  // `applicationId`, so all three land in `analysed` (287→290) and are held to
+  // the `requireOwnedRow` rule. Each satisfies it inline — the ownership check
+  // is written out in the handler rather than behind a shared loader, since
+  // this analyzer only accepts proof it can see and "the check is somewhere
+  // else" is the shape that shipped two Criticals.
+  //
+  // `migrateFinancingEconomics.backfillFinancingEconomics` takes no `orgId` at
+  // all — it paginates `financeCompanies` and then `financeApplications`
+  // directly — so it lands in `skippedNoOrgId` (143→144) with no
+  // caller-supplied id to point anywhere.
+  //
+  // Then 443→444 / 290→291 by `financingEconomics.reopenApproval`, which
+  // withdraws an approved purchase amount so a deal can be re-quoted. It takes
+  // an `orgId` and a caller-supplied `applicationId`, so it is held to the
+  // `requireOwnedRow` rule and satisfies it inline like its three siblings.
+  // Then 444→445 / 291→292 by `financingEconomics.resolveFinancingReconciliation`,
+  // which clears the flag marking a deal's financing figures as needing review.
+  // It takes an `orgId` and a caller-supplied `applicationId`, so it is held to
+  // the `requireOwnedRow` rule and satisfies it inline like its siblings.
+  // Then 445→446 / skippedNoOrgId 144→145 by one mutation from main, with
+  // `analysed` deliberately unchanged:
   //
   // `migrateCommissionAccruals.backfillCommissionAccruals` accrues the
   // commission backlog left by the move to earned-time recognition. It is an
   // internalMutation that walks every organization by pagination and takes no
   // `orgId` at all — there is no caller and no caller-supplied id — so it is
   // correctly outside the analysed surface rather than exempted from it.
+  //
+  // Both sides of that merge moved skippedNoOrgId 143→144 independently — the
+  // base branch via backfillFinancingEconomics, main via
+  // backfillCommissionAccruals — so the merged figure is 145, not the 144
+  // either side carried alone. Taking either verbatim would have silently
+  // un-pinned one migration from the guard.
+  //
+  // Then 446→455 / 292→301 by the nine mutations in `financeDealCosts`, which
+  // records what a financed deal actually cost and who is holding the money:
+  // `recordDealFee`, `recordActualFeeAmount`, `reconcileDealFee`,
+  // `voidDealFee`, `openDealCustody`, `recordCustodyMovement`,
+  // `reconcileDealCustody`, `recordLegalInvoice` and `classifyDealAccounting`.
+  //
+  // Every one takes an `orgId` alongside a caller-supplied id — an
+  // `applicationId`, a `feeId` or a `custodyId` — so all of them land in
+  // `analysed` and are held to the `requireOwnedRow` rule, satisfied inline.
+  //
+  // Three take a second caller-supplied id. Two of those (`recordDealFee` and
+  // `recordActualFeeAmount`, via `custodyId`) are second ROW ids and get their
+  // own `requireOwnedRow`, plus an explicit check that the row belongs to this
+  // DEAL — a custody record in the right organization can still belong to a
+  // different application. `openDealCustody`'s second id is a `userId`, which
+  // is proved by a `memberships` lookup instead, closing the same hole by a
+  // different route. `recordCustodyMovement`'s reversal path adds a fourth
+  // second-row-id check on `financeDealCustodyEntries`.
+  //
+  // Then 455→456 / 301→302 by `financeDealCosts.reopenDealCustody`, which
+  // undoes a reconciliation so a closed custody record can be corrected. Same
+  // shape as its siblings.
+  //
+  // `analysed` moving up by exactly the number of new mutations is the signal
+  // to check for — going up by less would mean one slipped into a skipped
+  // bucket, which is the direction that hides an unguarded write.
+  //
+  // Then 456→458 / 302→304 by two mutations in `sourcingPayables` that record
+  // what a supplier has actually been paid on a consigned vehicle:
+  // `recordPartialPayment` and `setDisputed`. Both take an `orgId` and a
+  // caller-supplied `payableId`, so both land in `analysed` and are held to the
+  // ownership rule. Both satisfy it the same way their sibling `markPaid`
+  // always has — loading the row and refusing it when `payable.orgId` is not
+  // the named org — which is what `requireOwnedRow` does, written out where the
+  // analyzer can see it.
+  // Then 458→459 / 304→305 by `migrateConsignedSaleBasis`, which restates
+  // historical consigned sales from principal to agent basis. It takes an
+  // optional `orgId` so a dealership can be migrated on its own, which is what
+  // puts it in `analysed`. It writes no caller-supplied document id — the only
+  // other argument is an opaque pagination cursor — and every row it touches is
+  // reached by walking from that org, so the ownership rule is satisfied by
+  // construction rather than by a check.
+  //
+  // RECOMPUTE these, never resolve a conflict by taking one side. Two branches
+  // have already each moved the same counter independently, and picking either
+  // number silently under-reports the merged surface.
   // Then 440→445 / 287→288 / skippedNoArgsBlock 9→13 by the five Social Inbox
   // aggregate migrations, which seed and repair the trees behind
   // `socialInbox.platformStats`:
@@ -321,12 +398,28 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // `requireOwnedRow`: it is an internalMutation with no caller-supplied
   // document id, and every row it touches is reached by walking either the
   // whole table or that same `orgId`'s `by_org` index.
+  // RECOMPUTE these, never resolve a conflict by taking one side. Both sides of
+  // this merge moved the same counters independently — this branch by
+  // `migrateConsignedSaleBasis`, main by the five Social Inbox aggregate
+  // migrations — so the merged figures are the sum of both movements, not the
+  // number either side carried alone. Taking either verbatim would silently
+  // un-pin the other side's mutations from the guard.
+  // Then 464→466 / 306→308 by the two mutations in `supplierReceivables`, which
+  // collect the dealership's agency margin from a supplier the buyer paid
+  // directly: `recordReceipt` and `setDisputed`. Both take an `orgId` and a
+  // caller-supplied `receivableId`, so both land in `analysed` and are held to
+  // the ownership rule.
+  //
+  // Both satisfy it with the load-and-compare written out inline. It began life
+  // behind a `loadOwnedReceivable` helper, which read better and this analyzer
+  // could not see through — it flagged `recordReceipt` immediately, which is
+  // the guard doing precisely its job.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 445,
-      analysed: 288,
+      totalMutations: 470,
+      analysed: 312,
       skippedNoArgsBlock: 13,
-      skippedNoOrgId: 144,
+      skippedNoOrgId: 145,
     });
   });
 });

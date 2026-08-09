@@ -27,6 +27,9 @@ type StorageDeletionStep =
   | { kind: "vehiclesWithStorage" }
   | { kind: "vehicleEditsWithStorage" }
   | { kind: "applicationDocumentsWithStorage" }
+  | { kind: "financeAppraisalsWithStorage" }
+  | { kind: "financeDealFeesWithStorage" }
+  | { kind: "vehicleOwnershipConversionsWithStorage" }
   | { kind: "orgSettingsWithStorage" }
   | { kind: "socialPostsWithStorage" };
 type SpecialDeletionStep = StorageDeletionStep | { kind: "dmConversations" } | { kind: "liveChatThreads" };
@@ -38,7 +41,7 @@ const ACTIVE_DELETION_STATUSES: DeletionRequestStatus[] = ["PENDING_REVIEW", "AP
 // cleanup steps for org-scoped conversations whose child rows are keyed by the
 // conversation/thread id rather than orgId. adminAuditLog is intentionally
 // retained as the platform deletion trail.
-const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
+export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "commandIdempotency", index: "by_org_createdAt" },
   { kind: "orgRows", table: "chartOfAccounts", index: "by_org" },
   { kind: "orgRows", table: "accountingPeriods", index: "by_org" },
@@ -52,6 +55,11 @@ const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "financialAuditLog", index: "by_org" },
   { kind: "orgRows", table: "vehicleLandedCosts", index: "by_org_vehicle" },
   { kind: "orgRows", table: "vehicleSupplierPayables", index: "by_org" },
+  { kind: "orgRows", table: "vehicleSupplierReceivables", index: "by_org" },
+  // Ordered before `sales` and `journalEntries` for the same reason as every
+  // other child step: it holds ids into both, so removing it after them would
+  // leave rows pointing at documents that no longer exist.
+  { kind: "orgRows", table: "consignedSaleCorrections", index: "by_org" },
   { kind: "orgRows", table: "vehiclePriceHistory", index: "by_org_vehicle" },
   { kind: "orgRows", table: "vehicleReservations", index: "by_org_vehicle" },
   { kind: "orgRows", table: "vehicleStatusRequests", index: "by_org" },
@@ -73,7 +81,28 @@ const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "guarantors", index: "by_org" },
   { kind: "orgRows", table: "quotes", index: "by_org" },
   { kind: "orgRows", table: "applicationStatusLog", index: "by_org" },
+  // Appraisals and overrides go before the application they belong to, so a run
+  // that FAILs between steps never leaves rows whose parent is already gone.
+  { kind: "financeAppraisalsWithStorage" },
+  { kind: "orgRows", table: "financeApplicationOverrides", index: "by_org" },
+  // Deal costs and custody, deepest first: entries reference a custody record,
+  // fee lines reference both a custody record and the application.
+  { kind: "orgRows", table: "financeDealCustodyEntries", index: "by_org" },
+  { kind: "financeDealFeesWithStorage" },
+  { kind: "orgRows", table: "financeDealCustody", index: "by_org" },
   { kind: "orgRows", table: "financeApplications", index: "by_org" },
+  // Before `vehicles`: these rows reference one, and the purchase document
+  // attached to a buy-in is a blob nothing else can reach once the row is gone.
+  { kind: "vehicleOwnershipConversionsWithStorage" },
+  // Deliberately AFTER the applications, which hold `companyRuleVersionId` —
+  // so this one outlives its referents rather than preceding them. It sits
+  // after `financeCompanies` (above) for the same reason that ordering already
+  // existed: on a FAILED run the surviving rows reference a deleted company,
+  // which is the lesser of the two dangling directions.
+  { kind: "orgRows", table: "financeCompanyRuleVersions", index: "by_org" },
+  // Before `deposits`: an application is the record of money moving off a
+  // deposit, so it must not outlive the row it points at.
+  { kind: "orgRows", table: "depositApplications", index: "by_org" },
   { kind: "orgRows", table: "deposits", index: "by_org" },
   { kind: "orgRows", table: "receivables", index: "by_org" },
   { kind: "orgRows", table: "collectionPayments", index: "by_org" },
@@ -248,6 +277,74 @@ async function deleteApplicationDocumentsWithStorageBatch(ctx: MutationCtx, orgI
   return counts;
 }
 
+/**
+ * Appraisals carry the finance company's own valuation documents, so deleting
+ * the rows alone would leave the PDFs in storage with nothing left pointing at
+ * them — unreachable, unbilled to no one, and still holding the appraiser's
+ * report on a customer's vehicle.
+ */
+async function deleteFinanceAppraisalsWithStorageBatch(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">
+) {
+  const appraisals = await ctx.db
+    .query("financeAppraisals")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .take(ORG_DELETION_BATCH_SIZE);
+  const counts: DeletedCounts = {};
+  for (const appraisal of appraisals) {
+    addStorageCount(counts, await deleteStorageIds(ctx, appraisal.documentStorageIds ?? []));
+    await ctx.db.delete(appraisal._id);
+  }
+  if (appraisals.length > 0) {
+    counts.financeAppraisals = appraisals.length;
+  }
+  return counts;
+}
+
+/**
+ * Deal cost lines carry the receipts backing them — the transfer slip, the
+ * licensing payment, the insurance certificate. Deleting the rows alone would
+ * leave those in storage with nothing pointing at them.
+ */
+async function deleteFinanceDealFeesWithStorageBatch(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">
+) {
+  const fees = await ctx.db
+    .query("financeDealFees")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .take(ORG_DELETION_BATCH_SIZE);
+  const counts: DeletedCounts = {};
+  for (const fee of fees) {
+    addStorageCount(counts, await deleteStorageIds(ctx, fee.documentStorageIds ?? []));
+    await ctx.db.delete(fee._id);
+  }
+  if (fees.length > 0) {
+    counts.financeDealFees = fees.length;
+  }
+  return counts;
+}
+
+async function deleteVehicleOwnershipConversionsWithStorageBatch(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">
+) {
+  const rows = await ctx.db
+    .query("vehicleOwnershipConversions")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .take(ORG_DELETION_BATCH_SIZE);
+  const counts: DeletedCounts = {};
+  for (const row of rows) {
+    addStorageCount(counts, await deleteStorageIds(ctx, row.documentStorageIds ?? []));
+    await ctx.db.delete(row._id);
+  }
+  if (rows.length > 0) {
+    counts.vehicleOwnershipConversions = rows.length;
+  }
+  return counts;
+}
+
 async function deleteOrgSettingsWithStorageBatch(ctx: MutationCtx, orgId: Id<"organizations">) {
   const settingsRows = await ctx.db
     .query("orgSettings")
@@ -385,6 +482,15 @@ async function runDeletionStep(ctx: MutationCtx, step: DeletionStep, orgId: Id<"
   }
   if (step.kind === "applicationDocumentsWithStorage") {
     return await deleteApplicationDocumentsWithStorageBatch(ctx, orgId);
+  }
+  if (step.kind === "financeAppraisalsWithStorage") {
+    return await deleteFinanceAppraisalsWithStorageBatch(ctx, orgId);
+  }
+  if (step.kind === "financeDealFeesWithStorage") {
+    return await deleteFinanceDealFeesWithStorageBatch(ctx, orgId);
+  }
+  if (step.kind === "vehicleOwnershipConversionsWithStorage") {
+    return await deleteVehicleOwnershipConversionsWithStorageBatch(ctx, orgId);
   }
   if (step.kind === "orgSettingsWithStorage") {
     return await deleteOrgSettingsWithStorageBatch(ctx, orgId);

@@ -332,6 +332,42 @@ export async function requireOrgMember(
   return membership;
 }
 
+/**
+ * Whether a given member holds a permission, for guards that run away from the
+ * mutation boundary.
+ *
+ * `requireTenantAuth` proves the CALLER's permissions at the entry point, which
+ * is right for the operation the entry point names — but a mutation authorized
+ * for one thing can go on to perform another. Completing a sale needs
+ * `create:sales`; refunding the customer's reservation deposit inside it needs
+ * `approve:requests`, and nothing at the boundary was ever going to notice.
+ *
+ * System owners pass everything, same as `requireTenantAuth`.
+ */
+export async function requireActorPermission(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  userId: Id<"users">,
+  permission: string,
+  message: string
+): Promise<void> {
+  const membership = await ctx.db
+    .query("memberships")
+    .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+    .unique();
+  if (!membership || membership.offboardingStatus) {
+    throwAppError(AppErrorCode.FORBIDDEN, message);
+  }
+  const role = await ctx.db.get(membership.roleId);
+  if (!role) {
+    throwAppError(AppErrorCode.ROLE_NOT_FOUND, "Membership role not found or corrupted.");
+  }
+  if (isSystemOwnerRole(role)) return;
+  if (!role.permissions.includes(permission)) {
+    throwAppError(AppErrorCode.FORBIDDEN, message);
+  }
+}
+
 // ─── Row-ownership guard ─────────────────────────────────────────────────────
 
 /**

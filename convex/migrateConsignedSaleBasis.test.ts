@@ -1,0 +1,711 @@
+/**
+ * Restating historical consigned sales from principal to agent basis.
+ *
+ * The migration's entire licence to run unattended is that it cannot move
+ * profit: the original posting booked gross revenue and a fabricated cost that
+ * offset exactly, so removing both and recognizing the spread leaves net income
+ * where it was. These tests hold it to that, hold it to correcting only what
+ * the impact report says is safe, and hold it to being genuinely re-runnable —
+ * not merely unlikely to double-post.
+ */
+import { convexTestWithComponents } from "../test-utils/convexTest";
+import { describe, expect, test, vi } from "vitest";
+import schema from "./schema";
+import { api, internal } from "./_generated/api";
+import { SYSTEM_KEYS } from "./utils/defaultChart";
+
+vi.mock("./rateLimit", () => ({
+  rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
+  checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
+}));
+
+const MODULE_GLOB = import.meta.glob("./**/*.*s");
+
+const PERMS = [
+  "view:sales", "create:sales", "edit:sales",
+  "view:vehicles", "create:vehicles", "edit:vehicles",
+  "view:customers", "create:customers",
+  "manage:finance", "view:finance",
+  "view:commissions", "manage:commissions",
+];
+
+const SALE_PRICE = 12_500;
+const ENTITLEMENT = 9_500;
+const MARGIN = SALE_PRICE - ENTITLEMENT;
+const SCALE = 1000;
+
+async function seedDealer(tag: string) {
+  const t = convexTestWithComponents(schema, MODULE_GLOB);
+  const orgId = await t.run((ctx) =>
+    ctx.db.insert("organizations", { name: `Mig ${tag}`, createdAt: Date.now() })
+  );
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now(),
+    })
+  );
+  const userId = await t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: `${tag}_u`, email: `${tag}@e.com`, name: "Mig User" })
+  );
+  const roleId = await t.run((ctx) =>
+    ctx.db.insert("roles", { orgId, name: "Owner", permissions: PERMS, isSystemOwnerRole: true })
+  );
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+  await t.run((ctx) =>
+    ctx.db.insert("orgSettings", {
+      orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH", "BANK_TRANSFER"],
+    })
+  );
+
+  const asUser = t.withIdentity({ subject: `${tag}_u`, clerkId: `${tag}_u` });
+  await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+
+  const fiscalYear = new Date().getUTCFullYear();
+  await asUser.mutation(api.accountingPeriods.create, {
+    orgId,
+    startDate: Date.UTC(fiscalYear, 0, 1),
+    endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+    fiscalYear, periodNumber: 1,
+  });
+  const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
+  await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+
+  const customerId = await t.run((ctx) =>
+    ctx.db.insert("customers", { orgId, firstName: "Buyer", lastName: tag })
+  );
+
+  return { t, orgId, userId, asUser, customerId };
+}
+
+/**
+ * A consigned sale as the OLD code posted it: gross revenue, fabricated COGS
+ * against AP-Suppliers, gross receivable from the customer. Written directly
+ * because the current code refuses to post this — which is the point. The
+ * migration exists for rows that are already on the books, and there is no
+ * longer any way to create one through the application.
+ */
+async function seedLegacyPrincipalSale(
+  s: Awaited<ReturnType<typeof seedDealer>>,
+  opts: { vin: string; salePrice?: number; sourceCost?: number | undefined; cogs?: number; purchasePrice?: number }
+) {
+  const salePrice = opts.salePrice ?? SALE_PRICE;
+  const cogsMajor = opts.cogs ?? ENTITLEMENT;
+  const vehicleId = await s.t.run((ctx) =>
+    ctx.db.insert("vehicles", {
+      orgId: s.orgId, vin: opts.vin, make: "Toyota", model: "Camry", year: 2024, mileage: 10,
+      color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: salePrice,
+      status: "SOLD", sourceType: "SOURCED", sourcedFromName: "Amman Importer Co",
+      ...(opts.sourceCost === undefined ? {} : { sourceCost: opts.sourceCost }),
+      ...(opts.purchasePrice ? { purchasePrice: opts.purchasePrice } : {}),
+    })
+  );
+  const saleId = await s.t.run((ctx) =>
+    ctx.db.insert("sales", {
+      orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
+      salePrice, saleDate: Date.now(), status: "COMPLETED",
+    })
+  );
+
+  await s.t.run(async (ctx) => {
+    const accounts = (await ctx.db.query("chartOfAccounts").collect())
+      .filter((a) => a.orgId === s.orgId);
+    const byKey = new Map(accounts.filter((a) => a.systemKey).map((a) => [a.systemKey!, a._id]));
+    const entryId = await ctx.db.insert("journalEntries", {
+      orgId: s.orgId, journalNumber: `LEGACY-${opts.vin}`, accountingDate: Date.now(),
+      sourceType: "sales", sourceId: saleId, category: "SYSTEM",
+      memo: "Legacy principal posting", status: "POSTED", currency: "JOD",
+      postedBy: s.userId, postedAt: Date.now(), createdAt: Date.now(),
+    });
+    const lines: Array<[string, number, number]> = [
+      [SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, salePrice * SCALE, 0],
+      [SYSTEM_KEYS.SALES_REVENUE, 0, salePrice * SCALE],
+      [SYSTEM_KEYS.COST_OF_VEHICLES_SOLD, cogsMajor * SCALE, 0],
+      [SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, 0, cogsMajor * SCALE],
+    ];
+    let n = 1;
+    for (const [key, debitMinor, creditMinor] of lines) {
+      if (debitMinor === 0 && creditMinor === 0) continue;
+      await ctx.db.insert("journalLines", {
+        orgId: s.orgId, journalEntryId: entryId, lineNumber: n++,
+        accountId: byKey.get(key)!, debitMinor, creditMinor,
+        currency: "JOD", scale: 3, accountingDate: Date.now(),
+      });
+    }
+  });
+
+  return { vehicleId, saleId };
+}
+
+/** Net movement per system key across the whole org's posted ledger. */
+async function ledger(
+  t: ReturnType<typeof convexTestWithComponents>,
+  orgId: string
+): Promise<Record<string, number>> {
+  return await t.run(async (ctx) => {
+    const accounts = (await ctx.db.query("chartOfAccounts").collect())
+      .filter((a) => a.orgId === orgId);
+    const keyByAccount = new Map<string, string>();
+    for (const a of accounts) if (a.systemKey) keyByAccount.set(a._id, a.systemKey);
+
+    const entries = (await ctx.db.query("journalEntries").collect())
+      .filter((e) => e.orgId === orgId && e.status === "POSTED");
+    const allLines = await ctx.db.query("journalLines").collect();
+
+    const totals: Record<string, number> = {};
+    for (const entry of entries) {
+      for (const l of allLines.filter((x) => x.journalEntryId === entry._id)) {
+        const key = keyByAccount.get(l.accountId);
+        if (!key) continue;
+        totals[key] = (totals[key] ?? 0) + l.debitMinor - l.creditMinor;
+      }
+    }
+    return totals;
+  });
+}
+
+function netIncome(l: Record<string, number>): number {
+  // Revenue and expense are both signed as (debit − credit), so income is the
+  // negation of revenue plus the expenses that reduce it.
+  const revenue = -((l[SYSTEM_KEYS.SALES_REVENUE] ?? 0) + (l[SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE] ?? 0));
+  const cogs = l[SYSTEM_KEYS.COST_OF_VEHICLES_SOLD] ?? 0;
+  return revenue - cogs;
+}
+
+async function runMigration(
+  s: Awaited<ReturnType<typeof seedDealer>>,
+  opts: { dryRun?: boolean } = {}
+) {
+  return await s.t.mutation(internal.migrateConsignedSaleBasis.migrateConsignedSaleBasis, {
+    orgId: s.orgId,
+    ...(opts.dryRun === undefined ? {} : { dryRun: opts.dryRun }),
+  });
+}
+
+describe("the correction itself", () => {
+  test("removes the gross and the fabricated cost, recognizes the spread, and moves no profit", async () => {
+    const s = await seedDealer("basic");
+    await seedLegacyPrincipalSale(s, { vin: "VINMIG1", sourceCost: ENTITLEMENT });
+
+    const before = await ledger(s.t, s.orgId);
+    expect(before[SYSTEM_KEYS.SALES_REVENUE]).toBe(-SALE_PRICE * SCALE);
+    expect(before[SYSTEM_KEYS.COST_OF_VEHICLES_SOLD]).toBe(ENTITLEMENT * SCALE);
+
+    const report = await runMigration(s);
+    expect(report.status).toBe("COMPLETE");
+    expect(report.corrected).toBe(1);
+
+    const after = await ledger(s.t, s.orgId);
+    // Turnover and cost of sales both drop to nothing; only the spread remains.
+    expect(after[SYSTEM_KEYS.SALES_REVENUE]).toBe(0);
+    expect(after[SYSTEM_KEYS.COST_OF_VEHICLES_SOLD]).toBe(0);
+    expect(after[SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE]).toBe(-MARGIN * SCALE);
+
+    // The whole premise, asserted rather than assumed.
+    expect(netIncome(after)).toBe(netIncome(before));
+    expect(report.netIncomeDeltaMinor).toBe(0);
+  });
+
+  test("leaves the balance sheet alone, because nothing on it was wrong", async () => {
+    const s = await seedDealer("bs");
+    await seedLegacyPrincipalSale(s, { vin: "VINMIG2", sourceCost: ENTITLEMENT });
+
+    const before = await ledger(s.t, s.orgId);
+    await runMigration(s);
+    const after = await ledger(s.t, s.orgId);
+
+    // The principal posting debited AR for the gross and credited AP for the
+    // entitlement — which is exactly what agent basis does on this route. A
+    // correction that touched them would be introducing an error, not fixing one.
+    expect(after[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS])
+      .toBe(before[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS]);
+    expect(after[SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS])
+      .toBe(before[SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS]);
+  });
+
+  test("records what it did, linked to the entries it corrected", async () => {
+    const s = await seedDealer("audit");
+    const { saleId } = await seedLegacyPrincipalSale(s, { vin: "VINMIG3", sourceCost: ENTITLEMENT });
+
+    await runMigration(s);
+
+    const corrections = await s.t.run((ctx) =>
+      ctx.db.query("consignedSaleCorrections").collect()
+    );
+    expect(corrections).toHaveLength(1);
+    const c = corrections[0]!;
+    expect(c.saleId).toBe(saleId);
+    expect(c.revenueReclassifiedMinor).toBe(SALE_PRICE * SCALE);
+    expect(c.commissionRecognizedMinor).toBe(MARGIN * SCALE);
+    expect(c.cogsReversedMinor).toBe(ENTITLEMENT * SCALE);
+    expect(c.netIncomeDeltaMinor).toBe(0);
+    // Links back to the original posting rather than replacing it: both entries
+    // stay on the books, which is the only version an auditor can follow.
+    expect(c.originalJournalEntryIds).toHaveLength(1);
+    expect(c.correctionJournalEntryId).toBeDefined();
+    expect(c.correctionJournalEntryId).not.toBe(c.originalJournalEntryIds[0]);
+
+    const audit = await s.t.run((ctx) =>
+      ctx.db.query("financialAuditLog").collect()
+    );
+    const migrations = audit.filter((a) => a.actionType === "MIGRATE_TRANSACTION");
+    expect(migrations).toHaveLength(1);
+    expect(migrations[0]!.resourceId).toBe(saleId);
+  });
+});
+
+describe("re-running it", () => {
+  test("has zero additional financial effect", async () => {
+    const s = await seedDealer("rerun");
+    await seedLegacyPrincipalSale(s, { vin: "VINMIG4", sourceCost: ENTITLEMENT });
+
+    const first = await runMigration(s);
+    expect(first.corrected).toBe(1);
+    const afterFirst = await ledger(s.t, s.orgId);
+
+    const second = await runMigration(s);
+    expect(second.corrected).toBe(0);
+    expect(second.alreadyCorrected).toBe(1);
+
+    // Not "close enough" — identical.
+    expect(await ledger(s.t, s.orgId)).toEqual(afterFirst);
+  });
+
+  test("duplicates neither the correction record nor the audit trail", async () => {
+    const s = await seedDealer("rerun2");
+    await seedLegacyPrincipalSale(s, { vin: "VINMIG5", sourceCost: ENTITLEMENT });
+
+    await runMigration(s);
+    await runMigration(s);
+    await runMigration(s);
+
+    const corrections = await s.t.run((ctx) => ctx.db.query("consignedSaleCorrections").collect());
+    expect(corrections).toHaveLength(1);
+    const migrations = (await s.t.run((ctx) => ctx.db.query("financialAuditLog").collect()))
+      .filter((a) => a.actionType === "MIGRATE_TRANSACTION");
+    expect(migrations).toHaveLength(1);
+  });
+
+  test("a sale already on agent basis is left alone rather than counted as work", async () => {
+    const s = await seedDealer("agentAlready");
+    // Posted correctly by the current code — no vehicle revenue, no COGS.
+    const vehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin: "VINMIG6", make: "Kia", model: "Rio", year: 2023, mileage: 5,
+        color: "Red", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
+        status: "AVAILABLE", sourceType: "SOURCED",
+        sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+      })
+    );
+    await s.asUser.mutation(api.sales.create, {
+      orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
+      salePrice: SALE_PRICE, saleDate: Date.now(), status: "COMPLETED" as const,
+    });
+
+    const before = await ledger(s.t, s.orgId);
+    const report = await runMigration(s);
+
+    expect(report.alreadyAgentBasis).toBe(1);
+    expect(report.corrected).toBe(0);
+    expect(await ledger(s.t, s.orgId)).toEqual(before);
+  });
+});
+
+describe("what it refuses to touch", () => {
+  test("a sale with no supplier cost, because the margin cannot be derived", async () => {
+    const s = await seedDealer("noCost");
+    await seedLegacyPrincipalSale(s, { vin: "VINMIG7", sourceCost: undefined });
+
+    const before = await ledger(s.t, s.orgId);
+    const report = await runMigration(s);
+
+    expect(report.flagged).toBe(1);
+    expect(report.corrected).toBe(0);
+    expect(await ledger(s.t, s.orgId)).toEqual(before);
+  });
+
+  test("a sale whose correction would move profit", async () => {
+    // Posted COGS of 8,000 against an agreed entitlement of 9,500: gross profit
+    // on the books is 4,500 but the real margin is 3,000. Correcting it would
+    // move reported profit by 1,500 — a restatement, not a reclassification,
+    // and not something to do to a dealership's books unattended.
+    const s = await seedDealer("profitMove");
+    await seedLegacyPrincipalSale(s, { vin: "VINMIG8", sourceCost: ENTITLEMENT, cogs: 8_000 });
+
+    const before = await ledger(s.t, s.orgId);
+    const report = await runMigration(s);
+
+    expect(report.flagged).toBe(1);
+    expect(report.corrected).toBe(0);
+    expect(netIncome(await ledger(s.t, s.orgId))).toBe(netIncome(before));
+  });
+
+  test("a vehicle carrying two DIFFERENT cost figures, because only a human can say which is the supplier's", async () => {
+    const s = await seedDealer("bothPrices");
+    await seedLegacyPrincipalSale(s, {
+      vin: "VINMIG9", sourceCost: ENTITLEMENT, purchasePrice: 9_000,
+    });
+
+    const report = await runMigration(s);
+    expect(report.flagged).toBe(1);
+    expect(report.corrected).toBe(0);
+  });
+
+  test("but NOT one whose purchase price merely repeats the supplier cost", async () => {
+    // There is no ambiguity here: both figures say the supplier is owed the
+    // same amount. Refusing these was measurably useless — on production 39 of
+    // 42 consigned vehicles carry a purchase price, including both that have
+    // sold, so the old flag disqualified every row the migration existed for.
+    const s = await seedDealer("samePrices");
+    await seedLegacyPrincipalSale(s, {
+      vin: "VINMIG13", sourceCost: ENTITLEMENT, purchasePrice: ENTITLEMENT,
+    });
+
+    const before = await ledger(s.t, s.orgId);
+    const report = await runMigration(s);
+
+    expect(report.flagged).toBe(0);
+    expect(report.corrected).toBe(1);
+    // And it is still only a reclassification.
+    expect(report.netIncomeDeltaMinor).toBe(0);
+    expect(netIncome(await ledger(s.t, s.orgId))).toBe(netIncome(before));
+  });
+
+  test("a dealer-owned sale, which was never misposted in the first place", async () => {
+    const s = await seedDealer("owned");
+    const vehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin: "VINMIG10", make: "Kia", model: "Rio", year: 2023, mileage: 5,
+        color: "Red", fuelType: "Gas", transmission: "Auto", sellingPrice: 8_000,
+        status: "AVAILABLE", sourceType: "STOCK", purchasePrice: 6_000,
+      })
+    );
+    await s.asUser.mutation(api.sales.create, {
+      orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
+      salePrice: 8_000, saleDate: Date.now(), status: "COMPLETED" as const,
+    });
+
+    const before = await ledger(s.t, s.orgId);
+    const report = await runMigration(s);
+
+    expect(report.consignedSalesFound).toBe(0);
+    expect(report.corrected).toBe(0);
+    expect(await ledger(s.t, s.orgId)).toEqual(before);
+  });
+});
+
+describe("the dry run", () => {
+  test("reports exactly what the real run would correct, and writes nothing", async () => {
+    const s = await seedDealer("dry");
+    await seedLegacyPrincipalSale(s, { vin: "VINMIG11", sourceCost: ENTITLEMENT });
+    await seedLegacyPrincipalSale(s, { vin: "VINMIG12", sourceCost: undefined });
+
+    const before = await ledger(s.t, s.orgId);
+    const dry = await runMigration(s, { dryRun: true });
+
+    expect(dry.dryRun).toBe(true);
+    expect(dry.corrected).toBe(1);
+    expect(dry.flagged).toBe(1);
+    expect(dry.revenueReclassifiedMinor).toBe(SALE_PRICE * SCALE);
+    // Nothing moved, and nothing was recorded as having moved.
+    expect(await ledger(s.t, s.orgId)).toEqual(before);
+    expect(await s.t.run((ctx) => ctx.db.query("consignedSaleCorrections").collect())).toHaveLength(0);
+
+    // And the real run then does precisely what the dry run promised.
+    const real = await runMigration(s);
+    expect(real.corrected).toBe(dry.corrected);
+    expect(real.flagged).toBe(dry.flagged);
+    expect(real.revenueReclassifiedMinor).toBe(dry.revenueReclassifiedMinor);
+  });
+});
+
+describe("what the impact report says afterwards", () => {
+  test("a corrected sale reads as already on agent basis, not as an anomaly", async () => {
+    // The correction posts a SECOND journal entry against the same sale, and it
+    // debits revenue / credits COGS — the mirror of what the report counts. Read
+    // naively, the sale then shows two posted journals (an anomaly) with its
+    // pre-correction revenue and cost still apparently intact. An accountant
+    // reading that concludes the migration did nothing and raises a manual
+    // correcting journal, double-correcting the P&L.
+    const s = await seedDealer("afterMig");
+    await seedLegacyPrincipalSale(s, { vin: "VINMIG14", sourceCost: ENTITLEMENT });
+
+    await runMigration(s);
+
+    const report = await s.t.query(internal.sourcedAgentImpact.sourcedSaleImpactReport, {
+      orgId: s.orgId,
+    });
+    const org = report.orgs[0]!;
+    expect(org.anomalyCount).toBe(0);
+    expect(org.alreadyAgentBasisCount).toBe(1);
+    expect(org.migratableCount).toBe(0);
+    expect(org.totals.revenueOverstatementMinor).toBe(0);
+  });
+});
+
+/**
+ * The historical periods a restatement corrects are usually CLOSED, so the
+ * ordinary outcome of the correction hook is that the event QUEUES rather than
+ * posting. Recording such a row as done meant the pre-check reported
+ * "already corrected" forever while no journal had ever been written.
+ */
+describe("a correction that could only queue", () => {
+  /** Dated into a year no accounting period covers, so nothing can post it. */
+  const LONG_AGO = Date.UTC(new Date().getUTCFullYear() - 3, 5, 12);
+
+  async function seedQueuedCase(tag: string) {
+    const s = await seedDealer(tag);
+    const { saleId, vehicleId } = await seedLegacyPrincipalSale(s, {
+      vin: `VINQ${tag}`,
+      sourceCost: ENTITLEMENT,
+    });
+    await s.t.run((ctx) => ctx.db.patch(saleId, { saleDate: LONG_AGO }));
+    return { s, saleId, vehicleId };
+  }
+
+  test("does not report a queued correction as corrected", async () => {
+    const { s, saleId } = await seedQueuedCase("q1");
+
+    const report = await runMigration(s);
+    expect(report.corrected).toBe(1);
+    // The distinction the whole lifecycle exists to make.
+    expect(report.queuedNow).toBe(1);
+    expect(report.postedNow).toBe(0);
+
+    const correction = await s.t.run(async (ctx) =>
+      (await ctx.db.query("consignedSaleCorrections").collect()).find((c) => c.saleId === saleId)
+    );
+    expect(correction!.status).toBe("PENDING_POSTING");
+    expect(correction!.correctionJournalEntryId).toBeUndefined();
+    expect(correction!.postedAt).toBeUndefined();
+
+    // And the books really are untouched: no journal exists to have touched them.
+    const after = await ledger(s.t, s.orgId);
+    expect(after[SYSTEM_KEYS.SALES_REVENUE]).toBe(-SALE_PRICE * SCALE);
+    expect(after[SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE] ?? 0).toBe(0);
+  });
+
+  test("a re-run says it is still waiting rather than that it is done", async () => {
+    const { s } = await seedQueuedCase("q2");
+    await runMigration(s);
+
+    const second = await runMigration(s);
+    expect(second.awaitingPosting).toBe(1);
+    // The specific wrong answer: reporting it as complete when nothing posted.
+    expect(second.alreadyCorrected).toBe(0);
+    expect(second.corrected).toBe(0);
+  });
+
+  test("a re-run duplicates neither the correction, the audit row nor the queued event", async () => {
+    const { s } = await seedQueuedCase("q3");
+    await runMigration(s);
+    await runMigration(s);
+    await runMigration(s);
+
+    const corrections = await s.t.run((ctx) =>
+      ctx.db.query("consignedSaleCorrections").collect()
+    );
+    expect(corrections).toHaveLength(1);
+
+    const migrations = await s.t.run(async (ctx) =>
+      (await ctx.db.query("financialAuditLog").collect())
+        .filter((a) => a.actionType === "MIGRATE_TRANSACTION")
+    );
+    expect(migrations).toHaveLength(1);
+
+    const queued = await s.t.run(async (ctx) =>
+      (await ctx.db.query("pendingAccountingEvents").collect())
+        .filter((p) => p.idempotencyKey.startsWith("consigned_agent_reclass_"))
+    );
+    expect(queued).toHaveLength(1);
+  });
+
+  test("promotes the row to POSTED once the outbox actually drains it", async () => {
+    const { s, saleId } = await seedQueuedCase("q4");
+    await runMigration(s);
+
+    // Open a period covering the sale, then drain — exactly the sequence an
+    // operator follows when reopening a year to take a restatement.
+    const fiscalYear = new Date(LONG_AGO).getUTCFullYear();
+    await s.asUser.mutation(api.accountingPeriods.create, {
+      orgId: s.orgId,
+      startDate: Date.UTC(fiscalYear, 0, 1),
+      endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+      fiscalYear,
+      periodNumber: 1,
+    });
+    const periods = await s.asUser.query(api.accountingPeriods.list, { orgId: s.orgId });
+    const reopened = periods.find((p) => p.fiscalYear === fiscalYear)!;
+    await s.asUser.mutation(api.accountingPeriods.open, { orgId: s.orgId, periodId: reopened._id });
+    await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+
+    const report = await runMigration(s);
+    expect(report.reconciledToPosted).toBe(1);
+
+    const correction = await s.t.run(async (ctx) =>
+      (await ctx.db.query("consignedSaleCorrections").collect()).find((c) => c.saleId === saleId)
+    );
+    expect(correction!.status).toBe("POSTED");
+    expect(correction!.correctionJournalEntryId).toBeDefined();
+
+    // The correction is now genuinely on the books.
+    const after = await ledger(s.t, s.orgId);
+    expect(after[SYSTEM_KEYS.SALES_REVENUE]).toBe(0);
+    expect(after[SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE]).toBe(-MARGIN * SCALE);
+    expect(netIncome(after)).toBe(MARGIN * SCALE);
+  });
+
+  test("the standalone reconciler promotes it without re-reading every sale", async () => {
+    const { s, saleId } = await seedQueuedCase("q5");
+    await runMigration(s);
+
+    const fiscalYear = new Date(LONG_AGO).getUTCFullYear();
+    await s.asUser.mutation(api.accountingPeriods.create, {
+      orgId: s.orgId,
+      startDate: Date.UTC(fiscalYear, 0, 1),
+      endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+      fiscalYear,
+      periodNumber: 1,
+    });
+    const periods = await s.asUser.query(api.accountingPeriods.list, { orgId: s.orgId });
+    const reopened = periods.find((p) => p.fiscalYear === fiscalYear)!;
+    await s.asUser.mutation(api.accountingPeriods.open, { orgId: s.orgId, periodId: reopened._id });
+    await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+
+    const result = await s.t.mutation(
+      internal.migrateConsignedSaleBasis.reconcileConsignedSaleCorrections,
+      { orgId: s.orgId }
+    );
+    expect(result.promoted).toBe(1);
+
+    const correction = await s.t.run(async (ctx) =>
+      (await ctx.db.query("consignedSaleCorrections").collect()).find((c) => c.saleId === saleId)
+    );
+    expect(correction!.status).toBe("POSTED");
+  });
+
+  test("the dry run predicts queuing instead of claiming it would post", async () => {
+    const { s } = await seedQueuedCase("q6");
+
+    const dry = await runMigration(s, { dryRun: true });
+    expect(dry.corrected).toBe(1);
+    expect(dry.queuedNow).toBe(1);
+    expect(dry.postedNow).toBe(0);
+
+    // And it wrote nothing at all.
+    const corrections = await s.t.run((ctx) =>
+      ctx.db.query("consignedSaleCorrections").collect()
+    );
+    expect(corrections).toHaveLength(0);
+  });
+});
+
+/**
+ * The combination that made a correction permanently unpromotable.
+ *
+ * A closed period (so the journal queues) AND a transaction row netted down by
+ * a reservation deposit (so the reporting basis cannot be derived) is the
+ * ordinary production shape, not an edge case — عربون is standard, and the
+ * periods a restatement corrects are closed by definition.
+ *
+ * Folding both into one status filed the row under one the reconciler never
+ * scans. Its journal id was never written, so `sourcedSaleImpactReport` went on
+ * reporting an already-corrected sale as fully overstated — which is an
+ * invitation to post the correction a second time by hand.
+ */
+describe("a correction that both queues AND needs a human", () => {
+  const LONG_AGO = Date.UTC(new Date().getUTCFullYear() - 3, 2, 4);
+
+  async function seedBothProblems(tag: string) {
+    const s = await seedDealer(tag);
+    const { saleId, vehicleId } = await seedLegacyPrincipalSale(s, {
+      vin: `VINBOTH${tag}`,
+      sourceCost: ENTITLEMENT,
+    });
+    await s.t.run((ctx) => ctx.db.patch(saleId, { saleDate: LONG_AGO }));
+    // Netted down by a 1,000 deposit, exactly as createSaleTransaction writes it.
+    await s.t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId: s.orgId,
+        type: "IN" as const,
+        amount: SALE_PRICE - 1_000,
+        date: LONG_AGO,
+        category: "VEHICLE_SALE",
+        description: "Sale net of a deposit already booked",
+        vehicleId,
+        customerId: s.customerId,
+      })
+    );
+    return { s, saleId, vehicleId };
+  }
+
+  async function openPeriodAndDrain(s: Awaited<ReturnType<typeof seedDealer>>) {
+    const fiscalYear = new Date(LONG_AGO).getUTCFullYear();
+    await s.asUser.mutation(api.accountingPeriods.create, {
+      orgId: s.orgId,
+      startDate: Date.UTC(fiscalYear, 0, 1),
+      endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+      fiscalYear,
+      periodNumber: 1,
+    });
+    const periods = await s.asUser.query(api.accountingPeriods.list, { orgId: s.orgId });
+    const reopened = periods.find((p) => p.fiscalYear === fiscalYear)!;
+    await s.asUser.mutation(api.accountingPeriods.open, { orgId: s.orgId, periodId: reopened._id });
+    await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+  }
+
+  test("records both facts separately rather than collapsing them", async () => {
+    const { s, saleId } = await seedBothProblems("both1");
+
+    const report = await runMigration(s);
+    expect(report.queuedNow).toBe(1);
+    // The transaction row is a SEPARATE problem and is reported as one.
+    expect(report.requiresReconciliation).toBe(1);
+
+    const correction = await s.t.run(async (ctx) =>
+      (await ctx.db.query("consignedSaleCorrections").collect()).find((c) => c.saleId === saleId)
+    );
+    expect(correction!.status).toBe("PENDING_POSTING");
+    expect(correction!.reportingBasisStatus).toBe("REQUIRES_RECONCILIATION");
+    expect(correction!.reportingBasisReason).toMatch(/deposits or an edit/i);
+  });
+
+  test("still promotes the journal once the outbox drains", async () => {
+    const { s, saleId } = await seedBothProblems("both2");
+    await runMigration(s);
+    await openPeriodAndDrain(s);
+
+    const result = await s.t.mutation(
+      internal.migrateConsignedSaleBasis.reconcileConsignedSaleCorrections,
+      { orgId: s.orgId }
+    );
+    expect(result.promoted).toBe(1);
+
+    const correction = await s.t.run(async (ctx) =>
+      (await ctx.db.query("consignedSaleCorrections").collect()).find((c) => c.saleId === saleId)
+    );
+    expect(correction!.status).toBe("POSTED");
+    // The id that was never being written. Without it the impact report cannot
+    // tell the correction apart from the original posting.
+    expect(correction!.correctionJournalEntryId).toBeDefined();
+    // And the transaction row is still, correctly, somebody's job.
+    expect(correction!.reportingBasisStatus).toBe("REQUIRES_RECONCILIATION");
+  });
+
+  test("the impact report stops calling the corrected sale overstated", async () => {
+    // The consequence that matters: an accountant reading a report that says
+    // this sale was never restated will restate it again by hand.
+    const { s } = await seedBothProblems("both3");
+    await runMigration(s);
+    await openPeriodAndDrain(s);
+    await s.t.mutation(internal.migrateConsignedSaleBasis.reconcileConsignedSaleCorrections, {
+      orgId: s.orgId,
+    });
+
+    const impact = await s.t.query(internal.sourcedAgentImpact.sourcedSaleImpactReport, {
+      orgId: s.orgId,
+    });
+    const org = impact.orgs.find((o: { orgId: string }) => o.orgId === s.orgId)!;
+    expect(org.anomalyCount).toBe(0);
+    expect(org.totals.revenueOverstatementMinor).toBe(0);
+  });
+});

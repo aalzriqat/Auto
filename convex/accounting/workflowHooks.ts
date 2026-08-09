@@ -16,7 +16,7 @@ import { postAccountingEvent, PostCommand } from "./postingEngine";
 import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate, checkPostingAllowed } from "../accountingPeriods";
-import { isChartInitialized, ensureCommissionAccounts, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts } from "../chartOfAccounts";
+import { isChartInitialized, ensureCommissionAccounts, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureConsignmentAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount, ensurePayrollAccounts } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
   enqueuePendingReversal,
@@ -32,7 +32,15 @@ export async function getOrgCurrency(ctx: QueryCtx | MutationCtx, orgId: Id<"org
   return settings?.currency ?? "JOD";
 }
 
-async function shouldPost(ctx: MutationCtx, orgId: Id<"organizations">, date: number): Promise<boolean> {
+/**
+ * Whether an event dated here would post now or queue to the outbox.
+ *
+ * Exported so the historical migration's dry run can predict which of the two
+ * a correction will do instead of reporting a bare "would correct" count —
+ * the distinction is the whole difference between a correction that reaches
+ * the books and one that sits waiting for a period to open.
+ */
+export async function shouldPost(ctx: MutationCtx, orgId: Id<"organizations">, date: number): Promise<boolean> {
   const [chartReady, period] = await Promise.all([
     isChartInitialized(ctx, orgId),
     getOpenPeriodForDate(ctx, orgId, date),
@@ -130,6 +138,16 @@ async function postDomainEvent(
     occurredAt: number;
     actorId: Id<"users">;
     payload: Record<string, unknown>;
+    /**
+     * Distinguishes REPEATED events of the same type against the same source —
+     * several instalments against one claim, say. `postAccountingEvent` dedupes
+     * on (eventType, sourceType, sourceId, eventVersion) as well as on the
+     * idempotency key, so leaving this at 1 makes every payment after the first
+     * silently return "already posted": the subledger records three receipts
+     * and the ledger records one. Defaults to 1, which is right for the events
+     * that genuinely happen once per source.
+     */
+    eventVersion?: number;
   }
 ): Promise<void> {
   await postOrEnqueue(ctx, {
@@ -137,7 +155,7 @@ async function postDomainEvent(
     eventType: args.eventType,
     sourceType: args.sourceType,
     sourceId: args.sourceId,
-    eventVersion: 1,
+    eventVersion: args.eventVersion ?? 1,
     accountingDate: args.occurredAt,
     occurredAt: args.occurredAt,
     currency: args.currency,
@@ -146,6 +164,23 @@ async function postDomainEvent(
     actorId: args.actorId,
   });
 }
+
+/**
+ * What actually became of a reversal.
+ *
+ *  - REVERSED — the reversing journal is posted. The money is back.
+ *  - DEFERRED — no period was open, so the reversal is queued. The original
+ *    entry is STILL POSTED until the outbox drains, and anything that treats
+ *    the amount as recovered before then is spending money the ledger still
+ *    shows as spent.
+ *  - NOT_POSTED — there was nothing to reverse (the forward entry never posted,
+ *    and any queued copy of it has been cancelled).
+ *
+ * Returned rather than swallowed because the caller has to tell DEFERRED from
+ * REVERSED. Collapsing the two is what let a slice be refunded in cash while
+ * its original application was still live in the general ledger.
+ */
+export type ReversalOutcome = "REVERSED" | "DEFERRED" | "NOT_POSTED";
 
 /**
  * Generic "undo this posted event, or drop it if it never posted" used when
@@ -166,16 +201,45 @@ async function reverseEventIfPosted(
     reversalDate: number;
     reversalIdempotencyKey: string;
     pendingPostIdempotencyKey: string;
+    /**
+     * Pins the reversal to ONE event when several share a source.
+     *
+     * A source that can move money more than once — a deposit applied to each
+     * car on its quote, a claim collected in instalments — writes several
+     * events under one `sourceId`, distinguished only by version. Without this
+     * the lookup below takes `.first()`, so a reversal aimed at the third
+     * movement backs out the first: a live invoice loses its credit and the
+     * cancelled one keeps it. Omit it only where the source genuinely posts
+     * once.
+     */
+    eventVersion?: number;
   }
-): Promise<void> {
-  const originalEvent = await ctx.db
-    .query("accountingEvents")
-    .withIndex("by_org_source", (q) =>
-      q.eq("orgId", args.orgId).eq("sourceType", args.sourceType).eq("sourceId", args.sourceId)
-    )
-    .filter((q) => q.eq(q.field("eventType"), args.eventType))
-    .filter((q) => q.eq(q.field("status"), "POSTED"))
-    .first();
+): Promise<ReversalOutcome> {
+  const originalEvent =
+    args.eventVersion === undefined
+      ? await ctx.db
+          .query("accountingEvents")
+          .withIndex("by_org_source", (q) =>
+            q
+              .eq("orgId", args.orgId)
+              .eq("sourceType", args.sourceType)
+              .eq("sourceId", args.sourceId)
+          )
+          .filter((q) => q.eq(q.field("eventType"), args.eventType))
+          .filter((q) => q.eq(q.field("status"), "POSTED"))
+          .first()
+      : await ctx.db
+          .query("accountingEvents")
+          .withIndex("by_org_event_source_version", (q) =>
+            q
+              .eq("orgId", args.orgId)
+              .eq("eventType", args.eventType)
+              .eq("sourceType", args.sourceType)
+              .eq("sourceId", args.sourceId)
+              .eq("eventVersion", args.eventVersion!)
+          )
+          .filter((q) => q.eq(q.field("status"), "POSTED"))
+          .first();
 
   if (originalEvent) {
     const period = await getOpenPeriodForDate(ctx, args.orgId, args.reversalDate);
@@ -188,25 +252,26 @@ async function reverseEventIfPosted(
         actorId: args.actorId,
         idempotencyKey: args.reversalIdempotencyKey,
       });
-    } else {
-      // No open period — defer the reversal to the outbox instead of skipping it.
-      await enqueuePendingReversal(ctx, {
-        orgId: args.orgId,
-        originalEventId: originalEvent._id,
-        reversalDate: args.reversalDate,
-        reason: args.reason,
-        actorId: args.actorId,
-        idempotencyKey: args.reversalIdempotencyKey,
-        sourceType: args.sourceType,
-        sourceId: args.sourceId,
-      });
+      return "REVERSED";
     }
-    return;
+    // No open period — defer the reversal to the outbox instead of skipping it.
+    await enqueuePendingReversal(ctx, {
+      orgId: args.orgId,
+      originalEventId: originalEvent._id,
+      reversalDate: args.reversalDate,
+      reason: args.reason,
+      actorId: args.actorId,
+      idempotencyKey: args.reversalIdempotencyKey,
+      sourceType: args.sourceType,
+      sourceId: args.sourceId,
+    });
+    return "DEFERRED";
   }
 
   // No posted GL entry. If it's still sitting unposted in the outbox, cancel
   // it so it never posts (net GL effect of the round trip is zero).
   await cancelPendingPostByKey(ctx, args.orgId, args.pendingPostIdempotencyKey);
+  return "NOT_POSTED";
 }
 
 export async function hookDepositReceived(
@@ -241,6 +306,23 @@ export async function hookDepositReceived(
   });
 }
 
+/**
+ * The exact accounting coordinates of one application of deposit money.
+ *
+ * Passed in rather than derived, and stored on the `depositApplications` row
+ * that owns it, so the reversal reads back precisely what was posted. A
+ * reversal that re-derives its target and gets it wrong does not fail — it
+ * finds no event and returns quietly, leaving the subledger reinstated and the
+ * ledger still showing the liability discharged.
+ */
+export type DepositApplicationIdentity = {
+  eventType: "DEPOSIT_APPLIED" | "DEPOSIT_APPLIED_TO_SETTLEMENT";
+  sourceType: string;
+  sourceId: string;
+  eventVersion: number;
+  idempotencyKey: string;
+};
+
 export async function hookDepositApplied(
   ctx: MutationCtx,
   args: {
@@ -252,14 +334,28 @@ export async function hookDepositApplied(
     actorId: Id<"users">;
     occurredAt: number;
     saleId?: Id<"sales">;
+    /** Which car on a multi-vehicle quote consumed its share. */
+    allocationVehicleId?: Id<"vehicles">;
+    /**
+     * The identity this application was recorded under.
+     *
+     * One deposit row can be applied several times — once per car it was
+     * allocated across — and each is its own movement of money against its own
+     * sale. Sharing an identity makes the second application collide with the
+     * first on both the key and the (eventType, sourceType, sourceId,
+     * eventVersion) tuple and silently post nothing, and makes every reversal
+     * ambiguous. Omitted only by callers that predate the application record.
+     */
+    identity?: DepositApplicationIdentity;
   }
 ) {
   await postDomainEvent(ctx, {
     orgId: args.orgId,
     eventType: "DEPOSIT_APPLIED",
-    sourceType: "deposits",
-    sourceId: args.depositId.toString(),
-    idempotencyKey: `deposit_applied_${args.depositId}`,
+    sourceType: args.identity?.sourceType ?? "deposits",
+    sourceId: args.identity?.sourceId ?? args.depositId.toString(),
+    idempotencyKey: args.identity?.idempotencyKey ?? `deposit_applied_${args.depositId}`,
+    eventVersion: args.identity?.eventVersion ?? 1,
     currency: args.currency,
     occurredAt: args.occurredAt,
     actorId: args.actorId,
@@ -269,6 +365,178 @@ export async function hookDepositApplied(
       currency: args.currency,
       customerId: args.customerId.toString(),
       saleId: args.saleId?.toString(),
+      allocationVehicleId: args.allocationVehicleId?.toString(),
+    },
+  });
+}
+
+/**
+ * Backs out ONE recorded application, using the identity it was posted under.
+ *
+ * Deliberately takes no depositId: reversing "the deposit" is what let a
+ * cancellation on one car unwind another car's live credit.
+ */
+export async function reverseDepositApplication(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    identity: DepositApplicationIdentity;
+    reason: string;
+    actorId: Id<"users">;
+    reversalDate: number;
+  }
+): Promise<ReversalOutcome> {
+  return await reverseEventIfPosted(ctx, {
+    orgId: args.orgId,
+    sourceType: args.identity.sourceType,
+    sourceId: args.identity.sourceId,
+    eventType: args.identity.eventType,
+    eventVersion: args.identity.eventVersion,
+    reason: args.reason,
+    actorId: args.actorId,
+    reversalDate: args.reversalDate,
+    reversalIdempotencyKey: `reversed_${args.identity.idempotencyKey}`,
+    pendingPostIdempotencyKey: args.identity.idempotencyKey,
+  });
+}
+
+/**
+ * The deposit is retained by the dealership against the margin the supplier
+ * owes it — only ever reachable on the DIRECT_TO_SUPPLIER route. See
+ * ruleDepositAppliedToSettlement for why this credits the supplier receivable
+ * rather than recognizing commission revenue a second time.
+ */
+export async function hookDepositAppliedToSettlement(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    depositId: Id<"deposits">;
+    customerId: Id<"customers">;
+    amountMinor: number;
+    currency: string;
+    supplierName?: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+    saleId?: Id<"sales">;
+    /** See hookDepositApplied — one row, one identity per application. */
+    identity?: DepositApplicationIdentity;
+  }
+) {
+  // Every existing org's chart predates agent accounting, and this rule needs
+  // RECEIVABLE_FROM_SUPPLIERS. Deposits are resolved BEFORE hookSaleCompleted
+  // runs, so its self-heal comes too late: the first settlement-treated
+  // consigned sale in any live org would roll the whole completion back with
+  // "System account RECEIVABLE_FROM_SUPPLIERS is not mapped". No fixture can
+  // catch it — they all call chartOfAccounts.initialize, which seeds it.
+  if (await isChartInitialized(ctx, args.orgId)) {
+    await ensureConsignmentAccounts(ctx, args.orgId, args.actorId);
+  }
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "DEPOSIT_APPLIED_TO_SETTLEMENT",
+    sourceType: args.identity?.sourceType ?? "deposits",
+    sourceId: args.identity?.sourceId ?? args.depositId.toString(),
+    // Distinct from `deposit_applied_*`: a deposit resolves exactly once, but
+    // the two treatments credit different accounts, so sharing a key would let
+    // whichever posted first silently suppress the other.
+    idempotencyKey:
+      args.identity?.idempotencyKey ?? `deposit_applied_settlement_${args.depositId}`,
+    eventVersion: args.identity?.eventVersion ?? 1,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      depositId: args.depositId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      customerId: args.customerId.toString(),
+      supplierName: args.supplierName,
+      saleId: args.saleId?.toString(),
+    },
+  });
+}
+
+/**
+ * Restates one historical consigned sale from principal to agent basis. The
+ * idempotency key is the sale, so a re-run of the migration posts nothing:
+ * postOrEnqueue drops an event whose key is already POSTED or already queued.
+ */
+export async function hookConsignedSaleReclassified(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    saleId: Id<"sales">;
+    vehicleId: Id<"vehicles">;
+    customerId: Id<"customers">;
+    currency: string;
+    revenueMinor: number;
+    commissionMinor: number;
+    cogsMinor: number;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "CONSIGNED_SALE_RECLASSIFIED",
+    sourceType: "sales",
+    sourceId: args.saleId.toString(),
+    idempotencyKey: `consigned_agent_reclass_${args.saleId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      saleId: args.saleId.toString(),
+      vehicleId: args.vehicleId.toString(),
+      customerId: args.customerId.toString(),
+      currency: args.currency,
+      revenueMinor: args.revenueMinor,
+      commissionMinor: args.commissionMinor,
+      cogsMinor: args.cogsMinor,
+    },
+  });
+}
+
+/**
+ * A receipt against a supplier receivable. Keyed on the receivable AND a
+ * sequence, because a claim can legitimately be collected in several
+ * instalments — keying on the receivable alone would silently drop every
+ * payment after the first.
+ */
+export async function hookSupplierReceivableCollected(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    receivableId: Id<"vehicleSupplierReceivables">;
+    vehicleId: Id<"vehicles">;
+    sourcedFromName: string;
+    amountMinor: number;
+    currency: string;
+    paymentMethod?: string;
+    receiptSeq: number;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "SUPPLIER_RECEIVABLE_COLLECTED",
+    sourceType: "vehicleSupplierReceivables",
+    sourceId: args.receivableId.toString(),
+    idempotencyKey: `supplier_receivable_collected_${args.receivableId}_${args.receiptSeq}`,
+    // The source identity has to differ too, not just the key — see the note on
+    // postDomainEvent's eventVersion.
+    eventVersion: args.receiptSeq,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      receivableId: args.receivableId.toString(),
+      sourcedFromName: args.sourcedFromName,
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+      vehicleId: args.vehicleId.toString(),
     },
   });
 }
@@ -283,6 +551,25 @@ type DepositResolutionHookArgs = {
   occurredAt: number;
   /** Only meaningful for DEPOSIT_REFUNDED — forfeiture never moves cash. */
   paymentMethod?: string;
+  /**
+   * Scopes the entry to ONE vehicle's slice of a shared quote deposit.
+   *
+   * Refunding part of a multi-vehicle deposit is a different movement from
+   * resolving the whole row, and the two must not share an identity: keyed on
+   * the deposit alone, the first partial refund would make every later one —
+   * and the eventual release of the remainder — return "already posted" and
+   * move no money at all.
+   */
+  sliceHoldId?: Id<"depositVehicleHolds">;
+  /**
+   * Which release of this row it is. Defaults to 1.
+   *
+   * A quote-scoped deposit can be released more than once — the free part now,
+   * the rest when the cars it was held against fall away. Keyed on the row
+   * alone, every release after the first returned "already posted" and moved
+   * cash with no journal behind it.
+   */
+  releaseSeq?: number;
 };
 
 /** Refund and forfeiture post identical event shapes — only the event type (and thus the posting rule) differs. */
@@ -291,9 +578,16 @@ function makeDepositResolutionHook(eventType: "DEPOSIT_REFUNDED" | "DEPOSIT_FORF
     postDomainEvent(ctx, {
       orgId: args.orgId,
       eventType,
-      sourceType: "deposits",
-      sourceId: args.depositId.toString(),
-      idempotencyKey: `${keyPrefix}_${args.depositId}`,
+      sourceType: args.sliceHoldId ? "depositVehicleHolds" : "deposits",
+      sourceId: (args.sliceHoldId ?? args.depositId).toString(),
+      // The first release of a row keeps the original key, so nothing already
+      // posted in production changes identity.
+      idempotencyKey: args.sliceHoldId
+        ? `${keyPrefix}_slice_${args.sliceHoldId}`
+        : `${keyPrefix}_${args.depositId}${
+            args.releaseSeq && args.releaseSeq > 1 ? `_${args.releaseSeq}` : ""
+          }`,
+      eventVersion: args.sliceHoldId ? 1 : (args.releaseSeq ?? 1),
       currency: args.currency,
       occurredAt: args.occurredAt,
       actorId: args.actorId,
@@ -303,6 +597,7 @@ function makeDepositResolutionHook(eventType: "DEPOSIT_REFUNDED" | "DEPOSIT_FORF
         currency: args.currency,
         customerId: args.customerId.toString(),
         paymentMethod: args.paymentMethod,
+        holdId: args.sliceHoldId?.toString(),
       },
     });
 }
@@ -326,6 +621,12 @@ export async function hookSaleCompleted(
     occurredAt: number;
     /** Pass true for drop-shipped vehicles — credits AP-Suppliers instead of Vehicle Inventory for COGS. */
     isSourced?: boolean;
+    /** Present when the vehicle is the supplier's and this sale is on agent basis — see SaleCompletedPayload. */
+    consignment?: {
+      supplierEntitlementMinor: number;
+      supplierName?: string;
+      settlementRoute: "DIRECT_TO_SUPPLIER" | "THROUGH_DEALERSHIP";
+    };
     /** Documentation/admin fees on top of the vehicle price — added to the AR debit, credited to Dealer Fee Income. */
     dealerFeesMinor?: number;
     /** Warranty/GAP premium collected and the portion owed to the third-party underwriter — see SaleCompletedPayload. */
@@ -342,6 +643,11 @@ export async function hookSaleCompleted(
     if (await isChartInitialized(ctx, args.orgId)) {
       await ensureSaleFiAccounts(ctx, args.orgId, args.actorId);
     }
+  }
+  // Every existing org's chart predates agent accounting, so the first sourced
+  // sale after deploy would otherwise fail to resolve these three keys.
+  if (args.consignment && (await isChartInitialized(ctx, args.orgId))) {
+    await ensureConsignmentAccounts(ctx, args.orgId, args.actorId);
   }
   await postDomainEvent(ctx, {
     orgId: args.orgId,
@@ -362,6 +668,12 @@ export async function hookSaleCompleted(
       salespersonId: args.salespersonId.toString(),
       taxMinor: args.taxMinor,
       isSourced: args.isSourced ?? false,
+      // Stamped unconditionally. It says "this payload was built by code that
+      // considers consignment", which is what lets ruleSaleCompleted refuse a
+      // sourced sale with no consignment block without also refusing the ones
+      // queued before agent basis existed. See SaleCompletedPayload.
+      consignmentEvaluated: true,
+      ...(args.consignment ? { consignment: args.consignment } : {}),
       dealerFeesMinor: args.dealerFeesMinor,
       warrantySoldMinor: args.warrantySoldMinor,
       warrantyCostMinor: args.warrantyCostMinor,
@@ -391,6 +703,8 @@ export async function hookSupplierPaymentSettled(
   args: {
     orgId: Id<"organizations">;
     payableId: Id<"vehicleSupplierPayables">;
+    /** Which payment against this payable this is. Defaults to 1. */
+    paymentSeq?: number;
     sourcedFromName: string;
     amountMinor: number;
     taxMinor?: number;
@@ -410,7 +724,11 @@ export async function hookSupplierPaymentSettled(
     eventType: "SUPPLIER_PAYMENT_SETTLED",
     sourceType: "vehicleSupplierPayables",
     sourceId: args.payableId.toString(),
-    idempotencyKey: `supplier_payment_settled_${args.payableId}`,
+    // Sequenced: a payable can be settled in instalments, and each one is its
+    // own movement of money. See the note on postDomainEvent's eventVersion for
+    // why the key alone is not enough.
+    idempotencyKey: `supplier_payment_settled_${args.payableId}_${args.paymentSeq ?? 1}`,
+    eventVersion: args.paymentSeq ?? 1,
     currency: args.currency,
     occurredAt: args.occurredAt,
     actorId: args.actorId,
@@ -1491,6 +1809,22 @@ export const hookDepositApplicationReversed = makeReversalHook<{ depositId: Id<"
   sourceId: (a) => a.depositId.toString(),
   reversalKey: (a) => `deposit_applied_reversed_${a.depositId}`,
   pendingPostKey: (a) => `deposit_applied_${a.depositId}`,
+});
+
+/**
+ * Reverses a DEPOSIT_APPLIED_TO_SETTLEMENT entry. The settlement treatment
+ * credits a different account from the ordinary application, so reversing it
+ * with `hookDepositApplicationReversed` reverses nothing at all: that hook
+ * looks for `DEPOSIT_APPLIED`, finds no such event, and silently no-ops —
+ * leaving the deposit reinstated as HELD while the GL still shows its
+ * liability extinguished against the supplier receivable.
+ */
+export const hookDepositSettlementApplicationReversed = makeReversalHook<{ depositId: Id<"deposits"> }>({
+  eventType: "DEPOSIT_APPLIED_TO_SETTLEMENT",
+  sourceType: "deposits",
+  sourceId: (a) => a.depositId.toString(),
+  reversalKey: (a) => `deposit_applied_settlement_reversed_${a.depositId}`,
+  pendingPostKey: (a) => `deposit_applied_settlement_${a.depositId}`,
 });
 
 /**

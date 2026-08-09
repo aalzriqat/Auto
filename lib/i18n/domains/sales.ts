@@ -116,7 +116,62 @@ export const salesEn = {
   CompletedStatus: "Completed (Delivered)",
   CancelledStatus: "Cancelled (Refunded/Backed out)",
   PricingAndFees: "Pricing & Fees",
+  // Consigned (SOURCED) sale settlement — see ConsignedSettlementSection.
+  // Multi-vehicle reservation-deposit allocation — see DepositAllocationPanel.
+  DepositAllocation: "Deposit allocation",
+  DepositAllocationDesc:
+    "This quote covers more than one vehicle and carries one reservation deposit of {amount}. Record how much of it belongs to each vehicle — the split is the customer's decision and cannot be worked out from the prices.",
+  DepositAllocationBlocking:
+    "No vehicle on this quote can be sold until its share of the deposit is recorded.",
+  DepositAllocationRemaining: "{amount} left to allocate",
+  DepositAllocationOver: "{amount} more than the deposit",
+  DepositAllocationRemainderNote:
+    "Anything left unallocated stays a customer deposit on the quote. It is not applied to any sale until it is allocated or resolved.",
+  DepositAllocationSuggest: "Suggest a split",
+  DepositAllocationSave: "Save allocation",
+  DepositAllocationSaved: "Deposit allocation saved",
+  DepositAllocationApplied: "applied",
+  QuotedAt: "Quoted at",
+  ConsignedSaleSettlement: "Consigned Vehicle — Supplier Settlement",
+  ConsignedSaleSettlementDesc:
+    "This car belongs to {supplier}. The dealership is selling it as his agent and keeps only its margin. Record where the buyer's money went — it decides who owes whom.",
+  SupplierSettlementRoute: "Where the buyer paid",
+  RouteThroughDealership: "Through the dealership",
+  RouteThroughDealershipHint: "The buyer paid the dealership the full price.",
+  RouteDirectToSupplier: "Direct to the supplier",
+  RouteDirectToSupplierHint: "The buyer paid the supplier. The dealership never handled the money.",
+  GrossTransactionValue: "Gross transaction value",
+  SupplierEntitlement: "{supplier} is entitled to",
+  DealerGrossMargin: "Dealership margin",
+  TheDealership: "The dealership",
+  TheSupplier: "the supplier",
+  ConsignedThroughConsequence:
+    "The dealership invoices the customer for the full price and owes {supplier} his share. Settle it from Supplier Payables.",
+  ConsignedDirectConsequence:
+    "The customer is invoiced nothing for the car. {supplier} is holding the dealership's margin until he settles it — collect it from Supplier Receivables.",
+  ConsignedNoSupplierCost:
+    "No supplier amount is recorded for this vehicle, so the dealership's margin cannot be determined and the sale cannot be completed. Record the agreed supplier amount, or convert the vehicle to dealer-owned stock first.",
+  DepositSettlementTitle: "The reservation deposit on this deal",
+  DepositSettlementDesc:
+    "The customer already paid this against the deal. Confirm it forms part of the final settlement and the rest is worked out for you.",
+  DepositSettlementConfirm: "This deposit forms part of the final settlement of this deal",
+  DepositSettlementHeldAmount: "Deposit held on this car",
+  DepositSettlementRequired:
+    "This sale cannot be completed until it is recorded what happens to this deposit.",
+  DepositSettlementCustomerOwes: "The customer would still owe",
+  DepositSettlementSupplierOwes: "{supplier} would still owe the dealership",
+  DepositSettlementNotDecided:
+    "This car's share of the deposit has not been decided yet. Record the split above first.",
+  DepositSettlementUnavailable: "This deposit cannot be treated that way",
+  DepositSettlementConfirmAllLines:
+    "This deposit decision applies to the whole deal, so confirm it on every vehicle on this quote — or on none of them.",
+  RouteDirectUnavailableFinanced:
+    "Not available on financed deals yet — the finance company's side of the settlement cannot record a direct payment to the supplier.",
+  RouteDirectRefusedFinanced:
+    "This deal is financed, and paying the supplier directly is not supported yet. Your choice has been kept — switch the route to “Through the dealership”, or make the deal a cash sale, to record it.",
   Taxes: "Taxes (JOD)",
+  ConsignedTaxUnsupported:
+    "This car is the supplier's, and tax on an agency sale has no agreed treatment yet — so the sale cannot be posted with it. Clear the tax to record the sale, or sell the car as dealership stock.",
   FinancingAndTradeIn: "Financing & Trade-In",
   SelectTradeIn: "Select trade-in (optional)",
   None: "None",
@@ -328,6 +383,39 @@ export const salesEn = {
   AppRejectedSuccess: "Application rejected.",
   DepositPending: "Deposit Pending",
   ApplicationDeposits: "Application Deposits",
+  DepositAlreadyReleased: "Part of this deposit has already been refunded or forfeited.",
+  ConfirmRefundShare:
+    "Refund {amount} of this deposit to the customer? Real money leaves the business and this cannot be undone.",
+  ConfirmForfeitShare:
+    "Forfeit {amount} of this deposit? The dealership keeps it and the customer does not get it back. This cannot be undone.",
+  DepositReversingPending:
+    "This share is being backed out of the ledger. It cannot be decided until that reversal posts, which needs an open accounting period.",
+  DepositDecisionNeedsApproval:
+    "Refunding or forfeiting a share needs approval permission, and cannot be done by whoever took the deposit.",
+  DepositAllocationResolved: "Decided — see the deposit history",
+  DepositReceived: "Deposit received",
+  DepositAllocated: "Allocated",
+  DepositApplied: "Applied to sales",
+  DepositUnallocated: "Unallocated",
+  DepositAwaitingDecision: "Awaiting a decision",
+  DepositReversing: "Reversal in progress",
+  DepositRefunded: "Refunded",
+  DepositForfeited: "Forfeited",
+  DepositPerVehicle: "Per vehicle",
+  DepositNotAllocatedYet: "Not allocated",
+  DepositTakeOffDeal: "Take off the deal",
+  DepositShareReleased: "That vehicle's share is now awaiting a decision.",
+  DepositShareResolved: "Decision recorded.",
+  DepositAwaitingDecisionTitle: "Shares awaiting a decision",
+  DepositAwaitingDecisionDesc:
+    "This money was put against a specific vehicle that has since left the deal. It is not returned to the pool and not handed to the other vehicles until somebody says what happens to it.",
+  DepositTreatmentReturn: "Return it to this quote",
+  DepositTreatmentReallocate: "Move it to another vehicle",
+  DepositTreatmentRefund: "Refund it to the customer",
+  DepositTreatmentForfeit: "Forfeit it",
+  DepositChooseVehicle: "Choose a vehicle",
+  DepositDecisionReason: "Reason (recorded)",
+  DepositRecordDecision: "Record decision",
   DepositRefundedSuccess: "Deposit refunded.",
   DepositForfeitedSuccess: "Deposit forfeited.",
   ConfirmDepositResolution: "Resolve this deposit?",
@@ -613,7 +701,61 @@ export const salesAr = {
   CompletedStatus: "مكتمل (تم التسليم)",
   CancelledStatus: "ملغى (مسترجع / تراجع)",
   PricingAndFees: "التسعير والرسوم",
+  // تسوية المركبة بالأمانة (SOURCED) — انظر ConsignedSettlementSection.
+  // توزيع العربون على مركبات العرض — انظر DepositAllocationPanel.
+  DepositAllocation: "توزيع العربون",
+  DepositAllocationDesc:
+    "يشمل هذا العرض أكثر من مركبة ويحمل عربونًا واحدًا بقيمة {amount}. سجّل حصة كل مركبة منه — فالتوزيع قرار العميل ولا يمكن استنتاجه من الأسعار.",
+  DepositAllocationBlocking:
+    "لا يمكن بيع أي مركبة في هذا العرض قبل تسجيل حصتها من العربون.",
+  DepositAllocationRemaining: "متبقٍ للتوزيع {amount}",
+  DepositAllocationOver: "{amount} زيادة عن العربون",
+  DepositAllocationRemainderNote:
+    "ما يبقى دون توزيع يظل عربونًا للعميل على العرض، ولا يُطبَّق على أي عملية بيع حتى يُوزَّع أو تُحسم معالجته.",
+  DepositAllocationSuggest: "اقترح توزيعًا",
+  DepositAllocationSave: "حفظ التوزيع",
+  DepositAllocationSaved: "تم حفظ توزيع العربون",
+  DepositAllocationApplied: "مُطبَّق",
+  QuotedAt: "السعر في العرض",
+  ConsignedSaleSettlement: "مركبة بالأمانة — تسوية المورّد",
+  ConsignedSaleSettlementDesc:
+    "هذه المركبة ملك {supplier}. المعرض يبيعها بالوكالة عنه ولا يحتفظ إلا بهامشه. سجّل أين ذهبت نقود المشتري — فهي التي تحدد من يدين لمن.",
+  SupplierSettlementRoute: "أين دفع المشتري",
+  RouteThroughDealership: "عن طريق المعرض",
+  RouteThroughDealershipHint: "دفع المشتري كامل المبلغ للمعرض.",
+  RouteDirectToSupplier: "مباشرة إلى المورّد",
+  RouteDirectToSupplierHint: "دفع المشتري للمورّد، ولم يستلم المعرض المبلغ إطلاقًا.",
+  GrossTransactionValue: "إجمالي قيمة الصفقة",
+  SupplierEntitlement: "مستحق {supplier}",
+  DealerGrossMargin: "هامش المعرض",
+  TheDealership: "المعرض",
+  TheSupplier: "المورّد",
+  ConsignedThroughConsequence:
+    "يصدر المعرض فاتورة بكامل المبلغ على العميل، ويبقى مدينًا لـ{supplier} بحصته. سدّدها من ذمم الموردين الدائنة.",
+  ConsignedDirectConsequence:
+    "لا يُفوتر العميل بثمن المركبة. يحتفظ {supplier} بهامش المعرض حتى يسدّده — حصّله من ذمم الموردين المدينة.",
+  DepositSettlementTitle: "العربون في هذه الصفقة",
+  DepositSettlementDesc:
+    "دفع العميل هذا المبلغ مقدمًا على الصفقة. أكّد أنه جزء من التسوية النهائية، وسيُحتسب الباقي تلقائيًا.",
+  DepositSettlementConfirm: "هذا العربون جزء من التسوية النهائية لهذه الصفقة",
+  DepositSettlementHeldAmount: "العربون المحجوز على هذه المركبة",
+  DepositSettlementRequired: "لا يمكن إتمام هذا البيع قبل تسجيل ما سيحدث لهذا العربون.",
+  DepositSettlementCustomerOwes: "يبقى على العميل",
+  DepositSettlementSupplierOwes: "يبقى على {supplier} للمعرض",
+  DepositSettlementNotDecided:
+    "لم تُحدَّد بعد حصة هذه المركبة من العربون. سجّل التوزيع أعلاه أولًا.",
+  DepositSettlementUnavailable: "لا يمكن معالجة هذا العربون بهذه الطريقة",
+  DepositSettlementConfirmAllLines:
+    "قرار العربون يسري على الصفقة كاملة، لذا أكّده على كل مركبة في هذا العرض — أو لا تؤكّده على أي منها.",
+  ConsignedNoSupplierCost:
+    "لا يوجد مبلغ مورّد مسجّل لهذه المركبة، لذا لا يمكن تحديد هامش المعرض ولا إتمام البيع. سجّل المبلغ المتفق عليه مع المورّد، أو حوّل المركبة إلى ملكية المعرض أولًا.",
+  RouteDirectUnavailableFinanced:
+    "غير متاح بعد في البيع بالتمويل — لا يمكن تسجيل الدفع المباشر للمورّد في تسوية شركة التمويل.",
+  RouteDirectRefusedFinanced:
+    "هذه الصفقة بالتمويل، والدفع المباشر للمورّد غير مدعوم بعد. تم الإبقاء على اختيارك — غيّر مسار التسوية إلى «عن طريق المعرض»، أو اجعل الصفقة بيعًا نقديًا، لتتمكن من تسجيلها.",
   Taxes: "الضرائب (دينار اردني)",
+  ConsignedTaxUnsupported:
+    "هذه المركبة ملك المورّد، ولا توجد بعد معالجة متفق عليها لضريبة البيع بالوكالة، لذا لا يمكن ترحيل البيع بوجودها. امسح الضريبة لتسجيل البيع، أو بِع المركبة كمخزون للمعرض.",
   FinancingAndTradeIn: "التمويل والاستبدال",
   SelectTradeIn: "اختر مركبة الاستبدال (اختياري)",
   None: "لا يوجد",
@@ -829,6 +971,39 @@ export const salesAr = {
   AppRejectedSuccess: "تم رفض الطلب.",
   DepositPending: "دفعة مقدمة معلقة",
   ApplicationDeposits: "دفعات الطلب المقدمة",
+  DepositAlreadyReleased: "تم استرداد أو مصادرة جزء من هذه الدفعة المقدمة مسبقًا.",
+  ConfirmRefundShare:
+    "هل تريد إعادة {amount} من هذا العربون إلى العميل؟ ستخرج أموال فعلية ولا يمكن التراجع عن ذلك.",
+  ConfirmForfeitShare:
+    "هل تريد مصادرة {amount} من هذا العربون؟ يحتفظ المعرض بالمبلغ ولا يستعيده العميل. لا يمكن التراجع عن ذلك.",
+  DepositReversingPending:
+    "يجري عكس قيد هذه الحصة. لا يمكن اتخاذ قرار بشأنها حتى يُرحَّل العكس، وهو ما يتطلب فترة محاسبية مفتوحة.",
+  DepositDecisionNeedsApproval:
+    "يتطلب استرداد الحصة أو مصادرتها صلاحية اعتماد، ولا يمكن أن ينفذه من استلم العربون.",
+  DepositAllocationResolved: "تم اتخاذ قرار بشأنها — راجع سجل العربون",
+  DepositReceived: "العربون المستلم",
+  DepositAllocated: "الموزّع",
+  DepositApplied: "المطبَّق على المبيعات",
+  DepositUnallocated: "غير موزّع",
+  DepositAwaitingDecision: "بانتظار قرار",
+  DepositReversing: "جارٍ عكس القيد",
+  DepositRefunded: "المسترد",
+  DepositForfeited: "المصادَر",
+  DepositPerVehicle: "حسب المركبة",
+  DepositNotAllocatedYet: "غير موزّع",
+  DepositTakeOffDeal: "إخراجها من الصفقة",
+  DepositShareReleased: "حصة هذه المركبة بانتظار قرار الآن.",
+  DepositShareResolved: "تم تسجيل القرار.",
+  DepositAwaitingDecisionTitle: "حصص بانتظار قرار",
+  DepositAwaitingDecisionDesc:
+    "هذا المبلغ وُضع مقابل مركبة محددة خرجت من الصفقة. لا يعود إلى الرصيد ولا يُمنح للمركبات الأخرى حتى يُحدَّد مصيره صراحةً.",
+  DepositTreatmentReturn: "إعادته إلى هذا العرض",
+  DepositTreatmentReallocate: "نقله إلى مركبة أخرى",
+  DepositTreatmentRefund: "إعادته إلى العميل",
+  DepositTreatmentForfeit: "مصادرته",
+  DepositChooseVehicle: "اختر مركبة",
+  DepositDecisionReason: "السبب (يُسجَّل)",
+  DepositRecordDecision: "تسجيل القرار",
   DepositRefundedSuccess: "تم استرداد الدفعة المقدمة.",
   DepositForfeitedSuccess: "تم مصادرة الدفعة المقدمة.",
   ConfirmDepositResolution: "هل تريد تسوية هذه الدفعة؟",

@@ -694,7 +694,11 @@ export function HomeOverviewCard({
           softToken="homeKpiProfitSoft"
         />
       </View>
-      {stats.truncated?.sales ? (
+      {/* Turnover counts as partial for the same reason `sales` does: the
+          figure above is short. A sale whose basis could not be established is
+          excluded from turnover deliberately — fail-closed — but excluding it
+          silently just swaps an overstated number for an understated one. */}
+      {stats.truncated?.sales || stats.truncated?.turnover ? (
         <Text style={[styles.panelNote, type.caption]}>{t("todayForRolePartialTotal")}</Text>
       ) : null}
     </Card>

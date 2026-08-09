@@ -14,6 +14,8 @@ export const dashboardEn = {
   SelectTimeRange: "Select time range",
   SalesOverview: "Sales Overview",
   SalesPerformance: "Sales Performance",
+  PartialTotalExplain:
+    "Partial — some sales could not be classified and are left out of this figure.",
   TopPerformer: "Top Performer",
   RevenueTrend: "Revenue Trend",
   ActiveLeads: "Active Leads",
@@ -137,6 +139,8 @@ export const dashboardAr = {
   SelectTimeRange: "اختر النطاق الزمني",
   SalesOverview: "نظرة عامة على المبيعات",
   SalesPerformance: "أداء المبيعات",
+  PartialTotalExplain:
+    "جزئي — تعذّر تصنيف بعض المبيعات ولم تُدرج في هذا الرقم.",
   TopPerformer: "الأفضل أداءً",
   RevenueTrend: "اتجاه الإيرادات",
   ActiveLeads: "العملاء المحتملين النشطين",

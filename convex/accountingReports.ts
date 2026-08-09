@@ -12,6 +12,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "./utils/money";
 import { SYSTEM_KEYS, SystemKey } from "./utils/defaultChart";
+import { liveAppliedMinorForDeposit } from "./utils/depositApplications";
 import { requireFeature } from "./subscriptions";
 import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
@@ -880,23 +881,103 @@ export const supplierPayablesReconciliation = query({
   },
 });
 
+/**
+ * What the dealership still owes on a reservation deposit, row by row.
+ *
+ * A `deposits` row is no longer all-or-nothing. Its money is applied per car on
+ * a multi-vehicle quote and can be released in part, so `status` records only
+ * whichever thing happened last: a row stays HELD until its LAST slice is
+ * consumed, and one that has been part-refunded stays HELD too.
+ *
+ * The GL, meanwhile, debits Customer Deposits per slice, at the moment each one
+ * is applied or paid back. So the two sides only agree if the subledger side is
+ * computed as the outstanding remainder rather than the row's face value.
+ * Reading face value made every multi-car deal mid-life, and permanently any
+ * deal with a zero-share car or a partial refund, report "customer deposits do
+ * not reconcile" — turning the one control that detects a real deposit-liability
+ * error into noise an accountant has to acknowledge at every close.
+ *
+ * Rows that are no longer HELD are included when something is still owed on
+ * them, for the same reason: the status is not the balance.
+ */
+async function outstandingDepositMinor(
+  ctx: QueryCtx,
+  deposit: Doc<"deposits">,
+  currency: string
+): Promise<number> {
+  const face = deposit.amountMinor ?? toMinorUnits(deposit.amount, currency);
+  const appliedToSales = await liveAppliedMinorForDeposit(ctx, deposit._id);
+  const paidOut = deposit.releasedAmountMinor ?? 0;
+
+  const holds = await ctx.db
+    .query("depositVehicleHolds")
+    .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
+    .collect();
+  // OTHER is deliberately NOT here. It records a treatment the system does not
+  // post, so the GL keeps the credit — dropping it from this side would leave
+  // the two apart from the moment it is chosen. Mirrors
+  // recordUnpostedDepositTreatment: the liability stays on the books awaiting a
+  // manual journal.
+  //
+  // Known limit: this is right until that manual journal is posted. Once an
+  // accountant debits Customer Deposits by hand the GL drops and this side does
+  // not, and nothing records that it happened — so the pair goes out of balance
+  // with no way to clear it. No UI sends OTHER today (QuoteDepositManager's
+  // treatments omit it), so the state is reachable only through the API.
+  const slicesFinalized = holds
+    .filter(
+      (hold) =>
+        hold.allocationStatus === "RESOLVED" &&
+        (hold.resolutionTreatment === "REFUND_TO_CUSTOMER" ||
+          hold.resolutionTreatment === "FORFEITED")
+    )
+    .reduce((sum, hold) => sum + (hold.allocatedAmountMinor ?? 0), 0);
+
+  const accountedFor = appliedToSales + paidOut + slicesFinalized;
+
+  // A row resolved before any of this existed carries no per-slice evidence at
+  // all: no application rows, no `releasedAmountMinor`, no hold treatments. Its
+  // status is the only record of what happened, and it says the whole row went.
+  // Without this every historical applied, refunded and forfeited deposit would
+  // reappear as an outstanding liability the moment this deploys.
+  const resolvedWithoutSliceRecord = deposit.status !== "HELD" && accountedFor === 0;
+  if (resolvedWithoutSliceRecord) return 0;
+
+  const outstanding = face - accountedFor;
+  if (outstanding < 0) {
+    // More has been relieved than the row ever held. Nothing reachable does
+    // that today, and if something starts to, this is the control that is
+    // supposed to say so — clamping it to zero would hide exactly the class of
+    // error the reconciliation exists to catch.
+    console.error(
+      `Deposit ${deposit._id} has been relieved by ${accountedFor} against a face value of ${face}.`
+    );
+  }
+  return outstanding;
+}
+
 export async function computeCustomerDepositsReconciliation(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   toDate: number | undefined
 ): Promise<GlVsSubledgerResult> {
   const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
-  const held = await ctx.db
-    .query("deposits")
-    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "HELD"))
-    .collect();
+  // Every row that could still owe something. A HELD row usually does; an
+  // APPLIED, REFUNDED or FORFEITED one can too, when only part of it went.
+  // VOIDED rows never received money in the first place.
+  const candidates = (
+    await ctx.db
+      .query("deposits")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect()
+  ).filter((d) => d.isDeleted !== true && d.status !== "VOIDED");
 
   const subByCurrency = new Map<string, number>();
-  for (const d of held) {
-    if (d.isDeleted) continue;
+  for (const d of candidates) {
     const currency = d.currency ?? orgCurrency;
-    const minor = d.amountMinor ?? toMinorUnits(d.amount, currency);
-    subByCurrency.set(currency, (subByCurrency.get(currency) ?? 0) + minor);
+    const outstanding = await outstandingDepositMinor(ctx, d, currency);
+    if (outstanding === 0) continue;
+    subByCurrency.set(currency, (subByCurrency.get(currency) ?? 0) + outstanding);
   }
 
   const glByCurrency = await computeGlBalanceByCurrency(ctx, orgId, SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY, toDate);

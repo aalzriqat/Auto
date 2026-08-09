@@ -38,7 +38,13 @@ type AuditActionType =
   | "REJECT_PREPAID_CORRECTION"
   | "RESOLVE_SYSTEM_ACCOUNT_ADOPTION"
   | "ACKNOWLEDGE_CLOSE_WARNINGS"
-  | "SET_COMMISSION_AMOUNT";
+  | "SET_COMMISSION_AMOUNT"
+  // Who decided which car on a multi-vehicle quote carries which share of the
+  // reservation deposit, and what happened to a share whose car left the deal.
+  // Not a posting — the money does not move — but it decides where a customer's
+  // deposit lands, so it is not a decision that may go unrecorded.
+  | "ALLOCATE_DEPOSIT"
+  | "RESOLVE_DEPOSIT_ALLOCATION";
 
 // ─── Internal: write audit entry ─────────────────────────────────────────────
 

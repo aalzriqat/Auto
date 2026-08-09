@@ -153,11 +153,11 @@ describe("Phase 2 — posting engine", () => {
     });
 
     expect(result.alreadyPosted).toBe(false);
-    expect(result.journalEntryId).toBeTruthy();
+    expect(result.journalEntryId!).toBeTruthy();
 
     // Verify balance
     const lines = await t.run((ctx) =>
-      ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", result.journalEntryId)).collect()
+      ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", result.journalEntryId!)).collect()
     );
     const debits = lines.reduce((s, l) => s + l.debitMinor, 0);
     const credits = lines.reduce((s, l) => s + l.creditMinor, 0);
@@ -189,7 +189,7 @@ describe("Phase 2 — posting engine", () => {
     });
 
     const lines = await t.run((ctx) =>
-      ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", result.journalEntryId)).collect()
+      ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", result.journalEntryId!)).collect()
     );
 
     expect(lines).toHaveLength(4);
@@ -300,7 +300,7 @@ describe("Phase 2 — posting engine", () => {
 
     const reversalResult = await asUser.mutation(internal.accountingLedger.reverse, {
       orgId,
-      originalEventId: postResult.eventId,
+      originalEventId: postResult.eventId!,
       reversalDate: now,
       reason: "Customer cancelled deposit",
       idempotencyKey: "dep_rev_reversal",
@@ -309,11 +309,11 @@ describe("Phase 2 — posting engine", () => {
     expect(reversalResult.alreadyReversed).toBe(false);
 
     // Original event should be REVERSED
-    const originalEvent = await t.run((ctx) => ctx.db.get(postResult.eventId));
+    const originalEvent = await t.run((ctx) => ctx.db.get(postResult.eventId!));
     expect(originalEvent?.status).toBe("REVERSED");
 
     // Original journal should be REVERSED
-    const originalJournal = await t.run((ctx) => ctx.db.get(postResult.journalEntryId));
+    const originalJournal = await t.run((ctx) => ctx.db.get(postResult.journalEntryId!));
     expect(originalJournal?.status).toBe("REVERSED");
 
     // Reversal journal should be balanced and inverse
@@ -321,7 +321,7 @@ describe("Phase 2 — posting engine", () => {
       ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", reversalResult.reversalJournalEntryId)).collect()
     );
     const originalLines = await t.run((ctx) =>
-      ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", postResult.journalEntryId)).collect()
+      ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", postResult.journalEntryId!)).collect()
     );
 
     // Each reversal line should be the inverse of its original
@@ -349,12 +349,12 @@ describe("Phase 2 — posting engine", () => {
     });
 
     await asUser.mutation(internal.accountingLedger.reverse, {
-      orgId, originalEventId: postResult.eventId, reversalDate: now,
+      orgId, originalEventId: postResult.eventId!, reversalDate: now,
       reason: "Test reversal", idempotencyKey: "dep_rev2_reversal",
     });
 
     const secondReversal = await asUser.mutation(internal.accountingLedger.reverse, {
-      orgId, originalEventId: postResult.eventId, reversalDate: now,
+      orgId, originalEventId: postResult.eventId!, reversalDate: now,
       reason: "Test reversal", idempotencyKey: "dep_rev2_reversal",
     });
 
@@ -375,7 +375,7 @@ describe("Phase 2 — posting engine", () => {
     });
 
     const detail = await asUser.query(api.accountingLedger.getJournalEntry, {
-      orgId, journalEntryId: postResult.journalEntryId,
+      orgId, journalEntryId: postResult.journalEntryId!,
     });
 
     expect(detail).not.toBeNull();

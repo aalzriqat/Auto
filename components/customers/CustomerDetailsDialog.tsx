@@ -29,6 +29,9 @@ import { QuotePrintTemplate } from "@/components/sales/QuotePrintTemplate";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { toast } from "@/components/ui/sonner";
 import { downloadElementAsPdf } from "@/lib/htmlToPdf";
+import { QuoteDepositManager } from "@/components/deposits/QuoteDepositManager";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 
 interface CustomerDetailsDialogProps {
   customerId: Id<"customers"> | null;
@@ -43,6 +46,13 @@ export function CustomerDetailsDialog({
 }: CustomerDetailsDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  // This dialog is reachable with VIEW_CUSTOMERS alone — RECEPTION has that and
+  // not VIEW_SALES. `deposits.quoteAllocation` requires VIEW_SALES and throws,
+  // and convex/react rethrows a query error during render, so mounting it
+  // unconditionally replaced the whole page with the error boundary for that
+  // role. The server guard stays strict; the surface just stops asking.
+  const { hasPermission } = usePermissions();
+  const canViewSales = hasPermission(PERMISSIONS.VIEW_SALES);
   const [activeTab, setActiveTab] = useState("overview");
   const [printingQuoteId, setPrintingQuoteId] = useState<Id<"quotes"> | null>(null);
 
@@ -321,6 +331,18 @@ export function CustomerDetailsDialog({
                             </div>
                           )}
                         </div>
+
+                        {/* The عربون against this quote, for the life of the
+                            deal — not only in the wizard session that took it.
+                            A share released by a cancelled sale or a car
+                            leaving the deal has to be decided somewhere, and
+                            the deposits screen deliberately refuses to pay one
+                            out: it belongs to the car it was put against. */}
+                        {activeOrgId && canViewSales && (
+                          <div className="border-t pt-3">
+                            <QuoteDepositManager orgId={activeOrgId} quoteId={quote._id} />
+                          </div>
+                        )}
 
                         <div className="flex justify-between items-center text-xs text-muted-foreground pt-2">
                           <div className="flex flex-col gap-0.5">

@@ -25,6 +25,10 @@
     "./financing": {
       "types": "./src/financing.ts",
       "default": "./src/financing.ts"
+    },
+    "./financingEconomics": {
+      "types": "./src/financingEconomics.ts",
+      "default": "./src/financingEconomics.ts"
     }
   },
   "scripts": {

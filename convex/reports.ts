@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { query, QueryCtx } from "./_generated/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
+import { grossTransactionValueForTransaction } from "./utils/grossTransactionValue";
 import { PERMISSIONS } from "./utils/permissions";
 import { rateLimiter } from "./rateLimit";
 import {
@@ -17,6 +18,7 @@ import {
   queuedEntryCountsInRange,
   type RecognitionState,
 } from "./utils/prepaidRecognitionEvents";
+import { saleEconomics } from "./utils/vehicleOwnership";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 
@@ -80,6 +82,12 @@ export const getSalesAndProfitReport = query({
     let totalRevenue = 0;
     let totalCost = 0;
     let totalProfit = 0;
+    // Consigned sales are the dealership's SERVICE, not its stock. Their gross
+    // is real and worth showing — it is the size of the deal arranged — but it
+    // is not turnover, so it is reported alongside rather than inside it.
+    let totalGrossTransactionValue = 0;
+    let totalSupplierSettlement = 0;
+    let agentSaleCount = 0;
 
     const vehicleIds = Array.from(new Set(salesInDateRange.map(s => s.vehicleId)));
     const vehicles = await Promise.all(vehicleIds.map(id => ctx.db.get(id)));
@@ -120,11 +128,22 @@ export const getSalesAndProfitReport = query({
 
       const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
       const cost = capitalizedCostByVehicle.get(sale.vehicleId) ?? 0;
-      const profit = sale.salePrice - cost;
+      const economics = saleEconomics({
+        salePrice: sale.salePrice,
+        vehicle: vehicle ?? {},
+        capitalizedCost: cost,
+        supplierSettlementRoute: sale.supplierSettlementRoute,
+      });
 
-      totalRevenue += sale.salePrice;
-      totalCost += cost;
-      totalProfit += profit;
+      totalRevenue += economics.recognizedRevenue;
+      totalCost += economics.recognizedCost;
+      // Unchanged by the agent split, and deliberately so: price less cost is
+      // the same number either way, which is exactly why restating a consigned
+      // sale moves turnover and cost of sales but never profit.
+      totalProfit += economics.dealershipMargin;
+      totalGrossTransactionValue += economics.grossTransactionValue;
+      totalSupplierSettlement += economics.supplierSettlement;
+      if (economics.isAgentSale) agentSaleCount += 1;
 
       return {
         ...sale,
@@ -134,17 +153,30 @@ export const getSalesAndProfitReport = query({
         vehicleVin: vehicle?.vin,
         vehicleCost: cost,
         vehicleExpenses: totalExpenses,
-        totalCost: cost,
-        netProfit: profit,
+        totalCost: economics.recognizedCost,
+        netProfit: economics.dealershipMargin,
+        isAgentSale: economics.isAgentSale,
+        settlementRoute: economics.settlementRoute,
+        grossTransactionValue: economics.grossTransactionValue,
+        supplierSettlement: economics.supplierSettlement,
+        recognizedRevenue: economics.recognizedRevenue,
       };
     });
 
     enrichedSales.sort((a, b) => b.saleDate - a.saleDate);
 
     return {
+      // Turnover. Excludes the gross of every consigned sale — the dealership
+      // never owned those cars and may recognize only its margin on them.
       totalRevenue,
       totalCost,
       totalProfit,
+      // The deal volume the dealership actually handled, agent sales at full
+      // ticket. Equals totalRevenue when nothing consigned was sold.
+      totalGrossTransactionValue,
+      // What of that gross belongs to suppliers and never was the dealership's.
+      totalSupplierSettlement,
+      agentSaleCount,
       sales: enrichedSales,
     };
   },
@@ -674,16 +706,26 @@ export const getSalespersonPerformance = query({
     const result = Object.entries(salesBySalesperson).map(([userId, userSales]) => {
       let totalRevenue = 0;
       let totalProfit = 0;
+      let totalGrossTransactionValue = 0;
 
       const user = userMap.get(userId as Id<"users">);
       const userName = (user && "name" in user ? user.name : null) ?? "Unknown";
 
       for (const sale of userSales) {
         const cost = capitalizedCostByVehicle.get(sale.vehicleId) ?? 0;
-        const profit = sale.salePrice - cost;
+        const economics = saleEconomics({
+          salePrice: sale.salePrice,
+          vehicle: vehicleMap.get(sale.vehicleId) ?? {},
+          capitalizedCost: cost,
+          supplierSettlementRoute: sale.supplierSettlementRoute,
+        });
 
-        totalRevenue += sale.salePrice;
-        totalProfit += profit;
+        // Same exclusion as getSalesAndProfitReport: a rep who sold a consigned
+        // car did not turn over its sticker price. Ranking on that would rank
+        // them above someone who sold twice the margin on owned stock.
+        totalRevenue += economics.recognizedRevenue;
+        totalProfit += economics.dealershipMargin;
+        totalGrossTransactionValue += economics.grossTransactionValue;
       }
 
       return {
@@ -692,6 +734,7 @@ export const getSalespersonPerformance = query({
         vehiclesSold: userSales.length,
         totalRevenue,
         totalProfit,
+        totalGrossTransactionValue,
       };
     });
 
@@ -800,6 +843,10 @@ export const getProfitAndLoss = query({
     let totalRevenue = 0;
     let costOfGoodsSold = 0;
     let operatingExpenses = 0;
+    // Reported beside turnover rather than folded into it: the dealership did
+    // handle these deals at full ticket, and that is worth knowing — it is just
+    // not its revenue.
+    let grossTransactionValue = 0;
 
     // Revenue: only explicit sale and deposit receipts.
     // COLLECTION_PAYMENT is an installment against an existing receivable — the
@@ -808,10 +855,117 @@ export const getProfitAndLoss = query({
     // Generic type="IN" rows (e.g. CLAIM_PAYMENT, REFUND-in) are also excluded.
     const REVENUE_CATEGORIES = new Set(["VEHICLE_SALE", "DEPOSIT"]);
 
+    // Legacy عربون receipts that a completed sale has since taken over.
+    //
+    // A deposit taken BEFORE recognition was separated from cash movement was
+    // booked as revenue on arrival and carries no `excludedFromRevenue` flag.
+    // Once its sale completes under the new rule, that sale recognizes the FULL
+    // amount it earned — so leaving the old receipt in revenue would count the
+    // same money twice, and deducting it from the sale instead would leave BOTH
+    // periods wrong (revenue in the deposit's month for a car nobody had sold,
+    // and a short month for the sale). It is dropped here, at read time,
+    // without rewriting a historical row.
+    //
+    // The relationship must be AUTHORITATIVE: an application row tying this
+    // deposit to a real sale. Never a matching vehicle, customer, amount or
+    // nearby date — a receipt that merely looks like it belongs to a sale is
+    // exactly what the follow-up correction PR exists to adjudicate.
+    //
+    // One query for the whole report rather than a lookup per transaction.
+    const legacyDepositsTakenOverBySale = new Set<string>();
+    {
+      // Bounded like every other scan in this file. Past the cap a legacy
+      // receipt simply keeps its old treatment, which is the same answer the
+      // report gives today — short of the correction, never short of revenue.
+      //
+      // Held BELOW the platform's per-execution document limit, deliberately.
+      // At 50,000 that graceful degradation was unreachable: the function
+      // would exceed the limit and throw first, so the report returned nothing
+      // at all instead of the slightly-stale answer described above — and this
+      // scan runs on top of the transactions read below, not instead of it.
+      // A cap that only takes effect after the runtime has already given up is
+      // not a cap.
+      const REPORT_SCAN_CAP = 8_000;
+      const applications = await ctx.db
+        .query("depositApplications")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .take(REPORT_SCAN_CAP);
+      for (const app of applications) {
+        // EVERY status, reversals included.
+        //
+        // Skipping REVERSED resurrected the original receipt as revenue when a
+        // sale was later cancelled: January booked 300, February recognised the
+        // full sale, and cancelling in March put January's 300 back. Cancelling
+        // a sale returns the money to the deposit liability — it does not make
+        // a receipt from two months earlier into earned revenue, and a
+        // cancellation is not a recognition event.
+        //
+        // Once a legacy receipt has entered an authoritative application
+        // lifecycle it stays out of revenue permanently. What happens next is
+        // decided by the disposition, on the disposition's own date: still held
+        // is a liability, a refund is not revenue, and a re-application means
+        // that sale recognises its own full revenue.
+        //
+        // Forfeiture is the known gap, and is stated here rather than implied.
+        // Forfeited income belongs to the forfeiture event and never to the
+        // original receipt's date — but THIS report does not surface it. The
+        // GL does: `postingRules` credits DEPOSIT_FORFEITURE_INCOME on the
+        // forfeiture date. The forfeiture path in `utils/depositHelpers` writes
+        // no `transactions` row, so a forfeited deposit is revenue in the GL
+        // and absent from this ledger-derived P&L. Before this change it was
+        // revenue on the receipt's date — mis-dated, but present in the annual
+        // total; now the annual total is short by it. Deliberately not fixed
+        // here: inventing a posting inside a read-time compatibility path is
+        // how the original defect happened. Tracked as reporting follow-up.
+        legacyDepositsTakenOverBySale.add(app.depositId);
+      }
+    }
+
     for (const tx of txInDateRange) {
       if (tx.isDeleted) continue;
+      if (
+        tx.category === "DEPOSIT" &&
+        tx.excludedFromRevenue !== true &&
+        tx.depositId !== undefined &&
+        legacyDepositsTakenOverBySale.has(tx.depositId)
+      ) {
+        continue;
+      }
+      // Cash received against a liability is not revenue, and a عربون is
+      // exactly that. Counting it on arrival, then writing the sale net of it
+      // to compensate, only balances when both land in one period: a deposit
+      // on 31 January against a sale on 1 February reported revenue in January
+      // for a car nobody had sold, and understated February by the same amount.
+      // The lifetime total came out right, which is why it survived this long.
+      //
+      // Scoped to rows that carry the flag, which is only rows written since
+      // recognition was separated from cash movement. Excluding every DEPOSIT
+      // row would understate the back-book instead, because those sales are
+      // still recorded net of what was collected — so history keeps the
+      // arithmetic it was written under and reads exactly as it does today.
+      // `depositRevenueImpact` measures what correcting it would move.
+      if (tx.excludedFromRevenue === true) continue;
       if (tx.type === "IN" && REVENUE_CATEGORIES.has(tx.category ?? "")) {
-        totalRevenue += tx.amount;
+        // `recognizedRevenueAmount` where the row carries one — a consigned
+        // sale, whose gross belongs to the supplier.
+        //
+        // Where it is absent, `amount` IS the revenue for every owned sale and
+        // every deposit, which is the overwhelming majority of rows. It is NOT
+        // a safe answer for a consigned sale predating this deploy: those were
+        // posted at gross and read as gross here. `migrateConsignedSaleBasis`
+        // writes the field onto them, and `sourcedSaleImpactReport` lists the
+        // ones it could not — so the remaining overstatement is bounded and
+        // enumerable rather than silent. Do not read this fallback as exact.
+        totalRevenue += tx.recognizedRevenueAmount ?? tx.amount;
+        // Vehicle sales only, at the full ticket. One definition, shared with
+        // getSalesAndProfitReport and the dashboard — see
+        // utils/grossTransactionValue for why all three have to agree, and for
+        // the two ways this used to disagree: DEPOSIT rows were counted as
+        // deals, and `amount` is net of anything already collected, so taking a
+        // deposit both inflated the figure once and deflated it again.
+        if (tx.category === "VEHICLE_SALE") {
+          grossTransactionValue += grossTransactionValueForTransaction(tx);
+        }
       } else if (tx.type === "OUT") {
         if (tx.category === "VEHICLE_PURCHASE" || (tx.category === "EXPENSE" && tx.vehicleId)) {
           costOfGoodsSold += tx.amount;
@@ -825,11 +979,15 @@ export const getProfitAndLoss = query({
     const netProfit = grossProfit - operatingExpenses;
 
     return {
+      // Accounting turnover. Excludes the gross of every consigned sale, and so
+      // agrees with getSalesAndProfitReport on the same period.
       totalRevenue,
       costOfGoodsSold,
       grossProfit,
       operatingExpenses,
       netProfit,
+      // Operational KPI, explicitly labelled and deliberately outside turnover.
+      grossTransactionValue,
       transactions: txInDateRange.sort((a, b) => b.date - a.date),
     };
   },

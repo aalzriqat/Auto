@@ -17,6 +17,7 @@ import {
 import { assertVehicleImagesAllowed } from "./utils/storageValidation";
 import { acquisitionPaymentMethodValidator, type AcquisitionPaymentMethod } from "./utils/paymentMethods";
 import { postVehicleAcquisitionIfOwned, hasVehicleAcquisitionAccountingExposure } from "./vehicles";
+import { retroactiveOwnershipChangeRefusal } from "./utils/vehicleOwnership";
 
 type VehicleEditPayload = {
   vin?: string;
@@ -203,6 +204,16 @@ export const requestUpdate = mutation({
     assertDirectVehicleStatusTransition(vehicle.status, payload.status);
     await assertVehicleImagesAllowed(ctx, payload.imageIds);
     assertValidOwnerCount(payload.ownerCount);
+
+    // Refused at request time as well as at approval, so it never becomes a
+    // request a manager can be asked to approve. `resolve` re-checks it too —
+    // the car can be sold in between.
+    const ownershipRefusal = retroactiveOwnershipChangeRefusal({
+      currentSourceType: vehicle.sourceType,
+      requestedSourceType: payload.sourceType,
+      status: vehicle.status,
+    });
+    if (ownershipRefusal) throw new ConvexError(ownershipRefusal);
 
     // Mirrors vehicles.update's acquisition-posting guard: a SOURCED→STOCK
     // flip (or a purchase price set for the first time) requested here must
@@ -406,6 +417,18 @@ export const resolve = mutation({
           resolveAcquisitionSourceType !== "SOURCED" &&
           resolveAcquisitionPurchasePrice != null && resolveAcquisitionPurchasePrice > 0 &&
           !resolveAcquisitionAlreadyExposed;
+
+        // The same refusal `vehicles.update` makes. Re-checked HERE rather than
+        // only at request time, because the vehicle can be sold in between the
+        // request and its approval — and because an approval workflow that can
+        // apply a patch the direct mutation refuses is not a workflow, it is a
+        // second door.
+        const resolveOwnershipRefusal = retroactiveOwnershipChangeRefusal({
+          currentSourceType: previousVehicle.sourceType,
+          requestedSourceType: payload.sourceType as "STOCK" | "SOURCED" | undefined,
+          status: previousVehicle.status,
+        });
+        if (resolveOwnershipRefusal) throw new ConvexError(resolveOwnershipRefusal);
 
         const { purchasePaymentMethod: resolvePurchasePaymentMethod, ...vehiclePatchFields } = payload;
 

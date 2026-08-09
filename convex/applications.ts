@@ -6,7 +6,8 @@ import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
-import { releaseHoldForApplicationQuote } from "./utils/depositHelpers";
+import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
+import { depositMethodValidator, type DepositMethod } from "./utils/depositRecording";
 import { completeSale } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
@@ -21,6 +22,12 @@ import {
 } from "./accounting/workflowHooks";
 import { toMinorUnits, assertValidMinorAmount } from "./utils/money";
 import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
+import {
+  buildRuleSnapshot,
+  creditDecisionForStatus,
+  handoverStatusForFacts,
+  type FinanceCompanyRuleSnapshot,
+} from "./utils/financingEconomics";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
@@ -80,6 +87,39 @@ async function getActiveReceivableAllocations(
     .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivableDocumentId))
     .filter((q) => q.eq(q.field("status"), "ACTIVE"))
     .collect();
+}
+
+/**
+ * Refuses to advance a deal whose dealer-side economics are not actually there.
+ *
+ * A reappraisal or a reopened approval clears the approved purchase amount
+ * while `status` stays APPROVED throughout, so status alone cannot be the gate.
+ * Deals with no quotation recorded predate this model entirely and are let
+ * through, so nothing in flight is stranded.
+ *
+ * One copy, two callers: handover and finalization applied the same two checks
+ * in the same order and differed only in the closing verb. Two copies of a
+ * money-path gate drift, and the drift shows up as the stricter one being
+ * quietly bypassed through the other door.
+ */
+function assertDealerEconomicsRecorded(
+  app: Doc<"financeApplications">,
+  action: "handing over the vehicle" | "finalizing"
+): void {
+  if (app.submittedQuotationMinor === undefined) return;
+  if (app.approvedDealerPurchaseAmountMinor === undefined) {
+    throw new ConvexError(
+      `The finance company's approved purchase amount is not recorded on this deal. Record it before ${action}.`
+    );
+  }
+  // An approval whose funding split could not be computed — the company's LTV
+  // basis names an amount nobody recorded — is not something to hand a vehicle
+  // over against, or to sell on. The approval being present is not enough.
+  if (app.financeCompanyFundedPortionMinor === undefined) {
+    throw new ConvexError(
+      `This deal's funding split could not be calculated. Resolve the reconciliation note on it before ${action}.`
+    );
+  }
 }
 
 async function hasHeldQuoteDeposit(ctx: QueryCtx, quoteId: Id<"quotes">): Promise<boolean> {
@@ -316,9 +356,13 @@ export const createFromQuote = mutation({
         throw new ConvexError("Quote vehicle not found in this organization.");
       }
     }
+    // Kept for the rule snapshot below rather than re-fetched: this handler
+    // already validates the company here, and reading it twice per application
+    // buys nothing.
+    let quoteCompany: Doc<"financeCompanies"> | null = null;
     if (quote.companyId) {
-      const company = await ctx.db.get(quote.companyId);
-      if (!company || company.orgId !== args.orgId) {
+      quoteCompany = await ctx.db.get(quote.companyId);
+      if (!quoteCompany || quoteCompany.orgId !== args.orgId) {
         throw new ConvexError("Quote finance company not found in this organization.");
       }
     }
@@ -428,6 +472,23 @@ export const createFromQuote = mutation({
           }
         : undefined;
 
+    // Snapshot the finance company's dealer-purchase rules onto the
+    // application, and point at the immutable version row they came from.
+    // Read live, these would let an edit to the company next month
+    // retroactively change the terms this deal was approved under.
+    let companyRuleSnapshot: FinanceCompanyRuleSnapshot | undefined;
+    let companyRuleVersionId: Id<"financeCompanyRuleVersions"> | undefined;
+    if (quoteCompany) {
+      companyRuleSnapshot = buildRuleSnapshot(quoteCompany);
+      const versionRow = await ctx.db
+        .query("financeCompanyRuleVersions")
+        .withIndex("by_company_version", (q) =>
+          q.eq("companyId", quoteCompany!._id).eq("version", companyRuleSnapshot!.ruleVersion)
+        )
+        .first();
+      if (versionRow) companyRuleVersionId = versionRow._id;
+    }
+
     const appId = await ctx.db.insert("financeApplications", {
       orgId: args.orgId,
       quoteId: quote._id,
@@ -437,6 +498,15 @@ export const createFromQuote = mutation({
       companyId: quote.companyId,
       salespersonId: auth.user._id,
       status: "PENDING_DOCS",
+      // The legacy `status` above stays the field every existing reader uses.
+      // These carry the five dimensions it conflates; a new application has
+      // been submitted for credit and nothing else has happened yet.
+      creditDecision: "SUBMITTED",
+      appraisalStatus: "NOT_REQUESTED",
+      settlementStatus: "NOT_READY",
+      handoverStatus: "BLOCKED",
+      ...(companyRuleSnapshot ? { companyRuleSnapshot } : {}),
+      ...(companyRuleVersionId ? { companyRuleVersionId } : {}),
       notes: args.notes,
       createdAt: now,
       updatedAt: now,
@@ -552,11 +622,22 @@ export const updateStatus = mutation({
     }
 
     const patchedAt = Date.now();
+    const nextFacts = { ...app, status: args.status };
     await ctx.db.patch(args.applicationId, {
       status: args.status,
       updatedAt: patchedAt,
       approvedBy,
       approvedAt,
+      // The dimensions have to move with the status that drives them. Setting
+      // them once at creation and never again left a normally-completed deal
+      // reading creditDecision=SUBMITTED and handoverStatus=BLOCKED forever,
+      // with the backfill skipping it because creditDecision was already set —
+      // a wrong value is harder to find than a missing one.
+      creditDecision: creditDecisionForStatus(args.status),
+      handoverStatus: handoverStatusForFacts(nextFacts),
+      ...(args.status === "REJECTED" && app.gapResolution === "PENDING_NEGOTIATION"
+        ? { gapResolution: "FAILED" as const }
+        : {}),
     });
 
     await ctx.db.insert("applicationStatusLog", {
@@ -712,6 +793,20 @@ export const cancelApplication = mutation({
           cancelledBy: auth.user._id,
           cancelledAt: now,
           cancellationReason: args.reason,
+          creditDecision: "CANCELLED",
+          // This branch has already reversed the sale and voided the
+          // finance-company receivable, so nothing is expected any more. The
+          // handover timestamp is deliberately left alone — the vehicle
+          // physically went to the customer and later came back, and erasing
+          // that is not the same as reversing it — but a cancelled deal that
+          // was never handed over must not keep claiming it is READY to be.
+          settlementStatus: "NOT_READY",
+          handoverStatus: handoverStatusForFacts({ ...app, status: "CANCELLED" }),
+          // A gap nobody will now negotiate. FAILED is the terminal value the
+          // validator already carries for exactly this.
+          ...(app.gapResolution === "PENDING_NEGOTIATION"
+            ? { gapResolution: "FAILED" as const }
+            : {}),
         });
 
         await ctx.db.insert("applicationStatusLog", {
@@ -791,12 +886,14 @@ export const registerVehicleHandover = mutation({
     if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
     if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before registering handover.");
     if (app.vehicleHandoverAt) throw new ConvexError("Vehicle handover has already been registered.");
+    assertDealerEconomicsRecorded(app, "handing over the vehicle");
 
     const now = Date.now();
     await ctx.db.patch(args.applicationId, {
       vehicleHandoverAt: now,
       vehicleHandoverBy: user._id,
       vehicleHandoverNotes: args.notes,
+      handoverStatus: "HANDED_OVER",
       updatedAt: now,
     });
     return now;
@@ -864,6 +961,22 @@ export const finalizeDeal = mutation({
   args: {
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),
+    // Only consulted when the deal's vehicle is consigned AND the buyer paid
+    // the supplier directly — the one case where what the customer owes the
+    // dealership does not imply what its reservation deposit is applied to.
+    depositResolution: v.optional(
+      v.object({
+        treatment: v.union(
+          v.literal("APPLY_TO_DEALER_AMOUNT"),
+          v.literal("APPLY_TO_TRANSACTION_SETTLEMENT"),
+          v.literal("REFUND_TO_CUSTOMER"),
+          v.literal("FORFEITED"),
+          v.literal("OTHER")
+        ),
+        reason: v.optional(v.string()),
+        refundMethod: v.optional(depositMethodValidator),
+      })
+    ),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -888,6 +1001,10 @@ export const finalizeDeal = mutation({
         if (!app.expectedPaymentMethod || !app.expectedPaymentDate) {
           throw new ConvexError("Register how and when the payment is expected before finalizing the deal.");
         }
+        // Same guard as registerVehicleHandover: an approval cleared by a
+        // reappraisal leaves status APPROVED, so this is the only thing
+        // stopping a sale being completed on economics nothing supports.
+        assertDealerEconomicsRecorded(app, "finalizing");
 
         const quote = await ctx.db.get(app.quoteId);
         if (!quote || quote.orgId !== args.orgId) throw new ConvexError("Quote not found");
@@ -937,16 +1054,45 @@ export const finalizeDeal = mutation({
           termMonths: quote.termMonths,
           applicationId: args.applicationId,
           quoteId: app.quoteId,
+          depositResolution: args.depositResolution as
+            | { treatment: DepositTreatment; reason?: string; refundMethod?: DepositMethod }
+            | undefined,
           idempotencyKey: args.idempotencyKey,
           actorId: auth.user._id,
         });
 
         const now = Date.now();
+        // The finance-company receivable below is still opened for
+        // quote.totalFinancedAmount — the customer's principal — while this PR
+        // computes expectedDealerRemittanceMinor from the approved purchase
+        // amount. Reconciling the two is PR 2's job, but shipping the
+        // divergence silently is not acceptable: flag it so the deal enters
+        // the same queue the legacy rows do rather than looking settled.
+
+        // NOTE: no reconciliation flag is raised here, deliberately.
+        //
+        // This module still opens the finance-company receivable from
+        // quote.totalFinancedAmount — the customer's financing principal, which
+        // is not what the company owes the dealership. PR 2 replaces that
+        // posting. Flagging every new financed deal in the meantime would make
+        // "we know this is wrong" a normal operating state, and a queue nobody
+        // can act on is worse than a defect nobody has been told about twice.
+        //
+        // So this PR stays behaviorally dormant on the money path: it adds the
+        // model and the arithmetic, and changes no posting. The migration still
+        // flags LEGACY rows, which is diagnosis of state that already exists
+        // rather than a new deal knowingly created wrong.
+
         await ctx.db.patch(args.applicationId, {
           status: "CLOSED",
           finalizedSaleId: saleId,
           finalizationIdempotencyKey: args.idempotencyKey,
           updatedAt: now,
+          // Credit stays APPROVED — CLOSED is the sale being created, not a
+          // change of decision. What moves is settlement: from here the
+          // finance company owes the dealership money.
+          creditDecision: "APPROVED",
+          settlementStatus: "EXPECTED",
         });
 
         // Post the finance receivable transfer when a finance company is on the deal
@@ -1075,6 +1221,11 @@ export const confirmDisbursement = mutation({
           disbursedAmountMinor: args.disbursedAmountMinor,
           disbursementIdempotencyKey: args.idempotencyKey,
           updatedAt: now,
+          // This mutation still accepts a single full receipt only, so
+          // confirming it settles the deal outright. Partial and repeated
+          // receipts, and the actualDealerReceiptTotalMinor they roll up into,
+          // arrive with the settlement-line work.
+          settlementStatus: "FULLY_SETTLED",
         });
 
         if (chequeToClear) {
