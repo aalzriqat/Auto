@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "convex dev --start \"next dev -H 0.0.0.0\"",
+    "dev:push": "convex dev --once",
+    "deploy:prod": "node scripts/deployProd.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
