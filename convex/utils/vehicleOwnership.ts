@@ -121,7 +121,7 @@ export type SettlementPayer =
         | { kind: "FINANCE_COMPANY"; financeCompanyId: string }
         | { kind: "MANUAL_PROVIDER"; name: string };
     }
-  | { external: true; counterparty: null; unidentifiedReason: "LEASE" | "MANUAL_PROVIDER_UNNAMED" };
+  | { external: true; counterparty: null; unidentifiedReason: "LEASE" | "PAYER_UNNAMED" };
 
 /**
  * `companyId` was the original proxy for "an external financier exists", and it
@@ -155,13 +155,13 @@ export function settlementPayer(facts: SettlementPayerFacts): SettlementPayer {
             external: true,
             counterparty: { kind: "FINANCE_COMPANY", financeCompanyId: facts.financeCompanyId },
           }
-        : { external: true, counterparty: null, unidentifiedReason: "MANUAL_PROVIDER_UNNAMED" };
+        : { external: true, counterparty: null, unidentifiedReason: "PAYER_UNNAMED" };
 
     case "MANUAL_FINANCE_COMPANY": {
       const name = facts.manualProviderName?.trim();
       return name
         ? { external: true, counterparty: { kind: "MANUAL_PROVIDER", name } }
-        : { external: true, counterparty: null, unidentifiedReason: "MANUAL_PROVIDER_UNNAMED" };
+        : { external: true, counterparty: null, unidentifiedReason: "PAYER_UNNAMED" };
     }
 
     case "LEASE":
@@ -194,15 +194,6 @@ export function settlementPayer(facts: SettlementPayerFacts): SettlementPayer {
           }
         : { external: false };
   }
-}
-
-/**
- * Whether this deal can be settled DIRECT_TO_SUPPLIER at all — an outside payer
- * exists AND the advice can name them.
- */
-export function canSettleDirectToSupplier(facts: SettlementPayerFacts): boolean {
-  const payer = settlementPayer(facts);
-  return payer.external && payer.counterparty !== null;
 }
 
 /**

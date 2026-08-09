@@ -387,6 +387,15 @@ export function ApplicationDetailsDialog({
     if (app.disbursedAt) return `${t("DisbursementReceived" as any)} - ${confirmedDisbursementLabel}`;
     return t("AwaitingDisbursement" as any);
   })();
+  // A configured company has a row to name; a manual provider has only the name
+  // snapshotted at submission; a lease has neither, and says so rather than
+  // rendering an empty label beside "Company".
+  const financierLabel =
+    app.company?.name ?? app.manualFinanceSnapshot?.providerName ?? t("UnnamedFinanceProvider" as any);
+  // The dealership-side disbursement compares against the customer's principal,
+  // so it keeps `expectsFinanceCompanyDisbursement`. The supplier-side status is
+  // about a payment that never touches that figure, so it must not.
+  const showDisbursementStatus = settlesDirectToSupplier || expectsFinanceCompanyDisbursement;
   const showDepositResolution =
     (app.status === "REJECTED" || app.status === "CANCELLED") && pendingDeposits.length > 0;
   const showApplicationDeposits =
@@ -499,13 +508,21 @@ export function ApplicationDetailsDialog({
             <div>
               <h4 className="font-semibold text-sm mb-2">{t("FinancingDetails" as any)}</h4>
               <div className="bg-muted/50 p-3 rounded-lg text-sm">
-                {app.company ? (
+                {/* Branched on the server's own answer, not on `app.company`.
+                    That row is null for every MANUAL_FINANCE_COMPANY deal by
+                    construction — `quotes.saveQuote` refuses a `companyId` on
+                    that mode — so an externally financed deal was labelled
+                    "Cash Deal" directly above the control that decides which
+                    balance sheet posts, and its disbursement status was hidden
+                    entirely. Harmless while the route could not be chosen here;
+                    actively misleading now that it can. */}
+                {app.hasExternalFinancier ? (
                   <>
-                    <p><strong>{t("Company" as any)}:</strong> {app.company.name}</p>
+                    <p><strong>{t("Company" as any)}:</strong> {financierLabel}</p>
                     <p><strong>{t("DownPayment" as any)}:</strong> {app.quote?.downPayment?.toLocaleString()} {t("JOD" as any)}</p>
                     <p><strong>{t("TermMonths" as any)}:</strong> {app.quote?.termMonths} {t("Months" as any)}</p>
                     <p><strong>{t("MonthlyInstallment" as any)}:</strong> <span className="font-semibold text-primary">{app.quote?.monthlyInstallment?.toLocaleString(undefined, { minimumFractionDigits: 2 })} {t("JOD" as any)}</span></p>
-                    {expectsFinanceCompanyDisbursement && (
+                    {showDisbursementStatus && (
                       <p>
                         <strong>{t("DisbursementStatus" as any)}:</strong>{" "}
                         {disbursementStatusLabel}
@@ -575,7 +592,7 @@ export function ApplicationDetailsDialog({
                     const reasonKey =
                       app.directRouteRefusal === "LEASE"
                         ? "RouteDirectUnavailableLease"
-                        : app.directRouteRefusal === "MANUAL_PROVIDER_UNNAMED"
+                        : app.directRouteRefusal === "PAYER_UNNAMED"
                           ? "RouteDirectUnavailableUnnamedProvider"
                           : "RouteDirectUnavailableNoExternalFinancier";
                     return (

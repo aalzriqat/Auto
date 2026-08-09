@@ -839,3 +839,47 @@ describe("a legacy deal that has a finance company but no recorded mode", () => 
     expect(result.disbursedAmountMinor).toBe(VEHICLE_PRICE * SCALE);
   });
 });
+
+/**
+ * The screen and the server must not be able to disagree about who pays.
+ *
+ * `applications.get` returns `canSettleDirectToSupplier` so the dialog can
+ * enable or disable the direct option, and `setSupplierSettlementRoute` decides
+ * whether to accept it. Those are two reads of one rule, and a drift between
+ * them produces the failure this PR keeps circling: a control the UI offers and
+ * the server refuses, or one it hides on a deal the server would have accepted.
+ * Nothing pinned them together until this test.
+ */
+describe("the screen's answer and the server's answer are the same answer", () => {
+  const cases = [
+    { name: "a configured finance company", opts: {}, direct: true },
+    {
+      name: "a named manual provider",
+      opts: { mode: "MANUAL_FINANCE_COMPANY" as const, manualProviderName: "Cairo Amman Finance" },
+      direct: true,
+    },
+    { name: "an unnamed manual provider", opts: { mode: "MANUAL_FINANCE_COMPANY" as const }, direct: false },
+    { name: "a lease", opts: { mode: "LEASE" as const }, direct: false },
+    { name: "an internal installment", opts: { mode: "INTERNAL_INSTALLMENT" as const }, direct: false },
+    { name: "a legacy deal with no mode but a finance company", opts: { omitMode: true }, direct: true },
+  ];
+
+  for (const [index, c] of cases.entries()) {
+    test(`${c.name}: get() and setSupplierSettlementRoute agree`, async () => {
+      const s = await seedDealership(`agree${index}`);
+      const { applicationId } = await runDeal(s, { ...c.opts, finalize: false });
+
+      const view = await s.asUser.query(api.applications.get, { orgId: s.orgId, applicationId });
+      expect(view?.canSettleDirectToSupplier).toBe(c.direct);
+
+      const attempt = s.asUser.mutation(api.applications.setSupplierSettlementRoute, {
+        orgId: s.orgId, applicationId, route: "DIRECT_TO_SUPPLIER",
+      });
+      if (c.direct) {
+        await expect(attempt).resolves.toBeDefined();
+      } else {
+        await expect(attempt).rejects.toThrow();
+      }
+    });
+  }
+});

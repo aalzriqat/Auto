@@ -140,6 +140,7 @@ export const salesEn = {
   RouteThroughDealershipHint: "The buyer paid the dealership the full price.",
   RouteDirectToSupplier: "Direct to the supplier",
   RouteDirectToSupplierHint: "The buyer paid the supplier. The dealership never handled the money.",
+  UnnamedFinanceProvider: "Finance provider (not named)",
   RouteDirectUnavailableNoExternalFinancier:
     "No outside financier on this deal, so nobody but the dealership pays the supplier.",
   RouteDirectUnavailableLease:
@@ -739,6 +740,7 @@ export const salesAr = {
   RouteThroughDealershipHint: "دفع المشتري كامل المبلغ للمعرض.",
   RouteDirectToSupplier: "مباشرة إلى المورّد",
   RouteDirectToSupplierHint: "دفع المشتري للمورّد، ولم يستلم المعرض المبلغ إطلاقًا.",
+  UnnamedFinanceProvider: "جهة التمويل (غير مسمّاة)",
   RouteDirectUnavailableNoExternalFinancier:
     "لا توجد جهة تمويل خارجية في هذه الصفقة، فلا أحد غير المعرض يدفع للمورّد.",
   RouteDirectUnavailableLease:

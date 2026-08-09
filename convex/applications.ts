@@ -229,7 +229,7 @@ async function settlementPayerForApplication(
 }
 
 /** The operator-facing reason an external payer cannot take the direct route. */
-function unidentifiedPayerRefusal(reason: "LEASE" | "MANUAL_PROVIDER_UNNAMED"): string {
+function unidentifiedPayerRefusal(reason: "LEASE" | "PAYER_UNNAMED"): string {
   return reason === "LEASE"
     ? "This is a lease, and the leasing provider is not recorded anywhere on the deal — so a payment to the supplier could not be attributed to anyone. Settle through the dealership until the provider is recorded."
     : "The finance provider on this deal is not named, so a payment to the supplier could not be attributed to anyone. Record the provider on the quote, then choose this route.";
@@ -430,11 +430,11 @@ export const get = query({
     // `lib/consignedRouteGuard.ts` — and the copies were free to disagree about
     // what the operator was allowed to choose. One answer, from the side that
     // enforces it.
-    const payer = settlementPayer({
-      quoteMode: app.quoteModeAtSubmission ?? quote?.mode,
-      financeCompanyId: app.companyId,
-      manualProviderName: app.manualFinanceSnapshot?.providerName,
-    });
+    //
+    // Through the same helper the mutations use, not a second assembly of the
+    // same facts: an inline copy here would be a third opinion in the file that
+    // exists to remove the second one.
+    const payer = await settlementPayerForApplication(ctx, app);
 
     return {
       ...app,
