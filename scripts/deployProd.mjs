@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 /**
- * The only supported way to deploy this project to production Convex.
+ * The supported way to deploy this project to production Convex.
+ *
+ * Advisory, not binding: `npx convex deploy` still exists and this cannot stop
+ * anyone reaching for it. Making production unreachable from a workstation is a
+ * separate change (CI-mediated deploy against a protected environment); until
+ * then, saying otherwise here would overstate what this buys.
  *
  * `pnpm deploy:prod`. The dev counterpart is `pnpm dev:push`, named so neither
  * can be mistaken for the other at a glance.
@@ -31,13 +36,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import path from "node:path";
-import {
-  BUNDLED_EXTENSIONS,
-  describeTargetSelection,
-  evaluateProdDeploy,
-  extractDeploymentName,
-  looksLikeProduction,
-} from "./deployGuard.ts";
+import { BUNDLED_EXTENSIONS, runGuardedDeploy } from "./deployGuard.ts";
 
 const argv = process.argv.slice(2);
 const allowBehind = argv.includes("--allow-behind");
@@ -176,92 +175,49 @@ function collectSnapshot() {
   };
 }
 
-function report(checks) {
-  console.log("\nProduction deploy preconditions\n");
-  for (const check of checks) {
-    console.log(`  ${check.ok ? "ok  " : "FAIL"}  ${check.id}: ${check.detail}`);
-  }
-}
+const io = {
+  collectSnapshot,
+  runDryRun: (args) => {
+    const r = spawnSync(process.execPath, [CONVEX_CLI, ...args], {
+      encoding: "utf8",
+      cwd: repoRoot,
+      // Colour off: the production label is matched textually, and a forced
+      // colour level turns "[Production]" into an ANSI-wrapped string that no
+      // longer matches — losing the PRODUCTION warning with no other symptom.
+      env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+    });
+    return {
+      status: r.status,
+      output: `${r.stdout ?? ""}${r.stderr ?? ""}`,
+      errorMessage: r.error?.message,
+    };
+  },
+  runDeploy: (args) =>
+    spawnSync(process.execPath, [CONVEX_CLI, ...args], {
+      stdio: "inherit",
+      cwd: repoRoot,
+    }).status ?? 1,
+  prompt: async (question) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      return await rl.question(question);
+    } finally {
+      rl.close();
+    }
+  },
+  isTTY: Boolean(process.stdin.isTTY),
+  log: (m) => console.log(m),
+  error: (m) => console.error(m),
+};
 
-const snapshot = collectSnapshot();
-const first = evaluateProdDeploy(snapshot, { allowBehind });
-report(first.checks);
-console.log(`\n${describeTargetSelection(snapshot.env)}\n`);
-
-if (!first.ok) {
-  console.error(`Refusing to deploy: ${first.failures.length} precondition(s) failed. Nothing was pushed.\n`);
+try {
+  process.exit(await runGuardedDeploy(io, { allowBehind }));
+} catch (error) {
+  // Graceful rather than a raw stack trace: a git failure is a refusal, not a
+  // broken tool, and the repo's own error rule asks for this.
+  console.error(`
+Refusing to deploy — could not establish repository state:
+  ${error.message}
+`);
   process.exit(1);
 }
-
-// Resolve the target using the deploy's own resolution, captured rather than
-// inherited so the name can be read back and confirmed against.
-//
-// `-y` is passed HERE and only here. Convex asks its production question before
-// it branches on --dry-run, so without this the operator answers the same
-// alarming prompt twice per deploy and the first answer decides nothing — which
-// is how a prompt gets trained into a reflex, the exact dynamic that produced
-// habitual `-y` in the first place. It is safe on a dry run because a dry run
-// pushes nothing (verified), and it is never forwarded to the real deploy: the
-// allowlist refuses it from the operator, and the spawn below omits it.
-console.log("Resolving the target deployment (dry run, nothing is pushed)…\n");
-const dry = spawnSync(process.execPath, [CONVEX_CLI, "deploy", "--dry-run", "-y", ...forwardedArgs], {
-  encoding: "utf8",
-  cwd: repoRoot,
-});
-const dryOutput = `${dry.stdout ?? ""}${dry.stderr ?? ""}`;
-process.stdout.write(dryOutput);
-if (dry.error) console.error(`
-Could not run the dry run: ${dry.error.message}`);
-if (dry.status !== 0) {
-  console.error("\nDry run failed. Not deploying.\n");
-  process.exit(dry.status ?? 1);
-}
-
-const target = extractDeploymentName(dryOutput);
-if (!target) {
-  console.error(
-    "\nCould not read the target deployment out of the dry run. Refusing:\n" +
-      "a confirmation that cannot name the target is not a confirmation.\n"
-  );
-  process.exit(1);
-}
-
-console.log(
-  `\nTarget: ${target}${looksLikeProduction(dryOutput) ? "  [PRODUCTION]" : ""}\n` +
-    "Convex does not reliably prompt for this — it stays silent when CONVEX_DEPLOYMENT\n" +
-    "already names the target, and when a deploy key is set. So confirm here.\n"
-);
-
-// Fail closed with no TTY: an unattended run must never self-confirm.
-if (!process.stdin.isTTY) {
-  console.error("Refusing: no interactive terminal to confirm the target. Nothing was pushed.\n");
-  process.exit(1);
-}
-
-const rl = createInterface({ input: process.stdin, output: process.stdout });
-const typed = (await rl.question(`Type the deployment name to deploy to it: `)).trim();
-rl.close();
-
-if (typed !== target) {
-  console.error(`\nGot "${typed}", expected "${target}". Nothing was pushed.\n`);
-  process.exit(1);
-}
-
-// Re-validate immediately before pushing. The dry run and the human pause can
-// take minutes, and the bundle is read from disk at push time, not at check
-// time — a file created in that window would otherwise ship unexamined.
-const recheck = evaluateProdDeploy(collectSnapshot(), { allowBehind });
-if (!recheck.ok) {
-  console.error("\nThe working tree changed while confirming. Refusing:\n");
-  report(recheck.checks);
-  process.exit(1);
-}
-
-// No `shell`, so arguments are passed as argv rather than concatenated into a
-// cmd.exe string — that both broke `--cmd "pnpm build"` on Windows and let an
-// argument chain a second unguarded command with `&`.
-const deploy = spawnSync(process.execPath, [CONVEX_CLI, "deploy", ...forwardedArgs], {
-  stdio: "inherit",
-  cwd: repoRoot,
-});
-process.exit(deploy.status ?? 1);

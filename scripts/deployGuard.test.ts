@@ -6,6 +6,7 @@ import {
   evaluateProdDeploy,
   extractDeploymentName,
   looksLikeProduction,
+  runGuardedDeploy,
   type RepoSnapshot,
 } from "./deployGuard";
 
@@ -294,5 +295,114 @@ describe("target selection is described, not inferred", () => {
   test("an unset environment is described as refusing, not as defaulting", () => {
     // Verified: with neither set the CLI errors rather than guessing.
     expect(describeTargetSelection({})).toMatch(/refuse/i);
+  });
+});
+
+describe("the enforcement flow", () => {
+  const DRY_OUTPUT = [
+    "▌ [Production] aalzriqat:auto:production (prod)",
+    "▌ └─ https://kindly-hound-172.convex.cloud",
+  ].join("\n");
+
+  /** A flow whose every side effect is observable. */
+  function harness(overrides: Partial<Parameters<typeof runGuardedDeploy>[0]> = {}) {
+    const deployCalls: string[][] = [];
+    const dryCalls: string[][] = [];
+    const io = {
+      collectSnapshot: () => CLEAN,
+      runDryRun: (args: string[]) => {
+        dryCalls.push(args);
+        return { status: 0, output: DRY_OUTPUT };
+      },
+      runDeploy: (args: string[]) => {
+        deployCalls.push(args);
+        return 0;
+      },
+      prompt: async () => "kindly-hound-172",
+      isTTY: true,
+      log: () => {},
+      error: () => {},
+      ...overrides,
+    };
+    return { io, deployCalls, dryCalls };
+  }
+
+  test("the happy path deploys, and the real argv carries no confirmation bypass", async () => {
+    const { io, deployCalls, dryCalls } = harness();
+    expect(await runGuardedDeploy(io)).toBe(0);
+    expect(deployCalls).toHaveLength(1);
+    // The two flags that make the dry run non-interactive must never reach the
+    // real deploy — that is the whole separation.
+    expect(deployCalls[0]).not.toContain("-y");
+    expect(deployCalls[0]).not.toContain("--dry-run");
+    expect(deployCalls[0]).not.toContain("--allow-deleting-large-indexes");
+    // …and the dry run must carry them, or it dead-ends on an index deletion.
+    expect(dryCalls[0]).toEqual(
+      expect.arrayContaining(["--dry-run", "-y", "--allow-deleting-large-indexes"])
+    );
+  });
+
+  test("no TTY refuses without deploying", async () => {
+    const { io, deployCalls } = harness({ isTTY: false });
+    expect(await runGuardedDeploy(io)).toBe(1);
+    expect(deployCalls).toEqual([]);
+  });
+
+  test("an unreadable target refuses without deploying", async () => {
+    const { io, deployCalls } = harness({
+      runDryRun: () => ({ status: 0, output: "no target here" }),
+    });
+    expect(await runGuardedDeploy(io)).toBe(1);
+    expect(deployCalls).toEqual([]);
+  });
+
+  test("a wrong typed name refuses without deploying", async () => {
+    const { io, deployCalls } = harness({ prompt: async () => "vibrant-cat-418" });
+    expect(await runGuardedDeploy(io)).toBe(1);
+    expect(deployCalls).toEqual([]);
+  });
+
+  test("the comparison is exact — a prefix of the target is not enough", async () => {
+    const { io, deployCalls } = harness({ prompt: async () => "kindly-hound" });
+    expect(await runGuardedDeploy(io)).toBe(1);
+    expect(deployCalls).toEqual([]);
+  });
+
+  test("a failed dry run refuses without deploying", async () => {
+    const { io, deployCalls } = harness({
+      runDryRun: () => ({ status: 1, output: "", errorMessage: "spawn EINVAL" }),
+    });
+    expect(await runGuardedDeploy(io)).toBe(1);
+    expect(deployCalls).toEqual([]);
+  });
+
+  test("failing preconditions refuse before the dry run even runs", async () => {
+    const { io, deployCalls, dryCalls } = harness({
+      collectSnapshot: () => ({ ...CLEAN, forwardedArgs: ["-vy"] }),
+    });
+    expect(await runGuardedDeploy(io)).toBe(1);
+    expect(dryCalls).toEqual([]);
+    expect(deployCalls).toEqual([]);
+  });
+
+  test("a tree that changes during confirmation refuses after the human said yes", async () => {
+    // The bundle is read from disk at push time, not at check time, so a file
+    // created during the pause would otherwise ship unexamined.
+    let call = 0;
+    const { io, deployCalls } = harness({
+      collectSnapshot: () => {
+        call += 1;
+        return call === 1
+          ? CLEAN
+          : { ...CLEAN, bundleFilesOnDisk: [...CLEAN.bundleFilesOnDisk, "convex/late.ts"] };
+      },
+    });
+    expect(await runGuardedDeploy(io)).toBe(1);
+    expect(deployCalls).toEqual([]);
+  });
+
+  test("the deploy's exit code is propagated, not swallowed", async () => {
+    const { io } = harness({ runDeploy: () => 17 });
+    expect(await runGuardedDeploy(io)).toBe(17);
   });
 });

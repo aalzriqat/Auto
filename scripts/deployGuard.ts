@@ -86,6 +86,8 @@ export const ALLOWED_DEPLOY_ARGS = new Set([
   "--cmd",
   "--cmd-url-env-var-name",
   "--debug-bundle-path",
+  "-m",
+  "--message",
 ]);
 
 /** Values these flags take, which must pass through without being read as flags. */
@@ -95,6 +97,8 @@ const ARGS_TAKING_VALUES = new Set([
   "--cmd",
   "--cmd-url-env-var-name",
   "--debug-bundle-path",
+  "-m",
+  "--message",
 ]);
 
 /**
@@ -125,7 +129,17 @@ function checkForwardedArgs(snapshot: RepoSnapshot): DeployCheck {
       rejected.push(arg);
       continue;
     }
-    if (ARGS_TAKING_VALUES.has(name) && !arg.includes("=")) i += 1; // skip its value
+    if (ARGS_TAKING_VALUES.has(name) && !arg.includes("=")) {
+      // Skipping the value unconditionally would let `--cmd -y` carry `-y`
+      // through as a "value". Convex binds it as the option's argument rather
+      // than as auto-confirm, so it is not a live bypass — but a rule that
+      // reads as one should not be left to be trusted by inspection.
+      const value = args[i + 1];
+      if (value !== undefined && value.startsWith("-")) {
+        rejected.push(`${arg} ${value}`);
+      }
+      i += 1;
+    }
   }
 
   return {
@@ -245,6 +259,36 @@ export function evaluateProdDeploy(
 }
 
 /**
+ * Arguments for the dry run that resolves the target.
+ *
+ * Two flags are added here and nowhere else, both inert because a dry run is
+ * evaluated by the server and never applied:
+ *
+ *   `-y` — Convex asks its production question *before* it branches on
+ *   `--dry-run`, so without this the operator answers the same alarming prompt
+ *   twice and the first answer decides nothing. That is how a prompt becomes a
+ *   reflex, which is the dynamic that produced habitual `-y`.
+ *
+ *   `--allow-deleting-large-indexes` — the index-deletion confirmation runs on
+ *   the dry run too, and it crashes rather than prompts when stdin is not a TTY
+ *   (which it is not, because the output is captured to read the target back).
+ *   Without this, any schema change dropping an index on a table over 100k rows
+ *   dead-ends `pnpm deploy:prod` entirely and the operator's only way forward is
+ *   the unguarded raw CLI — at the riskiest possible moment.
+ *
+ * Neither reaches `deployArgs`. The real deploy gets an inherited TTY, so
+ * Convex's genuine index-deletion prompt still fires there.
+ */
+export function dryRunArgs(forwarded: string[]): string[] {
+  return ["deploy", "--dry-run", "-y", "--allow-deleting-large-indexes", ...forwarded];
+}
+
+/** Arguments for the real deploy. Deliberately carries no confirmation bypass. */
+export function deployArgs(forwarded: string[]): string[] {
+  return ["deploy", ...forwarded];
+}
+
+/**
  * The deployment `convex deploy` resolved, read back out of its own dry run.
  *
  * Taken from the CLI's announcement rather than inferred from configuration,
@@ -291,4 +335,102 @@ export function describeTargetSelection(env: RepoSnapshot["env"]): string {
     return `CONVEX_DEPLOYMENT=${env.CONVEX_DEPLOYMENT}${from} is a dev deployment. It does NOT redirect a deploy: 'convex deploy' targets the project's PRODUCTION deployment regardless.`;
   }
   return "Neither CONVEX_DEPLOYMENT nor CONVEX_DEPLOY_KEY is set — the CLI will refuse rather than guess.";
+}
+
+/** Everything the flow touches that is not a pure decision. */
+export type DeployIO = {
+  collectSnapshot: () => RepoSnapshot;
+  runDryRun: (args: string[]) => { status: number | null; output: string; errorMessage?: string };
+  runDeploy: (args: string[]) => number;
+  prompt: (question: string) => Promise<string>;
+  isTTY: boolean;
+  log: (message: string) => void;
+  error: (message: string) => void;
+};
+
+/**
+ * The enforcement sequence, with its side effects injected.
+ *
+ * This lives here rather than in the CLI shell because the shell is where the
+ * previous round's real defect was: the pure rules were fine while the
+ * orchestration delegated the confirmation to a prompt that does not always
+ * appear, and printed that it would. Every step below is one line away from
+ * silently deploying — `-y` leaking into the real argv, the null-target
+ * short-circuit going missing, the TTY refusal inverting, the typed comparison
+ * loosening — and none of that was reachable by a test while it lived in a
+ * `.mjs` that exported nothing.
+ *
+ * Returns the process exit code. Never throws for a refusal; refusals are
+ * ordinary non-zero returns so the caller cannot mistake one for a crash.
+ */
+export async function runGuardedDeploy(
+  io: DeployIO,
+  options: DeployOptions = {}
+): Promise<number> {
+  const forwarded = io.collectSnapshot;
+  const snapshot = forwarded();
+  const first = evaluateProdDeploy(snapshot, options);
+
+  io.log("\nProduction deploy preconditions\n");
+  for (const check of first.checks) {
+    io.log(`  ${check.ok ? "ok  " : "FAIL"}  ${check.id}: ${check.detail}`);
+  }
+  io.log(`\n${describeTargetSelection(snapshot.env)}\n`);
+
+  if (!first.ok) {
+    io.error(
+      `Refusing to deploy: ${first.failures.length} precondition(s) failed. Nothing was pushed.\n`
+    );
+    return 1;
+  }
+
+  io.log("Resolving the target deployment (dry run, nothing is applied)…\n");
+  const dry = io.runDryRun(dryRunArgs(snapshot.forwardedArgs));
+  io.log(dry.output);
+  if (dry.errorMessage) io.error(`\nCould not run the dry run: ${dry.errorMessage}`);
+  if (dry.status !== 0) {
+    io.error("\nDry run failed. Not deploying.\n");
+    return dry.status ?? 1;
+  }
+
+  const target = extractDeploymentName(dry.output);
+  if (!target) {
+    io.error(
+      "\nCould not read the target deployment out of the dry run. Refusing:\n" +
+        "a confirmation that cannot name the target is not a confirmation.\n"
+    );
+    return 1;
+  }
+
+  io.log(
+    `\nTarget: ${target}${looksLikeProduction(dry.output) ? "  [PRODUCTION]" : ""}\n` +
+      "Convex does not reliably prompt for this — it stays silent when CONVEX_DEPLOYMENT\n" +
+      "already names the target, and when a deploy key is set. So confirm here.\n"
+  );
+
+  // Fail closed with no terminal: an unattended run must never self-confirm.
+  if (!io.isTTY) {
+    io.error("Refusing: no interactive terminal to confirm the target. Nothing was pushed.\n");
+    return 1;
+  }
+
+  const typed = (await io.prompt("Type the deployment name to deploy to it: ")).trim();
+  if (typed !== target) {
+    io.error(`\nGot "${typed}", expected "${target}". Nothing was pushed.\n`);
+    return 1;
+  }
+
+  // Re-validate immediately before pushing. The dry run and the human pause can
+  // take minutes, and the bundle is read from disk at push time, not at check
+  // time — a file created in that window would otherwise ship unexamined.
+  const recheck = evaluateProdDeploy(forwarded(), options);
+  if (!recheck.ok) {
+    io.error("\nThe working tree changed while confirming. Refusing:\n");
+    for (const check of recheck.checks) {
+      io.error(`  ${check.ok ? "ok  " : "FAIL"}  ${check.id}: ${check.detail}`);
+    }
+    return 1;
+  }
+
+  return io.runDeploy(deployArgs(snapshot.forwardedArgs));
 }
