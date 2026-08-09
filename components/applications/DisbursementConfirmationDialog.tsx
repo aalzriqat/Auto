@@ -73,41 +73,34 @@ export function DisbursementConfirmationDialog({
   const [reference, setReference] = useState("");
   const [paidOn, setPaidOn] = useState("");
 
-  // The prefill is read through a ref so the reset effect below depends on
-  // `open` ALONE.
+  // Reset to the prefill on the closed -> open TRANSITION, so a corrected figure
+  // from an abandoned attempt is never carried into the next one.
   //
+  // The transition is what matters, not the fact of being open.
   // `defaultAmountMajor` comes from a live Convex query — the application's
-  // approved purchase amount. With it in the reset effect's dependency array,
-  // anything that changed that figure while the operator was mid-entry re-ran
-  // the reset and silently wiped the amount, cheque reference and date they had
-  // just read off a settlement advice. Reset belongs to the open transition,
-  // not to every value change behind it.
+  // approved purchase amount — so it can change at any moment. Resetting
+  // whenever it changes silently wiped the amount, cheque reference and date the
+  // operator had just read off a settlement advice; `justOpened` is false on
+  // that path, so their typed data survives.
   //
-  // Synced in an effect rather than assigned during render, because writing a
-  // ref while rendering is what `react-hooks` forbids — and that is the shape
-  // the suggested fix arrived in, so it failed lint before it failed review.
-  //
-  // ⚠️ DECLARATION ORDER IS LOAD-BEARING. React flushes effects in declaration
-  // order, so this sync must stay ABOVE the reset effect below: when the dialog
-  // opens in the same commit that brings a new prefill, the reset has to read
-  // the fresh value. Reorder them — by hand, by a refactor, or by a lint
-  // autofix — and the dialog silently prefills a STALE money figure into a
-  // settlement advice, which the server will accept as long as it is positive.
-  // Pinned by "reads the current prefill on the open transition" in the tests.
-  const prefillRef = useRef(defaultAmountMajor);
+  // Tracking the transition explicitly rather than depending on `open` alone is
+  // what keeps this correct in ONE effect. The previous shape kept the prefill in
+  // a second ref synced by its own effect, which worked only because React
+  // flushes effects in declaration order — so moving two effects past each other,
+  // by hand or by an autofix, would have silently prefilled a STALE money figure
+  // into a settlement advice the server accepts as long as it is positive. A
+  // money-entry invariant should not rest on the order two hooks happen to
+  // appear in. Here the reset reads the current prop in the same render, and no
+  // ordering can change that.
+  const wasOpenRef = useRef(false);
   useEffect(() => {
-    prefillRef.current = defaultAmountMajor;
-  }, [defaultAmountMajor]);
-
-  // Reset to the prefill each time the dialog opens, so a corrected figure from
-  // an abandoned attempt is never silently carried into the next one.
-  useEffect(() => {
-    if (!open) return;
-    const prefill = prefillRef.current;
-    setAmount(prefill !== undefined ? String(prefill) : "");
+    const justOpened = open && !wasOpenRef.current;
+    wasOpenRef.current = open;
+    if (!justOpened) return;
+    setAmount(defaultAmountMajor !== undefined ? String(defaultAmountMajor) : "");
     setReference("");
     setPaidOn("");
-  }, [open]);
+  }, [open, defaultAmountMajor]);
 
   const amountInvalid = mode === "SUPPLIER" && amount.trim() !== "" && !(Number(amount) > 0);
   const supplier = mode === "SUPPLIER" ? supplierName ?? t("TheSupplier") : "";

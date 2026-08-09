@@ -12,7 +12,7 @@
  * Only this side knows the operator's local calendar day, so only this side can
  * tell those two cases apart.
  */
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 // `DialogContent` reads the language context for its close-button label.
@@ -21,6 +21,25 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
 }));
 
 import { DisbursementConfirmationDialog } from "./DisbursementConfirmationDialog";
+
+/**
+ * ⚠️ The timezone is the whole point of this suite, so it is pinned rather than
+ * inherited.
+ *
+ * Without this, the "today" test passed under CI's UTC **with or without** the
+ * fix: at 22:30Z the UTC calendar day is still 9 August, so the old
+ * `dateInputToUtcMs("2026-08-09")` produced midnight that morning — comfortably
+ * in the past, assertion satisfied, bug undetected. A regression test that
+ * cannot fail is not coverage. `lib/dateInput.test.ts` pins TZ for the same
+ * reason.
+ */
+const ORIGINAL_TZ = process.env.TZ;
+beforeAll(() => {
+  process.env.TZ = "Asia/Amman";
+});
+afterAll(() => {
+  process.env.TZ = ORIGINAL_TZ;
+});
 
 afterEach(() => {
   cleanup();
@@ -60,6 +79,14 @@ describe("the date a supplier advice is recorded under", () => {
     // midnight of it would be 1.5 hours ahead of now, and the server refuses a
     // future date.
     const dateInput = document.querySelector('input[type="date"]') as HTMLInputElement;
+
+    // Guard: if the local and UTC calendar days ever coincide at this instant,
+    // the scenario this test exists for is not being exercised at all and the
+    // assertion below would hold no matter what the component does. Fail loudly
+    // rather than pass vacuously.
+    expect(dateInput.max).toBe("2026-08-10");
+    expect(new Date().toISOString().slice(0, 10)).toBe("2026-08-09");
+
     fireEvent.change(dateInput, { target: { value: dateInput.max } });
     fireEvent.click(screen.getByRole("button", { name: /confirm/i }));
 
@@ -107,8 +134,13 @@ describe("what happens when the prefill changes while the dialog is open", () =>
       />
     );
 
+    // Every field the operator can have typed, not just one of them.
     const reference = screen.getByLabelText(/reference/i) as HTMLInputElement;
+    const amount = screen.getByLabelText(/SupplierDisbursementAmount/i) as HTMLInputElement;
+    const date = document.querySelector('input[type="date"]') as HTMLInputElement;
     fireEvent.change(reference, { target: { value: "CHQ-99182" } });
+    fireEvent.change(amount, { target: { value: "27500" } });
+    fireEvent.change(date, { target: { value: "2026-08-01" } });
 
     // The approved purchase amount changes underneath — an edit elsewhere, or
     // simply the query resolving again.
@@ -129,6 +161,8 @@ describe("what happens when the prefill changes while the dialog is open", () =>
     );
 
     expect((screen.getByLabelText(/reference/i) as HTMLInputElement).value).toBe("CHQ-99182");
+    expect((screen.getByLabelText(/SupplierDisbursementAmount/i) as HTMLInputElement).value).toBe("27500");
+    expect((document.querySelector('input[type="date"]') as HTMLInputElement).value).toBe("2026-08-01");
   });
 });
 
