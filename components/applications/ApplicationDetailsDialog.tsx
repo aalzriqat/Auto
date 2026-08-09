@@ -491,7 +491,13 @@ export function ApplicationDetailsDialog({
           </div>
         </DialogHeader>
 
-        <div className="grid grid-cols-2 gap-6 my-4">
+        {/* Single column below `sm`. This was a hard two-column grid, which on
+            a 390px phone left each column around 180px — every label wrapping
+            after two or three words. That was survivable while the right column
+            only displayed figures; it stopped being survivable when the
+            settlement-route control moved in, because the operator now has to
+            READ two options and choose between them there. */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 my-4">
           <div className="space-y-4">
             <div>
               <h4 className="font-semibold text-sm mb-2">{t("CustomerInfo" as any)}</h4>

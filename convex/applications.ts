@@ -393,7 +393,19 @@ export const list = query({
           ...app,
           customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
           vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
-          companyName: company ? company.name : "Cash / Direct",
+          // Not `company ? company.name : "Cash / Direct"`. A
+          // MANUAL_FINANCE_COMPANY deal has no company row by construction, so
+          // every one of them was listed as "Cash / Direct" — on a screen whose
+          // whole subject is financed deals, and where "Direct" is now also the
+          // name of the other settlement route. The operator finds the deal
+          // here before opening it.
+          companyName:
+            company?.name ??
+            (app.quoteModeAtSubmission === "MANUAL_FINANCE_COMPANY" || quote?.mode === "MANUAL_FINANCE_COMPANY"
+              ? (app.manualFinanceSnapshot?.providerName ?? "Finance provider")
+              : app.quoteModeAtSubmission === "LEASE" || quote?.mode === "LEASE"
+                ? "Lease"
+                : "Cash / Direct"),
           salespersonName: salesperson && "name" in salesperson ? salesperson.name : "Unknown",
           financedAmount: quote?.totalFinancedAmount || 0,
           monthlyInstallment: quote?.monthlyInstallment || 0,
