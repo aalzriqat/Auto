@@ -155,7 +155,12 @@ export function ApplicationClient() {
                     <TableRow key={app._id}>
                       <TableCell className="font-medium">{app.customerName}</TableCell>
                       <TableCell>{app.vehicleDesc}</TableCell>
-                      <TableCell>{app.companyName}</TableCell>
+                      {/* A real financier name renders as itself; the cases
+                          with no name to show come back as a key so they read
+                          in the operator's own language. */}
+                      <TableCell>
+                        {app.companyLabelKey ? t(app.companyLabelKey as any) : app.companyName}
+                      </TableCell>
                       <TableCell>{app.financedAmount.toLocaleString()} {t("JOD" as any)}</TableCell>
                       <TableCell>
                         <Badge

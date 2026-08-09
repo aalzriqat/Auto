@@ -388,6 +388,15 @@ export const list = query({
           app.status === "REJECTED" || app.status === "CANCELLED"
             ? await hasHeldQuoteDeposit(ctx, app.quoteId)
             : false;
+        // Through the shared resolver, not a fourth hand-rolled reading of the
+        // same rule — this file has been corrected twice already for exactly
+        // that. The pure form, because `quote` is loaded here anyway for the
+        // financed amounts, so it costs no extra read.
+        const payer = settlementPayer({
+          quoteMode: app.quoteModeAtSubmission ?? quote?.mode,
+          financeCompanyId: app.companyId,
+          manualProviderName: app.manualFinanceSnapshot?.providerName,
+        });
 
         return {
           ...app,
@@ -399,13 +408,20 @@ export const list = query({
           // whole subject is financed deals, and where "Direct" is now also the
           // name of the other settlement route. The operator finds the deal
           // here before opening it.
-          companyName:
-            company?.name ??
-            (app.quoteModeAtSubmission === "MANUAL_FINANCE_COMPANY" || quote?.mode === "MANUAL_FINANCE_COMPANY"
-              ? (app.manualFinanceSnapshot?.providerName ?? "Finance provider")
-              : app.quoteModeAtSubmission === "LEASE" || quote?.mode === "LEASE"
-                ? "Lease"
-                : "Cash / Direct"),
+          // A real financier's name, or "" when there is none to show. Kept as
+          // a name rather than a label because the list searches this field —
+          // operators can now find a deal by its manual provider.
+          companyName: company?.name ?? app.manualFinanceSnapshot?.providerName ?? "",
+          // The nameless cases come back as a key the client translates.
+          // Returning English here put "Finance provider" and "Lease" into the
+          // Arabic UI.
+          companyLabelKey: (company?.name ?? app.manualFinanceSnapshot?.providerName)
+            ? null
+            : !payer.external
+              ? "CashOrDirect"
+              : payer.counterparty === null && payer.unidentifiedReason === "LEASE"
+                ? "LeaseFinancing"
+                : "UnnamedFinanceProvider",
           salespersonName: salesperson && "name" in salesperson ? salesperson.name : "Unknown",
           financedAmount: quote?.totalFinancedAmount || 0,
           monthlyInstallment: quote?.monthlyInstallment || 0,

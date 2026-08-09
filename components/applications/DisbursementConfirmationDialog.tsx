@@ -202,12 +202,24 @@ export function DisbursementConfirmationDialog({
                 // so in Amman (UTC+3) every advice recorded before 15:00 local
                 // and dated today was rejected by the server's own
                 // "not in the future" check — for the date its picker offered.
-                // Sent unchanged. Clamping a future date to `Date.now()` filed
-                // a settlement advice under a date the operator never entered,
-                // and did it silently — the record whose entire job is to say
-                // what the advice said. The server rejects a future date with a
-                // message naming what to change, and the caller surfaces it.
-                disbursedAt: paidOn ? dateInputToUtcMs(paidOn) : undefined,
+                // A BACKDATED day is sent unchanged: clamping it to `Date.now()`
+                // filed a settlement advice under a date the operator never
+                // entered, silently, on the record whose whole job is to state
+                // what the advice said. The server refuses a genuinely future
+                // day and the caller surfaces that message.
+                //
+                // TODAY is sent as the current instant instead of as UTC
+                // midnight, because only this side knows the operator's local
+                // day. East of UTC, UTC-midnight-of-today is still in the
+                // future for the first hours of the morning — until 03:00 in
+                // Amman — so the server refused the very date this picker
+                // offers as its maximum. The server cannot fix that: it has no
+                // way to know the caller's offset.
+                disbursedAt: paidOn
+                  ? paidOn === todayDateInput()
+                    ? Date.now()
+                    : dateInputToUtcMs(paidOn)
+                  : undefined,
               });
             }}
             // `!(x > 0)`, not `x <= 0` — SonarCloud suggests the latter and they
