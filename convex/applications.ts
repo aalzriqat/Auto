@@ -435,6 +435,16 @@ export const get = query({
     // same facts: an inline copy here would be a third opinion in the file that
     // exists to remove the second one.
     const payer = await settlementPayerForApplication(ctx, app);
+    // The payer is not the only thing that can refuse the direct route.
+    // `setSupplierSettlementRoute` also refuses it while a عربون is held,
+    // because on that route the dealership bills the customer nothing for the
+    // car and the deposit has nowhere to land. Deriving the screen's answer
+    // from the payer alone offered an enabled option the server would reject —
+    // the same UI/server disagreement this query exists to prevent, one guard
+    // further along. Read off the deposits already loaded above rather than
+    // re-querying them.
+    const hasHeldDeposit = deposits.some((deposit) => deposit.status === "HELD");
+    const payerAllowsDirect = payer.external && payer.counterparty !== null;
 
     return {
       ...app,
@@ -447,12 +457,14 @@ export const get = query({
       /** Whether an outside party pays for the car at all. */
       hasExternalFinancier: payer.external,
       /** Whether DIRECT_TO_SUPPLIER is available, and why not when it is not. */
-      canSettleDirectToSupplier: payer.external && payer.counterparty !== null,
+      canSettleDirectToSupplier: payerAllowsDirect && !hasHeldDeposit,
       directRouteRefusal: !payer.external
         ? "NoExternalFinancier"
         : payer.counterparty === null
           ? payer.unidentifiedReason
-          : null,
+          : hasHeldDeposit
+            ? "HeldDeposit"
+            : null,
     };
   },
 });

@@ -862,6 +862,11 @@ describe("the screen's answer and the server's answer are the same answer", () =
     { name: "a lease", opts: { mode: "LEASE" as const }, direct: false },
     { name: "an internal installment", opts: { mode: "INTERNAL_INSTALLMENT" as const }, direct: false },
     { name: "a legacy deal with no mode but a finance company", opts: { omitMode: true }, direct: true },
+    // The payer is not the only thing that refuses this route. A held عربون
+    // does too, because the direct route bills the customer nothing for the car
+    // and the deposit has nowhere to land — so a screen that asks only "who
+    // pays?" offers an option the server rejects.
+    { name: "a deal holding a reservation deposit", opts: { deposit: 3_000 }, direct: false },
   ];
 
   for (const [index, c] of cases.entries()) {

@@ -594,7 +594,9 @@ export function ApplicationDetailsDialog({
                         ? "RouteDirectUnavailableLease"
                         : app.directRouteRefusal === "PAYER_UNNAMED"
                           ? "RouteDirectUnavailableUnnamedProvider"
-                          : "RouteDirectUnavailableNoExternalFinancier";
+                          : app.directRouteRefusal === "HeldDeposit"
+                            ? "RouteDirectUnavailableHeldDeposit"
+                            : "RouteDirectUnavailableNoExternalFinancier";
                     return (
                       <button
                         key={route}
