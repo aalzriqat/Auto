@@ -117,6 +117,28 @@ describe("production deploy preconditions", () => {
     expect(evaluateProdDeploy(behind, { allowBehind: true }).ok).toBe(true);
   });
 
+  test("a diverged branch is not called 'behind', and is not offered --allow-behind", () => {
+    // Caught by running the guard against its own branch. Saying "behind …
+    // pass --allow-behind" to someone on an unmerged branch is advice that
+    // cannot work: merged-into-main refuses regardless. A guard that names the
+    // state wrongly teaches the wrong flag.
+    const diverged: RepoSnapshot = {
+      ...CLEAN,
+      branch: "agent/deploy-target-guard",
+      headSha: "0c57293e".padEnd(40, "0"),
+      headIsAncestorOfOriginMain: false,
+    };
+    const tip = evaluateProdDeploy(diverged).checks.find(
+      (c) => c.id === "at-origin-main-tip"
+    );
+    expect(tip?.ok).toBe(false);
+    expect(tip?.detail).toMatch(/diverged/);
+    expect(tip?.detail).not.toMatch(/pass --allow-behind/);
+
+    // And --allow-behind must not launder unmerged code into a deploy.
+    expect(evaluateProdDeploy(diverged, { allowBehind: true }).ok).toBe(false);
+  });
+
   test("--allow-behind does not excuse anything else", () => {
     // A rollback still may not carry an untracked bundle file or a dirty tree.
     const ids = failureIds(

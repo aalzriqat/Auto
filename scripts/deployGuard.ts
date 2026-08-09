@@ -174,6 +174,20 @@ function checkAtTip(snapshot: RepoSnapshot, options: DeployOptions): DeployCheck
   if (atTip) {
     return { id: "at-origin-main-tip", ok: true, detail: "HEAD is origin/main" };
   }
+
+  // "Behind" only means something for a commit that is actually on main. A
+  // diverged branch is not behind the tip, it is somewhere else entirely, and
+  // telling its author to pass --allow-behind is advice that cannot work:
+  // `merged-into-main` would still refuse. Naming the state wrongly is how a
+  // guard teaches people to reach for the wrong flag.
+  if (!snapshot.headIsAncestorOfOriginMain) {
+    return {
+      id: "at-origin-main-tip",
+      ok: false,
+      detail: `HEAD ${snapshot.headSha.slice(0, 8)} has diverged from origin/main ${snapshot.originMainSha.slice(0, 8)} — merge it first; --allow-behind does not apply to unmerged work`,
+    };
+  }
+
   // A rollback deploys an older, already-merged commit on purpose. Allowed, but
   // never by default and never silently — the operator has to say so.
   return {
