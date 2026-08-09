@@ -298,7 +298,13 @@ export function ApplicationDetailsDialog({
     canConfirmFinanceDisbursement &&
     app.status === "CLOSED" &&
     settlesDirectToSupplier &&
-    expectsFinanceCompanyDisbursement &&
+    // `companyId`, not `expectsFinanceCompanyDisbursement`. That flag also
+    // requires `totalFinancedAmount > 0`, which the server never reads here —
+    // `confirmSupplierDisbursement` wants a finance company, a CLOSED deal, the
+    // direct route and a positive amount the operator types. Gating on the
+    // customer's principal hid the button on a deal the server would accept.
+    // The dealership button keeps that flag, because it does compare against it.
+    Boolean(app.companyId) &&
     !app.supplierDisbursementConfirmedAt;
 
   const handleConfirmDisbursement = async () => {
@@ -535,7 +541,15 @@ export function ApplicationDetailsDialog({
                 <p className="text-xs leading-relaxed text-muted-foreground">
                   {t("ConsignedSaleSettlementDesc" as any).replace("{supplier}", supplierLabel)}
                 </p>
-                <div className="grid gap-2 sm:grid-cols-2">
+                {/* `role="radio"` elements must be owned by a `radiogroup`;
+                    fieldset/legend group them visually but establish no ARIA
+                    ownership, so without this they announce as two unrelated
+                    radios with no set name. */}
+                <div
+                  role="radiogroup"
+                  aria-label={t("SupplierSettlementRoute" as any)}
+                  className="grid gap-2 sm:grid-cols-2"
+                >
                   {(
                     [
                       ["THROUGH_DEALERSHIP", "RouteThroughDealership", "RouteThroughDealershipHint"],

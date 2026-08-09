@@ -82,6 +82,7 @@ export function DisbursementConfirmationDialog({
     setPaidOn("");
   }, [open, defaultAmountMajor]);
 
+  const amountInvalid = mode === "SUPPLIER" && amount.trim() !== "" && !(Number(amount) > 0);
   const supplier = mode === "SUPPLIER" ? supplierName ?? t("TheSupplier") : "";
   // `replaceAll`, not `replace`. A string pattern replaces the FIRST match only,
   // and the description names the supplier twice in both locales — so the second
@@ -147,9 +148,17 @@ export function DisbursementConfirmationDialog({
                 id="supplier-advice-amount"
                 inputMode="decimal"
                 value={amount}
+                aria-invalid={amountInvalid}
                 onChange={(e) => setAmount(e.target.value)}
                 className="tabular-nums"
               />
+              {/* Otherwise the confirm button simply sits dead on a money screen
+                  with nothing saying why. */}
+              {amountInvalid && (
+                <p role="alert" className="text-xs font-medium text-destructive">
+                  {t("AdviceAmountInvalid")}
+                </p>
+              )}
               <p className="text-xs text-muted-foreground">
                 {t("DealershipExpected")}: <span className="tabular-nums">{amountLabel}</span>
               </p>
@@ -196,6 +205,9 @@ export function DisbursementConfirmationDialog({
                 disbursedAt: paidOn ? Math.min(dateInputToUtcMs(paidOn), Date.now()) : undefined,
               });
             }}
+            // `!(x > 0)`, not `x <= 0` — SonarCloud suggests the latter and they
+            // differ on NaN. A non-numeric entry must keep the button disabled,
+            // and `NaN <= 0` is false, which would enable it and submit NaN.
             disabled={submitting || (!isReceipt && !(Number(amount) > 0))}
             variant={isReceipt ? "default" : "outline"}
             className={accentClass}

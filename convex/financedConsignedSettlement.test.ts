@@ -621,8 +621,12 @@ describe("the settlement advice is recorded as stated", () => {
 
     const app = await s.t.run((ctx) => ctx.db.get(applicationId as never)) as {
       supplierDisbursedAmountMinor?: number;
+      supplierDisbursementReference?: string;
     };
     expect(app.supplierDisbursedAmountMinor).toBe(advised);
+    // The reference is half the point of recording the advice; without this a
+    // regression that drops it passes.
+    expect(app.supplierDisbursementReference).toBe("CHQ-771");
   });
 
   test("a nonsensical disbursement date is refused rather than stored", async () => {
