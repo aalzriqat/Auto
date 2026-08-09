@@ -1266,6 +1266,25 @@ export const finalizeDeal = mutation({
           }
         }
 
+        // The same refusal as `setSupplierSettlementRoute`, by the other door.
+        //
+        // That guard sees only the moment the route is chosen. A deposit taken
+        // AFTERWARDS slips past it — `deposits.create` needs only VIEW_SALES and
+        // the vehicle is RESERVED rather than SOLD, so nothing stops one. The
+        // deal then reached `resolveReservationDeposits`, whose message names
+        // five treatments this PR removed the UI for, leaving the operator at
+        // the finalize button being told to do something the product no longer
+        // offers. That is precisely the stranding the route-time refusal exists
+        // to prevent, so it is refused here too and in the same terms.
+        if (
+          app.supplierSettlementRoute === "DIRECT_TO_SUPPLIER" &&
+          (await hasHeldQuoteDeposit(ctx, app.quoteId))
+        ) {
+          throw new ConvexError(
+            "This deal is holding a reservation deposit, and on the direct route the dealership bills the customer nothing for the car — so what happens to that deposit has to be settled first. Resolve the deposit, then finalize."
+          );
+        }
+
         const quote = await ctx.db.get(app.quoteId);
         if (!quote || quote.orgId !== args.orgId) throw new ConvexError("Quote not found");
         if (quote.customerId !== app.customerId || quote.vehicleId !== app.vehicleId) {

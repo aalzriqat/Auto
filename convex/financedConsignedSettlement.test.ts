@@ -138,6 +138,8 @@ async function runDeal(
     finalize?: boolean;
     /** A reservation deposit (عربون) held on the quote before the deal closes. */
     deposit?: number;
+    /** A deposit taken AFTER the route was chosen — the ordering the route-time guard cannot see. */
+    depositAfterRoute?: number;
     /** Omit the finance company, as an INTERNAL_INSTALLMENT deal does. */
     mode?: "CONFIGURED_FINANCE_COMPANY" | "INTERNAL_INSTALLMENT";
     depositResolution?: {
@@ -182,6 +184,14 @@ async function runDeal(
   if (opts.route) {
     await s.asUser.mutation(api.applications.setSupplierSettlementRoute, {
       orgId: s.orgId, applicationId, route: opts.route,
+    });
+  }
+
+  if (opts.depositAfterRoute) {
+    await s.asUser.mutation(api.deposits.create, {
+      orgId: s.orgId,
+      quoteId,
+      amount: opts.depositAfterRoute,
     });
   }
 
@@ -512,6 +522,28 @@ describe("a reservation deposit on the direct route", () => {
         orgId: s.orgId, applicationId, route: "THROUGH_DEALERSHIP",
       })
     ).resolves.toBeDefined();
+  });
+
+  test("a deposit taken AFTER the route was chosen is refused at finalization, in the same terms", async () => {
+    const s = await seedDealership("dep2");
+
+    // The route-time guard cannot see this ordering: at the moment the route was
+    // chosen there was no deposit to refuse. `deposits.create` needs only
+    // VIEW_SALES and the vehicle is RESERVED rather than SOLD, so nothing stops
+    // one being taken afterwards.
+    //
+    // Without the matching guard at finalization the operator hit
+    // `resolveReservationDeposits`, whose message names five treatments — and
+    // this PR deleted the only UI that could supply any of them. That is exactly
+    // the stranding the route-time refusal exists to prevent, reached by the
+    // other door.
+    await expect(
+      runDeal(s, { route: "DIRECT_TO_SUPPLIER", depositAfterRoute: 3_000 })
+      // Asserting on wording unique to THIS refusal. The pre-existing
+      // `resolveReservationDeposits` message also contains "reservation
+      // deposit", so a looser regex passes without the guard and proves
+      // nothing — it names five treatments whose UI this PR removed.
+    ).rejects.toThrow(/resolve the deposit/i);
   });
 
   test("a deposit deal still finalizes through the dealership, exactly as before", async () => {

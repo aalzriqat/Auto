@@ -519,9 +519,14 @@ export function ApplicationDetailsDialog({
                 on him for its margin. Asked before finalization, because
                 afterwards the sale has already posted one of the two.
 
-                The same control as the sale form, on purpose: one explanation
-                of what each route means, in one place, rather than a second
-                phrasing an operator has to reconcile with the first. */}
+                Deliberately NOT the sale form's ConsignedSettlementSection,
+                though it duplicates its labels. That component renders nothing
+                unless `sales.consignedSalePreview` answers, and that query
+                withholds its cost-bearing reply from any role without cost
+                visibility — which the default SALES template lacks while
+                holding FINALIZE_FINANCED_DEAL. Reusing it hid the control from
+                exactly the role the server requires to set it. The duplication
+                is the price of a control that does not depend on seeing cost. */}
             {canChooseSettlementRoute && (
               <fieldset className="space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.04] p-4">
                 <legend className="px-1 text-xs font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">
