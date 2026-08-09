@@ -38,6 +38,8 @@ import {
   consignedSettlementRouteValidator,
   dealershipCollectsGross,
   isConsignedAgentSale,
+  settlementPayer,
+  type SettlementPayer,
 } from "./utils/vehicleOwnership";
 import { auditLog } from "./financialAudit";
 
@@ -192,6 +194,45 @@ async function closedDealSettlesDirectToSupplier(
   // own route is what `finalizeDeal` acted on, and absent reads as
   // THROUGH_DEALERSHIP, which is exactly what those deals posted.
   return !dealershipCollectsGross(consignedSettlementRoute(app));
+}
+
+/**
+ * Resolves who pays for the car on this deal, from the application's own
+ * snapshot.
+ *
+ * The MODE falls back to the quote's current mode when the application predates
+ * `quoteModeAtSubmission`, which is exactly what `finalizeDeal` already does
+ * when it derives `financingType` — so the two cannot disagree about what kind
+ * of deal this is.
+ *
+ * The IDENTITY does NOT fall back. A settlement advice records who paid the
+ * supplier, and re-deriving that later from a quote field the operator can
+ * still edit would let the named payer change after the payment was recorded.
+ * A legacy row carrying no snapshot therefore resolves as external-but-unnamed
+ * and is refused the direct route, rather than being attributed to whoever the
+ * quote happens to name today.
+ */
+async function settlementPayerForApplication(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">
+): Promise<SettlementPayer> {
+  let quoteMode = app.quoteModeAtSubmission;
+  if (quoteMode === undefined) {
+    const quote = await ctx.db.get(app.quoteId);
+    if (quote && quote.orgId === app.orgId) quoteMode = quote.mode;
+  }
+  return settlementPayer({
+    quoteMode,
+    financeCompanyId: app.companyId,
+    manualProviderName: app.manualFinanceSnapshot?.providerName,
+  });
+}
+
+/** The operator-facing reason an external payer cannot take the direct route. */
+function unidentifiedPayerRefusal(reason: "LEASE" | "MANUAL_PROVIDER_UNNAMED"): string {
+  return reason === "LEASE"
+    ? "This is a lease, and the leasing provider is not recorded anywhere on the deal — so a payment to the supplier could not be attributed to anyone. Settle through the dealership until the provider is recorded."
+    : "The finance provider on this deal is not named, so a payment to the supplier could not be attributed to anyone. Record the provider on the quote, then choose this route.";
 }
 
 async function hasHeldQuoteDeposit(ctx: QueryCtx, quoteId: Id<"quotes">): Promise<boolean> {
@@ -383,6 +424,18 @@ export const get = query({
     const quote = await ctx.db.get(app.quoteId);
     const deposits = await getQuoteDeposits(ctx, app.quoteId);
 
+    // Derived here rather than in the dialog, because the client must not hold
+    // a second opinion about who pays for the car. A previous version of this
+    // change shipped the rule twice — once on the server and once in
+    // `lib/consignedRouteGuard.ts` — and the copies were free to disagree about
+    // what the operator was allowed to choose. One answer, from the side that
+    // enforces it.
+    const payer = settlementPayer({
+      quoteMode: app.quoteModeAtSubmission ?? quote?.mode,
+      financeCompanyId: app.companyId,
+      manualProviderName: app.manualFinanceSnapshot?.providerName,
+    });
+
     return {
       ...app,
       customer,
@@ -391,6 +444,15 @@ export const get = query({
       salesperson,
       quote,
       deposits,
+      /** Whether an outside party pays for the car at all. */
+      hasExternalFinancier: payer.external,
+      /** Whether DIRECT_TO_SUPPLIER is available, and why not when it is not. */
+      canSettleDirectToSupplier: payer.external && payer.counterparty !== null,
+      directRouteRefusal: !payer.external
+        ? "NoExternalFinancier"
+        : payer.counterparty === null
+          ? payer.unidentifiedReason
+          : null,
     };
   },
 });
@@ -1138,10 +1200,21 @@ export const setSupplierSettlementRoute = mutation({
     // genuinely owes, and `confirmSupplierDisbursement` then refused the deal
     // forever because it has no finance company. A dead end with the customer's
     // debt erased on the way in.
-    if (args.route === "DIRECT_TO_SUPPLIER" && !app.companyId) {
-      throw new ConvexError(
-        "This deal has no finance company, so nobody outside the dealership pays the supplier — the direct route does not apply. If the dealership is financing the customer itself, settle through the dealership."
-      );
+    //
+    // Asked of the quote MODE rather than of `companyId`, which is only ever
+    // set on CONFIGURED_FINANCE_COMPANY deals — see `settlementPayer`.
+    if (args.route === "DIRECT_TO_SUPPLIER") {
+      const payer = await settlementPayerForApplication(ctx, app);
+      if (!payer.external) {
+        throw new ConvexError(
+          "This deal has no outside financier, so nobody outside the dealership pays the supplier — the direct route does not apply. If the dealership is financing the customer itself, settle through the dealership."
+        );
+      }
+      // External, but nobody the advice could name. Refused rather than
+      // recorded as an unattributable payment.
+      if (payer.counterparty === null) {
+        throw new ConvexError(unidentifiedPayerRefusal(payer.unidentifiedReason));
+      }
     }
     // A held عربون and the direct route together are refused, deliberately and
     // for now.
@@ -1252,12 +1325,25 @@ export const finalizeDeal = mutation({
         // supplier, and a deal with no finance company cannot take the direct
         // route at all. Nothing already CLOSED is touched, so no history is
         // restated; an in-flight deal is asked the question once.
+        //
+        // "External financier" is the quote MODE, not `companyId`. A
+        // MANUAL_FINANCE_COMPANY deal structurally cannot carry a `companyId`
+        // (`convex/quotes.ts` rejects one on every mode but CONFIGURED), so
+        // gating on it meant an ordinary "other finance option" deal was never
+        // asked the question and defaulted through the dealership — booking a
+        // customer receivable and a supplier payable on a deal where the
+        // financier paid the supplier directly.
+        //
+        // LEASE is asked too, even though it cannot answer DIRECT: being unable
+        // to record the right answer is not a reason to silently post the wrong
+        // one, and the refusal names why.
         {
           const vehicle = await ctx.db.get(app.vehicleId);
+          const payer = await settlementPayerForApplication(ctx, app);
           if (
             vehicle &&
             isConsignedAgentSale(vehicle) &&
-            app.companyId &&
+            payer.external &&
             app.supplierSettlementRoute === undefined
           ) {
             throw new ConvexError(
@@ -1740,8 +1826,19 @@ export const confirmSupplierDisbursement = mutation({
             "The company's payment to the supplier can only be recorded once the deal is finalized."
           );
         }
-        if (!app.companyId) {
-          throw new ConvexError("This application has no finance company — no disbursement expected.");
+        // The payer has to be nameable, because that is what this record IS —
+        // evidence that a specific third party paid the supplier. A configured
+        // finance company is identified by id; a manual provider by the name
+        // snapshotted at submission. Neither is `receivableDocuments.
+        // financeCompanyId`: the direct route deliberately opens no
+        // finance-company receivable, and this is provenance, not a payer of
+        // one.
+        const payer = await settlementPayerForApplication(ctx, app);
+        if (!payer.external) {
+          throw new ConvexError("This application has no outside financier — no disbursement expected.");
+        }
+        if (payer.counterparty === null) {
+          throw new ConvexError(unidentifiedPayerRefusal(payer.unidentifiedReason));
         }
         if (args.disbursedAmountMinor <= 0) {
           throw new ConvexError("Disbursement amount must be positive.");
@@ -1764,6 +1861,17 @@ export const confirmSupplierDisbursement = mutation({
         const vehicle = await ctx.db.get(app.vehicleId);
         const supplierName = vehicle?.sourcedFromName ?? "the supplier";
         const confirmedAt = args.disbursedAt ?? Date.now();
+        // Name the payer in the audit trail rather than calling every one of
+        // them "the finance company". On a manual provider that phrase was
+        // simply untrue, and this record is the only place the settlement
+        // advice's counterparty is written down.
+        let payerName = "The finance company";
+        if (payer.counterparty.kind === "MANUAL_PROVIDER") {
+          payerName = payer.counterparty.name;
+        } else if (app.companyId) {
+          const company = await ctx.db.get(app.companyId);
+          if (company && company.orgId === args.orgId) payerName = company.name;
+        }
 
         await ctx.db.patch(args.applicationId, {
           supplierDisbursementConfirmedAt: confirmedAt,
@@ -1785,11 +1893,12 @@ export const confirmSupplierDisbursement = mutation({
           actionType: "CONFIRM_SUPPLIER_DISBURSEMENT",
           resourceType: "financeApplications",
           resourceId: args.applicationId,
-          description: `Finance company paid ${supplierName} ${args.disbursedAmountMinor} minor units directly${args.reference ? ` (ref ${args.reference})` : ""}. No dealership cash moved; the dealership's margin remains a claim on ${supplierName}.`,
+          description: `${payerName} paid ${supplierName} ${args.disbursedAmountMinor} minor units directly${args.reference ? ` (ref ${args.reference})` : ""}. No dealership cash moved; the dealership's margin remains a claim on ${supplierName}.`,
           before: { supplierDisbursementConfirmedAt: null },
           after: {
             supplierDisbursementConfirmedAt: confirmedAt,
             supplierDisbursedAmountMinor: args.disbursedAmountMinor,
+            settlementCounterparty: payerName,
           },
           idempotencyKey: args.idempotencyKey,
         });

@@ -298,13 +298,15 @@ export function ApplicationDetailsDialog({
     canConfirmFinanceDisbursement &&
     app.status === "CLOSED" &&
     settlesDirectToSupplier &&
-    // `companyId`, not `expectsFinanceCompanyDisbursement`. That flag also
-    // requires `totalFinancedAmount > 0`, which the server never reads here —
-    // `confirmSupplierDisbursement` wants a finance company, a CLOSED deal, the
-    // direct route and a positive amount the operator types. Gating on the
-    // customer's principal hid the button on a deal the server would accept.
-    // The dealership button keeps that flag, because it does compare against it.
-    Boolean(app.companyId) &&
+    // The server's own answer, not `companyId`. That field is only ever set on
+    // CONFIGURED_FINANCE_COMPANY deals, so gating on it hid this button on
+    // every MANUAL_FINANCE_COMPANY deal — a supported external financier —
+    // while the server would have accepted the confirmation.
+    //
+    // Not `expectsFinanceCompanyDisbursement` either: that flag also requires
+    // `totalFinancedAmount > 0`, which the server never reads here. The
+    // dealership button keeps that flag, because it does compare against it.
+    app.canSettleDirectToSupplier &&
     !app.supplierDisbursementConfirmedAt;
 
   const handleConfirmDisbursement = async () => {
@@ -562,22 +564,37 @@ export function ApplicationDetailsDialog({
                     // unanswered, so an operator who wanted it saw no reason to
                     // click and hit the refusal at finalization.
                     const selected = app.supplierSettlementRoute === route;
+                    // The direct route needs somebody outside the dealership
+                    // who pays the supplier AND who the settlement advice can
+                    // name. Shown disabled with the reason rather than hidden:
+                    // an operator looking for the option they were told to pick
+                    // needs to know why it is not there, and a missing control
+                    // answers nothing.
+                    const unavailable =
+                      route === "DIRECT_TO_SUPPLIER" && !app.canSettleDirectToSupplier;
+                    const reasonKey =
+                      app.directRouteRefusal === "LEASE"
+                        ? "RouteDirectUnavailableLease"
+                        : app.directRouteRefusal === "MANUAL_PROVIDER_UNNAMED"
+                          ? "RouteDirectUnavailableUnnamedProvider"
+                          : "RouteDirectUnavailableNoExternalFinancier";
                     return (
                       <button
                         key={route}
                         type="button"
                         role="radio"
                         aria-checked={selected}
+                        disabled={unavailable}
                         onClick={() => handleChooseSettlementRoute(route)}
-                        className={`rounded-md border p-3 text-start transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 ${
+                        className={`rounded-md border p-3 text-start transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-60 ${
                           selected
                             ? "border-amber-500 bg-background shadow-sm"
-                            : "border-border bg-background/40 hover:bg-background"
+                            : "border-border bg-background/40 enabled:hover:bg-background"
                         }`}
                       >
                         <span className="block text-sm font-medium">{t(labelKey as any)}</span>
                         <span className="mt-0.5 block text-xs leading-snug text-muted-foreground">
-                          {t(hintKey as any)}
+                          {t((unavailable ? reasonKey : hintKey) as any)}
                         </span>
                       </button>
                     );

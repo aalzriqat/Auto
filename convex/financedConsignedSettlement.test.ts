@@ -140,8 +140,18 @@ async function runDeal(
     deposit?: number;
     /** A deposit taken AFTER the route was chosen — the ordering the route-time guard cannot see. */
     depositAfterRoute?: number;
-    /** Omit the finance company, as an INTERNAL_INSTALLMENT deal does. */
-    mode?: "CONFIGURED_FINANCE_COMPANY" | "INTERNAL_INSTALLMENT";
+    /**
+     * Every mode but CONFIGURED_FINANCE_COMPANY is refused a `companyId` by
+     * `quotes.saveQuote`, so these are the shapes where "is there an external
+     * financier?" cannot be answered by looking at that field.
+     */
+    mode?:
+      | "CONFIGURED_FINANCE_COMPANY"
+      | "INTERNAL_INSTALLMENT"
+      | "MANUAL_FINANCE_COMPANY"
+      | "LEASE";
+    /** The manual financier's name, which is the only identity that mode has. */
+    manualProviderName?: string;
     depositResolution?: {
       treatment: "APPLY_TO_DEALER_AMOUNT" | "APPLY_TO_TRANSACTION_SETTLEMENT" | "REFUND_TO_CUSTOMER" | "FORFEITED" | "OTHER";
       reason?: string;
@@ -159,6 +169,9 @@ async function runDeal(
     termMonths: 48,
     mode,
     ...(mode === "CONFIGURED_FINANCE_COMPANY" ? { companyId: s.companyId } : {}),
+    ...(mode === "MANUAL_FINANCE_COMPANY" && opts.manualProviderName !== undefined
+      ? { manualProviderName: opts.manualProviderName }
+      : {}),
     totalFinancedAmount: VEHICLE_PRICE - downPayment,
   });
 
@@ -576,7 +589,9 @@ describe("a deal with no external financier", () => {
       s.asUser.mutation(api.applications.setSupplierSettlementRoute, {
         orgId: s.orgId, applicationId, route: "DIRECT_TO_SUPPLIER",
       })
-    ).rejects.toThrow(/finance company/i);
+    // "No outside financier" rather than "no finance company": the refusal is
+    // about the quote MODE, not about whether a `companyId` happens to be set.
+    ).rejects.toThrow(/no outside financier/i);
   });
 });
 
@@ -694,5 +709,94 @@ describe("cancelling a direct-settled financed deal", () => {
     expect(posted[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS] ?? 0).toBe(0);
     expect(posted[SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE] ?? 0).toBe(0);
     expect(posted[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES] ?? 0).toBe(0);
+  });
+});
+
+/**
+ * `companyId` is set only on CONFIGURED_FINANCE_COMPANY quotes — `quotes.
+ * saveQuote` rejects it on every other mode. Using it as the proxy for "an
+ * external financier exists" therefore misread an ordinary MANUAL_FINANCE_COMPANY
+ * deal, the "other finance option" a dealership types in by name, as having no
+ * financier at all: the finalize guard never fired so the deal defaulted through
+ * the dealership, and the route control refused the direct answer that would
+ * have described it. The same field, wrong in both directions on the same deal.
+ */
+describe("an external financier the deal does not name with a companyId", () => {
+  test("a manual finance company is asked the settlement route before finalizing", async () => {
+    const s = await seedDealership("manual1");
+    await expect(
+      runDeal(s, { mode: "MANUAL_FINANCE_COMPANY", manualProviderName: "Cairo Amman Finance" })
+    ).rejects.toThrow(/record the settlement route/i);
+  });
+
+  test("a manual finance company can settle direct to the supplier", async () => {
+    const s = await seedDealership("manual2");
+    const { applicationId } = await runDeal(s, {
+      mode: "MANUAL_FINANCE_COMPANY",
+      manualProviderName: "Cairo Amman Finance",
+      route: "DIRECT_TO_SUPPLIER",
+    });
+
+    // The whole point of the route: no customer receivable for the car, no
+    // finance-company receivable, and the margin sitting as a claim on the
+    // supplier.
+    const posted = await ledgerBySystemKey(s);
+    expect(posted[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES] ?? 0).toBe(0);
+    expect(posted[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS] ?? 0).toBeGreaterThan(0);
+
+    // And the settlement advice can be recorded against the named provider,
+    // which `companyId`-gating made permanently impossible for this mode.
+    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId, applicationId, disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+    });
+    expect(result.disbursedAmountMinor).toBe(VEHICLE_PRICE * SCALE);
+  });
+
+  test("a manual finance company with no provider name cannot take the direct route", async () => {
+    const s = await seedDealership("manual3");
+    const { applicationId } = await runDeal(s, {
+      mode: "MANUAL_FINANCE_COMPANY",
+      finalize: false,
+    });
+
+    // External, but nobody a settlement advice could name. Recording that "the
+    // financier paid the supplier" with no financier identity is an
+    // unattributable payment, so it is refused rather than stored.
+    await expect(
+      s.asUser.mutation(api.applications.setSupplierSettlementRoute, {
+        orgId: s.orgId, applicationId, route: "DIRECT_TO_SUPPLIER",
+      })
+    ).rejects.toThrow(/not named/i);
+  });
+});
+
+/**
+ * A lease is externally financed in business terms, so it must not silently
+ * default through the dealership — but the data model carries no lease-provider
+ * identity anywhere, so it cannot record a direct payment either. Being unable
+ * to store the right answer is not a reason to post the wrong one quietly: it is
+ * asked the question and refused that one answer, with the reason named.
+ */
+describe("a lease, which is external but has no provider identity", () => {
+  test("is asked the settlement route before finalizing", async () => {
+    const s = await seedDealership("lease1");
+    await expect(runDeal(s, { mode: "LEASE" })).rejects.toThrow(/record the settlement route/i);
+  });
+
+  test("is refused the direct route, naming the missing provider as the reason", async () => {
+    const s = await seedDealership("lease2");
+    const { applicationId } = await runDeal(s, { mode: "LEASE", finalize: false });
+
+    await expect(
+      s.asUser.mutation(api.applications.setSupplierSettlementRoute, {
+        orgId: s.orgId, applicationId, route: "DIRECT_TO_SUPPLIER",
+      })
+    ).rejects.toThrow(/leasing provider is not recorded/i);
+  });
+
+  test("finalizes normally once it is told to settle through the dealership", async () => {
+    const s = await seedDealership("lease3");
+    const { saleId } = await runDeal(s, { mode: "LEASE", route: "THROUGH_DEALERSHIP" });
+    expect(saleId).toBeTruthy();
   });
 });

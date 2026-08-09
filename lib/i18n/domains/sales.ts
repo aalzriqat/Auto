@@ -140,6 +140,12 @@ export const salesEn = {
   RouteThroughDealershipHint: "The buyer paid the dealership the full price.",
   RouteDirectToSupplier: "Direct to the supplier",
   RouteDirectToSupplierHint: "The buyer paid the supplier. The dealership never handled the money.",
+  RouteDirectUnavailableNoExternalFinancier:
+    "No outside financier on this deal, so nobody but the dealership pays the supplier.",
+  RouteDirectUnavailableLease:
+    "The leasing provider is not recorded on this deal, so a payment to the supplier could not be attributed to anyone.",
+  RouteDirectUnavailableUnnamedProvider:
+    "The finance provider is not named on this deal, so a payment to the supplier could not be attributed to anyone.",
   GrossTransactionValue: "Gross transaction value",
   SupplierEntitlement: "{supplier} is entitled to",
   DealerGrossMargin: "Dealership margin",
@@ -733,6 +739,12 @@ export const salesAr = {
   RouteThroughDealershipHint: "دفع المشتري كامل المبلغ للمعرض.",
   RouteDirectToSupplier: "مباشرة إلى المورّد",
   RouteDirectToSupplierHint: "دفع المشتري للمورّد، ولم يستلم المعرض المبلغ إطلاقًا.",
+  RouteDirectUnavailableNoExternalFinancier:
+    "لا توجد جهة تمويل خارجية في هذه الصفقة، فلا أحد غير المعرض يدفع للمورّد.",
+  RouteDirectUnavailableLease:
+    "جهة التأجير غير مسجّلة في هذه الصفقة، فلا يمكن نسب الدفعة إلى المورّد لأي جهة.",
+  RouteDirectUnavailableUnnamedProvider:
+    "اسم جهة التمويل غير مسجّل في هذه الصفقة، فلا يمكن نسب الدفعة إلى المورّد لأي جهة.",
   GrossTransactionValue: "إجمالي قيمة الصفقة",
   SupplierEntitlement: "مستحق {supplier}",
   DealerGrossMargin: "هامش المعرض",

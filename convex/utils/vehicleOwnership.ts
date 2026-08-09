@@ -79,6 +79,114 @@ export interface SettlementRouteFacts {
   supplierSettlementRoute?: ConsignedSettlementRoute;
 }
 
+/** How a quote was priced, which is what decides who pays the supplier. */
+export type FinanceQuoteMode =
+  | "CASH"
+  | "CONFIGURED_FINANCE_COMPANY"
+  | "MANUAL_FINANCE_COMPANY"
+  | "INTERNAL_INSTALLMENT"
+  | "LEASE";
+
+/** The subset of a finance application the payer question depends on. */
+export interface SettlementPayerFacts {
+  /** `quoteModeAtSubmission`, falling back to the quote's current mode. */
+  quoteMode?: FinanceQuoteMode;
+  /** Only ever set on CONFIGURED_FINANCE_COMPANY deals. */
+  financeCompanyId?: string;
+  /** `manualFinanceSnapshot.providerName` — the manual financier's identity. */
+  manualProviderName?: string;
+}
+
+/**
+ * Who pays for the car, and whether a settlement advice can name them.
+ *
+ * `external` decides whether the settlement route is a real question — if
+ * nobody outside the dealership pays, the direct route is incoherent and there
+ * is nothing to ask. `counterparty` decides whether the DIRECT route can
+ * actually be recorded, because an external payment nobody can be named for is
+ * unauditable.
+ *
+ * These are two separate questions and collapsing them is a mistake worth
+ * naming. LEASE is external in business terms, so it must not silently default
+ * THROUGH_DEALERSHIP — but the model carries no lease-provider identity
+ * anywhere, so it cannot take DIRECT either. It gets asked the question and
+ * refused the answer, rather than being waved through on one side or hidden on
+ * the other.
+ */
+export type SettlementPayer =
+  | { external: false }
+  | {
+      external: true;
+      counterparty:
+        | { kind: "FINANCE_COMPANY"; financeCompanyId: string }
+        | { kind: "MANUAL_PROVIDER"; name: string };
+    }
+  | { external: true; counterparty: null; unidentifiedReason: "LEASE" | "MANUAL_PROVIDER_UNNAMED" };
+
+/**
+ * `companyId` was the original proxy for "an external financier exists", and it
+ * is wrong in both directions.
+ *
+ * `convex/quotes.ts` rejects `companyId` on every mode except
+ * CONFIGURED_FINANCE_COMPANY, so a MANUAL_FINANCE_COMPANY deal — an ordinary
+ * "other finance option", entered by name rather than picked from the
+ * configured list — structurally cannot carry one. It was therefore read as
+ * having no external financier at all: the finalize route requirement never
+ * fired, so the deal defaulted THROUGH_DEALERSHIP and booked a customer
+ * receivable plus a supplier payable even when the financier paid the supplier
+ * directly, while `setSupplierSettlementRoute` refused the DIRECT route that
+ * would have described it correctly. A real external financier treated as none,
+ * in both directions at once.
+ *
+ * The MODE is the fact that decides this, and it is snapshotted onto the
+ * application at submission, so it cannot drift when the quote is edited
+ * afterwards. The identity is read from the same snapshot for the same reason:
+ * a settlement advice records who paid, and that must not be re-derived later
+ * from a mutable quote field.
+ */
+export function settlementPayer(facts: SettlementPayerFacts): SettlementPayer {
+  switch (facts.quoteMode) {
+    case "CONFIGURED_FINANCE_COMPANY":
+      // Validated at quote time, but a row missing it is external-and-unnamed
+      // rather than not-external — the same treatment an unnamed manual
+      // provider gets, for the same reason.
+      return facts.financeCompanyId
+        ? {
+            external: true,
+            counterparty: { kind: "FINANCE_COMPANY", financeCompanyId: facts.financeCompanyId },
+          }
+        : { external: true, counterparty: null, unidentifiedReason: "MANUAL_PROVIDER_UNNAMED" };
+
+    case "MANUAL_FINANCE_COMPANY": {
+      const name = facts.manualProviderName?.trim();
+      return name
+        ? { external: true, counterparty: { kind: "MANUAL_PROVIDER", name } }
+        : { external: true, counterparty: null, unidentifiedReason: "MANUAL_PROVIDER_UNNAMED" };
+    }
+
+    case "LEASE":
+      return { external: true, counterparty: null, unidentifiedReason: "LEASE" };
+
+    // CASH is the customer paying, INTERNAL_INSTALLMENT is the DEALERSHIP
+    // financing the customer — it owes the supplier itself, so no outside party
+    // pays him. An absent mode predates the field and is treated as neither,
+    // which preserves what every historical row already posted.
+    case "CASH":
+    case "INTERNAL_INSTALLMENT":
+    default:
+      return { external: false };
+  }
+}
+
+/**
+ * Whether this deal can be settled DIRECT_TO_SUPPLIER at all — an outside payer
+ * exists AND the advice can name them.
+ */
+export function canSettleDirectToSupplier(facts: SettlementPayerFacts): boolean {
+  const payer = settlementPayer(facts);
+  return payer.external && payer.counterparty !== null;
+}
+
 /**
  * Absent means THROUGH_DEALERSHIP, because that is what every consigned sale
  * written before the field existed actually posted — the old code passed the
