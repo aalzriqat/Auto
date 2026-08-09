@@ -270,6 +270,107 @@ describe("the back-book keeps the arithmetic it was written under", () => {
     expect(pl.totalRevenue).toBe(DEPOSIT);
   });
 
+  test("the impact report attributes SLICES, never the whole receipt per sale", async () => {
+    // The inflation this exists to catch: one 500 عربون split 300 to car A and
+    // 150 to car B, 50 still held. Counting the receipt once per sale reports
+    // 1,000 of impact instead of 450 — and a migration decision would be taken
+    // on a number more than twice the real one, growing with every extra line
+    // on the quote.
+    const s = await seed("slices");
+    const a = await vehicle(s, "sliceA", false);
+    const b = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin: "VINSLICEB", make: "Kia", model: "Rio", year: 2023,
+        mileage: 5, color: "Red", fuelType: "Gas", transmission: "Auto",
+        sellingPrice: OWNED_PRICE, status: "AVAILABLE",
+        sourceType: "STOCK" as const, purchasePrice: OWNED_COST,
+      })
+    );
+    const at = Date.now();
+
+    const depositId = await s.t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId: s.orgId, vehicleId: a, customerId: s.customerId,
+        amount: 500, amountMinor: 500 * 1000, currency: "JOD", method: "CASH",
+        status: "HELD", holdActive: true, createdAt: at, createdBy: s.userId,
+      })
+    );
+    await s.t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId: s.orgId, type: "IN", amount: 500, date: at, category: "DEPOSIT",
+        description: "Legacy split deposit", vehicleId: a, depositId,
+      })
+    );
+
+    // Two completed sales, each carrying its own applied slice.
+    const saleFor = async (vehicleId: typeof a, slice: number) => {
+      const saleId = await s.t.run((ctx) =>
+        ctx.db.insert("sales", {
+          orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
+          salePrice: OWNED_PRICE, saleDate: at, status: "COMPLETED" as const,
+        })
+      );
+      await s.t.run((ctx) =>
+        ctx.db.insert("depositApplications", {
+          orgId: s.orgId, depositId, vehicleId, saleId, customerId: s.customerId,
+          amountMinor: slice * 1000, currency: "JOD",
+          treatment: "CUSTOMER_RECEIVABLE" as const,
+          eventType: "DEPOSIT_APPLIED", eventSourceType: "sale",
+          eventSourceId: saleId, eventVersion: 1,
+          eventIdempotencyKey: `slice:${vehicleId}:${slice}`,
+          status: "APPLIED" as const, appliedAt: at, appliedBy: s.userId,
+        })
+      );
+    };
+    await saleFor(a, 300);
+    await saleFor(b, 150);
+
+    const report = await s.t.query(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (await import("./_generated/api")).internal.depositRevenueImpact.depositRevenueImpact as any,
+      { orgId: s.orgId }
+    );
+
+    const org = report.perOrg[0];
+    // 300 + 150 attributed to their own sale periods, 50 still held. Never 1,000.
+    expect(org.samePeriodAmount + org.crossPeriodAmount).toBe(450);
+    expect(org.unresolvedAmount).toBe(50);
+    expect(org.partialOrMultiSaleDeposits).toBe(1);
+  });
+
+  test("a refunded or forfeited legacy deposit is not counted as unresolved", async () => {
+    // Terminal decisions. The money is not waiting on anything, so counting it
+    // as unresolved would overstate the work a migration has left to do.
+    for (const status of ["REFUNDED", "FORFEITED"] as const) {
+      const s = await seed(`terminal${status}`);
+      const v = await vehicle(s, `terminal${status}`, false);
+      const at = Date.now();
+      const depositId = await s.t.run((ctx) =>
+        ctx.db.insert("deposits", {
+          orgId: s.orgId, vehicleId: v, customerId: s.customerId,
+          amount: DEPOSIT, amountMinor: DEPOSIT * 1000, currency: "JOD", method: "CASH",
+          status, holdActive: false, createdAt: at, createdBy: s.userId,
+        })
+      );
+      await s.t.run((ctx) =>
+        ctx.db.insert("transactions", {
+          orgId: s.orgId, type: "IN", amount: DEPOSIT, date: at, category: "DEPOSIT",
+          description: "Legacy terminal deposit", vehicleId: v, depositId,
+        })
+      );
+
+      const report = await s.t.query(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (await import("./_generated/api")).internal.depositRevenueImpact.depositRevenueImpact as any,
+        { orgId: s.orgId }
+      );
+      expect(report.unresolvedLegacyDeposits).toBe(0);
+      expect(
+        status === "REFUNDED" ? report.refundedLegacyDeposits : report.forfeitedLegacyDeposits
+      ).toBe(1);
+    }
+  });
+
   test("the impact report counts a cross-period legacy deposit and writes nothing", async () => {
     const s = await seed("impact");
     const v = await vehicle(s, "impact", false);
