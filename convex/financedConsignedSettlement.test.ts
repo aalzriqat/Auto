@@ -539,11 +539,13 @@ describe("a reservation deposit on the direct route", () => {
     // other door.
     await expect(
       runDeal(s, { route: "DIRECT_TO_SUPPLIER", depositAfterRoute: 3_000 })
-      // Asserting on wording unique to THIS refusal. The pre-existing
-      // `resolveReservationDeposits` message also contains "reservation
-      // deposit", so a looser regex passes without the guard and proves
-      // nothing — it names five treatments whose UI this PR removed.
-    ).rejects.toThrow(/resolve the deposit/i);
+      // Pinned to wording unique to the FINALIZATION refusal. Two looser
+      // regexes both pass for the wrong reason: `/reservation deposit/i` also
+      // matches the pre-existing `resolveReservationDeposits` message, so it
+      // passes without the guard at all; and `/resolve the deposit/i` also
+      // matches the route-time refusal, so it would pass if this test's
+      // deposit were ever created before the route instead of after.
+    ).rejects.toThrow(/then finalize/i);
   });
 
   test("a deposit deal still finalizes through the dealership, exactly as before", async () => {
