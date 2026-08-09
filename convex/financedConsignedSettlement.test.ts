@@ -608,6 +608,8 @@ describe("cancelling by the other door, after the supplier was paid", () => {
   test("sales.update cannot cancel a deal the finance company has already paid the supplier for", async () => {
     const s = await seedDealership("bypass1");
     const { applicationId, saleId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER" });
+    // `runDeal` only returns a null `saleId` when called with `finalize: false`.
+    if (!saleId) throw new Error("runDeal was expected to finalize a sale");
     await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
       orgId: s.orgId, applicationId, disbursedAmountMinor: VEHICLE_PRICE * SCALE,
     });
