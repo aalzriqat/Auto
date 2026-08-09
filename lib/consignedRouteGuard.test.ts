@@ -17,8 +17,28 @@ describe("the sale form's consigned settlement-route guard", () => {
         financed: true,
         route: "DIRECT_TO_SUPPLIER",
         isConsigned: true,
+        status: "COMPLETED",
       })
     ).toBe("DIRECT_UNSUPPORTED_ON_FINANCED");
+  });
+
+  test("lets a draft be saved, and a sale be cancelled, without changing the route", () => {
+    // Only the transition that POSTS is refused. The same guard one function
+    // over got this wrong first (`consignedTaxRefusal`): an unscoped refusal
+    // blocked the CANCEL path, so the operator was told to change the route
+    // "to record it" on a deal they were trying NOT to record — and the submit
+    // they needed was the disabled one. A draft and a cancellation post
+    // nothing, so there is nothing there to refuse.
+    for (const status of ["PENDING", "CANCELLED"] as const) {
+      expect(
+        consignedRouteRefusal({
+          financed: true,
+          route: "DIRECT_TO_SUPPLIER",
+          isConsigned: true,
+          status,
+        })
+      ).toBeNull();
+    }
   });
 
   test("lets a cash consigned deal pay the supplier directly", () => {
@@ -29,6 +49,7 @@ describe("the sale form's consigned settlement-route guard", () => {
         financed: false,
         route: "DIRECT_TO_SUPPLIER",
         isConsigned: true,
+        status: "COMPLETED",
       })
     ).toBeNull();
   });
@@ -39,6 +60,7 @@ describe("the sale form's consigned settlement-route guard", () => {
         financed: true,
         route: "THROUGH_DEALERSHIP",
         isConsigned: true,
+        status: "COMPLETED",
       })
     ).toBeNull();
   });
@@ -50,6 +72,7 @@ describe("the sale form's consigned settlement-route guard", () => {
         financed: true,
         route: "DIRECT_TO_SUPPLIER",
         isConsigned: false,
+        status: "COMPLETED",
       })
     ).toBeNull();
   });
@@ -62,13 +85,14 @@ describe("the sale form's consigned settlement-route guard", () => {
         financed: true,
         route: "DIRECT_TO_SUPPLIER",
         isConsigned: undefined,
+        status: "COMPLETED",
       })
     ).toBeNull();
   });
 
   test("says nothing while the route itself is unset", () => {
     expect(
-      consignedRouteRefusal({ financed: true, route: undefined, isConsigned: true })
+      consignedRouteRefusal({ financed: true, route: undefined, isConsigned: true, status: "COMPLETED" })
     ).toBeNull();
   });
 });

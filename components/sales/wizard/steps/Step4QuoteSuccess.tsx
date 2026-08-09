@@ -223,6 +223,9 @@ export function Step4QuoteSuccess({
     financed: paymentType === "INSTALLMENT",
     route: settlementRoute,
     isConsigned: firstConsignedVehicleId !== undefined ? true : undefined,
+    // This button only ever completes a sale; the wizard has no draft or
+    // cancel transition of its own.
+    status: "COMPLETED",
   });
 
   const orgBranding = {

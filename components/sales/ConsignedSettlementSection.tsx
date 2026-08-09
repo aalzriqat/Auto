@@ -131,8 +131,16 @@ export function ConsignedSettlementSection({
   const supplier = preview.supplierName || t("TheSupplier" as any);
 
   // Past the early return, so the car is known to be consigned.
+  // The section itself has no status: it explains the refusal wherever the
+  // route is being chosen, and the callers decide whether that refusal blocks
+  // their particular transition.
   const routeRefused =
-    consignedRouteRefusal({ financed, route: value, isConsigned: true }) !== null;
+    consignedRouteRefusal({
+      financed,
+      route: value,
+      isConsigned: true,
+      status: "COMPLETED",
+    }) !== null;
 
   // Paying the supplier directly is not supported on a FINANCED deal yet: the
   // finance company's side of the settlement has nowhere to record it. The

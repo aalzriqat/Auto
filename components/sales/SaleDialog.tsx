@@ -243,6 +243,15 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     financed: financingType === "FINANCED" || financingType === "LEASE",
     route: watchAll.supplierSettlementRoute ?? "THROUGH_DEALERSHIP",
     isConsigned: selectedVehicle ? selectedVehicle.sourceType === "SOURCED" : undefined,
+    // Scoped exactly like the tax guard above. Unscoped, this blocked the
+    // CANCELLED transition on a draft it had itself refused — the operator
+    // could neither record the deal nor unrecord it.
+    status:
+      watchAll.status === "COMPLETED"
+        ? "COMPLETED"
+        : watchAll.status === "CANCELLED"
+          ? "CANCELLED"
+          : "PENDING",
   });
 
   const onSubmit = async (values: SaleFormValues) => {

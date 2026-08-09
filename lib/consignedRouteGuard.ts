@@ -35,7 +35,16 @@ export function consignedRouteRefusal(input: {
    * refusal — the preview has not answered yet.
    */
   isConsigned: boolean | undefined;
+  /**
+   * Only the transition that POSTS is refused. A draft and a cancellation post
+   * nothing, so neither has a settlement to get wrong — and refusing them is
+   * not harmless: `consignedTaxRefusal` shipped unscoped first, which blocked
+   * the CANCEL path behind a message telling the operator to change a deal
+   * they were trying not to record, with the submit they needed disabled.
+   */
+  status: "PENDING" | "COMPLETED" | "CANCELLED";
 }): ConsignedRouteRefusal | null {
+  if (input.status !== "COMPLETED") return null;
   if (input.isConsigned !== true) return null;
   if (!input.financed) return null;
   if (input.route !== "DIRECT_TO_SUPPLIER") return null;
