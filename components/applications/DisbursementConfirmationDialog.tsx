@@ -73,17 +73,27 @@ export function DisbursementConfirmationDialog({
   const [reference, setReference] = useState("");
   const [paidOn, setPaidOn] = useState("");
 
-  // The prefill is read through a ref so this effect depends on `open` ALONE.
+  // The prefill is read through a ref so the reset effect below depends on
+  // `open` ALONE.
   //
   // `defaultAmountMajor` comes from a live Convex query — the application's
-  // approved purchase amount. With it in the dependency array, anything that
-  // changed that figure while the operator was mid-entry re-ran the reset and
-  // silently wiped the amount, cheque reference and date they had just typed
-  // off a settlement advice. Reset belongs to the open transition, not to every
-  // value change behind it.
-  // Synced in an effect rather than assigned during render — writing a ref
-  // while rendering is what `react-hooks` forbids, and it is the shape the
-  // suggested fix arrived in.
+  // approved purchase amount. With it in the reset effect's dependency array,
+  // anything that changed that figure while the operator was mid-entry re-ran
+  // the reset and silently wiped the amount, cheque reference and date they had
+  // just read off a settlement advice. Reset belongs to the open transition,
+  // not to every value change behind it.
+  //
+  // Synced in an effect rather than assigned during render, because writing a
+  // ref while rendering is what `react-hooks` forbids — and that is the shape
+  // the suggested fix arrived in, so it failed lint before it failed review.
+  //
+  // ⚠️ DECLARATION ORDER IS LOAD-BEARING. React flushes effects in declaration
+  // order, so this sync must stay ABOVE the reset effect below: when the dialog
+  // opens in the same commit that brings a new prefill, the reset has to read
+  // the fresh value. Reorder them — by hand, by a refactor, or by a lint
+  // autofix — and the dialog silently prefills a STALE money figure into a
+  // settlement advice, which the server will accept as long as it is positive.
+  // Pinned by "reads the current prefill on the open transition" in the tests.
   const prefillRef = useRef(defaultAmountMajor);
   useEffect(() => {
     prefillRef.current = defaultAmountMajor;

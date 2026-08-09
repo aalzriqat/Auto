@@ -396,21 +396,17 @@ export function ApplicationDetailsDialog({
     return t("AwaitingDisbursement" as any);
   })();
   // A configured company has a row to name; a manual provider has only the name
-  // snapshotted at submission; a lease has neither, and says so rather than
-  // rendering an empty label beside "Company".
-  // `|| undefined` on the trimmed name, not `??`: a whitespace-only provider
-  // name is reachable (`saveQuote` applies no trim) and would otherwise render
-  // as an empty label beside "Company", while the server's own resolver
-  // correctly calls that payer unnamed.
+  // snapshotted at submission; a lease has neither.
+  //
   // A lease has an external financier and no name for it anywhere, so it fell
   // to "Finance provider (not named)" here while the applications list called
   // the same deal "Lease" — two descriptions of one deal, and this was the
   // inaccurate one: it has a leasing provider, not an unnamed finance company.
   //
-  // `|| undefined` on the trimmed name, not `??`: a whitespace-only provider
-  // name is reachable (`saveQuote` applies no trim) and would otherwise render
-  // as an empty label beside "Company", while the server's own resolver
-  // correctly calls that payer unnamed.
+  // `||` throughout rather than `??`: a whitespace-only provider name is
+  // reachable (`saveQuote` applies no trim) and `??` would keep the trimmed
+  // empty string, rendering a blank label beside "Company" while the server's
+  // own resolver correctly calls that payer unnamed.
   const financierLabel =
     app.company?.name ||
     app.manualFinanceSnapshot?.providerName?.trim() ||

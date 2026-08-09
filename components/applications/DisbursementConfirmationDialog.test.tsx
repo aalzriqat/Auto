@@ -131,3 +131,40 @@ describe("what happens when the prefill changes while the dialog is open", () =>
     expect((screen.getByLabelText(/reference/i) as HTMLInputElement).value).toBe("CHQ-99182");
   });
 });
+
+/**
+ * Pins the effect declaration order, which is load-bearing.
+ *
+ * The prefill ref is synced in an effect declared ABOVE the open-reset effect,
+ * and React flushes effects in declaration order — so when the dialog opens in
+ * the same commit that brings a new prefill, the reset reads the fresh value.
+ * Reorder the two and this fails: the dialog would prefill a STALE money figure
+ * into a settlement advice, which the server accepts as long as it is positive.
+ */
+describe("opening the dialog after the prefill changed", () => {
+  test("reads the current prefill on the open transition", () => {
+    const props = {
+      mode: "SUPPLIER" as const,
+      supplierName: "Amman Importer Co",
+      disabled: false,
+      submitting: false,
+      amountLabel: "JD 28,000",
+      t: (key: string) => key,
+      onOpenChange: () => {},
+      onConfirm: () => {},
+      onConfirmSupplier: () => {},
+    };
+
+    const { rerender } = render(
+      <DisbursementConfirmationDialog {...props} open={false} defaultAmountMajor={28_000} />
+    );
+
+    // The prefill and `open` change in the SAME commit — the case that breaks
+    // if the sync effect stops running first.
+    rerender(<DisbursementConfirmationDialog {...props} open defaultAmountMajor={29_000} />);
+
+    const amount = document.querySelector('input[inputmode="decimal"], input[type="number"], input[name="amount"]')
+      ?? screen.getByLabelText(/amount/i);
+    expect((amount as HTMLInputElement).value).toBe("29000");
+  });
+});
