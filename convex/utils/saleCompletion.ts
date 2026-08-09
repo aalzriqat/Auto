@@ -1092,8 +1092,16 @@ async function applySaleCompletionSideEffects(
   // the capitalized cost are both decimals, and their difference carries float
   // error that would otherwise be stored as the amount a supplier owes — a
   // receivable of 2999.9999999999995 can never be settled to zero.
-  const rawMarginAmount = args.salePrice - costAmount;
-  const marginMinorForClaim = toMinorUnits(Math.max(0, rawMarginAmount), prepared.currency);
+  // The SAME integer the journal posts from, not a second rounding of the float
+  // difference. `marginMinor` is `round(salePrice) - round(cost)`; this was
+  // `round(salePrice - cost)`, and where either amount carries more decimals
+  // than the currency scale those two disagree by a minor unit. The GL debit on
+  // the direct route comes from `marginMinor`, so the claim was raised for an
+  // amount its own posting never matched — unsettleable by one fils, forever on
+  // the aging report. Same defect as `recognizedRevenue` above; this is its
+  // sibling. `marginMinor` is non-null on every path that reaches here: a
+  // sourced sale without a positive `costMinor` throws further up.
+  const marginMinorForClaim = Math.max(0, marginMinor ?? 0);
   const supplierOwesMargin = marginMinorForClaim > 0;
   if (isSourced && costAmount > 0 && supplierOwesMargin && !dealershipCollectsGross(settlementRoute)) {
     const marginAmount = fromMinorUnits(marginMinorForClaim, prepared.currency);
@@ -1116,7 +1124,12 @@ async function applySaleCompletionSideEffects(
       vehicleId: args.vehicleId,
       saleId,
       sourcedFromName: prepared.vehicle.sourcedFromName ?? "Unknown supplier",
-      amountDue: costAmount,
+      // At the currency's scale, mirroring the receivable side. `sourceCost` is
+      // a decimal a person typed and the capitalized cost is a sum of them, so
+      // stored raw this becomes a payable no payment can close: `recordPayment`
+      // refuses to overpay, which leaves the last fraction of a fils unpayable
+      // and the row permanently short of PAID.
+      amountDue: fromMinorUnits(toMinorUnits(costAmount, prepared.currency), prepared.currency),
       currency: prepared.currency,
       status: "PENDING",
       createdBy: args.actorId,

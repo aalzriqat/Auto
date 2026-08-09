@@ -936,6 +936,81 @@ describe("a financed consigned sale settled directly with the supplier", () => {
     await expect(attempt()).rejects.toThrow(/financed/i);
   });
 
+  /**
+   * What the supplier owes must be the figure the journal posted, to the unit.
+   *
+   * The GL debit on the direct route is built from `marginMinor`
+   * (`toMinorUnits(salePrice) - costMinor`). The receivable was built from
+   * `toMinorUnits(salePrice - costAmount)` — `round(a) - round(b)` against
+   * `round(a - b)`. Where either amount carries more decimals than the currency
+   * scale those differ by a minor unit, and a claim that disagrees with its own
+   * posting by one fils can never be settled to zero. It sits on the aging
+   * report forever, which is the exact outcome the comment above it set out to
+   * prevent.
+   *
+   * The same defect was fixed for `recognizedRevenueAmount`; this is its
+   * sibling, two hundred lines further down the same function.
+   */
+  test("the supplier receivable equals the journal's margin, to the minor unit", async () => {
+    const s = await seedDealer("claimScale");
+    // Both carry sub-fils precision, so round(a-b) and round(a)-round(b) split.
+    const SALE = 12_500.7005;
+    const COST = 9_500.5002;
+    const vehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin: "VINCLAIM1", make: "Toyota", model: "Camry", year: 2024,
+        mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto",
+        sellingPrice: SALE, status: "AVAILABLE", sourceType: "SOURCED",
+        sourcedFromName: "Amman Importer Co", sourceCost: COST,
+      })
+    );
+    await s.asUser.mutation(api.sales.create, {
+      orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
+      salePrice: SALE, saleDate: Date.now(), status: "COMPLETED" as const,
+      financingType: "CASH" as const,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER" as const,
+    });
+
+    const receivable = await s.t.run(async (ctx) =>
+      (await ctx.db.query("vehicleSupplierReceivables").collect()).find((r) => r.vehicleId === vehicleId)
+    );
+    // marginMinor = round(12500.7005*1000) - round(9500.5002*1000) = 3000201.
+    expect(receivable?.amountDue).toBe(3_000.201);
+  });
+
+  /**
+   * And what the dealership owes is stored at the currency's scale.
+   *
+   * `sourceCost` is a decimal a person typed, and the capitalized cost is a sum
+   * of them. Stored raw, a payable of 9500.5002 is one no payment can ever
+   * close: `recordPayment` refuses to overpay, so the last fraction of a fils
+   * is unpayable and the row never reaches PAID. The receivable side already
+   * rounds through the currency; this side did not.
+   */
+  test("the supplier payable is stored at the currency's scale", async () => {
+    const s = await seedDealer("payScale");
+    const COST = 9_500.5002;
+    const vehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin: "VINPAY1", make: "Toyota", model: "Camry", year: 2024,
+        mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto",
+        sellingPrice: 12_500, status: "AVAILABLE", sourceType: "SOURCED",
+        sourcedFromName: "Amman Importer Co", sourceCost: COST,
+      })
+    );
+    await s.asUser.mutation(api.sales.create, {
+      orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
+      salePrice: 12_500, saleDate: Date.now(), status: "COMPLETED" as const,
+      financingType: "CASH" as const,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP" as const,
+    });
+
+    const payable = await s.t.run(async (ctx) =>
+      (await ctx.db.query("vehicleSupplierPayables").collect()).find((p) => p.vehicleId === vehicleId)
+    );
+    expect(payable?.amountDue).toBe(9_500.5);
+  });
+
   test("leaves nothing behind — no sale, no sold vehicle, no supplier payable", async () => {
     const { s, vehicleId, attempt } = await financedDirect("finDirectState");
     await expect(attempt()).rejects.toThrow();
