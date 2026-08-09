@@ -735,6 +735,17 @@ export interface DealStageFacts extends LifecycleFacts {
   approvedDealerPurchaseAmountMinor?: number;
   /** Every required document uploaded, verified or waived. */
   requiredDocumentsComplete: boolean;
+  /**
+   * Whether the money is finished, when the caller can answer it better than
+   * `settlementStatus` can.
+   *
+   * A DIRECT_TO_SUPPLIER deal never reaches FULLY_SETTLED through that field —
+   * the only mutation that writes it refuses that route — so judging both routes
+   * by it left the direct route's terminal stage permanently blocked on deals
+   * that were completely finished. The caller knows the route and the supplier's
+   * claim; this leaves room for it to say so.
+   */
+  settlementComplete?: boolean;
 }
 
 /**
@@ -783,7 +794,9 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
     APPROVED_PURCHASE: facts.approvedDealerPurchaseAmountMinor !== undefined,
     DELIVERY_ACTIONS: facts.requiredDocumentsComplete,
     HANDOVER: handover === "HANDED_OVER",
-    SETTLEMENT: settlement === "FULLY_SETTLED" || settlement === "RECONCILED",
+    SETTLEMENT:
+      facts.settlementComplete ??
+      (settlement === "FULLY_SETTLED" || settlement === "RECONCILED"),
   };
 
   const blockers: Partial<Record<DealStageKey, DealStageBlocker>> = {
@@ -853,6 +866,21 @@ export type ManagementProfit =
  * A profit of zero and a profit nobody can compute are different claims, and on
  * the screen a dealership reads to decide whether a deal made money, showing
  * the first in place of the second is the more damaging of the two errors.
+ *
+ * ⚠️ THIS IS NOT THE SAME FIGURE AS `computeDealerProceeds`, AND THAT IS
+ * UNRESOLVED. That function nets out `dealerContributionMinor` — what the
+ * dealership must put in when the finance company funds less than the purchase
+ * amount — and `customerDirectToDealerMinor`. This one does not: it is the
+ * headline from the approved mockup, and the mockup's four lines are the
+ * approved purchase amount, the supplier settlement and actual expenses, with
+ * no contribution line.
+ *
+ * So whenever LTV is under 100% and the customer's first payment does not cover
+ * the unfinanced slice, this figure is HIGHER than the dealership's true
+ * economics by roughly the contribution. Two profit definitions for one deal
+ * coexist in this repository, and until the dealership confirms which one the
+ * cockpit is meant to show, they must at least not be silent about each other.
+ * Tracked on SCRUM-26; do not "reconcile" them by quietly changing this one.
  */
 export function deriveManagementProfit(args: {
   approvedDealerPurchaseAmountMinor?: number;

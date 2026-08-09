@@ -17,7 +17,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { FileText, Eye, Search } from "lucide-react";
+import { FileText, Eye, Search, LayoutDashboard } from "lucide-react";
+import Link from "next/link";
 import { format } from "date-fns";
 import { ApplicationDetailsDialog } from "@/components/applications/ApplicationDetailsDialog";
 import { useTableControls } from "@/hooks/useTableControls";
@@ -173,6 +174,17 @@ export function ApplicationClient() {
                       <TableCell>{format(app.createdAt, "PP")}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{app.salespersonName}</TableCell>
                       <TableCell className="text-right">
+                        {/* The dialog stays the review surface — approving,
+                            documents, disbursement. The cockpit is the deal's
+                            own page: where it stands, what it is worth, and who
+                            holds the money. Two jobs, so two entry points
+                            rather than one dialog that grew a second identity. */}
+                        <Button variant="ghost" size="sm" asChild>
+                          <Link href={`/${activeOrgId}/applications/${app._id}/deal`}>
+                            <LayoutDashboard className="h-4 w-4 me-2" />
+                            {t("DealCockpitTitle")}
+                          </Link>
+                        </Button>
                         <Button
                           variant="ghost"
                           size="sm"

@@ -35,7 +35,9 @@ import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
   ensureReceivableDocument,
+  getReceivableOutstandingMinor,
 } from "./subledger";
+import { summarizeFees } from "./financeDealCosts";
 import {
   consignedSettlementRoute,
   consignedSettlementRouteValidator,
@@ -334,35 +336,73 @@ const VALID_STATUS_TRANSITIONS: Record<FinanceApplicationStatus, readonly Financ
  * on one table means "owed to us" and on another means "we owe" is how the same
  * deal ends up described two different ways on two different screens.
  */
-async function buildCockpitMoney(
-  ctx: QueryCtx,
-  app: Doc<"financeApplications">,
-  quote: Doc<"quotes"> | null
-) {
-  const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, app.orgId));
+/**
+ * Which way this deal settles, and whether the money is finished — resolved
+ * ONCE, because the stage rail and the money panel must never disagree about it.
+ *
+ * The SALE is the authority once it exists: `sales.update` locks the route on
+ * completion, so re-deriving from the live vehicle afterwards would let a later
+ * edit flip the answer under a deal that has already posted. Before a sale
+ * exists the vehicle is the only evidence there is.
+ *
+ * Unlike the mutation-side guard this does NOT throw when the evidence is
+ * missing. This is a read, and refusing would blank the operator's whole screen
+ * at the moment they most need to see what is wrong. It reports the route as
+ * unknown and every caller withholds what depends on it — the same fail-closed
+ * outcome, without destroying the diagnostic.
+ */
+async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">) {
   const vehicle = await ctx.db.get(app.vehicleId);
   const consigned = vehicle != null && isConsignedAgentSale(vehicle);
-  const supplierName = vehicle?.sourcedFromName ?? "";
 
-  // Which way this deal settles. The SALE is the authority once it exists —
-  // `sales.update` locks the route on completion, so re-deriving from the live
-  // vehicle afterwards would let a later edit flip the answer under a deal that
-  // has already posted.
-  //
-  // Unlike the mutation-side guard, a missing sale does NOT throw here. This is
-  // a read: refusing would blank the operator's whole screen at the moment they
-  // most need to see what is wrong. It reports the route as unknown instead, and
-  // withholds every action that depends on knowing it — the same fail-closed
-  // outcome, without destroying the diagnostic.
   let routeKnown = true;
   let settlesDirect = false;
   if (app.finalizedSaleId) {
     const sale = await ctx.db.get(app.finalizedSaleId);
     if (!sale || sale.orgId !== app.orgId) routeKnown = false;
-    else settlesDirect = !dealershipCollectsGross(consignedSettlementRoute(sale)) && consigned;
+    else settlesDirect = !dealershipCollectsGross(consignedSettlementRoute(sale));
+  } else if (vehicle === null) {
+    routeKnown = false;
   } else {
     settlesDirect = !dealershipCollectsGross(consignedSettlementRoute(app)) && consigned;
   }
+
+  const supplierClaim = app.finalizedSaleId
+    ? (
+        await ctx.db
+          .query("vehicleSupplierReceivables")
+          .withIndex("by_org_sale", (q) =>
+            q.eq("orgId", app.orgId).eq("saleId", app.finalizedSaleId!)
+          )
+          .collect()
+      ).find((row) => row.status !== "CANCELLED")
+    : undefined;
+
+  // A DIRECT deal can never reach FULLY_SETTLED through `settlementStatus`: the
+  // only writer of it is `confirmDisbursement`, which refuses the direct route
+  // outright, and `confirmSupplierDisbursement` deliberately writes EXPECTED.
+  // Judging both routes by that one field left the direct route's terminal stage
+  // permanently blocked on deals that were completely finished. Each route is
+  // judged by the evidence it can actually produce.
+  const statusSettlement = app.settlementStatus ?? settlementStatusForFacts(app);
+  const moneySettled =
+    routeKnown &&
+    (settlesDirect
+      ? app.supplierDisbursementConfirmedAt !== undefined && supplierClaim?.status === "PAID"
+      : statusSettlement === "FULLY_SETTLED" || statusSettlement === "RECONCILED");
+
+  return { vehicle, consigned, routeKnown, settlesDirect, supplierClaim, moneySettled };
+}
+
+async function buildCockpitMoney(
+  ctx: QueryCtx,
+  app: Doc<"financeApplications">,
+  quote: Doc<"quotes"> | null,
+  settlementFacts: Awaited<ReturnType<typeof resolveSettlement>>
+) {
+  const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, app.orgId));
+  const { vehicle, routeKnown, settlesDirect, moneySettled } = settlementFacts;
+  const supplierName = vehicle?.sourcedFromName ?? "";
 
   // --- actual expenses --------------------------------------------------
   const fees = await ctx.db
@@ -374,6 +414,13 @@ async function buildCockpitMoney(
   // with a real actual are summed, and the count of those without one is
   // reported so the screen can say the total is still incomplete rather than
   // presenting a partial sum as the final cost.
+  //
+  // The dealership's PROFIT is reduced by what the dealership itself bore, which
+  // is not the same as the total of every fee on the deal: `paidBy` names who
+  // actually paid, and a transfer fee the customer paid or a commission the
+  // finance company deducted is not a cost to the dealership. `summarizeFees`
+  // already draws that line and is reused rather than reimplemented — a second
+  // copy of a money computation is a second answer waiting to disagree.
   const feeLines = liveFees.map((fee) => ({
     id: fee._id,
     feeType: fee.feeType,
@@ -383,15 +430,21 @@ async function buildCockpitMoney(
     currency: fee.currency,
     reconciled: fee.reconciledAt !== undefined,
   }));
-  // A fee recorded in another currency cannot be added to this total. Counted
-  // as unrecorded rather than converted at a rate nobody agreed.
+  // A fee recorded in another currency cannot be added to this total, so it is
+  // withheld from the summary and counted as outstanding rather than converted
+  // at a rate nobody agreed.
   const sameCurrencyFees = liveFees.filter((fee) => fee.currency === currency);
-  const actualExpensesMinor = sameCurrencyFees.reduce(
-    (total, fee) => total + (fee.actualAmountMinor ?? 0),
-    0
-  );
-  const feesAwaitingActuals =
-    liveFees.length - sameCurrencyFees.filter((fee) => fee.actualAmountMinor !== undefined).length;
+  const sameCurrencySummary = summarizeFees(sameCurrencyFees);
+  const actualExpensesMinor = sameCurrencySummary.dealerBorneActualMinor;
+  const otherCurrencyFees = liveFees.length - sameCurrencyFees.length;
+  const feesAwaitingActuals = sameCurrencySummary.linesAwaitingActual + otherCurrencyFees;
+  // RECORDED and RECONCILED are different claims: an amount somebody typed and
+  // an amount somebody checked against its evidence. Only the second can close
+  // a deal, so only the second may call the headline "actual".
+  const expensesFullyReconciled =
+    otherCurrencyFees === 0 &&
+    sameCurrencySummary.linesAwaitingActual === 0 &&
+    sameCurrencySummary.linesAwaitingReconciliation === 0;
 
   // --- the supplier's position -----------------------------------------
   /** `amountDue` is stored in MAJOR units on both supplier tables, unlike every
@@ -411,22 +464,32 @@ async function buildCockpitMoney(
         .withIndex("by_vehicle", (q) => q.eq("vehicleId", app.vehicleId))
         .collect();
   const payable = payables.find((row) => row.orgId === app.orgId && row.status !== "CANCELLED");
+  const payableOutstandingMinor =
+    payable &&
+    toMinorSameCurrency(
+      Math.max(0, payable.amountDue - (payable.amountPaid ?? 0)),
+      payable.currency
+    );
 
-  const receivables = app.finalizedSaleId
-    ? await ctx.db
-        .query("vehicleSupplierReceivables")
-        .withIndex("by_org_sale", (q) =>
-          q.eq("orgId", app.orgId).eq("saleId", app.finalizedSaleId!)
-        )
-        .collect()
-    : [];
-  const supplierClaim = receivables.find((row) => row.status !== "CANCELLED");
+  const supplierClaim = settlementFacts.supplierClaim;
+  // Two different figures, and conflating them was a CRITICAL defect.
+  //
+  // OUTSTANDING is what the supplier still owes — the party row and the
+  // collection action. ORIGINAL is what the dealership earned on the deal, and
+  // it never moves: `recordReceipt` patches `amountReceived` and leaves
+  // `amountDue` alone. Deriving the headline from the outstanding figure made
+  // every dinar collected reduce reported profit one-for-one, so a fully
+  // collected deal reported a loss equal to its expenses — and it was already
+  // wrong on day one, because `openSupplierReceivable` seeds `amountReceived`
+  // with any customer deposit applied at sale time.
   const supplierClaimOutstandingMinor =
     supplierClaim &&
     toMinorSameCurrency(
       Math.max(0, supplierClaim.amountDue - (supplierClaim.amountReceived ?? 0)),
       supplierClaim.currency
     );
+  const supplierClaimOriginalMinor =
+    supplierClaim && toMinorSameCurrency(supplierClaim.amountDue, supplierClaim.currency);
 
   // --- the finance company's position ----------------------------------
   const financeReceivables = await ctx.db
@@ -438,22 +501,22 @@ async function buildCockpitMoney(
         .eq("sourceId", app._id)
     )
     .collect();
-  const financeReceivable = financeReceivables.find((row) => row.status !== "CANCELLED");
-  // No allocated total is stored on the document — a second copy of a figure
-  // derivable from the allocations is a figure that can disagree with them — so
-  // the outstanding balance is summed from the ACTIVE allocations, the same way
-  // the mutation side computes it. Reversed allocations must not count as paid.
-  let financeOutstandingMinor: number | undefined;
-  if (financeReceivable && financeReceivable.currency === currency) {
-    const allocations = await ctx.db
-      .query("paymentAllocations")
-      .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", financeReceivable._id))
-      .collect();
-    const allocatedMinor = allocations
-      .filter((allocation) => allocation.status === "ACTIVE")
-      .reduce((total, allocation) => total + allocation.amountMinor, 0);
-    financeOutstandingMinor = Math.max(0, financeReceivable.originalAmountMinor - allocatedMinor);
-  }
+  // CANCELLED is not the only status that means "nothing is owed". A written-off
+  // or reversed receivable would otherwise render at its full outstanding
+  // balance, asserting the finance company still owes money the dealership has
+  // already given up on.
+  const financeReceivable = financeReceivables.find(
+    (row) => row.status !== "CANCELLED" && row.status !== "WRITTEN_OFF" && row.status !== "REVERSED"
+  );
+  // Through the shared subledger helper rather than a second summation here.
+  // The balance is not stored on the document — a copy of a figure derivable
+  // from the allocations is a figure that can disagree with them — and this
+  // helper is what the mutation side already trusts, including its handling of
+  // reversed allocations, which must not count as paid.
+  const financeOutstandingMinor =
+    financeReceivable && financeReceivable.currency === currency
+      ? await getReceivableOutstandingMinor(ctx, financeReceivable._id)
+      : undefined;
 
   // --- the customer's position -----------------------------------------
   const deposits = quote ? await getQuoteDeposits(ctx, app.quoteId) : [];
@@ -462,11 +525,16 @@ async function buildCockpitMoney(
   // — and a deposit taken in another currency is excluded rather than summed at
   // a rate nobody agreed. Legacy rows predate `currency`; those carry the org's,
   // which is what `currency` already resolves to.
-  const heldDepositMinor = heldDeposits.reduce(
-    (total, deposit) =>
-      total + ((deposit.currency ?? currency) === currency ? (deposit.amountMinor ?? 0) : 0),
-    0
-  );
+  // `amountMinor` is OPTIONAL — `amount`, in major units, is the required field,
+  // and deposits taken before minor units existed carry only that. Falling back
+  // to zero made the screen assert the customer had put nothing in while the AR
+  // aging report showed the money. Every other reader in the codebase converts;
+  // this one now does too.
+  const heldDepositMinor = heldDeposits.reduce((total, deposit) => {
+    const depositCurrency = deposit.currency ?? currency;
+    if (depositCurrency !== currency) return total;
+    return total + (deposit.amountMinor ?? toMinorUnits(deposit.amount, depositCurrency));
+  }, 0);
   // The mockup shows a receipt number against the customer row. It lives on the
   // canonical payment, not the deposit.
   const depositPaymentId = heldDeposits.find((deposit) => deposit.canonicalPaymentId)?.canonicalPaymentId;
@@ -476,13 +544,16 @@ async function buildCockpitMoney(
     {
       party: "CUSTOMER" as const,
       name: "",
-      position:
-        heldDepositMinor > 0 ? ("DEALERSHIP_HOLDS" as const) : ("NOT_INVOLVED" as const),
+      position: !routeKnown
+        ? ("UNKNOWN" as const)
+        : heldDepositMinor > 0
+          ? ("DEALERSHIP_HOLDS" as const)
+          : ("NOT_INVOLVED" as const),
       amountMinor: heldDepositMinor,
       currency,
       reference: depositPayment?.externalReference,
     },
-    settlesDirect
+    settlesDirect && routeKnown
       ? {
           party: "SUPPLIER" as const,
           name: supplierName,
@@ -499,32 +570,52 @@ async function buildCockpitMoney(
           amountMinor: supplierClaimOutstandingMinor ?? 0,
           currency,
           reference: supplierClaim?.receiptReference,
+          // The collection action is keyed to THIS claim. Returning the id the
+          // server already resolved means the client never names a receivable
+          // of its own choosing — `recordReceipt` re-checks the org anyway, but
+          // a screen that can only act on the claim it was shown is a smaller
+          // surface than one that can post against any id it can guess.
+          receivableId: supplierClaim?._id,
         }
       : {
           party: "SUPPLIER" as const,
           name: supplierName,
-          position: !payable
-            ? ("NOT_INVOLVED" as const)
-            : payable.status === "PAID"
-              ? ("SETTLED" as const)
-              : ("DEALERSHIP_OWES" as const),
-          amountMinor: payable ? (toMinorSameCurrency(payable.amountDue, payable.currency) ?? 0) : 0,
+          // What is LEFT on the payable, not what it started at. `amountPaid`
+          // exists and was previously ignored, so a part-paid payable overstated
+          // the debt and a settled one still displayed a full balance — three
+          // rows on one panel following two different conventions.
+          position: !routeKnown
+            ? ("UNKNOWN" as const)
+            : !payable
+              ? ("NOT_INVOLVED" as const)
+              : payableOutstandingMinor === undefined
+                ? ("UNKNOWN" as const)
+                : payable.status === "PAID" || payableOutstandingMinor === 0
+                  ? ("SETTLED" as const)
+                  : ("DEALERSHIP_OWES" as const),
+          amountMinor: payableOutstandingMinor ?? 0,
           currency,
           reference: undefined,
         },
     {
       party: "FINANCIER" as const,
       name: app.manualFinanceSnapshot?.providerName ?? "",
-      position: settlesDirect
-        ? // It paid the supplier directly, so it never owed the dealership
-          // anything on this deal. Reporting a zero receivable would suggest a
-          // debt that was settled; there was never one to settle.
-          ("NOT_INVOLVED" as const)
-        : !financeReceivable
-          ? ("NOT_INVOLVED" as const)
-          : financeReceivable.status === "PAID"
-            ? ("SETTLED" as const)
-            : ("OWED_TO_DEALERSHIP" as const),
+      position: !routeKnown
+        ? ("UNKNOWN" as const)
+        : settlesDirect
+          ? // It paid the supplier directly, so it never owed the dealership
+            // anything on this deal. Reporting a zero receivable would suggest
+            // a debt that was settled; there was never one to settle.
+            ("NOT_INVOLVED" as const)
+          : !financeReceivable
+            ? ("NOT_INVOLVED" as const)
+            : financeOutstandingMinor === undefined
+              ? // A balance in another currency is a balance nobody here can
+                // state. Rendering "owes 0" would report a real debt as settled.
+                ("UNKNOWN" as const)
+              : financeOutstandingMinor === 0
+                ? ("SETTLED" as const)
+                : ("OWED_TO_DEALERSHIP" as const),
       amountMinor: settlesDirect ? 0 : (financeOutstandingMinor ?? 0),
       currency,
     },
@@ -539,17 +630,35 @@ async function buildCockpitMoney(
   let supplierSettlementMinor: number | undefined;
   if (!routeKnown) supplierSettlementMinor = undefined;
   else if (settlesDirect) {
+    // From the RECORDED settlement advice, not from the approved amount.
+    //
+    // Deriving it as `approved − margin claim` looked reasonable and was not:
+    // the `approved` term cancels algebraically, leaving `sale price − source
+    // cost` — precisely the basis this screen exists to avoid — and it rendered
+    // a `تسوية المورد` line for an amount no party would ever pay, because the
+    // supplier's actual entitlement is whatever the advice says it was.
+    //
+    // `supplierDisbursedAmountMinor` is what the financier actually paid him,
+    // recorded by `confirmSupplierDisbursement` off the advice document. What he
+    // NETS is that, less the margin he owes back. Until that advice exists there
+    // is no honest figure, so the headline reports why instead of inventing one.
     supplierSettlementMinor =
-      app.approvedDealerPurchaseAmountMinor !== undefined && supplierClaimOutstandingMinor !== undefined
-        ? app.approvedDealerPurchaseAmountMinor - supplierClaimOutstandingMinor
+      app.supplierDisbursedAmountMinor !== undefined && supplierClaimOriginalMinor !== undefined
+        ? app.supplierDisbursedAmountMinor - supplierClaimOriginalMinor
         : undefined;
   } else if (payable) {
     supplierSettlementMinor = toMinorSameCurrency(payable.amountDue, payable.currency);
   }
 
-  const settlement = app.settlementStatus ?? settlementStatusForFacts(app);
-  const fullySettled =
-    (settlement === "FULLY_SETTLED" || settlement === "RECONCILED") && feesAwaitingActuals === 0;
+  // A DIRECT deal can never reach FULLY_SETTLED through the status field: the
+  // only writer of it is `confirmDisbursement`, which refuses the direct route
+  // outright, and `confirmSupplierDisbursement` deliberately writes EXPECTED.
+  // Reading settlement off that field alone left the direct route's terminal
+  // stage permanently blocked and its qualifier permanently "estimated" — on
+  // deals that were completely finished. Each route is judged on the evidence
+  // it can actually produce: the advice being recorded, and the supplier's
+  // margin claim being collected in full.
+  const fullySettled = moneySettled && expensesFullyReconciled;
 
   return {
     currency,
@@ -844,7 +953,13 @@ export const dealCockpit = query({
     );
 
     // --- the stage rail --------------------------------------------------
+    // Resolved once, and shared with the money panel below, so the rail and the
+    // figures can never disagree about which way the deal settles or whether it
+    // is finished. The rail is qualitative — stage names and blocker keys, no
+    // amounts — so it is safe to show a caller who cannot see the money.
+    const settlementFacts = await resolveSettlement(ctx, app);
     const stages = deriveDealStages({
+      settlementComplete: settlementFacts.moneySettled,
       status: app.status,
       vehicleHandoverAt: app.vehicleHandoverAt,
       finalizedSaleId: app.finalizedSaleId,
@@ -902,7 +1017,7 @@ export const dealCockpit = query({
 
     if (!canSeeMoney) return { ...base, money: null };
 
-    return { ...base, money: await buildCockpitMoney(ctx, app, quote) };
+    return { ...base, money: await buildCockpitMoney(ctx, app, quote, settlementFacts) };
   },
 });
 

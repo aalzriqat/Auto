@@ -1027,12 +1027,17 @@ describe("the deal cockpit query", () => {
 
     // Set directly rather than through `approveDealerPurchaseAmount`, which
     // needs a recorded quotation, an appraisal and an LTV basis to reach —
-    // machinery this read query does not touch and which has its own suite. The
-    // field is the only input the derivation takes from the application.
+    // machinery this read query does not touch and which has its own suite.
     await s.t.run(async (ctx) => {
       await ctx.db.patch(applicationId, {
         approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
       });
+    });
+    // What the finance company actually paid the supplier, off the advice.
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: VEHICLE_PRICE * SCALE,
     });
 
     const view = await s.asUser.query(api.applications.dealCockpit, {
@@ -1082,5 +1087,280 @@ describe("the deal cockpit query", () => {
     });
     const live = view!.stages.filter((st) => st.state === "CURRENT" || st.state === "BLOCKED");
     expect(live).toHaveLength(1);
+  });
+});
+
+/**
+ * Regressions for the eight defects an independent review found in the first
+ * cut of `applications.dealCockpit`. Every one of these failed against commit
+ * 8fd99131 before the fix; a money test that never failed proves nothing.
+ */
+describe("the deal cockpit, under the conditions that broke it", () => {
+  /** A fee row, which the fixture does not otherwise create. */
+  async function addFee(
+    s: Seeded,
+    applicationId: string,
+    opts: { actualMinor: number; paidBy: "DEALER" | "CUSTOMER" | "FINANCE_COMPANY"; reconciled?: boolean }
+  ) {
+    await s.t.run(async (ctx) => {
+      await ctx.db.insert("financeDealFees", {
+        orgId: s.orgId as never,
+        applicationId: applicationId as never,
+        feeType: "LICENSING",
+        currency: "JOD",
+        actualAmountMinor: opts.actualMinor,
+        paidBy: opts.paidBy,
+        paidTo: "GOVERNMENT",
+        accountingTreatment: opts.paidBy === "DEALER" ? "SELLING_EXPENSE" : "CUSTOMER_RECEIVABLE",
+        includedInQuotation: false,
+        deductedFromSettlement: false,
+        refundable: false,
+        source: "MANUAL",
+        ...(opts.reconciled ? { reconciledAt: Date.now() } : {}),
+        createdBy: s.userId as never,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    });
+  }
+
+  async function cockpitOf(s: Seeded, applicationId: string) {
+    return await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId: applicationId as never,
+    });
+  }
+
+  /**
+   * C-1. The headline subtracted what the supplier STILL owes rather than what
+   * he settles at, so every dinar he repaid reduced reported profit one-for-one
+   * and a fully-collected deal reported a loss equal to its expenses.
+   */
+  test("collecting from the supplier does not change the deal's profit", async () => {
+    const s = await seedDealership("regC1");
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, { approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE });
+    });
+    // The headline now derives from the RECORDED advice rather than from the
+    // approved amount, so the advice has to exist for there to be a figure.
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+    });
+
+    const before = await cockpitOf(s, applicationId);
+    const profitBefore = before!.money!.managementProfit;
+    expect(profitBefore.available).toBe(true);
+
+    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      orgId: s.orgId,
+      receivableId: claim._id,
+      amount: MARGIN / 2,
+    });
+
+    const after = await cockpitOf(s, applicationId);
+    const profitAfter = after!.money!.managementProfit;
+    // Collecting a receivable converts a claim into cash. It does not make the
+    // deal less profitable.
+    expect(profitAfter.available && profitAfter.amountMinor).toBe(
+      profitBefore.available && profitBefore.amountMinor
+    );
+  });
+
+  /**
+   * H-2. `paidBy` was ignored, so a fee the CUSTOMER paid was subtracted from
+   * the dealership's own profit.
+   */
+  test("only expenses the dealership actually bore reduce its profit", async () => {
+    const s = await seedDealership("regH2");
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, { approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE });
+    });
+    // The headline now derives from the RECORDED advice rather than from the
+    // approved amount, so the advice has to exist for there to be a figure.
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+    });
+
+    await addFee(s, applicationId, { actualMinor: 200 * SCALE, paidBy: "DEALER" });
+    await addFee(s, applicationId, { actualMinor: 500 * SCALE, paidBy: "CUSTOMER" });
+
+    const view = await cockpitOf(s, applicationId);
+    const profit = view!.money!.managementProfit;
+    expect(profit.available).toBe(true);
+    if (!profit.available) return;
+    // Reduced by the dealership's 200, never by the customer's 500.
+    expect(profit.amountMinor).toBe(MARGIN * SCALE - 200 * SCALE);
+  });
+
+  /**
+   * H-3. When the sale behind a deal could not be loaded the query reported the
+   * route as unknown — and then rendered a complete THROUGH_DEALERSHIP layout
+   * anyway, showing "nobody owes anybody anything" on a deal with a live open
+   * claim against the supplier.
+   */
+  test("a deal whose sale cannot be loaded claims nothing about who holds the money", async () => {
+    const s = await seedDealership("regH3");
+    const { applicationId, saleId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      finalize: true,
+    });
+    await s.t.run(async (ctx) => {
+      await ctx.db.delete(saleId as never);
+    });
+
+    const view = await cockpitOf(s, applicationId);
+    expect(view!.money!.routeKnown).toBe(false);
+    // Not "nothing outstanding" — the supplier claim is still open.
+    for (const party of view!.money!.parties) {
+      expect(party.position).toBe("UNKNOWN");
+    }
+  });
+
+  /**
+   * H-4. The route was re-derived partly from the LIVE vehicle after the sale
+   * existed, so converting the vehicle to dealer stock — a supported workflow
+   * after a cancellation — silently flipped a settled DIRECT deal into a
+   * THROUGH_DEALERSHIP rendering, while still reporting the route as known.
+   */
+  test("editing the vehicle afterwards cannot flip how a settled deal reads", async () => {
+    const s = await seedDealership("regH4");
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.vehicleId as never, { sourceType: "STOCK" });
+    });
+
+    const view = await cockpitOf(s, applicationId);
+    // The sale is the authority once it exists. A later edit to the vehicle is
+    // not allowed to rewrite what a posted deal did.
+    expect(view!.money!.settlesDirectToSupplier).toBe(true);
+  });
+
+  /**
+   * H-6. `deposits.amountMinor` is optional and every other reader in the
+   * codebase falls back to converting `amount`. This one fell back to zero, so
+   * a deal with a real customer deposit reported the customer as not involved.
+   */
+  test("a deposit predating amountMinor is still counted as money held", async () => {
+    const s = await seedDealership("regH6");
+    const { applicationId } = await runDeal(s, { deposit: 1_000, finalize: false });
+
+    await s.t.run(async (ctx) => {
+      const deposit = (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)!;
+      // The legacy shape: major units only.
+      await ctx.db.patch(deposit._id, { amountMinor: undefined });
+    });
+
+    const view = await cockpitOf(s, applicationId);
+    const customer = view!.money!.parties.find((p) => p.party === "CUSTOMER")!;
+    expect(customer.position).toBe("DEALERSHIP_HOLDS");
+    expect(customer.amountMinor).toBe(1_000 * SCALE);
+  });
+
+  /**
+   * M-1. The supplier payable showed its ORIGINAL amount regardless of what had
+   * been paid against it, so a part-paid payable overstated the debt and a
+   * settled one still displayed a full balance.
+   */
+  test("a part-paid supplier payable shows what is left, not what it started at", async () => {
+    const s = await seedDealership("regM1");
+    const { applicationId } = await runDeal(s, { route: "THROUGH_DEALERSHIP", finalize: true });
+
+    await s.t.run(async (ctx) => {
+      const payable = (await ctx.db.query("vehicleSupplierPayables").collect()).find(
+        (row) => row.orgId === s.orgId
+      )!;
+      await ctx.db.patch(payable._id, {
+        amountPaid: 5_000,
+        status: "PARTIALLY_PAID",
+      });
+    });
+
+    const view = await cockpitOf(s, applicationId);
+    const supplier = view!.money!.parties.find((p) => p.party === "SUPPLIER")!;
+    expect(supplier.amountMinor).toBe((SUPPLIER_ENTITLEMENT - 5_000) * SCALE);
+  });
+
+  /**
+   * M-4. "Actual" was claimed on figures somebody typed but nobody checked.
+   * `deriveFeeStatus` already draws that line: recorded and reconciled are
+   * different claims, and only the second may close a deal.
+   */
+  test("an unreconciled expense keeps the figure estimated", async () => {
+    const s = await seedDealership("regM4");
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, {
+        approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+        settlementStatus: "FULLY_SETTLED",
+      });
+    });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+    });
+    await addFee(s, applicationId, { actualMinor: 200 * SCALE, paidBy: "DEALER", reconciled: false });
+
+    const view = await cockpitOf(s, applicationId);
+    const profit = view!.money!.managementProfit;
+    expect(profit.available && profit.classification).toBe("ESTIMATED_AWAITING_SETTLEMENT");
+  });
+});
+
+/**
+ * H-5. A DIRECT deal can never reach `FULLY_SETTLED` through the status field:
+ * the only writer of it is `confirmDisbursement`, which refuses the direct route
+ * outright, and `confirmSupplierDisbursement` deliberately writes `EXPECTED`. So
+ * the terminal stage stayed permanently BLOCKED and the qualifier permanently
+ * "estimated" on deals that were completely finished — a rail an operator could
+ * never clear, on the screen they use to decide what to do next.
+ */
+describe("a direct-settled deal that is genuinely finished", () => {
+  test("reaches its final stage and stops calling the figure an estimate", async () => {
+    const s = await seedDealership("regH5");
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, {
+        approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+      });
+    });
+
+    // The financier's advice, then the supplier repaying the margin in full.
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+    });
+    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      orgId: s.orgId,
+      receivableId: claim._id,
+      amount: MARGIN,
+    });
+
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+
+    const settlement = view!.stages.find((st) => st.key === "SETTLEMENT")!;
+    expect(settlement.state).toBe("COMPLETE");
+
+    const profit = view!.money!.managementProfit;
+    // Still not postable — settling a deal does not turn a management figure
+    // into an accounting one — but no longer described as awaiting a settlement
+    // that already happened.
+    expect(profit.available && profit.classification).toBe("ACTUAL_UNPOSTABLE");
+    expect(profit.available && profit.postable).toBe(false);
+    // And collecting in full has not moved the profit.
+    expect(profit.available && profit.amountMinor).toBe(MARGIN * SCALE);
   });
 });
