@@ -623,6 +623,35 @@ export const update = mutation({
         sale.salespersonId,
         "Salesperson cannot approve cancellation of their own sale."
       );
+
+      // The finance side's payment locks, enforced here as well as in
+      // `cancelApplication` — because this is the other door into the same
+      // reversal, and a lock bolted on only one of them is not a lock.
+      //
+      // The direct route makes this reachable in a way it was not before.
+      // `confirmSupplierDisbursement` deliberately records NO receipt against
+      // the margin claim (the supplier being paid is not the dealership being
+      // paid), so `cancelSupplierReceivablesForSale`'s receipt guard stays
+      // silent. Without this check the sale reversed, the claim was cancelled,
+      // a car already handed to the customer returned to sellable inventory,
+      // and the application stayed CLOSED still carrying the confirmation that
+      // the financier had paid for it.
+      if (sale.applicationId) {
+        const app = await ctx.db.get(sale.applicationId);
+        if (app && app.orgId === args.orgId) {
+          if (app.disbursedAt) {
+            throw new ConvexError(
+              "The finance company has already paid the dealership on this deal, so it can't be cancelled from here. Void it through a manual accounting correction instead."
+            );
+          }
+          if (app.supplierDisbursementConfirmedAt !== undefined) {
+            throw new ConvexError(
+              "The finance company has already paid the supplier on this deal. That payment is between the company and the supplier and can't be reversed from here — unwind it with them and record a manual accounting correction instead."
+            );
+          }
+        }
+      }
+
       const cancellationDate = Date.now();
       // Only a sale that actually COMPLETED has operational records to reverse.
       // This branch used to run for any non-CANCELLED sale, which included

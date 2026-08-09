@@ -604,6 +604,34 @@ describe("cancelling after the finance company has paid the supplier", () => {
   });
 });
 
+describe("cancelling by the other door, after the supplier was paid", () => {
+  test("sales.update cannot cancel a deal the finance company has already paid the supplier for", async () => {
+    const s = await seedDealership("bypass1");
+    const { applicationId, saleId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER" });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId, applicationId, disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+    });
+
+    // `cancelApplication` refuses this, but it is not the only way to cancel.
+    // `sales.update` never loaded the finance application, and the supplier
+    // confirmation deliberately records no receipt against the margin claim —
+    // so `cancelSupplierReceivablesForSale`'s receipt guard does not fire
+    // either. The sale reversed, the claim cancelled, a handed-over car went
+    // back to sellable inventory, and the application stayed CLOSED still
+    // carrying its payment confirmation.
+    //
+    // A lock with two doors and a bolt on one is not a lock.
+    await expect(
+      s.asApprover.mutation(api.sales.update, {
+        orgId: s.orgId, saleId, status: "CANCELLED" as const,
+      })
+    ).rejects.toThrow(/already paid the supplier/i);
+
+    const sale = await s.t.run((ctx) => ctx.db.get(saleId as never)) as { status: string };
+    expect(sale.status).toBe("COMPLETED");
+  });
+});
+
 describe("the settlement advice is recorded as stated", () => {
   test("an amount that differs from the customer's financing principal is stored verbatim", async () => {
     const s = await seedDealership("adv1");
