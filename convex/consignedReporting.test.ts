@@ -851,6 +851,87 @@ describe("tax on an agency sale, with no open accounting period", () => {
 });
 
 /**
+ * A financed consigned deal cannot be settled directly with the supplier.
+ *
+ * `finalizeDeal` calls `completeSale` with no `supplierSettlementRoute`, and an
+ * absent route reads as THROUGH_DEALERSHIP. So the wizard offered the choice,
+ * the operator picked DIRECT_TO_SUPPLIER, and the deal posted the opposite way
+ * — dealership owing the supplier the gross and the customer owing the
+ * dealership, when the financier had paid the supplier and the supplier owed
+ * the dealership its margin. Both sides inverted, with nothing on screen or in
+ * the ledger saying so.
+ *
+ * The refusal is enforced at the mutation boundary rather than by hiding the
+ * control, because the form is not the only caller.
+ */
+describe("a financed consigned sale settled directly with the supplier", () => {
+  async function financedDirect(
+    tag: string,
+    overrides: { financingType?: "CASH" | "FINANCED" | "LEASE"; route?: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER" } = {}
+  ) {
+    const s = await seedDealer(tag);
+    const vehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin: `VINFIN${tag}`, make: "Toyota", model: "Camry", year: 2024,
+        mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto",
+        sellingPrice: SALE_PRICE, status: "AVAILABLE", sourceType: "SOURCED",
+        sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+      })
+    );
+    return {
+      s,
+      vehicleId,
+      attempt: () =>
+        s.asUser.mutation(api.sales.create, {
+          orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
+          salePrice: SALE_PRICE, saleDate: Date.now(), status: "COMPLETED" as const,
+          financingType: overrides.financingType ?? "FINANCED",
+          supplierSettlementRoute: overrides.route ?? "DIRECT_TO_SUPPLIER",
+        }),
+    };
+  }
+
+  test("is refused rather than posted the other way round", async () => {
+    const { attempt } = await financedDirect("finDirect");
+    await expect(attempt()).rejects.toThrow(/financed/i);
+  });
+
+  test("leaves nothing behind — no sale, no sold vehicle, no supplier payable", async () => {
+    const { s, vehicleId, attempt } = await financedDirect("finDirectState");
+    await expect(attempt()).rejects.toThrow();
+
+    const state = await s.t.run(async (ctx) => ({
+      sales: (await ctx.db.query("sales").collect()).length,
+      payables: (await ctx.db.query("vehicleSupplierPayables").collect()).length,
+      status: (await ctx.db.get(vehicleId))?.status,
+    }));
+    expect(state.sales).toBe(0);
+    expect(state.payables).toBe(0);
+    expect(state.status).toBe("AVAILABLE");
+  });
+
+  test("a LEASE is treated as financed too", async () => {
+    const { attempt } = await financedDirect("finLease", { financingType: "LEASE" });
+    await expect(attempt()).rejects.toThrow(/financed/i);
+  });
+
+  test("a CASH consigned sale keeps the direct route", async () => {
+    // The refusal is scoped to what is genuinely unsupported. Cash deals are
+    // the whole reason the direct route exists.
+    const { s, attempt } = await financedDirect("finCash", { financingType: "CASH" });
+    const saleId = await attempt();
+
+    const route = await s.t.run(async (ctx) => (await ctx.db.get(saleId))?.supplierSettlementRoute);
+    expect(route).toBe("DIRECT_TO_SUPPLIER");
+  });
+
+  test("a financed sale settled THROUGH the dealership is unaffected", async () => {
+    const { attempt } = await financedDirect("finThrough", { route: "THROUGH_DEALERSHIP" });
+    await expect(attempt()).resolves.toBeDefined();
+  });
+});
+
+/**
  * The dashboard costs at most 500 distinct sold vehicles per window, because
  * `computeVehicleCapitalizedCost` reads every expense logged against a car and
  * running it unbounded on a live subscription is what the cap exists to stop.

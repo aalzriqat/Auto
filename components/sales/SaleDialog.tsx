@@ -518,6 +518,9 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                 orgId={activeOrgId}
                 vehicleId={(sale ? sale.vehicleId : watchAll.vehicleId) as Id<"vehicles"> | undefined}
                 salePrice={Number(watchAll.salePrice) || 0}
+                // Financing is chosen further down this same form, so this has
+                // to track it live rather than be read once.
+                financed={financingType === "FINANCED" || financingType === "LEASE"}
                 value={watchAll.supplierSettlementRoute ?? "THROUGH_DEALERSHIP"}
                 onChange={(route) => form.setValue("supplierSettlementRoute", route)}
                 // Locked once the sale is completed: the journal, the payable

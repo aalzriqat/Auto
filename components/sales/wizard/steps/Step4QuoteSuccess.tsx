@@ -426,6 +426,10 @@ export function Step4QuoteSuccess({
               orgId={activeOrgId}
               vehicleId={vehicleId}
               quoteId={quoteId}
+              // The wizard's own branch: an INSTALLMENT quote goes to a finance
+              // company, whose side of the settlement cannot record a direct
+              // payment to the supplier yet.
+              financed={paymentType === "INSTALLMENT"}
               value={settlementRoute}
               onChange={setSettlementRoute}
               // On the first CONSIGNED line, not the first line. A quote whose

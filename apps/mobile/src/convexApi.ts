@@ -157,6 +157,15 @@ export interface MobileDashboardStats {
     vehicles: boolean;
     sales: boolean;
     members: boolean;
+    /**
+     * Sales whose accounting basis could not be established are LEFT OUT of
+     * turnover rather than folded in at gross, so `salesVolumeThisMonth` is
+     * short rather than on two bases at once. The query has always returned
+     * this; nothing read it, so an understated figure rendered as an exact one.
+     */
+    turnover?: boolean;
+    /** Same, for the profit figures. */
+    profit?: boolean;
   };
   taskStats: {
     total: number;

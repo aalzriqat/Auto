@@ -229,6 +229,17 @@ export default function DashboardPage() {
                 <div>
                   <div className="text-3xl md:text-5xl font-bold tracking-tight">
                     {formatCompact(stats?.salesVolumeThisMonth || 0)}
+                    {/* A trailing "+" the moment the figure is known to be
+                        short. Sales whose accounting basis could not be
+                        established are excluded from turnover on purpose —
+                        folding them in at gross would put half the number on
+                        one basis and half on another — but excluding them
+                        silently only trades an overstated figure for an
+                        understated one presented as exact. Same idiom the
+                        admin counts already use. */}
+                    {stats?.truncated?.turnover ? (
+                      <span title={t("PartialTotalExplain" as any)}>+</span>
+                    ) : null}
                   </div>
                   {/* The label follows the basis the server computed, because
                       the two are different figures. A viewer without cost
@@ -242,6 +253,11 @@ export default function DashboardPage() {
                       : (t("Revenue" as any) || "Revenue")}
                     <span className="ms-1 text-[#4ade80] font-medium">(+0.0%)</span>
                   </p>
+                  {stats?.truncated?.turnover ? (
+                    <p className="text-xs text-amber-200/90 mt-1">
+                      {t("PartialTotalExplain" as any)}
+                    </p>
+                  ) : null}
                 </div>
                 <div>
                   <div className="text-3xl md:text-5xl font-bold tracking-tight">{stats?.salesThisMonth || 0}</div>

@@ -56,6 +56,12 @@ interface Props {
    * loses the control entirely and posts the default route.
    */
   onApplicable?: (vehicleId: Id<"vehicles">, applicable: boolean) => void;
+  /**
+   * The deal is going through a finance company. Paying the supplier directly
+   * has no representation on that side of the settlement yet, and the server
+   * refuses it — so the option is disabled here rather than offered and failed.
+   */
+  financed?: boolean;
 }
 
 export function ConsignedSettlementSection({
@@ -68,8 +74,21 @@ export function ConsignedSettlementSection({
   disabled,
   showRouteSelector = true,
   onApplicable,
+  financed = false,
 }: Props) {
   const { t, isRtl } = useLanguage();
+
+  // A route can outlive the deal shape that allowed it.
+  //
+  // The financing type is chosen in a different part of the same form, so an
+  // operator can pick DIRECT_TO_SUPPLIER on a cash deal and then switch it to
+  // FINANCED. The option disables itself, but a surviving DIRECT value would
+  // still be submitted — and refused by the server for a reason the screen was
+  // already showing, from a control that can no longer be clicked to change it.
+  // Exactly the lockout the deposit confirmation shipped once already.
+  useEffect(() => {
+    if (financed && value === "DIRECT_TO_SUPPLIER") onChange("THROUGH_DEALERSHIP");
+  }, [financed, value, onChange]);
 
   const preview = useQuery(
     api.sales.consignedSalePreview,
@@ -105,7 +124,16 @@ export function ConsignedSettlementSection({
   const directToSupplier = preview.settlementRoute === "DIRECT_TO_SUPPLIER";
   const supplier = preview.supplierName || t("TheSupplier" as any);
 
-  const routes: Array<{ id: Route; label: string; hint: string }> = [
+  // Paying the supplier directly is not supported on a FINANCED deal yet: the
+  // finance company's side of the settlement has nowhere to record it. The
+  // server refuses it outright (see saleCompletion), so offering it here would
+  // be offering a choice that fails on submit — which is the exact defect the
+  // deposit-settlement work spent this whole PR removing.
+  //
+  // Disabled and explained rather than hidden. A missing option reads as a bug
+  // to an operator who used it on a cash deal an hour ago; a disabled one with
+  // a reason reads as a limitation.
+  const routes: Array<{ id: Route; label: string; hint: string; unavailable?: string }> = [
     {
       id: "THROUGH_DEALERSHIP",
       label: t("RouteThroughDealership" as any),
@@ -115,6 +143,7 @@ export function ConsignedSettlementSection({
       id: "DIRECT_TO_SUPPLIER",
       label: t("RouteDirectToSupplier" as any),
       hint: t("RouteDirectToSupplierHint" as any),
+      ...(financed ? { unavailable: t("RouteDirectUnavailableFinanced" as any) } : {}),
     },
   ];
 
@@ -150,6 +179,7 @@ export function ConsignedSettlementSection({
                 type="button"
                 role="radio"
                 aria-checked={selected}
+                disabled={route.unavailable !== undefined}
                 onClick={() => onChange(route.id)}
                 className={cn(
                   "rounded-md border p-3 text-start transition-colors",
@@ -162,7 +192,7 @@ export function ConsignedSettlementSection({
               >
                 <span className="block text-sm font-medium">{route.label}</span>
                 <span className="mt-0.5 block text-xs leading-snug text-muted-foreground">
-                  {route.hint}
+                  {route.unavailable ?? route.hint}
                 </span>
               </button>
             );
