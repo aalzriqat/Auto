@@ -59,8 +59,17 @@ async function publicDealerProfile(
     .query("orgSettings")
     .withIndex("by_org", (settingsQuery) => settingsQuery.eq("orgId", orgId))
     .unique();
-  const logoUrl = websiteSettings.logoUrl
-    ?? (orgSettings?.logoStorageId ? await ctx.storage.getUrl(orgSettings.logoStorageId) : null);
+  // Both branches resolve through ctx.storage.getUrl(), so every URL this
+  // projection can emit points at our own storage backend. The website's own
+  // logo still wins over the org-wide one; what changed is that it can no
+  // longer be an arbitrary origin supplied by the caller.
+  //
+  // This value is not only rendered as an <img>: the dealer site also assigns
+  // it to the icon / shortcut icon / apple-touch-icon <link> elements, so every
+  // anonymous visitor's browser fetches it. That is why the trust boundary has
+  // to hold here, in the projection, rather than at each render site.
+  const websiteLogoStorageId = websiteSettings.logoStorageId ?? orgSettings?.logoStorageId;
+  const logoUrl = websiteLogoStorageId ? await ctx.storage.getUrl(websiteLogoStorageId) : null;
 
   const branchRows = await ctx.db
     .query("branches")

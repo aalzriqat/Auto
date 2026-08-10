@@ -3790,7 +3790,14 @@ export default defineSchema({
     supportedLanguages: v.array(v.union(v.literal("en"), v.literal("ar"))),
     primaryColor: v.optional(v.string()),
     secondaryColor: v.optional(v.string()),
-    logoUrl: v.optional(v.string()),
+    // Managed storage only. This was `logoUrl: v.optional(v.string())` — a
+    // caller-supplied absolute URL that `websiteProjection` preferred over the
+    // org's own logo and that `websites.resolveDomain` (no auth) served to
+    // anonymous visitors of the published dealer site. Anything stored here is
+    // fetched by every one of those visitors' browsers, so it must be an
+    // artifact we own rather than an arbitrary origin. Mirrors the pattern
+    // `orgSettings.logoStorageId` already uses.
+    logoStorageId: v.optional(v.id("_storage")),
     heroTitle: v.optional(v.string()),
     heroSubtitle: v.optional(v.string()),
     // Free-text badge shown as a small pill over the hero (e.g. Kinetic Sales'
