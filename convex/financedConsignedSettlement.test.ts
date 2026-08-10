@@ -2907,3 +2907,128 @@ describe("the supplier is never made debtor for money that did not reach him", (
     expect(await claimDueOf(s)).toBeUndefined();
   });
 });
+
+/**
+ * SCRUM-30 HIGH #2. The arm of the cancellation guard nothing exercised.
+ *
+ * `sales.update` refuses to cancel a deal whose finance company has already paid
+ * — and to know that, it has to READ the application. The readable already-paid
+ * case is covered above. What was not covered is what happens when the evidence
+ * itself cannot be read: a deleted application row, or one belonging to another
+ * organization.
+ *
+ * That arm is the dangerous one. Written as `if (app && app.orgId === orgId)`
+ * the guard skips BOTH refusals whenever the application cannot be read, so
+ * unavailable evidence becomes permission to proceed — on a cancellation that
+ * reverses money a finance company has already sent the supplier, returns a
+ * handed-over car to sellable inventory, and cancels the dealership's claim.
+ *
+ * Every `return`/skip toward a guard's evidence is an ALLOW. These pin that the
+ * code refuses instead, and that it says which case it is rather than failing
+ * with a message about a payment it could not actually check.
+ */
+describe("cancelling a deal whose financing evidence cannot be read", () => {
+  async function paidDirectDeal(tag: string) {
+    const s = await seedDealership(tag);
+    const { applicationId, saleId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      finalize: true,
+    });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+    });
+    return { s, applicationId, saleId: saleId as never };
+  }
+
+  test("a MISSING application refuses the cancellation rather than waving it through", async () => {
+    const { s, applicationId, saleId } = await paidDirectDeal("cancelMissingApp");
+
+    // The super-admin panel can hard-delete a row, and `hardDeleteOrg` removes
+    // tables in an order that can leave a sale whose application is gone.
+    await s.t.run(async (ctx) => {
+      await ctx.db.delete(applicationId as never);
+    });
+
+    await expect(
+      s.asApprover.mutation(api.sales.update, {
+        orgId: s.orgId,
+        saleId,
+        status: "CANCELLED" as const,
+      })
+    ).rejects.toThrow(/can't be read/i);
+
+    // And nothing moved. A refusal that still reversed the sale would be worse
+    // than no refusal, because it would look like it had held.
+    const sale = (await s.t.run((ctx) => ctx.db.get(saleId))) as { status: string };
+    expect(sale.status).toBe("COMPLETED");
+    const claims = await supplierClaimsOf(s);
+    expect(claims.every((r) => r.status !== "CANCELLED")).toBe(true);
+  });
+
+  test("an application belonging to ANOTHER org refuses the cancellation", async () => {
+    const { s, applicationId, saleId } = await paidDirectDeal("cancelForeignApp");
+
+    // The foreign org is created INSIDE this deal's database, not by a second
+    // `seedDealership`. Each `convexTest` instance is its own database and they
+    // allocate ids from the same deterministic counter, so a second fixture's
+    // "other" org id is byte-for-byte the FIRST org's id — the patch below would
+    // be a no-op and the test would pass against a guard that does nothing.
+    const foreignOrgId = await s.t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Another Dealership", createdAt: Date.now() })
+    );
+
+    // Readable, but not this tenant's. `ctx.db.get` returns the row regardless —
+    // tenancy is the caller's job, and this is the check that does it.
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId as never, { orgId: foreignOrgId as never });
+    });
+
+    await expect(
+      s.asApprover.mutation(api.sales.update, {
+        orgId: s.orgId,
+        saleId,
+        status: "CANCELLED" as const,
+      })
+    ).rejects.toThrow(/can't be read/i);
+
+    const sale = (await s.t.run((ctx) => ctx.db.get(saleId))) as { status: string };
+    expect(sale.status).toBe("COMPLETED");
+  });
+
+  test("the refusal names the unreadable evidence, not a payment it never checked", async () => {
+    const { s, applicationId, saleId } = await paidDirectDeal("cancelMessage");
+    await s.t.run(async (ctx) => {
+      await ctx.db.delete(applicationId as never);
+    });
+
+    // A guard that cannot read its evidence must not claim to have found a
+    // payment — the operator would go and unwind a disbursement nobody has
+    // confirmed. The two refusals are different instructions and must stay
+    // distinguishable.
+    await expect(
+      s.asApprover.mutation(api.sales.update, {
+        orgId: s.orgId,
+        saleId,
+        status: "CANCELLED" as const,
+      })
+    ).rejects.toThrow(/isn't possible to confirm whether the finance company has already paid/i);
+  });
+
+  test("a readable application with nothing paid still cancels normally", async () => {
+    // The control. Without it the three refusals above are equally satisfied by
+    // a guard that refuses every cancellation, which would be its own defect.
+    const s = await seedDealership("cancelReadableClean");
+    const { saleId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+
+    await s.asApprover.mutation(api.sales.update, {
+      orgId: s.orgId,
+      saleId: saleId as never,
+      status: "CANCELLED" as const,
+    });
+
+    const sale = (await s.t.run((ctx) => ctx.db.get(saleId as never))) as { status: string };
+    expect(sale.status).toBe("CANCELLED");
+  });
+});
