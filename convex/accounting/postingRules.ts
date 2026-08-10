@@ -223,6 +223,21 @@ export interface SaleCompletedPayload {
    */
   consignment?: {
     supplierEntitlementMinor: number;
+    /**
+     * What the third party actually pays the supplier on the DIRECT route — the
+     * basis the dealership's commission is measured against.
+     *
+     * Absent means "the sale price", which is what a cash direct sale and every
+     * event queued before this field existed both mean. A FINANCED direct deal
+     * sets it to the finance company's approved purchase amount, because that
+     * is the money that reaches him; measuring the commission against the sale
+     * price there credited revenue on a spread no party ever paid, and debited
+     * a supplier receivable to match.
+     *
+     * Unused on THROUGH_DEALERSHIP, where the dealership collects the gross and
+     * the customer is liable for the full sale price.
+     */
+    supplierGrossReceiptMinor?: number;
     supplierName?: string;
     settlementRoute: "DIRECT_TO_SUPPLIER" | "THROUGH_DEALERSHIP";
   };
@@ -521,17 +536,36 @@ function addResoldProductLines(
 function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
   const consignment = p.consignment!;
   const entitlementMinor = consignment.supplierEntitlementMinor;
-  const marginMinor = p.saleAmountMinor - entitlementMinor;
+  // The dealership's commission is its spread over the supplier's entitlement —
+  // but over WHICH amount depends on who paid him, and the two are not the same
+  // number on a financed direct deal.
+  //
+  // DIRECT: the basis is what actually reaches the supplier. `saleAmountMinor`
+  // would include `salePrice − approved`, an amount no party pays him, and
+  // crediting commission revenue for it also debits AR-Suppliers for it — the
+  // GL asserting a collectable debt against somebody who never received the
+  // money. Absent, it falls back to the sale price, which is exactly right for
+  // a cash direct sale (the buyer pays him the price) and for any event queued
+  // before this field existed.
+  //
+  // THROUGH: the dealership collects the gross and the customer is liable for
+  // the whole sale price, so the spread genuinely is over `saleAmountMinor`.
+  // Unchanged, deliberately — this rule was never wrong on that route.
+  const settlementBasisMinor =
+    consignment.settlementRoute === "DIRECT_TO_SUPPLIER"
+      ? (consignment.supplierGrossReceiptMinor ?? p.saleAmountMinor)
+      : p.saleAmountMinor;
+  const marginMinor = settlementBasisMinor - entitlementMinor;
   const dims = { customerId: p.customerId, vehicleId: p.vehicleId, salespersonId: p.salespersonId };
   const supplier = consignment.supplierName ?? "supplier";
 
-  // Fail closed. A negative margin means the car sold for less than the
-  // supplier is owed, which is a real situation but not one this rule may
-  // guess at — posting a negative commission would misstate revenue and hide
-  // a loss the dealership has to fund. It needs a decision, not a default.
+  // Fail closed. A negative margin means the supplier is paid less than he is
+  // owed, which is a real situation but not one this rule may guess at —
+  // posting a negative commission would misstate revenue and hide a loss the
+  // dealership has to fund. It needs a decision, not a default.
   if (marginMinor < 0) {
     throw new Error(
-      `Consigned sale ${p.saleId} is ${Math.abs(marginMinor)} minor units below the supplier's entitlement of ${entitlementMinor}. Record the shortfall against the supplier agreement before completing the sale.`
+      `Consigned sale ${p.saleId} settles ${Math.abs(marginMinor)} minor units below the supplier's entitlement of ${entitlementMinor}. Record the shortfall against the supplier agreement before completing the sale.`
     );
   }
 

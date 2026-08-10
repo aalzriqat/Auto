@@ -27,6 +27,7 @@ import {
 import { computeResoldProductMargin } from "../accounting/postingRules";
 import { toMinorUnits, fromMinorUnits } from "./money";
 import { computeVehicleCapitalizedCost, vehicleHasCostBasis } from "./vehicleCost";
+import { computeConsignedSupplierPosition } from "../../lib/financingEconomics";
 import { openSupplierReceivable } from "../supplierReceivables";
 import {
   allocatedDepositForVehicle,
@@ -81,6 +82,19 @@ type SaleCompletionArgs = {
   // means THROUGH_DEALERSHIP — see consignedSettlementRoute(). Ignored for
   // dealer-owned stock, which has no supplier to settle with.
   supplierSettlementRoute?: ConsignedSettlementRoute;
+  /**
+   * What the third party pays the supplier DIRECTLY, in minor units, on the
+   * direct route only. Omitted means "the buyer pays him the sale price", which
+   * is the cash direct case and stays exactly as it was.
+   *
+   * A FINANCED direct deal must pass the finance company's approved purchase
+   * amount here, because that — not the sale price — is what reaches him. The
+   * two differ whenever the company approves below the quotation, and deriving
+   * the dealership's claim from the sale price in that case made the supplier
+   * debtor for money that never passed through his hands. See
+   * `computeConsignedSupplierPosition`.
+   */
+  supplierGrossReceiptMinor?: number;
   // What happens to the customer's reservation deposit. Required on a consigned
   // sale that has one — see resolveReservationDeposits.
   depositResolution?: {
@@ -754,9 +768,33 @@ async function applySaleCompletionSideEffects(
   // capped at the margin, and the margin cannot be known without the cost.
   const costAmount = await computeVehicleCapitalizedCost(ctx, prepared.vehicle);
   const costMinor = costAmount > 0 ? toMinorUnits(costAmount, prepared.currency) : undefined;
+
+  // The ONE derivation of this deal's supplier economics. Everything downstream
+  // — the recognized revenue, the margin recorded on the sale, the supplier
+  // claim, the GL entry and the cockpit — consumes it. It used to be computed
+  // twice from two different quantities, and the two disagreed on exactly the
+  // deals where it mattered.
+  //
+  // What the dealership's margin is measured AGAINST is the amount that reaches
+  // the supplier, and that is not always the sale price:
+  //
+  //   THROUGH_DEALERSHIP — the dealership collects the gross and owes him his
+  //     entitlement, so its spread is over the SALE PRICE. Unchanged, and
+  //     correct: the customer is contractually liable for the whole price, and
+  //     that liability is on the books as a receivable.
+  //   DIRECT, cash — the BUYER pays him, and what he pays is the sale price.
+  //     Also unchanged.
+  //   DIRECT, financed — the FINANCE COMPANY pays him its APPROVED amount, and
+  //     `finalizeDeal` passes it. `salePrice − approved` never reaches him; it
+  //     is either paid to the dealership directly by the customer or collected
+  //     by nobody, and per SCRUM-23 it is a management figure on no invoice.
+  //     Measuring his debt against the sale price billed him for it anyway.
+  const supplierGrossReceiptMinor = !dealershipCollectsGross(settlementRoute)
+    ? (args.supplierGrossReceiptMinor ?? toMinorUnits(args.salePrice, prepared.currency))
+    : toMinorUnits(args.salePrice, prepared.currency);
   const marginMinor =
     isSourced && costMinor !== undefined
-      ? toMinorUnits(args.salePrice, prepared.currency) - costMinor
+      ? supplierGrossReceiptMinor - costMinor
       : null;
 
   const { previouslyCollected, appliedDeposits, appliedToSupplierSettlement } =
@@ -862,9 +900,31 @@ async function applySaleCompletionSideEffects(
         // entitlement, so the dealership owes the supplier more than the deal
         // collected with nothing on the books saying so. Paying it later
         // debits an AP that the sale never credited.
-        if (toMinorUnits(args.salePrice, prepared.currency) < costMinor) {
+        //
+        // Measured against what actually REACHES him, not against the sale
+        // price. On a financed direct deal the finance company's approved
+        // amount is what he is paid, and it can fall below his entitlement
+        // while the sale price stays comfortably above it — so the sale-price
+        // form of this check passed on precisely the deals where the supplier
+        // ends up short. `computeConsignedSupplierPosition` is the shared
+        // derivation that refuses it, and it refuses rather than clamping to
+        // zero: a shortfall means somebody has to fund the difference, and
+        // silently treating it as "no claim" makes that somebody the supplier
+        // without anyone deciding so.
+        try {
+          computeConsignedSupplierPosition({
+            supplierEntitlementMinor: costMinor,
+            supplierGrossReceiptMinor,
+          });
+        } catch (error) {
+          // Rethrown as a ConvexError: Convex redacts a plain Error's message
+          // from a production deployment, and the operator would meet this as
+          // "An unexpected error occurred" on a form whose only fix is a number
+          // they have no reason to suspect.
+          console.error(error);
+          const paidLabel = fromMinorUnits(supplierGrossReceiptMinor, prepared.currency);
           throw new ConvexError(
-            `This car is ${prepared.vehicle.sourcedFromName ?? "the supplier"}'s and the dealership sells it as his agent, but the sale price is below the supplier's entitlement of ${costAmount} — the amount he is owed for it. The deal would lose money the dealership has to fund, which is a real situation but not one that can be assumed. Record the shortfall against the supplier agreement, or agree a lower supplier amount, before completing the sale.`
+            `This car is ${prepared.vehicle.sourcedFromName ?? "the supplier"}'s and the dealership sells it as his agent, but he is only being paid ${paidLabel} against an entitlement of ${costAmount} — the amount he is owed for it. The deal would leave him short by money somebody has to fund, which is a real situation but not one that can be assumed. Record the shortfall against the supplier agreement, or agree a lower supplier amount, before completing the sale.`
           );
         }
         // A financed deal settled directly with the supplier used to be refused
@@ -899,6 +959,12 @@ async function applySaleCompletionSideEffects(
         }
         return {
           supplierEntitlementMinor: costMinor,
+          // Carried so the posting rule consumes this deal's actual settlement
+          // basis rather than recomputing one from the sale price. The GL and
+          // the subledger disagreeing about the size of the same claim is the
+          // defect being closed here, and the only way they cannot is if
+          // exactly one place decides it.
+          supplierGrossReceiptMinor,
           supplierName: prepared.vehicle.sourcedFromName,
           settlementRoute,
         };
@@ -1112,6 +1178,22 @@ async function applySaleCompletionSideEffects(
       // Denominated, not assumed: the reader resolves its currency from the
       // application, which can differ from the org's.
       consignedMarginCurrency: prepared.currency,
+      // The supplier's own side of the same settlement, recorded rather than
+      // left to be re-derived. `costMinor` is non-undefined wherever
+      // `marginMinor` is non-null on a sourced sale — the consignment block
+      // above throws otherwise — but it is read defensively because a future
+      // edit to that block must not silently start writing `undefined` here.
+      //
+      // The cockpit renders the entitlement as the supplier's settlement line
+      // and cancellation reverses against it, and both would otherwise have to
+      // recompute it from a vehicle cost that is editable after the sale.
+      ...(costMinor !== undefined ? { consignedSupplierEntitlementMinor: costMinor } : {}),
+      // Only on the direct route: on THROUGH_DEALERSHIP nobody pays him
+      // directly, and writing the sale price here would assert a receipt that
+      // never happened.
+      ...(!dealershipCollectsGross(settlementRoute)
+        ? { consignedSupplierGrossReceiptMinor: supplierGrossReceiptMinor }
+        : {}),
     });
   }
   if (isSourced && costAmount > 0 && supplierOwesMargin && !dealershipCollectsGross(settlementRoute)) {

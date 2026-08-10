@@ -866,6 +866,87 @@ export function computeExpectedRemittance(
   };
 }
 
+// ---------------------------------------------------------------------------
+// The supplier's position on a consigned sale
+// ---------------------------------------------------------------------------
+
+export interface ConsignedSupplierPositionInput {
+  /**
+   * What the dealership agreed the supplier gets for the car — his entitlement.
+   * The capitalized source cost, and the same figure the payable is raised at on
+   * the through-dealership route.
+   */
+  supplierEntitlementMinor: number;
+  /**
+   * What a third party pays the supplier DIRECTLY on this deal, in full.
+   *
+   * Two settlement shapes reach this, and the distinction is the whole point:
+   *
+   *   - cash direct — the BUYER pays the supplier, so this is the sale price;
+   *   - financed direct — the FINANCE COMPANY pays him, so this is the approved
+   *     dealer purchase amount, which is frequently NOT the sale price.
+   *
+   * It is never the sale price by assumption. Assuming it was is what let a
+   * supplier be made debtor for money that never reached him: with a sale at
+   * 20,000, an entitlement of 15,000 and an approval of 18,000, the claim was
+   * raised at 5,000 while only 3,000 of dealership money was ever in his hands.
+   * The missing 2,000 is `salePrice − approved` — an amount the customer either
+   * pays the dealership directly or nobody pays at all. Either way the supplier
+   * never touched it, and a subledger row is a debt somebody will be asked to
+   * settle.
+   */
+  supplierGrossReceiptMinor: number;
+}
+
+export interface ConsignedSupplierPosition {
+  entitlementMinor: number;
+  supplierGrossReceiptMinor: number;
+  /**
+   * Dealership money the supplier is holding, and therefore the largest claim
+   * that can honestly be raised against him. Never negative — see below.
+   */
+  dealershipClaimMinor: number;
+}
+
+/**
+ * The one derivation of who owes whom on a directly-settled consigned sale.
+ *
+ * The invariant it exists to make structural: **a claim on the supplier may
+ * never exceed the portion of money he actually received that belongs to the
+ * dealership.** Because the claim is `received − entitlement`, and `received` is
+ * the amount that genuinely reached him, that holds by construction rather than
+ * by anyone remembering to check it. No caller may derive the claim from a
+ * margin, a sale price, or any other quantity that can contain money the
+ * supplier never held.
+ *
+ * Fails closed when the supplier is paid LESS than he is owed. That is a real
+ * situation — a finance company can approve below the entitlement — but it means
+ * the supplier is short, not that the dealership has a claim of zero. Clamping
+ * to zero would silently make him absorb the shortfall; returning a negative
+ * claim would post a negative receivable and credit negative revenue. Somebody
+ * has to decide who tops it up, and AutoFlow does not model that yet, so the
+ * deal stops here rather than guessing.
+ */
+export function computeConsignedSupplierPosition(
+  input: ConsignedSupplierPositionInput
+): ConsignedSupplierPosition {
+  assertNonNegativeMinor(input.supplierEntitlementMinor, "Supplier entitlement");
+  assertNonNegativeMinor(input.supplierGrossReceiptMinor, "Supplier gross receipt");
+
+  const dealershipClaimMinor = input.supplierGrossReceiptMinor - input.supplierEntitlementMinor;
+  if (dealershipClaimMinor < 0) {
+    throw new FinancingEconomicsError(
+      `The supplier is being paid ${input.supplierGrossReceiptMinor} minor units but is owed ${input.supplierEntitlementMinor} — a shortfall of ${Math.abs(dealershipClaimMinor)}. Who covers that difference has to be agreed and recorded before the deal can be completed; it cannot be treated as the dealership simply having no claim.`
+    );
+  }
+
+  return {
+    entitlementMinor: input.supplierEntitlementMinor,
+    supplierGrossReceiptMinor: input.supplierGrossReceiptMinor,
+    dealershipClaimMinor,
+  };
+}
+
 export interface DealerProceedsInput {
   approvedDealerPurchaseAmountMinor: number;
   dealerContributionMinor: number;

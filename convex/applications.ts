@@ -45,10 +45,12 @@ import {
   consignedSettlementRoute,
   consignedSettlementRouteValidator,
   dealershipCollectsGross,
+  directSettlementBelowEntitlementRefusal,
   isConsignedAgentSale,
   settlementPayer,
   type SettlementPayer,
 } from "./utils/vehicleOwnership";
+import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { auditLog } from "./financialAudit";
 
 /** sourceType used for the canonical finance-company receivable opened at finalizeDeal. */
@@ -535,6 +537,13 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
   // derivations of the same number are two answers waiting to disagree, which
   // is exactly how the party rows came to contradict the stage rail.
   const margin = await saleTimeMarginMinor(ctx, app, { currency, consigned, supplierClaim });
+  // The supplier's own side, resolved from the same immutable sale-time record
+  // and by the same rules. What he KEEPS is his entitlement — on either route,
+  // and whatever the car sold for.
+  const supplierEntitlement = await saleTimeSupplierEntitlementMinor(ctx, app, {
+    currency,
+    consigned,
+  });
 
   const supplierObligation = await resolveSupplierObligation(ctx, app, {
     settlesDirect,
@@ -558,6 +567,8 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
     supplierClaim,
     /** The one resolution of the margin, so the headline cannot reach a second. */
     margin,
+    /** The one resolution of what the supplier keeps, for the same reason. */
+    supplierEntitlement,
     obligations,
     moneySettled: settlementIsComplete(obligations),
   };
@@ -653,6 +664,53 @@ async function saleTimeMarginMinor(
   // READER rejects one. `sales` is editable through the super-admin raw-JSON
   // editor, and a negative here would flow through as `disbursed − (−X)` and
   // publish an inflated profit that the `CorruptInput` guard never sees.
+  if (recorded < 0) return { known: false };
+  return { known: true, minor: recorded };
+}
+
+/**
+ * What the SUPPLIER keeps on this deal, from the record the sale owns.
+ *
+ * His entitlement, and nothing else. It is the same figure on both routes and
+ * it does not depend on what the car sold for: on THROUGH_DEALERSHIP the
+ * dealership owes it to him as a payable, and on DIRECT the financier pays him
+ * that much of what it disburses.
+ *
+ * The direct branch used to derive this as `disbursed − margin`, which was only
+ * ever equal to the entitlement when the disbursement happened to equal the sale
+ * price. Where a finance company approved below the quotation the screen showed
+ * an amount no party would pay — 13,000 against a real entitlement of 15,000 in
+ * the case that opened SCRUM-30 — and it moved whenever the recorded margin did,
+ * which is not a property the supplier's entitlement has.
+ *
+ * Same discipline as `saleTimeMarginMinor`, and for the same reasons: a missing,
+ * unreadable, foreign-currency or negative record is UNKNOWN, never zero. It
+ * reads only the sale, so no other deal's rows are reachable, and it is read
+ * rather than recomputed from the vehicle because `sourceCost` stays editable
+ * after the sale — recomputing would let a later edit restate a closed deal.
+ */
+async function saleTimeSupplierEntitlementMinor(
+  ctx: QueryCtx,
+  app: Doc<"financeApplications">,
+  opts: { currency: string; consigned: boolean }
+): Promise<MarginEvidence> {
+  if (!opts.consigned || !app.finalizedSaleId) return { known: false };
+
+  const sale = await ctx.db.get(app.finalizedSaleId);
+  if (!sale || sale.orgId !== app.orgId) return { known: false };
+
+  const recorded = sale.consignedSupplierEntitlementMinor;
+  // Absent means the sale predates the field. A deal completed before it
+  // existed genuinely has no record of what the supplier was owed, and the
+  // screen says so rather than inventing one.
+  if (recorded === undefined || !Number.isFinite(recorded)) return { known: false };
+  // Denominated alongside the margin, in `consignedMarginCurrency` — the two
+  // are written in the same patch, so one currency governs both.
+  if (sale.consignedMarginCurrency !== opts.currency) return { known: false };
+  // A supplier cannot be owed a negative amount. The write path cannot produce
+  // one, which is precisely why the reader refuses it: `sales` is editable
+  // through the super-admin raw-JSON editor, and a negative entitlement would
+  // otherwise INFLATE the owner-facing profit with nothing to catch it.
   if (recorded < 0) return { known: false };
   return { known: true, minor: recorded };
 }
@@ -1050,11 +1108,10 @@ async function buildCockpitMoney(
   // economics — margin less expenses — which is the point of computing it here
   // once rather than twice on the client.
   const supplierSettlementMinor = resolveSupplierSettlementMinor({
-    app,
     routeKnown,
     settlesDirect,
+    supplierEntitlement: settlementFacts.supplierEntitlement,
     margin: settlementFacts.margin,
-    financierObligation: settlementFacts.obligations.financier,
     payable,
     currency,
   });
@@ -1113,56 +1170,65 @@ async function buildCockpitMoney(
  * financier actually paid him, less the margin he owes back.
  */
 function resolveSupplierSettlementMinor(args: {
-  app: Doc<"financeApplications">;
   routeKnown: boolean;
   settlesDirect: boolean;
+  supplierEntitlement: MarginEvidence;
   margin: MarginEvidence;
-  financierObligation: ObligationState;
   payable: Doc<"vehicleSupplierPayables"> | undefined;
   currency: string;
 }): number | undefined {
-  const { app, routeKnown, settlesDirect, margin, financierObligation, payable, currency } = args;
+  const { routeKnown, settlesDirect, supplierEntitlement, margin, payable, currency } = args;
 
   let supplierSettlementMinor: number | undefined;
   if (!routeKnown) supplierSettlementMinor = undefined;
   else if (settlesDirect) {
-    // From the RECORDED settlement advice, not from the approved amount.
+    // What the supplier KEEPS is his entitlement. On this route the financier
+    // pays him, and the dealership's share of that payment is a claim it holds
+    // against him — so what remains his is exactly what he was owed for the car.
     //
-    // Deriving it as `approved − margin claim` looked reasonable and was not:
-    // the `approved` term cancels algebraically, leaving `sale price − source
-    // cost` — precisely the basis this screen exists to avoid — and it rendered
-    // a `تسوية المورد` line for an amount no party would ever pay, because the
-    // supplier's actual entitlement is whatever the advice says it was.
+    // Two earlier derivations of this line were wrong, in opposite directions,
+    // and both because they measured the supplier's position against something
+    // that is not his entitlement:
     //
-    // `supplierDisbursedAmountMinor` is what the financier actually paid him,
-    // recorded by `confirmSupplierDisbursement` off the advice document. What he
-    // NETS is that, less the margin he owes back. Until that advice exists there
-    // is no honest figure, so the headline reports why instead of inventing one.
-    // Only from a PROVEN-COMPLETE advice. A partial one is not evidence of what
-    // the supplier ends up with: an advice of half the approval reported a
-    // profit as if the whole deal had paid, and an advice below the margin
-    // produced a NEGATIVE supplier settlement and therefore a profit larger
-    // than the entire approved purchase amount.
+    //   `approved − margin claim` — the `approved` term cancels algebraically,
+    //     leaving `sale price − source cost`;
+    //   `disbursed − margin` — equal to the entitlement ONLY when the
+    //     disbursement equals the sale price. Where the finance company approved
+    //     below the quotation it rendered a `تسوية المورد` line for an amount no
+    //     party would ever pay: 13,000 against a real entitlement of 15,000, the
+    //     mismatch that opened SCRUM-30.
     //
-    // The margin comes from the shared sale-time resolution, and when it is not
-    // provable the headline is withheld. It used to read
-    // `supplierClaimOriginalMinor ?? 0`, so a claim that was missing, cancelled
-    // or denominated in another currency silently became "the supplier owes
-    // nothing back" — and the screen published a profit equal to the ENTIRE
-    // disbursement as though it were a fact about the deal. Reporting no figure
-    // is a smaller error than reporting a confident wrong one.
-    const marginBack = margin;
+    // Both also moved whenever the recorded margin moved, which is not a
+    // property the supplier's entitlement has.
+    //
+    // It no longer depends on the settlement advice at all, and that is a
+    // strengthening rather than a relaxation: the entitlement is a fact frozen
+    // at completion, so a missing, partial or contradictory advice can no longer
+    // distort the amount. It never could have been evidence of what he keeps —
+    // an advice of half the approval used to report a profit as though the whole
+    // deal had paid, and one below the margin produced a NEGATIVE supplier
+    // settlement and therefore a profit larger than the entire purchase. What
+    // the advice still governs is whether the deal is SETTLED, which is carried
+    // by the obligation state and the profit's classification badge, not by
+    // silently reshaping the number.
+    //
+    // Unreadable, foreign-currency, negative or unrecorded evidence stays
+    // UNKNOWN — `saleTimeSupplierEntitlementMinor` is where that is enforced —
+    // and the headline reports why instead of inventing a figure.
+    //
+    // The MARGIN is required too, even though the rendered amount no longer
+    // derives from it. That is deliberate and it is not leftover coupling: what
+    // the supplier keeps and what he owes back are two halves of one position,
+    // and the screen cannot honestly publish a profit for a deal whose claim
+    // record is missing, unreadable, negative or denominated in another
+    // currency. Dropping this gate — which the entitlement rewrite did at first
+    // — let the headline render a confident figure beside a supplier row
+    // reading UNKNOWN, which is precisely the confident-wrong-number failure
+    // this screen exists to prevent. Withholding both together is the smaller
+    // error, and it keeps every fail-closed guarantee written before the
+    // rewrite.
     supplierSettlementMinor =
-      financierObligation === "CLOSED" &&
-      app.supplierDisbursedAmountMinor !== undefined &&
-      marginBack.known
-        ? app.supplierDisbursedAmountMinor - marginBack.minor
-        : undefined;
-    // A supplier cannot net a negative amount; if the recorded facts imply one,
-    // they disagree with each other and the figure is not reportable.
-    if (supplierSettlementMinor !== undefined && supplierSettlementMinor < 0) {
-      supplierSettlementMinor = undefined;
-    }
+      supplierEntitlement.known && margin.known ? supplierEntitlement.minor : undefined;
   } else if (payable) {
     supplierSettlementMinor = toMinorSameCurrencyOrUndefined(
       payable.amountDue,
@@ -2270,6 +2336,25 @@ export const setSupplierSettlementRoute = mutation({
       if (payer.counterparty === null) {
         throw new ConvexError(unidentifiedPayerRefusal(payer.unidentifiedReason));
       }
+      // The mirror of the check `approveDealerPurchaseAmount` makes.
+      //
+      // That one fires when the amount is entered on a deal already routed
+      // direct; this one fires when the route is chosen on a deal already
+      // approved. Either ordering reaches the same illegal state — the supplier
+      // paid less than he is owed — and a guard that covers only one of them is
+      // a guard with a documented way around it.
+      if (app.approvedDealerPurchaseAmountMinor !== undefined) {
+        const costAmount = await computeVehicleCapitalizedCost(ctx, vehicle);
+        if (costAmount > 0) {
+          const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
+          const refusal = directSettlementBelowEntitlementRefusal({
+            approvedAmountMinor: app.approvedDealerPurchaseAmountMinor,
+            supplierEntitlementMinor: toMinorUnits(costAmount, currency),
+            supplierName: vehicle.sourcedFromName,
+          });
+          if (refusal) throw new ConvexError(refusal);
+        }
+      }
     }
     // A held عربون and the direct route together are refused, deliberately and
     // for now.
@@ -2405,6 +2490,27 @@ export const finalizeDeal = mutation({
               `This car belongs to ${vehicle.sourcedFromName ?? "the supplier"} and the deal is financed, so who the finance company pays decides whether the dealership owes him his entitlement or holds a claim on him for its margin. Record the settlement route before finalizing.`
             );
           }
+
+          // On the direct route the approved amount IS the settlement, so it is
+          // not optional here.
+          //
+          // `assertDealerEconomicsRecorded` lets a deal with no recorded
+          // quotation through untouched, which is right for a legacy deal
+          // settling through the dealership and wrong for this one: the direct
+          // route is only ever reachable with an external financier paying the
+          // supplier (`setSupplierSettlementRoute` refuses otherwise), and the
+          // amount they pay him is the approval. Without it `completeSale` would
+          // fall back to the sale price and open a supplier debt for money that
+          // never reached him — the exact defect this redesign closes, reached
+          // through a legacy door. A guard whose evidence is missing refuses.
+          if (
+            app.supplierSettlementRoute === "DIRECT_TO_SUPPLIER" &&
+            app.approvedDealerPurchaseAmountMinor === undefined
+          ) {
+            throw new ConvexError(
+              `On this deal the finance company pays ${vehicle?.sourcedFromName ?? "the supplier"} directly, so what it approved is the amount he actually receives — and the dealership's claim on him is measured from it. That approved purchase amount is not recorded on this deal. Record it before finalizing.`
+            );
+          }
         }
 
         // The same refusal as `setSupplierSettlementRoute`, by the other door.
@@ -2480,6 +2586,27 @@ export const finalizeDeal = mutation({
           // buyer's financier paid the supplier booked a payable to him and a
           // receivable at the gross, both inverted.
           supplierSettlementRoute: app.supplierSettlementRoute,
+          // What the finance company actually pays the supplier on this deal.
+          //
+          // Only on the direct route, and only from the FROZEN approval — the
+          // one amount contractually committed to before any money moves. On
+          // the through route the dealership collects the gross and this must
+          // stay absent, or the sale would measure its margin against an amount
+          // nobody paid the supplier.
+          //
+          // Without it, `completeSale` fell back to `quote.vehiclePrice` and
+          // opened a supplier debt for `salePrice − entitlement`. Where the
+          // company approved BELOW the quotation, `salePrice − approved` of that
+          // debt had never reached the supplier: with a 20,000 sale, a 15,000
+          // entitlement and an 18,000 approval, he was made debtor for 5,000
+          // while holding 3,000 of the dealership's money. The rest is either
+          // paid to the dealership directly by the customer or collected by
+          // nobody — and per SCRUM-23 it is a management figure on no invoice,
+          // so it may not appear in anybody's subledger.
+          supplierGrossReceiptMinor:
+            app.supplierSettlementRoute === "DIRECT_TO_SUPPLIER"
+              ? app.approvedDealerPurchaseAmountMinor
+              : undefined,
           depositResolution: args.depositResolution as
             | { treatment: DepositTreatment; reason?: string; refundMethod?: DepositMethod }
             | undefined,
@@ -2918,6 +3045,38 @@ export const confirmSupplierDisbursement = mutation({
             // go, and silence sent them nowhere. A first-class amend path with
             // its own audit record is tracked separately.
             "The company's payment to the supplier has already been recorded on this deal. To correct the amount, reference or date on a recorded advice, ask an administrator to amend it — it cannot be re-submitted here."
+          );
+        }
+
+        // The advice must record the amount the deal was approved at.
+        //
+        // The dealership's ruling is that on a financed direct deal the finance
+        // company pays the supplier in exactly ONE payment, for the approved
+        // amount. That makes any other figure a contradiction between two
+        // records of the same fact — not a partial payment, which this route
+        // does not have — and this mutation accepted any positive number, so the
+        // contradiction could be stored silently and then read back as evidence.
+        //
+        // It matters even though the supplier claim no longer derives from this
+        // field. The claim is accrued at finalization from the approval, so an
+        // advice that disagrees means either the approval on file is not what
+        // the company actually approved, or the money that reached the supplier
+        // is not what the claim was raised against. Both need a human. Refusing
+        // here is what makes the accrual VERIFIABLE rather than merely assumed —
+        // the enforcement and the re-grounding are two halves of one fix, and
+        // either alone leaves the debt derivable from the wrong quantity.
+        //
+        // Ordered AFTER the already-recorded check so a second advice is told
+        // that one exists, which is the more specific and more actionable
+        // answer, rather than being turned away over its amount.
+        if (app.approvedDealerPurchaseAmountMinor === undefined) {
+          throw new ConvexError(
+            "This deal has no approved purchase amount recorded, so there is nothing to check the company's payment against. Record what it approved before confirming what it paid."
+          );
+        }
+        if (args.disbursedAmountMinor !== app.approvedDealerPurchaseAmountMinor) {
+          throw new ConvexError(
+            `The company approved ${app.approvedDealerPurchaseAmountMinor} minor units on this deal but the advice records ${args.disbursedAmountMinor}. On a direct settlement it pays the supplier the approved amount in one payment, so these must agree: correct the approved amount if the company revised it, or the advice if it was mistyped. The dealership's claim on the supplier was raised against the approved amount, so recording a different payment would leave that claim measured against money he never received.`
           );
         }
 

@@ -339,3 +339,37 @@ export function retroactiveOwnershipChangeRefusal(args: {
     ? "This vehicle has already been sold on the supplier's behalf, so it cannot be converted to dealership stock now. Convert it before the sale, or correct the sale first."
     : "This vehicle has already been sold as the dealership's own stock, so it cannot be reclassified as a supplier's vehicle now — the completed sale already recognized revenue and cost of sales on it. Correct the sale through the consigned-sale correction instead.";
 }
+
+/**
+ * Why an approved purchase amount cannot be settled directly to this supplier,
+ * or `null` when it can.
+ *
+ * On the direct route the finance company's approved amount IS what reaches the
+ * supplier, so approving below his entitlement pays him less than he is owed.
+ * `approveDealerPurchaseAmount` guarded only `<= 0`, and the completion-time
+ * guard it relied on compared the SALE PRICE with the entitlement — a different
+ * quantity, and one that stays comfortably above it on exactly the deals where
+ * the approval falls below. So a sale at 20,000 with an entitlement of 15,000
+ * and an approval of 14,000 passed every check and left the supplier 1,000 short.
+ *
+ * It refuses rather than clamping the resulting claim to zero. A shortfall means
+ * somebody has to fund the difference; treating it as "the dealership simply has
+ * no claim" silently elects the supplier to absorb it, and AutoFlow does not
+ * model who tops it up. Returned as a message rather than thrown so each caller
+ * can raise it as its own error type — a `ConvexError`, so the operator is told
+ * which number to fix instead of meeting a redacted "unexpected error".
+ *
+ * Both amounts are integer minor units in the same currency. A caller that
+ * cannot establish the entitlement must not call this and read `null` as
+ * permission — absent evidence is not proof of sufficiency.
+ */
+export function directSettlementBelowEntitlementRefusal(args: {
+  approvedAmountMinor: number;
+  supplierEntitlementMinor: number;
+  supplierName?: string;
+}): string | null {
+  if (args.approvedAmountMinor >= args.supplierEntitlementMinor) return null;
+  const shortfall = args.supplierEntitlementMinor - args.approvedAmountMinor;
+  const supplier = args.supplierName ?? "the supplier";
+  return `On this deal the finance company pays ${supplier} directly, so the approved amount is what he actually receives — and ${args.approvedAmountMinor} minor units is ${shortfall} below the ${args.supplierEntitlementMinor} he is owed for the car. Somebody has to cover that difference, and who does is not something the deal can decide for itself. Agree a lower supplier amount, record the shortfall against the supplier agreement, or settle this deal through the dealership instead.`;
+}

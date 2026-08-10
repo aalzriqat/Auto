@@ -136,6 +136,12 @@ async function runDeal(
     route?: Route;
     downPayment?: number;
     finalize?: boolean;
+    /**
+     * What the finance company approved, in major units. Direct route only —
+     * it is the amount that reaches the supplier. Defaults to the vehicle
+     * price, which is the shape every pre-existing expectation assumes.
+     */
+    approvedAmount?: number;
     /** A reservation deposit (عربون) held on the quote before the deal closes. */
     deposit?: number;
     /** A deposit taken AFTER the route was chosen — the ordering the route-time guard cannot see. */
@@ -219,7 +225,36 @@ async function runDeal(
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
   });
 
+  // On the direct route the finance company's APPROVED amount is what reaches
+  // the supplier, so the dealership's claim on him is measured from it and
+  // `finalizeDeal` refuses without one.
+  //
+  // Approved AT the vehicle price, which is what every expectation in this file
+  // was written against: with `approved === salePrice` the claim is
+  // `salePrice − entitlement`, exactly as before, so this records a fact that
+  // was previously implicit rather than changing any deal's economics. The case
+  // where they DIFFER is the one that matters, and it is exercised through the
+  // real writers — `recordSubmittedQuotation` then `approveDealerPurchaseAmount`
+  // — rather than from here, because that is the path a real deal takes.
+  //
+  // Only `approvedDealerPurchaseAmountMinor` is written. The funding split is
+  // deliberately left alone: `assertDealerEconomicsRecorded` requires it only
+  // once a quotation is recorded, and tests that care about the contribution set
+  // it themselves — including the one that proves an UNRECORDED contribution
+  // withholds the headline instead of assuming zero.
+  // AFTER the `finalize: false` return, deliberately. A caller that stops short
+  // of finalizing is one that intends to drive the economics itself through the
+  // real writers, and `recordSubmittedQuotation` refuses to run once an approval
+  // exists — so seeding one here would make that path unreachable.
   if (opts.finalize === false) return { quoteId, applicationId, saleId: null };
+
+  if (opts.route === "DIRECT_TO_SUPPLIER") {
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, {
+        approvedDealerPurchaseAmountMinor: (opts.approvedAmount ?? VEHICLE_PRICE) * SCALE,
+      });
+    });
+  }
 
   const saleId = await s.asUser.mutation(api.applications.finalizeDeal, {
     orgId: s.orgId,
@@ -658,13 +693,20 @@ describe("cancelling by the other door, after the supplier was paid", () => {
 describe("the settlement advice is recorded as stated", () => {
   test("an amount that differs from the customer's financing principal is stored verbatim", async () => {
     const s = await seedDealership("adv1");
-    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", downPayment: 3_000 });
+    // Approved at the figure the company actually pays him, which is neither the
+    // vehicle price nor the customer's principal.
+    const { applicationId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      downPayment: 3_000,
+      approvedAmount: 17_450,
+    });
 
     // What the company pays the supplier is a transaction between two other
     // parties. It is NOT `totalFinancedAmount`, which is the customer's
     // principal and differs from it by the down payment — so recording the
     // dealership's own expectation in place of the advice is systematically
-    // wrong on any deal with one.
+    // wrong on any deal with one. Here the principal is 17,000 and the advice
+    // is 17,450; the advice tracks the APPROVAL, not the principal.
     const advised = 17_450 * SCALE;
     await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
       orgId: s.orgId, applicationId, disbursedAmountMinor: advised, reference: "CHQ-771",
@@ -1064,6 +1106,123 @@ describe("the deal cockpit query", () => {
     expect(profit.lines.reduce((t, l) => t + l.sign * l.amountMinor, 0)).toBe(profit.amountMinor);
   });
 
+  /**
+   * The scenario every other management-profit test forecloses.
+   *
+   * They all set approved amount = supplier advice = VEHICLE_PRICE, so A = D = S
+   * and the two formulas are forced to agree no matter what they mean. On the
+   * DIRECT route the cockpit derives the supplier's settlement as `D − margin`,
+   * where `margin` is frozen at sale time as `salePrice − sourceCost`. That
+   * identity only collapses to the supplier's real entitlement when the advice
+   * equals the sale price; otherwise the two differ by exactly `S − D`.
+   *
+   * Reachable through the real workflow, not a patched row: the finance company
+   * can approve LESS than the quotation (`basis: "MANUAL"` takes any amount),
+   * while `finalizeDeal` still records the sale at `quote.vehiclePrice`. Nothing
+   * ties them together.
+   *
+   * Economics of the case below: the supplier is owed 15,000. The financier
+   * approves — and therefore pays him — 18,000. He is holding 3,000 of the
+   * dealership's money and owes exactly that back.
+   *
+   * The sale is recorded at 20,000, so the dealership's TOTAL margin is 5,000.
+   * The other 2,000 never passes through the supplier's hands: it is
+   * `salePrice − approved`, which the customer either pays the dealership
+   * directly or nobody pays at all, and which SCRUM-23 rules a management figure
+   * on no invoice. A claim of 5,000 bills the supplier for it anyway.
+   *
+   * The dealership does NOT net 3,000 here, and an earlier draft of this test
+   * asserted that it did. At the 90% LTV this test itself configures, the
+   * finance company funds only 16,200 of the 18,000 it approved, and with no
+   * customer down payment the dealership puts in the remaining 1,800 — so it
+   * holds a 3,000 claim against 1,800 of its own money and nets 1,200. Every
+   * line is asserted below rather than just the total, because a headline that
+   * happens to land on the right number through two offsetting errors is exactly
+   * what this screen keeps producing.
+   */
+  test("the direct-route headline agrees with the canonical dealer economics when the advice is not the sale price", async () => {
+    const APPROVED = 18_000;
+    const s = await seedDealership("cockpitApprovalBelowSale");
+    // The quotation solver refuses a company with no LTV, and this suite's
+    // fixture has none because no other test quotes through the real writer.
+    // Before the deal, so the application freezes a snapshot that carries it.
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.companyId, { defaultLtvPercent: 90 });
+    });
+
+    const { applicationId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      finalize: false,
+    });
+
+    // Through the real writers, so the approval carries whatever the engine
+    // derives alongside it (notably the dealer contribution).
+    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId,
+      applicationId,
+      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+      source: "MANUAL_ENTRY",
+    });
+    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: s.orgId,
+      applicationId,
+      approvedAmountMinor: APPROVED * SCALE,
+      basis: "MANUAL",
+      notes: "Approved below the quotation.",
+    });
+
+    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: APPROVED * SCALE,
+    });
+
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    const profit = view!.money!.managementProfit;
+    expect(profit.available).toBe(true);
+    if (!profit.available) return;
+
+    // The debt the system OPENED against the supplier. He received 18,000 and
+    // was entitled to 15,000, so he owes 3,000 back — not the 5,000 sale-price
+    // margin. A receivable larger than the excess that actually reached him is
+    // a debt the dealership would age, display and offer to collect.
+    const claimDue = await s.t.run(async (ctx) => {
+      const rows = await ctx.db.query("vehicleSupplierReceivables").collect();
+      return rows.find((r) => r.orgId === s.orgId)?.amountDue;
+    });
+    expect(claimDue).toBe(APPROVED - SUPPLIER_ENTITLEMENT);
+
+    // THE INVARIANT, stated directly: the claim may never exceed the dealership
+    // money the supplier is actually holding. He received the approved amount
+    // and keeps his entitlement; everything else about the deal is irrelevant to
+    // what he owes.
+    expect(claimDue! * SCALE).toBe(APPROVED * SCALE - SUPPLIER_ENTITLEMENT * SCALE);
+    // And specifically NOT the total dealer margin, which is 2,000 larger.
+    expect(claimDue).not.toBe(VEHICLE_PRICE - SUPPLIER_ENTITLEMENT);
+
+    // What the supplier actually keeps is his entitlement, never `advice − margin`.
+    const line = (key: string) => profit.lines.find((l) => l.key === key)?.amountMinor;
+    expect(line("SUPPLIER_SETTLEMENT")).toBe(SUPPLIER_ENTITLEMENT * SCALE);
+    expect(line("APPROVED_PURCHASE")).toBe(APPROVED * SCALE);
+    expect(line("CUSTOMER_DIRECT_TO_DEALER")).toBe(0);
+    expect(line("ACTUAL_EXPENSES")).toBe(0);
+    // 90% of the 18,000 approval is 16,200; the dealership funds the rest.
+    expect(line("DEALER_CONTRIBUTION")).toBe(1_800 * SCALE);
+
+    // The canonical dealer economics: what the supplier holds for it, less what
+    // it put in itself.
+    expect(profit.amountMinor).toBe(
+      (APPROVED - SUPPLIER_ENTITLEMENT) * SCALE - 1_800 * SCALE
+    );
+    // The headline is the sum of the lines the screen renders, not a second
+    // formula that happens to agree today.
+    expect(profit.lines.reduce((t, l) => t + l.sign * l.amountMinor, 0)).toBe(profit.amountMinor);
+  });
+
   test("an unstarted deal reports that the profit cannot be computed, not that it is zero", async () => {
     const s = await seedDealership("cockpitNoProfit");
     const { applicationId } = await runDeal(s, { finalize: false });
@@ -1396,68 +1555,84 @@ describe("proving a deal is settled, rather than assuming it", () => {
    * The old predicate accepted any positive advice, so a 10,000 advice against a
    * 20,000 approval reported the deal complete and its profit "actual".
    */
-  test("a partial supplier disbursement is not a settled deal", async () => {
+  /**
+   * SUPERSEDED BY SCRUM-30, and strengthened rather than relaxed.
+   *
+   * This used to record a half-sized advice and then prove the deal did not read
+   * as settled. Under the dealership's ruling the finance company pays the
+   * supplier in exactly ONE payment for the approved amount, so a partial advice
+   * is not a thing that can happen — and storing one meant holding two
+   * contradictory records of the same fact and reading the contradiction back as
+   * evidence.
+   *
+   * So the guarantee is now made one step earlier: the partial advice is refused
+   * outright and never reaches the cockpit at all. That is strictly stronger
+   * than withholding a headline computed from it.
+   */
+  test("a partial supplier disbursement is refused, not recorded and then discounted", async () => {
     const s = await seedDealership("redesignPartial");
     const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
-    await s.t.run(async (ctx) => {
-      await ctx.db.patch(applicationId, {
-        approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
-      dealerContributionMinor: 0,
-      });
-    });
-    // Half of what the financier owes the supplier.
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
-      orgId: s.orgId,
-      applicationId,
-      disbursedAmountMinor: (VEHICLE_PRICE / 2) * SCALE,
-    });
-    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
-    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
-      orgId: s.orgId,
-      receivableId: claim._id,
-      amount: MARGIN,
-    });
 
+    // Half of what the financier owes the supplier.
+    await expect(
+      s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+        orgId: s.orgId,
+        applicationId,
+        disbursedAmountMinor: (VEHICLE_PRICE / 2) * SCALE,
+      })
+    ).rejects.toThrow(/approved .* but the advice records/i);
+
+    // Nothing was stored on the way to the refusal — a mutation is one
+    // transaction, so a throw rolls back every write it had already made.
+    const app = (await s.t.run((ctx) => ctx.db.get(applicationId as never))) as {
+      supplierDisbursedAmountMinor?: number;
+      supplierDisbursementConfirmedAt?: number;
+    };
+    expect(app.supplierDisbursedAmountMinor).toBeUndefined();
+    expect(app.supplierDisbursementConfirmedAt).toBeUndefined();
+
+    // And the deal is still not settled, which was this test's original point.
     const view = await cockpitOf(s, applicationId);
     expect(stageOf(view, "SETTLEMENT")).not.toBe("COMPLETE");
-    // And the headline must not present itself as a finished figure.
-    //
-    // Asserted on the reason rather than as `available && classification`,
-    // which is false whenever the figure is withheld and therefore never equal
-    // to "ACTUAL_UNPOSTABLE" — the assertion held no matter what the query did.
-    const profit = view!.money!.managementProfit;
-    expect(profit.available).toBe(false);
-    if (!profit.available) expect(profit.reason).toBe("NoSupplierSettlement");
   });
 
   /**
-   * CX-1b. An advice BELOW the margin produced a negative supplier settlement
-   * and therefore a profit larger than the entire approved purchase amount.
+   * CX-1b, also superseded by SCRUM-30 and also strengthened.
+   *
+   * An advice BELOW the margin used to produce a negative supplier settlement
+   * and therefore a profit larger than the entire approved purchase amount. The
+   * redesign removes the arithmetic that could do that — the settlement line is
+   * the supplier's recorded entitlement and never `advice − margin` — and the
+   * advice that would have triggered it cannot be recorded in the first place.
+   *
+   * Both halves are asserted: the refusal, and that the headline is still a
+   * sane figure bounded by the approval afterwards.
    */
-  test("an advice smaller than the margin never yields a profit above the approval", async () => {
+  test("an advice smaller than the margin is refused, and the headline stays within the approval", async () => {
     const s = await seedDealership("redesignNegative");
     const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
     await s.t.run(async (ctx) => {
-      await ctx.db.patch(applicationId, {
-        approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
-      dealerContributionMinor: 0,
-      });
+      await ctx.db.patch(applicationId, { dealerContributionMinor: 0 });
     });
-    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
-      orgId: s.orgId,
-      applicationId,
-      disbursedAmountMinor: Math.floor((MARGIN / 2) * SCALE),
-    });
+
+    await expect(
+      s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+        orgId: s.orgId,
+        applicationId,
+        disbursedAmountMinor: Math.floor((MARGIN / 2) * SCALE),
+      })
+    ).rejects.toThrow(/approved .* but the advice records/i);
 
     const view = await cockpitOf(s, applicationId);
     const profit = view!.money!.managementProfit;
-    // Guarded by `if (profit.available)` this asserted nothing whenever the
-    // figure was withheld — which is the very outcome it was meant to prove.
-    // An advice below the margin is not evidence of what the supplier nets, so
-    // the honest answer is no figure, and that is now stated rather than
-    // skipped past.
-    expect(profit.available).toBe(false);
-    if (!profit.available) expect(profit.reason).toBe("NoSupplierSettlement");
+    // The headline no longer depends on the advice at all, so it is available
+    // from sale-time facts — and it is the margin, nowhere near the approval.
+    expect(profit.available).toBe(true);
+    if (!profit.available) return;
+    expect(profit.amountMinor).toBe(MARGIN * SCALE);
+    expect(profit.amountMinor).toBeLessThan(VEHICLE_PRICE * SCALE);
+    // Still an estimate: nobody has proven the money moved.
+    expect(profit.classification).toBe("ESTIMATED_AWAITING_SETTLEMENT");
   });
 
   /**

@@ -1367,6 +1367,37 @@ export default defineSchema({
      * the difference as profit.
      */
     consignedMarginCurrency: v.optional(v.string()),
+    /**
+     * What the supplier is owed for the car, in minor units, frozen at
+     * completion — his entitlement, denominated in `consignedMarginCurrency`.
+     *
+     * Recorded rather than re-derived because every later reader needs it and
+     * every source it could be re-derived FROM can move underneath them: the
+     * vehicle's `sourceCost` is editable, and the capitalized cost is a sum over
+     * rows that can be added after the sale. The cockpit renders this as the
+     * supplier's settlement line on both routes, and cancellation reverses
+     * against it.
+     *
+     * Absent means the row predates this field: UNKNOWN, never zero. A zero
+     * entitlement and an unrecorded one are different facts, and only one of
+     * them means "the supplier is owed nothing".
+     */
+    consignedSupplierEntitlementMinor: v.optional(v.number()),
+    /**
+     * What a third party paid the supplier DIRECTLY, in minor units, frozen at
+     * completion. Written only on the direct route; absent on
+     * THROUGH_DEALERSHIP, where nobody pays him directly and the dealership
+     * owes him his entitlement as a payable instead.
+     *
+     * On a cash direct sale this is the sale price — the buyer pays him. On a
+     * financed direct sale it is the finance company's approved purchase
+     * amount, which is frequently NOT the sale price. Recording which quantity
+     * actually applied is what stops a later reader from assuming the sale
+     * price and reopening the defect this field was added to close: the
+     * dealership's claim is `this − entitlement`, so a claim can never exceed
+     * the dealership money the supplier is genuinely holding.
+     */
+    consignedSupplierGrossReceiptMinor: v.optional(v.number()),
     canonicalReceivableDocumentId: v.optional(v.id("receivableDocuments")),
     commissionAmount: v.optional(v.number()), // Calculated at sale time
     // How many COMMISSION_ADJUSTED corrections have been posted against this

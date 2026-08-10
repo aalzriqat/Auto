@@ -9,6 +9,14 @@ import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { computeSubmittedQuotation } from "../lib/financingEconomics";
 import {
+  consignedSettlementRoute,
+  dealershipCollectsGross,
+  directSettlementBelowEntitlementRefusal,
+  isConsignedAgentSale,
+} from "./utils/vehicleOwnership";
+import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
+import { toMinorUnits } from "./utils/money";
+import {
   assertMinorAmount,
   buildRuleSnapshot,
   deriveEconomics,
@@ -1136,6 +1144,36 @@ export const approveDealerPurchaseAmount = mutation({
     // if anything the more consequential of the two to leave self-serve.
     if (user._id === app.salespersonId) {
       throw new ConvexError("You cannot approve the purchase amount on your own application.");
+    }
+
+    // An approval below the supplier's entitlement, on a deal where the company
+    // pays HIM. Refused at the point the number is entered.
+    //
+    // Only where the route is already recorded as direct. Before it is chosen
+    // there is no fact to check against — on the through route the dealership
+    // collects the gross and the customer remains liable for the whole sale
+    // price, so an approval under the entitlement is an ordinary partly-funded
+    // deal rather than a shortfall to anyone. `setSupplierSettlementRoute`
+    // applies the mirror of this check when the route is chosen after the
+    // approval, and `completeSale` refuses at the commit point regardless, so
+    // neither ordering can slip through. This one exists so the operator learns
+    // it here rather than at the finalize button.
+    if (!dealershipCollectsGross(consignedSettlementRoute(app))) {
+      const vehicle = await ctx.db.get(app.vehicleId);
+      if (vehicle && vehicle.orgId === args.orgId && isConsignedAgentSale(vehicle)) {
+        const costAmount = await computeVehicleCapitalizedCost(ctx, vehicle);
+        // A vehicle with no recorded cost is not evidence that nothing is owed;
+        // `completeSale` refuses that sale outright. Nothing is asserted here.
+        if (costAmount > 0) {
+          const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
+          const refusal = directSettlementBelowEntitlementRefusal({
+            approvedAmountMinor: args.approvedAmountMinor,
+            supplierEntitlementMinor: toMinorUnits(costAmount, currency),
+            supplierName: vehicle.sourcedFromName,
+          });
+          if (refusal) throw new ConvexError(refusal);
+        }
+      }
     }
 
     const snapshot = await resolveRuleSnapshot(ctx, app);
