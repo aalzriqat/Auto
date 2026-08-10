@@ -32,6 +32,14 @@ export const notificationsEn = {
   Notif_ApplicationCreated_Message: "{actorName} submitted a new finance application for {customerName}",
   Notif_ApplicationCancelled_Title: "Finance Application Cancelled",
   Notif_ApplicationCancelled_Message: "{actorName} cancelled the finance application for {customerName}",
+  // Names no amount, deliberately. This row is stored verbatim and returned to
+  // the recipient by `notifications.list`, so anything written here is readable
+  // by whoever receives it — and what the advice says was paid is evidence the
+  // cockpit gates behind `view:finance`, which the recipients of this message
+  // are not selected on.
+  Notif_ApplicationSettlementAdviceDiscrepancy_Title: "Settlement Advice Needs Reconciling",
+  Notif_ApplicationSettlementAdviceDiscrepancy_Message:
+    "The settlement advice {actorName} recorded disagrees with the approved purchase amount. The deal is on hold until the two are reconciled — open it to review and correct the advice.",
   Notif_GuarantorAdded_Title: "Guarantor Added",
   Notif_GuarantorAdded_Message: "{actorName} added a guarantor for {customerName}",
   Notif_QuoteAccepted_Title: "Quote Accepted",
@@ -249,6 +257,10 @@ export const notificationsAr = {
   Notif_ApplicationCreated_Message: "قدّم {actorName} طلب تمويل جديد لـ {customerName}",
   Notif_ApplicationCancelled_Title: "تم إلغاء طلب التمويل",
   Notif_ApplicationCancelled_Message: "ألغى {actorName} طلب التمويل الخاص بـ {customerName}",
+  // No figure here either, for the same reason as the English.
+  Notif_ApplicationSettlementAdviceDiscrepancy_Title: "إشعار التسوية بحاجة إلى مطابقة",
+  Notif_ApplicationSettlementAdviceDiscrepancy_Message:
+    "إشعار التسوية الذي سجّله {actorName} لا يطابق مبلغ الشراء المعتمد. الصفقة متوقفة حتى تتم مطابقتهما — افتحها لمراجعة الإشعار وتصحيحه.",
   Notif_GuarantorAdded_Title: "تمت إضافة ضامن",
   Notif_GuarantorAdded_Message: "أضاف {actorName} ضامناً لـ {customerName}",
   Notif_QuoteAccepted_Title: "تم قبول عرض السعر",

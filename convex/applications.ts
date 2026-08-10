@@ -5,7 +5,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
-import { notifyManagers, getActorName } from "./utils/notifications";
+import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
 import { depositMethodValidator, type DepositMethod } from "./utils/depositRecording";
 import { completeSale } from "./utils/saleCompletion";
@@ -3283,15 +3283,34 @@ export const confirmSupplierDisbursement = mutation({
 
         if (!adviceAgreesWithApproval) {
           // A discrepancy nobody is told about is a discrepancy nobody resolves.
-          // Routed to managers on the same channel as the other things that stop
-          // a deal, rather than waiting to be noticed on the cockpit.
-          await notifyManagers(
+          //
+          // Its own type, because it borrowed `application.created` — whose
+          // template reads "{actorName} submitted a new finance application for
+          // {customerName}" and which was never given a `customerName`, so the
+          // renderer substituted only what it received and shipped the
+          // placeholder verbatim. Recipients were told a new application had
+          // arrived for a customer called `{customerName}`, about a deal that
+          // had in fact stopped. Nothing in it said reconciliation.
+          //
+          // Routed on the finance authority rather than `notifyManagers`, which
+          // selects on `manage:users` — a permission an org can reasonably give
+          // an office administrator, and one that says nothing about being
+          // allowed to see deal money.
+          //
+          // And it carries NO amount. `dispatch` stores `data` on the row as
+          // given and `notifications.list` returns rows unprojected, so the
+          // disbursed figure was not merely unrendered — it was readable by
+          // every recipient, which put settlement evidence the cockpit gates
+          // behind `view:finance` into the hands of people selected without it.
+          // The message says what happened; the figures stay on the cockpit,
+          // behind the gate that already exists for them.
+          await notifyByPermission(
             ctx,
             args.orgId,
-            "application.created" as const,
+            PERMISSIONS.MANAGE_FINANCE,
+            "application.settlement_advice_discrepancy" as const,
             {
               actorName: await getActorName(ctx),
-              amount: String(args.disbursedAmountMinor),
             },
             // The cockpit route, which is the page that renders the
             // discrepancy and carries the correction action. There is no page

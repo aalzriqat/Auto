@@ -46,6 +46,23 @@ export const NOTIFICATION_TYPES = {
   "sale.deleted": { category: "sales", priority: "normal", criticalDefault: false },
   "application.created": { category: "sales", priority: "normal", criticalDefault: false },
   "application.cancelled": { category: "sales", priority: "normal", criticalDefault: false },
+  /**
+   * A financed consigned deal whose settlement advice contradicts the approved
+   * purchase amount, which stops the deal until somebody reconciles the two.
+   *
+   * `finance`, not `sales`, because the people who can act on it are the ones
+   * holding the finance authority — and the category is what the per-user
+   * preference is keyed on, so filing it under sales would let it be silenced
+   * alongside routine lead traffic.
+   *
+   * Urgent and `criticalDefault`, because this is the only push signal for the
+   * one state in this workflow a deal cannot leave by itself.
+   */
+  "application.settlement_advice_discrepancy": {
+    category: "finance",
+    priority: "urgent",
+    criticalDefault: true,
+  },
   "guarantor.added": { category: "sales", priority: "normal", criticalDefault: false },
   "quote.accepted": { category: "sales", priority: "normal", criticalDefault: false },
   "quote.declined": { category: "sales", priority: "normal", criticalDefault: false },

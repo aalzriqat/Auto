@@ -20,7 +20,12 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+// The notification a recipient actually reads, rendered by the same function
+// every channel uses — asserting the stored row alone would not catch a
+// template whose placeholders are never filled.
+import { renderNotification } from "../lib/notifications/render";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -3699,6 +3704,197 @@ describe("financed direct evidence that has gone missing fails closed", () => {
     expect(dash.truncated.profit).toBe(true);
   });
 
+  /**
+   * The KPI deltas compare this period against the one before it, and the two
+   * halves were derived by different rules.
+   *
+   * The current window was moved onto the frozen recognized earning; the
+   * comparison window went on recomputing `salePrice − liveVehicleCost`. So the
+   * same deal counted 3,000 while it was current and 5,000 once it aged out,
+   * and the dealer read the difference as a collapse that never happened. Worse
+   * than either figure alone: the arrow is derived from both.
+   */
+  const FORTY_FIVE_DAYS = 45 * 86_400_000;
+
+  const monthDash = (s: Seeded) =>
+    s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId,
+      timeRange: "MONTH",
+    }) as Promise<{
+      previousPeriod?: { sales?: number; netProfit?: number; expenses?: number };
+      truncated: { profit: boolean };
+    }>;
+
+  test("the comparison window is on the same basis as the current one", async () => {
+    const { s, saleId } = await financedDirectSale("s30DashPrev", 18_000);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { saleDate: Date.now() - FORTY_FIVE_DAYS });
+    });
+
+    const dash = await monthDash(s);
+
+    // The premise, so this cannot pass by the window being empty: MONTH compares
+    // the last 30 days against the 30 before them, and a 45-day-old sale is in
+    // the second of those and not the first.
+    expect(dash.previousPeriod).toBeDefined();
+    expect(dash.previousPeriod!.sales).toBe(3_000);
+    // Specifically not 5,000 — the commercial spread the current window had
+    // already stopped publishing, still being published here.
+    expect(dash.previousPeriod!.sales).not.toBe(5_000);
+  });
+
+  test("and an unknown earning there withholds the comparison instead of filling it in", async () => {
+    const { s, saleId } = await financedDirectSale("s30DashPrevUnknown", 18_000);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, {
+        saleDate: Date.now() - FORTY_FIVE_DAYS,
+        consignedMarginMinor: undefined,
+      });
+    });
+
+    const dash = await monthDash(s);
+
+    // The current window fails closed on this row. The comparison window fell
+    // through to the live vehicle and produced a confident number, so a period
+    // that CANNOT be totalled was being compared against one that could.
+    expect(dash.previousPeriod!.sales).toBeUndefined();
+    expect(dash.previousPeriod!.netProfit).toBeUndefined();
+    // And the incompleteness is published, not merely acted on internally.
+    expect(dash.truncated.profit).toBe(true);
+  });
+
+  /**
+   * The evidence requirement was decided by asking a set that only ever holds
+   * the first 500 costed vehicles. Past that line the same deal stopped being
+   * recognized as one needing frozen evidence, and the turnover fallback
+   * published `salePrice − sourceCost` — the exact estimate this release exists
+   * to stop publishing. A lot with 500 sales in the window is not exotic.
+   */
+  test("a deal past the costing cap is still held to the same evidence", async () => {
+    const { s, saleId } = await financedDirectSale("s30DashTail", 18_000);
+    await s.t.run(async (ctx) => {
+      const sale = (await ctx.db.get(saleId)) as unknown as Record<string, unknown> & {
+        vehicleId: Id<"vehicles">;
+        saleDate: number;
+      };
+      const vehicle = (await ctx.db.get(sale.vehicleId)) as unknown as Record<string, unknown>;
+      const { _id: _vid, _creationTime: _vct, ...vehicleFields } = vehicle;
+      const { _id: _sid, _creationTime: _sct, ...saleFields } = sale;
+
+      // 500 filler sales dated BEFORE it, so the index returns them first and
+      // the deal under test lands at position 500 — one past the cap. They are
+      // dealership-owned, priced at zero and costed at zero, so they contribute
+      // nothing to either total and the only figure either assertion can be
+      // reading is the deal itself.
+      for (let i = 0; i < 500; i += 1) {
+        const filler = await ctx.db.insert("vehicles", {
+          ...vehicleFields,
+          sourceType: "STOCK",
+          sourceCost: 0,
+          purchasePrice: 0,
+          vin: `S30TAILVIN${String(i).padStart(4, "0")}`,
+        } as never);
+        await ctx.db.insert("sales", {
+          ...saleFields,
+          vehicleId: filler,
+          saleDate: sale.saleDate - (500 - i) * 1_000,
+          salePrice: 0,
+          supplierSettlementRoute: undefined,
+          consignedMarginMinor: undefined,
+          consignedMarginCurrency: undefined,
+        } as never);
+      }
+
+      // The state the fallback is reached from: no recorded earning at all.
+      await ctx.db.patch(saleId, { consignedMarginMinor: undefined });
+    });
+
+    // MONTH, deliberately, and not ALL_TIME: with no lower bound the query
+    // reads `by_org` and orders by CREATION, which puts the deal under test
+    // first and inside the cap however the fillers are dated. Only the dated
+    // window uses `by_org_saleDate`, where the fillers precede it and it lands
+    // at position 500. An earlier version of this test asserted against the
+    // ALL_TIME shape and passed on unfixed code.
+    const dash = (await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId,
+      timeRange: "MONTH",
+    })) as { salesTrend: Array<{ Revenue: number; Profit: number }> };
+
+    const revenue = dash.salesTrend.reduce((sum, p) => sum + p.Revenue, 0);
+    // Excluded, exactly as the same row is when it sits inside the cap.
+    expect(revenue).toBe(0);
+    // 20,000 − 15,000: the supplier's own money counted as the dealership's
+    // turnover, which is what the tail path published.
+    expect(revenue).not.toBe(5_000);
+  });
+
+  /**
+   * Ranking is a comparison, and a comparison between a complete total and an
+   * incomplete one has no meaning. This is the same defect already closed in
+   * the salesperson report, on the tile the owner sees first.
+   */
+  test("a salesperson holding an unknown earning is not crowned on their partial total", async () => {
+    const { s, saleId } = await financedDirectSale("s30TopPerf", 18_000);
+    await s.t.run(async (ctx) => {
+      const sale = (await ctx.db.get(saleId)) as unknown as Record<string, unknown> & {
+        vehicleId: Id<"vehicles">;
+        saleDate: number;
+      };
+      const vehicle = (await ctx.db.get(sale.vehicleId)) as unknown as Record<string, unknown>;
+      const { _id: _vid, _creationTime: _vct, ...vehicleFields } = vehicle;
+      const { _id: _sid, _creationTime: _sct, ...saleFields } = sale;
+
+      const ownedSale = async (price: number, salespersonId: Id<"users">, tag: string) => {
+        const v = await ctx.db.insert("vehicles", {
+          ...vehicleFields,
+          sourceType: "STOCK",
+          sourceCost: 0,
+          purchasePrice: 0,
+          vin: `S30RANKVIN${tag}`,
+        } as never);
+        await ctx.db.insert("sales", {
+          ...saleFields,
+          vehicleId: v,
+          salePrice: price,
+          salespersonId,
+          supplierSettlementRoute: undefined,
+          consignedMarginMinor: undefined,
+          consignedMarginCurrency: undefined,
+        } as never);
+      };
+
+      // The deal user: 1,000 of complete earnings, plus one deal whose earning
+      // cannot be established at all.
+      await ownedSale(1_000, s.userId, "A");
+      await ctx.db.patch(saleId, { consignedMarginMinor: undefined });
+      // The approver: 900, and every dinar of it accounted for.
+      await ownedSale(900, s.approverId, "B");
+
+      // The tile is drawn only for a role that may see people at all. The
+      // file's default role does not carry it, so without this the whole block
+      // is skipped and the assertion below passes against anything.
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === s.orgId)!;
+      await ctx.db.patch(role._id, { permissions: [...role.permissions, "view:users"] });
+    });
+
+    const dash = (await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId,
+      timeRange: "ALL_TIME",
+    })) as {
+      topPerformer: { name: string; revenue: number } | null;
+      truncated: Record<string, boolean>;
+      teamMembers?: unknown;
+    };
+
+    // 1,000 beat 900 and took the tile, on a total that omits an entire deal.
+    // The honest winner is the one whose number is whole.
+    expect(dash.topPerformer?.name).toBe("Approver");
+    expect(dash.topPerformer?.revenue).toBe(900);
+    // And the tile says it was drawn from a shortened field, so "best" is not
+    // read as "best of everyone".
+    expect(dash.truncated.topPerformer).toBe(true);
+  });
+
   test("recalculating a commission whose supplier receipt was erased refuses, and changes nothing", async () => {
     // Approved AT the entitlement, so the honest commission is 0 and no accrual
     // was posted — which is exactly the state `recalculateCommission` exists to
@@ -4020,6 +4216,82 @@ describe("a settlement advice that contradicts the approval", () => {
     expect(view!.settlementAdviceDiscrepancy).toBeNull();
     // The condition is still visible — this deal is stuck and the screen says so.
     expect(view!.settlementAdviceRequiresReconciliation).toBe(true);
+  });
+
+  /**
+   * The one push signal for the one blocking state this release introduces.
+   *
+   * It reused `application.created`, whose template reads "{actorName} submitted
+   * a new finance application for {customerName}" — and `customerName` was never
+   * supplied, so the renderer left the placeholder in the text. Managers were
+   * told a new application had arrived, for a customer named `{customerName}`,
+   * about a deal that had in fact frozen. Nothing in the message says
+   * reconciliation, so the recovery path this state was invented to provide was
+   * announced to nobody.
+   *
+   * The payload is the second half and the more serious one. `dispatch` stores
+   * `data` on the row verbatim and `notifications.list` returns rows
+   * unprojected, so `amount` — the settlement figure the cockpit gates behind
+   * `view:finance` — was readable by every holder of `manage:users`, a
+   * permission an org can grant an office administrator.
+   */
+  test("the people told about a frozen deal are told what froze, and nothing they may not see", async () => {
+    const { s, applicationId } = await paidDeal("s30ReconNotify", 18_000);
+
+    // A back-office role: manages people, has no business with the money.
+    const clerkId = await s.t.run(async (ctx) => {
+      const roleId = await ctx.db.insert("roles", {
+        orgId: s.orgId,
+        name: "Office Admin",
+        permissions: ["manage:users", "view:sales"],
+      } as never);
+      const userId = await ctx.db.insert("users", {
+        clerkId: "s30ReconNotify_clerk",
+        email: "s30ReconNotify.clerk@example.com",
+        name: "Office Admin",
+      });
+      await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
+      return userId;
+    });
+
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 17_995 * SCALE,
+      reference: "WIRE-4471",
+    });
+
+    const rows = await s.t.run(async (ctx) =>
+      (await ctx.db.query("notifications").collect()).filter((n) => n.orgId === s.orgId)
+    );
+
+    // Nobody selected on `manage:users` alone is told about somebody else's
+    // settlement advice.
+    expect(rows.filter((n) => n.userId === clerkId)).toHaveLength(0);
+
+    const notice = rows.find((n) => n.type === "application.settlement_advice_discrepancy");
+    // Its own type, not `application.created` borrowed.
+    expect(notice?.type).toBe("application.settlement_advice_discrepancy");
+    const noticeType = notice!.type as string;
+
+    const rendered = renderNotification("en", noticeType, notice!.data);
+    // No placeholder survives, in either language.
+    expect(rendered.title + rendered.message).not.toContain("{");
+    expect(renderNotification("ar", noticeType, notice!.data).message).not.toContain("{");
+    // And it says what happened, rather than announcing a new application.
+    expect(rendered.message.toLowerCase()).toContain("reconcil");
+
+    // The row itself, which is what a recipient's client actually receives.
+    const stored = JSON.stringify(notice!.data ?? {});
+    for (const evidence of [
+      String(17_995 * SCALE),
+      String(18_000 * SCALE),
+      "17995",
+      "18000",
+      "WIRE-4471",
+    ]) {
+      expect(stored).not.toContain(evidence);
+    }
   });
 
   test("and a role holding view:finance receives the evidence in full", async () => {

@@ -478,11 +478,32 @@ export const stats = query({
      * approved, not the sale price, and the difference reaches no party.
      */
     const needsFrozenMarginEvidence = (sale: Doc<"sales">): boolean =>
-      consignedVehicleIds.has(sale.vehicleId) &&
       !dealershipCollectsGross(
         consignedSettlementRoute({ supplierSettlementRoute: sale.supplierSettlementRoute })
       ) &&
       (sale.financingType === "FINANCED" || sale.financingType === "LEASE");
+
+    /**
+     * Whether this sale needs a recorded earning and has none.
+     *
+     * Answered from the sale row alone, which is what makes it the same answer
+     * everywhere. It used to also require the vehicle to be in
+     * `consignedVehicleIds` — a set holding only the first 500 costed vehicles
+     * — so past that line a financed direct deal stopped being recognized as
+     * one needing evidence, and the turnover fallback published
+     * `salePrice − sourceCost` for it: the supplier's own money reported as the
+     * dealership's. The vehicle was never needed. `supplierSettlementRoute` is
+     * refused outright on dealer-owned stock (see applications.ts's
+     * `setSupplierSettlementRoute`, which rejects rather than storing-and-
+     * ignoring it precisely so readers may trust it), so DIRECT_TO_SUPPLIER on
+     * a sale means a consigned car by construction.
+     *
+     * The residual risk runs the safe way. If such a row somehow existed on
+     * owned stock it would be excluded and flagged rather than estimated —
+     * short and saying so, which is the failure this whole change prefers.
+     */
+    const recognizedEarningIsUnknown = (sale: Doc<"sales">): boolean =>
+      frozenConsignedMargin(sale) === undefined && needsFrozenMarginEvidence(sale);
 
     /**
      * The one authority for what a sale contributed, shared by the turnover
@@ -493,15 +514,29 @@ export const stats = query({
      * `null` means "cannot be established": excluded and flagged, never zeroed
      * and never grossed up.
      */
-    const recognizedEarningOfSale = (sale: Doc<"sales">): number | null | undefined => {
+    const earningReader = (onUnknown: () => void) => (sale: Doc<"sales">) => {
       const frozen = frozenConsignedMargin(sale);
       if (frozen !== undefined) return frozen;
-      if (needsFrozenMarginEvidence(sale)) {
-        unknownMarginExcluded = true;
+      // The same predicate the ranking asks, so the two cannot come to
+      // different conclusions about one sale — the tile would then omit a row
+      // the totals kept, or rank on a row the totals withheld.
+      if (recognizedEarningIsUnknown(sale)) {
+        onUnknown();
         return null;
       }
       return undefined;
     };
+
+    /**
+     * One rule, two windows. The comparison period gets its own instance rather
+     * than its own logic, because the only thing that legitimately differs
+     * between them is WHICH total is short — and a delta computed from a
+     * fail-closed current period and a fail-open historical one reports the
+     * difference between two accounting bases as a change in the business.
+     */
+    const recognizedEarningOfSale = earningReader(() => {
+      unknownMarginExcluded = true;
+    });
 
     const recognizedRevenueOfSale = (sale: Doc<"sales">): number => {
       if (!canViewProfitMetrics) return sale.salePrice;
@@ -700,19 +735,31 @@ export const stats = query({
 
     // 7. Top performer — ranked by visible sale revenue in this period
     // (not the task backlog leaderboard above, which tracks a different thing).
-    const revenueBySalesperson: Record<string, { revenue: number; deals: number }> = {};
+    const revenueBySalesperson: Record<string, { revenue: number; deals: number; complete: boolean }> = {};
+    let topPerformerIncomplete = false;
     let topPerformer: { name: string; revenue: number; deals: number; userId: Id<"users">; imageUrl?: string; lastSeenAt?: number } | null = null;
     if (canViewSalesMetrics && canViewUsers) {
       for (const sale of activeSales) {
-        const entry = revenueBySalesperson[sale.salespersonId] ?? { revenue: 0, deals: 0 };
+        const entry = revenueBySalesperson[sale.salespersonId] ?? { revenue: 0, deals: 0, complete: true };
         // Ranking on gross would put whoever moved a consigned car above a
         // colleague who earned twice the margin on stock the dealership owned.
         entry.revenue += recognizedRevenueOfSale(sale);
         entry.deals += 1;
+        // One deal whose earning cannot be established makes this person's
+        // total a lower bound, and a lower bound cannot be compared with a
+        // total. Their deal COUNT still rose, so the tile read as a complete
+        // record of a complete period.
+        if (recognizedEarningIsUnknown(sale)) entry.complete = false;
         revenueBySalesperson[sale.salespersonId] = entry;
       }
 
-      const topEntry = Object.entries(revenueBySalesperson).sort((a, b) => b[1].revenue - a[1].revenue)[0];
+      // Ranked among the people whose earnings are fully known, rather than
+      // ranking everyone on whatever could be totalled. The same defect was
+      // already closed in the salesperson report; this tile kept sorting on the
+      // partial figure and declaring a winner from it.
+      const eligible = Object.entries(revenueBySalesperson).filter(([, e]) => e.complete);
+      topPerformerIncomplete = eligible.length !== Object.keys(revenueBySalesperson).length;
+      const topEntry = eligible.sort((a, b) => b[1].revenue - a[1].revenue)[0];
       if (topEntry) {
         const [salespersonId, { revenue, deals }] = topEntry;
         const salesperson = await ctx.db.get(salespersonId as Id<"users">);
@@ -848,11 +895,19 @@ export const stats = query({
       );
     }
 
-    const previousRecognizedRevenueOfSale = (sale: {
-      vehicleId: Id<"vehicles">;
-      salePrice: number;
-    }): number => {
+    let previousUnknownMarginExcluded = false;
+    const previousRecognizedEarningOfSale = earningReader(() => {
+      previousUnknownMarginExcluded = true;
+    });
+
+    const previousRecognizedRevenueOfSale = (sale: Doc<"sales">): number => {
       if (!canViewProfitMetrics) return sale.salePrice;
+      // What the sale itself recorded, first and for the same reason the
+      // current window reads it first: it is the figure the ledger, the
+      // supplier claim and the reports all booked, and it needs no vehicle —
+      // so it is also the right answer for a row past the costing cap.
+      const recognized = previousRecognizedEarningOfSale(sale);
+      if (recognized !== undefined) return recognized ?? 0;
       // Excluded rather than booked at gross, exactly as the current window
       // treats the same absence. Booking it at gross here put the two windows
       // on different bases, so a period-over-period change reported the
@@ -916,6 +971,18 @@ export const stats = query({
         )
       );
       for (const sale of previousSales) {
+        // The same three-way answer the current window's chart makes, in the
+        // same order. This arm read only the live vehicle cost, so a consigned
+        // deal contributed `salePrice − cost` here while contributing its
+        // frozen margin there — and where the earning could not be established
+        // at all, this arm still produced a number, which is the one outcome
+        // the current arm exists to refuse.
+        const recognized = previousRecognizedEarningOfSale(sale);
+        if (recognized === null) continue;
+        if (recognized !== undefined) {
+          previousProfit += recognized;
+          continue;
+        }
         const cost = previousCostByVehicle.get(sale.vehicleId);
         if (cost !== undefined) previousProfit += sale.salePrice - cost;
       }
@@ -932,18 +999,31 @@ export const stats = query({
     // delta at all when one is absent, which is the honest outcome. Permission
     // gating is the same as the current-period figure each one is compared
     // against — a caller who cannot see the number cannot see its history.
+    // An unknown earning on EITHER side is the same kind of hole as a cap: the
+    // total is short, and a delta taken across it is a confident number derived
+    // from an incomplete one. It is withheld on both sides rather than only the
+    // one it occurred on, because the client divides them.
+    const profitIncomplete = profitTruncated || unknownMarginExcluded;
+    const marginUnknownEitherSide = unknownMarginExcluded || previousUnknownMarginExcluded;
     const previousPeriod = comparesPeriods
       ? {
         sales:
-          canViewSalesMetrics && !salesTruncated && !previousSalesTruncated
+          canViewSalesMetrics &&
+            !salesTruncated &&
+            !previousSalesTruncated &&
+            !marginUnknownEitherSide
             ? previousSalesVolume
             : undefined,
         expenses:
           canViewCostMetrics && !previousExpensesTruncated ? previousTotalExpenses : undefined,
         netProfit:
           canViewProfitMetrics &&
-            !profitTruncated &&
+            // The value this response actually publishes as `truncated.profit`,
+            // not the raw cap flag. Gating on the raw flag divided a numerator
+            // that excluded unknown rows by a denominator that did not.
+            !profitIncomplete &&
             !previousProfitTruncated &&
+            !marginUnknownEitherSide &&
             !previousSalesTruncated &&
             !previousExpensesTruncated
             ? previousProfit
@@ -981,13 +1061,21 @@ export const stats = query({
         vehicles: false,
         sales: salesTruncated,
         members: false,
-        // Either reason the profit figure is short: sales past the costing cap,
-        // or consigned sales whose earning could not be established.
-        profit: profitTruncated || unknownMarginExcluded,
+        // Either reason a profit figure in this response is short: sales past
+        // the costing cap, or consigned sales whose earning could not be
+        // established. The comparison window counts — when its earnings cannot
+        // be established the delta is withheld, and a consumer shown no delta
+        // and no flag has no way to tell that from a period that did not move.
+        profit: profitIncomplete || previousUnknownMarginExcluded,
         // Sales whose vehicle fell past the costing cap are left OUT of
         // turnover rather than folded in at gross, so the figure is short
         // rather than on two bases at once.
         turnover: turnoverTruncated || previousTurnoverTruncated,
+        // Salespeople left out of the ranking because their earnings are not
+        // fully known. The winner shown is the best COMPLETE record, which is a
+        // true statement — but only if the consumer can tell it was drawn from
+        // a shortened field.
+        topPerformer: topPerformerIncomplete,
       },
       taskStats: {
         total: totalTasks,
