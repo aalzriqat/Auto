@@ -4254,6 +4254,23 @@ describe("a settlement advice that contradicts the approval", () => {
       return userId;
     });
 
+    // Answers for the deal, is not allowed to see what it earns. A shape an org
+    // can define, because these two permissions are independent.
+    const financeOnlyId = await s.t.run(async (ctx) => {
+      const roleId = await ctx.db.insert("roles", {
+        orgId: s.orgId,
+        name: "Settlements",
+        permissions: ["manage:finance", "view:sales"],
+      } as never);
+      const userId = await ctx.db.insert("users", {
+        clerkId: "s30ReconNotify_fin",
+        email: "s30ReconNotify.fin@example.com",
+        name: "Settlements Officer",
+      });
+      await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
+      return userId;
+    });
+
     await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
       orgId: s.orgId,
       applicationId,
@@ -4268,6 +4285,27 @@ describe("a settlement advice that contradicts the approval", () => {
     // Nobody selected on `manage:users` alone is told about somebody else's
     // settlement advice.
     expect(rows.filter((n) => n.userId === clerkId)).toHaveLength(0);
+
+    // The boundary this actually has to hold. `manage:finance` and
+    // `view:finance` are INDEPENDENT permissions and roles here are
+    // customizable, so the person who can correct the advice is not necessarily
+    // allowed to see its figures. They must still be told the deal is stuck —
+    // and the row they receive must carry no evidence, because `dispatch`
+    // stores `data` verbatim and `notifications.list` hands the row back
+    // unprojected.
+    const financeOnlyRows = rows.filter((n) => n.userId === financeOnlyId);
+    expect(financeOnlyRows).toHaveLength(1);
+    expect(financeOnlyRows[0].type).toBe("application.settlement_advice_discrepancy");
+    const financeOnlyPayload = JSON.stringify(financeOnlyRows[0].data ?? {});
+    for (const evidence of [
+      String(17_995 * SCALE),
+      String(18_000 * SCALE),
+      "17995",
+      "18000",
+      "WIRE-4471",
+    ]) {
+      expect(financeOnlyPayload).not.toContain(evidence);
+    }
 
     const notice = rows.find((n) => n.type === "application.settlement_advice_discrepancy");
     // Its own type, not `application.created` borrowed.
@@ -4733,4 +4771,289 @@ describe("amending one field of a settlement advice", () => {
     expect(view!.settlementAdviceDiscrepancy!.recordedReference).toBe("WIRE-4471");
     expect(view!.settlementAdviceDiscrepancy!.recordedAt).toBe(PAID_AT);
   });
+});
+
+/**
+ * Round 8. Every surface answers the SAME question about one sale.
+ *
+ * Round 7 made the dashboard's evidence rule independent of the vehicle so it
+ * would survive the costing cap. That fixed the tail and broke the middle: the
+ * dashboard stopped asking what `saleEconomics` asks, and `saleEconomics` is
+ * what the sales report, the supplier claim and the P&L all use. Being
+ * cap-independent was never the goal. Being the SAME rule everywhere is.
+ *
+ * What these tests pin: the vehicle is authoritative when it is known, and the
+ * sale's own frozen evidence answers only when the vehicle is not.
+ */
+describe("one recognized-earning rule, asked identically by every surface", () => {
+  const range = () => ({ startDate: Date.now() - 86_400_000, endDate: Date.now() + 86_400_000 });
+
+  /** The canonical financed-direct deal: 20,000 sale, 15,000 entitlement, 18,000 approved. */
+  async function financedDirectDeal(tag: string) {
+    const s = await seedDealership(tag);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
+    });
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: false });
+    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId,
+      applicationId,
+      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+      source: "MANUAL_ENTRY",
+    });
+    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: s.orgId,
+      applicationId,
+      approvedAmountMinor: 18_000 * SCALE,
+      basis: "MANUAL",
+      notes: "Approved at 18,000.",
+    });
+    const saleId = (await s.asUser.mutation(api.applications.finalizeDeal, {
+      orgId: s.orgId,
+      applicationId,
+    })) as never;
+    return { s, saleId };
+  }
+
+  /**
+   * A dealer-owned car carrying a settlement route left over from when it was
+   * believed to be the supplier's.
+   *
+   * Every step is a shipped mutation. `sales.update` never re-normalises the
+   * route when the vehicle's ownership changes, and the completion carries the
+   * stored value into the COMPLETED row — so the finished sale is dealer-owned,
+   * direct-routed and financed at once.
+   */
+  async function staleRouteOnOwnedStock(tag: string) {
+    const s = await seedDealership(tag);
+    const saleId = await s.asUser.mutation(api.sales.createDraft, {
+      orgId: s.orgId,
+      vehicleId: s.vehicleId,
+      customerId: s.customerId,
+      salespersonId: s.userId,
+      salePrice: 20_000,
+      saleDate: Date.now(),
+      financingType: "CASH",
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+    } as never);
+
+    // The car turns out to be the dealership's own. Permitted while unsold —
+    // `retroactiveOwnershipChangeRefusal` keys on the sale status, and this one
+    // is still PENDING. Converting to owned stock capitalizes the acquisition,
+    // so it needs a payment method.
+    await s.asUser.mutation(api.vehicles.update, {
+      orgId: s.orgId,
+      vehicleId: s.vehicleId,
+      sourceType: "STOCK",
+      purchasePrice: 15_000,
+      purchasePaymentMethod: "CASH",
+    } as never);
+
+    await s.asUser.mutation(api.sales.update, {
+      orgId: s.orgId,
+      saleId,
+      financingType: "FINANCED",
+    } as never);
+
+    await s.asUser.mutation(api.sales.completeDraft, { orgId: s.orgId, saleId } as never);
+
+    // The ranking tile is drawn only for a role that may see people at all, and
+    // this file's default role does not carry it — without this the tile is
+    // always null and the assertion about it proves nothing.
+    await s.t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === s.orgId)!;
+      await ctx.db.patch(role._id, { permissions: [...role.permissions, "view:users"] });
+    });
+    return { s, saleId };
+  }
+
+  test("a car the dealership owns is counted by the dashboard exactly as the report counts it", async () => {
+    const { s } = await staleRouteOnOwnedStock("s30Stale");
+
+    const dash = (await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId,
+      timeRange: "ALL_TIME",
+    })) as {
+      salesVolumeThisMonth: number;
+      truncated: { turnover: boolean; profit: boolean };
+      topPerformer: { name: string } | null;
+    };
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId,
+      ...range(),
+    });
+
+    // The ledger took the owned-stock path and the report agrees with it. The
+    // premise, asserted so this cannot pass by both being wrong together.
+    expect(report.totalRevenue).toBe(20_000);
+    expect(report.unknownMarginSaleCount).toBe(0);
+
+    // The dashboard excluded the row entirely and called the rest complete.
+    // Cross-surface equality is what actually pins the rule — a dashboard-only
+    // assertion is exactly what let this through.
+    expect(dash.salesVolumeThisMonth).toBe(report.totalRevenue);
+    expect(dash.truncated.profit).toBe(false);
+    // And its salesperson did not vanish from the ranking over a correct row.
+    expect(dash.topPerformer).not.toBeNull();
+  });
+
+  /**
+   * A viewer without profit permission is ranked on GROSS, and on that basis
+   * nothing is unknown — every sale contributes its full price. Excluding a
+   * salesperson there withholds a complete number for a reason that does not
+   * apply, and the shipped SALES template is exactly this viewer.
+   */
+  test("a gross-basis viewer ranks on gross, where no earning is unknown", async () => {
+    const { s, saleId } = await financedDirectDeal("s30Gross");
+
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { consignedMarginMinor: undefined });
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === s.orgId)!;
+      await ctx.db.patch(role._id, {
+        permissions: ["view:sales", "view:users"],
+        isSystemOwnerRole: false,
+      });
+    });
+
+    const dash = (await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId,
+      timeRange: "ALL_TIME",
+    })) as {
+      salesVolumeBasis: string;
+      topPerformer: { name: string } | null;
+      truncated: { topPerformer: boolean };
+    };
+
+    // Premise: this viewer is on the gross basis.
+    expect(dash.salesVolumeBasis).toBe("GROSS_TRANSACTION_VALUE");
+    // Their 20,000 IS in this viewer's headline, so removing them from the tile
+    // beside it puts two figures on one screen in contradiction.
+    expect(dash.topPerformer?.name).toBe("Deal User");
+    expect(dash.truncated.topPerformer).toBe(false);
+  });
+
+  /**
+   * The marker the product actually renders. `truncated.profit` is read by no
+   * consumer anywhere; the web dashboard's trailing "+" and its amber note, and
+   * the mobile home's equivalent, all read `truncated.turnover`. So a headline
+   * shortened by an unknown earning was displayed as exact.
+   */
+  test("a turnover shortened by an unknown earning says so on the flag the UI reads", async () => {
+    const { s, saleId } = await financedDirectDeal("s30TurnFlag");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { consignedMarginMinor: undefined });
+    });
+
+    const dash = (await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId,
+      timeRange: "ALL_TIME",
+    })) as { salesVolumeThisMonth: number; truncated: { turnover: boolean } };
+
+    expect(dash.salesVolumeThisMonth).toBe(0);
+    expect(dash.truncated.turnover).toBe(true);
+  });
+
+  /**
+   * A hard-deleted vehicle — reachable through the `/admin` raw editor — made
+   * the REPORT discard the margin the sale froze and publish the whole ticket
+   * as the dealership's revenue and profit.
+   */
+  test("a sale whose vehicle row is gone keeps the earning the sale itself recorded", async () => {
+    const { s, saleId } = await financedDirectDeal("s30NoVehicle");
+
+    await s.t.run(async (ctx) => {
+      const sale = (await ctx.db.get(saleId)) as unknown as { vehicleId: Id<"vehicles"> };
+      await ctx.db.delete(sale.vehicleId);
+    });
+
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId,
+      ...range(),
+    });
+
+    // 3,000 is what the GL, the supplier claim and the cockpit recognized.
+    expect(report.totalRevenue).toBe(3_000);
+    expect(report.totalProfit).toBe(3_000);
+    // Specifically not the whole ticket against a cost basis that vanished
+    // along with the vehicle.
+    expect(report.totalRevenue).not.toBe(20_000);
+  });
+
+  /**
+   * Removing a cheque number that was never on the advice.
+   *
+   * Omission means "no change" here, and deliberately so — that is what fixed
+   * an earlier defect where an amount-only correction erased the reference and
+   * moved the payment date. But the audit recorded `args.reference ?? null`
+   * while the write recorded `args.reference ?? existing`, so the two disagreed
+   * about exactly one case: the operator who clears the field. They were told it
+   * worked, the old reference survived, and the audit asserted it was removed.
+   *
+   * On the record whose entire purpose is to state what somebody else's
+   * document said, an audit entry that contradicts the stored value is worse
+   * than the failed edit.
+   */
+  test("clearing a wrongly transcribed reference removes it, and the audit says what actually happened", async () => {
+    const { s, applicationId } = await paidDealForClearing("s30ClearRef");
+
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 18_000 * SCALE,
+      reference: "WRONG-CHEQUE-9",
+    });
+
+    await s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 18_000 * SCALE,
+      clearReference: true,
+      reason: "The cheque number belonged to a different deal entirely.",
+    } as never);
+
+    const app = (await s.t.run((ctx) => ctx.db.get(applicationId as never))) as unknown as {
+      supplierDisbursementReference?: string;
+    };
+    expect(app.supplierDisbursementReference).toBeUndefined();
+
+    const entry = await s.t.run(async (ctx) =>
+      (await ctx.db.query("financialAuditLog").collect())
+        .filter((l) => l.actionType === "AMEND_SUPPLIER_DISBURSEMENT_ADVICE")
+        .at(-1)
+    );
+    // Asserted to exist first. `entry?.after?.x ?? null` is null when there is
+    // no entry at all, so the interesting assertion below would pass against a
+    // missing audit record — it did, while this test was reading a table name
+    // that does not exist.
+    expect(entry).toBeTruthy();
+    const after = (entry as unknown as { after?: Record<string, unknown> }).after!;
+    const before = (entry as unknown as { before?: Record<string, unknown> }).before!;
+    // What was actually removed, and what it was before — the audit now states
+    // the value that is really on the row rather than the argument it was sent.
+    expect(before.supplierDisbursementReference).toBe("WRONG-CHEQUE-9");
+    expect(after.supplierDisbursementReference).toBeNull();
+  });
+
+  async function paidDealForClearing(tag: string) {
+    const s = await seedDealership(tag);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
+    });
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: false });
+    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId,
+      applicationId,
+      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+      source: "MANUAL_ENTRY",
+    });
+    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: s.orgId,
+      applicationId,
+      approvedAmountMinor: 18_000 * SCALE,
+      basis: "MANUAL",
+      notes: "Approved at 18,000.",
+    });
+    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+    return { s, applicationId };
+  }
 });

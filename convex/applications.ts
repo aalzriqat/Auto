@@ -3364,6 +3364,16 @@ export const amendSupplierDisbursementAdvice = mutation({
     /** The corrected amount from the advice. */
     disbursedAmountMinor: v.number(),
     reference: v.optional(v.string()),
+    /**
+     * Remove the recorded reference outright.
+     *
+     * Separate from omitting `reference`, which means "not part of this
+     * correction". Without this there is no way to say "the advice carries no
+     * cheque number" — a cleared form field arrives as `undefined`, identical
+     * to silence, so the wrong reference survived while the operator was told
+     * the correction had been saved.
+     */
+    clearReference: v.optional(v.boolean()),
     disbursedAt: v.optional(v.number()),
     /**
      * Why the recorded advice was wrong. Required, and stored on the audit
@@ -3411,6 +3421,7 @@ export const amendSupplierDisbursementAdvice = mutation({
           applicationId: args.applicationId,
           disbursedAmountMinor: args.disbursedAmountMinor,
           reference: args.reference ?? null,
+          clearReference: args.clearReference ?? false,
           disbursedAt: args.disbursedAt ?? null,
           reason,
         }),
@@ -3440,19 +3451,29 @@ export const amendSupplierDisbursementAdvice = mutation({
         const agrees = args.disbursedAmountMinor === approvedAtRecordingMinor;
         const confirmedAt = args.disbursedAt ?? app.supplierDisbursementConfirmedAt;
 
+        // Three distinct instructions, told apart explicitly.
+        //
+        // Omitted means "not part of this correction", never "clear it".
+        // Convex removes a field patched with `undefined`, so passing the
+        // argument straight through DELETED the cheque number whenever the
+        // caller did not resend it — on an amount-only correction, which is the
+        // common case, and on the one path whose whole purpose is to keep the
+        // evidence about somebody else's payment straight.
+        //
+        // But that left no way to say "this reference was never on the advice".
+        // A cleared field arrived as `undefined`, indistinguishable from
+        // silence, so the operator was told the correction succeeded while the
+        // wrong cheque number survived — and the audit below recorded `null`,
+        // asserting a removal that did not happen. On a record whose entire job
+        // is to state what somebody else's document said, an audit entry that
+        // contradicts the stored value is worse than the refused edit.
+        const effectiveReference = args.clearReference
+          ? undefined
+          : (args.reference ?? app.supplierDisbursementReference);
+
         await ctx.db.patch(args.applicationId, {
           supplierDisbursedAmountMinor: args.disbursedAmountMinor,
-          // Omitted means "not part of this correction", never "clear it".
-          //
-          // Convex removes a field patched with `undefined`, so passing the
-          // argument straight through DELETED the cheque number whenever the
-          // caller did not resend it — on an amount-only correction, which is
-          // the common case, and on the one path whose whole purpose is to keep
-          // the evidence about somebody else's payment straight. The reference
-          // is the only link between this row and the bank's own record of it.
-          //
-          // The date already worked this way below; the two now agree.
-          supplierDisbursementReference: args.reference ?? app.supplierDisbursementReference,
+          supplierDisbursementReference: effectiveReference,
           supplierDisbursementConfirmedAt: confirmedAt,
           supplierDisbursementConfirmedBy: user._id,
           supplierDisbursementStatus: agrees
@@ -3472,11 +3493,13 @@ export const amendSupplierDisbursementAdvice = mutation({
           actionType: "AMEND_SUPPLIER_DISBURSEMENT_ADVICE",
           resourceType: "financeApplications",
           resourceId: args.applicationId,
-          description: `Settlement advice corrected to ${args.disbursedAmountMinor} minor units${args.reference ? ` (ref ${args.reference})` : ""}. Reason: ${reason}. The approved purchase amount (${approvedAtRecordingMinor}) and the supplier claim raised against it are unchanged.`,
+          description: `Settlement advice corrected to ${args.disbursedAmountMinor} minor units${args.clearReference ? " (reference removed)" : args.reference ? ` (ref ${args.reference})` : ""}. Reason: ${reason}. The approved purchase amount (${approvedAtRecordingMinor}) and the supplier claim raised against it are unchanged.`,
           before: previous,
           after: {
             supplierDisbursedAmountMinor: args.disbursedAmountMinor,
-            supplierDisbursementReference: args.reference ?? null,
+            // What was actually persisted, not what was passed in. These two
+            // disagreed on exactly the case the operator cares about.
+            supplierDisbursementReference: effectiveReference ?? null,
             supplierDisbursementConfirmedAt: confirmedAt,
             supplierDisbursementStatus: agrees ? "CONFIRMED" : "REQUIRES_RECONCILIATION",
           },

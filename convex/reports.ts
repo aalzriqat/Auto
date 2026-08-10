@@ -166,7 +166,7 @@ export const getSalesAndProfitReport = query({
       const cost = capitalizedCostByVehicle.get(sale.vehicleId) ?? 0;
       const economics = saleEconomics({
         salePrice: sale.salePrice,
-        vehicle: vehicle ?? {},
+        vehicle: vehicle ?? null,
         capitalizedCost: cost,
         supplierSettlementRoute: sale.supplierSettlementRoute,
         // The margin the sale froze at completion, so this report agrees with
@@ -772,7 +772,7 @@ export const getSalespersonPerformance = query({
         const cost = capitalizedCostByVehicle.get(sale.vehicleId) ?? 0;
         const economics = saleEconomics({
           salePrice: sale.salePrice,
-          vehicle: vehicleMap.get(sale.vehicleId) ?? {},
+          vehicle: vehicleMap.get(sale.vehicleId) ?? null,
           capitalizedCost: cost,
           supplierSettlementRoute: sale.supplierSettlementRoute,
           // As above: the margin the sale recorded, so a rep is ranked on what

@@ -16,6 +16,10 @@ export const dashboardEn = {
   SalesPerformance: "Sales Performance",
   PartialTotalExplain:
     "Partial — some sales could not be classified and are left out of this figure.",
+  // Said as a limit on the COMPARISON rather than on any one person: the name
+  // shown is genuinely the best of those whose earnings are fully known.
+  RankingIncompleteExplain:
+    "Ranked on complete earnings only — salespeople with a deal whose earning could not be established are not included.",
   TopPerformer: "Top Performer",
   RevenueTrend: "Revenue Trend",
   ActiveLeads: "Active Leads",
@@ -141,6 +145,8 @@ export const dashboardAr = {
   SalesPerformance: "أداء المبيعات",
   PartialTotalExplain:
     "جزئي — تعذّر تصنيف بعض المبيعات ولم تُدرج في هذا الرقم.",
+  RankingIncompleteExplain:
+    "الترتيب يشمل الأرباح المؤكدة فقط — لا يظهر فيه من لديه صفقة تعذّر تحديد ربحها.",
   TopPerformer: "الأفضل أداءً",
   RevenueTrend: "اتجاه الإيرادات",
   ActiveLeads: "العملاء المحتملين النشطين",

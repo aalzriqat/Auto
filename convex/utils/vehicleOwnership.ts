@@ -272,7 +272,22 @@ export interface SaleEconomics {
  */
 export function saleEconomics(args: {
   salePrice: number;
-  vehicle: OwnershipFacts;
+  /**
+   * The vehicle, or `null` when its row could not be read at all.
+   *
+   * The distinction matters and an empty object cannot carry it. `sourceType`
+   * is optional, so a legacy dealer-owned vehicle and a vanished one both look
+   * like "no sourceType" — and callers were passing `{}` for the vanished case.
+   * `isConsignedAgentSale({})` is false, so a hard-deleted vehicle (reachable
+   * through the `/admin` raw editor) silently reclassified a consigned sale as
+   * the dealership's own: the frozen margin was discarded even though the sale
+   * still carried it, and the whole ticket was published as revenue against a
+   * cost basis that vanished with the vehicle.
+   *
+   * `null` means "ask the sale instead". The vehicle stays authoritative
+   * whenever it is present.
+   */
+  vehicle: OwnershipFacts | null;
   capitalizedCost: number;
   supplierSettlementRoute?: ConsignedSettlementRoute;
   /**
@@ -308,9 +323,24 @@ export function saleEconomics(args: {
   externallyFinanced?: boolean;
 }): SaleEconomics {
   const { salePrice, capitalizedCost } = args;
-  const agent = isConsignedAgentSale(args.vehicle);
   const settlesDirect = !dealershipCollectsGross(consignedSettlementRoute(args));
-  const evidenceRequired = agent && settlesDirect && args.externallyFinanced === true;
+  // The vehicle answers whenever it is present, so every surface that holds one
+  // reaches the same conclusion this function has always reached. Only when the
+  // row is genuinely gone does the sale's own evidence stand in: a recorded
+  // consigned margin, or a direct settlement route — which `setSupplierSettlementRoute`
+  // refuses on dealer-owned stock, making it a positive consignment signal.
+  const vehicle = args.vehicle;
+  const vehicleUnknown = vehicle === null;
+  const agent =
+    vehicle === null
+      ? args.recordedMargin !== undefined || settlesDirect
+      : isConsignedAgentSale(vehicle);
+  // With no vehicle there is no cost basis either — `capitalizedCost` arrives as
+  // 0 — so `salePrice − cost` would report the entire ticket as the dealership's
+  // margin. An agent sale whose earning cannot be read from the sale is UNKNOWN,
+  // not the whole ticket.
+  const evidenceRequired =
+    agent && ((settlesDirect && args.externallyFinanced === true) || vehicleUnknown);
   const margin =
     agent && args.recordedMargin !== undefined
       ? args.recordedMargin

@@ -502,8 +502,27 @@ export const stats = query({
      * owned stock it would be excluded and flagged rather than estimated —
      * short and saying so, which is the failure this whole change prefers.
      */
+    /**
+     * The vehicle was actually read, and belongs to this org.
+     *
+     * `costedVehicleIdSet` is not the same question — it holds the ids this
+     * query INTENDED to cost, including ones whose row turned out to be gone.
+     * Only a populated cost proves the document was read.
+     */
+    const vehicleKnown = (sale: Doc<"sales">): boolean =>
+      capitalizedCostByVehicle.has(sale.vehicleId);
+
     const recognizedEarningIsUnknown = (sale: Doc<"sales">): boolean =>
-      frozenConsignedMargin(sale) === undefined && needsFrozenMarginEvidence(sale);
+      frozenConsignedMargin(sale) === undefined &&
+      needsFrozenMarginEvidence(sale) &&
+      // The vehicle answers whenever it is present, exactly as it does in
+      // `saleEconomics`. Making this rule vehicle-independent was never the
+      // goal — being the SAME rule as the sales report, the supplier claim and
+      // the P&L is. Without this the two disagreed about a dealer-owned car
+      // carrying a settlement route left over from when it was thought to be
+      // the supplier's: the report and the ledger counted it in full while the
+      // dashboard excluded it and called the remainder complete.
+      !(vehicleKnown(sale) && !consignedVehicleIds.has(sale.vehicleId));
 
     /**
      * The one authority for what a sale contributed, shared by the turnover
@@ -749,7 +768,15 @@ export const stats = query({
         // total a lower bound, and a lower bound cannot be compared with a
         // total. Their deal COUNT still rose, so the tile read as a complete
         // record of a complete period.
-        if (recognizedEarningIsUnknown(sale)) entry.complete = false;
+        // Only on the accounting basis. A viewer without profit permission is
+        // ranked on GROSS — `recognizedRevenueOfSale` returns the full sale
+        // price for them and `salesVolumeBasis` says so — and on that basis
+        // nothing is unknown. Excluding a rep there withheld a complete number
+        // for a reason that did not apply to it, and put the tile in
+        // contradiction with the headline beside it: the shipped SALES template
+        // counted a 20,000 deal in full and simultaneously crowned a smaller
+        // seller.
+        if (canViewProfitMetrics && recognizedEarningIsUnknown(sale)) entry.complete = false;
         revenueBySalesperson[sale.salespersonId] = entry;
       }
 
@@ -1070,7 +1097,20 @@ export const stats = query({
         // Sales whose vehicle fell past the costing cap are left OUT of
         // turnover rather than folded in at gross, so the figure is short
         // rather than on two bases at once.
-        turnover: turnoverTruncated || previousTurnoverTruncated,
+        //
+        // Unknown earnings belong here too, and this is the flag that matters:
+        // `truncated.profit` is read by NO consumer anywhere in the product.
+        // Every "this total is short" marker — the web dashboard's trailing "+"
+        // and its amber note, and the mobile home's equivalent — reads
+        // `turnover` (and `sales`). Excluding an unknown-earning row from the
+        // headline while leaving this false traded an overstated figure for an
+        // understated one presented as exact, which is the same defect wearing
+        // the other sign.
+        turnover:
+          turnoverTruncated ||
+          previousTurnoverTruncated ||
+          unknownMarginExcluded ||
+          previousUnknownMarginExcluded,
         // Salespeople left out of the ranking because their earnings are not
         // fully known. The winner shown is the best COMPLETE record, which is a
         // true statement — but only if the consumer can tell it was drawn from

@@ -190,6 +190,10 @@ export function DealCockpit({
               )
           ),
           reference: correction.reference,
+          // Distinct from omitting it. An emptied field used to arrive as
+          // `undefined`, identical to "not part of this correction", so the
+          // wrong cheque number survived a correction that reported success.
+          clearReference: correction.clearReference,
           disbursedAt: correction.disbursedAt,
           reason: correction.reason,
           idempotencyKey: correctionKeyRef.current,
@@ -319,6 +323,8 @@ export function DealCockpitView({
   onCorrectSettlementAdvice?: (correction: {
     amountMajor: number;
     reference?: string;
+    /** The operator emptied a reference that was on file — not the same as omitting it. */
+    clearReference?: boolean;
     disbursedAt?: number;
     reason: string;
   }) => Promise<void>;

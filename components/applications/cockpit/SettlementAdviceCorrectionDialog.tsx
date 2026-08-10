@@ -57,6 +57,14 @@ type SettlementAdviceCorrectionDialogProps = {
   onCorrect: (correction: {
     amountMajor: number;
     reference?: string;
+    /**
+     * The operator emptied a reference that was on file.
+     *
+     * Distinct from omitting `reference`, which means "not part of this
+     * correction". Both used to arrive as `undefined`, so clearing a wrongly
+     * transcribed cheque number reported success and changed nothing.
+     */
+    clearReference?: boolean;
     disbursedAt?: number;
     reason: string;
   }) => void;
@@ -224,6 +232,14 @@ export function SettlementAdviceCorrectionDialog({
               onCorrect({
                 amountMajor: amountValue,
                 reference: reference.trim() || undefined,
+                // Emptying a field that had something in it is an instruction,
+                // and it has to be told apart from silence — the server treats
+                // an absent reference as "leave it alone", which is what keeps
+                // an amount-only correction from erasing the cheque number.
+                clearReference:
+                  reference.trim() === "" && (recordedReference ?? "") !== ""
+                    ? true
+                    : undefined,
                 // Sent only when the operator actually moved the date. See
                 // `seededPaidOnRef`: an unchanged date has no lossless
                 // representation here, so omitting it is what preserves the
