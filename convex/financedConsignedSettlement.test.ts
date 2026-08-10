@@ -1636,3 +1636,32 @@ describe("what the supplier-receipt mutation accepts", () => {
     expect(after.amountReceived).toBe(1_000);
   });
 });
+
+/**
+ * CX-7. `sales.update` can cancel a completed sale, which cancels the supplier
+ * claim, but the finance application keeps its own status. The cockpit read the
+ * sale only for the route and ignored its status, so a cancelled deal still
+ * rendered as live work with a next step and a blocked settlement stage.
+ */
+describe("a deal whose sale was cancelled from the sales side", () => {
+  test("is shown as stopped, not as work still to do", async () => {
+    const s = await seedDealership("cancelViaSale");
+    const { applicationId, saleId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      finalize: true,
+    });
+
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId as never, { status: "CANCELLED" });
+    });
+
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    // Every unfinished stage belongs to a deal that is over.
+    const live = view!.stages.filter((st) => st.state === "CURRENT" || st.state === "BLOCKED");
+    expect(live).toHaveLength(0);
+    expect(view!.stages.find((st) => st.key === "SETTLEMENT")!.state).toBe("STOPPED");
+  });
+});

@@ -736,6 +736,12 @@ export interface DealStageFacts extends LifecycleFacts {
   /** Every required document uploaded, verified or waived. */
   requiredDocumentsComplete: boolean;
   /**
+   * The deal is over for a reason the credit dimension cannot express — the
+   * sale itself was cancelled from the sales side, which reverses the GL and
+   * cancels the supplier claim while the application keeps its own status.
+   */
+  dealCancelled?: boolean;
+  /**
    * Whether the money is finished, when the caller can answer it better than
    * `settlementStatus` can.
    *
@@ -770,7 +776,10 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
   const appraisal = facts.appraisalStatus;
   const gap = facts.gapResolution;
 
-  const stopped = credit === "REJECTED" || credit === "CANCELLED";
+  // `dealCancelled` covers the case the credit dimension cannot see: the sale
+  // can be cancelled from the sales side, which reverses the GL and cancels the
+  // supplier claim, while the application keeps its own status.
+  const stopped = credit === "REJECTED" || credit === "CANCELLED" || facts.dealCancelled === true;
   // A gap of zero is not a gap, and `undefined` means none was ever recorded.
   const hasGap = (facts.rawAppraisalGapMinor ?? 0) !== 0;
 

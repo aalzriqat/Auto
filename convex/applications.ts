@@ -361,10 +361,16 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
 
   let routeKnown = true;
   let settlesDirect = false;
+  // `sales.update` can cancel a completed sale — it cancels the supplier claim
+  // and reverses the GL — while the finance application keeps its own status.
+  // Reading the sale only for its route left a cancelled deal rendering as live
+  // work with a next step and a blocked settlement stage.
+  let saleCancelled = false;
   if (app.finalizedSaleId) {
     const sale = await ctx.db.get(app.finalizedSaleId);
     if (!sale || sale.orgId !== app.orgId) routeKnown = false;
-    else settlesDirect = !dealershipCollectsGross(consignedSettlementRoute(sale));
+    else saleCancelled = sale.status === "CANCELLED";
+    if (sale && sale.orgId === app.orgId) settlesDirect = !dealershipCollectsGross(consignedSettlementRoute(sale));
   } else if (vehicle === null) {
     routeKnown = false;
   } else {
@@ -455,6 +461,7 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
     consigned,
     routeKnown,
     settlesDirect,
+    saleCancelled,
     supplierClaim,
     obligations,
     moneySettled: settlementIsComplete(obligations),
@@ -1059,6 +1066,7 @@ export const dealCockpit = query({
     const settlementFacts = await resolveSettlement(ctx, app);
     const stages = deriveDealStages({
       settlementComplete: settlementFacts.moneySettled,
+      dealCancelled: settlementFacts.saleCancelled,
       status: app.status,
       vehicleHandoverAt: app.vehicleHandoverAt,
       finalizedSaleId: app.finalizedSaleId,
