@@ -832,9 +832,9 @@ export const salesAr = {
   RouteDirectUnavailableNoExternalFinancier:
     "لا توجد جهة تمويل خارجية في هذه الصفقة، فلا أحد غير المعرض يدفع للمورّد.",
   RouteDirectUnavailableLease:
-    "جهة التأجير غير مسجّلة في هذه الصفقة، فلا يمكن نسب الدفعة إلى المورّد لأي جهة.",
+    "جهة التأجير غير مسجّلة في هذه الصفقة، فلا يمكن إسناد الدفعة إلى أي جهة.",
   RouteDirectUnavailableUnnamedProvider:
-    "اسم جهة التمويل غير مسجّل في هذه الصفقة، فلا يمكن نسب الدفعة إلى المورّد لأي جهة.",
+    "اسم جهة التمويل غير مسجّل في هذه الصفقة، فلا يمكن إسناد الدفعة إلى أي جهة.",
   GrossTransactionValue: "إجمالي قيمة الصفقة",
   SupplierEntitlement: "مستحق {supplier}",
   DealerGrossMargin: "هامش المعرض",

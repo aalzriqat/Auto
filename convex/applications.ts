@@ -834,6 +834,54 @@ async function resolveCustomerDeposits(
   return { heldDepositMinor, unreadableDeposits, depositPayment };
 }
 
+/** `amountDue` is stored in MAJOR units on both supplier tables, unlike every
+ *  `*Minor` field on the application. Converting at the ROW's own currency, and
+ *  refusing to mix currencies, is what keeps a 3-decimal JOD figure from being
+ *  read as a 2-decimal one. Both callers subtract AFTER conversion: taking the
+ *  difference in major units first leaves a float residue that the row then
+ *  displays as a balance still outstanding. */
+function outstandingMinorFromMajor(
+  dueMajor: number,
+  settledMajor: number,
+  rowCurrency: string,
+  currency: string
+): number | undefined {
+  const due = toMinorSameCurrencyOrUndefined(dueMajor, rowCurrency, currency);
+  const settled = toMinorSameCurrencyOrUndefined(settledMajor, rowCurrency, currency);
+  return due === undefined || settled === undefined ? undefined : Math.max(0, due - settled);
+}
+
+function customerPosition(args: {
+  routeKnown: boolean;
+  unreadableDeposits: number;
+  heldDepositMinor: number;
+}) {
+  if (!args.routeKnown) return "UNKNOWN" as const;
+  // A deposit whose amount could not be read makes this row's total a partial
+  // one. Reporting NOT_INVOLVED would tell the dealership the customer had put
+  // nothing in.
+  if (args.unreadableDeposits > 0) return "UNKNOWN" as const;
+  return args.heldDepositMinor > 0 ? ("DEALERSHIP_HOLDS" as const) : ("NOT_INVOLVED" as const);
+}
+
+function financierPosition(args: {
+  routeKnown: boolean;
+  settlesDirect: boolean;
+  hasReceivable: boolean;
+  outstandingMinor: number | undefined;
+}) {
+  if (!args.routeKnown) return "UNKNOWN" as const;
+  // It paid the supplier directly, so it never owed the dealership anything on
+  // this deal. Reporting a zero receivable would suggest a debt that was
+  // settled; there was never one to settle.
+  if (args.settlesDirect) return "NOT_INVOLVED" as const;
+  if (!args.hasReceivable) return "NOT_INVOLVED" as const;
+  // A balance in another currency is a balance nobody here can state. Rendering
+  // "owes 0" would report a real debt as settled.
+  if (args.outstandingMinor === undefined) return "UNKNOWN" as const;
+  return args.outstandingMinor === 0 ? ("SETTLED" as const) : ("OWED_TO_DEALERSHIP" as const);
+}
+
 async function buildCockpitMoney(
   ctx: QueryCtx,
   app: Doc<"financeApplications">,
@@ -848,14 +896,6 @@ async function buildCockpitMoney(
   const { feeLines, actualExpensesMinor, feesAwaitingActuals, expensesFullyReconciled } = expenses;
 
   // --- the supplier's position -----------------------------------------
-  /** `amountDue` is stored in MAJOR units on both supplier tables, unlike every
-   *  `*Minor` field on the application. Converting at the ROW's own currency,
-   *  and refusing to mix currencies, is what keeps a 3-decimal JOD figure from
-   *  being read as a 2-decimal one. */
-  /** Routed through the query's one guarded conversion — see its comment. */
-  const toMinorSameCurrency = (amount: number, rowCurrency: string): number | undefined =>
-    toMinorSameCurrencyOrUndefined(amount, rowCurrency, currency);
-
   const payables = app.finalizedSaleId
     ? await ctx.db
         .query("vehicleSupplierPayables")
@@ -868,11 +908,12 @@ async function buildCockpitMoney(
   const payable = payables.find((row) => row.orgId === app.orgId && row.status !== "CANCELLED");
   // Converted before subtracting, as above.
   const payableOutstandingMinor = payable
-    ? (() => {
-        const due = toMinorSameCurrency(payable.amountDue, payable.currency);
-        const paid = toMinorSameCurrency(payable.amountPaid ?? 0, payable.currency);
-        return due === undefined || paid === undefined ? undefined : Math.max(0, due - paid);
-      })()
+    ? outstandingMinorFromMajor(
+        payable.amountDue,
+        payable.amountPaid ?? 0,
+        payable.currency,
+        currency
+      )
     : undefined;
 
   const supplierClaim = settlementFacts.supplierClaim;
@@ -886,25 +927,18 @@ async function buildCockpitMoney(
   // collected deal reported a loss equal to its expenses — and it was already
   // wrong on day one, because `openSupplierReceivable` seeds `amountReceived`
   // with any customer deposit applied at sale time.
-  // Subtracted AFTER conversion, for the same reason the obligation is: taking
-  // the difference in major units first leaves a float residue that the row then
-  // displays as a balance still outstanding.
   //
   // ORIGINAL is no longer computed here at all. The headline reads the margin
   // from `settlementFacts.margin`, which resolves it once from immutable
   // sale-time records; a second local reading of `amountDue` was how the party
   // row and the headline came to disagree in the first place.
   const supplierClaimOutstandingMinor = supplierClaim
-    ? (() => {
-        const due = toMinorSameCurrency(supplierClaim.amountDue, supplierClaim.currency);
-        const received = toMinorSameCurrency(
-          supplierClaim.amountReceived ?? 0,
-          supplierClaim.currency
-        );
-        return due === undefined || received === undefined
-          ? undefined
-          : Math.max(0, due - received);
-      })()
+    ? outstandingMinorFromMajor(
+        supplierClaim.amountDue,
+        supplierClaim.amountReceived ?? 0,
+        supplierClaim.currency,
+        currency
+      )
     : undefined;
 
   // --- the finance company's position ----------------------------------
@@ -944,16 +978,7 @@ async function buildCockpitMoney(
     {
       party: "CUSTOMER" as const,
       name: "",
-      position: !routeKnown
-        ? ("UNKNOWN" as const)
-        : // A deposit whose amount could not be read makes this row's total a
-          // partial one. Reporting NOT_INVOLVED would tell the dealership the
-          // customer had put nothing in.
-          unreadableDeposits > 0
-          ? ("UNKNOWN" as const)
-          : heldDepositMinor > 0
-            ? ("DEALERSHIP_HOLDS" as const)
-            : ("NOT_INVOLVED" as const),
+      position: customerPosition({ routeKnown, unreadableDeposits, heldDepositMinor }),
       amountMinor: heldDepositMinor,
       currency,
       reference: depositPayment?.externalReference,
@@ -1007,22 +1032,12 @@ async function buildCockpitMoney(
     {
       party: "FINANCIER" as const,
       name: app.manualFinanceSnapshot?.providerName ?? "",
-      position: !routeKnown
-        ? ("UNKNOWN" as const)
-        : settlesDirect
-          ? // It paid the supplier directly, so it never owed the dealership
-            // anything on this deal. Reporting a zero receivable would suggest
-            // a debt that was settled; there was never one to settle.
-            ("NOT_INVOLVED" as const)
-          : !financeReceivable
-            ? ("NOT_INVOLVED" as const)
-            : financeOutstandingMinor === undefined
-              ? // A balance in another currency is a balance nobody here can
-                // state. Rendering "owes 0" would report a real debt as settled.
-                ("UNKNOWN" as const)
-              : financeOutstandingMinor === 0
-                ? ("SETTLED" as const)
-                : ("OWED_TO_DEALERSHIP" as const),
+      position: financierPosition({
+        routeKnown,
+        settlesDirect,
+        hasReceivable: Boolean(financeReceivable),
+        outstandingMinor: financeOutstandingMinor,
+      }),
       amountMinor: settlesDirect ? 0 : (financeOutstandingMinor ?? 0),
       currency,
     },
