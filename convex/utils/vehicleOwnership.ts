@@ -265,10 +265,28 @@ export function saleEconomics(args: {
   vehicle: OwnershipFacts;
   capitalizedCost: number;
   supplierSettlementRoute?: ConsignedSettlementRoute;
+  /**
+   * The margin the SALE recorded at completion, when it has one. Reports read
+   * this rather than re-deriving, so the operational figures cannot disagree
+   * with the ledger about what a deal earned.
+   *
+   * On a financed DIRECT deal `salePrice − capitalizedCost` is not the
+   * dealership's earning: the finance company pays the supplier what it
+   * approved, and `salePrice − approved` reaches nobody. The GL, the supplier
+   * subledger and the P&L all recognize `approved − entitlement`, and without
+   * this the sales report published the larger figure beside them — two
+   * owner-facing profit numbers for one deal.
+   *
+   * Absent means the sale predates the field, and the fallback below is what
+   * that row was actually posted on, so old rows keep reconciling.
+   */
+  recordedMargin?: number;
 }): SaleEconomics {
   const { salePrice, capitalizedCost } = args;
   const agent = isConsignedAgentSale(args.vehicle);
-  const margin = salePrice - capitalizedCost;
+  const margin = agent && args.recordedMargin !== undefined
+    ? args.recordedMargin
+    : salePrice - capitalizedCost;
 
   if (!agent) {
     return {

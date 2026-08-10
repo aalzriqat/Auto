@@ -23,7 +23,13 @@ import { api } from "./_generated/api";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 
 vi.mock("./rateLimit", () => ({
-  rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
+  rateLimiter: {
+    limit: vi.fn().mockResolvedValue({ ok: true }),
+    // The reports read through `check`, which is a different method from
+    // `limit` — it inspects the bucket without consuming from it. Stubbing only
+    // `limit` left every report query throwing "not a function".
+    check: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
+  },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
@@ -41,6 +47,9 @@ const PERMS = [
   "register:expected_payment",
   "manage:finance", "view:finance",
   "view:commissions", "manage:commissions",
+  // The sales reports read the same deals this file completes, and SCRUM-30
+  // requires them to agree with the ledger about what one earned.
+  "view:reports",
 ];
 
 const VEHICLE_PRICE = 20_000;
@@ -3281,5 +3290,98 @@ describe("automatic commission is based on recognized earnings, not the commerci
 
     // 10% of (20,000 − 15,000).
     expect(sale.commissionAmount).toBe(500);
+  });
+});
+
+/**
+ * SCRUM-30 — the sales reports agree with the ledger about what a deal earned.
+ *
+ * `getSalesAndProfitReport` and `getSalespersonPerformance` both derived the
+ * consigned margin as `salePrice − capitalizedCost`. Before this branch that
+ * agreed with the GL by construction. It no longer does: on a financed DIRECT
+ * deal the ledger recognizes `approved − entitlement`, and the difference is
+ * `salePrice − approved` — money that reaches no party.
+ *
+ * Left alone, the owner opened the sales report and saw 5,000 profit on a deal
+ * whose P&L, GL and supplier subledger all said 3,000, in a report file whose
+ * own comment claims it "can no longer disagree with them about a vehicle's
+ * margin". Two owner-facing profit figures for one deal is worse than either
+ * number being wrong on its own, because it destroys trust in both.
+ */
+describe("the sales reports reconcile to the ledger on a financed direct deal", () => {
+  async function reportedDeal(tag: string, approvedAmount: number) {
+    const s = await seedDealership(tag);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
+    });
+    const { applicationId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      finalize: false,
+    });
+    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId,
+      applicationId,
+      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+      source: "MANUAL_ENTRY",
+    });
+    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: s.orgId,
+      applicationId,
+      approvedAmountMinor: approvedAmount * SCALE,
+      basis: "MANUAL",
+      notes: `Approved at ${approvedAmount}.`,
+    });
+    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+    return s;
+  }
+
+  const range = () => ({ startDate: Date.now() - 86_400_000, endDate: Date.now() + 86_400_000 });
+
+  test("the sales-and-profit report shows the recognized margin, not the sale-price spread", async () => {
+    const s = await reportedDeal("s30Report", 18_000);
+
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId,
+      ...range(),
+    });
+
+    // What the ledger recognized.
+    expect(report.totalProfit).toBe(3_000);
+    expect(report.totalRevenue).toBe(3_000);
+    // And NOT `salePrice − cost`, which is 2,000 larger and is what this report
+    // published beside a P&L that said 3,000.
+    expect(report.totalProfit).not.toBe(VEHICLE_PRICE - SUPPLIER_ENTITLEMENT);
+
+    // Asserted against the GL itself rather than against a second expectation,
+    // so the two cannot drift apart again without this failing.
+    const ledger = await ledgerBySystemKey(s);
+    expect(report.totalRevenue * SCALE).toBe(-ledger[SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE]);
+  });
+
+  test("salesperson performance ranks on the recognized margin too", async () => {
+    const s = await reportedDeal("s30ReportPerf", 18_000);
+
+    const perf = await s.asUser.query(api.reports.getSalespersonPerformance, {
+      orgId: s.orgId,
+      ...range(),
+    });
+
+    const row = perf.find((r: { totalProfit: number }) => r.totalProfit !== 0) ?? perf[0];
+    expect(row.totalProfit).toBe(3_000);
+    expect(row.totalProfit).not.toBe(VEHICLE_PRICE - SUPPLIER_ENTITLEMENT);
+  });
+
+  test("a THROUGH_DEALERSHIP deal still reports the full spread", async () => {
+    // The control. There the dealership collects the gross and the customer is
+    // liable for the whole sale price, so `salePrice − entitlement` genuinely is
+    // the recognized margin and this report must be unchanged.
+    const s = await seedDealership("s30ReportThrough");
+    await runDeal(s, { route: "THROUGH_DEALERSHIP", finalize: true });
+
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId,
+      ...range(),
+    });
+    expect(report.totalProfit).toBe(VEHICLE_PRICE - SUPPLIER_ENTITLEMENT);
   });
 });

@@ -21,6 +21,7 @@ import {
 import { saleEconomics } from "./utils/vehicleOwnership";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { getOrgCurrency } from "./accounting/workflowHooks";
+import { fromMinorUnits } from "./utils/money";
 
 /** Longest span an interactive report may request. */
 const MAX_REPORT_RANGE_MS = 366 * 24 * 60 * 60 * 1000;
@@ -133,6 +134,14 @@ export const getSalesAndProfitReport = query({
         vehicle: vehicle ?? {},
         capitalizedCost: cost,
         supplierSettlementRoute: sale.supplierSettlementRoute,
+        // The margin the sale froze at completion, so this report agrees with
+        // the GL and the P&L about what the deal earned. On a financed DIRECT
+        // deal re-deriving it from the sale price overstates by
+        // salePrice - approved, which is money that reaches no party.
+        recordedMargin:
+          sale.consignedMarginMinor !== undefined && sale.consignedMarginCurrency
+            ? fromMinorUnits(sale.consignedMarginMinor, sale.consignedMarginCurrency)
+            : undefined,
       });
 
       totalRevenue += economics.recognizedRevenue;
@@ -718,6 +727,13 @@ export const getSalespersonPerformance = query({
           vehicle: vehicleMap.get(sale.vehicleId) ?? {},
           capitalizedCost: cost,
           supplierSettlementRoute: sale.supplierSettlementRoute,
+          // As above: the margin the sale recorded, so a rep is ranked on what
+          // the dealership actually earned rather than on a spread that
+          // includes money no party paid.
+          recordedMargin:
+            sale.consignedMarginMinor !== undefined && sale.consignedMarginCurrency
+              ? fromMinorUnits(sale.consignedMarginMinor, sale.consignedMarginCurrency)
+              : undefined,
         });
 
         // Same exclusion as getSalesAndProfitReport: a rep who sold a consigned
