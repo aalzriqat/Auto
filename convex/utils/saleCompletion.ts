@@ -1107,7 +1107,12 @@ async function applySaleCompletionSideEffects(
   // margin still uncollected. Writing the fact costs one patch; deducing it
   // from a gap cost three review rounds and two wrong answers.
   if (isSourced && marginMinor !== null) {
-    await ctx.db.patch(saleId, { consignedMarginMinor: marginMinor });
+    await ctx.db.patch(saleId, {
+      consignedMarginMinor: marginMinor,
+      // Denominated, not assumed: the reader resolves its currency from the
+      // application, which can differ from the org's.
+      consignedMarginCurrency: prepared.currency,
+    });
   }
   if (isSourced && costAmount > 0 && supplierOwesMargin && !dealershipCollectsGross(settlementRoute)) {
     const marginAmount = fromMinorUnits(marginMinorForClaim, prepared.currency);

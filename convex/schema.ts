@@ -1353,6 +1353,20 @@ export default defineSchema({
      * uncollected. A fact this important is recorded, not deduced from a gap.
      */
     consignedMarginMinor: v.optional(v.number()),
+    /**
+     * The currency `consignedMarginMinor` is denominated in — the org's, as it
+     * stood when the sale completed.
+     *
+     * Stored rather than assumed, like every other money row in this schema
+     * (`vehicleSupplierReceivables.currency`, `financeDealFees.currency`,
+     * `deposits.currency`). The cockpit resolves its own currency from
+     * `financeApplications.economicsCurrency`, and `orgSettings` does not count
+     * `financeApplications` among the rows that lock an org's currency — so a
+     * young org can record deal economics in JOD and later switch to USD. The
+     * reader would then have subtracted USD cents from JOD fils and published
+     * the difference as profit.
+     */
+    consignedMarginCurrency: v.optional(v.string()),
     canonicalReceivableDocumentId: v.optional(v.id("receivableDocuments")),
     commissionAmount: v.optional(v.number()), // Calculated at sale time
     // How many COMMISSION_ADJUSTED corrections have been posted against this

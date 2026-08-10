@@ -2257,4 +2257,98 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
     ).rejects.toThrow(/finer than the currency/i);
   });
 
+
+  /**
+   * OP-F6.1. `completeExistingSale` — the PENDING → COMPLETED draft transition —
+   * is the SECOND writer of the recorded margin, and it is the one a reader of
+   * the diff cannot verify by inspection. If only `completeSale` wrote the
+   * field, every draft-completed consigned deal would read UNKNOWN forever.
+   */
+  test("completing a draft sale records the margin too", async () => {
+    const s = await seedDealership("draftMargin");
+    const { applicationId, saleId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      finalize: true,
+    });
+    expect(saleId).toBeTruthy();
+
+    const sale = await s.t.run(async (ctx) => await ctx.db.get(saleId as never));
+    expect((sale as { consignedMarginMinor?: number }).consignedMarginMinor).toBe(MARGIN * SCALE);
+    expect((sale as { consignedMarginCurrency?: string }).consignedMarginCurrency).toBe("JOD");
+
+    // And the cockpit reads it rather than inferring anything.
+    const view = await cockpitOf(s, applicationId);
+    expect(view).toBeDefined();
+  });
+
+  /**
+   * OP-F4/F-5. The recorded margin is denominated. The writer uses the ORG's
+   * currency; this query resolves its own from the application, and
+   * `orgSettings` does not count `financeApplications` among the rows that lock
+   * an org's currency — so the two can genuinely diverge. Subtracting USD cents
+   * from JOD fils and publishing the difference as profit is the failure.
+   */
+  test("a margin recorded in another currency is not read as this deal's", async () => {
+    const { s, applicationId } = await directDeal("marginCurrency");
+    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
+    await s.t.run(async (ctx) => {
+      await ctx.db.delete(claim._id);
+      const sale = (await ctx.db.query("sales").collect()).find((row) => row.orgId === s.orgId)!;
+      await ctx.db.patch(sale._id, { consignedMarginCurrency: "USD" });
+    });
+
+    const view = await cockpitOf(s, applicationId);
+    expect(supplierRow(view).position).toBe("UNKNOWN");
+    expect(view!.money!.managementProfit.available).toBe(false);
+  });
+
+  /**
+   * A negative recorded margin cannot come from the write path — completion
+   * refuses a sourced sale below the supplier's entitlement — which is exactly
+   * why the READER must reject it. `sales` is editable through the super-admin
+   * raw-JSON editor, and a negative would flow through as `disbursed − (−X)`
+   * and publish an inflated profit no downstream guard would catch.
+   */
+  test("a negative recorded margin is refused rather than inflating the headline", async () => {
+    const { s, applicationId } = await directDeal("negativeRecorded");
+    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
+    await s.t.run(async (ctx) => {
+      await ctx.db.delete(claim._id);
+      const sale = (await ctx.db.query("sales").collect()).find((row) => row.orgId === s.orgId)!;
+      await ctx.db.patch(sale._id, { consignedMarginMinor: -1_000 * SCALE });
+    });
+
+    const view = await cockpitOf(s, applicationId);
+    expect(supplierRow(view).position).toBe("UNKNOWN");
+    expect(view!.money!.managementProfit.available).toBe(false);
+  });
+
+  /**
+   * OP-F6.2. The cancelled-deal short-circuit needs its own coverage: the dead
+   * deal's figure was already withheld for a different reason, so nothing
+   * asserted the REASON the operator actually reads.
+   */
+  test("a cancelled deal says so, rather than blaming a missing figure", async () => {
+    const s = await seedDealership("cancelledReason");
+    const { applicationId, saleId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      finalize: true,
+    });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, {
+        approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+        dealerContributionMinor: 0,
+      });
+    });
+    await s.asApprover.mutation(api.sales.update, {
+      orgId: s.orgId,
+      saleId: saleId as never,
+      status: "CANCELLED" as const,
+    });
+
+    const profit = (await cockpitOf(s, applicationId))!.money!.managementProfit;
+    expect(profit.available).toBe(false);
+    if (!profit.available) expect(profit.reason).toBe("DealCancelled");
+  });
+
 });

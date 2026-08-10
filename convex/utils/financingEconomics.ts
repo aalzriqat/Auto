@@ -906,12 +906,7 @@ export type ManagementProfit =
     }
   | {
       available: false;
-      reason:
-        | "NoApprovedPurchaseAmount"
-        | "NoSupplierSettlement"
-        | "NoDealerContribution"
-        | "CorruptInput"
-        | "DealCancelled";
+      reason: "NoApprovedPurchaseAmount" | "NoSupplierSettlement" | "NoDealerContribution";
     };
 
 /**
@@ -972,8 +967,6 @@ export type ManagementProfit =
  * SCRUM-26.
  */
 export function deriveManagementProfit(args: {
-  /** A cancelled deal has no profit: its journal was reversed. */
-  dealCancelled?: boolean;
   approvedDealerPurchaseAmountMinor?: number;
   supplierSettlementMinor?: number;
   dealerContributionMinor?: number;
@@ -983,11 +976,6 @@ export function deriveManagementProfit(args: {
   currency: string;
   fullySettled: boolean;
 }): ManagementProfit {
-  // Checked first. A cancelled sale still carries its approval, its recorded
-  // margin and its disbursement, so every input below remains computable — and
-  // the figure they produce describes a deal whose journal has been reversed.
-  // Reporting a profit for it is not a smaller error than reporting none.
-  if (args.dealCancelled) return { available: false, reason: "DealCancelled" };
   if (args.approvedDealerPurchaseAmountMinor === undefined)
     return { available: false, reason: "NoApprovedPurchaseAmount" };
   if (args.supplierSettlementMinor === undefined)
@@ -1009,10 +997,7 @@ export function deriveManagementProfit(args: {
     (args.customerDirectToDealerMinor ?? 0) < 0 ||
     args.actualExpensesMinor < 0
   ) {
-    // Its own reason rather than `NoDealerContribution`, which told the operator
-    // to record a contribution that is already there — a defensive branch that
-    // lies about which field is corrupt defeats its own purpose.
-    return { available: false, reason: "CorruptInput" };
+    return { available: false, reason: "NoDealerContribution" };
   }
 
   const lines: ManagementProfitLine[] = [

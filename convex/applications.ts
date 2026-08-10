@@ -531,21 +531,28 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
  * figure into a confidently wrong one — a cancelled deal could read its
  * successor's margin — which is worse than the gap it closed.
  *
- * The evidence was in the wrong table. `vehicleSupplierReceivables` is keyed by
- * `saleId`, so it answers "whose sale is this" natively, and sale completion
- * opens a claim on the direct route **iff the margin is positive**
- * (`utils/saleCompletion.ts`; a sourced sale without a positive cost throws
- * before reaching it). That makes the claim rows a complete record:
+ * ⚠️ SUPERSEDED, and recorded here so it is not reinstated. A third version
+ * read the CLAIM rows: `vehicleSupplierReceivables` is keyed by `saleId`, and
+ * completion opens a claim iff the margin is positive, so "no row for this
+ * sale" looked like proof of a zero margin. One reviewer verified that chain
+ * exhaustively and accepted it; another found that `hardDeleteOrg` removes
+ * receivables before sales, so a partially-failed run leaves claimless sales.
+ * Both were right — and an invariant that has to be re-proved by enumerating
+ * every possible row-removal path is not an invariant. Do not "simplify" this
+ * back to a claim query.
+ *
+ * So the SALE records what it earned. `consignedMarginMinor` is written at
+ * completion on every sourced sale, zero included, with the currency it is
+ * denominated in beside it. This function reads that fact and nothing else:
  *
  *   - a LIVE claim carries the margin in `amountDue`, frozen at completion —
  *     `recordReceipt` moves `amountReceived`, never this;
- *   - ANY row for the sale, including a CANCELLED one, means a margin existed,
- *     so a missing live claim is missing evidence — never zero;
- *   - NO row at all for the sale is positive proof the margin was zero, which
- *     is the one case where opening no claim was correct.
+ *   - otherwise the sale's recorded margin, when it is present, readable, in
+ *     this query's currency, and not negative;
+ *   - anything else is UNKNOWN. Never zero.
  *
- * Nothing here reads the vehicle, so a second sale of the same car cannot
- * contaminate the first, and no row from another deal is reachable.
+ * Nothing is deduced from the absence of a record, and nothing here reads the
+ * vehicle, so no other deal's rows are reachable.
  */
 type MarginEvidence = { known: true; minor: number } | { known: false };
 
@@ -588,9 +595,20 @@ async function saleTimeMarginMinor(
   const sale = await ctx.db.get(app.finalizedSaleId);
   if (!sale || sale.orgId !== app.orgId) return { known: false };
   const recorded = sale.consignedMarginMinor;
-  return recorded === undefined || !Number.isFinite(recorded)
-    ? { known: false }
-    : { known: true, minor: recorded };
+  if (recorded === undefined || !Number.isFinite(recorded)) return { known: false };
+  // Denominated in the currency the sale recorded, which is the ORG's — while
+  // this query's currency comes from the application. They agree today only
+  // because they were resolved at different times, and `orgSettings` does not
+  // count `financeApplications` among the rows that lock an org's currency.
+  // Absent means the row predates the field: unreadable, not assumed to match.
+  if (sale.consignedMarginCurrency !== currency) return { known: false };
+  // The write path cannot produce a negative — `saleCompletion` refuses a
+  // sourced sale below the supplier's entitlement — which is exactly why the
+  // READER rejects one. `sales` is editable through the super-admin raw-JSON
+  // editor, and a negative here would flow through as `disbursed − (−X)` and
+  // publish an inflated profit that the `CorruptInput` guard never sees.
+  if (recorded < 0) return { known: false };
+  return { known: true, minor: recorded };
 }
 
 /**
@@ -824,7 +842,11 @@ async function buildCockpitMoney(
       deposit.amountMinor ??
       toMinorSameCurrencyOrUndefined(deposit.amount, depositCurrency, currency);
     if (minor === undefined) {
-      if (depositCurrency === currency) unreadableDeposits += 1;
+      // Counted whatever the reason — unreadable amount OR another currency.
+      // Gating this on a currency match left a foreign deposit excluded from the
+      // total AND able to leave the row saying the customer had put nothing in,
+      // which is the same error this counter was added to prevent.
+      unreadableDeposits += 1;
       return total;
     }
     return total + minor;
