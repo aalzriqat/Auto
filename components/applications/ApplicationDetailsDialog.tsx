@@ -249,6 +249,23 @@ export function ApplicationDetailsDialog({
   if (!app) return null;
   const currencyScale = scaleForCurrency(currency.code);
   const currencyFactor = Math.pow(10, currencyScale);
+  // The dealer-side economics are denominated in the application's OWN pinned
+  // currency, not the org's current one — `financeApplications.economicsCurrency`
+  // governs every `*Minor` field in that block, including the approved purchase
+  // amount and the supplier advice.
+  //
+  // They are not always the same currency, and `orgSettings` does not count
+  // `financeApplications` among the rows that lock an org's. A young dealership
+  // can record a deal in JOD (scale 3) and later switch to USD (scale 2), and
+  // this component read and WROTE both figures at the org's scale — so
+  // confirming a 17,450 advice on a JOD-pinned deal under a USD org sent
+  // 1,745,000 minor units instead of 17,450,000, understating by 10×.
+  //
+  // Absent means the row predates the field, and the org's currency is then the
+  // only reading available — which is what the server falls back to as well, so
+  // the two agree rather than each guessing separately.
+  const economicsCurrencyCode = app.economicsCurrency ?? currency.code;
+  const economicsFactor = Math.pow(10, scaleForCurrency(economicsCurrencyCode));
   const expectedDisbursementAmount = app.quote?.totalFinancedAmount ?? 0;
   const expectedDisbursementMinor = Math.round(expectedDisbursementAmount * currencyFactor);
   const expectsFinanceCompanyDisbursement = Boolean(app.companyId && expectedDisbursementMinor > 0);
@@ -262,7 +279,7 @@ export function ApplicationDetailsDialog({
   // saying nothing.
   const expectedSupplierDisbursementLabel =
     app.approvedDealerPurchaseAmountMinor !== undefined
-      ? currency.format(app.approvedDealerPurchaseAmountMinor / currencyFactor)
+      ? currency.format(app.approvedDealerPurchaseAmountMinor / economicsFactor)
       : t("NotRecorded" as any);
   // A consigned car is the supplier's, so this deal has a settlement route: the
   // finance company's cheque is made out to the dealership or to him, depending
@@ -363,7 +380,9 @@ export function ApplicationDetailsDialog({
         orgId: activeOrgId,
         applicationId,
         // The advice's own figure, not the dealership's expectation.
-        disbursedAmountMinor: Math.round(advice.amountMajor * currencyFactor),
+        // Scaled by the APPLICATION's pinned economics currency — this figure is
+        // stored as `supplierDisbursedAmountMinor`, which lives in that block.
+        disbursedAmountMinor: Math.round(advice.amountMajor * economicsFactor),
         reference: advice.reference,
         disbursedAt: advice.disbursedAt,
         idempotencyKey: confirmSupplierDisbursementIdempotencyKeyRef.current,
@@ -786,7 +805,7 @@ export function ApplicationDetailsDialog({
                     // differs by the down payment on every deal that has one.
                     defaultAmountMajor={
                       app.approvedDealerPurchaseAmountMinor !== undefined
-                        ? app.approvedDealerPurchaseAmountMinor / currencyFactor
+                        ? app.approvedDealerPurchaseAmountMinor / economicsFactor
                         : undefined
                     }
                     t={(key) => t(key as any)}
