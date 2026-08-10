@@ -35,6 +35,7 @@
  * without shelling out or touching a deployment. `scripts/deployProd.mjs`
  * gathers the snapshot and owns the side effects.
  */
+import { parseEnv } from "node:util";
 
 /** One precondition and how it landed. */
 export type DeployCheck = {
@@ -383,8 +384,19 @@ export function looksLikeProduction(dryRunOutput: string): boolean {
  */
 export function describeTargetSelection(env: RepoSnapshot["env"]): string {
   const from = env.source ? ` (from ${env.source})` : "";
+  if (env.CONVEX_SELF_HOSTED_URL) {
+    return `CONVEX_SELF_HOSTED_URL=${env.CONVEX_SELF_HOSTED_URL}${from} — this deploys to a self-hosted backend, not to Convex Cloud, and Convex will NOT prompt in this configuration.`;
+  }
   if (env.CONVEX_DEPLOY_KEY) {
     return `CONVEX_DEPLOY_KEY is set${from} — the target is whatever deployment that key belongs to, and Convex will NOT prompt in this configuration.`;
+  }
+  // The CLI reads the deploy key as `CONVEX_DEPLOY_KEY || CONVEX_DEPLOYMENT_TOKEN`
+  // and takes that branch before it looks at CONVEX_DEPLOYMENT. Describing only
+  // the two obvious variables meant an operator with just the token was told
+  // "the CLI will refuse rather than guess" on the line directly above a push
+  // that would have gone to production without a prompt.
+  if (env.CONVEX_DEPLOYMENT_TOKEN) {
+    return `CONVEX_DEPLOYMENT_TOKEN is set${from} — the CLI reads it as a deploy key, so the target is whatever deployment that token belongs to, and Convex will NOT prompt in this configuration.`;
   }
   if (env.CONVEX_DEPLOYMENT?.startsWith("prod:")) {
     return `CONVEX_DEPLOYMENT=${env.CONVEX_DEPLOYMENT}${from} — this names production directly, and Convex will NOT prompt when the configured deployment is the target.`;
@@ -392,8 +404,80 @@ export function describeTargetSelection(env: RepoSnapshot["env"]): string {
   if (env.CONVEX_DEPLOYMENT) {
     return `CONVEX_DEPLOYMENT=${env.CONVEX_DEPLOYMENT}${from} is a dev deployment. It does NOT redirect a deploy: 'convex deploy' targets the project's PRODUCTION deployment regardless.`;
   }
-  return "Neither CONVEX_DEPLOYMENT nor CONVEX_DEPLOY_KEY is set — the CLI will refuse rather than guess.";
+  return "None of the deployment-selecting variables is set — the CLI will refuse rather than guess.";
 }
+
+/**
+ * Reads the selecting variables out of one `.env` file's contents.
+ *
+ * A leading BOM is stripped first. `parseEnv` keeps it inside the first key, so
+ * a `.env.local` written by PowerShell 5.1 (`Out-File -Encoding UTF8` emits one)
+ * yields `"﻿CONVEX_DEPLOYMENT"` and the real key reads as unset. That used
+ * to be harmless — an unset selector was left `undefined` and the child's own
+ * dotenv picked the value up off disk. It is no longer harmless: an unset
+ * selector is now pinned to `""`, which is an own property the child's dotenv
+ * refuses to overwrite, so the CLI would refuse with "No CONVEX_DEPLOYMENT set"
+ * on a file it can read perfectly well itself. That turns a cosmetic parser gap
+ * into `pnpm deploy:prod` failing where `npx convex deploy` succeeds — the worst
+ * possible incentive for a guard whose only power is being used.
+ */
+export function selectorsFromEnvFile(text: string): Partial<Record<SelectorKey, string>> {
+  const parsed = parseEnv(text.startsWith("﻿") ? text.slice(1) : text);
+  const out: Partial<Record<SelectorKey, string>> = {};
+  for (const key of FROZEN_DEPLOY_ENV_KEYS) {
+    if (parsed[key]) out[key] = parsed[key];
+  }
+  return out;
+}
+
+/**
+ * The selection the CLI will make, resolved from the same sources in the same
+ * order: `process.env` first, then `.env.local`, then `.env` — because
+ * `dotenv.config` never overrides a variable that is already set.
+ *
+ * `source` names where the variable that actually decides the target came from,
+ * not whichever one happened to be seen first. Those differ: with
+ * `CONVEX_DEPLOYMENT` exported in the shell and `CONVEX_DEPLOY_KEY` in
+ * `.env.local`, the key decides and the shell does not, so reporting
+ * "process env" would point the operator at the wrong file.
+ */
+export function resolveSelectors(
+  processEnv: Record<string, string | undefined>,
+  files: { name: string; text: string }[]
+): RepoSnapshot["env"] {
+  const values: Partial<Record<SelectorKey, string>> = {};
+  const origins: Partial<Record<SelectorKey, string>> = {};
+
+  for (const key of FROZEN_DEPLOY_ENV_KEYS) {
+    if (processEnv[key]) {
+      values[key] = processEnv[key];
+      origins[key] = "process env";
+    }
+  }
+  for (const file of files) {
+    const parsed = selectorsFromEnvFile(file.text);
+    for (const key of FROZEN_DEPLOY_ENV_KEYS) {
+      if (!values[key] && parsed[key]) {
+        values[key] = parsed[key];
+        origins[key] = file.name;
+      }
+    }
+  }
+
+  // Precedence as the CLI applies it: self-hosted, then the deploy key (either
+  // spelling), then the named deployment.
+  const decider = DECIDING_ORDER.find((key) => values[key] !== undefined);
+
+  return { ...values, source: decider ? origins[decider] : undefined };
+}
+
+/** Which variable actually decides the target, most decisive first. */
+const DECIDING_ORDER = [
+  "CONVEX_SELF_HOSTED_URL",
+  "CONVEX_DEPLOY_KEY",
+  "CONVEX_DEPLOYMENT_TOKEN",
+  "CONVEX_DEPLOYMENT",
+] as const satisfies readonly SelectorKey[];
 
 /** Everything the flow touches that is not a pure decision. */
 /**
@@ -433,6 +517,8 @@ export const FROZEN_DEPLOY_ENV_KEYS = [
   "CONVEX_SELF_HOSTED_URL",
   "CONVEX_SELF_HOSTED_ADMIN_KEY",
 ] as const;
+
+export type SelectorKey = (typeof FROZEN_DEPLOY_ENV_KEYS)[number];
 
 /**
  * Freezes the selection out of a snapshot's environment.

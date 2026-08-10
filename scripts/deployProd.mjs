@@ -36,15 +36,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import path from "node:path";
-import { parseEnv } from "node:util";
-import {
-  BUNDLED_EXTENSIONS,
-  FROZEN_DEPLOY_ENV_KEYS,
-  runGuardedDeploy,
-} from "./deployGuard.ts";
-
-/** The variables that select a deployment, owned by the guard module. */
-const SELECTOR_KEYS = FROZEN_DEPLOY_ENV_KEYS;
+import { BUNDLED_EXTENSIONS, resolveSelectors, runGuardedDeploy } from "./deployGuard.ts";
 
 const argv = process.argv.slice(2);
 const allowBehind = argv.includes("--allow-behind");
@@ -135,34 +127,20 @@ function bundleFilesOnDisk() {
  * force — and a deploy key is the case where Convex asks nothing.
  * `dotenv.config` does not override an already-set variable, so process env wins.
  *
- * Parsed with `node:util`'s `parseEnv` — the same grammar `dotenv` implements —
- * rather than by hand. What this reads is no longer only advisory text: it is
- * frozen into the environment of every child process, so it *overrides* the
- * CLI's own parse. Any disagreement between the two would mean the operator is
- * shown one target and the deploy is handed another. A hand-rolled reader got
- * three cases wrong that matter here: `export KEY=value` was skipped entirely,
- * an inline `#` inside a quoted value truncated it, and an unterminated quote
- * silently dropped the last character.
+ * Only the file reading lives here; the parsing and precedence are in the guard
+ * module so they are testable. This reader is no longer advisory text — its
+ * result is frozen into every child process and therefore *overrides* the CLI's
+ * own parse, so a divergence between the two would show the operator one target
+ * and hand the deploy another. It had produced a defect in each of the last two
+ * reviews while it sat in this untested file.
  */
 function resolveDeployEnv() {
-  const out = {
-    source: undefined,
-  };
-  for (const key of SELECTOR_KEYS) out[key] = process.env[key];
-  if (SELECTOR_KEYS.some((k) => process.env[k])) out.source = "process env";
-
+  const files = [];
   for (const file of [".env.local", ".env"]) {
     const full = path.join(repoRoot, file);
-    if (!existsSync(full)) continue;
-    const parsed = parseEnv(readFileSync(full, "utf8"));
-    for (const key of SELECTOR_KEYS) {
-      if (!out[key] && parsed[key]) {
-        out[key] = parsed[key];
-        out.source ??= file;
-      }
-    }
+    if (existsSync(full)) files.push({ name: file, text: readFileSync(full, "utf8") });
   }
-  return out;
+  return resolveSelectors(process.env, files);
 }
 
 function collectSnapshot() {

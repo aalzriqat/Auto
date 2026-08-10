@@ -10,6 +10,7 @@ import {
   freezeDeployEnv,
   FROZEN_DEPLOY_ENV_KEYS,
   looksLikeProduction,
+  resolveSelectors,
   runGuardedDeploy,
   type RepoSnapshot,
 } from "./deployGuard";
@@ -323,8 +324,87 @@ describe("target selection is described, not inferred", () => {
   });
 
   test("an unset environment is described as refusing, not as defaulting", () => {
-    // Verified: with neither set the CLI errors rather than guessing.
+    // Verified: with none of them set the CLI errors rather than guessing.
     expect(describeTargetSelection({})).toMatch(/refuse/i);
+  });
+
+  test("a deploy token is described as silencing the prompt, not as nothing being set", () => {
+    // The CLI reads the deploy key as `CONVEX_DEPLOY_KEY || CONVEX_DEPLOYMENT_TOKEN`
+    // and takes that branch before CONVEX_DEPLOYMENT. Describing only the two
+    // obvious variables printed "the CLI will refuse rather than guess" directly
+    // above a push that would have gone to production without a prompt — the
+    // manufactured confidence this whole wrapper exists to avoid.
+    const described = describeTargetSelection({ CONVEX_DEPLOYMENT_TOKEN: "prod:x|abc" });
+    expect(described).toMatch(/will NOT prompt/i);
+    expect(described).not.toMatch(/refuse/i);
+  });
+
+  test("a self-hosted backend is described as what it is", () => {
+    const described = describeTargetSelection({ CONVEX_SELF_HOSTED_URL: "https://convex.internal" });
+    expect(described).toMatch(/self-hosted/i);
+    expect(described).not.toMatch(/refuse/i);
+  });
+});
+
+describe("resolving the selection the CLI will make", () => {
+  test("a BOM-prefixed .env.local is read, not silently treated as empty", () => {
+    // PowerShell 5.1's `Out-File -Encoding UTF8` writes a BOM. parseEnv keeps it
+    // inside the first key, so CONVEX_DEPLOYMENT read as unset — and an unset
+    // selector is now pinned to "" and shadows the child's own dotenv, so the
+    // CLI would refuse with "No CONVEX_DEPLOYMENT set" on a file it reads fine
+    // itself. `pnpm deploy:prod` failing where `npx convex deploy` succeeds is
+    // the worst possible incentive for a guard whose only power is being used.
+    const resolved = resolveSelectors(
+      {},
+      [{ name: ".env.local", text: "﻿CONVEX_DEPLOYMENT=prod:kindly-hound-172\n" }]
+    );
+    expect(resolved.CONVEX_DEPLOYMENT).toBe("prod:kindly-hound-172");
+    expect(resolved.source).toBe(".env.local");
+  });
+
+  test("source names the variable that decides the target, not the first one seen", () => {
+    // CONVEX_DEPLOY_KEY decides and CONVEX_DEPLOYMENT does not, so pointing the
+    // operator at "process env" would point them at the wrong place to look.
+    const resolved = resolveSelectors(
+      { CONVEX_DEPLOYMENT: "dev:vibrant-cat-418" },
+      [{ name: ".env.local", text: "CONVEX_DEPLOY_KEY=prod:foo|abc\n" }]
+    );
+    expect(resolved.source).toBe(".env.local");
+  });
+
+  test("process env wins over a file, as dotenv does not overwrite what is already set", () => {
+    const resolved = resolveSelectors(
+      { CONVEX_DEPLOYMENT: "prod:from-shell" },
+      [{ name: ".env.local", text: "CONVEX_DEPLOYMENT=prod:from-file\n" }]
+    );
+    expect(resolved.CONVEX_DEPLOYMENT).toBe("prod:from-shell");
+    expect(resolved.source).toBe("process env");
+  });
+
+  test(".env.local wins over .env", () => {
+    const resolved = resolveSelectors({}, [
+      { name: ".env.local", text: "CONVEX_DEPLOYMENT=prod:local\n" },
+      { name: ".env", text: "CONVEX_DEPLOYMENT=prod:plain\n" },
+    ]);
+    expect(resolved.CONVEX_DEPLOYMENT).toBe("prod:local");
+    expect(resolved.source).toBe(".env.local");
+  });
+
+  test("the grammar the hand-rolled reader got wrong", () => {
+    // Each of these silently produced a wrong value before parseEnv: `export `
+    // was skipped entirely, an inline # inside quotes truncated the value, and
+    // an unterminated quote lost its last character.
+    const resolved = resolveSelectors({}, [
+      {
+        name: ".env.local",
+        text: [
+          "export CONVEX_DEPLOYMENT=prod:kindly-hound-172 # team: autoflow",
+          'CONVEX_DEPLOY_KEY="prod:foo|abc #def"',
+        ].join("\n"),
+      },
+    ]);
+    expect(resolved.CONVEX_DEPLOYMENT).toBe("prod:kindly-hound-172");
+    expect(resolved.CONVEX_DEPLOY_KEY).toBe("prod:foo|abc #def");
   });
 });
 
