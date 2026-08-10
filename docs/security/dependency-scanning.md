@@ -83,13 +83,28 @@ no autolinking in the security workflow. Reproducibility of the *scanned* graph
 is therefore structural — CI reads a file in git, so it cannot differ between
 runs, and it cannot depend on network resolution or an SDK being present.
 
-**Verified vs not verified.** The lock was generated with the repo's own wrapper
-and OSV-Scanner 2.3.8 parses it (444 packages, matching the entry count). What
-has **not** been exercised is a real `assembleRelease` against it: that needs
-`apps/mobile/android/release-signing.properties`, which is not in the repo. So
-Gradle's documented behaviour — failing a build whose locked configuration
-resolves to versions other than the recorded ones — is expected here but
-unproven locally.
+**Enforcement is proven, by injection rather than by assertion.** Running
+
+```bash
+./gradlew :app:dependencies -Pexpo.webp.animated=true
+```
+
+adds `com.facebook.fresco:animated-webp:3.6.0`, which is not in the lock. It
+resolves cleanly in `debugRuntimeClasspath`, `debugOptimizedRuntimeClasspath`,
+`releaseCompileClasspath` and the unit-test classpaths, and is `FAILED` **only**
+under `releaseRuntimeClasspath`. That establishes three things at once: locking
+is active on the intended configuration; it has no collateral effect on the
+debug/test/compile classpaths, which is the point of not using
+`lockAllConfigurations()`; and a native dependency change without a lock
+regeneration makes the release runtime classpath unresolvable.
+
+Caveat worth knowing: `:app:dependencies` is a *report* task — it prints
+`FAILED` inline and still exits 0. Only a real build task throws. So "the
+dependencies report succeeded" is not evidence the lock is satisfied; read the
+tree.
+
+Not exercised: a full `assembleRelease`, which needs
+`apps/mobile/android/release-signing.properties` (not in the repo).
 
 Practical consequence to be aware of: this repo already has one tripwire that
 breaks the APK build when a native module is added (dependency *verification*,
@@ -137,8 +152,16 @@ Verified by comparing the ledger against the release runtime lock: none of
 
 ### What the ledger's findings actually are
 
-95 distinct advisories across 73 packages — 4 Critical, 115 High, 153 Medium,
-10 Low by advisory group.
+Measured with OSV-Scanner 2.3.8 against the committed ledger on 2026-08-10:
+**289 advisory entries** across **73 vulnerable package-versions**, resolving to
+**95 distinct advisory IDs** (the same advisory recurs against several versions
+of the same artifact).
+
+By severity, counted per entry so it reconciles to the total:
+**4 Critical + 115 High + 153 Medium + 10 Low + 7 unscored = 289.**
+
+Three numbers, three different things — quoting one as another is how the
+falsified claim below got made in the first place.
 
 | ledger group | advisories | of which ship | what it is |
 | --- | --- | --- | --- |

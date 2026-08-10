@@ -1,9 +1,20 @@
 name: Security
 
-# New security tooling — reports only for now (continue-on-error on every
-# job) so findings can be triaged before any of these gate merges. Gitleaks
-# (secret scanning) already runs in test.yml's secret-scan job and is not
-# duplicated here.
+# Security tooling. Findings are REPORTED, not enforced: every scanner step
+# carries continue-on-error, and none of these jobs is in main's required
+# status checks. Verified against the live branch-protection API, which lists
+# unit-and-integration, type-check, convex-backend, lint, secret-scan,
+# dependency-audit, dealer-worker, Analyze (javascript-typescript),
+# production-build and mobile-and-shared — plus zero rulesets. So a red job
+# here does not block a merge today. Do not read "DASHBOARD" below as "gate".
+#
+# Three steps DO hard-fail their job, and all three are about whether the scan
+# RAN, never about what it found: the manifest-classification check, the
+# runtime-lock sanity check, and the toolchain report check. A crashed or empty
+# scan must never be indistinguishable from a clean one.
+#
+# Gitleaks (secret scanning) already runs in test.yml's secret-scan job and is
+# not duplicated here.
 on:
   push:
     branches: [ "main" ]
@@ -98,14 +109,16 @@ jobs:
       # green. Fail loudly instead so the omission is visible.
       #
       # The invariant this enforces: every dependency source in the repo is
-      # explicitly classified as either GATING (it ships or runs, so a
-      # vulnerability in it blocks) or REPORTING (build-machine only), and
-      # anything unclassified fails CI until a human decides which it is.
+      # explicitly classified as either DASHBOARD (it ships or runs, so its
+      # vulnerabilities belong on the Security tab) or REPORTING (build-machine
+      # only), and anything unclassified fails CI until a human decides which.
       # Deliberately not "the three files we happen to have today" — this PR
       # itself adds a fourth, which is exactly the drift the step exists for.
       - name: Fail if an unclassified dependency manifest appeared
         run: |
-          # GATING — scanned by this job, uploaded to code scanning.
+          # DASHBOARD — scanned by this job and uploaded to code scanning.
+          # This is the signal a merge gate should be built on; see the header
+          # for why it does not block a merge today.
           gating=$(printf '%s\n' \
             "./apps/mobile/android/app/gradle.lockfile" \
             "./dealer-worker/package-lock.json" \
@@ -120,8 +133,10 @@ jobs:
             \( -name 'pnpm-lock.yaml' -o -name 'package-lock.json' -o -name 'yarn.lock' \
                -o -name 'bun.lock' -o -name 'gradle.lockfile' -o -name 'buildscript-gradle.lockfile' \
                -o -name 'settings-gradle.lockfile' \
+               -o -name 'npm-shrinkwrap.json' -o -name 'Gopkg.lock' -o -name '*.csproj' \
+               -o -name 'Podfile.lock' -o -name 'Package.resolved' \
                -o -name 'verification-metadata.xml' -o -name 'pom.xml' -o -name 'go.mod' \
-               -o -name 'Cargo.lock' -o -name 'requirements.txt' -o -name 'poetry.lock' \
+               -o -name 'Cargo.lock' -o -name 'requirements*.txt' -o -name 'poetry.lock' \
                -o -name 'uv.lock' -o -name 'pylock.toml' -o -name 'Pipfile.lock' -o -name 'pdm.lock' \
                -o -name 'composer.lock' -o -name 'Gemfile.lock' -o -name 'gems.locked' \
                -o -name 'packages.lock.json' -o -name 'packages.config' -o -name 'deps.json' \
@@ -147,11 +162,56 @@ jobs:
         with:
           # Keep in sync with the `gating` list in the classification step above.
           scan-args: |-
-            --output=osv-results.sarif
+            --output-file=osv-results.sarif
             --format=sarif
             --lockfile=pnpm-lock.yaml
             --lockfile=dealer-worker/package-lock.json
             --lockfile=apps/mobile/android/app/gradle.lockfile
+
+      # Fail-closed, and the reason is specific rather than defensive.
+      #
+      # osv-scanner reports "found 0 packages" and exits 0 for a lockfile it can
+      # read but that contains no entries. With three lockfiles on the command
+      # line the overall scan still succeeds and still writes SARIF — carrying
+      # only the pnpm findings. Reproduced: emptying gradle.lockfile drops all
+      # three Android results, including GHSA-574f-3g2m-x479 (CVSS 9.3), and the
+      # pinned category then marks them `fixed` with a green job and no signal
+      # anywhere.
+      #
+      # The manifest guard above cannot catch it — it compares FILENAMES, never
+      # content. Reachable by a bad lock regeneration, or by deleting the
+      # activateDependencyLocking block in app/build.gradle, after which the
+      # committed lock silently freezes forever.
+      - name: Fail if the Android runtime lock is empty or no longer locked
+        run: |
+          lock=apps/mobile/android/app/gradle.lockfile
+          entries=$(grep -c '=releaseRuntimeClasspath$' "$lock" || true)
+          # Floor, not an exact count, so ordinary dependency churn does not
+          # trip it. The real graph is ~444; anything under 300 means the lock
+          # was truncated, emptied, or written for the wrong configuration.
+          if [ "${entries:-0}" -lt 300 ]; then
+            echo "::error::$lock has only ${entries:-0} releaseRuntimeClasspath entries (expected ~444)."
+            echo "::error::A near-empty lock scans clean and would silently close the shipped-Android alerts."
+            echo "::error::Regenerate: cd apps/mobile/android && ./gradlew :app:dependencies --write-locks"
+            exit 1
+          fi
+          if ! grep -q 'activateDependencyLocking' apps/mobile/android/app/build.gradle; then
+            echo "::error::Dependency locking is no longer activated in apps/mobile/android/app/build.gradle."
+            echo "::error::The committed lock would then never change again, and this scan would report on a stale graph."
+            exit 1
+          fi
+          echo "Android runtime lock present ($entries entries) and locking still active."
+
+      - name: Fail if the runtime scan produced no SARIF
+        if: always()
+        run: |
+          if [ ! -s osv-results.sarif ]; then
+            echo "::error::osv-runtime produced no SARIF — the scan failed rather than finding nothing."
+            exit 1
+          fi
+          jq -e '.runs[0].tool.driver.name' osv-results.sarif > /dev/null || {
+            echo "::error::osv-results.sarif is not a well-formed SARIF report."; exit 1; }
+          echo "Runtime SARIF present ($(jq '[.runs[0].results[]?] | length' osv-results.sarif) result(s))."
 
       - name: Upload SARIF to GitHub Code Scanning
         uses: github/codeql-action/upload-sarif@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3
@@ -163,10 +223,12 @@ jobs:
           # main is keyed `.github/workflows/security.yml:osv-scanner`. Renaming
           # the job to osv-runtime would therefore start a NEW category, leaving
           # the old one orphaned: its 289 gradle + 18 pnpm alerts would never be
-          # marked fixed, while the pnpm findings were re-created as new alerts
+          # closed at all, while the pnpm findings were re-created as new alerts
           # under the new key — more open alerts than before, which is the exact
           # opposite of the point. Pinning the old key updates the analysis in
-          # place, so the gradle findings close with a real `fixed` transition.
+          # place. NOTE: GitHub records the dropped ledger alerts as `fixed`
+          # even though nothing was remediated — they are out of scope, not
+          # resolved. See docs/security/dependency-scanning.md.
           # NOTE: this string is used VERBATIM as the analysis category --
           # upload-sarif does not prepend the workflow path to it. So it has to
           # be the full existing key, not the bare job name. Verified live:
@@ -190,7 +252,8 @@ jobs:
   # Non-blocking because a ledger advisory does not imply a shipped
   # vulnerability: the finding may be against a build plugin, a test jar, or a
   # version that is no longer resolved by anything. Overlap with a real shipped
-  # vulnerability is expected and is caught by osv-runtime, which does block.
+  # vulnerability is expected, and osv-runtime surfaces that overlap on the
+  # Security tab. Note neither job blocks a merge today — see the header.
   #
   # Note this job has no `security-events: write` — it cannot publish alerts
   # even by accident.
@@ -208,7 +271,7 @@ jobs:
         uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
         with:
           scan-args: |-
-            --output=osv-toolchain.json
+            --output-file=osv-toolchain.json
             --format=json
             --lockfile=apps/mobile/android/gradle/verification-metadata.xml
 
