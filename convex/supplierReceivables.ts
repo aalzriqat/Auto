@@ -299,17 +299,28 @@ export const recordReceipt = mutation({
 
         const alreadyReceived = row.amountReceived ?? 0;
         const projected = alreadyReceived + args.amount;
+        // Both comparisons below are made in the currency's integer minor units.
+        //
+        // In major units they were float comparisons against an accumulated
+        // float, and that combination made a claim permanently unsettleable: a
+        // 4.440 JOD claim collected as three receipts of 1.480 accumulates to
+        // 4.4399999999999995, so `=== amountDue` was false and the claim stayed
+        // PARTIALLY_PAID — while `> amountDue` rejected any further receipt,
+        // because the residue owing is under a thousandth of a fils. The
+        // supplier had paid in full and no amount existed that could close it.
+        const dueMinor = toMinorUnits(row.amountDue, row.currency);
+        const projectedMinor = toMinorUnits(projected, row.currency);
         // Being paid more than you are owed is a real error with real money
         // behind it, and absorbing it into the claim hides which deal it
         // happened on. Same refusal as the payable side.
-        if (projected > row.amountDue) {
+        if (projectedMinor > dueMinor) {
           throw new ConvexError(
             `That would record ${projected} against ${row.amountDue} owed. Reduce the amount, or correct the claim first.`
           );
         }
 
         const now = args.receivedAt ?? Date.now();
-        const settlesInFull = projected === row.amountDue;
+        const settlesInFull = projectedMinor === dueMinor;
         const receiptSeq = receiptSeqFor(row) + 1;
 
         await ctx.db.patch(args.receivableId, {

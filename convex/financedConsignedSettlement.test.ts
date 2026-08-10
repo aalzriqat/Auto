@@ -1031,6 +1031,7 @@ describe("the deal cockpit query", () => {
     await s.t.run(async (ctx) => {
       await ctx.db.patch(applicationId, {
         approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+      dealerContributionMinor: 0,
       });
     });
     // What the finance company actually paid the supplier, off the advice.
@@ -1140,7 +1141,7 @@ describe("the deal cockpit, under the conditions that broke it", () => {
     const s = await seedDealership("regC1");
     const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
     await s.t.run(async (ctx) => {
-      await ctx.db.patch(applicationId, { approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE });
+      await ctx.db.patch(applicationId, { approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE, dealerContributionMinor: 0 });
     });
     // The headline now derives from the RECORDED advice rather than from the
     // approved amount, so the advice has to exist for there to be a figure.
@@ -1178,7 +1179,7 @@ describe("the deal cockpit, under the conditions that broke it", () => {
     const s = await seedDealership("regH2");
     const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
     await s.t.run(async (ctx) => {
-      await ctx.db.patch(applicationId, { approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE });
+      await ctx.db.patch(applicationId, { approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE, dealerContributionMinor: 0 });
     });
     // The headline now derives from the RECORDED advice rather than from the
     // approved amount, so the advice has to exist for there to be a figure.
@@ -1299,6 +1300,7 @@ describe("the deal cockpit, under the conditions that broke it", () => {
     await s.t.run(async (ctx) => {
       await ctx.db.patch(applicationId, {
         approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+        dealerContributionMinor: 0,
         settlementStatus: "FULLY_SETTLED",
       });
     });
@@ -1330,6 +1332,7 @@ describe("a direct-settled deal that is genuinely finished", () => {
     await s.t.run(async (ctx) => {
       await ctx.db.patch(applicationId, {
         approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+      dealerContributionMinor: 0,
       });
     });
 
@@ -1399,6 +1402,7 @@ describe("proving a deal is settled, rather than assuming it", () => {
     await s.t.run(async (ctx) => {
       await ctx.db.patch(applicationId, {
         approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+      dealerContributionMinor: 0,
       });
     });
     // Half of what the financier owes the supplier.
@@ -1417,8 +1421,13 @@ describe("proving a deal is settled, rather than assuming it", () => {
     const view = await cockpitOf(s, applicationId);
     expect(stageOf(view, "SETTLEMENT")).not.toBe("COMPLETE");
     // And the headline must not present itself as a finished figure.
+    //
+    // Asserted on the reason rather than as `available && classification`,
+    // which is false whenever the figure is withheld and therefore never equal
+    // to "ACTUAL_UNPOSTABLE" — the assertion held no matter what the query did.
     const profit = view!.money!.managementProfit;
-    expect(profit.available && profit.classification).not.toBe("ACTUAL_UNPOSTABLE");
+    expect(profit.available).toBe(false);
+    if (!profit.available) expect(profit.reason).toBe("NoSupplierSettlement");
   });
 
   /**
@@ -1431,6 +1440,7 @@ describe("proving a deal is settled, rather than assuming it", () => {
     await s.t.run(async (ctx) => {
       await ctx.db.patch(applicationId, {
         approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+      dealerContributionMinor: 0,
       });
     });
     await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
@@ -1441,9 +1451,13 @@ describe("proving a deal is settled, rather than assuming it", () => {
 
     const view = await cockpitOf(s, applicationId);
     const profit = view!.money!.managementProfit;
-    if (profit.available) {
-      expect(profit.amountMinor).toBeLessThanOrEqual(VEHICLE_PRICE * SCALE);
-    }
+    // Guarded by `if (profit.available)` this asserted nothing whenever the
+    // figure was withheld — which is the very outcome it was meant to prove.
+    // An advice below the margin is not evidence of what the supplier nets, so
+    // the honest answer is no figure, and that is now stated rather than
+    // skipped past.
+    expect(profit.available).toBe(false);
+    if (!profit.available) expect(profit.reason).toBe("NoSupplierSettlement");
   });
 
   /**
@@ -1483,6 +1497,7 @@ describe("proving a deal is settled, rather than assuming it", () => {
     await s.t.run(async (ctx) => {
       await ctx.db.patch(applicationId, {
         approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+      dealerContributionMinor: 0,
       });
     });
     await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
@@ -1508,6 +1523,7 @@ describe("proving a deal is settled, rather than assuming it", () => {
     await s.t.run(async (ctx) => {
       await ctx.db.patch(applicationId, {
         approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+      dealerContributionMinor: 0,
       });
     });
     await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
@@ -1685,6 +1701,7 @@ describe("the party rows and the stage rail agree", () => {
     await s.t.run(async (ctx) => {
       await ctx.db.patch(applicationId, {
         approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+      dealerContributionMinor: 0,
       });
     });
     await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
@@ -1718,5 +1735,244 @@ describe("the party rows and the stage rail agree", () => {
     const supplier = view!.money!.parties.find((p) => p.party === "SUPPLIER")!;
     expect(supplier.position).toBe("OWED_TO_DEALERSHIP");
     expect(supplier.amountMinor).toBe(MARGIN * SCALE);
+  });
+});
+
+/**
+ * The settlement derivation after the PATCH HALT.
+ *
+ * Round 2 and round 3 each fixed a defect and introduced another, all in this
+ * one subsystem, which is what the circuit breaker exists to detect. The common
+ * cause was not any single patch: the derivation inferred money facts from live
+ * mutable state, compared money as major-unit floats, and treated missing
+ * evidence as zero. These cover the redesign, not the patches.
+ */
+describe("settlement derived from sale-time facts, in integer minor units", () => {
+  async function cockpitOf(s: Seeded, applicationId: string) {
+    return await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId: applicationId as never,
+    });
+  }
+  const stageOf = (view: Awaited<ReturnType<typeof cockpitOf>>, key: string) =>
+    view!.stages.find((st) => st.key === key)!.state;
+  const supplierRow = (view: Awaited<ReturnType<typeof cockpitOf>>) =>
+    view!.money!.parties.find((p) => p.party === "SUPPLIER")!;
+
+  /** A finished DIRECT deal whose supplier claim is left open for the caller. */
+  async function directDeal(tag: string) {
+    const s = await seedDealership(tag);
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, {
+        approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+      dealerContributionMinor: 0,
+      });
+    });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+    });
+    return { s, applicationId };
+  }
+
+  /**
+   * OP-H1. Money was compared by subtracting major-unit floats, and JOD carries
+   * three decimals. A 4.440 claim collected in three receipts of 1.480 lands on
+   * 4.4399999999999995 — so `amountDue - amountReceived` is 8.9e-16, which is
+   * greater than zero.
+   *
+   * That stranded the claim twice over. `recordReceipt` never set PAID, because
+   * it tested `projected === amountDue` exactly; and it refused every further
+   * receipt, because any positive amount exceeds a residue smaller than a
+   * thousandth of a fils. The supplier had paid in full, the deal could never
+   * reach COMPLETE, and no amount existed that could close it.
+   */
+  test("a claim paid in instalments that do not sum exactly is still fully settled", async () => {
+    const { s, applicationId } = await directDeal("residueClaim");
+    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(claim._id, { amountDue: 4.44, amountReceived: undefined, status: "OPEN" });
+    });
+
+    for (let i = 0; i < 3; i++) {
+      await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+        orgId: s.orgId,
+        receivableId: claim._id,
+        amount: 1.48,
+      });
+    }
+
+    const settled = (await supplierClaimsOf(s)).find((row) => row._id === claim._id)!;
+    // The residue is real; the point is that it must not be treated as a debt.
+    expect(settled.amountReceived).not.toBe(4.44);
+    expect(settled.status).toBe("PAID");
+
+    const view = await cockpitOf(s, applicationId);
+    expect(stageOf(view, "SETTLEMENT")).toBe("COMPLETE");
+    // And the row must stop inviting a receipt from a supplier who owes nothing.
+    expect(supplierRow(view).position).toBe("SETTLED");
+  });
+
+  /**
+   * OP-H2. `marginBack = supplierClaimOriginalMinor ?? 0` — so a claim the
+   * screen could not read became "the supplier owes nothing back", and the
+   * headline published the ENTIRE disbursement as the dealership's profit.
+   *
+   * A claim denominated in another currency is the reachable case: it is
+   * present and valid, and only unreadable here.
+   */
+  test("a claim in another currency withholds the headline instead of inventing one", async () => {
+    const { s, applicationId } = await directDeal("foreignClaim");
+    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(claim._id, { currency: "USD" });
+    });
+
+    const profit = (await cockpitOf(s, applicationId))!.money!.managementProfit;
+    // Never the disbursement reported as profit.
+    if (profit.available) {
+      expect(profit.amountMinor).toBeLessThan(VEHICLE_PRICE * SCALE);
+    }
+    expect(profit.available).toBe(false);
+  });
+
+  /**
+   * CX-9. The margin was re-derived as `salePrice − computeVehicleCapitalizedCost`,
+   * and that helper reads the vehicle's CURRENT `sourceCost`. So a deal with no
+   * live claim was judged against a figure any later edit could move: correcting
+   * the supplier's price up to the sale price made the margin look like zero,
+   * which the derivation read as "nothing was ever owed" and used to report the
+   * deal COMPLETE — with an uncollected margin and a cancelled claim on file.
+   *
+   * The sale-time margin says 5,000 and keeps saying it. Nothing here is a
+   * judgement about whether the correction was right; it is that a settled deal
+   * must not be re-decided by a field the settlement no longer depends on.
+   *
+   * (Codex also reported a NEGATIVE margin reaching this branch. It cannot:
+   * `completeSale` refuses a consigned sale priced below the supplier's
+   * entitlement outright — see saleCompletion.ts:866 — so that half is rejected.)
+   */
+  test("a later correction to the vehicle cost cannot close an uncollected deal", async () => {
+    const { s, applicationId } = await directDeal("costEditedNoClaim");
+    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
+    await s.t.run(async (ctx) => {
+      // The claim is voided, so no live claim speaks for the margin...
+      await ctx.db.patch(claim._id, { status: "CANCELLED" });
+      // ...and the cost is corrected up to the sale price, which is what made
+      // the old derivation compute a zero margin.
+      await ctx.db.patch(s.vehicleId as never, { sourceCost: VEHICLE_PRICE });
+    });
+
+    const view = await cockpitOf(s, applicationId);
+    expect(stageOf(view, "SETTLEMENT")).not.toBe("COMPLETE");
+    expect(supplierRow(view).position).toBe("UNKNOWN");
+  });
+
+  /**
+   * CX-9, second half. The margin used to be re-derived through
+   * `computeVehicleCapitalizedCost`, which reads the vehicle's CURRENT
+   * `sourceCost`. Correcting a supplier's price after the sale therefore
+   * reopened a settled deal — the screen changed its mind about history because
+   * an editable field moved.
+   */
+  test("editing the vehicle cost after the sale does not disturb a settled deal", async () => {
+    const { s, applicationId } = await directDeal("costEditedAfter");
+    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      orgId: s.orgId,
+      receivableId: claim._id,
+      amount: MARGIN,
+    });
+    const before = await cockpitOf(s, applicationId);
+    expect(stageOf(before, "SETTLEMENT")).toBe("COMPLETE");
+
+    // Somebody corrects what the supplier actually charged, months later.
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.vehicleId as never, { sourceCost: VEHICLE_PRICE - 1 });
+    });
+
+    const after = await cockpitOf(s, applicationId);
+    expect(stageOf(after, "SETTLEMENT")).toBe("COMPLETE");
+    expect(after!.money!.managementProfit).toEqual(before!.money!.managementProfit);
+  });
+
+  /**
+   * CX-10. On a consigned THROUGH_DEALERSHIP deal the dealership collects the
+   * gross and owes the supplier his share, so the payable is the record of a
+   * debt that certainly exists. Its absence is a missing record, not a settled
+   * one — and answering NONE marked the deal complete while the supplier was
+   * still unpaid.
+   */
+  test("a consigned through-route deal with no payable on record is not complete", async () => {
+    const s = await seedDealership("payableMissing");
+    const { applicationId } = await runDeal(s, { route: "THROUGH_DEALERSHIP", finalize: true });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, { settlementStatus: "FULLY_SETTLED" });
+      const payable = (await ctx.db.query("vehicleSupplierPayables").collect()).find(
+        (row) => row.orgId === s.orgId
+      )!;
+      await ctx.db.delete(payable._id);
+    });
+
+    const view = await cockpitOf(s, applicationId);
+    expect(stageOf(view, "SETTLEMENT")).not.toBe("COMPLETE");
+    expect(supplierRow(view).position).toBe("UNKNOWN");
+  });
+
+  /**
+   * H-7, ruled by the dealership on 2026-08-10. `صافي ربح المعرض` nets the
+   * dealership's own contribution to the purchase amount. Calling the
+   * pre-contribution number "net profit" while the dealership still has to put
+   * money in overstated a real deal by roughly 875 JOD at 85% LTV.
+   */
+  test("the headline nets the dealership contribution, and shows it as its own line", async () => {
+    const { s, applicationId } = await directDeal("h7Contribution");
+    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      orgId: s.orgId,
+      receivableId: claim._id,
+      amount: MARGIN,
+    });
+    const contribution = 875 * SCALE;
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, { dealerContributionMinor: contribution });
+    });
+
+    const profit = (await cockpitOf(s, applicationId))!.money!.managementProfit;
+    expect(profit.available).toBe(true);
+    if (!profit.available) return;
+
+    const line = profit.lines.find((l) => l.key === "DEALER_CONTRIBUTION")!;
+    expect(line).toBeDefined();
+    expect(line.sign).toBe(-1);
+    expect(line.amountMinor).toBe(contribution);
+    // The headline is the lines, so the two cannot disagree.
+    expect(profit.amountMinor).toBe(
+      profit.lines.reduce((total, l) => total + l.sign * l.amountMinor, 0)
+    );
+  });
+
+  /**
+   * The other half of H-7: defaulting an unrecorded contribution to zero would
+   * republish the pre-contribution figure under the post-contribution name,
+   * which is the exact error the ruling corrects.
+   */
+  test("an unrecorded contribution withholds the headline rather than assuming zero", async () => {
+    const { s, applicationId } = await directDeal("h7Missing");
+    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      orgId: s.orgId,
+      receivableId: claim._id,
+      amount: MARGIN,
+    });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, { dealerContributionMinor: undefined });
+    });
+
+    const profit = (await cockpitOf(s, applicationId))!.money!.managementProfit;
+    expect(profit.available).toBe(false);
+    if (!profit.available) expect(profit.reason).toBe("NoDealerContribution");
   });
 });

@@ -159,14 +159,41 @@ describe("صافي ربح المعرض", () => {
   const settled = {
     approvedDealerPurchaseAmountMinor: 12_500_000,
     supplierSettlementMinor: 9_500_000,
+    // A deal the finance company funded in full, so the dealership put nothing
+    // of its own in. The contribution is a real zero here, not an unrecorded one.
+    dealerContributionMinor: 0,
     actualExpensesMinor: 590_000,
     currency: "JOD",
   };
 
-  test("reproduces the mockup's arithmetic", () => {
-    // 12,500 − 9,500 − 590 = 2,410 JOD, at JOD's three decimal places.
+  test("reproduces the mockup's arithmetic when the dealership contributes nothing", () => {
+    // 12,500 − 9,500 − 0 − 590 = 2,410 JOD, at JOD's three decimal places.
     const profit = deriveManagementProfit({ ...settled, fullySettled: false });
     expect(profit.available && profit.amountMinor).toBe(2_410_000);
+  });
+
+  /**
+   * H-7, ruled by the dealership on 2026-08-10, with its own worked example.
+   *
+   * The same deal carrying an 875 JOD dealer contribution is worth 1,535, not
+   * 2,410. Whether the finance company nets the contribution from its
+   * remittance or the dealership pays it separately changes cash movement, not
+   * profit — so calling 2,410 `صافي ربح المعرض` while the dealership still has
+   * to fund 875 overstated the deal by exactly that.
+   */
+  test("nets the dealership's contribution to the financing", () => {
+    const profit = deriveManagementProfit({
+      ...settled,
+      dealerContributionMinor: 875_000,
+      fullySettled: false,
+    });
+    expect(profit.available && profit.amountMinor).toBe(1_535_000);
+
+    if (!profit.available) return;
+    const line = profit.lines.find((l) => l.key === "DEALER_CONTRIBUTION");
+    expect(line).toBeDefined();
+    expect(line!.sign).toBe(-1);
+    expect(line!.amountMinor).toBe(875_000);
   });
 
   test("the headline equals its own derivation, never a second computation", () => {
@@ -206,6 +233,17 @@ describe("صافي ربح المعرض", () => {
       fullySettled: false,
     });
     expect(noSupplier).toEqual({ available: false, reason: "NoSupplierSettlement" });
+
+    // Defaulting an unrecorded contribution to zero would republish the
+    // pre-contribution figure under the post-contribution name — the H-7 error
+    // reached from the other direction, and the more dangerous one because the
+    // number still looks perfectly reasonable.
+    const noContribution = deriveManagementProfit({
+      ...settled,
+      dealerContributionMinor: undefined,
+      fullySettled: false,
+    });
+    expect(noContribution).toEqual({ available: false, reason: "NoDealerContribution" });
   });
 
   test("a deal that cost more than it approved reports the loss, not a floor of zero", () => {

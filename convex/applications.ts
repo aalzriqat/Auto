@@ -41,7 +41,6 @@ import {
   getReceivableOutstandingMinor,
 } from "./subledger";
 import { summarizeFees } from "./financeDealCosts";
-import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import {
   consignedSettlementRoute,
   consignedSettlementRouteValidator,
@@ -415,8 +414,20 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
       ).find((row) => row.status !== "CANCELLED")
     : undefined;
 
-  const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, app.orgId));
+  const orgCurrency = await getOrgCurrency(ctx, app.orgId);
+  const currency = app.economicsCurrency ?? orgCurrency;
   const sameCurrency = (rowCurrency: string) => rowCurrency === currency;
+
+  // Resolved ONCE, from immutable sale-time records, and shared by the
+  // obligation below and the headline in `buildCockpitMoney`. Two independent
+  // derivations of the same number are two answers waiting to disagree, which
+  // is exactly how the party rows came to contradict the stage rail.
+  const margin = await saleTimeMarginMinor(ctx, app, {
+    currency,
+    orgCurrency,
+    consigned,
+    supplierClaim,
+  });
 
   // --- what the supplier still owes, or is still owed ---------------------
   let supplierObligation: ObligationState = "UNKNOWN";
@@ -425,7 +436,11 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
       supplierObligation = !sameCurrency(supplierClaim.currency)
         ? "UNKNOWN"
         : supplierClaim.status === "PAID" ||
-            supplierClaim.amountDue - (supplierClaim.amountReceived ?? 0) <= 0
+            rowFullySettled(
+              supplierClaim.amountDue,
+              supplierClaim.amountReceived ?? 0,
+              supplierClaim.currency
+            )
           ? "CLOSED"
           : "OPEN";
     } else {
@@ -433,10 +448,14 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
       // deliberately opens none. Demanding a paid claim as proof therefore
       // demanded a record whose absence is right, and such deals could never
       // finish. But an absent claim on a deal that DID earn a margin is missing
-      // evidence, not proof — so the margin is re-derived the same way the sale
-      // derived it, and only a provable zero counts as nothing to collect.
-      const margin = await derivedMarginMinor(ctx, app, currency);
-      supplierObligation = margin === undefined ? "UNKNOWN" : margin <= 0 ? "NONE" : "UNKNOWN";
+      // evidence, not proof — so only a margin PROVEN to be exactly zero counts
+      // as nothing to collect.
+      //
+      // A negative margin is not "nothing to collect" either. The sale sold
+      // below the supplier's cost, which means the dealership owes rather than
+      // is owed, and no record here expresses that. Reporting NONE would close
+      // a deal on the strength of a figure that contradicts its own paperwork.
+      supplierObligation = !margin.known ? "UNKNOWN" : margin.minor === 0 ? "NONE" : "UNKNOWN";
     }
   } else {
     const payables = app.finalizedSaleId
@@ -447,10 +466,19 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
       : [];
     const payable = payables.find((row) => row.orgId === app.orgId && row.status !== "CANCELLED");
     supplierObligation = !payable
-      ? "NONE"
+      ? // On a CONSIGNED through-route deal the dealership collects the gross and
+        // owes the supplier his share, so the payable is the record of a debt
+        // that certainly exists. Its absence is a missing record, not a settled
+        // one, and answering NONE marked the deal complete while the supplier
+        // was still unpaid. Only a deal that was never consigned genuinely owes
+        // a supplier nothing.
+        consigned
+        ? "UNKNOWN"
+        : "NONE"
       : !sameCurrency(payable.currency)
         ? "UNKNOWN"
-        : payable.status === "PAID" || payable.amountDue - (payable.amountPaid ?? 0) <= 0
+        : payable.status === "PAID" ||
+            rowFullySettled(payable.amountDue, payable.amountPaid ?? 0, payable.currency)
           ? "CLOSED"
           : "OPEN";
   }
@@ -490,29 +518,91 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
     settlesDirect,
     saleCancelled,
     supplierClaim,
+    /** The one resolution of the margin, so the headline cannot reach a second. */
+    margin,
     obligations,
     moneySettled: settlementIsComplete(obligations),
   };
 }
 
 /**
- * The deal's margin, re-derived exactly as `completeSale` derived it: the sale
- * price less the vehicle's capitalized cost. Used only to tell a genuine
- * zero-margin deal from one whose supplier claim has gone missing.
+ * What the dealership earned on this deal — read from records written when the
+ * sale completed, never recomputed from what the vehicle looks like today.
+ *
+ * The previous version derived it as `salePrice − computeVehicleCapitalizedCost`,
+ * and that helper reads the vehicle's CURRENT `sourceCost`. That field stays
+ * editable after the sale, so correcting a supplier's price next week silently
+ * changed whether last week's deal counted as zero-margin — and with it whether
+ * the screen believed anything was still owed. A settled deal must not be
+ * re-openable by an edit to a field the settlement no longer depends on.
+ *
+ * Both admissible sources are frozen at completion:
+ *   - the supplier claim's `amountDue`, which `recordReceipt` never moves; and
+ *   - the sale's recognized revenue, which on a consigned sale IS the margin
+ *     (`saleEconomics` sets `recognizedRevenue = margin` for an agent sale).
+ *
+ * Anything else is absence of evidence — and absence of evidence is not zero.
  */
-async function derivedMarginMinor(
+type MarginEvidence = { known: true; minor: number } | { known: false };
+
+async function saleTimeMarginMinor(
   ctx: QueryCtx,
   app: Doc<"financeApplications">,
-  currency: string
-): Promise<number | undefined> {
-  if (!app.finalizedSaleId) return undefined;
-  const sale = await ctx.db.get(app.finalizedSaleId);
-  if (!sale || sale.orgId !== app.orgId) return undefined;
-  const vehicle = await ctx.db.get(app.vehicleId);
-  if (!vehicle) return undefined;
-  const cost = await computeVehicleCapitalizedCost(ctx, vehicle);
-  if (cost <= 0) return undefined;
-  return toMinorUnits(sale.salePrice, currency) - toMinorUnits(cost, currency);
+  opts: {
+    currency: string;
+    orgCurrency: string;
+    consigned: boolean;
+    supplierClaim: Doc<"vehicleSupplierReceivables"> | undefined;
+  }
+): Promise<MarginEvidence> {
+  const { currency, orgCurrency, consigned, supplierClaim } = opts;
+
+  // The claim the sale opened. `amountDue` is the margin as it stood at
+  // completion and stays there for the life of the claim — receipts land on
+  // `amountReceived`. A claim denominated in another currency is evidence
+  // nobody here can read, which is not the same as evidence of zero.
+  if (supplierClaim) {
+    return supplierClaim.currency === currency
+      ? { known: true, minor: toMinorUnits(supplierClaim.amountDue, supplierClaim.currency) }
+      : { known: false };
+  }
+
+  // No claim at all. On a consigned sale the completion transaction recognized
+  // the margin as revenue, so a recorded ZERO there is positive proof the deal
+  // earned nothing — the one case where opening no claim was correct.
+  if (!consigned || !app.finalizedSaleId) return { known: false };
+  // `transactions` carries no currency of its own; its amounts are the org's.
+  // When the application is denominated in something else, that row cannot be
+  // converted at a rate nobody agreed, so it is not read.
+  if (currency !== orgCurrency) return { known: false };
+
+  const rows = await ctx.db
+    .query("transactions")
+    .withIndex("by_org_vehicle", (q) => q.eq("orgId", app.orgId).eq("vehicleId", app.vehicleId))
+    .collect();
+  const recognized = rows.filter(
+    (row) => row.category === "VEHICLE_SALE" && row.recognizedRevenueAmount !== undefined
+  );
+  // A vehicle resold after a cancellation carries more than one, and the row
+  // does not say which sale it belongs to. Which one speaks for THIS deal is
+  // not decidable from the data, so it is not decided. Zero rows means the sale
+  // predates recognized-revenue accounting — also undecidable, not zero.
+  if (recognized.length !== 1) return { known: false };
+  return { known: true, minor: toMinorUnits(recognized[0].recognizedRevenueAmount!, currency) };
+}
+
+/**
+ * Whether a subledger row is fully settled, decided in integer minor units.
+ *
+ * `amountDue`, `amountReceived` and `amountPaid` are MAJOR units — floats. The
+ * previous `due - paid <= 0` left a binary residue: a 2.410 JOD claim collected
+ * as 1.205 twice ends about 4.4e-16 short, which is greater than zero, so the
+ * claim stayed OPEN permanently, the deal could never reach COMPLETE, and the
+ * collection button kept inviting a receipt from a supplier who owed nothing.
+ * Money is compared as integers or it is not compared.
+ */
+function rowFullySettled(due: number, settled: number, rowCurrency: string): boolean {
+  return toMinorUnits(due, rowCurrency) - toMinorUnits(settled, rowCurrency) <= 0;
 }
 
 async function buildCockpitMoney(
@@ -585,12 +675,14 @@ async function buildCockpitMoney(
         .withIndex("by_vehicle", (q) => q.eq("vehicleId", app.vehicleId))
         .collect();
   const payable = payables.find((row) => row.orgId === app.orgId && row.status !== "CANCELLED");
-  const payableOutstandingMinor =
-    payable &&
-    toMinorSameCurrency(
-      Math.max(0, payable.amountDue - (payable.amountPaid ?? 0)),
-      payable.currency
-    );
+  // Converted before subtracting, as above.
+  const payableOutstandingMinor = payable
+    ? (() => {
+        const due = toMinorSameCurrency(payable.amountDue, payable.currency);
+        const paid = toMinorSameCurrency(payable.amountPaid ?? 0, payable.currency);
+        return due === undefined || paid === undefined ? undefined : Math.max(0, due - paid);
+      })()
+    : undefined;
 
   const supplierClaim = settlementFacts.supplierClaim;
   // Two different figures, and conflating them was a CRITICAL defect.
@@ -603,14 +695,26 @@ async function buildCockpitMoney(
   // collected deal reported a loss equal to its expenses — and it was already
   // wrong on day one, because `openSupplierReceivable` seeds `amountReceived`
   // with any customer deposit applied at sale time.
-  const supplierClaimOutstandingMinor =
-    supplierClaim &&
-    toMinorSameCurrency(
-      Math.max(0, supplierClaim.amountDue - (supplierClaim.amountReceived ?? 0)),
-      supplierClaim.currency
-    );
-  const supplierClaimOriginalMinor =
-    supplierClaim && toMinorSameCurrency(supplierClaim.amountDue, supplierClaim.currency);
+  // Subtracted AFTER conversion, for the same reason the obligation is: taking
+  // the difference in major units first leaves a float residue that the row then
+  // displays as a balance still outstanding.
+  //
+  // ORIGINAL is no longer computed here at all. The headline reads the margin
+  // from `settlementFacts.margin`, which resolves it once from immutable
+  // sale-time records; a second local reading of `amountDue` was how the party
+  // row and the headline came to disagree in the first place.
+  const supplierClaimOutstandingMinor = supplierClaim
+    ? (() => {
+        const due = toMinorSameCurrency(supplierClaim.amountDue, supplierClaim.currency);
+        const received = toMinorSameCurrency(
+          supplierClaim.amountReceived ?? 0,
+          supplierClaim.currency
+        );
+        return due === undefined || received === undefined
+          ? undefined
+          : Math.max(0, due - received);
+      })()
+    : undefined;
 
   // --- the finance company's position ----------------------------------
   const financeReceivables = await ctx.db
@@ -770,11 +874,20 @@ async function buildCockpitMoney(
     // profit as if the whole deal had paid, and an advice below the margin
     // produced a NEGATIVE supplier settlement and therefore a profit larger
     // than the entire approved purchase amount.
-    const marginBack = supplierClaimOriginalMinor ?? 0;
+    //
+    // The margin comes from the shared sale-time resolution, and when it is not
+    // provable the headline is withheld. It used to read
+    // `supplierClaimOriginalMinor ?? 0`, so a claim that was missing, cancelled
+    // or denominated in another currency silently became "the supplier owes
+    // nothing back" — and the screen published a profit equal to the ENTIRE
+    // disbursement as though it were a fact about the deal. Reporting no figure
+    // is a smaller error than reporting a confident wrong one.
+    const marginBack = settlementFacts.margin;
     supplierSettlementMinor =
       settlementFacts.obligations.financier === "CLOSED" &&
-      app.supplierDisbursedAmountMinor !== undefined
-        ? app.supplierDisbursedAmountMinor - marginBack
+      app.supplierDisbursedAmountMinor !== undefined &&
+      marginBack.known
+        ? app.supplierDisbursedAmountMinor - marginBack.minor
         : undefined;
     // A supplier cannot net a negative amount; if the recorded facts imply one,
     // they disagree with each other and the figure is not reportable.
@@ -802,6 +915,10 @@ async function buildCockpitMoney(
     managementProfit: deriveManagementProfit({
       approvedDealerPurchaseAmountMinor: app.approvedDealerPurchaseAmountMinor,
       supplierSettlementMinor,
+      // H-7: read from the application, where the approval froze it. Not
+      // recomputed from today's LTV and first payment — the same rule the
+      // margin now follows, for the same reason.
+      dealerContributionMinor: app.dealerContributionMinor,
       actualExpensesMinor,
       currency,
       fullySettled,

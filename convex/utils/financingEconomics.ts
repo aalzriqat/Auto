@@ -879,6 +879,7 @@ export type ManagementProfitClassification =
 export type ManagementProfitLine =
   | { key: "APPROVED_PURCHASE"; sign: 1; amountMinor: number }
   | { key: "SUPPLIER_SETTLEMENT"; sign: -1; amountMinor: number }
+  | { key: "DEALER_CONTRIBUTION"; sign: -1; amountMinor: number }
   | { key: "ACTUAL_EXPENSES"; sign: -1; amountMinor: number };
 
 /**
@@ -902,7 +903,10 @@ export type ManagementProfit =
       /** Structural, not advisory. This figure has no journal and never will. */
       postable: false;
     }
-  | { available: false; reason: "NoApprovedPurchaseAmount" | "NoSupplierSettlement" };
+  | {
+      available: false;
+      reason: "NoApprovedPurchaseAmount" | "NoSupplierSettlement" | "NoDealerContribution";
+    };
 
 /**
  * Returns `available: false` rather than a zero when an input is missing.
@@ -911,24 +915,37 @@ export type ManagementProfit =
  * the screen a dealership reads to decide whether a deal made money, showing
  * the first in place of the second is the more damaging of the two errors.
  *
- * ⚠️ THIS IS NOT THE SAME FIGURE AS `computeDealerProceeds`, AND THAT IS
- * UNRESOLVED. That function nets out `dealerContributionMinor` — what the
- * dealership must put in when the finance company funds less than the purchase
- * amount — and `customerDirectToDealerMinor`. This one does not: it is the
- * headline from the approved mockup, and the mockup's four lines are the
- * approved purchase amount, the supplier settlement and actual expenses, with
- * no contribution line.
+ * H-7, RULED by the dealership on 2026-08-10: this figure NETS
+ * `dealerContributionMinor`, and its components are the same dealer economics
+ * `computeDealerProceeds` uses. Whether the finance company nets the
+ * contribution from its remittance or the dealership pays it separately changes
+ * cash movement, not profit — `computeExpectedRemittance` treats
+ * `NETTED_FROM_REMITTANCE` purely as a deduction, and the dealership funds the
+ * contribution either way. Calling the pre-contribution number `صافي ربح المعرض`
+ * while the dealership still has to put money in was materially misleading: at
+ * 85% LTV it overstated a real deal by roughly 875 JOD.
  *
- * So whenever LTV is under 100% and the customer's first payment does not cover
- * the unfinanced slice, this figure is HIGHER than the dealership's true
- * economics by roughly the contribution. Two profit definitions for one deal
- * coexist in this repository, and until the dealership confirms which one the
- * cockpit is meant to show, they must at least not be silent about each other.
- * Tracked on SCRUM-26; do not "reconcile" them by quietly changing this one.
+ * Nor is it double-counting the customer's money. `computeFundingComposition`
+ * defines the contribution as `approved − financeCompanyFunded −
+ * customerFirstPaymentApplied`, so the customer's first payment has already
+ * been taken out before the dealership's share is what remains.
+ *
+ * What this deliberately is NOT is a third profit formula. The ONE thing that
+ * still separates it from `computeDealerProceeds` is classification, not
+ * arithmetic: the approved-purchase spread has no journal, so the figure keeps
+ * ESTIMATED_AWAITING_SETTLEMENT / ACTUAL_UNPOSTABLE and stays unpostable.
+ *
+ * ⚠️ One asymmetry with `computeDealerProceeds` remains and is NOT guessed at
+ * here: that function also ADDS `customerDirectToDealerMinor`, the gap the
+ * customer pays the dealership directly. No such field is persisted on
+ * `financeApplications`, so there is no sale-time evidence to read, and
+ * inventing one would be the same error in the opposite direction. Raised on
+ * SCRUM-26 as H-7b; do not close it by assuming zero.
  */
 export function deriveManagementProfit(args: {
   approvedDealerPurchaseAmountMinor?: number;
   supplierSettlementMinor?: number;
+  dealerContributionMinor?: number;
   actualExpensesMinor: number;
   currency: string;
   fullySettled: boolean;
@@ -937,10 +954,19 @@ export function deriveManagementProfit(args: {
     return { available: false, reason: "NoApprovedPurchaseAmount" };
   if (args.supplierSettlementMinor === undefined)
     return { available: false, reason: "NoSupplierSettlement" };
+  // Defaulting this to zero would be the very error H-7 corrects, just reached
+  // from a different direction: it would publish the pre-contribution number
+  // under the post-contribution name. Today the two fields are written and
+  // cleared in the same patch, so an approval without a composition should not
+  // occur — but that is an invariant of the current writers, not evidence about
+  // the row in hand, and the failure mode of assuming it is an overstated profit.
+  if (args.dealerContributionMinor === undefined)
+    return { available: false, reason: "NoDealerContribution" };
 
   const lines: ManagementProfitLine[] = [
     { key: "APPROVED_PURCHASE", sign: 1, amountMinor: args.approvedDealerPurchaseAmountMinor },
     { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: args.supplierSettlementMinor },
+    { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: args.dealerContributionMinor },
     { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: args.actualExpensesMinor },
   ];
 

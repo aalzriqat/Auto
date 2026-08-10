@@ -91,7 +91,24 @@ const STATUS_LABEL: Record<string, string> = {
 const PROFIT_LINE_LABEL: Record<string, string> = {
   APPROVED_PURCHASE: "LineApprovedPurchase",
   SUPPLIER_SETTLEMENT: "LineSupplierSettlement",
+  DEALER_CONTRIBUTION: "LineDealerContribution",
   ACTUAL_EXPENSES: "LineActualExpenses",
+};
+
+/**
+ * Keyed by the reason itself rather than tested with a ternary, which had two
+ * branches for what is now three reasons and would have labelled a missing
+ * dealer contribution as a missing supplier settlement. Typed against the
+ * union, so adding a fourth reason fails the build instead of silently
+ * inheriting whichever branch happened to be the `else`.
+ */
+const PROFIT_BLOCKED_REASON: Record<
+  "NoApprovedPurchaseAmount" | "NoSupplierSettlement" | "NoDealerContribution",
+  string
+> = {
+  NoApprovedPurchaseAmount: "ProfitNeedsApprovedPurchase",
+  NoSupplierSettlement: "ProfitNeedsSupplierSettlement",
+  NoDealerContribution: "ProfitNeedsDealerContribution",
 };
 
 /** A money run is Latin digits inside Arabic prose; `<bdi>` keeps it whole. */
@@ -389,9 +406,7 @@ export function DealCockpitView({
                           {t("ProfitNotCalculable")}
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          {deal.money.managementProfit.reason === "NoApprovedPurchaseAmount"
-                            ? t("ProfitNeedsApprovedPurchase")
-                            : t("ProfitNeedsSupplierSettlement")}
+                          {t(PROFIT_BLOCKED_REASON[deal.money.managementProfit.reason])}
                         </p>
                       </>
                     )}
