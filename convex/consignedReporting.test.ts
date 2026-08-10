@@ -268,6 +268,176 @@ describe("turnover excludes agent gross", () => {
   });
 });
 
+/**
+ * SCRUM-30 — the reporting reader of `consignedMarginMinor` must be as strict
+ * as the cockpit's reader of the same field.
+ *
+ * `saleTimeMarginMinor` rejects a non-finite or negative value and answers
+ * UNKNOWN, and says why: the write path cannot produce either, but `sales` is
+ * editable through the super-admin raw-JSON editor, so the READER is where the
+ * rejection has to live. This reader was added in the same change and took the
+ * value straight through `fromMinorUnits`.
+ *
+ * `NaN` is the sharp one. Convex stores it under a `v.number()` validator
+ * without complaint, `NaN === null` is false so it is not counted as unknown,
+ * and `total += NaN` poisons the figure for EVERY OTHER SALE in the range — one
+ * corrupt row turns the whole org's profit into `NaN` on screen.
+ */
+describe("a recorded margin the reader cannot trust", () => {
+  test("NaN does not poison the profit of every other sale in the range", async () => {
+    const s = await seedDealer("reportNaN");
+    const saleId = await sellConsigned(s, "VINNAN1");
+    await sellOwned(s, "VINNAN2");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { consignedMarginMinor: NaN });
+    });
+
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId, ...range(),
+    });
+
+    expect(Number.isFinite(report.totalProfit)).toBe(true);
+    expect(Number.isFinite(report.totalRevenue)).toBe(true);
+    // The owned sale is untouched by its neighbour, and the consigned row falls
+    // back to the basis its route makes correct rather than to a number.
+    expect(report.totalProfit).toBe(MARGIN + OWNED_MARGIN);
+  });
+
+  test("a negative recorded margin is not read as a loss", async () => {
+    // The write path refuses a sourced sale below the supplier's entitlement,
+    // so a negative here is corruption. Read literally it credits the org with
+    // a loss it never made, and the arithmetic flows on into the totals.
+    const s = await seedDealer("reportNegative");
+    const saleId = await sellConsigned(s, "VINNEG1");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { consignedMarginMinor: -5_000 * 1_000 });
+    });
+
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId, ...range(),
+    });
+
+    expect(report.totalProfit).toBe(MARGIN);
+  });
+
+  test("and the salesperson ranking is protected by the same reader", async () => {
+    const s = await seedDealer("perfNaN");
+    const saleId = await sellConsigned(s, "VINNAN3");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { consignedMarginMinor: NaN });
+    });
+
+    const rows = await s.asUser.query(api.reports.getSalespersonPerformance, {
+      orgId: s.orgId, ...range(),
+    });
+    expect(rows.every((r) => Number.isFinite(r.totalProfit))).toBe(true);
+  });
+});
+
+/**
+ * SCRUM-30 — a rep carrying an unknown-margin sale must not be ranked as though
+ * their partial profit were the whole of it.
+ *
+ * `getSalespersonPerformance` counts every sale in `vehiclesSold`, drops the
+ * unknown-margin ones out of `totalProfit` with `?? 0`, and then sorts the reps
+ * by that incomplete number — so two columns computed over different sets of
+ * rows sit side by side in one row of a table that claims to rank people by
+ * what they earned. Before this release `dealershipMargin` could not be null,
+ * `?? 0` never fired, and the two always agreed; the divergence is new here.
+ *
+ * Warning the owner is not sufficient on its own while the ORDER is still
+ * derived from the partial figure. The incomplete rows come out of the ranking.
+ */
+describe("ranking a salesperson whose earnings are not fully known", () => {
+  /** A financed direct sale that never recorded what the supplier received. */
+  async function sellFinancedDirectWithoutEvidence(
+    s: Awaited<ReturnType<typeof seedDealer>>,
+    vin: string,
+    salespersonId: string
+  ) {
+    const vehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin, make: "Toyota", model: "Camry", year: 2024, mileage: 10,
+        color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
+        status: "SOLD", sourceType: "SOURCED",
+        sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+      })
+    );
+    // Inserted rather than written through `sales.create`, which now refuses
+    // this exact shape. It is the row a deal completed before the refusal
+    // leaves behind, and the reader has to cope with it.
+    return await s.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: s.orgId, vehicleId, customerId: s.customerId,
+        salespersonId: salespersonId as never,
+        salePrice: SALE_PRICE, saleDate: Date.now(), status: "COMPLETED",
+        financingType: "FINANCED", supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      })
+    );
+  }
+
+  test("their partial total does not out-rank a colleague whose figures are complete", async () => {
+    const s = await seedDealer("perfRank");
+    // A second rep, so there is an ordering to get wrong.
+    const otherId = await s.t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "perfRank_u2", email: "u2@e.com", name: "Second Rep" })
+    );
+
+    // The complete rep: one owned sale, every figure known.
+    await sellOwned(s, "VINRANK1");
+    // The incomplete rep: a KNOWN consigned sale plus one whose earning cannot
+    // be established. Their known-only profit is deliberately larger than the
+    // complete rep's whole total, which is the only arrangement that can tell
+    // "ranked on a partial number" apart from "ranked correctly".
+    const known = await sellConsigned(s, "VINRANK2");
+    const unknown = await sellFinancedDirectWithoutEvidence(s, "VINRANK3", otherId);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(known, { salespersonId: otherId });
+    });
+
+    const rows = await s.asUser.query(api.reports.getSalespersonPerformance, {
+      orgId: s.orgId, ...range(),
+    });
+
+    const incomplete = rows.find((r) => r.userId === otherId)!;
+    const complete = rows.find((r) => r.userId !== otherId)!;
+
+    // The premise: the incomplete rep's PARTIAL figure really is the larger one,
+    // so a naive sort puts them first.
+    expect(incomplete.totalProfit).toBeGreaterThan(complete.totalProfit);
+    expect(incomplete.unknownMarginSaleCount).toBe(1);
+    expect(incomplete.vehiclesSold).toBe(2);
+
+    // The claim: they are marked as not fully known, and they are ordered
+    // AFTER every rep who is — not ahead of them on a number that is missing a
+    // sale.
+    expect(rows.indexOf(complete)).toBeLessThan(rows.indexOf(incomplete));
+    expect(incomplete.marginComplete).toBe(false);
+    expect(complete.marginComplete).toBe(true);
+    expect(unknown).toBeTruthy();
+  });
+
+  test("and a board where everybody's figures are complete still ranks by profit", async () => {
+    // The control. Separating the incomplete rows must not disturb the ordinary
+    // ranking, which is what this screen is for.
+    const s = await seedDealer("perfRankControl");
+    const otherId = await s.t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "perfRankControl_u2", email: "u2b@e.com", name: "Second Rep" })
+    );
+    await sellOwned(s, "VINRANK4");
+    const bigger = await sellConsigned(s, "VINRANK5");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(bigger, { salespersonId: otherId });
+    });
+
+    const rows = await s.asUser.query(api.reports.getSalespersonPerformance, {
+      orgId: s.orgId, ...range(),
+    });
+    expect(rows.every((r) => r.marginComplete)).toBe(true);
+    expect(rows[0]!.totalProfit).toBeGreaterThanOrEqual(rows[1]!.totalProfit);
+  });
+});
+
 describe("historical and new agent sales report identically", () => {
   test("a legacy principal-posted sale already reports as agent basis", async () => {
     // The reports derive from the sale and the vehicle, not from the ledger, so

@@ -3736,6 +3736,71 @@ describe("a settlement advice that contradicts the approval", () => {
     expect(app.approvedDealerPurchaseAmountMinor).toBe(18_000 * SCALE);
   });
 
+  /**
+   * The discrepancy has two halves and they do not carry the same permission.
+   *
+   * That there is an unresolved contradiction is a WORKFLOW condition: it says
+   * this deal is waiting on a human, and hiding it produces exactly the dead
+   * end the reconciliation state was invented to escape — a flag nobody is
+   * shown is not a recovery path.
+   *
+   * What the finance company was approved to pay the supplier, what its advice
+   * says it paid, the cheque number and the date are EVIDENCE, and they are the
+   * same class of figure `money` exists to withhold. The default SALES template
+   * carries `view:sales` and not `view:finance` precisely so a salesperson can
+   * follow their own deal without learning what the dealership makes on it, and
+   * `approvedMinor` is one subtraction away from that.
+   *
+   * The two permissions are also INDEPENDENT — roles here are customizable, so
+   * an org can define a role holding `manage:finance` without `view:finance`.
+   * The correction form must therefore key off the evidence it actually
+   * received, never off the authority alone.
+   */
+  test("the reconciliation flag survives the finance gate; the evidence behind it does not", async () => {
+    const { s, applicationId } = await paidDeal("s30ReconGate", 18_000);
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 17_995 * SCALE,
+      reference: "WIRE-4471",
+    });
+
+    await s.t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === s.orgId)!;
+      await ctx.db.patch(role._id, {
+        permissions: role.permissions.filter((p) => p !== "view:finance"),
+        isSystemOwnerRole: false,
+      });
+    });
+
+    const view = await cockpit(s, applicationId);
+    expect(view!.money).toBeNull();
+    // Every figure, the cheque number and the date go with it.
+    expect(view!.settlementAdviceDiscrepancy).toBeNull();
+    // The condition is still visible — this deal is stuck and the screen says so.
+    expect(view!.settlementAdviceRequiresReconciliation).toBe(true);
+  });
+
+  test("and a role holding view:finance receives the evidence in full", async () => {
+    const { s, applicationId } = await paidDeal("s30ReconGateAllowed", 18_000);
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 17_995 * SCALE,
+      reference: "WIRE-4471",
+    });
+
+    const view = await cockpit(s, applicationId);
+    expect(view!.settlementAdviceRequiresReconciliation).toBe(true);
+    expect(view!.settlementAdviceDiscrepancy).toEqual({
+      recordedMinor: 17_995 * SCALE,
+      approvedMinor: 18_000 * SCALE,
+      currency: "JOD",
+      recordedReference: "WIRE-4471",
+      recordedAt: expect.any(Number),
+    });
+  });
+
   test("the supplier claim is untouched by the disagreement", async () => {
     const { s, applicationId } = await paidDeal("s30ReconClaim", 18_000);
     await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
@@ -3749,6 +3814,84 @@ describe("a settlement advice that contradicts the approval", () => {
     const rows = await supplierClaimsOf(s);
     const live = rows.find((r) => r.status !== "CANCELLED");
     expect(live?.amountDue).toBe(3_000);
+  });
+
+  /**
+   * The completeness predicate must answer to the reconciliation STATE, not to
+   * the arithmetic between the two figures.
+   *
+   * Every mismatch recorded before this one was an advice BELOW the approval,
+   * where `disbursed >= approved` happened to be false — so the deal stayed
+   * open by accident of the comparison rather than because anybody decided a
+   * contradicted advice cannot settle a deal. An advice ABOVE the approval
+   * exposed that: 20,000 against an 18,000 approval was stored, flagged
+   * REQUIRES_RECONCILIATION, and satisfied `>=` in the same breath — so the
+   * cockpit showed the settlement stage COMPLETE and published the headline as
+   * ACTUAL rather than ESTIMATED, on a deal whose whole point was that the
+   * dealership does not yet know how much money the supplier is holding.
+   *
+   * Note what is NOT asserted: that the financier still owes money. It does
+   * not — it sent too much. The honest answer is that the obligation is
+   * UNKNOWN, and `settlementIsComplete` already treats UNKNOWN as not-done.
+   */
+  test("an advice larger than the approval cannot carry the deal to a settled state", async () => {
+    const { s, applicationId } = await paidDeal("s30ReconOver", 18_000);
+
+    // The cheque was written for the quotation, not the approval. Nothing
+    // refuses it — it is evidence about a payment somebody made.
+    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 20_000 * SCALE,
+    });
+    expect(result.status).toBe("REQUIRES_RECONCILIATION");
+
+    // Collect the dealership's 3,000 claim, so the ONLY thing left standing
+    // between this deal and "settled" is the contradicted advice.
+    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      orgId: s.orgId,
+      receivableId: claim._id,
+      amount: 3_000,
+    });
+
+    const view = await cockpit(s, applicationId);
+    expect(view!.stages.find((st) => st.key === "SETTLEMENT")!.state).not.toBe("COMPLETE");
+    const profit = view!.money!.managementProfit;
+    // Still an estimate. Promoting it to ACTUAL asserts the money is finished.
+    expect(profit.available && profit.classification).toBe("ESTIMATED_AWAITING_SETTLEMENT");
+  });
+
+  /**
+   * The other half of the same rule, and the reason it is a state check rather
+   * than an equality check: correcting the advice back into agreement has to
+   * RELEASE the deal. A predicate that blocks on the contradiction but never
+   * clears it would trade a false completion for a permanent dead end, which is
+   * the failure this whole reconciliation path was built to escape.
+   */
+  test("and correcting the advice back to the approval releases it", async () => {
+    const { s, applicationId } = await paidDeal("s30ReconOverFixed", 18_000);
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 20_000 * SCALE,
+    });
+    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      orgId: s.orgId,
+      receivableId: claim._id,
+      amount: 3_000,
+    });
+
+    await s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 18_000 * SCALE,
+      reason: "Advice re-read: the cheque was for the approved amount after all.",
+    });
+
+    const view = await cockpit(s, applicationId);
+    expect(view!.stages.find((st) => st.key === "SETTLEMENT")!.state).toBe("COMPLETE");
   });
 
   test("locks cancellation, which the refusal had left wide open", async () => {
@@ -3964,7 +4107,15 @@ describe("a settlement advice that contradicts the approval", () => {
  * the rendered half is pinned in DealCockpitView.test.tsx).
  */
 describe("amending one field of a settlement advice", () => {
-  const PAID_AT = Date.UTC(2026, 7, 5);
+  /**
+   * Deliberately NOT midnight, and carrying milliseconds.
+   *
+   * `confirmSupplierDisbursement` stamps `Date.now()`, so this is the shape a
+   * real recorded advice has. A midnight fixture made every assertion about
+   * "the date survived" pass under a conversion that silently discards the time
+   * of day — which is exactly what the correction form was doing to it.
+   */
+  const PAID_AT = Date.UTC(2026, 7, 5, 14, 32, 17, 456);
 
   async function advisedDeal(tag: string) {
     const s = await seedDealership(tag);
@@ -4008,6 +4159,7 @@ describe("amending one field of a settlement advice", () => {
 
   test("correcting only the amount leaves the reference and the date untouched", async () => {
     const { s, applicationId } = await advisedDeal("s30Preserve");
+    const before = await appOf(s, applicationId);
 
     await s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, {
       orgId: s.orgId,
@@ -4021,6 +4173,13 @@ describe("amending one field of a settlement advice", () => {
     // The two that were never mentioned. Erasing WIRE-4471 destroys the only
     // link between this row and the bank's own record of the payment.
     expect(app.supplierDisbursementReference).toBe("WIRE-4471");
+    // To the MILLISECOND, and asserted against what was actually on the row
+    // rather than against the constant it was seeded from. Same instant, not
+    // "same day" and not "same hour" — a lossy conversion that lands on the
+    // right date would satisfy a looser assertion, and one did: the correction
+    // form was rewriting 14:32:17.456 to 00:00:00.000 and every test that
+    // watched the date agreed the date was preserved.
+    expect(app.supplierDisbursementConfirmedAt).toBe(before.supplierDisbursementConfirmedAt);
     expect(app.supplierDisbursementConfirmedAt).toBe(PAID_AT);
     // And the correction did its job.
     expect(app.supplierDisbursementStatus).toBe("CONFIRMED");

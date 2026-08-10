@@ -524,12 +524,14 @@ export function DealCockpitView({
       {/* --- the two records that disagree -------------------------------- */}
       {/* Above the stage rail, not inside the money column. The rail tells the
           deal's normal story; this is the exception that has stopped it, so it
-          has to be the first thing read. And it sits outside `deal.money`
-          deliberately: that block is withheld from anyone without permission to
-          see margins, while the person who has to chase a settlement advice
-          often has exactly that permission set. A warning only the accountant
-          can see is not a warning. */}
-      {deal.settlementAdviceDiscrepancy && (
+          has to be the first thing read.
+          The WARNING is ungated — a deal stuck in reconciliation that only the
+          accountant can see is not a warning. The FIGURES inside it are gated,
+          and the SERVER decides: `settlementAdviceDiscrepancy` arrives `null`
+          for a caller without `view:finance`, so this renders the alert and its
+          explanation with no amounts under it. Nothing here re-derives the
+          permission, which is why the two cannot drift apart. */}
+      {deal.settlementAdviceRequiresReconciliation && (
         <div
           role="alert"
           className="rounded-md border border-destructive/40 border-s-4 border-s-destructive bg-destructive/5 p-4"
@@ -558,6 +560,13 @@ export function DealCockpitView({
               evidence, offering the fix before showing what needs fixing.
               Indented to the text on desktop only; on a 390px screen that
               indent costs width the three figures need to stay on one line. */}
+          {/* Only for a caller the SERVER sent the evidence to. The correction
+              button lives in here with it, and that is the point: correcting a
+              figure you were never shown is a guess, not a correction.
+              `manage:finance` and `view:finance` are independent permissions and
+              roles here are customizable, so one can be held without the other —
+              this nesting is what stops the button appearing for such a role. */}
+          {discrepancy && (
           <div className="mt-3 flex flex-wrap items-end justify-between gap-x-6 gap-y-3 sm:ps-6">
             <dl className="flex flex-wrap gap-x-8 gap-y-2 text-sm">
               <div className="space-y-0.5">
@@ -594,6 +603,7 @@ export function DealCockpitView({
               </Button>
             )}
           </div>
+          )}
         </div>
       )}
 

@@ -23,6 +23,35 @@ import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { fromMinorUnits } from "./utils/money";
 
+/**
+ * The margin a consigned sale FROZE at completion, or `undefined` when the row
+ * does not carry one this reader is willing to believe.
+ *
+ * Deliberately the same discipline as `applications.saleTimeMarginMinor`, which
+ * guards the identical field for the cockpit and states the reason: the write
+ * path cannot produce a non-finite or negative margin — `saleCompletion`
+ * refuses a sourced sale below the supplier's entitlement — which is exactly
+ * why the READER rejects one. `sales` is editable through the super-admin
+ * raw-JSON editor, so a corrupt value arrives here, not there.
+ *
+ * `NaN` is the one that does real damage. Convex accepts it under a
+ * `v.number()` validator, it is not `null` so it is never counted among the
+ * unknown-margin rows, and one `total += NaN` renders the whole org's profit as
+ * `NaN` for every other sale in the range.
+ *
+ * Returning `undefined` hands the decision back to `saleEconomics`, which is
+ * where "what does an absent margin mean on THIS route" already lives: UNKNOWN
+ * on a financed direct deal whose evidence is required, and the sale-price
+ * spread where that genuinely is the answer.
+ */
+function recordedConsignedMargin(sale: Doc<"sales">): number | undefined {
+  const minor = sale.consignedMarginMinor;
+  const currency = sale.consignedMarginCurrency;
+  if (minor === undefined || !currency) return undefined;
+  if (!Number.isFinite(minor) || minor < 0) return undefined;
+  return fromMinorUnits(minor, currency);
+}
+
 /** Longest span an interactive report may request. */
 const MAX_REPORT_RANGE_MS = 366 * 24 * 60 * 60 * 1000;
 
@@ -144,10 +173,7 @@ export const getSalesAndProfitReport = query({
         // the GL and the P&L about what the deal earned. On a financed DIRECT
         // deal re-deriving it from the sale price overstates by
         // salePrice - approved, which is money that reaches no party.
-        recordedMargin:
-          sale.consignedMarginMinor !== undefined && sale.consignedMarginCurrency
-            ? fromMinorUnits(sale.consignedMarginMinor, sale.consignedMarginCurrency)
-            : undefined,
+        recordedMargin: recordedConsignedMargin(sale),
         externallyFinanced:
           sale.financingType === "FINANCED" || sale.financingType === "LEASE",
       });
@@ -752,10 +778,7 @@ export const getSalespersonPerformance = query({
           // As above: the margin the sale recorded, so a rep is ranked on what
           // the dealership actually earned rather than on a spread that
           // includes money no party paid.
-          recordedMargin:
-            sale.consignedMarginMinor !== undefined && sale.consignedMarginCurrency
-              ? fromMinorUnits(sale.consignedMarginMinor, sale.consignedMarginCurrency)
-              : undefined,
+          recordedMargin: recordedConsignedMargin(sale),
           externallyFinanced:
             sale.financingType === "FINANCED" || sale.financingType === "LEASE",
         });
@@ -778,10 +801,34 @@ export const getSalespersonPerformance = query({
         totalGrossTransactionValue,
         /** Of `vehiclesSold`, how many contributed nothing because their earning is unknown. */
         unknownMarginSaleCount,
+        /**
+         * Whether `totalRevenue` and `totalProfit` account for every sale in
+         * `vehiclesSold`, or only for the ones whose earning could be
+         * established.
+         *
+         * `false` makes the row's two halves legible: the count is over ALL the
+         * rep's sales and the money is over a subset, and without this the
+         * table shows them side by side as one complete statement.
+         */
+        marginComplete: unknownMarginSaleCount === 0,
       };
     });
 
-    return result.sort((a, b) => b.totalProfit - a.totalProfit);
+    /**
+     * Complete rows ranked by profit; incomplete rows after all of them.
+     *
+     * The incomplete ones are NOT ranked among the others, because the number
+     * that would rank them is missing a sale — a rep whose known-only profit is
+     * larger than a colleague's complete total was placed above them, which is
+     * a claim about who earned more that the data does not support. Ordering
+     * them by profit *within* their own group would make the same claim on a
+     * smaller stage, so they are ordered by name instead: a list, not a ranking.
+     */
+    return result.sort((a, b) => {
+      if (a.marginComplete !== b.marginComplete) return a.marginComplete ? -1 : 1;
+      if (!a.marginComplete) return a.userName.localeCompare(b.userName);
+      return b.totalProfit - a.totalProfit;
+    });
   },
 });
 

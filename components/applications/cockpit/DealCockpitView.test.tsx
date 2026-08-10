@@ -89,6 +89,19 @@ function dealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
       appraisalGapMinor: undefined,
     },
     ...overrides,
+    /**
+     * Derived from the evidence unless a case sets it explicitly, because that
+     * is what the server does: the flag is the ungated workflow condition and
+     * the evidence is the gated detail, so on any caller who can see the
+     * amounts the two arrive together.
+     *
+     * Setting the flag WITHOUT the evidence is the `view:finance`-less case and
+     * is spelled out by the tests that need it, never reached by accident here.
+     */
+    settlementAdviceRequiresReconciliation:
+      "settlementAdviceRequiresReconciliation" in overrides
+        ? overrides.settlementAdviceRequiresReconciliation
+        : overrides.settlementAdviceDiscrepancy != null,
   } as unknown as DealCockpitData;
 }
 
@@ -233,14 +246,48 @@ describe("a settlement advice that contradicts the approval", () => {
     expect(screen.queryByText("CorrectSettlementAdvice")).toBeNull();
   });
 
-  test("is visible even to a caller who cannot see the deal's money", () => {
-    // The whole reason the field lives outside `money`. The person who chases a
-    // settlement advice is not always the person allowed to see margins, and a
-    // warning only the accountant can see is not a warning.
-    renderCockpit(dealFixture({ money: null, settlementAdviceDiscrepancy: DISCREPANCY }));
+  test("the WARNING reaches a caller who cannot see the deal's money", () => {
+    // A deal is stuck and the screen says so to whoever can open it. A warning
+    // only the accountant can see is not a warning.
+    //
+    // This is the shape the server actually sends such a caller: the flag, and
+    // no evidence. An earlier fixture handed the amounts to a `money: null`
+    // caller to make this same point, which pinned a response `dealCockpit`
+    // cannot produce — the amounts and `money` are withheld by one permission.
+    renderCockpit(
+      dealFixture({
+        money: null,
+        settlementAdviceDiscrepancy: null,
+        settlementAdviceRequiresReconciliation: true,
+      })
+    );
     expect(screen.getByText("MoneyPanelHidden")).toBeTruthy();
     expect(screen.getByText("SettlementAdviceDiscrepancyTitle")).toBeTruthy();
-    expect(screen.getByText(/17,995/)).toBeTruthy();
+    expect(screen.getByText("SettlementAdviceDiscrepancyBody")).toBeTruthy();
+  });
+
+  test("but the figures behind it do not, and neither does the correction", () => {
+    // `approvedMinor` is one subtraction from the dealership's margin, and the
+    // cheque number and payment date are the same class of record. The button
+    // goes with them: correcting a figure you were never shown is a guess, and
+    // `manage:finance` is an independent permission that a customized role can
+    // hold without `view:finance`.
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          money: null,
+          settlementAdviceDiscrepancy: null,
+          settlementAdviceRequiresReconciliation: true,
+        })}
+        canCorrectAdvice
+        onCorrectSettlementAdvice={async () => {}}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    expect(screen.queryByText(/17,995/)).toBeNull();
+    expect(screen.queryByText(/18,000/)).toBeNull();
+    expect(screen.queryByText("SettlementAdviceDifference")).toBeNull();
+    expect(screen.queryByRole("button", { name: "CorrectSettlementAdvice" })).toBeNull();
   });
 
   test("scales by the currency the discrepancy was pinned to, not the org's", () => {
@@ -372,7 +419,16 @@ describe("the correction form and the evidence it was not asked to change", () =
     approvedMinor: 18_000 * SCALE,
     currency: "JOD",
     recordedReference: "WIRE-4471",
-    recordedAt: Date.UTC(2026, 7, 5),
+    /**
+     * Deliberately NOT midnight.
+     *
+     * `confirmSupplierDisbursement` stamps `Date.now()`, so a real recorded
+     * advice carries a time of day and milliseconds. Every fixture here used to
+     * be `Date.UTC(2026, 7, 5)` — already midnight — which made the form's
+     * round trip through a date-only `<input type="date">` lossless by
+     * construction and hid the fact that it truncates.
+     */
+    recordedAt: Date.UTC(2026, 7, 5, 14, 32, 17, 456),
   };
 
   function openCorrection(onCorrect: (c: unknown) => Promise<void>) {
@@ -418,10 +474,23 @@ describe("the correction form and the evidence it was not asked to change", () =
       disbursedAt?: number;
     };
     expect(sent.amountMajor).toBe(18_000);
-    // Not undefined, and above all not "" or today. The operator changed one
-    // field; the other two have to arrive exactly as they were on file.
+    // Not "" and not today. The operator changed one field; the cheque number
+    // has to arrive exactly as it was on file.
     expect(sent.reference).toBe("WIRE-4471");
-    expect(sent.disbursedAt).toBe(Date.UTC(2026, 7, 5));
+    // And the date is not resent AT ALL.
+    //
+    // Resending it looked like preservation and was not. The field is an
+    // `<input type="date">`: the recorded instant goes in through
+    // `msToDateInput`, which keeps the UTC calendar date and discards the time,
+    // and comes back out through `dateInputToUtcMs`, which is documented to
+    // produce UTC midnight. So an advice stamped 14:32:17.456 was rewritten to
+    // 00:00:00.000 by an operator who only retyped the amount — and for anyone
+    // west of UTC the displayed day moved with it.
+    //
+    // There is no way to preserve an instant through a date-only control, so
+    // the form does not try: an untouched date sends nothing and the server
+    // keeps what it already has. `undefined` here IS the preservation.
+    expect(sent.disbursedAt).toBeUndefined();
   });
 
   test("the reference and the date can still be deliberately corrected", async () => {

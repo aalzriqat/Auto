@@ -82,6 +82,20 @@ export function SettlementAdviceCorrectionDialog({
   const [reference, setReference] = useState("");
   const [paidOn, setPaidOn] = useState("");
   const [reason, setReason] = useState("");
+  /**
+   * What the date field was seeded with, so an untouched date can be told from
+   * a deliberately re-entered one.
+   *
+   * This control is date-ONLY. The recorded instant comes in through
+   * `msToDateInput`, which keeps the UTC calendar date and drops the time, and
+   * would go back out through `dateInputToUtcMs`, which is documented to
+   * produce UTC midnight. There is no round trip that preserves 14:32:17.456,
+   * so the form does not attempt one — it reports "the date was not part of
+   * this correction" by sending nothing, and the server keeps the instant it
+   * already holds. Comparing against the seed rather than tracking a "touched"
+   * flag also covers the operator who edits the date and then puts it back.
+   */
+  const seededPaidOnRef = useRef("");
 
   // Reset on the closed -> open TRANSITION only. The recorded figure comes from
   // a live query, and re-seeding whenever it changed would wipe what the
@@ -102,7 +116,9 @@ export function SettlementAdviceCorrectionDialog({
     // when the supplier was paid, issued by an operator who only touched the
     // amount. Today's date is the fallback only when nothing is recorded.
     setReference(recordedReference ?? "");
-    setPaidOn(recordedAt !== null ? msToDateInput(recordedAt) : todayDateInput());
+    const seededPaidOn = recordedAt !== null ? msToDateInput(recordedAt) : todayDateInput();
+    seededPaidOnRef.current = seededPaidOn;
+    setPaidOn(seededPaidOn);
     setReason("");
   }, [open, recordedMajor, recordedReference, recordedAt]);
 
@@ -208,7 +224,16 @@ export function SettlementAdviceCorrectionDialog({
               onCorrect({
                 amountMajor: amountValue,
                 reference: reference.trim() || undefined,
-                disbursedAt: paidOn ? dateInputToUtcMs(paidOn) : undefined,
+                // Sent only when the operator actually moved the date. See
+                // `seededPaidOnRef`: an unchanged date has no lossless
+                // representation here, so omitting it is what preserves the
+                // recorded instant to the millisecond. When the date IS
+                // corrected, midnight on the chosen day is the honest reading
+                // of a deliberate date-only entry.
+                disbursedAt:
+                  paidOn && paidOn !== seededPaidOnRef.current
+                    ? dateInputToUtcMs(paidOn)
+                    : undefined,
                 reason: reason.trim(),
               })
             }

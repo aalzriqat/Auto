@@ -490,6 +490,24 @@ function resolveFinancierObligation(
   settlesDirect: boolean
 ): ObligationState {
   if (settlesDirect) {
+    // A contradicted advice cannot settle anything, whichever side of the
+    // approval it falls on.
+    //
+    // This is deliberately a check on the STATE and not on the arithmetic
+    // below. Every mismatch that existed when that arithmetic was written was
+    // an advice BELOW the approval, where `>=` happens to be false — so the
+    // deal stayed open by accident of the comparison rather than because a
+    // contradiction had been decided to block completion. An advice ABOVE the
+    // approval was stored, flagged REQUIRES_RECONCILIATION, and satisfied `>=`
+    // in the same breath: the stage rail read COMPLETE and the headline was
+    // published as ACTUAL on a deal whose entire premise is that nobody yet
+    // knows how much money the supplier is holding.
+    //
+    // UNKNOWN, not OPEN. OPEN asserts the financier still owes money, which is
+    // the opposite of true when it has sent too much; UNKNOWN says the state
+    // cannot be established, which is exactly the situation, and
+    // `settlementIsComplete` already treats it as not-done.
+    if (app.supplierDisbursementStatus === "REQUIRES_RECONCILIATION") return "UNKNOWN";
     // The financier pays the SUPPLIER the approved purchase amount. An advice
     // for less than that is a PART payment and the money is not finished — the
     // previous predicate accepted any positive advice, so half the money
@@ -612,6 +630,23 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
  * vehicle, so no other deal's rows are reachable.
  */
 type MarginEvidence = { known: true; minor: number } | { known: false };
+
+/**
+ * The two records of one supplier payment when they disagree, plus the rest of
+ * what the advice says, for the screen that has to state the discrepancy and
+ * the form that corrects it.
+ *
+ * Declared rather than inferred so the cockpit's two return arms carry the same
+ * shape: the gated arm supplies it, the ungated arm supplies `null`, and a
+ * caller cannot end up with a type that says the field is always absent.
+ */
+type SettlementAdviceEvidence = {
+  recordedMinor: number | null;
+  approvedMinor: number | null;
+  currency: string | null;
+  recordedReference: string | null;
+  recordedAt: number | null;
+};
 
 async function saleTimeMarginMinor(
   ctx: QueryCtx,
@@ -1542,6 +1577,33 @@ export const dealCockpit = query({
       actorNames.set(entry.changedBy, actor?.name ?? "");
     }
 
+    const adviceRequiresReconciliation =
+      app.supplierDisbursementStatus === "REQUIRES_RECONCILIATION";
+    const settlementAdviceEvidence: SettlementAdviceEvidence | null =
+      adviceRequiresReconciliation
+        ? {
+            recordedMinor: app.supplierDisbursedAmountMinor ?? null,
+            approvedMinor:
+              app.supplierDisbursementApprovedAtRecordingMinor ??
+              app.approvedDealerPurchaseAmountMinor ??
+              null,
+            currency: app.economicsCurrency ?? null,
+            /**
+             * The rest of the recorded advice, so the correction form can open
+             * showing what is actually on file.
+             *
+             * Not decoration. A dialog that is never told the cheque number
+             * cannot prefill it, and the first version of this form opened
+             * blank on the reference and on today's date — so an operator
+             * correcting the amount submitted an empty reference and a wrong
+             * date alongside it. The server no longer accepts that as an
+             * instruction to erase them, and this stops the form asking.
+             */
+            recordedReference: app.supplierDisbursementReference ?? null,
+            recordedAt: app.supplierDisbursementConfirmedAt ?? null,
+          }
+        : null;
+
     const base = {
       applicationId: app._id,
       status: app.status,
@@ -1559,43 +1621,31 @@ export const dealCockpit = query({
       salespersonName: salesperson?.name ?? "",
       financeCompanyName: company?.name ?? app.manualFinanceSnapshot?.providerName ?? "",
       /**
-       * Set only when the recorded settlement advice disagrees with what the
-       * deal was approved at, carrying both figures so the screen can state the
-       * discrepancy rather than merely announce one.
+       * That the recorded settlement advice disagrees with what the deal was
+       * approved at — and nothing about by how much.
        *
-       * Surfaced on the cockpit because the alternative is a deal sitting in
-       * REQUIRES_RECONCILIATION that nobody can see is in it. The state exists
-       * to be resolved by a human, and a state no human is shown is not a
-       * recovery path — it is the same dead end in a different place.
+       * Outside the money gate on purpose. This is a WORKFLOW condition: it
+       * says the deal is waiting on a human, and a state nobody is shown is not
+       * a recovery path, it is the same dead end in a different place. Whoever
+       * can see the deal can see that it is stuck.
        *
-       * Deliberately outside `money`, which the permission gate can withhold:
-       * this is a workflow condition, not a profit figure, and the person who
-       * has to act on it is not always the person allowed to see margins.
+       * An earlier revision put the amounts out here with it, on the reasoning
+       * that the person who chases a settlement advice is not always the one
+       * allowed to see margins. That reasoning was wrong about which figure was
+       * being published: `approvedMinor` is one subtraction from the
+       * dealership's margin, so it handed `view:sales` exactly what the money
+       * gate exists to withhold. The condition is public; the evidence is not.
        */
-      settlementAdviceDiscrepancy:
-        app.supplierDisbursementStatus === "REQUIRES_RECONCILIATION"
-          ? {
-              recordedMinor: app.supplierDisbursedAmountMinor ?? null,
-              approvedMinor:
-                app.supplierDisbursementApprovedAtRecordingMinor ??
-                app.approvedDealerPurchaseAmountMinor ??
-                null,
-              currency: app.economicsCurrency ?? null,
-              /**
-               * The rest of the recorded advice, so the correction form can
-               * open showing what is actually on file.
-               *
-               * Not decoration. A dialog that is never told the cheque number
-               * cannot prefill it, and the first version of this form opened
-               * blank on the reference and on today's date — so an operator
-               * correcting the amount submitted an empty reference and a wrong
-               * date alongside it. The server no longer accepts that as an
-               * instruction to erase them, and this stops the form asking.
-               */
-              recordedReference: app.supplierDisbursementReference ?? null,
-              recordedAt: app.supplierDisbursementConfirmedAt ?? null,
-            }
-          : null,
+      settlementAdviceRequiresReconciliation: adviceRequiresReconciliation,
+      /**
+       * The FIGURES behind that flag, and they are gated.
+       *
+       * `null` here means one of two different things and the client must not
+       * try to tell them apart: either there is no discrepancy, or the caller
+       * may not see the amounts. `settlementAdviceRequiresReconciliation`
+       * above is the only thing that answers "is this deal stuck".
+       */
+      settlementAdviceDiscrepancy: null as SettlementAdviceEvidence | null,
       stages,
       documents,
       timeline: timeline
@@ -1612,7 +1662,11 @@ export const dealCockpit = query({
 
     if (!canSeeMoney) return { ...base, money: null };
 
-    return { ...base, money: await buildCockpitMoney(ctx, app, quote, settlementFacts) };
+    return {
+      ...base,
+      settlementAdviceDiscrepancy: settlementAdviceEvidence,
+      money: await buildCockpitMoney(ctx, app, quote, settlementFacts),
+    };
   },
 });
 
