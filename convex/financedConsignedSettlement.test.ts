@@ -2563,3 +2563,347 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
   });
 
 });
+
+/**
+ * SCRUM-30. The one invariant this whole redesign exists to make structural:
+ *
+ *   **A claim on the supplier may never exceed the portion of money he actually
+ *   received that economically belongs to the dealership.**
+ *
+ * Every test here drives the REAL writers — `recordSubmittedQuotation`,
+ * `approveDealerPurchaseAmount`, `finalizeDeal`, `confirmSupplierDisbursement`,
+ * `recordReceipt` — because the defect was never in the arithmetic. The pure
+ * function was fine; the wrong quantity was handed to it. A helper-level test
+ * would have passed throughout the entire period the bug was live.
+ *
+ * The deals below deliberately break the identity every other test in this file
+ * relies on. Elsewhere the approval equals the vehicle price, so `approved`, the
+ * sale price and what the supplier receives are the same number, and no formula
+ * can be told apart from any other. Here they are three different numbers.
+ */
+describe("the supplier is never made debtor for money that did not reach him", () => {
+  /** Walks a direct deal to APPROVED, then approves `approvedAmount` for real. */
+  async function directDealApprovedAt(tag: string, approvedAmount: number) {
+    const s = await seedDealership(tag);
+    // The quotation solver refuses a company with no LTV, and this suite's
+    // fixture has none. Set before the deal, so the application freezes a
+    // snapshot carrying it. At 100% the finance company funds the whole
+    // approval and the dealership contributes nothing, which keeps these tests
+    // about the supplier rather than about the funding split.
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
+    });
+
+    const { applicationId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      finalize: false,
+    });
+
+    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId,
+      applicationId,
+      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+      source: "MANUAL_ENTRY",
+    });
+    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: s.orgId,
+      applicationId,
+      approvedAmountMinor: approvedAmount * SCALE,
+      basis: "MANUAL",
+      notes: `Approved at ${approvedAmount}.`,
+    });
+    return { s, applicationId };
+  }
+
+  /** The live claim's opening amount, in major units, or undefined if none. */
+  async function claimDueOf(s: Seeded) {
+    const rows = await supplierClaimsOf(s);
+    return rows.find((r) => r.status !== "CANCELLED")?.amountDue;
+  }
+
+  const cockpit = (s: Seeded, applicationId: string) =>
+    s.asUser.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+
+  test("a supplier paid exactly his entitlement owes nothing, and no claim is opened", async () => {
+    const { s, applicationId } = await directDealApprovedAt("s30Exact", SUPPLIER_ENTITLEMENT);
+    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+
+    // He received 15,000 and was owed 15,000. A claim for anything at all would
+    // be a debt he does not have — and a zero-amount claim is worse than none,
+    // because it sits on the aging report forever and no receipt can close it.
+    expect(await claimDueOf(s)).toBeUndefined();
+
+    // The ledger must agree: no receivable from suppliers, no commission.
+    const ledger = await ledgerBySystemKey(s);
+    expect(ledger[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS] ?? 0).toBe(0);
+    expect(ledger[SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE] ?? 0).toBe(0);
+  });
+
+  test("a supplier paid 3,000 above his entitlement owes exactly 3,000, not the 5,000 dealer margin", async () => {
+    const APPROVED = 18_000;
+    const { s, applicationId } = await directDealApprovedAt("s30Excess", APPROVED);
+    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+
+    // The excess that genuinely reached him.
+    expect(await claimDueOf(s)).toBe(APPROVED - SUPPLIER_ENTITLEMENT);
+    // NOT the dealership's total margin on the deal, which is 2,000 larger and
+    // is what the subledger used to raise.
+    expect(await claimDueOf(s)).not.toBe(VEHICLE_PRICE - SUPPLIER_ENTITLEMENT);
+
+    // GL and subledger reconcile — the same integer, not merely similar figures.
+    const ledger = await ledgerBySystemKey(s);
+    expect(ledger[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS]).toBe(
+      (APPROVED - SUPPLIER_ENTITLEMENT) * SCALE
+    );
+    // Revenue is the legally supported claim, never the management spread.
+    expect(ledger[SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE]).toBe(
+      -(APPROVED - SUPPLIER_ENTITLEMENT) * SCALE
+    );
+  });
+
+  test("money the customer pays the dealership directly cannot become the supplier's debt", async () => {
+    const APPROVED = 18_000;
+    const { s, applicationId } = await directDealApprovedAt("s30CustomerGap", APPROVED);
+
+    // The customer covers the 2,000 the financier did not approve, straight to
+    // the dealership. It is the dealership's money and always was — it never
+    // passed through the supplier's hands for a moment.
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, {
+        customerGapCashToDealerMinor: 1_200 * SCALE,
+        customerGapInstallmentToDealerMinor: 800 * SCALE,
+      });
+    });
+    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+
+    // Unmoved by the customer's payment. This is the case that shows the old
+    // model was not merely off by a rounding: it billed the SUPPLIER for money
+    // the CUSTOMER had already paid the dealership.
+    expect(await claimDueOf(s)).toBe(APPROVED - SUPPLIER_ENTITLEMENT);
+
+    const ledger = await ledgerBySystemKey(s);
+    expect(ledger[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS]).toBe(
+      (APPROVED - SUPPLIER_ENTITLEMENT) * SCALE
+    );
+
+    // And the headline counts it on the DEALERSHIP's side, where it belongs.
+    const profit = (await cockpit(s, applicationId))!.money!.managementProfit;
+    expect(profit.available).toBe(true);
+    if (!profit.available) return;
+    expect(profit.lines.find((l) => l.key === "CUSTOMER_DIRECT_TO_DEALER")?.amountMinor).toBe(
+      2_000 * SCALE
+    );
+    expect(profit.lines.find((l) => l.key === "SUPPLIER_SETTLEMENT")?.amountMinor).toBe(
+      SUPPLIER_ENTITLEMENT * SCALE
+    );
+  });
+
+  test("a dealership contribution moves its own profit, never the supplier's debt", async () => {
+    const APPROVED = 18_000;
+    const { s, applicationId } = await directDealApprovedAt("s30Contribution", APPROVED);
+    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+
+    const before = await claimDueOf(s);
+
+    // The dealership funds part of the purchase itself. That is money going OUT
+    // of the dealership, so it reduces what the deal earns — but the supplier is
+    // still holding exactly the same excess, so he still owes exactly the same.
+    // Settling a contribution on the wrong side of the settlement is a
+    // documented failure mode, which is why it is pinned here.
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, { dealerContributionMinor: 875 * SCALE });
+    });
+
+    expect(await claimDueOf(s)).toBe(before);
+    expect(await claimDueOf(s)).toBe(APPROVED - SUPPLIER_ENTITLEMENT);
+
+    const profit = (await cockpit(s, applicationId))!.money!.managementProfit;
+    expect(profit.available).toBe(true);
+    if (!profit.available) return;
+    // Its own line, subtracted — and the supplier line untouched beside it.
+    expect(profit.lines.find((l) => l.key === "DEALER_CONTRIBUTION")?.amountMinor).toBe(875 * SCALE);
+    expect(profit.lines.find((l) => l.key === "SUPPLIER_SETTLEMENT")?.amountMinor).toBe(
+      SUPPLIER_ENTITLEMENT * SCALE
+    );
+    expect(profit.amountMinor).toBe((APPROVED - SUPPLIER_ENTITLEMENT - 875) * SCALE);
+  });
+
+  test("a receipt above the corrected claim is refused — the old claim was 2,000 larger", async () => {
+    const APPROVED = 18_000;
+    const { s, applicationId } = await directDealApprovedAt("s30Overpay", APPROVED);
+    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+
+    const claim = (await supplierClaimsOf(s)).find((r) => r.status !== "CANCELLED")!;
+
+    // 5,000 is exactly what the OLD model would have opened, so it is the amount
+    // an operator working from the previous screen would have tried to collect.
+    // It must be refused, not quietly absorbed as an overpayment.
+    await expect(
+      s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+        orgId: s.orgId,
+        receivableId: claim._id,
+        amount: VEHICLE_PRICE - SUPPLIER_ENTITLEMENT,
+      })
+    ).rejects.toThrow();
+
+    // The exact claim settles it in full.
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      orgId: s.orgId,
+      receivableId: claim._id,
+      amount: APPROVED - SUPPLIER_ENTITLEMENT,
+    });
+    const settled = (await supplierClaimsOf(s)).find((r) => r._id === claim._id)!;
+    expect(settled.status).toBe("PAID");
+  });
+
+  test("a partial receipt leaves the remainder outstanding, against the corrected claim", async () => {
+    const APPROVED = 18_000;
+    const { s, applicationId } = await directDealApprovedAt("s30Partial", APPROVED);
+    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+
+    const claim = (await supplierClaimsOf(s)).find((r) => r.status !== "CANCELLED")!;
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      orgId: s.orgId,
+      receivableId: claim._id,
+      amount: 1_000,
+    });
+
+    const row = (await supplierClaimsOf(s)).find((r) => r._id === claim._id)!;
+    expect(row.status).not.toBe("PAID");
+    expect(row.amountReceived).toBe(1_000);
+    // The opening amount never moves when a receipt lands.
+    expect(row.amountDue).toBe(APPROVED - SUPPLIER_ENTITLEMENT);
+  });
+
+  test("cancelling the deal reverses the corrected claim in both the GL and the subledger", async () => {
+    const APPROVED = 18_000;
+    const { s, applicationId } = await directDealApprovedAt("s30Cancel", APPROVED);
+    const saleId = await s.asUser.mutation(api.applications.finalizeDeal, {
+      orgId: s.orgId,
+      applicationId,
+    });
+
+    const ledgerBefore = await ledgerBySystemKey(s);
+    expect(ledgerBefore[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS]).toBe(
+      (APPROVED - SUPPLIER_ENTITLEMENT) * SCALE
+    );
+
+    await s.asApprover.mutation(api.sales.update, {
+      orgId: s.orgId,
+      saleId: saleId as never,
+      status: "CANCELLED" as const,
+    });
+
+    // The subledger claim is withdrawn...
+    const claims = await supplierClaimsOf(s);
+    expect(claims.every((r) => r.status === "CANCELLED")).toBe(true);
+
+    // ...and the GL nets to nothing, rather than posting 3,000 and reversing
+    // 5,000. A reversal that does not match its original is how a subledger and
+    // a ledger drift apart while every individual entry still balances.
+    const ledgerAfter = await ledgerBySystemKey(s);
+    expect(ledgerAfter[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS] ?? 0).toBe(0);
+    expect(ledgerAfter[SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE] ?? 0).toBe(0);
+  });
+
+  test("the cockpit reports the same economic state the subledger and the GL hold", async () => {
+    const APPROVED = 18_000;
+    const { s, applicationId } = await directDealApprovedAt("s30Reconcile", APPROVED);
+    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: APPROVED * SCALE,
+    });
+
+    const claim = (await supplierClaimsOf(s)).find((r) => r.status !== "CANCELLED")!;
+    const ledger = await ledgerBySystemKey(s);
+    const view = await cockpit(s, applicationId);
+
+    // Three records of one fact, asserted equal in integer minor units: the
+    // subledger's claim, the GL's debit, and the party row the operator acts on.
+    const supplierParty = view!.money!.parties.find((p) => p.party === "SUPPLIER")!;
+    expect(claim.amountDue * SCALE).toBe(ledger[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS]);
+    expect(supplierParty.amountMinor).toBe(ledger[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS]);
+    expect(supplierParty.amountMinor).toBe((APPROVED - SUPPLIER_ENTITLEMENT) * SCALE);
+  });
+
+  test("an approval below the supplier's entitlement is refused, not clamped to no claim", async () => {
+    const s = await seedDealership("s30Floor");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
+    });
+    const { applicationId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      finalize: false,
+    });
+    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId,
+      applicationId,
+      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+      source: "MANUAL_ENTRY",
+    });
+
+    // 14,000 against an entitlement of 15,000: the supplier ends up 1,000 short.
+    // The old `salePrice >= entitlement` guard passed this without complaint,
+    // because 20,000 is comfortably above 15,000 — a different quantity entirely.
+    await expect(
+      s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: s.orgId,
+        applicationId,
+        approvedAmountMinor: 14_000 * SCALE,
+        basis: "MANUAL",
+        notes: "Below the supplier's entitlement.",
+      })
+    ).rejects.toThrow(/he is owed/i);
+  });
+
+  test("choosing the direct route after a too-low approval is refused by the mirror guard", async () => {
+    const s = await seedDealership("s30FloorMirror");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
+    });
+    // No route yet, so the approval-time guard has nothing to check against.
+    const { applicationId } = await runDeal(s, { finalize: false });
+    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId,
+      applicationId,
+      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+      source: "MANUAL_ENTRY",
+    });
+    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: s.orgId,
+      applicationId,
+      approvedAmountMinor: 14_000 * SCALE,
+      basis: "MANUAL",
+      notes: "Approved before the route was chosen.",
+    });
+
+    // The other ordering reaches the same illegal state. A guard that covers
+    // only one of the two has a documented way around it.
+    await expect(
+      s.asUser.mutation(api.applications.setSupplierSettlementRoute, {
+        orgId: s.orgId,
+        applicationId,
+        route: "DIRECT_TO_SUPPLIER",
+      })
+    ).rejects.toThrow(/he is owed/i);
+  });
+
+  test("a direct deal with no approved amount is refused rather than settled at the sale price", async () => {
+    const s = await seedDealership("s30NoApproval");
+    const { applicationId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      finalize: false,
+    });
+
+    // The fallback this replaces is the whole defect: with no approval recorded,
+    // `completeSale` measured the supplier's debt against `quote.vehiclePrice`
+    // and opened a claim for money nobody had paid him.
+    await expect(
+      s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId })
+    ).rejects.toThrow(/approved purchase amount is not recorded/i);
+
+    expect(await claimDueOf(s)).toBeUndefined();
+  });
+});
