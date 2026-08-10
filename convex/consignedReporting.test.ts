@@ -190,7 +190,10 @@ describe("the economics split", () => {
       });
       expect(e.dealershipMargin).toBe(MARGIN);
       // ...and revenue less cost always equals it, whichever way it is split.
-      expect(e.recognizedRevenue - e.recognizedCost).toBe(MARGIN);
+      // Neither is withheld here: no external finance is declared, so this is
+      // the cash shape where `salePrice - cost` genuinely is the earning.
+      expect(e.recognizedRevenue).not.toBeNull();
+      expect(e.recognizedRevenue! - e.recognizedCost).toBe(MARGIN);
     }
   });
 });

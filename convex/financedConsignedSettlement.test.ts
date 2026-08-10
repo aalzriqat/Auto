@@ -2631,7 +2631,10 @@ describe("the supplier is never made debtor for money that did not reach him", (
   }
 
   const cockpit = (s: Seeded, applicationId: string) =>
-    s.asUser.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+    s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId: applicationId as never,
+    });
 
   test("a supplier paid exactly his entitlement owes nothing, and no claim is opened", async () => {
     const { s, applicationId } = await directDealApprovedAt("s30Exact", SUPPLIER_ENTITLEMENT);
@@ -3383,5 +3386,207 @@ describe("the sales reports reconcile to the ledger on a financed direct deal", 
       ...range(),
     });
     expect(report.totalProfit).toBe(VEHICLE_PRICE - SUPPLIER_ENTITLEMENT);
+  });
+});
+
+/**
+ * SCRUM-30 — missing settlement evidence is UNKNOWN, never the sale price.
+ *
+ * The commission ruling and the report correction both read one persisted fact:
+ * what the finance company actually paid the supplier. Both were written with a
+ * fallback — `supplierGrossReceipt ?? salePrice`, `recordedMargin ?? salePrice −
+ * cost` — which is correct for every shape where the buyer really does hand the
+ * supplier the sale price: owned stock, THROUGH_DEALERSHIP, and cash direct.
+ *
+ * It is not correct for a FINANCED direct deal. There the finance company pays
+ * only what it approved, `salePrice − approved` reaches no party, and the fact
+ * is the only thing separating the recognized 3,000 from the commercial 5,000.
+ * Reading its absence as "then use the sale price" restores the exact basis the
+ * ruling removed — silently, and on the two paths that pay payroll and inform
+ * the owner.
+ *
+ * It is reachable rather than theoretical. `/admin`'s raw-JSON record editor can
+ * clear any field on any row (convex/adminData.ts), rows written before this
+ * branch never carried it, and a future writer can simply forget. So the
+ * evidence is required where it is required: commission refuses and leaves the
+ * existing figure alone, and the reports withhold the number and say they did.
+ */
+describe("financed direct evidence that has gone missing fails closed", () => {
+  const RATE = 10;
+
+  /** A complete, valid financed DIRECT deal, with the salesperson on 10%. */
+  async function financedDirectSale(tag: string, approvedAmount: number) {
+    const s = await seedDealership(tag);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
+      const membership = (await ctx.db.query("memberships").collect()).find(
+        (m) => m.orgId === s.orgId && m.userId === s.userId
+      )!;
+      await ctx.db.patch(membership._id, { commissionRate: RATE });
+    });
+
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: false });
+    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId,
+      applicationId,
+      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+      source: "MANUAL_ENTRY",
+    });
+    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: s.orgId,
+      applicationId,
+      approvedAmountMinor: approvedAmount * SCALE,
+      basis: "MANUAL",
+      notes: `Approved at ${approvedAmount}.`,
+    });
+    const saleId = (await s.asUser.mutation(api.applications.finalizeDeal, {
+      orgId: s.orgId,
+      applicationId,
+    })) as never;
+    return { s, applicationId, saleId };
+  }
+
+  const range = () => ({ startDate: Date.now() - 86_400_000, endDate: Date.now() + 86_400_000 });
+
+  test("recalculating a commission whose supplier receipt was erased refuses, and changes nothing", async () => {
+    // Approved AT the entitlement, so the honest commission is 0 and no accrual
+    // was posted — which is exactly the state `recalculateCommission` exists to
+    // repair, and therefore the state in which it is reachable at all.
+    const { s, saleId } = await financedDirectSale("s30Erased", SUPPLIER_ENTITLEMENT);
+
+    await s.t.run(async (ctx) => {
+      // What `/admin`'s raw-JSON editor does to a completed sale, and what every
+      // row written before this branch already looks like.
+      await ctx.db.patch(saleId, {
+        consignedSupplierGrossReceiptMinor: undefined,
+        commissionAmount: undefined,
+      });
+    });
+
+    await expect(
+      s.asUser.mutation(api.sales.recalculateCommission, { orgId: s.orgId, saleId })
+    ).rejects.toThrow(/paid him was not recorded|cannot be worked out/i);
+
+    // The refusal is only worth having if it left the row alone: a Convex
+    // mutation that throws rolls back every write it made, so no commission was
+    // invented and none of the ledger moved.
+    const after = (await s.t.run((ctx) => ctx.db.get(saleId))) as {
+      commissionAmount?: number;
+    } | null;
+    expect(after?.commissionAmount).toBeUndefined();
+    // And specifically not 10% of `salePrice − cost`, which is what the
+    // fallback produced: 500 of real payroll on a deal that earned nothing.
+    expect(after?.commissionAmount).not.toBe(500);
+  });
+
+  test("a cash direct sale with no recorded receipt still commissions on the sale price", async () => {
+    // The control that keeps the refusal scoped. On a cash direct sale the buyer
+    // hands the supplier the sale price himself, so an absent receipt is not
+    // missing evidence — it is a legacy row, and `salePrice` is exactly what it
+    // was posted on. This is the shape that must keep working untouched.
+    // The rate is set AFTER completion, so the sale completes at a commission of
+    // 0 and accrues nothing — which is the only state `recalculateCommission`
+    // will act on, and the same state the financed case above is tested in.
+    const s = await seedDealership("s30CashDirect");
+
+    // Straight through sales.create rather than runDeal, which only builds
+    // financed deals — and this is the one shape that must NOT be financed.
+    const saleId = await s.asUser.mutation(api.sales.create, {
+      orgId: s.orgId,
+      vehicleId: s.vehicleId,
+      customerId: s.customerId,
+      salespersonId: s.userId,
+      salePrice: VEHICLE_PRICE,
+      saleDate: Date.now(),
+      status: "COMPLETED" as const,
+      financingType: "CASH" as const,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER" as const,
+    });
+    // Completion records the receipt even here — on this route it IS the sale
+    // price — so the legacy shape has to be produced deliberately.
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId as never, {
+        consignedSupplierGrossReceiptMinor: undefined,
+        commissionAmount: undefined,
+      });
+      const membership = (await ctx.db.query("memberships").collect()).find(
+        (m) => m.orgId === s.orgId && m.userId === s.userId
+      )!;
+      await ctx.db.patch(membership._id, { commissionRate: RATE });
+    });
+
+    // Recalculation is the same entry point the financed case refuses. Here it
+    // must succeed, on the sale price, because that is what the buyer paid him.
+    await s.asUser.mutation(api.sales.recalculateCommission, {
+      orgId: s.orgId,
+      saleId: saleId as never,
+    });
+
+    const sale = (await s.t.run((ctx) => ctx.db.get(saleId as never))) as {
+      commissionAmount?: number;
+      financingType?: string;
+    };
+    expect(sale.financingType).toBe("CASH");
+    // 10% of (20,000 − 15,000): the whole spread, because the whole spread
+    // really did pass through the supplier.
+    expect(sale.commissionAmount).toBe(500);
+  });
+
+  test("the sales report withholds the profit it cannot establish instead of publishing 5,000", async () => {
+    const { s, saleId } = await financedDirectSale("s30ReportErased", 18_000);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { consignedMarginMinor: undefined });
+    });
+
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId,
+      ...range(),
+    });
+
+    const row = report.sales.find((r: { _id: string }) => r._id === saleId)!;
+    // UNKNOWN, and distinguishable from zero — a sale that earned nothing and a
+    // sale whose earning is unknown are different answers to the owner.
+    expect(row.netProfit).toBeNull();
+    expect(row.recognizedRevenue).toBeNull();
+    expect(row.netProfit).not.toBe(VEHICLE_PRICE - SUPPLIER_ENTITLEMENT);
+
+    // Excluded from the totals rather than folded in at either value...
+    expect(report.totalProfit).toBe(0);
+    expect(report.totalRevenue).toBe(0);
+    // ...and the exclusion is declared, so an understated total is never
+    // presented as the complete picture.
+    expect(report.unknownMarginSaleCount).toBe(1);
+  });
+
+  test("salesperson performance does not rank a rep on an earning nobody can substantiate", async () => {
+    const { s, saleId } = await financedDirectSale("s30PerfErased", 18_000);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { consignedMarginMinor: undefined });
+    });
+
+    const perf = await s.asUser.query(api.reports.getSalespersonPerformance, {
+      orgId: s.orgId,
+      ...range(),
+    });
+
+    const row = perf[0]!;
+    expect(row.totalProfit).toBe(0);
+    expect(row.totalProfit).not.toBe(VEHICLE_PRICE - SUPPLIER_ENTITLEMENT);
+    expect(row.unknownMarginSaleCount).toBe(1);
+    // The sale is still counted as sold — the rep did place the car. Only the
+    // money is withheld.
+    expect(row.vehiclesSold).toBe(1);
+  });
+
+  test("an intact financed direct sale is unaffected by any of this", async () => {
+    // The whole point of the guard is that it fires on absence and nothing else.
+    const { s } = await financedDirectSale("s30Intact", 18_000);
+
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId,
+      ...range(),
+    });
+    expect(report.totalProfit).toBe(3_000);
+    expect(report.unknownMarginSaleCount).toBe(0);
   });
 });

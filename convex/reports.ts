@@ -89,6 +89,12 @@ export const getSalesAndProfitReport = query({
     let totalGrossTransactionValue = 0;
     let totalSupplierSettlement = 0;
     let agentSaleCount = 0;
+    // Sales whose earning could not be established (financed, settled directly
+    // with the supplier, and missing the margin the completion should have
+    // frozen). They are excluded from every profit figure below and reported as
+    // a count, because an understated total presented as complete is the same
+    // failure as an overstated one.
+    let unknownMarginSaleCount = 0;
 
     const vehicleIds = Array.from(new Set(salesInDateRange.map(s => s.vehicleId)));
     const vehicles = await Promise.all(vehicleIds.map(id => ctx.db.get(id)));
@@ -142,14 +148,21 @@ export const getSalesAndProfitReport = query({
           sale.consignedMarginMinor !== undefined && sale.consignedMarginCurrency
             ? fromMinorUnits(sale.consignedMarginMinor, sale.consignedMarginCurrency)
             : undefined,
+        externallyFinanced:
+          sale.financingType === "FINANCED" || sale.financingType === "LEASE",
       });
 
-      totalRevenue += economics.recognizedRevenue;
+      // A financed direct row with no recorded margin earns UNKNOWN, not zero
+      // and not the sale-price spread. It is left out of the totals and counted,
+      // so the owner is told the report is incomplete rather than being handed a
+      // confident figure built on a number the ledger never recognized.
+      if (economics.dealershipMargin === null) unknownMarginSaleCount += 1;
+      totalRevenue += economics.recognizedRevenue ?? 0;
       totalCost += economics.recognizedCost;
       // Unchanged by the agent split, and deliberately so: price less cost is
       // the same number either way, which is exactly why restating a consigned
       // sale moves turnover and cost of sales but never profit.
-      totalProfit += economics.dealershipMargin;
+      totalProfit += economics.dealershipMargin ?? 0;
       totalGrossTransactionValue += economics.grossTransactionValue;
       totalSupplierSettlement += economics.supplierSettlement;
       if (economics.isAgentSale) agentSaleCount += 1;
@@ -186,6 +199,12 @@ export const getSalesAndProfitReport = query({
       // What of that gross belongs to suppliers and never was the dealership's.
       totalSupplierSettlement,
       agentSaleCount,
+      /**
+       * How many sales in this range were left out of `totalRevenue` and
+       * `totalProfit` because what they earned is unknown. Non-zero means these
+       * totals are a floor, not the answer.
+       */
+      unknownMarginSaleCount,
       sales: enrichedSales,
     };
   },
@@ -716,6 +735,9 @@ export const getSalespersonPerformance = query({
       let totalRevenue = 0;
       let totalProfit = 0;
       let totalGrossTransactionValue = 0;
+      // Same rule as getSalesAndProfitReport: a rep is never ranked on an
+      // earning nobody can substantiate, and never on an implicit zero either.
+      let unknownMarginSaleCount = 0;
 
       const user = userMap.get(userId as Id<"users">);
       const userName = (user && "name" in user ? user.name : null) ?? "Unknown";
@@ -734,13 +756,16 @@ export const getSalespersonPerformance = query({
             sale.consignedMarginMinor !== undefined && sale.consignedMarginCurrency
               ? fromMinorUnits(sale.consignedMarginMinor, sale.consignedMarginCurrency)
               : undefined,
+          externallyFinanced:
+            sale.financingType === "FINANCED" || sale.financingType === "LEASE",
         });
 
+        if (economics.dealershipMargin === null) unknownMarginSaleCount += 1;
         // Same exclusion as getSalesAndProfitReport: a rep who sold a consigned
         // car did not turn over its sticker price. Ranking on that would rank
         // them above someone who sold twice the margin on owned stock.
-        totalRevenue += economics.recognizedRevenue;
-        totalProfit += economics.dealershipMargin;
+        totalRevenue += economics.recognizedRevenue ?? 0;
+        totalProfit += economics.dealershipMargin ?? 0;
         totalGrossTransactionValue += economics.grossTransactionValue;
       }
 
@@ -751,6 +776,8 @@ export const getSalespersonPerformance = query({
         totalRevenue,
         totalProfit,
         totalGrossTransactionValue,
+        /** Of `vehiclesSold`, how many contributed nothing because their earning is unknown. */
+        unknownMarginSaleCount,
       };
     });
 

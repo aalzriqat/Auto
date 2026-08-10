@@ -1375,8 +1375,13 @@ export default defineSchema({
      * every source it could be re-derived FROM can move underneath them: the
      * vehicle's `sourceCost` is editable, and the capitalized cost is a sum over
      * rows that can be added after the sale. The cockpit renders this as the
-     * supplier's settlement line on both routes, and cancellation reverses
-     * against it.
+     * supplier's settlement line on both routes.
+     *
+     * Cancellation does NOT read it: `makeReversalHook` reverses the original
+     * journal entry line for line, which is stronger — it cannot disagree with
+     * what was posted even if this field were wrong. Said explicitly because the
+     * opposite claim was written here first, and a comment that overstates who
+     * depends on a field is how a field survives long after its last reader.
      *
      * Absent means the row predates this field: UNKNOWN, never zero. A zero
      * entitlement and an unrecorded one are different facts, and only one of
@@ -1396,6 +1401,11 @@ export default defineSchema({
      * price and reopening the defect this field was added to close: the
      * dealership's claim is `this − entitlement`, so a claim can never exceed
      * the dealership money the supplier is genuinely holding.
+     *
+     * Read by `sales.recalculateCommission`, which measures the salesperson's
+     * commission on what this sale actually recognized. On a FINANCED direct row
+     * its absence is refused rather than defaulted — see `commissionableEarnings`
+     * in convex/utils/saleCompletion.ts.
      */
     consignedSupplierGrossReceiptMinor: v.optional(v.number()),
     canonicalReceivableDocumentId: v.optional(v.id("receivableDocuments")),

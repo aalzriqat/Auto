@@ -118,8 +118,12 @@ export function ConsignedSettlementSection({
   // reserve space in the form — this section only exists for consigned cars.
   if (!vehicleId || preview === null || preview === undefined) return null;
 
-  const money = (n: number) =>
-    n.toLocaleString(isRtl ? "ar-JO" : "en-JO", { maximumFractionDigits: 2 });
+  // `null` is UNKNOWN, not zero: the server withholds an earning it cannot
+  // substantiate rather than sending a confident number, and a dash is the only
+  // honest way to render that. Never `?? 0` here — a zero margin and an unknown
+  // one are different answers and the operator has to be able to tell them apart.
+  const money = (n: number | null) =>
+    n === null ? "—" : n.toLocaleString(isRtl ? "ar-JO" : "en-JO", { maximumFractionDigits: 2 });
 
   const directToSupplier = preview.settlementRoute === "DIRECT_TO_SUPPLIER";
   const supplier = preview.supplierName || t("TheSupplier" as any);

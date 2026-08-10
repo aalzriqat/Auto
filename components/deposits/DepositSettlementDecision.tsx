@@ -138,8 +138,10 @@ export function DepositSettlementDecision({
   // that matter.
   if (!preview || !deposit) return null;
 
-  const money = (n: number) =>
-    n.toLocaleString(isRtl ? "ar-JO" : "en-JO", { maximumFractionDigits: 2 });
+  // See ConsignedSettlementSection: `null` means the server could not establish
+  // the figure, and a dash says so rather than a fabricated zero.
+  const money = (n: number | null) =>
+    n === null ? "—" : n.toLocaleString(isRtl ? "ar-JO" : "en-JO", { maximumFractionDigits: 2 });
   const supplier = preview.supplierName || t("TheSupplier" as any);
   const directToSupplier = preview.settlementRoute === "DIRECT_TO_SUPPLIER";
 

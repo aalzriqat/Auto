@@ -47,7 +47,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { downloadCSV } from "@/lib/utils/export";
-import { sumRecognizedRevenue, sumReportedCost, sumReportedProfit } from "@/lib/saleReporting";
+import { countUnknownMargin, sumRecognizedRevenue, sumReportedCost, sumReportedProfit } from "@/lib/saleReporting";
 import { RoleGuard } from "@/components/auth/RoleGuard";
 import { paginationOptsValidator } from "convex/server";
 import { dateInputToUtcMs, dateInputEndToUtcMs, todayDateInput, daysFromTodayDateInput } from "@/lib/dateInput";
@@ -213,6 +213,9 @@ export default function ReportsPage() {
   const filteredRevenue = sumRecognizedRevenue(filteredSales);
   const filteredCost = sumReportedCost(filteredSales);
   const filteredProfit = sumReportedProfit(filteredSales);
+  // Counted from the SAME rows the cards are summed from, so the notice cannot
+  // claim a different number of exclusions than the totals actually made.
+  const filteredUnknownMargin = countUnknownMargin(filteredSales);
 
   const handlePrint = () => window.print();
   const dateFilterProps = { startDateStr, endDateStr, setStartDateStr, setEndDateStr, selectedSalesperson, setSelectedSalesperson, salespersonOptions };
@@ -303,6 +306,15 @@ export default function ReportsPage() {
               </Card>
             </div>
 
+            {/* An understated total presented as complete is the same failure as
+                an overstated one, so the exclusions are stated next to the
+                figures they changed rather than only in the row itself. */}
+            {filteredUnknownMargin > 0 && (
+              <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
+                {t("ProfitUnknownNotice").replace("{count}", String(filteredUnknownMargin))}
+              </div>
+            )}
+
             <Card className="print-shadow-none border print:border-gray-200 overflow-x-auto">
               <Table>
                 <TableHeader>
@@ -325,7 +337,21 @@ export default function ReportsPage() {
                       <TableCell>{sale.salespersonName || "-"}</TableCell>
                       <TableCell className="text-right">{format(sale.salePrice)}</TableCell>
                       <TableCell className="text-right">{format(sale.totalCost)}</TableCell>
-                      <TableCell className="text-right text-green-600 font-medium">{format(sale.netProfit)}</TableCell>
+                      {/* `null` is the server saying it cannot establish what
+                          this deal earned — a financed sale settled directly
+                          with the supplier whose recorded margin is missing. It
+                          is shown as a dash and excluded from the totals above,
+                          because formatting it as 0 would read as "this sale
+                          made nothing", which is a different and false claim. */}
+                      <TableCell className="text-right text-green-600 font-medium">
+                        {sale.netProfit === null ? (
+                          <span className="text-muted-foreground" title={t("ProfitUnknownForSale")}>
+                            —
+                          </span>
+                        ) : (
+                          format(sale.netProfit)
+                        )}
+                      </TableCell>
                     </TableRow>
                   ))}
                   {!filteredSales?.length && (

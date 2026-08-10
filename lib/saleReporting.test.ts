@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
+  countUnknownMargin,
+  marginIsUnknown,
   recognizedRevenueOf,
   sumRecognizedRevenue,
   sumReportedCost,
@@ -58,5 +60,41 @@ describe("rows that do not carry the field", () => {
     expect(sumRecognizedRevenue(undefined)).toBe(0);
     expect(sumReportedCost(null)).toBe(0);
     expect(sumReportedProfit([])).toBe(0);
+  });
+});
+
+/**
+ * SCRUM-30 — a withheld figure and a missing one are not the same row.
+ *
+ * The backend now answers `null` when it cannot establish what a deal earned: a
+ * financed sale settled directly with the supplier whose recorded margin is
+ * gone. The fallback directly above exists for the OTHER case — a field the
+ * backend has not started sending yet — and applying it to a withheld value
+ * would answer with the sale price, which on exactly these rows is the largest
+ * wrong number available. A deliberate refusal would have become 20,000.
+ */
+describe("a figure the backend withheld", () => {
+  const WITHHELD = { salePrice: 20_000, recognizedRevenue: null, totalCost: 0, netProfit: null };
+
+  test("is recognized as unknown rather than as an old row", () => {
+    expect(marginIsUnknown(WITHHELD)).toBe(true);
+    // The genuinely-old row, which must keep its fallback.
+    expect(marginIsUnknown({ salePrice: 8_000 })).toBe(false);
+  });
+
+  test("contributes nothing, and never the sale price", () => {
+    expect(recognizedRevenueOf(WITHHELD)).toBe(0);
+    expect(recognizedRevenueOf(WITHHELD)).not.toBe(20_000);
+  });
+
+  test("is excluded from the filtered totals the cards are drawn from", () => {
+    expect(sumRecognizedRevenue([AGENT_SALE, WITHHELD])).toBe(3_000);
+    expect(sumReportedProfit([AGENT_SALE, WITHHELD])).toBe(3_000);
+  });
+
+  test("is counted, so an understated total is never shown as complete", () => {
+    expect(countUnknownMargin([AGENT_SALE, WITHHELD, OWNED_SALE])).toBe(1);
+    expect(countUnknownMargin([AGENT_SALE, OWNED_SALE])).toBe(0);
+    expect(countUnknownMargin(undefined)).toBe(0);
   });
 });

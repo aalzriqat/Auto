@@ -1714,9 +1714,11 @@ export const recalculateCommission = mutation({
         // silently re-based payroll on a later edit is how a commission comes
         // to disagree with the revenue it was earned against.
         //
-        // Absent means the row predates the field or the sale is not a direct
-        // consigned one; the calculator then uses the sale price, which is the
-        // correct basis for every such case.
+        // Absent means the row predates the field, the sale is not a direct
+        // consigned one, or the value was cleared. On a cash direct sale the
+        // calculator then uses the sale price, which is the correct basis; on a
+        // FINANCED one it refuses rather than guessing, and this whole mutation
+        // rolls back with the existing commission untouched.
         supplierGrossReceipt:
           sale.consignedSupplierGrossReceiptMinor !== undefined
             ? fromMinorUnits(
@@ -1725,6 +1727,8 @@ export const recalculateCommission = mutation({
               )
             : undefined,
         settlementRoute: sale.supplierSettlementRoute,
+        externallyFinanced:
+          sale.financingType === "FINANCED" || sale.financingType === "LEASE",
       });
       // Cost basis was just verified, so the calculator always returns a number.
       const commissionAmount = amount ?? 0;

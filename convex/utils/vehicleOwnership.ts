@@ -233,10 +233,20 @@ export interface SaleEconomics {
   grossTransactionValue: number;
   /** The supplier's share of that gross. Zero on dealer-owned stock. */
   supplierSettlement: number;
-  /** What the dealership actually earned: its commission, or its gross profit. */
-  dealershipMargin: number;
-  /** What belongs in turnover. The margin on an agent sale; the price on an owned one. */
-  recognizedRevenue: number;
+  /**
+   * What the dealership actually earned: its commission, or its gross profit.
+   *
+   * `null` means UNKNOWN — the row is a financed sale settled directly with the
+   * supplier whose recorded margin is missing, so what it earned cannot be
+   * derived from the sale price. Callers must withhold it, never read it as
+   * zero and never substitute `salePrice − cost`.
+   */
+  dealershipMargin: number | null;
+  /**
+   * What belongs in turnover. The margin on an agent sale; the price on an
+   * owned one — so it is `null` exactly when the margin is.
+   */
+  recognizedRevenue: number | null;
   /** Cost of sales. Zero on an agent sale — there is no cost of a car you never bought. */
   recognizedCost: number;
 }
@@ -277,16 +287,36 @@ export function saleEconomics(args: {
    * this the sales report published the larger figure beside them — two
    * owner-facing profit numbers for one deal.
    *
-   * Absent means the sale predates the field, and the fallback below is what
-   * that row was actually posted on, so old rows keep reconciling.
+   * Absent means the sale predates the field, was never a consigned direct
+   * one, or had the value cleared. For every shape where `salePrice − cost` is
+   * genuinely what the row was posted on — owned stock, THROUGH_DEALERSHIP,
+   * cash direct — that fallback is correct and old rows keep reconciling. For a
+   * financed direct row it is not: see `externallyFinanced`.
    */
   recordedMargin?: number;
+  /**
+   * Whether a third party financed this sale (FINANCED or LEASE).
+   *
+   * It is what separates the two readings of an absent `recordedMargin`. On a
+   * cash direct sale the buyer really hands the supplier the sale price, so the
+   * spread over his entitlement is the earning. On a financed one the finance
+   * company pays him only what it approved, and `salePrice − approved` reaches
+   * no party at all — so without the recorded margin the earning is genuinely
+   * UNKNOWN, and this returns `null` rather than confidently publishing the
+   * larger figure beside a P&L that says otherwise.
+   */
+  externallyFinanced?: boolean;
 }): SaleEconomics {
   const { salePrice, capitalizedCost } = args;
   const agent = isConsignedAgentSale(args.vehicle);
-  const margin = agent && args.recordedMargin !== undefined
-    ? args.recordedMargin
-    : salePrice - capitalizedCost;
+  const settlesDirect = !dealershipCollectsGross(consignedSettlementRoute(args));
+  const evidenceRequired = agent && settlesDirect && args.externallyFinanced === true;
+  const margin =
+    agent && args.recordedMargin !== undefined
+      ? args.recordedMargin
+      : evidenceRequired
+        ? null
+        : salePrice - capitalizedCost;
 
   if (!agent) {
     return {

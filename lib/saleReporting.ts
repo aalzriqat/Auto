@@ -24,11 +24,34 @@ function finiteOrZero(value: number | null | undefined): number {
 }
 
 /**
+ * An explicit `null` is the backend saying it could not establish what this
+ * deal earned — a financed sale settled directly with the supplier whose
+ * recorded margin is missing. It is NOT the same as the field being absent.
+ *
+ * The distinction decides real money on screen. `recognizedRevenueOf` falls
+ * back to `salePrice` for an absent field, which is right for a client running
+ * ahead of a backend deploy; applying that same fallback to a withheld value
+ * would answer 20,000 for a deal that earned 3,000 — turning a deliberate
+ * refusal into the largest wrong number available.
+ */
+export function marginIsUnknown(sale: ReportedSaleRow): boolean {
+  return sale?.netProfit === null || sale?.recognizedRevenue === null;
+}
+
+/** How many of these rows contribute nothing to the totals because their earning is unknown. */
+export function countUnknownMargin(sales: ReportedSaleRow[] | undefined | null): number {
+  return (sales ?? []).filter((sale) => marginIsUnknown(sale)).length;
+}
+
+/**
  * Falls back to `salePrice` only when the row predates `recognizedRevenue` —
  * a client running ahead of a backend deploy. Showing the old number beats
  * showing nothing, and for owned stock the two are identical anyway.
+ *
+ * A withheld (`null`) value never takes that path: see `marginIsUnknown`.
  */
 export function recognizedRevenueOf(sale: ReportedSaleRow): number {
+  if (marginIsUnknown(sale)) return 0;
   if (typeof sale?.recognizedRevenue === "number" && Number.isFinite(sale.recognizedRevenue)) {
     return sale.recognizedRevenue;
   }

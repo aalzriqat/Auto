@@ -151,6 +151,14 @@ type PreparedSaleCompletion = {
   accrueAtCompletion: boolean;
 };
 
+/**
+ * Why a financed sale settled directly with the supplier cannot be recorded as
+ * a plain sale. Shared so the refusal reads identically wherever it fires, and
+ * so the two places that enforce it cannot drift into describing it differently.
+ */
+export const FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT =
+  "This is a financed sale of the supplier's car settled directly with him, so what the finance company approved is what he actually receives — and the dealership's claim on him is measured from it. That amount lives on the finance application, so this deal has to be completed through the financing workflow rather than recorded as a sale directly.";
+
 async function prepareSaleCompletion(
   ctx: MutationCtx,
   args: SaleCompletionArgs
@@ -236,6 +244,26 @@ async function prepareSaleCompletion(
   // defect this change exists to remove.
   const currency = await getOrgCurrency(ctx, args.orgId);
 
+  // Refused BEFORE the commission is worked out, not after.
+  //
+  // Both this and the commission calculator refuse the same missing fact, and
+  // the commission block runs first — so without this the operator recording a
+  // financed direct sale was told his salesperson's commission could not be
+  // calculated, when the real answer is that this deal does not belong in this
+  // form at all. The specific refusal has to reach him first, and it applies to
+  // a draft as much as to a completion: a draft that can never be completed is
+  // not a useful thing to have created.
+  if (
+    isConsignedAgentSale(vehicle) &&
+    !dealershipCollectsGross(
+      consignedSettlementRoute({ supplierSettlementRoute: args.supplierSettlementRoute })
+    ) &&
+    (args.financingType === "FINANCED" || args.financingType === "LEASE") &&
+    args.supplierGrossReceiptMinor === undefined
+  ) {
+    throw new ConvexError(FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT);
+  }
+
   let accrueAtCompletion = false;
   if (commissionMode === "MANUAL") {
     commissionAmount = args.existingCommissionAmount;
@@ -256,6 +284,7 @@ async function prepareSaleCompletion(
           ? fromMinorUnits(args.supplierGrossReceiptMinor, currency)
           : undefined,
       settlementRoute: args.supplierSettlementRoute,
+      externallyFinanced: args.financingType === "FINANCED" || args.financingType === "LEASE",
     });
     accrueAtCompletion = commissionAmount != null;
   }
@@ -294,6 +323,12 @@ export async function computeAutoCommissionAmount(
     supplierGrossReceipt?: number;
     /** The route this sale settles on; absent reads as THROUGH_DEALERSHIP. */
     settlementRoute?: ConsignedSettlementRoute;
+    /**
+     * Whether a third party financed this sale (FINANCED or LEASE). It decides
+     * whether an absent `supplierGrossReceipt` is the ordinary cash-direct case
+     * or missing evidence that must be refused — see `commissionableEarnings`.
+     */
+    externallyFinanced: boolean;
   }
 ): Promise<number | undefined> {
   if (!vehicleHasCostBasis(args.vehicle)) return undefined;
@@ -307,6 +342,7 @@ export async function computeAutoCommissionAmount(
     vehicle: args.vehicle,
     supplierGrossReceipt: args.supplierGrossReceipt,
     settlementRoute: args.settlementRoute,
+    externallyFinanced: args.externallyFinanced,
   });
   if (args.commissionMode === "AUTO_TIERS") {
     return calculateCommissionFromTiers(grossProfit, args.commissionTiers);
@@ -346,6 +382,18 @@ export async function computeAutoCommissionAmount(
  *     spread over the entitlement is genuinely recognized;
  *   - a cash DIRECT sale — the buyer pays the supplier the sale price, so the
  *     basis IS the sale price.
+ *
+ * **Missing evidence is not a cash sale.** On a financed DIRECT deal the
+ * supplier receipt is the approved purchase amount, and it is the only thing
+ * that distinguishes the recognized 3,000 from the commercial 5,000. Reading an
+ * absent value as "then use the sale price" would restore the exact basis this
+ * ruling removed, silently, on the one path that pays real payroll money — and
+ * it is reachable: `/admin`'s raw-JSON record editor can clear the field on a
+ * completed sale, and rows written before this branch never carried it. So the
+ * calculator refuses instead. In `recalculateCommission` the throw rolls the
+ * mutation back, which is precisely the required outcome: the existing
+ * commission is left exactly as it was rather than being replaced by a number
+ * nobody can substantiate.
  */
 function commissionableEarnings(args: {
   salePrice: number;
@@ -353,14 +401,20 @@ function commissionableEarnings(args: {
   vehicle: Doc<"vehicles">;
   supplierGrossReceipt?: number;
   settlementRoute?: ConsignedSettlementRoute;
+  externallyFinanced: boolean;
 }): number {
   const settlesDirect = !dealershipCollectsGross(
     consignedSettlementRoute({ supplierSettlementRoute: args.settlementRoute })
   );
-  const realizedBasis =
-    isConsignedAgentSale(args.vehicle) && settlesDirect
-      ? (args.supplierGrossReceipt ?? args.salePrice)
-      : args.salePrice;
+  const consignedDirect = isConsignedAgentSale(args.vehicle) && settlesDirect;
+  if (consignedDirect && args.externallyFinanced && args.supplierGrossReceipt === undefined) {
+    throw new ConvexError(
+      "This sale is the supplier's car, financed, and settled directly with him, but the amount the finance company actually paid him was not recorded on it. Commission is earned on what the dealership recognized over the supplier's entitlement, and without that amount it cannot be worked out. Record the approved purchase amount on the deal first."
+    );
+  }
+  const realizedBasis = consignedDirect
+    ? (args.supplierGrossReceipt ?? args.salePrice)
+    : args.salePrice;
   return Math.max(0, realizedBasis - args.vehicleCost);
 }
 
@@ -898,15 +952,18 @@ async function applySaleCompletionSideEffects(
   // application workflow, because only that workflow knows what the financier
   // approved — and the approval must be a server-side fact, never an amount the
   // caller supplies alongside the sale.
+  // Asserted here as well as in `prepareSaleCompletion`, which reaches it first
+  // and is where the refusal actually fires. Kept because this is the function
+  // that goes on to USE the amount: a later caller that reaches the posting
+  // without going through prepare would otherwise reintroduce the fallback
+  // silently, and this is the line that must not be quietly true.
   if (
     isSourced &&
     settlesDirectToSupplier &&
     (args.financingType === "FINANCED" || args.financingType === "LEASE") &&
     args.supplierGrossReceiptMinor === undefined
   ) {
-    throw new ConvexError(
-      "This is a financed sale of the supplier's car settled directly with him, so what the finance company approved is what he actually receives — and the dealership's claim on him is measured from it. That amount lives on the finance application, so this deal has to be completed through the financing workflow rather than recorded as a sale directly."
-    );
+    throw new ConvexError(FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT);
   }
   // The supplied amount is denominated in the APPLICATION's pinned currency,
   // and this sale's currency comes from the ORG. They are not always the same:
@@ -933,6 +990,14 @@ async function applySaleCompletionSideEffects(
   const supplierGrossReceiptMinor = settlesDirectToSupplier
     ? (args.supplierGrossReceiptMinor ?? salePriceMinor)
     : salePriceMinor;
+  // The same quantity `computeConsignedSupplierPosition` calls
+  // `dealershipClaimMinor`, and deliberately still spelled out here rather than
+  // taken from it: that function REFUSES a receipt below the entitlement, and it
+  // is called further down inside the consignment block, after the checks that
+  // decide whether a shortfall is even possible. Calling it here instead would
+  // move that refusal ahead of them and change which error an operator sees.
+  // The shared derivation remains the authority on whether this number is legal;
+  // this is the same arithmetic under a guard that has not run yet.
   const marginMinor =
     isSourced && costMinor !== undefined
       ? supplierGrossReceiptMinor - costMinor
