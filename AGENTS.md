@@ -26,6 +26,12 @@ so an untracked or `.gitignore`d module there ships exactly like committed code
 while appearing in no diff, review or CI check. It also resolves the target with
 a dry run and makes you type the deployment's name before pushing.
 
+To deploy a commit that is merged but behind the tip — a deliberate rollback —
+run `pnpm deploy:prod --allow-behind`. That flag excuses only the tip check. A
+dirty tree, an untracked module under `convex/`, and unmerged code are still
+refused, and a branch that has diverged from `origin/main` is not "behind" and
+is not covered by it.
+
 That last part is not redundant with Convex's own prompt. Convex asks only when
 `CONVEX_DEPLOYMENT` names a *different* deployment than the target; it stays
 silent when the variable already names production, and when `CONVEX_DEPLOY_KEY`

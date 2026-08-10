@@ -90,11 +90,34 @@ function trackedChanges() {
     const status = entry.slice(0, 2);
     const file = entry.slice(3);
     if (status.startsWith("??")) continue; // untracked is the bundle check's job
-    // A rename emits the destination, then the source as its own field.
-    if (status.startsWith("R") || status.startsWith("C")) i += 1;
+    // A rename emits the destination, then the source as its own field. The
+    // marker can be in either column — a worktree-side rename is " R", which
+    // `startsWith` missed, leaving the source path to be read as an entry and
+    // its first two characters mistaken for a status.
+    if (status.includes("R") || status.includes("C")) i += 1;
     changed.push(file);
   }
   return changed;
+}
+
+/**
+ * Every deployable file under `convex/` that git has, read with `-z`.
+ *
+ * `git ls-files` applies `core.quotePath`, so a non-ASCII path comes back as
+ * `"convex/prob\303\251.ts"` and one containing a newline is split across
+ * entries. The on-disk walk returns raw paths, so a quoted entry matches
+ * nothing — `bundle-is-tracked` would then name a committed file as an
+ * untracked offender and refuse every production deploy. `-z` never quotes,
+ * which puts both sides of the comparison in the same alphabet. The same
+ * quoting hazard was already handled for `git status`; this side was missed.
+ */
+function trackedBundleFiles() {
+  return execFileSync("git", ["ls-files", "-z", "convex/"], {
+    encoding: "utf8",
+    cwd: repoRoot,
+  })
+    .split("\0")
+    .filter(Boolean);
 }
 
 /** Every deployable file Convex would bundle, walked from disk. */
@@ -163,7 +186,7 @@ function collectSnapshot() {
     headIsAncestorOfOriginMain: ancestor.status === 0,
     trackedChanges: trackedChanges(),
     bundleFilesOnDisk: bundleFilesOnDisk(),
-    trackedBundleFiles: git(["ls-files", "convex/"]).split("\n").filter(Boolean),
+    trackedBundleFiles: trackedBundleFiles(),
     forwardedArgs,
     env: resolveDeployEnv(),
   };

@@ -256,6 +256,21 @@ describe("bundleOffenders", () => {
     expect(bundleOffenders(["convex\\utils\\a.ts"], ["convex/utils/a.ts"])).toEqual([]);
   });
 
+  test("a git-quoted tracked path matches nothing, so the tracked list must be read with -z", () => {
+    // Reproduced against this repo: `git ls-files convex/` applies
+    // core.quotePath and emits "convex/prob\303\251.ts", while the disk walk
+    // returns convex/probé.ts. The comparison is byte-exact, so the tracked file
+    // is reported as an untracked offender and EVERY production deploy is
+    // refused, naming a mangled path. `git ls-files -z` never quotes.
+    //
+    // This pins the mechanism, so that reading the tracked list without -z
+    // cannot look harmless again: the suite already covered this quoting hazard
+    // on the git status side and on the disk side, and missed this one.
+    const quoted = String.raw`"convex/prob\303\251.ts"`;
+    expect(bundleOffenders(["convex/probé.ts"], [quoted])).toEqual(["convex/probé.ts"]);
+    expect(bundleOffenders(["convex/probé.ts"], ["convex/probé.ts"])).toEqual([]);
+  });
+
   test("an empty tracked list makes every on-disk file an offender", () => {
     expect(bundleOffenders(["convex/a.ts", "convex/b.ts"], [])).toEqual([
       "convex/a.ts",
@@ -307,6 +322,9 @@ describe("target selection is inventoried, not predicted", () => {
     { CONVEX_DEPLOYMENT_TOKEN: "prod:x|abc" },
     { CONVEX_DEPLOY_KEY: "preview:x|abc" },
     { CONVEX_DEPLOYMENT: "dev:vibrant-cat-418" },
+    // The empty case used to return early with its own sentence, which is how
+    // the last CLI prediction stayed out of the invariance check below.
+    {},
   ];
 
   test("every set variable is listed, with where it came from", () => {
@@ -388,7 +406,7 @@ describe("target selection is inventoried, not predicted", () => {
     // Asserting the row's shape closes it: non-indented lines are constant,
     // indented lines are structurally an inventory, so an environment-dependent
     // claim has nowhere left to live.
-    const ROW = /^ {2}CONVEX_[A-Z_]+ (set|= \S+)( \(from [^)]+\))?$/;
+    const ROW = /^ {2}(\(none set\)|CONVEX_[A-Z_]+ (set|= \S+|= "")( \(from [^)]+\))?)$/;
     for (const env of PROSE_CONFIGURATIONS) {
       const rows = describeTargetSelection(env)
         .split("\n")
@@ -398,9 +416,22 @@ describe("target selection is inventoried, not predicted", () => {
     }
   });
 
-  test("an unset environment is described as refusing, not as defaulting", () => {
-    // Verified: with none of them set the CLI errors rather than guessing.
-    expect(describeTargetSelection({})).toMatch(/refuse/i);
+  test("an unset environment is reported as unset, with no claim about the CLI", () => {
+    // This said "the CLI will refuse rather than guess" -- the last surviving
+    // prediction, and it survived precisely because the empty case returned
+    // early and so sat outside the invariance check.
+    const text = describeTargetSelection({});
+    expect(text).toContain("(none set)");
+    expect(collapse(text)).not.toMatch(/the CLI will refuse/i);
+  });
+
+  test("an empty value is shown as present and empty, not as absent", () => {
+    // "" is an own property, so it stops the CLI's dotenv loading that variable
+    // from a file -- a different state from unset, and one the operator has to
+    // be able to see to explain why a file value is being ignored.
+    const text = describeTargetSelection({ CONVEX_DEPLOYMENT: "" });
+    expect(text).toContain('CONVEX_DEPLOYMENT = ""');
+    expect(text).not.toContain("(none set)");
   });
 });
 

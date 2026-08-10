@@ -416,20 +416,24 @@ const SECRET_SELECTORS = new Set<SelectorKey>([
  * own: a value can be in force without ever appearing in `process.env`.
  */
 export function describeTargetSelection(env: RepoSnapshot["env"]): string {
-  const set = FROZEN_DEPLOY_ENV_KEYS.filter((key) => env[key]);
-  if (set.length === 0) {
-    return "None of the deployment-selecting variables is set — the CLI will refuse rather than guess.";
-  }
+  // `undefined` is absent; `""` is present and empty, which is a different
+  // state the operator needs to see — it is an own property, so it stops the
+  // CLI's dotenv from loading the same variable out of a file.
+  const set = FROZEN_DEPLOY_ENV_KEYS.filter((key) => env[key] !== undefined);
 
   const lines = set.map((key) => {
     const origin = env.sources?.[key] ? ` (from ${env.sources[key]})` : "";
-    const shown = SECRET_SELECTORS.has(key) ? "set" : `= ${env[key]}`;
+    const shown = env[key] === "" ? '= ""' : SECRET_SELECTORS.has(key) ? "set" : `= ${env[key]}`;
     return `  ${key} ${shown}${origin}`;
   });
 
   return [
     "Deployment selection the CLI will read:",
-    ...lines,
+    // The empty case gets the same prose as every other, rather than an early
+    // return of its own. That early return was the last sentence predicting the
+    // CLI ("the CLI will refuse rather than guess"), and being a separate branch
+    // is what kept it out of the invariance test that would have caught it.
+    ...(lines.length > 0 ? lines : ["  (none set)"]),
     "More than one of these can be set; this wrapper does not guess which the CLI",
     "will act on. It deploys to production only: the target below is read back from",
     "the CLI's own dry run, and one that does not announce itself as production is",
@@ -455,7 +459,7 @@ export function selectorsFromEnvFile(text: string): Partial<Record<SelectorKey, 
   const parsed = parseEnv(text.startsWith("﻿") ? text.slice(1) : text);
   const out: Partial<Record<SelectorKey, string>> = {};
   for (const key of FROZEN_DEPLOY_ENV_KEYS) {
-    if (parsed[key]) out[key] = parsed[key];
+    if (parsed[key] !== undefined) out[key] = parsed[key];
   }
   return out;
 }
@@ -476,8 +480,14 @@ export function resolveSelectors(
   const values: Partial<Record<SelectorKey, string>> = {};
   const origins: Partial<Record<SelectorKey, string>> = {};
 
+  // Presence is `!== undefined`, not truthiness. An empty string is a present
+  // value: `dotenv.populate` gates on `hasOwnProperty`, so `CONVEX_DEPLOYMENT=""`
+  // in the shell stops the CLI loading that variable from a file at all, and the
+  // CLI then reads it as unset. Treating `""` as absent here resolved the file's
+  // value instead and froze it into the child — so the wrapper would deploy to a
+  // deployment the bare CLI would have refused to pick.
   for (const key of FROZEN_DEPLOY_ENV_KEYS) {
-    if (processEnv[key]) {
+    if (processEnv[key] !== undefined) {
       values[key] = processEnv[key];
       origins[key] = "process env";
     }
@@ -485,7 +495,7 @@ export function resolveSelectors(
   for (const file of files) {
     const parsed = selectorsFromEnvFile(file.text);
     for (const key of FROZEN_DEPLOY_ENV_KEYS) {
-      if (!values[key] && parsed[key]) {
+      if (values[key] === undefined && parsed[key] !== undefined) {
         values[key] = parsed[key];
         origins[key] = file.name;
       }
