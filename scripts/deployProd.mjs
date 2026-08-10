@@ -137,11 +137,21 @@ function resolveDeployEnv() {
     const full = path.join(repoRoot, file);
     if (!existsSync(full)) continue;
     for (const line of readFileSync(full, "utf8").split("\n")) {
-      const m = line.match(/^\s*(CONVEX_DEPLOYMENT|CONVEX_DEPLOY_KEY)\s*=\s*(.*)$/);
-      if (!m) continue;
-      const value = m[2].trim().replace(/^["']|["']$/g, "").replace(/\s+#.*$/, "");
-      if (!out[m[1]]) {
-        out[m[1]] = value;
+      const eq = line.indexOf("=");
+      if (eq === -1) continue;
+      const key = line.slice(0, eq).trim();
+      if (key !== "CONVEX_DEPLOYMENT" && key !== "CONVEX_DEPLOY_KEY") continue;
+      // Split rather than matched: the anchored alternation with a trailing
+      // `(.*)$` backtracks super-linearly on long lines, and this file is read
+      // on every deploy.
+      let value = line.slice(eq + 1).trim();
+      const hash = value.indexOf(" #");
+      if (hash !== -1) value = value.slice(0, hash).trim();
+      if (value.length >= 2 && (value.startsWith('"') || value.startsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      if (!out[key]) {
+        out[key] = value;
         out.source = file;
       }
     }

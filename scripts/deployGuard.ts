@@ -116,10 +116,18 @@ export const BUNDLED_EXTENSIONS = [
   ".jsx",
 ];
 
-function checkForwardedArgs(snapshot: RepoSnapshot): DeployCheck {
+/**
+ * Splits the forwarded arguments into what was rejected and why.
+ *
+ * Separated from the message building so each half stays readable; the scan is
+ * the part that has to be right.
+ */
+function scanForwardedArgs(args: string[]): {
+  rejected: string[];
+  flagShapedValues: string[];
+} {
   const rejected: string[] = [];
   const flagShapedValues: string[] = [];
-  const args = snapshot.forwardedArgs;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -130,18 +138,22 @@ function checkForwardedArgs(snapshot: RepoSnapshot): DeployCheck {
       rejected.push(arg);
       continue;
     }
-    if (ARGS_TAKING_VALUES.has(name) && !arg.includes("=")) {
-      // Skipping the value unconditionally would let `--cmd -y` carry `-y`
-      // through as a "value". Convex binds it as the option's argument rather
-      // than as auto-confirm, so it is not a live bypass — but a rule that
-      // reads as one should not be left to be trusted by inspection.
-      const value = args[i + 1];
-      if (value !== undefined && value.startsWith("-")) {
-        flagShapedValues.push(`${arg} ${value}`);
-      }
-      i += 1;
-    }
+    if (!ARGS_TAKING_VALUES.has(name) || arg.includes("=")) continue;
+
+    // Skipping the value unconditionally would let `--cmd -y` carry `-y`
+    // through as a "value". Convex binds it as the option's argument rather
+    // than as auto-confirm, so it is not a live bypass — but a rule that reads
+    // as one should not be left to be trusted by inspection.
+    const value = args[i + 1];
+    if (value?.startsWith("-")) flagShapedValues.push(`${arg} ${value}`);
+    i += 1;
   }
+
+  return { rejected, flagShapedValues };
+}
+
+function checkForwardedArgs(snapshot: RepoSnapshot): DeployCheck {
+  const { rejected, flagShapedValues } = scanForwardedArgs(snapshot.forwardedArgs);
 
   // Two different reasons, two different sentences. Reporting a flag-shaped
   // value under "only these may be forwarded" contradicts itself when the flag
@@ -195,11 +207,15 @@ export function bundleOffenders(
   onDisk: string[],
   tracked: string[]
 ): string[] {
-  const trackedSet = new Set(tracked.map((p) => p.replace(/\\/g, "/")));
+  const normalise = (p: string) => p.replaceAll("\\", "/");
+  const trackedSet = new Set(tracked.map(normalise));
   return onDisk
-    .map((p) => p.replace(/\\/g, "/"))
+    .map(normalise)
     .filter((p) => !trackedSet.has(p))
-    .sort();
+    // Explicit comparator. These are file paths, so a stable byte ordering is
+    // what is wanted — locale-aware collation would reorder a deploy refusal by
+    // the operator's language, which is not a property a refusal should have.
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 function checkBundleIsTracked(snapshot: RepoSnapshot): DeployCheck {
@@ -312,9 +328,9 @@ export function deployArgs(forwarded: string[]): string[] {
  */
 export function extractDeploymentName(dryRunOutput: string): string | null {
   // e.g. "▌ └─ https://kindly-hound-172.convex.cloud"
-  const url = dryRunOutput.match(/https:\/\/([a-z0-9-]+)\.convex\.cloud/i);
+  const url = /https:\/\/([a-z0-9-]+)\.convex\.cloud/i.exec(dryRunOutput);
   if (url) return url[1];
-  const dash = dryRunOutput.match(/dashboard\.convex\.dev\/t\/[^/]+\/[^/]+\/([a-z0-9-]+)/i);
+  const dash = /dashboard\.convex\.dev\/t\/[^/]+\/[^/]+\/([a-z0-9-]+)/i.exec(dryRunOutput);
   return dash ? dash[1] : null;
 }
 
@@ -362,6 +378,35 @@ export type DeployIO = {
 };
 
 /**
+ * Runs the dry run and reads the target back, or returns the exit code to stop on.
+ *
+ * Split out so the sequence above reads as the list of gates it is.
+ */
+function resolveTarget(
+  io: DeployIO,
+  snapshot: RepoSnapshot
+): { target: string; output: string } | number {
+  io.log("Resolving the target deployment (dry run, nothing is applied)\u2026\n");
+  const dry = io.runDryRun(dryRunArgs(snapshot.forwardedArgs));
+  io.log(dry.output);
+  if (dry.errorMessage) io.error(`\nCould not run the dry run: ${dry.errorMessage}`);
+  if (dry.status !== 0) {
+    io.error("\nDry run failed. Not deploying.\n");
+    return dry.status ?? 1;
+  }
+
+  const target = extractDeploymentName(dry.output);
+  if (!target) {
+    io.error(
+      "\nCould not read the target deployment out of the dry run. Refusing:\n" +
+        "a confirmation that cannot name the target is not a confirmation.\n"
+    );
+    return 1;
+  }
+  return { target, output: dry.output };
+}
+
+/**
  * The enforcement sequence, with its side effects injected.
  *
  * This lives here rather than in the CLI shell because the shell is where the
@@ -396,26 +441,12 @@ export async function runGuardedDeploy(
     return 1;
   }
 
-  io.log("Resolving the target deployment (dry run, nothing is applied)…\n");
-  const dry = io.runDryRun(dryRunArgs(snapshot.forwardedArgs));
-  io.log(dry.output);
-  if (dry.errorMessage) io.error(`\nCould not run the dry run: ${dry.errorMessage}`);
-  if (dry.status !== 0) {
-    io.error("\nDry run failed. Not deploying.\n");
-    return dry.status ?? 1;
-  }
-
-  const target = extractDeploymentName(dry.output);
-  if (!target) {
-    io.error(
-      "\nCould not read the target deployment out of the dry run. Refusing:\n" +
-        "a confirmation that cannot name the target is not a confirmation.\n"
-    );
-    return 1;
-  }
+  const resolved = resolveTarget(io, snapshot);
+  if (typeof resolved === "number") return resolved;
+  const { target, output: dryOutput } = resolved;
 
   io.log(
-    `\nTarget: ${target}${looksLikeProduction(dry.output) ? "  [PRODUCTION]" : ""}\n` +
+    `\nTarget: ${target}${looksLikeProduction(dryOutput) ? "  [PRODUCTION]" : ""}\n` +
       "Convex does not reliably prompt for this — it stays silent when CONVEX_DEPLOYMENT\n" +
       "already names the target, and when a deploy key is set. So confirm here.\n"
   );
