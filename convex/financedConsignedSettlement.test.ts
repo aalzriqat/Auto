@@ -1831,11 +1831,12 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
     });
 
     const profit = (await cockpitOf(s, applicationId))!.money!.managementProfit;
-    // Never the disbursement reported as profit.
-    if (profit.available) {
-      expect(profit.amountMinor).toBeLessThan(VEHICLE_PRICE * SCALE);
-    }
     expect(profit.available).toBe(false);
+    // Pinned to the REASON, not merely to unavailability. Without this the test
+    // would still pass if the figure were withheld for an unrelated cause —
+    // and the `if (profit.available)` guard it used to carry asserted nothing
+    // at all, which is the same shape as the two vacuous tests fixed above.
+    if (!profit.available) expect(profit.reason).toBe("NoSupplierSettlement");
   });
 
   /**
@@ -1975,4 +1976,144 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
     expect(profit.available).toBe(false);
     if (!profit.available) expect(profit.reason).toBe("NoDealerContribution");
   });
+
+  /**
+   * OP-F1. Cancelling a sale SOFT-deletes its `VEHICLE_SALE` transaction
+   * (`utils/saleCancellation.ts` patches `isDeleted: true`) rather than removing
+   * it. The margin fallback counted those rows, so a vehicle that had been sold,
+   * cancelled and re-sold looked permanently ambiguous.
+   *
+   * The victim is the case the obligations redesign existed to rescue: a genuine
+   * zero-margin direct resale opens no supplier claim, so the fallback is the
+   * only evidence there is — and it answered UNKNOWN forever. Settlement could
+   * never complete, and no operator action could produce the missing proof,
+   * because there is nothing to collect. A dead end reintroduced by a different
+   * door.
+   */
+  test("a vehicle re-sold after a cancellation is judged on the live sale only", async () => {
+    const s = await seedDealership("resaleAfterCancel");
+    const first = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+
+    // Cancelled before any receipt, so the supplier-paid guard does not fire.
+    await s.asApprover.mutation(api.sales.update, {
+      orgId: s.orgId,
+      saleId: first.saleId as never,
+      status: "CANCELLED" as const,
+    });
+
+    // The dead transaction is still on the vehicle. That is the premise.
+    const dead = await s.t.run(async (ctx) =>
+      (await ctx.db.query("transactions").collect()).filter(
+        (row) => row.orgId === s.orgId && row.category === "VEHICLE_SALE"
+      )
+    );
+    expect(dead.length).toBeGreaterThan(0);
+    expect(dead.every((row) => row.isDeleted === true)).toBe(true);
+
+    // Re-sold at exactly the supplier's entitlement: a real zero-margin deal,
+    // for which sale completion deliberately opens no claim.
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.vehicleId as never, { sourceCost: VEHICLE_PRICE });
+    });
+    const second = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(second.applicationId, {
+        approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+        dealerContributionMinor: 0,
+      });
+    });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId: second.applicationId,
+      disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+    });
+
+    const claims = (await supplierClaimsOf(s)).filter((row) => row.status !== "CANCELLED");
+    expect(claims).toHaveLength(0);
+
+    const view = await cockpitOf(s, second.applicationId);
+    expect(stageOf(view, "SETTLEMENT")).toBe("COMPLETE");
+    expect(supplierRow(view).position).toBe("NOT_INVOLVED");
+  });
+
+
+  /**
+   * OP-F3 / CX-12. The mirror of the receivable residue, on the PAYABLE that
+   * the through-route cockpit reads.
+   *
+   * `recordPartialPayment` compared major-unit floats exactly as `recordReceipt`
+   * did, so a 4.440 JOD payable paid in three instalments of 1.480 accumulated
+   * to 4.4399999999999995 — never PAID, and no further payment accepted, since
+   * the residue owing is under a thousandth of a fils.
+   *
+   * The cockpit made it worse rather than better: judging the same row in minor
+   * units it reported the supplier SETTLED while the payables screen and the
+   * aging report reported PARTIALLY_PAID forever. Two screens, one supplier,
+   * opposite answers about whether he had been paid. Both sides of the
+   * comparison now agree.
+   */
+  test("a payable paid in instalments that do not sum exactly is settled on both surfaces", async () => {
+    const s = await seedDealership("payableResidue");
+    const { applicationId } = await runDeal(s, { route: "THROUGH_DEALERSHIP", finalize: true });
+
+    const payable = await s.t.run(async (ctx) =>
+      (await ctx.db.query("vehicleSupplierPayables").collect()).find(
+        (row) => row.orgId === s.orgId && row.status !== "CANCELLED"
+      )!
+    );
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(payable._id, {
+        amountDue: 4.44,
+        amountPaid: undefined,
+        status: "DUE_ON_SALE",
+      });
+    });
+
+    for (let i = 0; i < 3; i++) {
+      await s.asApprover.mutation(api.sourcingPayables.recordPartialPayment, {
+        orgId: s.orgId,
+        payableId: payable._id,
+        amount: 1.48,
+      });
+    }
+
+    const after = await s.t.run(async (ctx) => await ctx.db.get(payable._id));
+    // The residue is real; what must not happen is treating it as a debt.
+    expect(after!.amountPaid).not.toBe(4.44);
+    expect(after!.status).toBe("PAID");
+    // And the settled timestamp must exist on a row that reports itself settled.
+    expect(after!.paidAt).toBeDefined();
+
+    // The cockpit and the subledger now agree.
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId: applicationId as never,
+    });
+    const supplier = view!.money!.parties.find((p) => p.party === "SUPPLIER")!;
+    expect(supplier.position).toBe("SETTLED");
+  });
+
+  /**
+   * The representability guard the receivable side already had. Two payments of
+   * 0.0005 would otherwise settle a 0.001 payable while each accounting hook
+   * rounded to a fils — discharging two fils against a one-fils liability.
+   */
+  test("a payment finer than the currency can represent is refused", async () => {
+    const s = await seedDealership("payableFraction");
+    await runDeal(s, { route: "THROUGH_DEALERSHIP", finalize: true });
+    const payable = await s.t.run(async (ctx) =>
+      (await ctx.db.query("vehicleSupplierPayables").collect()).find(
+        (row) => row.orgId === s.orgId && row.status !== "CANCELLED"
+      )!
+    );
+
+    await expect(
+      s.asApprover.mutation(api.sourcingPayables.recordPartialPayment, {
+        orgId: s.orgId,
+        payableId: payable._id,
+        amount: 0.0005,
+      })
+    ).rejects.toThrow();
+  });
+
 });

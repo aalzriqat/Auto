@@ -255,4 +255,58 @@ describe("صافي ربح المعرض", () => {
     });
     expect(profit.available && profit.amountMinor).toBe(-490_000);
   });
+
+  /**
+   * OP-F2 / H-7b. Subtracting the dealership's contribution while omitting the
+   * money the customer paid the dealership directly does not converge on
+   * `computeDealerProceeds` — it moves the error to the other side of zero.
+   *
+   * A deal where the customer absorbs a 1,000 gap and the dealership
+   * contributes 1,000 has the same profit as one with neither. The half-applied
+   * version reported it 1,000 LOW, under a label asserting the contribution had
+   * been accounted for. Understating an owner's profit is not the safe
+   * direction; it is the same defect wearing the opposite sign.
+   */
+  test("the customer's direct payment offsets the dealership's contribution", () => {
+    const both = deriveManagementProfit({
+      ...settled,
+      dealerContributionMinor: 1_000_000,
+      customerDirectToDealerMinor: 1_000_000,
+      fullySettled: false,
+    });
+    const neither = deriveManagementProfit({
+      ...settled,
+      dealerContributionMinor: 0,
+      customerDirectToDealerMinor: 0,
+      fullySettled: false,
+    });
+    expect(both.available && both.amountMinor).toBe(neither.available && neither.amountMinor);
+
+    if (!both.available) return;
+    const line = both.lines.find((l) => l.key === "CUSTOMER_DIRECT_TO_DEALER");
+    expect(line).toBeDefined();
+    expect(line!.sign).toBe(1);
+    expect(line!.amountMinor).toBe(1_000_000);
+  });
+
+  /**
+   * The same figure `computeDealerProceeds` would report, which is the whole
+   * point of the H-7 ruling: same economics, different accounting
+   * classification. Opus's worked example, with the supplier settlement
+   * standing in for the vehicle cost on a consigned deal.
+   */
+  test("agrees with computeDealerProceeds on a negotiated-gap deal", () => {
+    const profit = deriveManagementProfit({
+      approvedDealerPurchaseAmountMinor: 10_000_000,
+      supplierSettlementMinor: 7_000_000,
+      dealerContributionMinor: 1_000_000,
+      customerDirectToDealerMinor: 1_000_000,
+      actualExpensesMinor: 0,
+      currency: "JOD",
+      fullySettled: false,
+    });
+    // 10,000 + 1,000 − 7,000 − 1,000 − 0 = 3,000
+    expect(profit.available && profit.amountMinor).toBe(3_000_000);
+  });
+
 });

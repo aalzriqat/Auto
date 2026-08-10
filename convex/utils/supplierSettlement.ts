@@ -1,4 +1,5 @@
 import { Doc } from "../_generated/dataModel";
+import { toMinorUnits } from "./money";
 
 /**
  * The settlement state of a supplier payable, derived from the money rather
@@ -64,7 +65,15 @@ export function deriveSettlementStatus(
   // honoured where the history cannot contradict it.
   if (payable.status === "PAID" && amountPaid === 0) return "PAID";
 
-  if (amountPaid >= payable.amountDue && payable.amountDue > 0) return "PAID";
+  // Compared in integer minor units. `amountPaid` accumulates instalments in
+  // major units, so it can land a float hair under `amountDue` on a fully paid
+  // debt — which reported the supplier as still owed, and disagreed with the
+  // cockpit, which judges the same row in minor units.
+  if (
+    payable.amountDue > 0 &&
+    toMinorUnits(amountPaid, payable.currency) >= toMinorUnits(payable.amountDue, payable.currency)
+  )
+    return "PAID";
   if (amountPaid > 0) return "PARTIALLY_PAID";
   return isDue(payable) ? "DUE_ON_SALE" : "NOT_YET_DUE";
 }

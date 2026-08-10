@@ -644,6 +644,7 @@ export const salesEn = {
   ManagementFigureNote:
     "A management figure. It has no journal behind it and is never posted to the books.",
   LineApprovedPurchase: "Approved purchase amount (finance company)",
+  LineCustomerDirectToDealer: "Paid by the customer to the dealership",
   LineSupplierSettlement: "Supplier settlement",
   LineDealerContribution: "Dealership contribution to financing",
   LineActualExpenses: "Actual expenses",
@@ -1329,6 +1330,7 @@ export const salesAr = {
   ProfitNeedsDealerContribution: "مساهمة المعرض في قيمة الشراء غير مُسجَّلة.",
   ManagementFigureNote: "رقم إداري لا يقابله قيد محاسبي، ولا يُرحَّل إلى الدفاتر.",
   LineApprovedPurchase: "قيمة الشراء المعتمدة من شركة التمويل",
+  LineCustomerDirectToDealer: "مدفوع من العميل للمعرض",
   LineSupplierSettlement: "تسوية المورد",
   LineDealerContribution: "مساهمة المعرض في التمويل",
   LineActualExpenses: "مصاريف فعلية",

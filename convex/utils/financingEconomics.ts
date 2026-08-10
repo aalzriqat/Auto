@@ -878,6 +878,7 @@ export type ManagementProfitClassification =
 
 export type ManagementProfitLine =
   | { key: "APPROVED_PURCHASE"; sign: 1; amountMinor: number }
+  | { key: "CUSTOMER_DIRECT_TO_DEALER"; sign: 1; amountMinor: number }
   | { key: "SUPPLIER_SETTLEMENT"; sign: -1; amountMinor: number }
   | { key: "DEALER_CONTRIBUTION"; sign: -1; amountMinor: number }
   | { key: "ACTUAL_EXPENSES"; sign: -1; amountMinor: number };
@@ -935,17 +936,34 @@ export type ManagementProfit =
  * arithmetic: the approved-purchase spread has no journal, so the figure keeps
  * ESTIMATED_AWAITING_SETTLEMENT / ACTUAL_UNPOSTABLE and stays unpostable.
  *
- * ⚠️ One asymmetry with `computeDealerProceeds` remains and is NOT guessed at
- * here: that function also ADDS `customerDirectToDealerMinor`, the gap the
- * customer pays the dealership directly. No such field is persisted on
- * `financeApplications`, so there is no sale-time evidence to read, and
- * inventing one would be the same error in the opposite direction. Raised on
- * SCRUM-26 as H-7b; do not close it by assuming zero.
+ * H-7b, CORRECTED 2026-08-10. An earlier revision of this comment claimed that
+ * `customerDirectToDealerMinor` — the gap the customer pays the dealership
+ * directly — had no persisted source and so could not be included. **That was
+ * wrong**, and the claim was reached by grepping for a field of that name
+ * instead of for the quantity. It is composed from two fields that ARE stored
+ * on `financeApplications`, exactly as `recomputeAndPatchEconomics` composes it:
+ *
+ *     customerGapCashToDealerMinor + customerGapInstallmentToDealerMinor
+ *
+ * Leaving it out while subtracting the dealer contribution did not converge on
+ * `computeDealerProceeds` — it moved the error to the other side of zero. On a
+ * deal where the customer absorbs a 1,000 gap and the dealership contributes
+ * 1,000, the true profit is unchanged, but the half-applied version reported it
+ * 1,000 LOW, under a label asserting the contribution had been accounted for.
+ * Understating an owner's profit is not the safe direction; it is the same
+ * defect wearing the opposite sign.
+ *
+ * Unlike the contribution, an absent value here IS a real zero: both fields are
+ * written only when a gap is resolved to the dealership, and their absence
+ * means no gap was. `recomputeAndPatchEconomics` reads them with the same
+ * `?? 0`, so this agrees with the engine rather than inventing a convention.
  */
 export function deriveManagementProfit(args: {
   approvedDealerPurchaseAmountMinor?: number;
   supplierSettlementMinor?: number;
   dealerContributionMinor?: number;
+  /** `customerGapCashToDealerMinor + customerGapInstallmentToDealerMinor`. */
+  customerDirectToDealerMinor?: number;
   actualExpensesMinor: number;
   currency: string;
   fullySettled: boolean;
@@ -965,6 +983,11 @@ export function deriveManagementProfit(args: {
 
   const lines: ManagementProfitLine[] = [
     { key: "APPROVED_PURCHASE", sign: 1, amountMinor: args.approvedDealerPurchaseAmountMinor },
+    {
+      key: "CUSTOMER_DIRECT_TO_DEALER",
+      sign: 1,
+      amountMinor: args.customerDirectToDealerMinor ?? 0,
+    },
     { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: args.supplierSettlementMinor },
     { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: args.dealerContributionMinor },
     { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: args.actualExpensesMinor },

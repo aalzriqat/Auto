@@ -5,7 +5,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
 import { hookSupplierPaymentSettled } from "./accounting/workflowHooks";
-import { toMinorUnits } from "./utils/money";
+import { fromMinorUnits, toMinorUnits } from "./utils/money";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 import { Id } from "./_generated/dataModel";
 import { getActiveDepositHolds } from "./utils/depositHelpers";
@@ -382,19 +382,43 @@ export const recordPartialPayment = mutation({
           );
         }
 
+        // The payment must be representable in the payable's currency. JOD
+        // carries three decimals, so two payments of 0.0005 would otherwise
+        // settle a 0.001 payable while each accounting hook rounded to a fils —
+        // discharging two fils from the ledger against a one-fils liability.
+        // The mirror of the guard on the receivable side.
+        if (
+          fromMinorUnits(toMinorUnits(args.amount, payable.currency), payable.currency) !==
+          args.amount
+        ) {
+          throw new ConvexError(
+            `A payment in ${payable.currency} cannot be finer than the currency allows. Round ${args.amount} to the nearest representable amount.`
+          );
+        }
+
         const alreadyPaid = payable.amountPaid ?? 0;
         const projected = alreadyPaid + args.amount;
+        // Both comparisons in integer minor units, the same fix applied to
+        // `supplierReceivables.recordReceipt`. In major units they were float
+        // comparisons against an accumulated float, which made a payable
+        // permanently unsettleable: 4.440 JOD paid as three instalments of
+        // 1.480 accumulates to 4.4399999999999995, so `=== amountDue` was false
+        // and the status stayed PARTIALLY_PAID, while `> amountDue` rejected any
+        // further payment because the residue owing is under a thousandth of a
+        // fils. The supplier had been paid in full and nothing could record it.
+        const dueMinor = toMinorUnits(payable.amountDue, payable.currency);
+        const projectedMinor = toMinorUnits(projected, payable.currency);
         // Paying a supplier more than he is owed is a real error with real
         // money behind it, and netting it into the next payable hides which
         // deal it happened on.
-        if (projected > payable.amountDue) {
+        if (projectedMinor > dueMinor) {
           throw new ConvexError(
             `That would pay ${projected} against ${payable.amountDue} owed. Reduce the amount, or correct the entitlement first.`
           );
         }
 
         const now = Date.now();
-        const settlesInFull = projected === payable.amountDue;
+        const settlesInFull = projectedMinor === dueMinor;
         const paymentSeq = (payable.paymentSeq ?? 0) + 1;
         await ctx.db.patch(args.payableId, {
           amountPaid: projected,

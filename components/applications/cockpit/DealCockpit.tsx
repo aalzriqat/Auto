@@ -90,6 +90,7 @@ const STATUS_LABEL: Record<string, string> = {
 
 const PROFIT_LINE_LABEL: Record<string, string> = {
   APPROVED_PURCHASE: "LineApprovedPurchase",
+  CUSTOMER_DIRECT_TO_DEALER: "LineCustomerDirectToDealer",
   SUPPLIER_SETTLEMENT: "LineSupplierSettlement",
   DEALER_CONTRIBUTION: "LineDealerContribution",
   ACTUAL_EXPENSES: "LineActualExpenses",

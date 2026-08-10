@@ -562,7 +562,9 @@ async function saleTimeMarginMinor(
   // `amountReceived`. A claim denominated in another currency is evidence
   // nobody here can read, which is not the same as evidence of zero.
   if (supplierClaim) {
-    return supplierClaim.currency === currency
+    // Same reason as `rowFullySettled`: an unrepresentable amount is missing
+    // evidence, not grounds to refuse the whole query.
+    return supplierClaim.currency === currency && Number.isFinite(supplierClaim.amountDue)
       ? { known: true, minor: toMinorUnits(supplierClaim.amountDue, supplierClaim.currency) }
       : { known: false };
   }
@@ -580,15 +582,38 @@ async function saleTimeMarginMinor(
     .query("transactions")
     .withIndex("by_org_vehicle", (q) => q.eq("orgId", app.orgId).eq("vehicleId", app.vehicleId))
     .collect();
-  const recognized = rows.filter(
-    (row) => row.category === "VEHICLE_SALE" && row.recognizedRevenueAmount !== undefined
+  // Ambiguity is judged on EVERY sale row for the vehicle, not only the ones
+  // carrying a recognized amount.
+  //
+  // Filtering first and then counting was a way to attribute the wrong deal's
+  // margin: a vehicle sold once before recognized-revenue accounting existed
+  // and once after leaves exactly one row with the field set, so the LATER
+  // sale's margin was read as though it belonged to THIS application. The
+  // legacy row is the evidence that the vehicle was sold twice, and dropping it
+  // discarded the very fact that made the answer unsafe.
+  //
+  // `transactions` carries no `saleId`, so no row can be tied to a particular
+  // sale. Until one does, a vehicle with more than one sale row is undecidable
+  // — and undecidable is answered as such, not guessed.
+  //
+  // Soft-deleted rows are excluded, as every other reader of this table does.
+  // Cancelling a sale patches its VEHICLE_SALE row `isDeleted: true` rather
+  // than removing it (`utils/saleCancellation.ts`), so counting them left a
+  // vehicle that had been sold, cancelled and re-sold looking permanently
+  // ambiguous — and a genuine zero-margin resale could never finish, which is
+  // the very dead-end the obligations redesign existed to remove. Worse, a
+  // cancelled-and-not-resold vehicle returned the DEAD row as live evidence.
+  const saleRows = rows.filter(
+    (row) => row.category === "VEHICLE_SALE" && row.isDeleted !== true
   );
-  // A vehicle resold after a cancellation carries more than one, and the row
-  // does not say which sale it belongs to. Which one speaks for THIS deal is
-  // not decidable from the data, so it is not decided. Zero rows means the sale
-  // predates recognized-revenue accounting — also undecidable, not zero.
-  if (recognized.length !== 1) return { known: false };
-  return { known: true, minor: toMinorUnits(recognized[0].recognizedRevenueAmount!, currency) };
+  if (saleRows.length !== 1) return { known: false };
+  // Zero recognized rows means the sale predates recognized-revenue accounting:
+  // also undecidable, and specifically not zero.
+  const recognizedAmount = saleRows[0].recognizedRevenueAmount;
+  if (recognizedAmount === undefined || !Number.isFinite(recognizedAmount)) {
+    return { known: false };
+  }
+  return { known: true, minor: toMinorUnits(recognizedAmount, currency) };
 }
 
 /**
@@ -602,6 +627,12 @@ async function saleTimeMarginMinor(
  * Money is compared as integers or it is not compared.
  */
 function rowFullySettled(due: number, settled: number, rowCurrency: string): boolean {
+  // `toMinorUnits` throws on a value it cannot represent as a safe integer, and
+  // Convex accepts NaN as a `v.number()` — a stored amount reachable through the
+  // admin raw-JSON editor. This runs inside a QUERY whose contract is to degrade
+  // to UNKNOWN rather than refuse: a throw here blanks the whole cockpit instead
+  // of one row, which is the opposite of the fail-safe the caller expects.
+  if (!Number.isFinite(due) || !Number.isFinite(settled)) return false;
   return toMinorUnits(due, rowCurrency) - toMinorUnits(settled, rowCurrency) <= 0;
 }
 
@@ -919,6 +950,13 @@ async function buildCockpitMoney(
       // recomputed from today's LTV and first payment — the same rule the
       // margin now follows, for the same reason.
       dealerContributionMinor: app.dealerContributionMinor,
+      // H-7b: the offsetting half. Composed from the two stored gap fields the
+      // same way `recomputeAndPatchEconomics` composes it, so the cockpit and
+      // the economics engine cannot disagree about what the customer paid the
+      // dealership directly.
+      customerDirectToDealerMinor:
+        (app.customerGapCashToDealerMinor ?? 0) +
+        (app.customerGapInstallmentToDealerMinor ?? 0),
       actualExpensesMinor,
       currency,
       fullySettled,
