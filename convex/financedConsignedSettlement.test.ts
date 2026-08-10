@@ -2065,6 +2065,82 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
   });
 
   /**
+   * CX-13. The false zero.
+   *
+   * An earlier design read "no claim row for this sale" as proof the margin was
+   * zero, because completion opens a claim only when it is positive. Absence
+   * proves no such thing. `hardDeleteOrg` removes `vehicleSupplierReceivables`
+   * (step 58) BEFORE `sales` (step 70), so a run that fails between them leaves
+   * a sale whose claim is gone — and a sale predating the claims table looks
+   * identical. Both would have reported the deal fully settled with the whole
+   * margin still uncollected.
+   *
+   * The sale records what it earned. A missing claim on a sale that recorded a
+   * POSITIVE margin is a missing record, and missing records are never NONE.
+   */
+  test("a deleted claim does not become proof that the margin was zero", async () => {
+    const { s, applicationId } = await directDeal("deletedClaim");
+    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
+    // Exactly what a half-completed org wipe leaves behind: the claim gone,
+    // the sale still present.
+    await s.t.run(async (ctx) => {
+      await ctx.db.delete(claim._id);
+    });
+
+    const view = await cockpitOf(s, applicationId);
+    expect(stageOf(view, "SETTLEMENT")).not.toBe("COMPLETE");
+    expect(supplierRow(view).position).toBe("UNKNOWN");
+  });
+
+  /**
+   * The other side of the same fact: a sale that predates `consignedMarginMinor`
+   * has no recorded margin, and that is UNKNOWN rather than zero.
+   */
+  test("a sale with no recorded margin is unknown, not zero", async () => {
+    const { s, applicationId } = await directDeal("legacyNoMargin");
+    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
+    await s.t.run(async (ctx) => {
+      await ctx.db.delete(claim._id);
+      const sale = (await ctx.db.query("sales").collect()).find((row) => row.orgId === s.orgId)!;
+      await ctx.db.patch(sale._id, { consignedMarginMinor: undefined });
+    });
+
+    const view = await cockpitOf(s, applicationId);
+    expect(supplierRow(view).position).toBe("UNKNOWN");
+    expect(view!.money!.managementProfit.available).toBe(false);
+  });
+
+  /**
+   * And the case all of this exists to keep working: a genuine zero-margin deal
+   * records a zero, so it can still finish.
+   */
+  test("a recorded zero margin still lets the deal complete", async () => {
+    const s = await seedDealership("recordedZero");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.vehicleId as never, { sourceCost: VEHICLE_PRICE });
+    });
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, {
+        approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+        dealerContributionMinor: 0,
+      });
+      const sale = (await ctx.db.query("sales").collect()).find((row) => row.orgId === s.orgId)!;
+      // The premise: completion recorded a zero rather than recording nothing.
+      expect(sale.consignedMarginMinor).toBe(0);
+    });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+    });
+
+    const view = await cockpitOf(s, applicationId);
+    expect(stageOf(view, "SETTLEMENT")).toBe("COMPLETE");
+    expect(supplierRow(view).position).toBe("NOT_INVOLVED");
+  });
+
+  /**
    * OP-F3 follow-through. A stored amount this currency cannot represent must
    * mark ONE row unknown, not reject the query — `dealCockpit` is the whole
    * screen, and Convex accepts NaN as a `v.number()`, which the admin raw-JSON

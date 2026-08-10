@@ -641,6 +641,8 @@ export const salesEn = {
   ProfitNeedsApprovedPurchase: "The finance company's approved purchase amount is not recorded.",
   ProfitNeedsSupplierSettlement: "What the supplier settles at is not recorded.",
   ProfitNeedsDealerContribution: "The dealership's own contribution to the purchase is not recorded.",
+  ProfitInputCorrupt: "One of the recorded amounts is not valid, so the figure cannot be trusted.",
+  ProfitDealCancelled: "This deal was cancelled, so it has no profit to report.",
   ManagementFigureNote:
     "A management figure. It has no journal behind it and is never posted to the books.",
   LineApprovedPurchase: "Approved purchase amount (finance company)",
@@ -1328,6 +1330,8 @@ export const salesAr = {
   ProfitNeedsApprovedPurchase: "قيمة الشراء المعتمدة من شركة التمويل غير مُسجَّلة.",
   ProfitNeedsSupplierSettlement: "قيمة تسوية المورد غير مُسجَّلة.",
   ProfitNeedsDealerContribution: "مساهمة المعرض في قيمة الشراء غير مُسجَّلة.",
+  ProfitInputCorrupt: "أحد المبالغ المُسجَّلة غير صالح، لذا لا يمكن الاعتماد على الرقم.",
+  ProfitDealCancelled: "أُلغيت هذه الصفقة، فلا يوجد ربح لعرضه.",
   ManagementFigureNote: "رقم إداري لا يقابله قيد محاسبي، ولا يُرحَّل إلى الدفاتر.",
   LineApprovedPurchase: "قيمة الشراء المعتمدة من شركة التمويل",
   LineCustomerDirectToDealer: "مدفوع من العميل للمعرض",

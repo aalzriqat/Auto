@@ -104,12 +104,18 @@ const PROFIT_LINE_LABEL: Record<string, string> = {
  * inheriting whichever branch happened to be the `else`.
  */
 const PROFIT_BLOCKED_REASON: Record<
-  "NoApprovedPurchaseAmount" | "NoSupplierSettlement" | "NoDealerContribution",
+  "NoApprovedPurchaseAmount"
+  | "NoSupplierSettlement"
+  | "NoDealerContribution"
+  | "CorruptInput"
+  | "DealCancelled",
   string
 > = {
   NoApprovedPurchaseAmount: "ProfitNeedsApprovedPurchase",
   NoSupplierSettlement: "ProfitNeedsSupplierSettlement",
   NoDealerContribution: "ProfitNeedsDealerContribution",
+  CorruptInput: "ProfitInputCorrupt",
+  DealCancelled: "ProfitDealCancelled",
 };
 
 /** A money run is Latin digits inside Arabic prose; `<bdi>` keeps it whole. */

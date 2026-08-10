@@ -416,7 +416,6 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
 
   const orgCurrency = await getOrgCurrency(ctx, app.orgId);
   const currency = app.economicsCurrency ?? orgCurrency;
-  const sameCurrency = (rowCurrency: string) => rowCurrency === currency;
 
   // Resolved ONCE, from immutable sale-time records, and shared by the
   // obligation below and the headline in `buildCockpitMoney`. Two independent
@@ -574,36 +573,39 @@ async function saleTimeMarginMinor(
 
   if (!consigned || !app.finalizedSaleId) return { known: false };
 
-  // Every claim ever raised for THIS sale, cancelled ones included. The
-  // cancelled row is the point: it is the difference between "the deal earned
-  // nothing" and "the deal earned something and the claim was voided".
-  const claims = await ctx.db
-    .query("vehicleSupplierReceivables")
-    .withIndex("by_org_sale", (q) =>
-      q.eq("orgId", app.orgId).eq("saleId", app.finalizedSaleId!)
-    )
-    .collect();
-  return claims.length === 0 ? { known: true, minor: 0 } : { known: false };
+  // The margin the SALE recorded, not an inference from a missing record.
+  //
+  // A previous version read "no claim row for this sale" as proof the margin
+  // was zero, because completion opens a claim only when it is positive. That
+  // was unsound in both directions a reviewer could reach: a sale predating the
+  // claims table has no row, and `hardDeleteOrg` removes receivables (step 58)
+  // before sales (step 70), so a failed run leaves sales whose claims are gone.
+  // Either would have reported a deal fully settled with the margin still
+  // uncollected — the precise error this screen exists to prevent.
+  //
+  // `consignedMarginMinor` is written on every sourced sale, zero included.
+  // Absent means the row predates the field: UNKNOWN, and specifically not zero.
+  const sale = await ctx.db.get(app.finalizedSaleId);
+  if (!sale || sale.orgId !== app.orgId) return { known: false };
+  const recorded = sale.consignedMarginMinor;
+  return recorded === undefined || !Number.isFinite(recorded)
+    ? { known: false }
+    : { known: true, minor: recorded };
 }
 
 /**
- * Whether a subledger row is fully settled, decided in integer minor units.
- *
- * `amountDue`, `amountReceived` and `amountPaid` are MAJOR units — floats. The
- * previous `due - paid <= 0` left a binary residue: a 2.410 JOD claim collected
- * as 1.205 twice ends about 4.4e-16 short, which is greater than zero, so the
- * claim stayed OPEN permanently, the deal could never reach COMPLETE, and the
- * collection button kept inviting a receipt from a supplier who owed nothing.
- * Money is compared as integers or it is not compared.
- */
-/**
  * The ONLY conversion this query performs, and the only place it can refuse.
  *
+ * `amountDue`, `amountReceived` and `amountPaid` are MAJOR units — floats — so
+ * comparing them directly left a binary residue: a 2.410 JOD claim collected as
+ * 1.205 twice ends about 4.4e-16 short, which is greater than zero, so the claim
+ * stayed OPEN permanently and the collection button kept inviting a receipt from
+ * a supplier who owed nothing. Money is compared as integers or not at all.
+ *
  * `toMinorUnits` throws on anything it cannot represent as a safe integer, and
- * Convex accepts `NaN` as a `v.number()` — a stored amount reachable through the
- * admin raw-JSON editor. This runs inside a QUERY whose contract is to degrade
- * one row to UNKNOWN rather than refuse, because a throw blanks the entire
- * cockpit.
+ * Convex accepts `NaN` as a `v.number()`. This runs inside a QUERY whose
+ * contract is to degrade one row to UNKNOWN rather than refuse, because a throw
+ * blanks the entire cockpit.
  *
  * A first attempt guarded `rowFullySettled` and the margin resolution with
  * `Number.isFinite`, which was on the wrong side of the problem: the same NaN
@@ -806,10 +808,26 @@ async function buildCockpitMoney(
   // to zero made the screen assert the customer had put nothing in while the AR
   // aging report showed the money. Every other reader in the codebase converts;
   // this one now does too.
+  //
+  // Routed through the query's one guarded conversion like every other amount.
+  // This was the single raw `toMinorUnits` left on this path, which made the
+  // claim above ("every conversion goes through here") false — and a legacy
+  // deposit carrying only a non-representable `amount` would have thrown and
+  // taken the whole cockpit down, on the one row the guard was not applied to.
+  // A deposit that cannot be read is left out of the total and counted, so the
+  // screen can say the figure is incomplete rather than quietly understating
+  // what the customer has put in.
+  let unreadableDeposits = 0;
   const heldDepositMinor = heldDeposits.reduce((total, deposit) => {
     const depositCurrency = deposit.currency ?? currency;
-    if (depositCurrency !== currency) return total;
-    return total + (deposit.amountMinor ?? toMinorUnits(deposit.amount, depositCurrency));
+    const minor =
+      deposit.amountMinor ??
+      toMinorSameCurrencyOrUndefined(deposit.amount, depositCurrency, currency);
+    if (minor === undefined) {
+      if (depositCurrency === currency) unreadableDeposits += 1;
+      return total;
+    }
+    return total + minor;
   }, 0);
   // The mockup shows a receipt number against the customer row. It lives on the
   // canonical payment, not the deposit.
@@ -822,9 +840,14 @@ async function buildCockpitMoney(
       name: "",
       position: !routeKnown
         ? ("UNKNOWN" as const)
-        : heldDepositMinor > 0
-          ? ("DEALERSHIP_HOLDS" as const)
-          : ("NOT_INVOLVED" as const),
+        : // A deposit whose amount could not be read makes this row's total a
+          // partial one. Reporting NOT_INVOLVED would tell the dealership the
+          // customer had put nothing in.
+          unreadableDeposits > 0
+          ? ("UNKNOWN" as const)
+          : heldDepositMinor > 0
+            ? ("DEALERSHIP_HOLDS" as const)
+            : ("NOT_INVOLVED" as const),
       amountMinor: heldDepositMinor,
       currency,
       reference: depositPayment?.externalReference,
@@ -964,6 +987,10 @@ async function buildCockpitMoney(
     settlesDirectToSupplier: settlesDirect,
     routeKnown,
     managementProfit: deriveManagementProfit({
+      // A cancelled sale keeps its approval, its recorded margin and its
+      // disbursement, so every input stays computable and the figure they
+      // produce describes a deal whose journal was reversed.
+      dealCancelled: settlementFacts.saleCancelled,
       approvedDealerPurchaseAmountMinor: app.approvedDealerPurchaseAmountMinor,
       supplierSettlementMinor,
       // H-7: read from the application, where the approval froze it. Not

@@ -1097,6 +1097,18 @@ async function applySaleCompletionSideEffects(
   // sourced sale without a positive `costMinor` throws further up.
   const marginMinorForClaim = Math.max(0, marginMinor ?? 0);
   const supplierOwesMargin = marginMinorForClaim > 0;
+  // Recorded on the sale itself, including when it is zero.
+  //
+  // A zero margin opens no claim below, and the cockpit used to read that
+  // absence as proof the deal earned nothing. Absence proves no such thing: it
+  // is also what a sale predating the claims table looks like, and what a
+  // `hardDeleteOrg` that fails between removing receivables and removing sales
+  // leaves behind. Both would have shown the deal as fully settled with the
+  // margin still uncollected. Writing the fact costs one patch; deducing it
+  // from a gap cost three review rounds and two wrong answers.
+  if (isSourced && marginMinor !== null) {
+    await ctx.db.patch(saleId, { consignedMarginMinor: marginMinor });
+  }
   if (isSourced && costAmount > 0 && supplierOwesMargin && !dealershipCollectsGross(settlementRoute)) {
     const marginAmount = fromMinorUnits(marginMinorForClaim, prepared.currency);
     await openSupplierReceivable(ctx, {

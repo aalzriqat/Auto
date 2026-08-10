@@ -1335,6 +1335,24 @@ export default defineSchema({
     supplierSettlementRoute: v.optional(
       v.union(v.literal("THROUGH_DEALERSHIP"), v.literal("DIRECT_TO_SUPPLIER"))
     ),
+    /**
+     * What the dealership earned on a consigned sale, in minor units, frozen at
+     * completion. Written on every sourced sale — INCLUDING a zero — because
+     * zero is the fact that most needs recording.
+     *
+     * Absent means the row predates this field, and readers must treat that as
+     * UNKNOWN rather than as zero. Never defaulted at write time, for the same
+     * reason `supplierSettlementRoute` above is not.
+     *
+     * The cockpit previously inferred a zero margin from the ABSENCE of a
+     * `vehicleSupplierReceivables` row, on the grounds that sale completion
+     * opens one only when the margin is positive. That inference was unsound:
+     * absence is also what a legacy sale looks like, and what a `hardDeleteOrg`
+     * that fails between deleting receivables and deleting sales leaves behind.
+     * Either way the screen would have reported a deal settled with money still
+     * uncollected. A fact this important is recorded, not deduced from a gap.
+     */
+    consignedMarginMinor: v.optional(v.number()),
     canonicalReceivableDocumentId: v.optional(v.id("receivableDocuments")),
     commissionAmount: v.optional(v.number()), // Calculated at sale time
     // How many COMMISSION_ADJUSTED corrections have been posted against this
