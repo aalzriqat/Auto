@@ -397,9 +397,16 @@ const SECRET_SELECTORS = new Set<SelectorKey>([
  *
  * Predicting the CLI's branch order buys nothing: the guard already reads the
  * authoritative target back out of the CLI's own dry run, twice, and that is
- * what binds. So the prose is now limited to facts that do not depend on the
- * CLI's internal ordering — which variables are set, where each came from, and
- * the one documented property of the command itself.
+ * what binds. So the inventory lines are the only environment-dependent output,
+ * and the prose that follows them describes this wrapper's own behaviour rather
+ * than the CLI's — a claim that cannot go stale when the CLI changes.
+ *
+ * The prose deliberately says nothing about where `convex deploy` would land.
+ * An earlier version asserted it "targets the project's PRODUCTION deployment
+ * regardless", which is false for a preview deploy key: the CLI's own help says
+ * a preview key deploys to a preview deployment, and `kind === "preview"` routes
+ * to `deployToNewPreviewDeployment`. That is the same defect one more time —
+ * a sentence about the CLI's behaviour, written from a model of it.
  *
  * Per-key origins matter because the CLI loads `.env.local` and `.env` on its
  * own: a value can be in force without ever appearing in `process.env`.
@@ -419,9 +426,10 @@ export function describeTargetSelection(env: RepoSnapshot["env"]): string {
   return [
     "Deployment selection the CLI will read:",
     ...lines,
-    "'convex deploy' targets the project's PRODUCTION deployment regardless of which",
-    "of these is set. The target below is read back from the CLI's own dry run rather",
-    "than predicted from these values.",
+    "More than one of these can be set; the CLI acts on one of them, and this",
+    "wrapper does not guess which. It deploys to production only: the target below",
+    "is read back from the CLI's own dry run, and one that does not announce itself",
+    "as production is refused.",
   ].join("\n");
 }
 

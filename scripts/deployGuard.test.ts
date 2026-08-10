@@ -318,33 +318,57 @@ describe("target selection is inventoried, not predicted", () => {
     }
   });
 
-  test("it states the one property of the command that does not depend on these values", () => {
-    // Verified with --dry-run: `convex deploy` goes to production whatever
-    // CONVEX_DEPLOYMENT names. That is a fact about the command, not a
-    // prediction about which variable the CLI will branch on.
+  test("it says more than one may be set and that this wrapper does not guess", () => {
+    // The inventory can list several variables while the CLI acts on exactly
+    // one. Saying so is what keeps a multi-variable listing from reading as
+    // "all of these apply" — without needing to know which one wins.
     const text = describeTargetSelection({ CONVEX_DEPLOYMENT: "dev:vibrant-cat-418" });
-    expect(text).toMatch(/PRODUCTION/);
-    expect(text).toMatch(/read back from the CLI's own dry run/i);
+    expect(text).toMatch(/the CLI acts on one of them/i);
+    expect(text).toMatch(/does not guess which/i);
   });
 
-  test("it never claims to know which variable wins or whether Convex will prompt", () => {
-    // Both claims were a second implementation of the CLI's branch order, and
-    // both were wrong in production-adjacent ways: CONVEX_DEPLOYMENT_TOKEN was
-    // omitted entirely, then the self-hosted branch was placed ahead of the
-    // deploy key and treated a lone URL as decisive when the CLI needs the pair.
-    // The guard reads the real target back from the dry run, so the prediction
-    // bought nothing and cost two false sentences printed above a prod push.
-    const configurations = [
+  test("the explanatory prose is identical in every configuration", () => {
+    // This is the test the design rests on, so it asserts the property rather
+    // than banning the two phrasings that happened to be wrong last time.
+    //
+    // Every defect in this function came from prose that varied with the
+    // environment: CONVEX_DEPLOYMENT_TOKEN omitted, then the self-hosted branch
+    // ordered ahead of the deploy key, then "targets PRODUCTION regardless"
+    // (false for a preview deploy key). A denylist of past wordings cannot catch
+    // the next one — a reworded prediction, or the round-3 falsehood restored in
+    // different words, both passed the previous version of this test.
+    //
+    // If the only environment-dependent output is the indented inventory, no
+    // such claim can exist, whatever words it would have used.
+    const prose = (env: RepoSnapshot["env"]) =>
+      describeTargetSelection(env)
+        .split("\n")
+        .filter((line) => !line.startsWith("  "));
+
+    const baseline = prose({ CONVEX_DEPLOYMENT: "prod:kindly-hound-172" });
+    const configurations: RepoSnapshot["env"][] = [
       { CONVEX_DEPLOY_KEY: "prod:x|abc", CONVEX_SELF_HOSTED_URL: "https://internal" },
       { CONVEX_SELF_HOSTED_URL: "https://internal" },
+      { CONVEX_SELF_HOSTED_URL: "https://internal", CONVEX_SELF_HOSTED_ADMIN_KEY: "k" },
       { CONVEX_DEPLOYMENT_TOKEN: "prod:x|abc" },
-      { CONVEX_DEPLOYMENT: "prod:kindly-hound-172" },
+      { CONVEX_DEPLOY_KEY: "preview:x|abc" },
+      { CONVEX_DEPLOYMENT: "dev:vibrant-cat-418" },
     ];
     for (const env of configurations) {
-      const text = describeTargetSelection(env);
-      expect(text).not.toMatch(/will NOT prompt/i);
-      expect(text).not.toMatch(/the target is whatever/i);
+      expect(prose(env)).toEqual(baseline);
     }
+  });
+
+  test("the prose makes no claim about where 'convex deploy' would land", () => {
+    // "targets the project's PRODUCTION deployment regardless of which of these
+    // is set" is false for a preview deploy key — the CLI's own help says such a
+    // key deploys to a preview deployment. What this wrapper does is its own
+    // property and cannot go stale: it reads the target back and refuses one
+    // that is not production.
+    const text = describeTargetSelection({ CONVEX_DEPLOY_KEY: "preview:x|abc" });
+    expect(text).not.toMatch(/targets .*PRODUCTION/i);
+    expect(text).toMatch(/read back from the CLI's own dry run/i);
+    expect(text).toMatch(/does not announce itself\s+as production is refused/i);
   });
 
   test("an unset environment is described as refusing, not as defaulting", () => {
