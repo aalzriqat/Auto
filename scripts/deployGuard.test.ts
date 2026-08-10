@@ -1,4 +1,6 @@
 import { describe, expect, test } from "vitest";
+import { readFileSync } from "node:fs";
+import * as nodePath from "node:path";
 import {
   ALLOWED_DEPLOY_ARGS,
   bundleOffenders,
@@ -404,5 +406,54 @@ describe("the enforcement flow", () => {
   test("the deploy's exit code is propagated, not swallowed", async () => {
     const { io } = harness({ runDeploy: () => 17 });
     expect(await runGuardedDeploy(io)).toBe(17);
+  });
+});
+
+describe("declared Node range matches what CI actually runs", () => {
+  test("engines.node does not admit a major CI never tests", () => {
+    // This field is new on this branch, and nothing else in the repo pins Node
+    // — no vercel.json, no .nvmrc. Vercel resolves the BUILD runtime from
+    // engines.node in preference to its dashboard setting, choosing the newest
+    // major the range admits. An open ">=22.18" would therefore let the
+    // production web build drift onto a Node major that no CI job has ever run,
+    // as a side effect of a local deploy script's type-stripping requirement.
+    const pkg = JSON.parse(
+      readFileSync(nodePath.join(process.cwd(), "package.json"), "utf8")
+    ) as { engines?: { node?: string } };
+    const range = pkg.engines?.node ?? "";
+    expect(range).toMatch(/<\s*\d+/); // must have an upper bound at all
+
+    const upper = Number(range.match(/<\s*(\d+)/)?.[1]);
+    const ciMajor = Number(
+      readFileSync(nodePath.join(process.cwd(), ".github", "workflows", "test.yml"), "utf8")
+        .match(/node-version:\s*'?(\d+)/)?.[1]
+    );
+    expect(Number.isFinite(upper)).toBe(true);
+    expect(Number.isFinite(ciMajor)).toBe(true);
+    // The range may not reach past the major CI exercises.
+    expect(upper).toBe(ciMajor + 1);
+  });
+});
+
+describe("flag values that look like flags", () => {
+  test("--cmd -y is refused, and for the right reason", () => {
+    // Not a live bypass — commander binds `-y` as --cmd's argument rather than
+    // as auto-confirm — but a rule that reads like one must not rest on
+    // inspection. Before this, the value was skipped unconditionally.
+    const result = evaluateProdDeploy({ ...CLEAN, forwardedArgs: ["--cmd", "-y"] });
+    expect(result.ok).toBe(false);
+    const failure = result.failures.find((f) => f.id === "allowed-args-only");
+    expect(failure?.detail).toMatch(/value looks like a flag/);
+    // And it must NOT claim --cmd is disallowed; --cmd is on the allowlist.
+    expect(failure?.detail).not.toMatch(/refusing --cmd —/);
+  });
+
+  test("--message is forwardable, and its ordinary value is not mistaken for a flag", () => {
+    // Convex writes it to the deployment audit log. Long form only: the CLI
+    // registers no `-m`, so advertising one would fail the dry run.
+    expect(
+      evaluateProdDeploy({ ...CLEAN, forwardedArgs: ["--message", "rollback to 52be7b4f"] }).ok
+    ).toBe(true);
+    expect(ALLOWED_DEPLOY_ARGS.has("-m")).toBe(false);
   });
 });

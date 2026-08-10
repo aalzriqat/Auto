@@ -86,7 +86,8 @@ export const ALLOWED_DEPLOY_ARGS = new Set([
   "--cmd",
   "--cmd-url-env-var-name",
   "--debug-bundle-path",
-  "-m",
+  // Long form only: `convex deploy` declares "--message <message>" and
+  // registers no `-m`, so advertising one would fail the dry run.
   "--message",
 ]);
 
@@ -97,7 +98,6 @@ const ARGS_TAKING_VALUES = new Set([
   "--cmd",
   "--cmd-url-env-var-name",
   "--debug-bundle-path",
-  "-m",
   "--message",
 ]);
 
@@ -118,6 +118,7 @@ export const BUNDLED_EXTENSIONS = [
 
 function checkForwardedArgs(snapshot: RepoSnapshot): DeployCheck {
   const rejected: string[] = [];
+  const flagShapedValues: string[] = [];
   const args = snapshot.forwardedArgs;
 
   for (let i = 0; i < args.length; i++) {
@@ -136,19 +137,31 @@ function checkForwardedArgs(snapshot: RepoSnapshot): DeployCheck {
       // reads as one should not be left to be trusted by inspection.
       const value = args[i + 1];
       if (value !== undefined && value.startsWith("-")) {
-        rejected.push(`${arg} ${value}`);
+        flagShapedValues.push(`${arg} ${value}`);
       }
       i += 1;
     }
   }
 
+  // Two different reasons, two different sentences. Reporting a flag-shaped
+  // value under "only these may be forwarded" contradicts itself when the flag
+  // itself IS on the list — `--cmd -y` is refused for its value, not its name.
+  const reasons: string[] = [];
+  if (rejected.length > 0) {
+    reasons.push(
+      `refusing ${rejected.join(" ")} — only ${[...ALLOWED_DEPLOY_ARGS].join(", ")} may be forwarded. '-y' (and any combined form such as '-vy') suppresses the production confirmation and is never allowed`
+    );
+  }
+  if (flagShapedValues.length > 0) {
+    reasons.push(
+      `refusing ${flagShapedValues.join(", ")} — the value looks like a flag, so what it does cannot be read from the command line`
+    );
+  }
+
   return {
     id: "allowed-args-only",
-    ok: rejected.length === 0,
-    detail:
-      rejected.length === 0
-        ? "only known-safe arguments are forwarded"
-        : `refusing ${rejected.join(" ")} — only ${[...ALLOWED_DEPLOY_ARGS].join(", ")} may be forwarded. '-y' (and any combined form such as '-vy') suppresses the production confirmation and is never allowed`,
+    ok: reasons.length === 0,
+    detail: reasons.length === 0 ? "only known-safe arguments are forwarded" : reasons.join("; "),
   };
 }
 
@@ -367,8 +380,7 @@ export async function runGuardedDeploy(
   io: DeployIO,
   options: DeployOptions = {}
 ): Promise<number> {
-  const forwarded = io.collectSnapshot;
-  const snapshot = forwarded();
+  const snapshot = io.collectSnapshot();
   const first = evaluateProdDeploy(snapshot, options);
 
   io.log("\nProduction deploy preconditions\n");
@@ -423,7 +435,7 @@ export async function runGuardedDeploy(
   // Re-validate immediately before pushing. The dry run and the human pause can
   // take minutes, and the bundle is read from disk at push time, not at check
   // time — a file created in that window would otherwise ship unexamined.
-  const recheck = evaluateProdDeploy(forwarded(), options);
+  const recheck = evaluateProdDeploy(io.collectSnapshot(), options);
   if (!recheck.ok) {
     io.error("\nThe working tree changed while confirming. Refusing:\n");
     for (const check of recheck.checks) {
