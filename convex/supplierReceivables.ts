@@ -315,7 +315,7 @@ export const recordReceipt = mutation({
         // happened on. Same refusal as the payable side.
         if (projectedMinor > dueMinor) {
           throw new ConvexError(
-            `That would record ${projected} against ${row.amountDue} owed. Reduce the amount, or correct the claim first.`
+            `That would record ${fromMinorUnits(projectedMinor, row.currency)} against ${fromMinorUnits(dueMinor, row.currency)} owed. Reduce the amount, or correct the claim first.`
           );
         }
 

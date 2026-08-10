@@ -413,7 +413,7 @@ export const recordPartialPayment = mutation({
         // deal it happened on.
         if (projectedMinor > dueMinor) {
           throw new ConvexError(
-            `That would pay ${projected} against ${payable.amountDue} owed. Reduce the amount, or correct the entitlement first.`
+            `That would pay ${fromMinorUnits(projectedMinor, payable.currency)} against ${fromMinorUnits(dueMinor, payable.currency)} owed. Reduce the amount, or correct the entitlement first.`
           );
         }
 

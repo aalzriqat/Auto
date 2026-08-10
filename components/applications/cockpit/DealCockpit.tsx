@@ -317,7 +317,8 @@ export function DealCockpitView({
             >
               <Check className="h-4 w-4 text-emerald-600" />
               <span>
-                <bdi>{completed.length}</bdi> {t("StagesCompleted")}
+                <bdi>{completed.length}</bdi>{" "}
+                {t(completed.length === 1 ? "StageCompletedOne" : "StagesCompleted")}
               </span>
               <ChevronDown
                 className={`h-4 w-4 ms-auto transition-transform ${showCompleted ? "rotate-180" : ""}`}

@@ -2351,4 +2351,40 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
     if (!profit.available) expect(profit.reason).toBe("DealCancelled");
   });
 
+
+  /**
+   * CodeRabbit. `deposit.amountMinor ?? convert(...)` put the currency check
+   * inside the FALLBACK only, so a foreign-currency deposit that happened to
+   * carry `amountMinor` was added to the customer's total unconverted — 500 USD
+   * cents counted as 500 JOD fils. The stored minor amount is denominated too;
+   * it is not a currency-free number.
+   */
+  test("a foreign-currency deposit is not summed into the customer's total", async () => {
+    const s = await seedDealership("foreignDeposit");
+    // THROUGH_DEALERSHIP because the direct route refuses to be chosen while an
+    // unresolved reservation deposit is held — and the deposit is the point of
+    // this test. It is also the route the mockup depicts.
+    const { applicationId } = await runDeal(s, {
+      route: "THROUGH_DEALERSHIP",
+      finalize: false,
+      deposit: 300,
+    });
+
+    await s.t.run(async (ctx) => {
+      const deposit = (await ctx.db.query("deposits").collect()).find(
+        (row) => row.orgId === s.orgId
+      )!;
+      // Present AND in another currency — the combination the old expression
+      // could not see.
+      await ctx.db.patch(deposit._id, { currency: "USD", amountMinor: 300 * SCALE });
+    });
+
+    const view = await cockpitOf(s, applicationId);
+    const customer = view!.money!.parties.find((p) => p.party === "CUSTOMER")!;
+    expect(customer.amountMinor).toBe(0);
+    // And the row must say it cannot speak for the customer, not that the
+    // customer put nothing in.
+    expect(customer.position).toBe("UNKNOWN");
+  });
+
 });

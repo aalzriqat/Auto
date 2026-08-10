@@ -838,9 +838,17 @@ async function buildCockpitMoney(
   let unreadableDeposits = 0;
   const heldDepositMinor = heldDeposits.reduce((total, deposit) => {
     const depositCurrency = deposit.currency ?? currency;
+    // The currency is checked BEFORE choosing which field supplies the amount.
+    // Written as `amountMinor ?? convert(...)` the check lived only inside the
+    // fallback, so a foreign-currency deposit that happened to carry
+    // `amountMinor` was added to the total unconverted — 500 USD cents counted
+    // as 500 JOD fils. The stored minor amount is denominated too; it is not a
+    // currency-free number.
     const minor =
-      deposit.amountMinor ??
-      toMinorSameCurrencyOrUndefined(deposit.amount, depositCurrency, currency);
+      depositCurrency !== currency
+        ? undefined
+        : (deposit.amountMinor ??
+          toMinorSameCurrencyOrUndefined(deposit.amount, depositCurrency, currency));
     if (minor === undefined) {
       // Counted whatever the reason — unreadable amount OR another currency.
       // Gating this on a currency match left a foreign deposit excluded from the

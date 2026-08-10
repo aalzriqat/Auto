@@ -638,7 +638,18 @@ export const update = mutation({
       // the financier had paid for it.
       if (sale.applicationId) {
         const app = await ctx.db.get(sale.applicationId);
-        if (app && app.orgId === args.orgId) {
+        // Fails CLOSED. Written as `if (app && app.orgId === args.orgId)` this
+        // skipped BOTH refusals whenever the application could not be read —
+        // a missing row, or one belonging to another org. That is a guard whose
+        // evidence being unavailable becomes permission to proceed, on a
+        // cancellation that reverses money the finance company has already
+        // paid. Unreadable evidence refuses, and says which case it is.
+        if (!app || app.orgId !== args.orgId) {
+          throw new ConvexError(
+            "This sale's financing application can't be read, so it isn't possible to confirm whether the finance company has already paid. Resolve the application first, or void the sale through a manual accounting correction."
+          );
+        }
+        {
           if (app.disbursedAt) {
             throw new ConvexError(
               "The finance company has already paid the dealership on this deal, so it can't be cancelled from here. Void it through a manual accounting correction instead."
