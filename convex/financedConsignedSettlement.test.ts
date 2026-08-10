@@ -1665,3 +1665,58 @@ describe("a deal whose sale was cancelled from the sales side", () => {
     expect(view!.stages.find((st) => st.key === "SETTLEMENT")!.state).toBe("STOPPED");
   });
 });
+
+/**
+ * One response must not contradict itself.
+ *
+ * The obligation model is the authority on whether a party still owes anything.
+ * The `أطراف الصفقة` rows were re-deriving that from the claim independently, so
+ * a zero-margin direct deal reported supplier obligation NONE and a COMPLETE
+ * settlement stage while the supplier ROW in the same payload said UNKNOWN —
+ * the screen simultaneously saying the deal is finished and that it cannot tell.
+ */
+describe("the party rows and the stage rail agree", () => {
+  test("a zero-margin direct deal shows nothing outstanding, not an unknown", async () => {
+    const s = await seedDealership("rowAgreesZeroMargin");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.vehicleId as never, { sourceCost: VEHICLE_PRICE });
+    });
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, {
+        approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+      });
+    });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+    });
+
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+
+    expect(view!.stages.find((st) => st.key === "SETTLEMENT")!.state).toBe("COMPLETE");
+    const supplier = view!.money!.parties.find((p) => p.party === "SUPPLIER")!;
+    // There is genuinely nothing to collect, and the row must say so rather
+    // than claiming it cannot tell.
+    expect(supplier.position).toBe("NOT_INVOLVED");
+    expect(supplier.amountMinor).toBe(0);
+  });
+
+  test("an open margin claim still reads as owed to the dealership", async () => {
+    // The guard against satisfying the test above by collapsing every row.
+    const s = await seedDealership("rowAgreesOpenClaim");
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    const supplier = view!.money!.parties.find((p) => p.party === "SUPPLIER")!;
+    expect(supplier.position).toBe("OWED_TO_DEALERSHIP");
+    expect(supplier.amountMinor).toBe(MARGIN * SCALE);
+  });
+});

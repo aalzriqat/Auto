@@ -332,6 +332,33 @@ const VALID_STATUS_TRANSITIONS: Record<FinanceApplicationStatus, readonly Financ
 };
 
 /**
+ * How a party row reads an obligation.
+ *
+ * One translation, used by every row, so a row can never disagree with the
+ * settlement stage about whether somebody still owes money. `openPosition` is
+ * the only per-row difference — which way an OPEN obligation points, since the
+ * dealership owes the supplier on one route and is owed by him on the other.
+ *
+ * NONE is "nothing outstanding", not "cannot tell": a zero-margin deal has no
+ * claim, and that absence is the correct answer rather than missing evidence.
+ */
+function positionForObligation(
+  obligation: ObligationState,
+  openPosition: "DEALERSHIP_OWES" | "OWED_TO_DEALERSHIP"
+) {
+  switch (obligation) {
+    case "CLOSED":
+      return "SETTLED" as const;
+    case "NONE":
+      return "NOT_INVOLVED" as const;
+    case "OPEN":
+      return openPosition;
+    default:
+      return "UNKNOWN" as const;
+  }
+}
+
+/**
  * The money half of the cockpit: `أطراف الصفقة` and the headline figure.
  *
  * Every row arrives already classified — who holds the money, which way it is
@@ -655,12 +682,17 @@ async function buildCockpitMoney(
           // owed TO him — what remains is the dealership's agency margin, owed
           // BY him. Same row, opposite direction, which is exactly why the
           // screen cannot hard-code the mockup's THROUGH_DEALERSHIP layout.
-          position:
-            supplierClaimOutstandingMinor === undefined
-              ? ("UNKNOWN" as const)
-              : supplierClaimOutstandingMinor > 0
-                ? ("OWED_TO_DEALERSHIP" as const)
-                : ("SETTLED" as const),
+          //
+          // Read from the OBLIGATION, not re-derived from the claim. Deriving it
+          // here independently made one response contradict itself: a
+          // zero-margin deal has no claim, so this said UNKNOWN while the
+          // obligation said NONE and the stage rail said COMPLETE — the screen
+          // announcing the deal was finished and that it could not tell, at the
+          // same time. There is one authority on who still owes what.
+          position: positionForObligation(
+            settlementFacts.obligations.supplier,
+            "OWED_TO_DEALERSHIP"
+          ),
           amountMinor: supplierClaimOutstandingMinor ?? 0,
           currency,
           reference: supplierClaim?.receiptReference,
@@ -678,15 +710,12 @@ async function buildCockpitMoney(
           // exists and was previously ignored, so a part-paid payable overstated
           // the debt and a settled one still displayed a full balance — three
           // rows on one panel following two different conventions.
-          position: !routeKnown
-            ? ("UNKNOWN" as const)
-            : !payable
-              ? ("NOT_INVOLVED" as const)
-              : payableOutstandingMinor === undefined
-                ? ("UNKNOWN" as const)
-                : payable.status === "PAID" || payableOutstandingMinor === 0
-                  ? ("SETTLED" as const)
-                  : ("DEALERSHIP_OWES" as const),
+          // Same authority as the direct row above: the obligation, not a second
+          // reading of the payable.
+          position: positionForObligation(
+            settlementFacts.obligations.supplier,
+            "DEALERSHIP_OWES"
+          ),
           amountMinor: payableOutstandingMinor ?? 0,
           currency,
           reference: undefined,
