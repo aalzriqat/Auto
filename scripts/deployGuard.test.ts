@@ -295,54 +295,61 @@ describe("reading the target back out of the dry run", () => {
   });
 });
 
-describe("target selection is described, not inferred", () => {
-  test("a dev CONVEX_DEPLOYMENT is called out as NOT redirecting the deploy", () => {
-    const text = describeTargetSelection({ CONVEX_DEPLOYMENT: "dev:vibrant-cat-418" });
+describe("target selection is inventoried, not predicted", () => {
+  test("every set variable is listed, with where it came from", () => {
+    const text = describeTargetSelection({
+      CONVEX_DEPLOYMENT: "dev:vibrant-cat-418",
+      CONVEX_DEPLOY_KEY: "prod:xxx",
+      sources: { CONVEX_DEPLOYMENT: "process env", CONVEX_DEPLOY_KEY: ".env.local" },
+    });
     expect(text).toContain("dev:vibrant-cat-418");
-    expect(text).toMatch(/does NOT redirect/i);
-    expect(text).toMatch(/PRODUCTION/i);
+    expect(text).toContain("(from process env)");
+    expect(text).toContain("CONVEX_DEPLOY_KEY set (from .env.local)");
   });
 
-  test("a prod CONVEX_DEPLOYMENT is called out as silencing the prompt", () => {
-    // Verified with --dry-run: when the configured deployment IS the target,
-    // Convex asks nothing at all.
-    expect(describeTargetSelection({ CONVEX_DEPLOYMENT: "prod:kindly-hound-172" })).toMatch(
-      /will NOT prompt/i
-    );
+  test("secret values are never printed, only the fact that they are set", () => {
+    // The CLI reads .env.local and .env itself, so a key can be in force without
+    // appearing in process.env — the operator needs to know it exists and which
+    // file to look in, and nothing more than that.
+    for (const key of ["CONVEX_DEPLOY_KEY", "CONVEX_DEPLOYMENT_TOKEN", "CONVEX_SELF_HOSTED_ADMIN_KEY"]) {
+      const text = describeTargetSelection({ [key]: "prod:team|SUPERSECRET" });
+      expect(text).toContain(`${key} set`);
+      expect(text).not.toContain("SUPERSECRET");
+    }
   });
 
-  test("a deploy key is called out as silencing the prompt", () => {
-    expect(describeTargetSelection({ CONVEX_DEPLOY_KEY: "prod:xxx" })).toMatch(/will NOT prompt/i);
+  test("it states the one property of the command that does not depend on these values", () => {
+    // Verified with --dry-run: `convex deploy` goes to production whatever
+    // CONVEX_DEPLOYMENT names. That is a fact about the command, not a
+    // prediction about which variable the CLI will branch on.
+    const text = describeTargetSelection({ CONVEX_DEPLOYMENT: "dev:vibrant-cat-418" });
+    expect(text).toMatch(/PRODUCTION/);
+    expect(text).toMatch(/read back from the CLI's own dry run/i);
   });
 
-  test("the source of the value is reported when it came from a file", () => {
-    // The CLI reads .env.local and .env itself, so a key can be in force
-    // without appearing in process.env.
-    expect(
-      describeTargetSelection({ CONVEX_DEPLOY_KEY: "prod:xxx", source: ".env.local" })
-    ).toContain(".env.local");
+  test("it never claims to know which variable wins or whether Convex will prompt", () => {
+    // Both claims were a second implementation of the CLI's branch order, and
+    // both were wrong in production-adjacent ways: CONVEX_DEPLOYMENT_TOKEN was
+    // omitted entirely, then the self-hosted branch was placed ahead of the
+    // deploy key and treated a lone URL as decisive when the CLI needs the pair.
+    // The guard reads the real target back from the dry run, so the prediction
+    // bought nothing and cost two false sentences printed above a prod push.
+    const configurations = [
+      { CONVEX_DEPLOY_KEY: "prod:x|abc", CONVEX_SELF_HOSTED_URL: "https://internal" },
+      { CONVEX_SELF_HOSTED_URL: "https://internal" },
+      { CONVEX_DEPLOYMENT_TOKEN: "prod:x|abc" },
+      { CONVEX_DEPLOYMENT: "prod:kindly-hound-172" },
+    ];
+    for (const env of configurations) {
+      const text = describeTargetSelection(env);
+      expect(text).not.toMatch(/will NOT prompt/i);
+      expect(text).not.toMatch(/the target is whatever/i);
+    }
   });
 
   test("an unset environment is described as refusing, not as defaulting", () => {
     // Verified: with none of them set the CLI errors rather than guessing.
     expect(describeTargetSelection({})).toMatch(/refuse/i);
-  });
-
-  test("a deploy token is described as silencing the prompt, not as nothing being set", () => {
-    // The CLI reads the deploy key as `CONVEX_DEPLOY_KEY || CONVEX_DEPLOYMENT_TOKEN`
-    // and takes that branch before CONVEX_DEPLOYMENT. Describing only the two
-    // obvious variables printed "the CLI will refuse rather than guess" directly
-    // above a push that would have gone to production without a prompt — the
-    // manufactured confidence this whole wrapper exists to avoid.
-    const described = describeTargetSelection({ CONVEX_DEPLOYMENT_TOKEN: "prod:x|abc" });
-    expect(described).toMatch(/will NOT prompt/i);
-    expect(described).not.toMatch(/refuse/i);
-  });
-
-  test("a self-hosted backend is described as what it is", () => {
-    const described = describeTargetSelection({ CONVEX_SELF_HOSTED_URL: "https://convex.internal" });
-    expect(described).toMatch(/self-hosted/i);
-    expect(described).not.toMatch(/refuse/i);
   });
 });
 
@@ -359,17 +366,19 @@ describe("resolving the selection the CLI will make", () => {
       [{ name: ".env.local", text: "﻿CONVEX_DEPLOYMENT=prod:kindly-hound-172\n" }]
     );
     expect(resolved.CONVEX_DEPLOYMENT).toBe("prod:kindly-hound-172");
-    expect(resolved.source).toBe(".env.local");
+    expect(resolved.sources?.CONVEX_DEPLOYMENT).toBe(".env.local");
   });
 
-  test("source names the variable that decides the target, not the first one seen", () => {
-    // CONVEX_DEPLOY_KEY decides and CONVEX_DEPLOYMENT does not, so pointing the
-    // operator at "process env" would point them at the wrong place to look.
+  test("each variable carries its own origin, so none has to be judged decisive", () => {
+    // Reporting a single source meant choosing which variable the CLI would act
+    // on — a model of its branch order, and the thing that kept being wrong.
+    // Every origin is reported instead, which needs no such model.
     const resolved = resolveSelectors(
       { CONVEX_DEPLOYMENT: "dev:vibrant-cat-418" },
       [{ name: ".env.local", text: "CONVEX_DEPLOY_KEY=prod:foo|abc\n" }]
     );
-    expect(resolved.source).toBe(".env.local");
+    expect(resolved.sources?.CONVEX_DEPLOYMENT).toBe("process env");
+    expect(resolved.sources?.CONVEX_DEPLOY_KEY).toBe(".env.local");
   });
 
   test("process env wins over a file, as dotenv does not overwrite what is already set", () => {
@@ -378,7 +387,7 @@ describe("resolving the selection the CLI will make", () => {
       [{ name: ".env.local", text: "CONVEX_DEPLOYMENT=prod:from-file\n" }]
     );
     expect(resolved.CONVEX_DEPLOYMENT).toBe("prod:from-shell");
-    expect(resolved.source).toBe("process env");
+    expect(resolved.sources?.CONVEX_DEPLOYMENT).toBe("process env");
   });
 
   test(".env.local wins over .env", () => {
@@ -387,7 +396,7 @@ describe("resolving the selection the CLI will make", () => {
       { name: ".env", text: "CONVEX_DEPLOYMENT=prod:plain\n" },
     ]);
     expect(resolved.CONVEX_DEPLOYMENT).toBe("prod:local");
-    expect(resolved.source).toBe(".env.local");
+    expect(resolved.sources?.CONVEX_DEPLOYMENT).toBe(".env.local");
   });
 
   test("the grammar the hand-rolled reader got wrong", () => {
@@ -461,7 +470,10 @@ describe("the enforcement flow", () => {
     // from an environment that can change underneath them. That wiring was
     // asserted nowhere: the flow tests injected runDryRun handlers that ignored
     // the parameter entirely, so the freeze could have been dropped in silence.
-    const env = { CONVEX_DEPLOYMENT: "prod:kindly-hound-172", source: "process env" };
+    const env = {
+      CONVEX_DEPLOYMENT: "prod:kindly-hound-172",
+      sources: { CONVEX_DEPLOYMENT: "process env" },
+    };
     const { io, envs } = harness({ collectSnapshot: () => ({ ...CLEAN, env }) });
     expect(await runGuardedDeploy(io)).toBe(0);
 

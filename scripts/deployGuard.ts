@@ -66,7 +66,8 @@ export type RepoSnapshot = {
     CONVEX_DEPLOYMENT_TOKEN?: string;
     CONVEX_SELF_HOSTED_URL?: string;
     CONVEX_SELF_HOSTED_ADMIN_KEY?: string;
-    source?: string;
+    /** Where each set variable was read from, keyed by variable name. */
+    sources?: Partial<Record<SelectorKey, string>>;
   };
 };
 
@@ -375,36 +376,53 @@ export function looksLikeProduction(dryRunOutput: string): boolean {
   return /\[Production\]|\(prod\)/i.test(dryRunOutput);
 }
 
+/** Variables whose value must never be printed. */
+const SECRET_SELECTORS = new Set<SelectorKey>([
+  "CONVEX_DEPLOY_KEY",
+  "CONVEX_DEPLOYMENT_TOKEN",
+  "CONVEX_SELF_HOSTED_ADMIN_KEY",
+]);
+
 /**
- * How the environment will steer `convex deploy`, in words.
+ * What is set, and where each value came from. An inventory, not a prediction.
  *
- * `source` is reported because the CLI loads `.env.local` and `.env` itself, so
- * a value can be in force without appearing in `process.env` — and a deploy key
- * is exactly the case where Convex asks nothing.
+ * This used to state which variable would win and whether Convex would prompt —
+ * a second implementation of the CLI's `getDeploymentSelectionFromEnv`,
+ * maintained by reading a bundled file. It was wrong twice: once by omitting
+ * `CONVEX_DEPLOYMENT_TOKEN` entirely, and once by putting the self-hosted branch
+ * ahead of the deploy key and treating the URL alone as decisive when the CLI
+ * requires both halves of the pair. Each time it printed a confident false
+ * sentence immediately above a production push, which is precisely the
+ * manufactured confidence this wrapper exists to remove.
+ *
+ * Predicting the CLI's branch order buys nothing: the guard already reads the
+ * authoritative target back out of the CLI's own dry run, twice, and that is
+ * what binds. So the prose is now limited to facts that do not depend on the
+ * CLI's internal ordering — which variables are set, where each came from, and
+ * the one documented property of the command itself.
+ *
+ * Per-key origins matter because the CLI loads `.env.local` and `.env` on its
+ * own: a value can be in force without ever appearing in `process.env`.
  */
 export function describeTargetSelection(env: RepoSnapshot["env"]): string {
-  const from = env.source ? ` (from ${env.source})` : "";
-  if (env.CONVEX_SELF_HOSTED_URL) {
-    return `CONVEX_SELF_HOSTED_URL=${env.CONVEX_SELF_HOSTED_URL}${from} — this deploys to a self-hosted backend, not to Convex Cloud, and Convex will NOT prompt in this configuration.`;
+  const set = FROZEN_DEPLOY_ENV_KEYS.filter((key) => env[key]);
+  if (set.length === 0) {
+    return "None of the deployment-selecting variables is set — the CLI will refuse rather than guess.";
   }
-  if (env.CONVEX_DEPLOY_KEY) {
-    return `CONVEX_DEPLOY_KEY is set${from} — the target is whatever deployment that key belongs to, and Convex will NOT prompt in this configuration.`;
-  }
-  // The CLI reads the deploy key as `CONVEX_DEPLOY_KEY || CONVEX_DEPLOYMENT_TOKEN`
-  // and takes that branch before it looks at CONVEX_DEPLOYMENT. Describing only
-  // the two obvious variables meant an operator with just the token was told
-  // "the CLI will refuse rather than guess" on the line directly above a push
-  // that would have gone to production without a prompt.
-  if (env.CONVEX_DEPLOYMENT_TOKEN) {
-    return `CONVEX_DEPLOYMENT_TOKEN is set${from} — the CLI reads it as a deploy key, so the target is whatever deployment that token belongs to, and Convex will NOT prompt in this configuration.`;
-  }
-  if (env.CONVEX_DEPLOYMENT?.startsWith("prod:")) {
-    return `CONVEX_DEPLOYMENT=${env.CONVEX_DEPLOYMENT}${from} — this names production directly, and Convex will NOT prompt when the configured deployment is the target.`;
-  }
-  if (env.CONVEX_DEPLOYMENT) {
-    return `CONVEX_DEPLOYMENT=${env.CONVEX_DEPLOYMENT}${from} is a dev deployment. It does NOT redirect a deploy: 'convex deploy' targets the project's PRODUCTION deployment regardless.`;
-  }
-  return "None of the deployment-selecting variables is set — the CLI will refuse rather than guess.";
+
+  const lines = set.map((key) => {
+    const origin = env.sources?.[key] ? ` (from ${env.sources[key]})` : "";
+    const shown = SECRET_SELECTORS.has(key) ? "set" : `= ${env[key]}`;
+    return `  ${key} ${shown}${origin}`;
+  });
+
+  return [
+    "Deployment selection the CLI will read:",
+    ...lines,
+    "'convex deploy' targets the project's PRODUCTION deployment regardless of which",
+    "of these is set. The target below is read back from the CLI's own dry run rather",
+    "than predicted from these values.",
+  ].join("\n");
 }
 
 /**
@@ -435,11 +453,9 @@ export function selectorsFromEnvFile(text: string): Partial<Record<SelectorKey, 
  * order: `process.env` first, then `.env.local`, then `.env` — because
  * `dotenv.config` never overrides a variable that is already set.
  *
- * `source` names where the variable that actually decides the target came from,
- * not whichever one happened to be seen first. Those differ: with
- * `CONVEX_DEPLOYMENT` exported in the shell and `CONVEX_DEPLOY_KEY` in
- * `.env.local`, the key decides and the shell does not, so reporting
- * "process env" would point the operator at the wrong file.
+ * Every set variable gets its own origin, so the operator can be pointed at the
+ * exact file to edit without this code having to decide which variable the CLI
+ * will act on.
  */
 export function resolveSelectors(
   processEnv: Record<string, string | undefined>,
@@ -464,20 +480,11 @@ export function resolveSelectors(
     }
   }
 
-  // Precedence as the CLI applies it: self-hosted, then the deploy key (either
-  // spelling), then the named deployment.
-  const decider = DECIDING_ORDER.find((key) => values[key] !== undefined);
-
-  return { ...values, source: decider ? origins[decider] : undefined };
+  // Every origin is reported, rather than picking one "deciding" variable.
+  // Choosing the decider meant modelling the CLI's branch order, which is the
+  // thing that kept being wrong; showing all of them needs no such model.
+  return { ...values, sources: origins };
 }
-
-/** Which variable actually decides the target, most decisive first. */
-const DECIDING_ORDER = [
-  "CONVEX_SELF_HOSTED_URL",
-  "CONVEX_DEPLOY_KEY",
-  "CONVEX_DEPLOYMENT_TOKEN",
-  "CONVEX_DEPLOYMENT",
-] as const satisfies readonly SelectorKey[];
 
 /** Everything the flow touches that is not a pure decision. */
 /**
