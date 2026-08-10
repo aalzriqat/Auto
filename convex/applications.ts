@@ -1581,6 +1581,19 @@ export const dealCockpit = query({
                 app.approvedDealerPurchaseAmountMinor ??
                 null,
               currency: app.economicsCurrency ?? null,
+              /**
+               * The rest of the recorded advice, so the correction form can
+               * open showing what is actually on file.
+               *
+               * Not decoration. A dialog that is never told the cheque number
+               * cannot prefill it, and the first version of this form opened
+               * blank on the reference and on today's date — so an operator
+               * correcting the amount submitted an empty reference and a wrong
+               * date alongside it. The server no longer accepts that as an
+               * instruction to erase them, and this stops the form asking.
+               */
+              recordedReference: app.supplierDisbursementReference ?? null,
+              recordedAt: app.supplierDisbursementConfirmedAt ?? null,
             }
           : null,
       stages,
@@ -3356,7 +3369,17 @@ export const amendSupplierDisbursementAdvice = mutation({
 
         await ctx.db.patch(args.applicationId, {
           supplierDisbursedAmountMinor: args.disbursedAmountMinor,
-          supplierDisbursementReference: args.reference,
+          // Omitted means "not part of this correction", never "clear it".
+          //
+          // Convex removes a field patched with `undefined`, so passing the
+          // argument straight through DELETED the cheque number whenever the
+          // caller did not resend it — on an amount-only correction, which is
+          // the common case, and on the one path whose whole purpose is to keep
+          // the evidence about somebody else's payment straight. The reference
+          // is the only link between this row and the bank's own record of it.
+          //
+          // The date already worked this way below; the two now agree.
+          supplierDisbursementReference: args.reference ?? app.supplierDisbursementReference,
           supplierDisbursementConfirmedAt: confirmedAt,
           supplierDisbursementConfirmedBy: user._id,
           supplierDisbursementStatus: agrees

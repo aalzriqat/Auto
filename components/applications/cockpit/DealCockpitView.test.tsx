@@ -355,3 +355,128 @@ describe("correcting the advice", () => {
     expect(sent.reason).toBe("Advice re-read: the amount was transposed on entry.");
   });
 });
+
+/**
+ * SCRUM-30 — the correction form must not submit blanks over what it was not
+ * asked to change.
+ *
+ * Every field in this dialog is sent on every save, so an empty reference and
+ * today's date were not "unchanged" — they were an instruction to erase the
+ * cheque number and restate when the supplier was paid, issued by an operator
+ * who only touched the amount. The server now preserves what it is not given,
+ * and these pin the other half: the form opens showing what is on file.
+ */
+describe("the correction form and the evidence it was not asked to change", () => {
+  const ADVISED = {
+    recordedMinor: 17_995 * SCALE,
+    approvedMinor: 18_000 * SCALE,
+    currency: "JOD",
+    recordedReference: "WIRE-4471",
+    recordedAt: Date.UTC(2026, 7, 5),
+  };
+
+  function openCorrection(onCorrect: (c: unknown) => Promise<void>) {
+    render(
+      <DealCockpitView
+        deal={dealFixture({ settlementAdviceDiscrepancy: ADVISED })}
+        canCorrectAdvice
+        onCorrectSettlementAdvice={onCorrect as never}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "CorrectSettlementAdvice" }));
+  }
+
+  test("opens showing the recorded reference and the recorded date", async () => {
+    openCorrection(async () => {});
+
+    const reference = (await screen.findByLabelText(
+      "SettlementAdviceReferenceLabel"
+    )) as HTMLInputElement;
+    const date = screen.getByLabelText("SettlementAdviceDateLabel") as HTMLInputElement;
+
+    expect(reference.value).toBe("WIRE-4471");
+    expect(date.value).toBe("2026-08-05");
+  });
+
+  test("an amount-only correction resends them unchanged", async () => {
+    const onCorrect = vi.fn(async (_correction: unknown) => {});
+    openCorrection(onCorrect);
+
+    const amount = (await screen.findByLabelText(
+      "SettlementAdviceAmountLabel"
+    )) as HTMLInputElement;
+    fireEvent.change(amount, { target: { value: "18000" } });
+    fireEvent.change(screen.getByLabelText("SettlementAdviceReasonLabel"), {
+      target: { value: "Advice re-read: the amount was transposed on entry." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "SaveCorrection" }));
+
+    const sent = onCorrect.mock.calls[0][0] as unknown as {
+      amountMajor: number;
+      reference?: string;
+      disbursedAt?: number;
+    };
+    expect(sent.amountMajor).toBe(18_000);
+    // Not undefined, and above all not "" or today. The operator changed one
+    // field; the other two have to arrive exactly as they were on file.
+    expect(sent.reference).toBe("WIRE-4471");
+    expect(sent.disbursedAt).toBe(Date.UTC(2026, 7, 5));
+  });
+
+  test("the reference and the date can still be deliberately corrected", async () => {
+    // The control. Preserving what was not touched must not become refusing to
+    // change what was — the operator who mistyped the cheque number needs this
+    // path as much as the one who mistyped the amount.
+    const onCorrect = vi.fn(async (_correction: unknown) => {});
+    openCorrection(onCorrect);
+
+    await screen.findByLabelText("SettlementAdviceAmountLabel");
+    fireEvent.change(screen.getByLabelText("SettlementAdviceReferenceLabel"), {
+      target: { value: "WIRE-4472" },
+    });
+    fireEvent.change(screen.getByLabelText("SettlementAdviceDateLabel"), {
+      target: { value: "2026-08-06" },
+    });
+    fireEvent.change(screen.getByLabelText("SettlementAdviceReasonLabel"), {
+      target: { value: "Advice re-read: wrong cheque number and date were entered." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "SaveCorrection" }));
+
+    const sent = onCorrect.mock.calls[0][0] as unknown as {
+      reference?: string;
+      disbursedAt?: number;
+    };
+    expect(sent.reference).toBe("WIRE-4472");
+    expect(sent.disbursedAt).toBe(Date.UTC(2026, 7, 6));
+  });
+
+  test("falls back to today only when nothing is recorded", async () => {
+    const onCorrect = vi.fn(async (_correction: unknown) => {});
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          settlementAdviceDiscrepancy: {
+            ...ADVISED,
+            recordedReference: null,
+            recordedAt: null,
+          },
+        })}
+        canCorrectAdvice
+        onCorrectSettlementAdvice={onCorrect as never}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "CorrectSettlementAdvice" }));
+
+    const reference = (await screen.findByLabelText(
+      "SettlementAdviceReferenceLabel"
+    )) as HTMLInputElement;
+    expect(reference.value).toBe("");
+    // A date is still required by the input, and today is the only defensible
+    // guess when the record carries none.
+    expect((screen.getByLabelText("SettlementAdviceDateLabel") as HTMLInputElement).value).not.toBe(
+      ""
+    );
+  });
+});

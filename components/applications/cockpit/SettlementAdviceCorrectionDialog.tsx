@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
+import { dateInputToUtcMs, msToDateInput, todayDateInput } from "@/lib/dateInput";
 import {
   Dialog,
   DialogContent,
@@ -41,6 +41,14 @@ type SettlementAdviceCorrectionDialogProps = {
   submitting: boolean;
   /** What the advice currently says, in MAJOR units — the value being corrected. */
   recordedMajor: number | null;
+  /**
+   * The rest of what is on file. Prefilled so a correction to one field does
+   * not submit blanks over the other two — this form previously opened with an
+   * empty reference and today's date, and an amount-only correction therefore
+   * erased the cheque number and moved the payment date.
+   */
+  recordedReference: string | null;
+  recordedAt: number | null;
   /** What the deal was approved at, for the operator to check against. Read-only. */
   approvedLabel: string;
   recordedLabel: string;
@@ -62,6 +70,8 @@ export function SettlementAdviceCorrectionDialog({
   open,
   submitting,
   recordedMajor,
+  recordedReference,
+  recordedAt,
   approvedLabel,
   recordedLabel,
   t,
@@ -86,10 +96,15 @@ export function SettlementAdviceCorrectionDialog({
     // one digit, and making them retype the whole figure invites a second
     // transcription error on top of the first.
     setAmount(recordedMajor === null ? "" : String(recordedMajor));
-    setReference("");
-    setPaidOn(todayDateInput());
+    // Seeded from what is on file, not blanked. Every field here is submitted
+    // on every save, so an empty reference and today's date were not "no
+    // change" — they were an instruction to erase a cheque number and restate
+    // when the supplier was paid, issued by an operator who only touched the
+    // amount. Today's date is the fallback only when nothing is recorded.
+    setReference(recordedReference ?? "");
+    setPaidOn(recordedAt !== null ? msToDateInput(recordedAt) : todayDateInput());
     setReason("");
-  }, [open, recordedMajor]);
+  }, [open, recordedMajor, recordedReference, recordedAt]);
 
   const amountValue = Number(amount);
   const amountValid = amount.trim() !== "" && Number.isFinite(amountValue) && amountValue > 0;

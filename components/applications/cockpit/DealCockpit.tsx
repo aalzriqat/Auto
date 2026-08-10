@@ -878,6 +878,8 @@ export function DealCockpitView({
               ? discrepancy.recordedMinor / discrepancyFactor
               : null
           }
+          recordedReference={discrepancy.recordedReference ?? null}
+          recordedAt={discrepancy.recordedAt ?? null}
           recordedLabel={adviceRecordedLabel}
           approvedLabel={adviceApprovedLabel}
           t={t}

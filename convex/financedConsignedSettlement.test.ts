@@ -3946,3 +3946,119 @@ describe("a settlement advice that contradicts the approval", () => {
     ).rejects.toThrow(/why the recorded advice was wrong/i);
   });
 });
+
+/**
+ * SCRUM-30 — correcting one field of an advice must not erase the others.
+ *
+ * The amendment path exists to PRESERVE evidence about a payment somebody else
+ * made. Its first implementation destroyed some of it: the dialog opened with
+ * an empty reference and today's date regardless of what was recorded, and sent
+ * both on every submit. An operator fixing a transposed amount therefore also
+ * wiped the cheque number and moved the payment date to whenever they happened
+ * to notice — on the one screen whose entire purpose is to keep that record
+ * straight, and with no indication that anything but the amount had changed.
+ *
+ * Both halves are closed and both are pinned here: the server preserves what it
+ * is not given, and the cockpit hands the dialog the recorded values to prefill
+ * (`convex/applications.ts` returns them on `settlementAdviceDiscrepancy`;
+ * the rendered half is pinned in DealCockpitView.test.tsx).
+ */
+describe("amending one field of a settlement advice", () => {
+  const PAID_AT = Date.UTC(2026, 7, 5);
+
+  async function advisedDeal(tag: string) {
+    const s = await seedDealership(tag);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
+    });
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: false });
+    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId,
+      applicationId,
+      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+      source: "MANUAL_ENTRY",
+    });
+    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: s.orgId,
+      applicationId,
+      approvedAmountMinor: 18_000 * SCALE,
+      basis: "MANUAL",
+      notes: "Approved at 18,000.",
+    });
+    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+    // The advice as it actually arrived: wrong amount, but a real cheque number
+    // and a real date, both of which are the evidence.
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 17_995 * SCALE,
+      reference: "WIRE-4471",
+      disbursedAt: PAID_AT,
+    });
+    return { s, applicationId };
+  }
+
+  const appOf = (s: Seeded, applicationId: string) =>
+    s.t.run((ctx) => ctx.db.get(applicationId as never)) as Promise<{
+      supplierDisbursedAmountMinor?: number;
+      supplierDisbursementReference?: string;
+      supplierDisbursementConfirmedAt?: number;
+      supplierDisbursementStatus?: string;
+    }>;
+
+  test("correcting only the amount leaves the reference and the date untouched", async () => {
+    const { s, applicationId } = await advisedDeal("s30Preserve");
+
+    await s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 18_000 * SCALE,
+      reason: "Advice re-read: the amount was transposed on entry.",
+    });
+
+    const app = await appOf(s, applicationId);
+    expect(app.supplierDisbursedAmountMinor).toBe(18_000 * SCALE);
+    // The two that were never mentioned. Erasing WIRE-4471 destroys the only
+    // link between this row and the bank's own record of the payment.
+    expect(app.supplierDisbursementReference).toBe("WIRE-4471");
+    expect(app.supplierDisbursementConfirmedAt).toBe(PAID_AT);
+    // And the correction did its job.
+    expect(app.supplierDisbursementStatus).toBe("CONFIRMED");
+  });
+
+  test("the reference and the date can still be corrected when they are given", async () => {
+    // The control. Preserving what is omitted must not become refusing to
+    // change what is supplied — the operator who mistyped the cheque number
+    // needs this path as much as the one who mistyped the amount.
+    const { s, applicationId } = await advisedDeal("s30PreserveControl");
+    const correctedAt = Date.UTC(2026, 7, 6);
+
+    await s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 18_000 * SCALE,
+      reference: "WIRE-4472",
+      disbursedAt: correctedAt,
+      reason: "Advice re-read: wrong cheque number and date were entered.",
+    });
+
+    const app = await appOf(s, applicationId);
+    expect(app.supplierDisbursementReference).toBe("WIRE-4472");
+    expect(app.supplierDisbursementConfirmedAt).toBe(correctedAt);
+  });
+
+  test("the cockpit hands the dialog what is recorded, so it can prefill it", async () => {
+    // The dialog cannot preserve what it is never told. The first version of
+    // this payload carried only the two amounts, which is why the correction
+    // form opened blank on the reference and on today's date.
+    const { s, applicationId } = await advisedDeal("s30PreservePayload");
+
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId: applicationId as never,
+    });
+    expect(view!.settlementAdviceDiscrepancy).not.toBeNull();
+    expect(view!.settlementAdviceDiscrepancy!.recordedReference).toBe("WIRE-4471");
+    expect(view!.settlementAdviceDiscrepancy!.recordedAt).toBe(PAID_AT);
+  });
+});
