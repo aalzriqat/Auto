@@ -454,7 +454,16 @@ export const recordPartialPayment = mutation({
           occurredAt: now,
         });
 
-        return { amountPaid: projected, remainingAmount: payable.amountDue - projected };
+        // The remainder is derived from the integers, not from a major-unit
+        // subtraction. That difference returns a residue like 4.4e-16 on a row
+        // this same call just marked PAID — and a caller that passes the
+        // returned balance back as its next payment would hand the guard above
+        // an amount it rejects as unrepresentable. A float must not leak out of
+        // the path whose whole purpose was to move this to integers.
+        return {
+          amountPaid: projected,
+          remainingAmount: fromMinorUnits(Math.max(0, dueMinor - projectedMinor), payable.currency),
+        };
       }
     );
   },

@@ -2001,6 +2001,24 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
       status: "CANCELLED" as const,
     });
 
+    // The financier leg of the DEAD deal is then closed. This ordering is the
+    // reachable one: `sales.update` refuses to cancel a sale whose supplier
+    // disbursement is already confirmed, so the confirmation has to come after.
+    // Without it the dead deal's settlement is incomplete for an unrelated
+    // reason and the assertion at the end of this test proves nothing — which
+    // is exactly how it was first written.
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(first.applicationId, {
+        approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+        dealerContributionMinor: 0,
+      });
+    });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId: first.applicationId,
+      disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+    });
+
     // The dead transaction is still on the vehicle. That is the premise.
     const dead = await s.t.run(async (ctx) =>
       (await ctx.db.query("transactions").collect()).filter(
@@ -2034,6 +2052,51 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
     const view = await cockpitOf(s, second.applicationId);
     expect(stageOf(view, "SETTLEMENT")).toBe("COMPLETE");
     expect(supplierRow(view).position).toBe("NOT_INVOLVED");
+
+    // And the DEAD deal must not read the live one's margin. Cancelling a sale
+    // never clears `finalizedSaleId`, so the first application is still a
+    // reachable screen — and an earlier fix that counted live transaction rows
+    // for the VEHICLE gave it its successor's figure, turning a withheld number
+    // into a confidently wrong one. The claim rows are keyed by SALE, so the
+    // cancelled deal can only ever find its own cancelled claim.
+    const deadView = await cockpitOf(s, first.applicationId);
+    expect(stageOf(deadView, "SETTLEMENT")).not.toBe("COMPLETE");
+    expect(deadView!.money!.managementProfit.available).toBe(false);
+  });
+
+  /**
+   * OP-F3 follow-through. A stored amount this currency cannot represent must
+   * mark ONE row unknown, not reject the query — `dealCockpit` is the whole
+   * screen, and Convex accepts NaN as a `v.number()`, which the admin raw-JSON
+   * editor can write.
+   *
+   * A first attempt guarded only the settlement predicate, so the same NaN
+   * reached the party-row conversion a few lines later and threw anyway.
+   */
+  test("an unreadable stored amount marks the row unknown instead of blanking the screen", async () => {
+    const { s, applicationId } = await directDeal("nanAmount");
+    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(claim._id, { amountDue: Number.NaN });
+    });
+
+    const view = await cockpitOf(s, applicationId);
+    expect(view).toBeDefined();
+    expect(supplierRow(view).position).toBe("UNKNOWN");
+  });
+
+  test("an amount that overflows minor units also degrades rather than throwing", async () => {
+    // `Number.isFinite(1e18)` is true, so a finiteness check alone misses this:
+    // 1e18 JOD is 1e21 minor units, which is not a safe integer.
+    const { s, applicationId } = await directDeal("overflowAmount");
+    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(claim._id, { amountDue: 1e18 });
+    });
+
+    const view = await cockpitOf(s, applicationId);
+    expect(view).toBeDefined();
+    expect(supplierRow(view).position).toBe("UNKNOWN");
   });
 
 
@@ -2113,7 +2176,9 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
         payableId: payable._id,
         amount: 0.0005,
       })
-    ).rejects.toThrow();
+      // Matched on the message: a bare `rejects.toThrow()` would also pass on an
+      // authorization or not-found failure, and prove nothing about the guard.
+    ).rejects.toThrow(/finer than the currency/i);
   });
 
 });

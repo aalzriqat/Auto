@@ -417,7 +417,21 @@ export function DealCockpitView({
                     <>
                       <Separator />
                       <dl className="space-y-1.5 text-sm">
-                        {deal.money.managementProfit.lines.map((line) => (
+                        {deal.money.managementProfit.lines
+                          // A zero on an OPTIONAL line is noise, not information:
+                          // the customer-direct amount has no writer yet, so it
+                          // would read "0.000" on every deal forever, and the
+                          // dealer contribution is zero on any fully funded deal.
+                          // The three lines the mockup always shows stay, so the
+                          // derivation never looks like it is hiding a term.
+                          .filter(
+                            (line) =>
+                              line.amountMinor !== 0 ||
+                              line.key === "APPROVED_PURCHASE" ||
+                              line.key === "SUPPLIER_SETTLEMENT" ||
+                              line.key === "ACTUAL_EXPENSES"
+                          )
+                          .map((line) => (
                           <div key={line.key} className="flex items-center justify-between gap-4">
                             <dt className="text-muted-foreground">{t(PROFIT_LINE_LABEL[line.key] ?? line.key)}</dt>
                             <dd>

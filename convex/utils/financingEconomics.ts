@@ -953,10 +953,18 @@ export type ManagementProfit =
  * Understating an owner's profit is not the safe direction; it is the same
  * defect wearing the opposite sign.
  *
- * Unlike the contribution, an absent value here IS a real zero: both fields are
- * written only when a gap is resolved to the dealership, and their absence
- * means no gap was. `recomputeAndPatchEconomics` reads them with the same
- * `?? 0`, so this agrees with the engine rather than inventing a convention.
+ * ⚠️ READ THIS BEFORE BUILDING THE GAP-RESOLUTION MUTATION. As of 2026-08-10
+ * **no production code writes either field.** Every occurrence sets them to
+ * `undefined`; nothing writes `gapResolution: CUSTOMER_ABSORBS | DEALER_ABSORBS
+ * | SPLIT` either. The recording workflow does not exist yet, so this line is
+ * structurally zero on every current deal and the `?? 0` is safe — but it is
+ * safe by circumstance, NOT because absence means "no gap was negotiated".
+ *
+ * The composition is wired in advance precisely so the future writer cannot be
+ * forgotten. A writer that populates `customerGapShareMinor` (the share) and
+ * omits these two DESTINATION fields would silently understate profit by the
+ * whole gap, and nothing here would notice. Populate both. Tracked as H-7b on
+ * SCRUM-26.
  */
 export function deriveManagementProfit(args: {
   approvedDealerPurchaseAmountMinor?: number;
@@ -980,6 +988,17 @@ export function deriveManagementProfit(args: {
   // the row in hand, and the failure mode of assuming it is an overstated profit.
   if (args.dealerContributionMinor === undefined)
     return { available: false, reason: "NoDealerContribution" };
+  // `computeDealerProceeds` asserts non-negativity on every input; this had no
+  // equivalent, so a negative value written through the admin raw-JSON editor
+  // would INFLATE the owner-facing figure with nothing to catch it. A negative
+  // amount on either line is not a smaller profit, it is a corrupt record.
+  if (
+    args.dealerContributionMinor < 0 ||
+    (args.customerDirectToDealerMinor ?? 0) < 0 ||
+    args.actualExpensesMinor < 0
+  ) {
+    return { available: false, reason: "NoDealerContribution" };
+  }
 
   const lines: ManagementProfitLine[] = [
     { key: "APPROVED_PURCHASE", sign: 1, amountMinor: args.approvedDealerPurchaseAmountMinor },

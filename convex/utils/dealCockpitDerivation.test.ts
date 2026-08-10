@@ -280,6 +280,11 @@ describe("صافي ربح المعرض", () => {
       customerDirectToDealerMinor: 0,
       fullySettled: false,
     });
+    // Asserted before the comparison: `false === false` would otherwise pass if
+    // the shared fixture ever stopped being computable, and the test would go
+    // green while proving nothing.
+    expect(both.available).toBe(true);
+    expect(neither.available).toBe(true);
     expect(both.available && both.amountMinor).toBe(neither.available && neither.amountMinor);
 
     if (!both.available) return;
