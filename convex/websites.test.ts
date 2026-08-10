@@ -885,4 +885,29 @@ describe("dealer website logo is storage-backed, not an arbitrary URL", () => {
     const preview = await asOwner.query(api.websites.preview, { orgId });
     expect(preview?.profile.logoUrl).toBeNull();
   });
+  test("the anonymous public path serves a storage-derived logo, not a caller string", async () => {
+    // The tests above use api.websites.preview, which is authenticated and
+    // reads the LIVE projection. The real exposure is resolveDomain, which is
+    // unauthenticated and returns snapshot.snapshotJson -- JSON frozen at
+    // publish time. Covering only preview would leave the actual public path
+    // untested, so this asserts the published snapshot itself.
+    const { convex, orgId, asOwner } = await saveDealerWebsiteDraft();
+
+    const storageId = await convex.run((ctx) =>
+      ctx.storage.store(new Blob(["published-logo"], { type: "image/png" })),
+    );
+    await asOwner.mutation(api.websites.saveDraft, { orgId, logoStorageId: storageId });
+    await asOwner.mutation(api.websites.publish, { orgId });
+
+    const expectedUrl = await convex.run((ctx) => ctx.storage.getUrl(storageId));
+    const site = await convex.query(api.websites.resolveDomain, {
+      host: "premiumcars.autoflowdealer.com",
+    });
+
+    // This is the exact value app/dealer-site/[[...slug]]/page.tsx hands to
+    // DealerBrowserChrome, which assigns it to the icon / shortcut icon /
+    // apple-touch-icon <link> elements every anonymous visitor's browser fetches.
+    expect(site?.profile.logoUrl).toBe(expectedUrl);
+    expect(site?.profile.logoUrl).toMatch(/\/api\/storage\//);
+  });
 });
