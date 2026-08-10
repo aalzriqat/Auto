@@ -854,11 +854,10 @@ describe("the dealer website logo cannot be an arbitrary caller-supplied origin"
         .query("orgSettings")
         .withIndex("by_org", (q) => q.eq("orgId", orgId))
         .unique();
-      if (settings) {
-        await ctx.db.patch(settings._id, { logoStorageId: orgLogo });
-      } else {
-        await ctx.db.insert("orgSettings", { orgId, logoStorageId: orgLogo });
-      }
+      // seedDealer always creates this row; fail loudly rather than silently
+      // testing nothing if that ever stops being true.
+      if (!settings) throw new Error("expected seedDealer to have created an orgSettings row");
+      await ctx.db.patch(settings._id, { logoStorageId: orgLogo });
     });
 
     const expectedUrl = await convex.run((ctx) => ctx.storage.getUrl(orgLogo));
@@ -890,11 +889,10 @@ describe("the dealer website logo cannot be an arbitrary caller-supplied origin"
         .query("orgSettings")
         .withIndex("by_org", (q) => q.eq("orgId", orgId))
         .unique();
-      if (settings) {
-        await ctx.db.patch(settings._id, { logoStorageId: orgLogo });
-      } else {
-        await ctx.db.insert("orgSettings", { orgId, logoStorageId: orgLogo });
-      }
+      // seedDealer always creates this row; fail loudly rather than silently
+      // testing nothing if that ever stops being true.
+      if (!settings) throw new Error("expected seedDealer to have created an orgSettings row");
+      await ctx.db.patch(settings._id, { logoStorageId: orgLogo });
     });
     await asOwner.mutation(api.websites.publish, { orgId });
 
