@@ -28,8 +28,11 @@ import {
   deriveDealStages,
   deriveManagementProfit,
   handoverStatusForFacts,
+  settlementIsComplete,
   settlementStatusForFacts,
   type FinanceCompanyRuleSnapshot,
+  type ObligationState,
+  type SettlementObligations,
 } from "./utils/financingEconomics";
 import {
   allocatePaymentToReceivable,
@@ -38,6 +41,7 @@ import {
   getReceivableOutstandingMinor,
 } from "./subledger";
 import { summarizeFees } from "./financeDealCosts";
+import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import {
   consignedSettlementRoute,
   consignedSettlementRouteValidator,
@@ -378,20 +382,103 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
       ).find((row) => row.status !== "CANCELLED")
     : undefined;
 
-  // A DIRECT deal can never reach FULLY_SETTLED through `settlementStatus`: the
-  // only writer of it is `confirmDisbursement`, which refuses the direct route
-  // outright, and `confirmSupplierDisbursement` deliberately writes EXPECTED.
-  // Judging both routes by that one field left the direct route's terminal stage
-  // permanently blocked on deals that were completely finished. Each route is
-  // judged by the evidence it can actually produce.
-  const statusSettlement = app.settlementStatus ?? settlementStatusForFacts(app);
-  const moneySettled =
-    routeKnown &&
-    (settlesDirect
-      ? app.supplierDisbursementConfirmedAt !== undefined && supplierClaim?.status === "PAID"
-      : statusSettlement === "FULLY_SETTLED" || statusSettlement === "RECONCILED");
+  const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, app.orgId));
+  const sameCurrency = (rowCurrency: string) => rowCurrency === currency;
 
-  return { vehicle, consigned, routeKnown, settlesDirect, supplierClaim, moneySettled };
+  // --- what the supplier still owes, or is still owed ---------------------
+  let supplierObligation: ObligationState = "UNKNOWN";
+  if (settlesDirect) {
+    if (supplierClaim) {
+      supplierObligation = !sameCurrency(supplierClaim.currency)
+        ? "UNKNOWN"
+        : supplierClaim.status === "PAID" ||
+            supplierClaim.amountDue - (supplierClaim.amountReceived ?? 0) <= 0
+          ? "CLOSED"
+          : "OPEN";
+    } else {
+      // No claim is the CORRECT state for a zero-margin deal: sale completion
+      // deliberately opens none. Demanding a paid claim as proof therefore
+      // demanded a record whose absence is right, and such deals could never
+      // finish. But an absent claim on a deal that DID earn a margin is missing
+      // evidence, not proof — so the margin is re-derived the same way the sale
+      // derived it, and only a provable zero counts as nothing to collect.
+      const margin = await derivedMarginMinor(ctx, app, currency);
+      supplierObligation = margin === undefined ? "UNKNOWN" : margin <= 0 ? "NONE" : "UNKNOWN";
+    }
+  } else {
+    const payables = app.finalizedSaleId
+      ? await ctx.db
+          .query("vehicleSupplierPayables")
+          .withIndex("by_sale", (q) => q.eq("saleId", app.finalizedSaleId))
+          .collect()
+      : [];
+    const payable = payables.find((row) => row.orgId === app.orgId && row.status !== "CANCELLED");
+    supplierObligation = !payable
+      ? "NONE"
+      : !sameCurrency(payable.currency)
+        ? "UNKNOWN"
+        : payable.status === "PAID" || payable.amountDue - (payable.amountPaid ?? 0) <= 0
+          ? "CLOSED"
+          : "OPEN";
+  }
+
+  // --- what the finance company still owes --------------------------------
+  const statusSettlement = app.settlementStatus ?? settlementStatusForFacts(app);
+  let financierObligation: ObligationState;
+  if (settlesDirect) {
+    // The financier pays the SUPPLIER the approved purchase amount. An advice
+    // for less than that is a PART payment and the money is not finished —
+    // the previous predicate accepted any positive advice, so half the money
+    // reported a completed deal.
+    financierObligation =
+      app.approvedDealerPurchaseAmountMinor === undefined
+        ? "UNKNOWN"
+        : app.supplierDisbursedAmountMinor === undefined
+          ? "OPEN"
+          : app.supplierDisbursedAmountMinor >= app.approvedDealerPurchaseAmountMinor
+            ? "CLOSED"
+            : "OPEN";
+  } else {
+    // `settlementStatus` is the lifecycle hint, and it only ever spoke for the
+    // financier's leg. It is authoritative here precisely because the supplier's
+    // leg is now judged separately above.
+    financierObligation =
+      statusSettlement === "FULLY_SETTLED" || statusSettlement === "RECONCILED" ? "CLOSED" : "OPEN";
+  }
+
+  const obligations: SettlementObligations = routeKnown
+    ? { financier: financierObligation, supplier: supplierObligation }
+    : { financier: "UNKNOWN", supplier: "UNKNOWN" };
+
+  return {
+    vehicle,
+    consigned,
+    routeKnown,
+    settlesDirect,
+    supplierClaim,
+    obligations,
+    moneySettled: settlementIsComplete(obligations),
+  };
+}
+
+/**
+ * The deal's margin, re-derived exactly as `completeSale` derived it: the sale
+ * price less the vehicle's capitalized cost. Used only to tell a genuine
+ * zero-margin deal from one whose supplier claim has gone missing.
+ */
+async function derivedMarginMinor(
+  ctx: QueryCtx,
+  app: Doc<"financeApplications">,
+  currency: string
+): Promise<number | undefined> {
+  if (!app.finalizedSaleId) return undefined;
+  const sale = await ctx.db.get(app.finalizedSaleId);
+  if (!sale || sale.orgId !== app.orgId) return undefined;
+  const vehicle = await ctx.db.get(app.vehicleId);
+  if (!vehicle) return undefined;
+  const cost = await computeVehicleCapitalizedCost(ctx, vehicle);
+  if (cost <= 0) return undefined;
+  return toMinorUnits(sale.salePrice, currency) - toMinorUnits(cost, currency);
 }
 
 async function buildCockpitMoney(
@@ -642,10 +729,22 @@ async function buildCockpitMoney(
     // recorded by `confirmSupplierDisbursement` off the advice document. What he
     // NETS is that, less the margin he owes back. Until that advice exists there
     // is no honest figure, so the headline reports why instead of inventing one.
+    // Only from a PROVEN-COMPLETE advice. A partial one is not evidence of what
+    // the supplier ends up with: an advice of half the approval reported a
+    // profit as if the whole deal had paid, and an advice below the margin
+    // produced a NEGATIVE supplier settlement and therefore a profit larger
+    // than the entire approved purchase amount.
+    const marginBack = supplierClaimOriginalMinor ?? 0;
     supplierSettlementMinor =
-      app.supplierDisbursedAmountMinor !== undefined && supplierClaimOriginalMinor !== undefined
-        ? app.supplierDisbursedAmountMinor - supplierClaimOriginalMinor
+      settlementFacts.obligations.financier === "CLOSED" &&
+      app.supplierDisbursedAmountMinor !== undefined
+        ? app.supplierDisbursedAmountMinor - marginBack
         : undefined;
+    // A supplier cannot net a negative amount; if the recorded facts imply one,
+    // they disagree with each other and the figure is not reportable.
+    if (supplierSettlementMinor !== undefined && supplierSettlementMinor < 0) {
+      supplierSettlementMinor = undefined;
+    }
   } else if (payable) {
     supplierSettlementMinor = toMinorSameCurrency(payable.amountDue, payable.currency);
   }

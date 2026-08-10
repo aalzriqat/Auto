@@ -7,7 +7,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
-import { toMinorUnits } from "./utils/money";
+import { fromMinorUnits, toMinorUnits } from "./utils/money";
 import { hookSupplierReceivableCollected } from "./accounting/workflowHooks";
 import { auditLog } from "./financialAudit";
 
@@ -240,11 +240,19 @@ export const recordReceipt = mutation({
         operation: "supplierReceivables.recordReceipt",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        // EVERY persisted input that can change the stored record. `receivedAt`
+        // was missing, and it is the one the cockpit lets an operator correct:
+        // because the caller deliberately REUSES its key after a lost response,
+        // a retry with a fixed date produced an identical fingerprint and was
+        // replayed back as success while the ledger kept the original date.
         fingerprint: JSON.stringify({
           receivableId: args.receivableId,
           amount: args.amount,
           receiptMethod,
           receiptReference: args.receiptReference ?? null,
+          receiptAccountId: args.receiptAccountId ?? null,
+          receiptNotes: args.receiptNotes ?? null,
+          receivedAt: args.receivedAt ?? null,
         }),
       },
       async () => {
@@ -253,6 +261,29 @@ export const recordReceipt = mutation({
 
         if (!Number.isFinite(args.amount) || args.amount <= 0) {
           throw new ConvexError("A receipt must be greater than zero.");
+        }
+        // The amount must be representable in the claim's currency. JOD carries
+        // three decimals, so a half-fils receipt cannot be posted: the subledger
+        // would store it verbatim while the journal rounded, and two receipts of
+        // 0.0005 would mark a 0.001 claim PAID while crediting two fils against
+        // a one-fils receivable. Checked here rather than in the dialog, because
+        // this mutation is now reachable from a browser.
+        if (fromMinorUnits(toMinorUnits(args.amount, row.currency), row.currency) !== args.amount) {
+          throw new ConvexError(
+            `A receipt in ${row.currency} cannot be finer than the currency allows. Round ${args.amount} to the nearest representable amount.`
+          );
+        }
+        // `receivedAt` reaches `settledAt` and the accounting event. A skewed
+        // clock, a modified client or a direct call could otherwise mark a large
+        // claim paid against a journal dated in the future — or NaN, which every
+        // comparison guard silently passes.
+        if (args.receivedAt !== undefined) {
+          if (!Number.isSafeInteger(args.receivedAt) || args.receivedAt <= 0) {
+            throw new ConvexError("The receipt date is not a valid instant.");
+          }
+          if (args.receivedAt > Date.now()) {
+            throw new ConvexError("A receipt cannot be dated in the future.");
+          }
         }
         if (row.status === "CANCELLED") {
           throw new ConvexError("This claim was cancelled with its sale.");

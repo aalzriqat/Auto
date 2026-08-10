@@ -821,6 +821,41 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
 }
 
 /**
+ * Whether one party's obligation on a deal is finished.
+ *
+ * `NONE` and `CLOSED` both mean "nothing more will move", and they are kept
+ * apart because they are different facts: a zero-margin deal legitimately has
+ * NO supplier claim, and demanding a paid one as proof made such deals
+ * impossible to finish. `UNKNOWN` is not a soft OPEN — it means the evidence
+ * that would settle the question is missing, and it must never satisfy
+ * completion.
+ */
+export type ObligationState = "CLOSED" | "OPEN" | "UNKNOWN" | "NONE";
+
+/**
+ * The obligations a financed consigned deal carries, per settlement route.
+ *
+ * Replaces a single `moneySettled` boolean that grew one condition per defect
+ * and produced three of its own: a partial financier advice counted as full
+ * payment, a through-route deal counted as settled while the supplier was still
+ * owed, and a zero-margin deal could never complete. Those are three different
+ * obligations to three different parties, and one boolean could not tell them
+ * apart — so it is not a boolean any more.
+ */
+export interface SettlementObligations {
+  /** What the finance company owes — to the dealership, or to the supplier. */
+  financier: ObligationState;
+  /** What is owed to the supplier, or by him for the dealership's margin. */
+  supplier: ObligationState;
+}
+
+/** Every obligation proven finished, or proven never to have existed. */
+export function settlementIsComplete(obligations: SettlementObligations): boolean {
+  const done = (state: ObligationState) => state === "CLOSED" || state === "NONE";
+  return done(obligations.financier) && done(obligations.supplier);
+}
+
+/**
  * How settled the headline figure's inputs are.
  *
  * `ACTUAL_UNPOSTABLE` is deliberately not called "settled" or "final": even

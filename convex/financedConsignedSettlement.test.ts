@@ -1364,3 +1364,275 @@ describe("a direct-settled deal that is genuinely finished", () => {
     expect(profit.available && profit.amountMinor).toBe(MARGIN * SCALE);
   });
 });
+
+/**
+ * When is a financed consigned deal actually FINISHED?
+ *
+ * The first cut answered this with one boolean that grew a condition per bug.
+ * Three defects came straight out of that: a partial advice counted as full
+ * payment, a through-route deal counted as settled while the supplier was still
+ * owed, and a zero-margin deal could never finish because the proof it demanded
+ * was a receivable that correctly does not exist.
+ *
+ * The answer is per-route EVIDENCE, and each obligation is proven closed,
+ * proven absent, or unknown. Unknown is never completion.
+ */
+describe("proving a deal is settled, rather than assuming it", () => {
+  async function cockpitOf(s: Seeded, applicationId: string) {
+    return await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId: applicationId as never,
+    });
+  }
+  const stageOf = (view: Awaited<ReturnType<typeof cockpitOf>>, key: string) =>
+    view!.stages.find((st) => st.key === key)!.state;
+
+  /**
+   * CX-1. The financier pays the supplier the approved purchase amount. An
+   * advice for less than that is a PART payment, and the money is not finished.
+   * The old predicate accepted any positive advice, so a 10,000 advice against a
+   * 20,000 approval reported the deal complete and its profit "actual".
+   */
+  test("a partial supplier disbursement is not a settled deal", async () => {
+    const s = await seedDealership("redesignPartial");
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, {
+        approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+      });
+    });
+    // Half of what the financier owes the supplier.
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: (VEHICLE_PRICE / 2) * SCALE,
+    });
+    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      orgId: s.orgId,
+      receivableId: claim._id,
+      amount: MARGIN,
+    });
+
+    const view = await cockpitOf(s, applicationId);
+    expect(stageOf(view, "SETTLEMENT")).not.toBe("COMPLETE");
+    // And the headline must not present itself as a finished figure.
+    const profit = view!.money!.managementProfit;
+    expect(profit.available && profit.classification).not.toBe("ACTUAL_UNPOSTABLE");
+  });
+
+  /**
+   * CX-1b. An advice BELOW the margin produced a negative supplier settlement
+   * and therefore a profit larger than the entire approved purchase amount.
+   */
+  test("an advice smaller than the margin never yields a profit above the approval", async () => {
+    const s = await seedDealership("redesignNegative");
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, {
+        approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+      });
+    });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: Math.floor((MARGIN / 2) * SCALE),
+    });
+
+    const view = await cockpitOf(s, applicationId);
+    const profit = view!.money!.managementProfit;
+    if (profit.available) {
+      expect(profit.amountMinor).toBeLessThanOrEqual(VEHICLE_PRICE * SCALE);
+    }
+  });
+
+  /**
+   * CX-2. `settlementStatus` says the financier paid the dealership. It says
+   * nothing about whether the dealership then paid the supplier, and on a
+   * consigned deal that is a separate obligation to a separate party.
+   */
+  test("a through-route deal is not settled while the supplier payable is open", async () => {
+    const s = await seedDealership("redesignThrough");
+    const { applicationId } = await runDeal(s, { route: "THROUGH_DEALERSHIP", finalize: true });
+    await s.t.run(async (ctx) => {
+      // The financier's side is done...
+      await ctx.db.patch(applicationId, { settlementStatus: "FULLY_SETTLED" });
+      // ...and the supplier is still owed every dinar.
+      const payable = (await ctx.db.query("vehicleSupplierPayables").collect()).find(
+        (row) => row.orgId === s.orgId
+      )!;
+      await ctx.db.patch(payable._id, { status: "DUE_ON_SALE", amountPaid: 0 });
+    });
+
+    const view = await cockpitOf(s, applicationId);
+    expect(stageOf(view, "SETTLEMENT")).not.toBe("COMPLETE");
+  });
+
+  /**
+   * CX-8. Sale completion deliberately opens NO supplier receivable when the
+   * margin is zero. Demanding a PAID claim as proof therefore demanded a record
+   * whose absence is the correct state, and the deal could never finish.
+   */
+  test("a zero-margin direct deal can finish, because there is nothing to collect", async () => {
+    const s = await seedDealership("redesignZeroMargin");
+    // The dealership earns nothing on this one: it sells at the supplier's cost.
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.vehicleId as never, { sourceCost: VEHICLE_PRICE });
+    });
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, {
+        approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+      });
+    });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+    });
+
+    const claims = (await supplierClaimsOf(s)).filter((row) => row.status !== "CANCELLED");
+    expect(claims).toHaveLength(0); // the premise: no claim is correct here
+
+    const view = await cockpitOf(s, applicationId);
+    expect(stageOf(view, "SETTLEMENT")).toBe("COMPLETE");
+  });
+
+  /**
+   * The full direct-route path still completes, so the redesign has not simply
+   * made completion unreachable — which would satisfy every test above.
+   */
+  test("a fully paid direct deal still completes", async () => {
+    const s = await seedDealership("redesignFullDirect");
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, {
+        approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+      });
+    });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+    });
+    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      orgId: s.orgId,
+      receivableId: claim._id,
+      amount: MARGIN,
+    });
+
+    const view = await cockpitOf(s, applicationId);
+    expect(stageOf(view, "SETTLEMENT")).toBe("COMPLETE");
+    const profit = view!.money!.managementProfit;
+    expect(profit.available && profit.classification).toBe("ACTUAL_UNPOSTABLE");
+  });
+});
+
+/**
+ * The money-entry guards on `supplierReceivables.recordReceipt`.
+ *
+ * It had no caller until the cockpit gave it one, so its inputs had never been
+ * reachable from a browser. Everything a client can now send has to be checked
+ * on the side that posts the journal.
+ */
+describe("what the supplier-receipt mutation accepts", () => {
+  async function directClaim(tag: string) {
+    const s = await seedDealership(tag);
+    await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+    const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
+    return { s, claim };
+  }
+
+  /** CX-5. A future receipt date marks a claim paid against a journal dated ahead of now. */
+  test("a receipt dated in the future is refused", async () => {
+    const { s, claim } = await directClaim("guardFuture");
+    await expect(
+      s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+        orgId: s.orgId,
+        receivableId: claim._id,
+        amount: 1_000,
+        receivedAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      })
+    ).rejects.toThrow();
+  });
+
+  test("a receipt date that is not a real instant is refused", async () => {
+    const { s, claim } = await directClaim("guardNaN");
+    await expect(
+      s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+        orgId: s.orgId,
+        receivableId: claim._id,
+        amount: 1_000,
+        receivedAt: Number.NaN,
+      })
+    ).rejects.toThrow();
+  });
+
+  /**
+   * CX-4. JOD carries three decimals. A half-fils receipt cannot be represented
+   * in the ledger, so the subledger would record it while the journal rounded —
+   * two receipts of 0.0005 marking a 0.001 claim PAID while posting two fils
+   * against a one-fils receivable.
+   */
+  test("an amount finer than the currency can represent is refused", async () => {
+    const { s, claim } = await directClaim("guardFraction");
+    await expect(
+      s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+        orgId: s.orgId,
+        receivableId: claim._id,
+        amount: 0.0005,
+      })
+    ).rejects.toThrow();
+  });
+
+  /**
+   * The idempotency fingerprint must cover every input that changes the stored
+   * record. The cockpit deliberately REUSES its key when a response is lost, so
+   * an operator who corrects the date and retries would otherwise get the old
+   * receipt replayed back as success while the ledger kept the original date.
+   */
+  test("replaying a key with a corrected date is refused, not silently replayed", async () => {
+    const { s, claim } = await directClaim("guardFingerprint");
+    const key = "receipt-key-1";
+    const dayOne = Date.UTC(2026, 7, 1);
+    const dayTwo = Date.UTC(2026, 7, 2);
+
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      orgId: s.orgId,
+      receivableId: claim._id,
+      amount: 1_000,
+      receivedAt: dayOne,
+      idempotencyKey: key,
+    });
+
+    await expect(
+      s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+        orgId: s.orgId,
+        receivableId: claim._id,
+        amount: 1_000,
+        receivedAt: dayTwo,
+        idempotencyKey: key,
+      })
+    ).rejects.toThrow();
+  });
+
+  test("a genuine replay of the identical receipt is still idempotent", async () => {
+    // The point is to reject CHANGED content, not to break retry safety.
+    const { s, claim } = await directClaim("guardReplay");
+    const key = "receipt-key-2";
+    const at = Date.UTC(2026, 7, 1);
+    const once = {
+      orgId: s.orgId,
+      receivableId: claim._id,
+      amount: 1_000,
+      receivedAt: at,
+      idempotencyKey: key,
+    };
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, once);
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, once);
+
+    const after = (await supplierClaimsOf(s)).find((row) => row._id === claim._id)!;
+    expect(after.amountReceived).toBe(1_000);
+  });
+});
