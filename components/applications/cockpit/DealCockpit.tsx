@@ -118,6 +118,19 @@ const PROFIT_BLOCKED_REASON: Record<
   DealCancelled: "ProfitDealCancelled",
 };
 
+/**
+ * Keyed by state rather than tested with a ternary chain. The chain drew three
+ * SonarCloud findings, and its final `else` silently absorbed any state it did
+ * not name — so a new one rendered as PENDING's dash instead of failing.
+ */
+const STAGE_ICON: Record<StageState, React.ReactNode> = {
+  COMPLETE: <Check className="h-4 w-4 text-emerald-600" />,
+  STOPPED: <Ban className="h-4 w-4 text-muted-foreground" />,
+  BLOCKED: <AlertTriangle className="h-4 w-4 text-amber-600" />,
+  CURRENT: <CircleDot className="h-4 w-4 text-primary" />,
+  PENDING: <Minus className="h-4 w-4 text-muted-foreground/60" />,
+};
+
 /** A money run is Latin digits inside Arabic prose; `<bdi>` keeps it whole. */
 function Money({ children }: Readonly<{ children: React.ReactNode }>) {
   return <bdi className="tabular-nums">{children}</bdi>;
@@ -157,6 +170,93 @@ export function DealCockpit({
         });
       }}
     />
+  );
+}
+
+/**
+ * The money summary card, extracted so `DealCockpitView` clears the cognitive
+ * complexity gate. Presentation only: every figure and every classification
+ * arrives already derived from `applications.dealCockpit`, and nothing here
+ * computes money. The headline cannot be rendered without its qualifier,
+ * because amount and classification travel in one object.
+ */
+function MoneyPanel({
+  money,
+  managementProfit,
+  t,
+}: Readonly<{
+  money: (minor: number) => string;
+  managementProfit: NonNullable<DealCockpitData["money"]>["managementProfit"];
+  t: (key: string) => string;
+}>) {
+  return (
+  <Card>
+    <CardContent className="space-y-4 pt-6">
+      <div className="space-y-1">
+        <p className="text-sm text-muted-foreground">{t("NetDealershipProfit")}</p>
+        {managementProfit.available ? (
+          <>
+            <div className="flex flex-wrap items-baseline gap-3">
+              <p className="text-3xl font-semibold">
+                <Money>{money(managementProfit.amountMinor)}</Money>
+              </p>
+              {/* The qualifier is not decoration. It renders from
+                  the same object as the amount, so there is no code
+                  path that shows one without the other. */}
+              <Badge variant="outline" className="border-amber-500/60 text-amber-700 dark:text-amber-400">
+                {managementProfit.classification === "ACTUAL_UNPOSTABLE"
+                  ? t("ProfitActualUnpostable")
+                  : t("ProfitEstimatedAwaitingSettlement")}
+              </Badge>
+            </div>
+            <p className="text-xs text-muted-foreground">{t("ManagementFigureNote")}</p>
+          </>
+        ) : (
+          <>
+            <p className="text-2xl font-semibold text-muted-foreground">
+              {t("ProfitNotCalculable")}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {t(PROFIT_BLOCKED_REASON[managementProfit.reason])}
+            </p>
+          </>
+        )}
+      </div>
+
+      {managementProfit.available && (
+        <>
+          <Separator />
+          <dl className="space-y-1.5 text-sm">
+            {managementProfit.lines
+              // A zero on an OPTIONAL line is noise, not information:
+              // the customer-direct amount has no writer yet, so it
+              // would read "0.000" on every deal forever, and the
+              // dealer contribution is zero on any fully funded deal.
+              // The three lines the mockup always shows stay, so the
+              // derivation never looks like it is hiding a term.
+              .filter(
+                (line) =>
+                  line.amountMinor !== 0 ||
+                  line.key === "APPROVED_PURCHASE" ||
+                  line.key === "SUPPLIER_SETTLEMENT" ||
+                  line.key === "ACTUAL_EXPENSES"
+              )
+              .map((line) => (
+              <div key={line.key} className="flex items-center justify-between gap-4">
+                <dt className="text-muted-foreground">{t(PROFIT_LINE_LABEL[line.key] ?? line.key)}</dt>
+                <dd>
+                  <Money>
+                    {line.sign < 0 ? "− " : ""}
+                    {money(line.amountMinor)}
+                  </Money>
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </>
+      )}
+    </CardContent>
+  </Card>
   );
 }
 
@@ -387,73 +487,11 @@ export function DealCockpitView({
                 </div>
               )}
 
-              <Card>
-                <CardContent className="space-y-4 pt-6">
-                  <div className="space-y-1">
-                    <p className="text-sm text-muted-foreground">{t("NetDealershipProfit")}</p>
-                    {deal.money.managementProfit.available ? (
-                      <>
-                        <div className="flex flex-wrap items-baseline gap-3">
-                          <p className="text-3xl font-semibold">
-                            <Money>{money(deal.money.managementProfit.amountMinor)}</Money>
-                          </p>
-                          {/* The qualifier is not decoration. It renders from
-                              the same object as the amount, so there is no code
-                              path that shows one without the other. */}
-                          <Badge variant="outline" className="border-amber-500/60 text-amber-700 dark:text-amber-400">
-                            {deal.money.managementProfit.classification === "ACTUAL_UNPOSTABLE"
-                              ? t("ProfitActualUnpostable")
-                              : t("ProfitEstimatedAwaitingSettlement")}
-                          </Badge>
-                        </div>
-                        <p className="text-xs text-muted-foreground">{t("ManagementFigureNote")}</p>
-                      </>
-                    ) : (
-                      <>
-                        <p className="text-2xl font-semibold text-muted-foreground">
-                          {t("ProfitNotCalculable")}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {t(PROFIT_BLOCKED_REASON[deal.money.managementProfit.reason])}
-                        </p>
-                      </>
-                    )}
-                  </div>
-
-                  {deal.money.managementProfit.available && (
-                    <>
-                      <Separator />
-                      <dl className="space-y-1.5 text-sm">
-                        {deal.money.managementProfit.lines
-                          // A zero on an OPTIONAL line is noise, not information:
-                          // the customer-direct amount has no writer yet, so it
-                          // would read "0.000" on every deal forever, and the
-                          // dealer contribution is zero on any fully funded deal.
-                          // The three lines the mockup always shows stay, so the
-                          // derivation never looks like it is hiding a term.
-                          .filter(
-                            (line) =>
-                              line.amountMinor !== 0 ||
-                              line.key === "APPROVED_PURCHASE" ||
-                              line.key === "SUPPLIER_SETTLEMENT" ||
-                              line.key === "ACTUAL_EXPENSES"
-                          )
-                          .map((line) => (
-                          <div key={line.key} className="flex items-center justify-between gap-4">
-                            <dt className="text-muted-foreground">{t(PROFIT_LINE_LABEL[line.key] ?? line.key)}</dt>
-                            <dd>
-                              <Money>
-                                {line.sign < 0 ? "− " : ""}
-                                {money(line.amountMinor)}
-                              </Money>
-                            </dd>
-                          </div>
-                        ))}
-                      </dl>
-                    </>
-                  )}
-                </CardContent>
-              </Card>
+              <MoneyPanel
+                money={money}
+                managementProfit={deal.money.managementProfit}
+                t={t}
+              />
 
               {/* --- أطراف الصفقة ------------------------------------------ */}
               <Card>
@@ -648,18 +686,7 @@ function StageRow({
   blocker,
   isFocus,
 }: Readonly<{ state: StageState; label: string; blocker?: string; isFocus: boolean }>) {
-  const icon =
-    state === "COMPLETE" ? (
-      <Check className="h-4 w-4 text-emerald-600" />
-    ) : state === "STOPPED" ? (
-      <Ban className="h-4 w-4 text-muted-foreground" />
-    ) : state === "BLOCKED" ? (
-      <AlertTriangle className="h-4 w-4 text-amber-600" />
-    ) : state === "CURRENT" ? (
-      <CircleDot className="h-4 w-4 text-primary" />
-    ) : (
-      <Minus className="h-4 w-4 text-muted-foreground/60" />
-    );
+  const icon = STAGE_ICON[state] ?? STAGE_ICON.PENDING;
 
   return (
     <div

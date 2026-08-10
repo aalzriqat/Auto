@@ -381,27 +381,140 @@ function positionForObligation(
  * unknown and every caller withholds what depends on it — the same fail-closed
  * outcome, without destroying the diagnostic.
  */
-async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">) {
-  const vehicle = await ctx.db.get(app.vehicleId);
-  const consigned = vehicle != null && isConsignedAgentSale(vehicle);
-
+/**
+ * Which settlement route this deal is on, and whether the sale still stands.
+ *
+ * Extracted from `resolveSettlement` unchanged. `sales.update` can cancel a
+ * completed sale — cancelling the supplier claim and reversing the GL — while
+ * the finance application keeps its own status, so reading the sale only for
+ * its route left a cancelled deal rendering as live work.
+ */
+async function resolveDealRoute(
+  ctx: QueryCtx,
+  app: Doc<"financeApplications">,
+  opts: { vehicle: Doc<"vehicles"> | null; consigned: boolean }
+): Promise<{ routeKnown: boolean; settlesDirect: boolean; saleCancelled: boolean }> {
   let routeKnown = true;
   let settlesDirect = false;
-  // `sales.update` can cancel a completed sale — it cancels the supplier claim
-  // and reverses the GL — while the finance application keeps its own status.
-  // Reading the sale only for its route left a cancelled deal rendering as live
-  // work with a next step and a blocked settlement stage.
   let saleCancelled = false;
+
   if (app.finalizedSaleId) {
     const sale = await ctx.db.get(app.finalizedSaleId);
     if (!sale || sale.orgId !== app.orgId) routeKnown = false;
     else saleCancelled = sale.status === "CANCELLED";
-    if (sale && sale.orgId === app.orgId) settlesDirect = !dealershipCollectsGross(consignedSettlementRoute(sale));
-  } else if (vehicle === null) {
+    if (sale && sale.orgId === app.orgId) {
+      settlesDirect = !dealershipCollectsGross(consignedSettlementRoute(sale));
+    }
+  } else if (opts.vehicle === null) {
     routeKnown = false;
   } else {
-    settlesDirect = !dealershipCollectsGross(consignedSettlementRoute(app)) && consigned;
+    settlesDirect = !dealershipCollectsGross(consignedSettlementRoute(app)) && opts.consigned;
   }
+
+  return { routeKnown, settlesDirect, saleCancelled };
+}
+
+/**
+ * What the supplier still owes, or is still owed. Extracted unchanged.
+ *
+ * The two branches are not symmetric and must not be made so: on the direct
+ * route the supplier owes the dealership its margin, and on the through route
+ * the dealership owes the supplier his share.
+ */
+async function resolveSupplierObligation(
+  ctx: QueryCtx,
+  app: Doc<"financeApplications">,
+  opts: {
+    settlesDirect: boolean;
+    consigned: boolean;
+    currency: string;
+    supplierClaim: Doc<"vehicleSupplierReceivables"> | undefined;
+    margin: MarginEvidence;
+  }
+): Promise<ObligationState> {
+  const { settlesDirect, consigned, currency, supplierClaim, margin } = opts;
+
+  if (settlesDirect) {
+    if (supplierClaim) {
+      return obligationFromRow({
+        due: supplierClaim.amountDue,
+        settled: supplierClaim.amountReceived ?? 0,
+        rowCurrency: supplierClaim.currency,
+        queryCurrency: currency,
+        storedPaid: supplierClaim.status === "PAID",
+      });
+    }
+    // No claim is the CORRECT state for a zero-margin deal: sale completion
+    // deliberately opens none. Demanding a paid claim as proof therefore
+    // demanded a record whose absence is right, and such deals could never
+    // finish. But an absent claim on a deal that DID earn a margin is missing
+    // evidence, not proof — so only a margin PROVEN to be exactly zero counts
+    // as nothing to collect.
+    //
+    // A negative margin is not "nothing to collect" either. The sale sold below
+    // the supplier's cost, which means the dealership owes rather than is owed,
+    // and no record here expresses that. Reporting NONE would close a deal on
+    // the strength of a figure that contradicts its own paperwork.
+    return !margin.known ? "UNKNOWN" : margin.minor === 0 ? "NONE" : "UNKNOWN";
+  }
+
+  const payables = app.finalizedSaleId
+    ? await ctx.db
+        .query("vehicleSupplierPayables")
+        .withIndex("by_sale", (q) => q.eq("saleId", app.finalizedSaleId))
+        .collect()
+    : [];
+  const payable = payables.find((row) => row.orgId === app.orgId && row.status !== "CANCELLED");
+  if (!payable) {
+    // On a CONSIGNED through-route deal the dealership collects the gross and
+    // owes the supplier his share, so the payable is the record of a debt that
+    // certainly exists. Its absence is a missing record, not a settled one, and
+    // answering NONE marked the deal complete while the supplier was still
+    // unpaid. Only a deal that was never consigned genuinely owes nothing.
+    return consigned ? "UNKNOWN" : "NONE";
+  }
+  return obligationFromRow({
+    due: payable.amountDue,
+    settled: payable.amountPaid ?? 0,
+    rowCurrency: payable.currency,
+    queryCurrency: currency,
+    storedPaid: payable.status === "PAID",
+  });
+}
+
+/** What the finance company still owes. Extracted unchanged. */
+function resolveFinancierObligation(
+  app: Doc<"financeApplications">,
+  settlesDirect: boolean
+): ObligationState {
+  if (settlesDirect) {
+    // The financier pays the SUPPLIER the approved purchase amount. An advice
+    // for less than that is a PART payment and the money is not finished — the
+    // previous predicate accepted any positive advice, so half the money
+    // reported a completed deal.
+    if (app.approvedDealerPurchaseAmountMinor === undefined) return "UNKNOWN";
+    if (app.supplierDisbursedAmountMinor === undefined) return "OPEN";
+    return app.supplierDisbursedAmountMinor >= app.approvedDealerPurchaseAmountMinor
+      ? "CLOSED"
+      : "OPEN";
+  }
+  // `settlementStatus` is the lifecycle hint, and it only ever spoke for the
+  // financier's leg. It is authoritative here precisely because the supplier's
+  // leg is judged separately.
+  const statusSettlement = app.settlementStatus ?? settlementStatusForFacts(app);
+  return statusSettlement === "FULLY_SETTLED" || statusSettlement === "RECONCILED"
+    ? "CLOSED"
+    : "OPEN";
+}
+
+async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">) {
+  const vehicle = await ctx.db.get(app.vehicleId);
+  const consigned = vehicle != null && isConsignedAgentSale(vehicle);
+
+  const { routeKnown, settlesDirect, saleCancelled } = await resolveDealRoute(ctx, app, {
+    vehicle,
+    consigned,
+  });
 
   const supplierClaim = app.finalizedSaleId
     ? (
@@ -423,81 +536,14 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
   // is exactly how the party rows came to contradict the stage rail.
   const margin = await saleTimeMarginMinor(ctx, app, { currency, consigned, supplierClaim });
 
-  // --- what the supplier still owes, or is still owed ---------------------
-  let supplierObligation: ObligationState = "UNKNOWN";
-  if (settlesDirect) {
-    if (supplierClaim) {
-      supplierObligation = obligationFromRow({
-        due: supplierClaim.amountDue,
-        settled: supplierClaim.amountReceived ?? 0,
-        rowCurrency: supplierClaim.currency,
-        queryCurrency: currency,
-        storedPaid: supplierClaim.status === "PAID",
-      });
-    } else {
-      // No claim is the CORRECT state for a zero-margin deal: sale completion
-      // deliberately opens none. Demanding a paid claim as proof therefore
-      // demanded a record whose absence is right, and such deals could never
-      // finish. But an absent claim on a deal that DID earn a margin is missing
-      // evidence, not proof — so only a margin PROVEN to be exactly zero counts
-      // as nothing to collect.
-      //
-      // A negative margin is not "nothing to collect" either. The sale sold
-      // below the supplier's cost, which means the dealership owes rather than
-      // is owed, and no record here expresses that. Reporting NONE would close
-      // a deal on the strength of a figure that contradicts its own paperwork.
-      supplierObligation = !margin.known ? "UNKNOWN" : margin.minor === 0 ? "NONE" : "UNKNOWN";
-    }
-  } else {
-    const payables = app.finalizedSaleId
-      ? await ctx.db
-          .query("vehicleSupplierPayables")
-          .withIndex("by_sale", (q) => q.eq("saleId", app.finalizedSaleId))
-          .collect()
-      : [];
-    const payable = payables.find((row) => row.orgId === app.orgId && row.status !== "CANCELLED");
-    supplierObligation = !payable
-      ? // On a CONSIGNED through-route deal the dealership collects the gross and
-        // owes the supplier his share, so the payable is the record of a debt
-        // that certainly exists. Its absence is a missing record, not a settled
-        // one, and answering NONE marked the deal complete while the supplier
-        // was still unpaid. Only a deal that was never consigned genuinely owes
-        // a supplier nothing.
-        consigned
-        ? "UNKNOWN"
-        : "NONE"
-      : obligationFromRow({
-          due: payable.amountDue,
-          settled: payable.amountPaid ?? 0,
-          rowCurrency: payable.currency,
-          queryCurrency: currency,
-          storedPaid: payable.status === "PAID",
-        });
-  }
-
-  // --- what the finance company still owes --------------------------------
-  const statusSettlement = app.settlementStatus ?? settlementStatusForFacts(app);
-  let financierObligation: ObligationState;
-  if (settlesDirect) {
-    // The financier pays the SUPPLIER the approved purchase amount. An advice
-    // for less than that is a PART payment and the money is not finished —
-    // the previous predicate accepted any positive advice, so half the money
-    // reported a completed deal.
-    financierObligation =
-      app.approvedDealerPurchaseAmountMinor === undefined
-        ? "UNKNOWN"
-        : app.supplierDisbursedAmountMinor === undefined
-          ? "OPEN"
-          : app.supplierDisbursedAmountMinor >= app.approvedDealerPurchaseAmountMinor
-            ? "CLOSED"
-            : "OPEN";
-  } else {
-    // `settlementStatus` is the lifecycle hint, and it only ever spoke for the
-    // financier's leg. It is authoritative here precisely because the supplier's
-    // leg is now judged separately above.
-    financierObligation =
-      statusSettlement === "FULLY_SETTLED" || statusSettlement === "RECONCILED" ? "CLOSED" : "OPEN";
-  }
+  const supplierObligation = await resolveSupplierObligation(ctx, app, {
+    settlesDirect,
+    consigned,
+    currency,
+    supplierClaim,
+    margin,
+  });
+  const financierObligation = resolveFinancierObligation(app, settlesDirect);
 
   const obligations: SettlementObligations = routeKnown
     ? { financier: financierObligation, supplier: supplierObligation }
@@ -675,33 +721,33 @@ function obligationFromRow(args: {
   return args.storedPaid || dueMinor - settledMinor <= 0 ? "CLOSED" : "OPEN";
 }
 
-async function buildCockpitMoney(
+/**
+ * `المصاريف الفعلية` — the deal's fee lines and what they total. Extracted from
+ * `buildCockpitMoney` unchanged.
+ *
+ * `actualAmountMinor` unset means unpaid or unrecorded — NOT zero. Only lines
+ * with a real actual are summed, and the count of those without one is reported
+ * so the screen can say the total is still incomplete rather than presenting a
+ * partial sum as the final cost.
+ *
+ * The dealership's PROFIT is reduced by what the dealership itself bore, which
+ * is not the total of every fee on the deal: `paidBy` names who actually paid,
+ * and a transfer fee the customer paid or a commission the finance company
+ * deducted is not a cost to the dealership. `summarizeFees` already draws that
+ * line and is reused rather than reimplemented — a second copy of a money
+ * computation is a second answer waiting to disagree.
+ */
+async function summarizeCockpitExpenses(
   ctx: QueryCtx,
   app: Doc<"financeApplications">,
-  quote: Doc<"quotes"> | null,
-  settlementFacts: Awaited<ReturnType<typeof resolveSettlement>>
+  currency: string
 ) {
-  const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, app.orgId));
-  const { vehicle, routeKnown, settlesDirect, moneySettled } = settlementFacts;
-  const supplierName = vehicle?.sourcedFromName ?? "";
-
-  // --- actual expenses --------------------------------------------------
   const fees = await ctx.db
     .query("financeDealFees")
     .withIndex("by_application", (q) => q.eq("applicationId", app._id))
     .collect();
   const liveFees = fees.filter((fee) => fee.voidedAt === undefined);
-  // `actualAmountMinor` unset means unpaid or unrecorded — NOT zero. Only lines
-  // with a real actual are summed, and the count of those without one is
-  // reported so the screen can say the total is still incomplete rather than
-  // presenting a partial sum as the final cost.
-  //
-  // The dealership's PROFIT is reduced by what the dealership itself bore, which
-  // is not the same as the total of every fee on the deal: `paidBy` names who
-  // actually paid, and a transfer fee the customer paid or a commission the
-  // finance company deducted is not a cost to the dealership. `summarizeFees`
-  // already draws that line and is reused rather than reimplemented — a second
-  // copy of a money computation is a second answer waiting to disagree.
+
   const feeLines = liveFees.map((fee) => ({
     id: fee._id,
     feeType: fee.feeType,
@@ -716,16 +762,90 @@ async function buildCockpitMoney(
   // at a rate nobody agreed.
   const sameCurrencyFees = liveFees.filter((fee) => fee.currency === currency);
   const sameCurrencySummary = summarizeFees(sameCurrencyFees);
-  const actualExpensesMinor = sameCurrencySummary.dealerBorneActualMinor;
   const otherCurrencyFees = liveFees.length - sameCurrencyFees.length;
-  const feesAwaitingActuals = sameCurrencySummary.linesAwaitingActual + otherCurrencyFees;
-  // RECORDED and RECONCILED are different claims: an amount somebody typed and
-  // an amount somebody checked against its evidence. Only the second can close
-  // a deal, so only the second may call the headline "actual".
-  const expensesFullyReconciled =
-    otherCurrencyFees === 0 &&
-    sameCurrencySummary.linesAwaitingActual === 0 &&
-    sameCurrencySummary.linesAwaitingReconciliation === 0;
+
+  return {
+    feeLines,
+    actualExpensesMinor: sameCurrencySummary.dealerBorneActualMinor,
+    feesAwaitingActuals: sameCurrencySummary.linesAwaitingActual + otherCurrencyFees,
+    // RECORDED and RECONCILED are different claims: an amount somebody typed and
+    // an amount somebody checked against its evidence. Only the second can close
+    // a deal, so only the second may call the headline "actual".
+    expensesFullyReconciled:
+      otherCurrencyFees === 0 &&
+      sameCurrencySummary.linesAwaitingActual === 0 &&
+      sameCurrencySummary.linesAwaitingReconciliation === 0,
+  };
+}
+
+/**
+ * What the customer has put in and is still holding. Extracted unchanged.
+ *
+ * `amountMinor` is OPTIONAL — `amount`, in major units, is the required field,
+ * and deposits taken before minor units existed carry only that. Falling back to
+ * zero made the screen assert the customer had put nothing in while the AR aging
+ * report showed the money.
+ *
+ * Every amount goes through the query's one guarded conversion. A raw
+ * `toMinorUnits` survived here once, and a legacy deposit carrying only a
+ * non-representable `amount` would have thrown and taken the whole cockpit down
+ * on the single row the guard was not applied to. A deposit that cannot be read
+ * is left out of the total AND counted, so the screen can say the figure is
+ * incomplete rather than quietly understating what the customer has paid.
+ */
+async function resolveCustomerDeposits(
+  ctx: QueryCtx,
+  app: Doc<"financeApplications">,
+  opts: { quote: Doc<"quotes"> | null; currency: string }
+) {
+  const { quote, currency } = opts;
+  const deposits = quote ? await getQuoteDeposits(ctx, app.quoteId) : [];
+  const heldDeposits = deposits.filter((deposit) => deposit.status === "HELD");
+
+  let unreadableDeposits = 0;
+  const heldDepositMinor = heldDeposits.reduce((total, deposit) => {
+    const depositCurrency = deposit.currency ?? currency;
+    // The currency is checked BEFORE choosing which field supplies the amount.
+    // Written as `amountMinor ?? convert(...)` the check lived only inside the
+    // fallback, so a foreign-currency deposit that happened to carry
+    // `amountMinor` was added to the total unconverted — 500 USD cents counted
+    // as 500 JOD fils. The stored minor amount is denominated too; it is not a
+    // currency-free number.
+    const minor =
+      depositCurrency !== currency
+        ? undefined
+        : (deposit.amountMinor ??
+          toMinorSameCurrencyOrUndefined(deposit.amount, depositCurrency, currency));
+    if (minor === undefined) {
+      // Counted whatever the reason — unreadable amount OR another currency.
+      unreadableDeposits += 1;
+      return total;
+    }
+    return total + minor;
+  }, 0);
+
+  // The mockup shows a receipt number against the customer row. It lives on the
+  // canonical payment, not the deposit.
+  const depositPaymentId = heldDeposits.find(
+    (deposit) => deposit.canonicalPaymentId
+  )?.canonicalPaymentId;
+  const depositPayment = depositPaymentId ? await ctx.db.get(depositPaymentId) : null;
+
+  return { heldDepositMinor, unreadableDeposits, depositPayment };
+}
+
+async function buildCockpitMoney(
+  ctx: QueryCtx,
+  app: Doc<"financeApplications">,
+  quote: Doc<"quotes"> | null,
+  settlementFacts: Awaited<ReturnType<typeof resolveSettlement>>
+) {
+  const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, app.orgId));
+  const { vehicle, routeKnown, settlesDirect, moneySettled } = settlementFacts;
+  const supplierName = vehicle?.sourcedFromName ?? "";
+
+  const expenses = await summarizeCockpitExpenses(ctx, app, currency);
+  const { feeLines, actualExpensesMinor, feesAwaitingActuals, expensesFullyReconciled } = expenses;
 
   // --- the supplier's position -----------------------------------------
   /** `amountDue` is stored in MAJOR units on both supplier tables, unlike every
@@ -814,55 +934,11 @@ async function buildCockpitMoney(
       ? await getReceivableOutstandingMinor(ctx, financeReceivable._id)
       : undefined;
 
-  // --- the customer's position -----------------------------------------
-  const deposits = quote ? await getQuoteDeposits(ctx, app.quoteId) : [];
-  const heldDeposits = deposits.filter((deposit) => deposit.status === "HELD");
-  // `amountMinor` is stored on the deposit itself, so nothing is converted here
-  // — and a deposit taken in another currency is excluded rather than summed at
-  // a rate nobody agreed. Legacy rows predate `currency`; those carry the org's,
-  // which is what `currency` already resolves to.
-  // `amountMinor` is OPTIONAL — `amount`, in major units, is the required field,
-  // and deposits taken before minor units existed carry only that. Falling back
-  // to zero made the screen assert the customer had put nothing in while the AR
-  // aging report showed the money. Every other reader in the codebase converts;
-  // this one now does too.
-  //
-  // Routed through the query's one guarded conversion like every other amount.
-  // This was the single raw `toMinorUnits` left on this path, which made the
-  // claim above ("every conversion goes through here") false — and a legacy
-  // deposit carrying only a non-representable `amount` would have thrown and
-  // taken the whole cockpit down, on the one row the guard was not applied to.
-  // A deposit that cannot be read is left out of the total and counted, so the
-  // screen can say the figure is incomplete rather than quietly understating
-  // what the customer has put in.
-  let unreadableDeposits = 0;
-  const heldDepositMinor = heldDeposits.reduce((total, deposit) => {
-    const depositCurrency = deposit.currency ?? currency;
-    // The currency is checked BEFORE choosing which field supplies the amount.
-    // Written as `amountMinor ?? convert(...)` the check lived only inside the
-    // fallback, so a foreign-currency deposit that happened to carry
-    // `amountMinor` was added to the total unconverted — 500 USD cents counted
-    // as 500 JOD fils. The stored minor amount is denominated too; it is not a
-    // currency-free number.
-    const minor =
-      depositCurrency !== currency
-        ? undefined
-        : (deposit.amountMinor ??
-          toMinorSameCurrencyOrUndefined(deposit.amount, depositCurrency, currency));
-    if (minor === undefined) {
-      // Counted whatever the reason — unreadable amount OR another currency.
-      // Gating this on a currency match left a foreign deposit excluded from the
-      // total AND able to leave the row saying the customer had put nothing in,
-      // which is the same error this counter was added to prevent.
-      unreadableDeposits += 1;
-      return total;
-    }
-    return total + minor;
-  }, 0);
-  // The mockup shows a receipt number against the customer row. It lives on the
-  // canonical payment, not the deposit.
-  const depositPaymentId = heldDeposits.find((deposit) => deposit.canonicalPaymentId)?.canonicalPaymentId;
-  const depositPayment = depositPaymentId ? await ctx.db.get(depositPaymentId) : null;
+  const { heldDepositMinor, unreadableDeposits, depositPayment } = await resolveCustomerDeposits(
+    ctx,
+    app,
+    { quote, currency }
+  );
 
   const parties = [
     {
@@ -958,58 +1034,22 @@ async function buildCockpitMoney(
   // pays him the gross and he owes the margin back. Both reduce to the same
   // economics — margin less expenses — which is the point of computing it here
   // once rather than twice on the client.
-  let supplierSettlementMinor: number | undefined;
-  if (!routeKnown) supplierSettlementMinor = undefined;
-  else if (settlesDirect) {
-    // From the RECORDED settlement advice, not from the approved amount.
-    //
-    // Deriving it as `approved − margin claim` looked reasonable and was not:
-    // the `approved` term cancels algebraically, leaving `sale price − source
-    // cost` — precisely the basis this screen exists to avoid — and it rendered
-    // a `تسوية المورد` line for an amount no party would ever pay, because the
-    // supplier's actual entitlement is whatever the advice says it was.
-    //
-    // `supplierDisbursedAmountMinor` is what the financier actually paid him,
-    // recorded by `confirmSupplierDisbursement` off the advice document. What he
-    // NETS is that, less the margin he owes back. Until that advice exists there
-    // is no honest figure, so the headline reports why instead of inventing one.
-    // Only from a PROVEN-COMPLETE advice. A partial one is not evidence of what
-    // the supplier ends up with: an advice of half the approval reported a
-    // profit as if the whole deal had paid, and an advice below the margin
-    // produced a NEGATIVE supplier settlement and therefore a profit larger
-    // than the entire approved purchase amount.
-    //
-    // The margin comes from the shared sale-time resolution, and when it is not
-    // provable the headline is withheld. It used to read
-    // `supplierClaimOriginalMinor ?? 0`, so a claim that was missing, cancelled
-    // or denominated in another currency silently became "the supplier owes
-    // nothing back" — and the screen published a profit equal to the ENTIRE
-    // disbursement as though it were a fact about the deal. Reporting no figure
-    // is a smaller error than reporting a confident wrong one.
-    const marginBack = settlementFacts.margin;
-    supplierSettlementMinor =
-      settlementFacts.obligations.financier === "CLOSED" &&
-      app.supplierDisbursedAmountMinor !== undefined &&
-      marginBack.known
-        ? app.supplierDisbursedAmountMinor - marginBack.minor
-        : undefined;
-    // A supplier cannot net a negative amount; if the recorded facts imply one,
-    // they disagree with each other and the figure is not reportable.
-    if (supplierSettlementMinor !== undefined && supplierSettlementMinor < 0) {
-      supplierSettlementMinor = undefined;
-    }
-  } else if (payable) {
-    supplierSettlementMinor = toMinorSameCurrency(payable.amountDue, payable.currency);
-  }
+  const supplierSettlementMinor = resolveSupplierSettlementMinor({
+    app,
+    routeKnown,
+    settlesDirect,
+    margin: settlementFacts.margin,
+    financierObligation: settlementFacts.obligations.financier,
+    payable,
+    currency,
+  });
 
   // A DIRECT deal can never reach FULLY_SETTLED through the status field: the
   // only writer of it is `confirmDisbursement`, which refuses the direct route
   // outright, and `confirmSupplierDisbursement` deliberately writes EXPECTED.
   // Reading settlement off that field alone left the direct route's terminal
   // stage permanently blocked and its qualifier permanently "estimated" — on
-  // deals that were completely finished. Each route is judged on the evidence
-  // it can actually produce: the advice being recorded, and the supplier's
-  // margin claim being collected in full.
+  // deals that were completely finished.
   const fullySettled = moneySettled && expensesFullyReconciled;
 
   return {
@@ -1048,6 +1088,74 @@ async function buildCockpitMoney(
     /** `فرق تخمين` — a read of what was recorded, never a fresh computation. */
     appraisalGapMinor: app.rawAppraisalGapMinor,
   };
+}
+
+/**
+ * What the supplier ends up with, which is what the headline subtracts.
+ * Extracted from `buildCockpitMoney` unchanged.
+ *
+ * THROUGH_DEALERSHIP: the payable the dealership owes him. DIRECT: what the
+ * financier actually paid him, less the margin he owes back.
+ */
+function resolveSupplierSettlementMinor(args: {
+  app: Doc<"financeApplications">;
+  routeKnown: boolean;
+  settlesDirect: boolean;
+  margin: MarginEvidence;
+  financierObligation: ObligationState;
+  payable: Doc<"vehicleSupplierPayables"> | undefined;
+  currency: string;
+}): number | undefined {
+  const { app, routeKnown, settlesDirect, margin, financierObligation, payable, currency } = args;
+
+  let supplierSettlementMinor: number | undefined;
+  if (!routeKnown) supplierSettlementMinor = undefined;
+  else if (settlesDirect) {
+    // From the RECORDED settlement advice, not from the approved amount.
+    //
+    // Deriving it as `approved − margin claim` looked reasonable and was not:
+    // the `approved` term cancels algebraically, leaving `sale price − source
+    // cost` — precisely the basis this screen exists to avoid — and it rendered
+    // a `تسوية المورد` line for an amount no party would ever pay, because the
+    // supplier's actual entitlement is whatever the advice says it was.
+    //
+    // `supplierDisbursedAmountMinor` is what the financier actually paid him,
+    // recorded by `confirmSupplierDisbursement` off the advice document. What he
+    // NETS is that, less the margin he owes back. Until that advice exists there
+    // is no honest figure, so the headline reports why instead of inventing one.
+    // Only from a PROVEN-COMPLETE advice. A partial one is not evidence of what
+    // the supplier ends up with: an advice of half the approval reported a
+    // profit as if the whole deal had paid, and an advice below the margin
+    // produced a NEGATIVE supplier settlement and therefore a profit larger
+    // than the entire approved purchase amount.
+    //
+    // The margin comes from the shared sale-time resolution, and when it is not
+    // provable the headline is withheld. It used to read
+    // `supplierClaimOriginalMinor ?? 0`, so a claim that was missing, cancelled
+    // or denominated in another currency silently became "the supplier owes
+    // nothing back" — and the screen published a profit equal to the ENTIRE
+    // disbursement as though it were a fact about the deal. Reporting no figure
+    // is a smaller error than reporting a confident wrong one.
+    const marginBack = margin;
+    supplierSettlementMinor =
+      financierObligation === "CLOSED" &&
+      app.supplierDisbursedAmountMinor !== undefined &&
+      marginBack.known
+        ? app.supplierDisbursedAmountMinor - marginBack.minor
+        : undefined;
+    // A supplier cannot net a negative amount; if the recorded facts imply one,
+    // they disagree with each other and the figure is not reportable.
+    if (supplierSettlementMinor !== undefined && supplierSettlementMinor < 0) {
+      supplierSettlementMinor = undefined;
+    }
+  } else if (payable) {
+    supplierSettlementMinor = toMinorSameCurrencyOrUndefined(
+      payable.amountDue,
+      payable.currency,
+      currency
+    );
+  }
+  return supplierSettlementMinor;
 }
 
 async function assertRequiredApplicationDocumentsComplete(
