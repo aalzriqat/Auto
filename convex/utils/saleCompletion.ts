@@ -159,6 +159,20 @@ type PreparedSaleCompletion = {
 export const FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT =
   "This is a financed sale of the supplier's car settled directly with him, so what the finance company approved is what he actually receives — and the dealership's claim on him is measured from it. That amount lives on the finance application, so this deal has to be completed through the financing workflow rather than recorded as a sale directly.";
 
+/**
+ * Why a commission cannot be recalculated on an already-completed financed
+ * direct sale that has no usable record of what it earned.
+ *
+ * Deliberately NOT `FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT`, which tells the
+ * operator to complete the deal through the financing workflow. That is right
+ * advice when the sale is being created and useless when it was completed
+ * months ago — the sale exists, the ledger has moved, and the missing thing is
+ * the sale's own recorded earning. Pointing a manager at the wrong remedy on a
+ * refusal that concerns somebody's pay is worse than saying less.
+ */
+export const CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN =
+  "This sale is the supplier's car, financed, and settled directly with him, but it carries no usable record of what the dealership earned on it — so a commission cannot be worked out. Its recorded margin is missing, unreadable, or in a different currency from the organization's. Have the deal's figures corrected before recalculating; the existing commission has been left untouched.";
+
 async function prepareSaleCompletion(
   ctx: MutationCtx,
   args: SaleCompletionArgs
@@ -329,21 +343,43 @@ export async function computeAutoCommissionAmount(
      * or missing evidence that must be refused — see `commissionableEarnings`.
      */
     externallyFinanced: boolean;
+    /**
+     * What a COMPLETED consigned sale already recorded as its recognized
+     * earning, in major units. When given it is used verbatim and nothing is
+     * read from the vehicle.
+     *
+     * Only recalculation supplies this, and only for a sale that has one.
+     * Completion cannot: it is the thing computing the figure in the first
+     * place. The distinction matters because the two operands age differently
+     * — the supplier receipt is frozen on the sale, while the vehicle's
+     * capitalized cost is a live row that a later correction can move. Deriving
+     * a commission from one frozen and one live operand produced a payable the
+     * GL, the supplier claim and every report disagreed with.
+     */
+    frozenRecognizedEarnings?: number;
   }
 ): Promise<number | undefined> {
-  if (!vehicleHasCostBasis(args.vehicle)) return undefined;
-  // Same cost basis the GL uses for COGS (purchase + landed costs + capitalized
-  // reconditioning expenses) so commission, the GL, and the operational reports
-  // all show the same margin for a sale.
-  const vehicleCost = await computeVehicleCapitalizedCost(ctx, args.vehicle);
-  const grossProfit = commissionableEarnings({
-    salePrice: args.salePrice,
-    vehicleCost,
-    vehicle: args.vehicle,
-    supplierGrossReceipt: args.supplierGrossReceipt,
-    settlementRoute: args.settlementRoute,
-    externallyFinanced: args.externallyFinanced,
-  });
+  let grossProfit: number;
+  if (args.frozenRecognizedEarnings !== undefined) {
+    // The sale already recorded what it earned, and that figure is what the
+    // ledger booked. Nothing is re-derived from the vehicle here — not even
+    // its cost — because the vehicle is a live row and the earning is not.
+    grossProfit = args.frozenRecognizedEarnings;
+  } else {
+    if (!vehicleHasCostBasis(args.vehicle)) return undefined;
+    // Same cost basis the GL uses for COGS (purchase + landed costs +
+    // capitalized reconditioning expenses) so commission, the GL, and the
+    // operational reports all show the same margin for a sale.
+    const vehicleCost = await computeVehicleCapitalizedCost(ctx, args.vehicle);
+    grossProfit = commissionableEarnings({
+      salePrice: args.salePrice,
+      vehicleCost,
+      vehicle: args.vehicle,
+      supplierGrossReceipt: args.supplierGrossReceipt,
+      settlementRoute: args.settlementRoute,
+      externallyFinanced: args.externallyFinanced,
+    });
+  }
   if (args.commissionMode === "AUTO_TIERS") {
     return calculateCommissionFromTiers(grossProfit, args.commissionTiers);
   }

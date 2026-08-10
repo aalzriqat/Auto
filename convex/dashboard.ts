@@ -4,6 +4,8 @@ import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { isSystemOwnerRole, PERMISSIONS, type Permission } from "./utils/permissions";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
+import { fromMinorUnits } from "./utils/money";
+import { consignedSettlementRoute, dealershipCollectsGross } from "./utils/vehicleOwnership";
 import {
   grossTransactionValueForSale,
   grossTransactionValueForTransaction,
@@ -436,6 +438,13 @@ export const stats = query({
      * price on the dealership's own stock.
      */
     let turnoverTruncated = false;
+    /**
+     * Consigned sales left out because what they earned cannot be established.
+     * Separate from `profitTruncated`, which means "past the costing cap" — a
+     * different reason for a short figure, and one an operator can act on
+     * differently.
+     */
+    let unknownMarginExcluded = false;
     const turnoverFromBasis = (
       basis: UncostedBasis | undefined,
       salePrice: number
@@ -444,8 +453,63 @@ export const stats = query({
       if (!basis.consigned) return salePrice;
       return Math.max(0, salePrice - basis.supplierCost);
     };
-    const recognizedRevenueOfSale = (sale: { vehicleId: Id<"vehicles">; salePrice: number }): number => {
+
+    /**
+     * What a consigned sale RECORDED as its earning, or `undefined` when it
+     * carries none this reader will believe.
+     *
+     * Identical discipline to `reports.recordedConsignedMargin`, and the same
+     * reason: `sales` is editable through the super-admin raw-JSON editor, so a
+     * non-finite or negative value reaches a reader even though no writer can
+     * produce one. A `NaN` here would propagate into every month of the chart.
+     */
+    const frozenConsignedMargin = (sale: Doc<"sales">): number | undefined => {
+      const minor = sale.consignedMarginMinor;
+      const currency = sale.consignedMarginCurrency;
+      if (minor === undefined || !currency) return undefined;
+      if (!Number.isFinite(minor) || minor < 0) return undefined;
+      return fromMinorUnits(minor, currency);
+    };
+
+    /**
+     * A financed sale of the supplier's car settled directly with him — the one
+     * shape where `salePrice − cost` is not the dealership's earning and must
+     * never be published as it. The supplier receives what the finance company
+     * approved, not the sale price, and the difference reaches no party.
+     */
+    const needsFrozenMarginEvidence = (sale: Doc<"sales">): boolean =>
+      consignedVehicleIds.has(sale.vehicleId) &&
+      !dealershipCollectsGross(
+        consignedSettlementRoute({ supplierSettlementRoute: sale.supplierSettlementRoute })
+      ) &&
+      (sale.financingType === "FINANCED" || sale.financingType === "LEASE");
+
+    /**
+     * The one authority for what a sale contributed, shared by the turnover
+     * headline and the profit trend so the two halves of this screen cannot
+     * disagree with each other — or with the sales report and the P&L, which
+     * both read the same frozen figure.
+     *
+     * `null` means "cannot be established": excluded and flagged, never zeroed
+     * and never grossed up.
+     */
+    const recognizedEarningOfSale = (sale: Doc<"sales">): number | null | undefined => {
+      const frozen = frozenConsignedMargin(sale);
+      if (frozen !== undefined) return frozen;
+      if (needsFrozenMarginEvidence(sale)) {
+        unknownMarginExcluded = true;
+        return null;
+      }
+      return undefined;
+    };
+
+    const recognizedRevenueOfSale = (sale: Doc<"sales">): number => {
       if (!canViewProfitMetrics) return sale.salePrice;
+      // Answered from what the sale itself recorded wherever it can be. This
+      // needs no vehicle at all, so it is also right for a row past the costing
+      // cap, where the fallback below has only a supplier cost to work from.
+      const recognized = recognizedEarningOfSale(sale);
+      if (recognized !== undefined) return recognized ?? 0;
       const cost = capitalizedCostByVehicle.get(sale.vehicleId);
       if (!costedVehicleIdSet.has(sale.vehicleId) || cost === undefined) {
         // Answered from the vehicle row where it could be. What remains is a
@@ -497,9 +561,26 @@ export const stats = query({
         // Skip it rather than book its full sale price as profit. The omission is
         // reported as `truncated.profit`, alongside the vehicles/sales/members
         // flags this query already returns.
-        const cost = capitalizedCostByVehicle.get(sale.vehicleId);
-        if (canViewProfitMetrics && cost !== undefined) {
-          monthlyProfits[key] = (monthlyProfits[key] || 0) + (sale.salePrice - cost);
+        if (canViewProfitMetrics) {
+          // Same authority as the turnover line above. Before this, the chart
+          // recomputed `salePrice − cost` for a consigned car while the sales
+          // report, the supplier claim, the journal and the cockpit all read
+          // the margin the sale froze — so the home screen and the P&L stated
+          // two different profits for one deal, which is the exact condition
+          // this whole change exists to remove.
+          const recognized = recognizedEarningOfSale(sale);
+          if (recognized === null) {
+            // Unknown earning: excluded, and reported as such. Publishing
+            // `salePrice − cost` here would be a confident figure built on a
+            // number no party transacted.
+          } else if (recognized !== undefined) {
+            monthlyProfits[key] = (monthlyProfits[key] || 0) + recognized;
+          } else {
+            const cost = capitalizedCostByVehicle.get(sale.vehicleId);
+            if (cost !== undefined) {
+              monthlyProfits[key] = (monthlyProfits[key] || 0) + (sale.salePrice - cost);
+            }
+          }
         }
       }
     } else {
@@ -900,7 +981,9 @@ export const stats = query({
         vehicles: false,
         sales: salesTruncated,
         members: false,
-        profit: profitTruncated,
+        // Either reason the profit figure is short: sales past the costing cap,
+        // or consigned sales whose earning could not be established.
+        profit: profitTruncated || unknownMarginExcluded,
         // Sales whose vehicle fell past the costing cap are left OUT of
         // turnover rather than folded in at gross, so the figure is short
         // rather than on two bases at once.

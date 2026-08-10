@@ -227,12 +227,31 @@ export function SettlementAdviceCorrectionDialog({
                 // Sent only when the operator actually moved the date. See
                 // `seededPaidOnRef`: an unchanged date has no lossless
                 // representation here, so omitting it is what preserves the
-                // recorded instant to the millisecond. When the date IS
-                // corrected, midnight on the chosen day is the honest reading
-                // of a deliberate date-only entry.
+                // recorded instant to the millisecond.
+                //
+                // TODAY becomes the current instant rather than UTC midnight,
+                // because only this side knows the operator's local day. East
+                // of UTC, UTC-midnight-of-today is still in the FUTURE for the
+                // first hours of the morning — until 03:00 in Amman — and the
+                // server refuses a future disbursement date, so the form was
+                // offering a date its own backend would reject. On the only
+                // route out of REQUIRES_RECONCILIATION that meant the deal
+                // could not be corrected before 03:00. The server cannot fix
+                // this: it has no way to know the caller's offset.
+                //
+                // Any OTHER day is sent as chosen. Clamping a backdated entry
+                // to `Date.now()` would file the advice under a date the
+                // operator never entered, on the record whose entire job is to
+                // state what somebody else's document said.
+                //
+                // `DisbursementConfirmationDialog` and `SupplierSettlementDialog`
+                // both carry this branch already; this dialog was written
+                // without it.
                 disbursedAt:
                   paidOn && paidOn !== seededPaidOnRef.current
-                    ? dateInputToUtcMs(paidOn)
+                    ? paidOn === todayDateInput()
+                      ? Date.now()
+                      : dateInputToUtcMs(paidOn)
                     : undefined,
                 reason: reason.trim(),
               })

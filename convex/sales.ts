@@ -14,11 +14,13 @@ import { vehicleHasCostBasis, computeVehicleCapitalizedCost } from "./utils/vehi
 import {
   saleEconomics,
   dealershipCollectsGross,
+  consignedSettlementRoute,
   consignedSettlementRouteValidator,
+  isConsignedAgentSale,
 } from "./utils/vehicleOwnership";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
-import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale } from "./utils/saleCompletion";
+import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
@@ -1718,9 +1720,56 @@ export const recalculateCommission = mutation({
         .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", sale.salespersonId))
         .unique();
 
+      /**
+       * What this sale recorded as its recognized earning, for a consigned car.
+       *
+       * `recalculateCommission` already refused to read the supplier receipt
+       * from the vehicle or the application, on the grounds that both move
+       * after completion. The cost was still being read from the vehicle, so
+       * only half of that principle was in force: with the receipt frozen at
+       * 18,000 and the entitlement later corrected from 15,000 to 16,000, the
+       * calculator produced 2,000 of "earnings" against 3,000 the GL, the
+       * supplier claim and every report had recognized.
+       *
+       * A consigned car is never capitalized into Vehicle Inventory, so the
+       * acquisition lock that stops an owned vehicle's cost being edited after
+       * posting never engages for one — the edit is an ordinary, permitted
+       * correction, which is exactly why the commission must not follow it.
+       *
+       * Owned sales are untouched: they have no frozen margin, they keep the
+       * vehicle-cost derivation, and that remains right for them.
+       */
+      const marginCurrency = sale.consignedMarginCurrency;
+      const frozenMarginMinor = sale.consignedMarginMinor;
+      const frozenRecognizedEarnings =
+        isConsignedAgentSale(vehicle) &&
+        frozenMarginMinor !== undefined &&
+        Number.isFinite(frozenMarginMinor) &&
+        frozenMarginMinor >= 0 &&
+        marginCurrency === (await getOrgCurrency(ctx, args.orgId))
+          ? fromMinorUnits(frozenMarginMinor, marginCurrency)
+          : undefined;
+
+      // Fail closed rather than fall back to the vehicle. A financed direct
+      // sale whose frozen margin is absent, corrupt or in another currency is
+      // the one shape where re-deriving is most wrong — the sale price is not
+      // what the supplier received and the live cost is not what he was owed —
+      // so the commission is left exactly as it is and the mutation rolls back.
+      if (
+        frozenRecognizedEarnings === undefined &&
+        isConsignedAgentSale(vehicle) &&
+        !dealershipCollectsGross(
+          consignedSettlementRoute({ supplierSettlementRoute: sale.supplierSettlementRoute })
+        ) &&
+        (sale.financingType === "FINANCED" || sale.financingType === "LEASE")
+      ) {
+        throw new ConvexError(CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN);
+      }
+
       const amount = await computeAutoCommissionAmount(ctx, {
         salePrice: sale.salePrice,
         vehicle,
+        frozenRecognizedEarnings,
         commissionMode: mode,
         memberCommissionRate: membership?.commissionRate,
         commissionTiers: orgSettings?.commissionTiers ?? [],

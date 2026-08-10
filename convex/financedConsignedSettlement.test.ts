@@ -3465,14 +3465,31 @@ describe("financed direct evidence that has gone missing fails closed", () => {
   const RATE = 10;
 
   /** A complete, valid financed DIRECT deal, with the salesperson on 10%. */
-  async function financedDirectSale(tag: string, approvedAmount: number) {
+  async function financedDirectSale(
+    tag: string,
+    approvedAmount: number,
+    /**
+     * Complete the sale under MANUAL commission with none entered — the state
+     * in which `recalculateCommission` is legitimately reachable later, because
+     * nothing was computed and nothing was accrued.
+     */
+    opts: { manualCommission?: boolean } = {}
+  ) {
     const s = await seedDealership(tag);
     await s.t.run(async (ctx) => {
       await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
       const membership = (await ctx.db.query("memberships").collect()).find(
         (m) => m.orgId === s.orgId && m.userId === s.userId
       )!;
-      await ctx.db.patch(membership._id, { commissionRate: RATE });
+      await ctx.db.patch(membership._id, {
+        commissionRate: opts.manualCommission ? undefined : RATE,
+      });
+      if (opts.manualCommission) {
+        const settings = (await ctx.db.query("orgSettings").collect()).find(
+          (x) => x.orgId === s.orgId
+        )!;
+        await ctx.db.patch(settings._id, { commissionMode: "MANUAL" });
+      }
     });
 
     const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: false });
@@ -3498,6 +3515,190 @@ describe("financed direct evidence that has gone missing fails closed", () => {
 
   const range = () => ({ startDate: Date.now() - 86_400_000, endDate: Date.now() + 86_400_000 });
 
+  /**
+   * The recalculation path must measure a consigned commission on the SAME
+   * recognized earning the ledger booked — not re-derive it from a vehicle that
+   * has moved since.
+   *
+   * `recalculateCommission` already reads the sale's frozen supplier receipt
+   * rather than the application's, and says so. But it hands the LIVE vehicle
+   * to the calculator, which recomputes the capitalized cost from it — so only
+   * one of the two operands is frozen. The receipt is 18,000 forever; the cost
+   * is whatever the vehicle says today.
+   *
+   * On `origin/main` that asymmetry was harmless: financed + DIRECT is refused
+   * there, so no sale existed whose recognized earning differed from
+   * `salePrice − cost` in the first place. This release creates that sale
+   * shape, which is what makes an old helper a new defect — the calculator is
+   * now handed data it was never written for.
+   *
+   * Reachability, precisely. Both of `recalculateCommission`'s guards have to
+   * be absent, and there is an ordinary way to get there: complete under
+   * MANUAL commission without entering one (nothing is computed,
+   * `accrueAtCompletion` is false, so no accrual is posted), then have the
+   * owner switch the org to automatic later — `orgSettings` locks the currency
+   * once financial records exist, but deliberately not `commissionMode`.
+   */
+  test("recalculating a consigned commission uses the frozen margin, not a cost the vehicle has moved to", async () => {
+    const { s, saleId } = await financedDirectSale("s30CommFrozen", 18_000, {
+      manualCommission: true,
+    });
+
+    const completed = (await s.t.run((ctx) => ctx.db.get(saleId))) as unknown as {
+      commissionAmount?: number;
+      consignedMarginMinor?: number;
+      vehicleId: never;
+    };
+    // The preconditions that make recalculation legal at all. Asserted rather
+    // than assumed: if completion ever starts writing a commission here, this
+    // test would silently stop exercising the path it exists for.
+    expect(completed.commissionAmount).toBeUndefined();
+    expect(completed.consignedMarginMinor).toBe(3_000 * SCALE);
+    const accrualsBefore = await s.t.run(async (ctx) =>
+      (await ctx.db.query("accountingEvents").collect()).filter(
+        (e) => e.eventType === "COMMISSION_ACCRUED"
+      )
+    );
+    expect(accrualsBefore).toHaveLength(0);
+
+    // The supplier cost is corrected afterwards. Permitted: a consigned car is
+    // never capitalized into Vehicle Inventory, so the acquisition lock that
+    // guards an owned vehicle's cost never engages here.
+    await s.asUser.mutation(api.vehicles.update, {
+      orgId: s.orgId,
+      vehicleId: completed.vehicleId,
+      sourceCost: 16_000,
+    } as never);
+
+    // ...and the dealership moves to automatic commission at 10%.
+    await s.t.run(async (ctx) => {
+      const settings = (await ctx.db.query("orgSettings").collect()).find(
+        (x) => x.orgId === s.orgId
+      )!;
+      await ctx.db.patch(settings._id, { commissionMode: "AUTO_MEMBER" });
+      const membership = (await ctx.db.query("memberships").collect()).find(
+        (m) => m.orgId === s.orgId && m.userId === s.userId
+      )!;
+      await ctx.db.patch(membership._id, { commissionRate: RATE });
+    });
+
+    await s.asUser.mutation(api.sales.recalculateCommission, {
+      orgId: s.orgId,
+      saleId,
+    });
+
+    const after = (await s.t.run((ctx) => ctx.db.get(saleId))) as {
+      commissionAmount?: number;
+    };
+    // 10% of the 3,000 the GL, the supplier claim and every report recognized —
+    // not 10% of 18,000 − 16,000, which is a margin no party transacted and
+    // which the ledger never booked.
+    expect(after.commissionAmount).toBe(300);
+  });
+
+  test("and the accrual it posts carries that same basis", async () => {
+    // The payable is the part that reaches the employee. A sale row corrected
+    // in isolation would still owe them the wrong money.
+    const { s, saleId } = await financedDirectSale("s30CommFrozenGl", 18_000, {
+      manualCommission: true,
+    });
+    const completed = (await s.t.run((ctx) => ctx.db.get(saleId))) as unknown as {
+      vehicleId: never;
+    };
+
+    await s.asUser.mutation(api.vehicles.update, {
+      orgId: s.orgId,
+      vehicleId: completed.vehicleId,
+      sourceCost: 16_000,
+    } as never);
+    await s.t.run(async (ctx) => {
+      const settings = (await ctx.db.query("orgSettings").collect()).find(
+        (x) => x.orgId === s.orgId
+      )!;
+      await ctx.db.patch(settings._id, { commissionMode: "AUTO_MEMBER" });
+      const membership = (await ctx.db.query("memberships").collect()).find(
+        (m) => m.orgId === s.orgId && m.userId === s.userId
+      )!;
+      await ctx.db.patch(membership._id, { commissionRate: RATE });
+    });
+
+    await s.asUser.mutation(api.sales.recalculateCommission, {
+      orgId: s.orgId,
+      saleId,
+    });
+
+    const accrued = await s.t.run(async (ctx) =>
+      (await ctx.db.query("accountingEvents").collect()).find(
+        (e) => e.eventType === "COMMISSION_ACCRUED"
+      )
+    );
+    expect(accrued).toBeTruthy();
+    expect((accrued as { payload?: { amountMinor?: number } })?.payload?.amountMinor).toBe(
+      300 * SCALE
+    );
+  });
+
+  /**
+   * The dashboard is the screen the owner opens first, and it was the one
+   * surface this change did not reach.
+   *
+   * `dashboard.stats` recomputed `salePrice − capitalizedCost` for a consigned
+   * car while the sales report, the supplier claim, the journal and the cockpit
+   * all read the margin the sale froze. Before this release every one of them
+   * was on `salePrice − entitlement` and they agreed — wrongly, which is the
+   * defect being fixed. Correcting five of six surfaces is what created the
+   * contradiction: the home KPI said 5,000 and the P&L said 3,000 for the same
+   * deal, in the same period.
+   */
+  test("the dashboard and the sales report state the same profit for one deal", async () => {
+    const { s } = await financedDirectSale("s30DashAgrees", 18_000);
+
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId,
+      ...range(),
+    });
+    const dash = (await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId,
+      timeRange: "ALL_TIME",
+    })) as {
+      salesTrend: Array<{ Profit: number; Revenue: number }>;
+      truncated: { profit: boolean };
+    };
+    const dashProfit = dash.salesTrend.reduce((sum, p) => sum + p.Profit, 0);
+    const dashRevenue = dash.salesTrend.reduce((sum, p) => sum + p.Revenue, 0);
+
+    // The premise, asserted so this cannot pass by both being wrong together.
+    expect(report.totalProfit).toBe(3_000);
+    expect(dashProfit).toBe(3_000);
+    expect(dashRevenue).toBe(3_000);
+    // Specifically not the commercial spread, which is what it published.
+    expect(dashProfit).not.toBe(5_000);
+    expect(dash.truncated.profit).toBe(false);
+  });
+
+  test("and a deal whose earning is unknown is excluded from it, not published at gross", async () => {
+    // The fail-closed arm. The reports withhold such a row and say so; the
+    // dashboard was publishing a confident 5,000 for it.
+    const { s, saleId } = await financedDirectSale("s30DashUnknown", 18_000);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { consignedMarginMinor: undefined });
+    });
+
+    const dash = (await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId,
+      timeRange: "ALL_TIME",
+    })) as {
+      salesTrend: Array<{ Profit: number; Revenue: number }>;
+      truncated: { profit: boolean };
+    };
+
+    expect(dash.salesTrend.reduce((sum, p) => sum + p.Profit, 0)).toBe(0);
+    expect(dash.salesTrend.reduce((sum, p) => sum + p.Revenue, 0)).toBe(0);
+    // Short, and saying so — an understated total presented as complete is the
+    // same failure as an overstated one.
+    expect(dash.truncated.profit).toBe(true);
+  });
+
   test("recalculating a commission whose supplier receipt was erased refuses, and changes nothing", async () => {
     // Approved AT the entitlement, so the honest commission is 0 and no accrual
     // was posted — which is exactly the state `recalculateCommission` exists to
@@ -3507,15 +3708,23 @@ describe("financed direct evidence that has gone missing fails closed", () => {
     await s.t.run(async (ctx) => {
       // What `/admin`'s raw-JSON editor does to a completed sale, and what every
       // row written before this branch already looks like.
+      //
+      // The frozen MARGIN goes too, and that is the point of the test now.
+      // Recalculation reads the recorded earning first and only falls back to
+      // deriving one; erasing the receipt alone no longer leaves it with
+      // nothing to go on, because the margin the sale recorded is a better
+      // answer than anything re-derived from a live vehicle. This is the state
+      // where there is genuinely no recorded earning at all.
       await ctx.db.patch(saleId, {
         consignedSupplierGrossReceiptMinor: undefined,
+        consignedMarginMinor: undefined,
         commissionAmount: undefined,
       });
     });
 
     await expect(
       s.asUser.mutation(api.sales.recalculateCommission, { orgId: s.orgId, saleId })
-    ).rejects.toThrow(/paid him was not recorded|cannot be worked out/i);
+    ).rejects.toThrow(/no usable record of what the dealership earned/i);
 
     // The refusal is only worth having if it left the row alone: a Convex
     // mutation that throws rolls back every write it made, so no commission was
@@ -3527,6 +3736,38 @@ describe("financed direct evidence that has gone missing fails closed", () => {
     // And specifically not 10% of `salePrice − cost`, which is what the
     // fallback produced: 500 of real payroll on a deal that earned nothing.
     expect(after?.commissionAmount).not.toBe(500);
+  });
+
+  test("but an erased RECEIPT alone is survivable, because the margin is the record", async () => {
+    // The other side of the rule, and the reason the test above had to erase
+    // both fields. The receipt is the input the margin was computed FROM; once
+    // the margin exists, it is the recognized earning and the receipt is
+    // history. Refusing here would strand a sale that has a perfectly good
+    // record of what it earned.
+    const { s, saleId } = await financedDirectSale("s30ErasedReceiptOnly", 18_000, {
+      manualCommission: true,
+    });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { consignedSupplierGrossReceiptMinor: undefined });
+      const settings = (await ctx.db.query("orgSettings").collect()).find(
+        (x) => x.orgId === s.orgId
+      )!;
+      await ctx.db.patch(settings._id, { commissionMode: "AUTO_MEMBER" });
+      const membership = (await ctx.db.query("memberships").collect()).find(
+        (m) => m.orgId === s.orgId && m.userId === s.userId
+      )!;
+      await ctx.db.patch(membership._id, { commissionRate: RATE });
+    });
+
+    await s.asUser.mutation(api.sales.recalculateCommission, {
+      orgId: s.orgId,
+      saleId,
+    });
+
+    const after = (await s.t.run((ctx) => ctx.db.get(saleId))) as unknown as {
+      commissionAmount?: number;
+    };
+    expect(after.commissionAmount).toBe(300);
   });
 
   test("a cash direct sale with no recorded receipt still commissions on the sale price", async () => {
