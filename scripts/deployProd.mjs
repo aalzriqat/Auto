@@ -185,16 +185,36 @@ function collectSnapshot() {
   };
 }
 
+/**
+ * The environment every child process gets.
+ *
+ * The deployment-selecting variables are pinned to what the guard resolved and
+ * the operator confirmed, rather than re-read per process — each CLI invocation
+ * resolves its own target, so leaving them ambient means the real deploy could
+ * answer differently from the dry run the operator approved.
+ *
+ * Colour is forced off because the production label is matched textually and a
+ * forced colour level wraps it in ANSI.
+ */
+function childEnv(frozenEnv) {
+  return {
+    ...process.env,
+    ...frozenEnv,
+    NO_COLOR: "1",
+    FORCE_COLOR: "0",
+  };
+}
+
 const io = {
   collectSnapshot,
-  runDryRun: (args) => {
+  runDryRun: (args, frozenEnv) => {
     const r = spawnSync(process.execPath, [CONVEX_CLI, ...args], {
       encoding: "utf8",
       cwd: repoRoot,
       // Colour off: the production label is matched textually, and a forced
       // colour level turns "[Production]" into an ANSI-wrapped string that no
       // longer matches — losing the PRODUCTION warning with no other symptom.
-      env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+      env: childEnv(frozenEnv),
     });
     return {
       status: r.status,
@@ -202,10 +222,11 @@ const io = {
       errorMessage: r.error?.message,
     };
   },
-  runDeploy: (args) =>
+  runDeploy: (args, frozenEnv) =>
     spawnSync(process.execPath, [CONVEX_CLI, ...args], {
       stdio: "inherit",
       cwd: repoRoot,
+      env: childEnv(frozenEnv),
     }).status ?? 1,
   prompt: async (question) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });

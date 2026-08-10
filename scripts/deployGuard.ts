@@ -83,20 +83,38 @@ export const ALLOWED_DEPLOY_ARGS = new Set([
   "--typecheck",
   "--typecheck-components",
   "--codegen",
-  "--cmd",
-  "--cmd-url-env-var-name",
   "--debug-bundle-path",
   // Long form only: `convex deploy` declares "--message <message>" and
   // registers no `-m`, so advertising one would fail the dry run.
   "--message",
 ]);
 
-/** Values these flags take, which must pass through without being read as flags. */
+/**
+ * `--cmd` and `--cmd-url-env-var-name` are deliberately NOT allowlisted.
+ *
+ * They ran arbitrary code and undid the guard's central check. From the CLI's
+ * own help, `convex deploy` runs in this order:
+ *
+ *   1. Run a command if specified with `--cmd`
+ *   2. Typecheck   3. Regenerate   4. Bundle   5. Push
+ *
+ * The bundle is read from disk at step 4, after `--cmd` has already run at step
+ * 1 — and after every precondition this guard evaluated, because those all
+ * happen before the CLI is spawned at all. So an allowed `--cmd` could write
+ * `convex/anything.ts` and have it shipped, which is precisely the
+ * untracked-module failure the guard exists to prevent, reintroduced through a
+ * flag the guard itself permitted.
+ *
+ * Not fixable by inspecting the command string: any shell string can reach a
+ * writer. The flag has to go. A production deploy of Convex functions does not
+ * need a build step — the web build is Vercel's — and CI's own use of `--cmd`
+ * is a separate raw invocation with a deploy key, not this wrapper. If a build
+ * command is ever genuinely required here, the wrapper must run it itself,
+ * before the final validation, and then deploy without `--cmd`.
+ */
 const ARGS_TAKING_VALUES = new Set([
   "--typecheck",
   "--codegen",
-  "--cmd",
-  "--cmd-url-env-var-name",
   "--debug-bundle-path",
   "--message",
 ]);
@@ -367,10 +385,26 @@ export function describeTargetSelection(env: RepoSnapshot["env"]): string {
 }
 
 /** Everything the flow touches that is not a pure decision. */
+/**
+ * The deployment-selecting variables, pinned for the whole run.
+ *
+ * Both dry runs and the real deploy are separate CLI processes that each
+ * resolve their own target from the ambient environment. Passing an explicit,
+ * frozen selection means the second resolution cannot answer differently from
+ * the one the operator confirmed because a `.env.local` changed underneath it.
+ */
+export type FrozenDeployEnv = {
+  CONVEX_DEPLOYMENT?: string;
+  CONVEX_DEPLOY_KEY?: string;
+};
+
 export type DeployIO = {
   collectSnapshot: () => RepoSnapshot;
-  runDryRun: (args: string[]) => { status: number | null; output: string; errorMessage?: string };
-  runDeploy: (args: string[]) => number;
+  runDryRun: (
+    args: string[],
+    env: FrozenDeployEnv
+  ) => { status: number | null; output: string; errorMessage?: string };
+  runDeploy: (args: string[], env: FrozenDeployEnv) => number;
   prompt: (question: string) => Promise<string>;
   isTTY: boolean;
   log: (message: string) => void;
@@ -384,10 +418,11 @@ export type DeployIO = {
  */
 function resolveTarget(
   io: DeployIO,
-  snapshot: RepoSnapshot
+  snapshot: RepoSnapshot,
+  env: FrozenDeployEnv
 ): { target: string; output: string } | number {
   io.log("Resolving the target deployment (dry run, nothing is applied)\u2026\n");
-  const dry = io.runDryRun(dryRunArgs(snapshot.forwardedArgs));
+  const dry = io.runDryRun(dryRunArgs(snapshot.forwardedArgs), env);
   io.log(dry.output);
   if (dry.errorMessage) io.error(`\nCould not run the dry run: ${dry.errorMessage}`);
   if (dry.status !== 0) {
@@ -400,6 +435,16 @@ function resolveTarget(
     io.error(
       "\nCould not read the target deployment out of the dry run. Refusing:\n" +
         "a confirmation that cannot name the target is not a confirmation.\n"
+    );
+    return 1;
+  }
+  // `deploy:prod` means production. Previously this only decorated a log line,
+  // so the command would happily push to whatever the dry run resolved. A label
+  // is not a gate.
+  if (!looksLikeProduction(dry.output)) {
+    io.error(
+      `\nRefusing: the resolved target ${target} does not announce itself as production,\n` +
+        "and this command deploys to production only. Nothing was pushed.\n"
     );
     return 1;
   }
@@ -441,7 +486,14 @@ export async function runGuardedDeploy(
     return 1;
   }
 
-  const resolved = resolveTarget(io, snapshot);
+  // Pinned once and used for every child process below, so the target the
+  // operator confirms is the target that is resolved again at push time.
+  const frozenEnv: FrozenDeployEnv = {
+    CONVEX_DEPLOYMENT: snapshot.env.CONVEX_DEPLOYMENT,
+    CONVEX_DEPLOY_KEY: snapshot.env.CONVEX_DEPLOY_KEY,
+  };
+
+  const resolved = resolveTarget(io, snapshot, frozenEnv);
   if (typeof resolved === "number") return resolved;
   const { target, output: dryOutput } = resolved;
 
@@ -475,5 +527,23 @@ export async function runGuardedDeploy(
     return 1;
   }
 
-  return io.runDeploy(deployArgs(snapshot.forwardedArgs));
+  // Resolve the target a second time and require it to be the one that was
+  // confirmed.
+  //
+  // Confirming a name and then letting a fresh CLI process resolve its own
+  // target independently is a promise the guard was not keeping: the real
+  // deploy re-reads the deployment selection, so a change between the
+  // confirmation and the push could send it somewhere else. The preconditions
+  // do not catch this either — none of them reads the environment.
+  const reresolved = resolveTarget(io, io.collectSnapshot(), frozenEnv);
+  if (typeof reresolved === "number") return reresolved;
+  if (reresolved.target !== target) {
+    io.error(
+      `\nThe target changed after you confirmed it: you approved ${target}, but the\n` +
+        `deploy now resolves to ${reresolved.target}. Nothing was pushed.\n`
+    );
+    return 1;
+  }
+
+  return io.runDeploy(deployArgs(snapshot.forwardedArgs), frozenEnv);
 }

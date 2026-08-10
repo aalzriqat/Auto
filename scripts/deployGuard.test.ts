@@ -103,10 +103,25 @@ describe("production deploy preconditions", () => {
     expect(
       evaluateProdDeploy({
         ...CLEAN,
-        forwardedArgs: ["--typecheck", "disable", "-v", "--cmd", "pnpm build"],
+        forwardedArgs: ["--typecheck", "disable", "-v", "--message", "release"],
       }).ok
     ).toBe(true);
   });
+
+  test.each(["--cmd", "--cmd-url-env-var-name"])(
+    "%s is refused — it runs before the bundle is read, undoing every check",
+    (flag) => {
+      // From the CLI's own help: step 1 runs --cmd, step 4 bundles. Every
+      // precondition here runs before the CLI is spawned at all, so an allowed
+      // --cmd could write convex/anything.ts after the final validation and
+      // have it shipped — the untracked-module failure this guard exists to
+      // prevent, reintroduced through a flag the guard permitted. An earlier
+      // version of this suite asserted --cmd passed.
+      expect(failureIds({ ...CLEAN, forwardedArgs: [flag, "pnpm build"] })).toContain(
+        "allowed-args-only"
+      );
+    }
+  );
 
   test("a flag value is never mistaken for a flag", () => {
     // `--cmd "npx convex deploy -y"` would be alarming, but the value belongs to
@@ -436,16 +451,16 @@ describe("declared Node range matches what CI actually runs", () => {
 });
 
 describe("flag values that look like flags", () => {
-  test("--cmd -y is refused, and for the right reason", () => {
+  test("--message -y is refused, and for the right reason", () => {
     // Not a live bypass — commander binds `-y` as --cmd's argument rather than
     // as auto-confirm — but a rule that reads like one must not rest on
     // inspection. Before this, the value was skipped unconditionally.
-    const result = evaluateProdDeploy({ ...CLEAN, forwardedArgs: ["--cmd", "-y"] });
+    const result = evaluateProdDeploy({ ...CLEAN, forwardedArgs: ["--message", "-y"] });
     expect(result.ok).toBe(false);
     const failure = result.failures.find((f) => f.id === "allowed-args-only");
     expect(failure?.detail).toMatch(/value looks like a flag/);
-    // And it must NOT claim --cmd is disallowed; --cmd is on the allowlist.
-    expect(failure?.detail).not.toMatch(/refusing --cmd —/);
+    // And it must NOT claim --message is disallowed; --message is allowlisted.
+    expect(failure?.detail).not.toMatch(/refusing --message —/);
   });
 
   test("--message is forwardable, and its ordinary value is not mistaken for a flag", () => {
@@ -455,5 +470,88 @@ describe("flag values that look like flags", () => {
       evaluateProdDeploy({ ...CLEAN, forwardedArgs: ["--message", "rollback to 52be7b4f"] }).ok
     ).toBe(true);
     expect(ALLOWED_DEPLOY_ARGS.has("-m")).toBe(false);
+  });
+});
+
+describe("the target is frozen between confirmation and push", () => {
+  const prod = (name: string) =>
+    `▌ [Production] aalzriqat:auto:production (prod)
+▌ └─ https://${name}.convex.cloud`;
+
+  test("a target that changes after confirmation must not deploy", () => {
+    // The real deploy is a separate CLI process that resolves its own target,
+    // and none of the preconditions reads the environment — so confirming a
+    // name guaranteed nothing about where the push landed.
+    const deployCalls: string[][] = [];
+    let resolution = 0;
+    const io = {
+      collectSnapshot: () => CLEAN,
+      runDryRun: () => {
+        resolution += 1;
+        // First resolution: the name the operator is shown and confirms.
+        // Second: something changed underneath.
+        return { status: 0, output: prod(resolution === 1 ? "kindly-hound-172" : "vibrant-cat-418") };
+      },
+      runDeploy: (args: string[]) => {
+        deployCalls.push(args);
+        return 0;
+      },
+      prompt: async () => "kindly-hound-172",
+      isTTY: true,
+      log: () => {},
+      error: () => {},
+    };
+    return runGuardedDeploy(io).then((code) => {
+      expect(code).toBe(1);
+      expect(deployCalls).toEqual([]);
+    });
+  });
+
+  test("an unchanged target still deploys", () => {
+    const deployCalls: string[][] = [];
+    const io = {
+      collectSnapshot: () => CLEAN,
+      runDryRun: () => ({ status: 0, output: prod("kindly-hound-172") }),
+      runDeploy: (args: string[]) => {
+        deployCalls.push(args);
+        return 0;
+      },
+      prompt: async () => "kindly-hound-172",
+      isTTY: true,
+      log: () => {},
+      error: () => {},
+    };
+    return runGuardedDeploy(io).then((code) => {
+      expect(code).toBe(0);
+      expect(deployCalls).toHaveLength(1);
+    });
+  });
+
+  test("a non-production target is refused — deploy:prod means production", () => {
+    // looksLikeProduction previously only decorated a log line, so the command
+    // would push to whatever the dry run resolved. A label is not a gate.
+    const deployCalls: string[][] = [];
+    const io = {
+      collectSnapshot: () => CLEAN,
+      runDryRun: () => ({
+        status: 0,
+        output: [
+          "▌ [Preview] some-preview",
+          "▌ └─ https://some-preview-123.convex.cloud",
+        ].join("\n"),
+      }),
+      runDeploy: (args: string[]) => {
+        deployCalls.push(args);
+        return 0;
+      },
+      prompt: async () => "some-preview-123",
+      isTTY: true,
+      log: () => {},
+      error: () => {},
+    };
+    return runGuardedDeploy(io).then((code) => {
+      expect(code).toBe(1);
+      expect(deployCalls).toEqual([]);
+    });
   });
 });
