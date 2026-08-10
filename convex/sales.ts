@@ -1709,6 +1709,22 @@ export const recalculateCommission = mutation({
         commissionMode: mode,
         memberCommissionRate: membership?.commissionRate,
         commissionTiers: orgSettings?.commissionTiers ?? [],
+        // From the fact the SALE froze at completion, not from the vehicle or
+        // the application — both can move afterwards, and a recalculation that
+        // silently re-based payroll on a later edit is how a commission comes
+        // to disagree with the revenue it was earned against.
+        //
+        // Absent means the row predates the field or the sale is not a direct
+        // consigned one; the calculator then uses the sale price, which is the
+        // correct basis for every such case.
+        supplierGrossReceipt:
+          sale.consignedSupplierGrossReceiptMinor !== undefined
+            ? fromMinorUnits(
+                sale.consignedSupplierGrossReceiptMinor,
+                sale.consignedMarginCurrency ?? (await getOrgCurrency(ctx, args.orgId))
+              )
+            : undefined,
+        settlementRoute: sale.supplierSettlementRoute,
       });
       // Cost basis was just verified, so the calculator always returns a number.
       const commissionAmount = amount ?? 0;

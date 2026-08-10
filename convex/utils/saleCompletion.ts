@@ -39,6 +39,7 @@ import { planDepositSettlementApplication } from "./depositSettlementPlan";
 import {
   consignedSettlementRoute,
   dealershipCollectsGross,
+  isConsignedAgentSale,
   type ConsignedSettlementRoute,
 } from "./vehicleOwnership";
 import {
@@ -229,6 +230,12 @@ async function prepareSaleCompletion(
   // PAYMENT (the previous behavior) recognized the expense on a cash basis
   // inside an accrual ledger: a car sold in July with its commission paid in
   // August showed full margin in July and a naked expense in August.
+  // Resolved before the commission block, which needs it to read the supplier
+  // receipt: that amount arrives in MINOR units and this calculator works in
+  // major ones, and converting with the wrong scale is the exact class of
+  // defect this change exists to remove.
+  const currency = await getOrgCurrency(ctx, args.orgId);
+
   let accrueAtCompletion = false;
   if (commissionMode === "MANUAL") {
     commissionAmount = args.existingCommissionAmount;
@@ -240,11 +247,18 @@ async function prepareSaleCompletion(
       commissionMode,
       memberCommissionRate: membership.commissionRate,
       commissionTiers: orgSettings?.commissionTiers ?? [],
+      // The same settlement facts the claim and the journal are built from, so
+      // payroll cannot be measured on a spread the ledger never recognized.
+      // In MAJOR units here because this calculator works in them; the amount
+      // itself is validated against the currency further down.
+      supplierGrossReceipt:
+        args.supplierGrossReceiptMinor !== undefined
+          ? fromMinorUnits(args.supplierGrossReceiptMinor, currency)
+          : undefined,
+      settlementRoute: args.supplierSettlementRoute,
     });
     accrueAtCompletion = commissionAmount != null;
   }
-
-  const currency = await getOrgCurrency(ctx, args.orgId);
 
   return { vehicle, customer, leadId, commissionAmount, currency, accrueAtCompletion };
 }
@@ -269,6 +283,17 @@ export async function computeAutoCommissionAmount(
     commissionMode: string;
     memberCommissionRate: number | undefined;
     commissionTiers: CommissionTier[];
+    /**
+     * What actually reaches the supplier on a consigned DIRECT sale, in major
+     * units. Omitted means "the sale price", which is the cash direct case and
+     * every owned sale.
+     *
+     * Required on a financed direct deal, where it is the approved purchase
+     * amount. See `commissionableEarnings` below for why it may not be inferred.
+     */
+    supplierGrossReceipt?: number;
+    /** The route this sale settles on; absent reads as THROUGH_DEALERSHIP. */
+    settlementRoute?: ConsignedSettlementRoute;
   }
 ): Promise<number | undefined> {
   if (!vehicleHasCostBasis(args.vehicle)) return undefined;
@@ -276,12 +301,67 @@ export async function computeAutoCommissionAmount(
   // reconditioning expenses) so commission, the GL, and the operational reports
   // all show the same margin for a sale.
   const vehicleCost = await computeVehicleCapitalizedCost(ctx, args.vehicle);
-  const grossProfit = Math.max(0, args.salePrice - vehicleCost);
+  const grossProfit = commissionableEarnings({
+    salePrice: args.salePrice,
+    vehicleCost,
+    vehicle: args.vehicle,
+    supplierGrossReceipt: args.supplierGrossReceipt,
+    settlementRoute: args.settlementRoute,
+  });
   if (args.commissionMode === "AUTO_TIERS") {
     return calculateCommissionFromTiers(grossProfit, args.commissionTiers);
   }
   const rate = args.memberCommissionRate ?? 0;
   return rate > 0 ? grossProfit * (rate / 100) : 0;
+}
+
+/**
+ * The base automatic salesperson commission is calculated on.
+ *
+ * **Dealership ruling (SCRUM-30):** commission is measured on *recognized,
+ * realized dealership earnings* — never on `salePrice − cost` merely because
+ * that happens to equal the commercial spread.
+ *
+ * On a financed DIRECT deal those are not the same number. With a sale at
+ * 20,000, a supplier entitlement of 15,000 and an approved purchase amount of
+ * 18,000, the dealership recognizes 3,000 of agency revenue. The remaining
+ * 2,000 is `salePrice − approved`: per SCRUM-23 it appears on no invoice and no
+ * receipt, and it is a management figure. Commissioning it would pay real
+ * payroll money — an accrued expense and an employee payable — against an
+ * earning the ledger never recognized.
+ *
+ * It stays out of the base even when the customer pays that 2,000 directly to
+ * the dealership. Such a payment must first be explicitly recorded and
+ * classified as dealership income belonging to this sale; if the commission
+ * plan then marks that component commission-eligible, the base becomes the SUM
+ * of two recognized components. It must never be reached by falling back to
+ * `salePrice − cost`, because that route also moves payroll whenever an
+ * internal quotation or sale-price figure changes with no money attached to it.
+ *
+ * Every other case is unchanged and deliberately so:
+ *   - an owned sale — the dealership sells its own car and the whole spread is
+ *     its earning;
+ *   - a consigned THROUGH_DEALERSHIP sale — the dealership collects the gross
+ *     and the customer is contractually liable for the full sale price, so the
+ *     spread over the entitlement is genuinely recognized;
+ *   - a cash DIRECT sale — the buyer pays the supplier the sale price, so the
+ *     basis IS the sale price.
+ */
+function commissionableEarnings(args: {
+  salePrice: number;
+  vehicleCost: number;
+  vehicle: Doc<"vehicles">;
+  supplierGrossReceipt?: number;
+  settlementRoute?: ConsignedSettlementRoute;
+}): number {
+  const settlesDirect = !dealershipCollectsGross(
+    consignedSettlementRoute({ supplierSettlementRoute: args.settlementRoute })
+  );
+  const realizedBasis =
+    isConsignedAgentSale(args.vehicle) && settlesDirect
+      ? (args.supplierGrossReceipt ?? args.salePrice)
+      : args.salePrice;
+  return Math.max(0, realizedBasis - args.vehicleCost);
 }
 
 async function insertSaleRecord(

@@ -3148,3 +3148,138 @@ describe("the claim cannot be reopened through a second door", () => {
     expect(claim.amountDue).toBe(VEHICLE_PRICE - SUPPLIER_ENTITLEMENT);
   });
 });
+
+/**
+ * SCRUM-30 — automatic salesperson commission is measured on RECOGNIZED
+ * dealership earnings, never on `salePrice − cost`.
+ *
+ * Dealership ruling, 2026-08-10. On a financed DIRECT deal the two are
+ * different numbers: with a sale at 20,000, an entitlement of 15,000 and an
+ * approved purchase amount of 18,000, the dealership recognizes 3,000 of agency
+ * revenue and the remaining 2,000 is `salePrice − approved` — a management
+ * figure on no invoice and no receipt (SCRUM-23).
+ *
+ * Commission is not a display number. It accrues to Commission Payable and
+ * becomes payroll money owed to an employee, so its base has to be an
+ * economically supported dealership earning. Left on `salePrice − cost`, the
+ * same invalid 2,000 this whole redesign removes from the supplier subledger
+ * and the GL would have survived intact through employee compensation — which
+ * is why this is part of SCRUM-30 rather than a follow-up.
+ *
+ * The customer paying that 2,000 directly does NOT make it commissionable. It
+ * must first be recorded and classified as dealership income belonging to the
+ * sale; only then may the commission plan mark that component eligible, and the
+ * base becomes the SUM of two recognized components. It must never be reached
+ * by falling back to `salePrice − cost`, because that path also moves payroll
+ * whenever an internal quotation figure changes with no money behind it.
+ */
+describe("automatic commission is based on recognized earnings, not the commercial spread", () => {
+  const RATE_PERCENT = 10;
+
+  async function directDealCommissionedAt(tag: string, approvedAmount: number) {
+    const s = await seedDealership(tag);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
+      // The salesperson earns a straight percentage of the deal's margin.
+      const membership = (await ctx.db.query("memberships").collect()).find(
+        (m) => m.orgId === s.orgId && m.userId === s.userId
+      )!;
+      await ctx.db.patch(membership._id, { commissionRate: RATE_PERCENT });
+    });
+
+    const { applicationId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      finalize: false,
+    });
+    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId,
+      applicationId,
+      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+      source: "MANUAL_ENTRY",
+    });
+    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: s.orgId,
+      applicationId,
+      approvedAmountMinor: approvedAmount * SCALE,
+      basis: "MANUAL",
+      notes: `Approved at ${approvedAmount}.`,
+    });
+    const saleId = await s.asUser.mutation(api.applications.finalizeDeal, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    const sale = (await s.t.run((ctx) => ctx.db.get(saleId as never))) as {
+      commissionAmount?: number;
+    };
+    return { s, applicationId, saleId, sale };
+  }
+
+  test("the 20k/18k/15k deal commissions on 3,000, not on the 5,000 spread", async () => {
+    const { sale } = await directDealCommissionedAt("s30Commission", 18_000);
+
+    // 10% of the recognized agency revenue: (18,000 − 15,000) × 10%.
+    expect(sale.commissionAmount).toBe(300);
+    // And specifically NOT 10% of `salePrice − cost`, which is what the
+    // calculator produced before the ruling. That figure pays an employee for
+    // 2,000 that appears on no invoice and that nobody has committed to paying.
+    expect(sale.commissionAmount).not.toBe(500);
+  });
+
+  test("the commission accrued to the ledger matches the recognized base", async () => {
+    const { s } = await directDealCommissionedAt("s30CommissionGl", 18_000);
+
+    // Not just the stored figure — the money actually posted. A commission that
+    // agrees with the sale row but not with Commission Payable would leave
+    // payroll and the ledger disagreeing about the same obligation.
+    const ledger = await ledgerBySystemKey(s);
+    expect(ledger[SYSTEM_KEYS.COMMISSION_PAYABLE] ?? 0).toBe(-300 * SCALE);
+    // The commission expense is 10% of what the ledger recognized as revenue,
+    // and revenue is the claim — so the two are consistent by construction.
+    expect(ledger[SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE]).toBe(-3_000 * SCALE);
+  });
+
+  test("the base tracks the approval, while the sale price stays put", async () => {
+    // Same car, same customer, same 20,000 sale price in both deals — only the
+    // finance company's approval differs. If commission were measured on
+    // `salePrice − cost` these two would be identical; they are not.
+    const lower = await directDealCommissionedAt("s30CommissionLow", 18_000);
+    const higher = await directDealCommissionedAt("s30CommissionHigh", 19_000);
+
+    expect(lower.sale.commissionAmount).toBe(300);
+    expect(higher.sale.commissionAmount).toBe(400);
+    // The management-only spread moved from 2,000 to 1,000 between these two
+    // deals and payroll did not follow it — it followed the recognized earning.
+    expect(lower.sale.commissionAmount).not.toBe(higher.sale.commissionAmount);
+  });
+
+  test("a supplier paid exactly his entitlement earns the salesperson nothing", async () => {
+    // Zero recognized revenue is a real outcome, not a broken one: the
+    // dealership placed the car and made nothing on the metal. Commission of
+    // zero is the honest answer, and `salePrice − cost` would have paid 500.
+    const { sale } = await directDealCommissionedAt("s30CommissionZero", SUPPLIER_ENTITLEMENT);
+
+    expect(sale.commissionAmount).toBe(0);
+  });
+
+  test("a THROUGH_DEALERSHIP deal still commissions on the sale price", async () => {
+    // The ruling is scoped to what it should be. On this route the dealership
+    // collects the gross and the customer is contractually liable for the whole
+    // sale price, so the spread over the entitlement genuinely IS recognized —
+    // and this deal must be untouched by the change.
+    const s = await seedDealership("s30CommissionThrough");
+    await s.t.run(async (ctx) => {
+      const membership = (await ctx.db.query("memberships").collect()).find(
+        (m) => m.orgId === s.orgId && m.userId === s.userId
+      )!;
+      await ctx.db.patch(membership._id, { commissionRate: RATE_PERCENT });
+    });
+
+    const { saleId } = await runDeal(s, { route: "THROUGH_DEALERSHIP", finalize: true });
+    const sale = (await s.t.run((ctx) => ctx.db.get(saleId as never))) as {
+      commissionAmount?: number;
+    };
+
+    // 10% of (20,000 − 15,000).
+    expect(sale.commissionAmount).toBe(500);
+  });
+});
