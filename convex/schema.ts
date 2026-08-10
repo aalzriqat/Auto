@@ -3794,9 +3794,18 @@ export default defineSchema({
     // caller-supplied absolute URL that `websiteProjection` preferred over the
     // org's own logo and that `websites.resolveDomain` (no auth) served to
     // anonymous visitors of the published dealer site. Anything stored here is
-    // fetched by every one of those visitors' browsers, so it must be an
-    // artifact we own rather than an arbitrary origin. Mirrors the pattern
-    // `orgSettings.logoStorageId` already uses.
+    // fetched by every one of those visitors' browsers, so it must name a blob
+    // in this deployment rather than an arbitrary origin. Mirrors
+    // `orgSettings.logoStorageId`.
+    //
+    // Scope of the guarantee, precisely: `v.id("_storage")` proves the value is
+    // a storage id in THIS deployment. It does not prove the blob belongs to
+    // THIS org — `_storage` is deployment-global — so a `website.manage` holder
+    // could point their site at another tenant's storage id. That is accepted
+    // for now rather than overlooked: Convex storage URLs are unauthenticated
+    // by id, so naming one grants no read access the holder did not already
+    // have; the realistic effect is hotlinking, not disclosure. Closing it means
+    // recording ownership at upload time and validating it here.
     logoStorageId: v.optional(v.id("_storage")),
     heroTitle: v.optional(v.string()),
     heroSubtitle: v.optional(v.string()),

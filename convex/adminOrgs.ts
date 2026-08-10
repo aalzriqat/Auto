@@ -31,6 +31,7 @@ type StorageDeletionStep =
   | { kind: "financeDealFeesWithStorage" }
   | { kind: "vehicleOwnershipConversionsWithStorage" }
   | { kind: "orgSettingsWithStorage" }
+  | { kind: "websiteSettingsWithStorage" }
   | { kind: "socialPostsWithStorage" };
 type SpecialDeletionStep = StorageDeletionStep | { kind: "dmConversations" } | { kind: "liveChatThreads" };
 type DeletionStep = OrgScopedDeletionStep | SpecialDeletionStep;
@@ -120,7 +121,7 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "wizardDrafts", index: "by_org_user" },
   { kind: "orgSettingsWithStorage" },
   { kind: "orgRows", table: "leadAssignmentCursors", index: "by_org" },
-  { kind: "orgRows", table: "websiteSettings", index: "by_org" },
+  { kind: "websiteSettingsWithStorage" },
   { kind: "orgRows", table: "websiteDomains", index: "by_org" },
   { kind: "orgRows", table: "websitePublishedSections", index: "by_org" },
   { kind: "orgRows", table: "websiteLeadRouting", index: "by_org_settings_form" },
@@ -361,6 +362,30 @@ async function deleteOrgSettingsWithStorageBatch(ctx: MutationCtx, orgId: Id<"or
   return counts;
 }
 
+/**
+ * `websiteSettings` gained a `logoStorageId`, so it can no longer be deleted by
+ * the generic `orgRows` step — that path is a plain `ctx.db.delete` loop and
+ * would leave the dealer's uploaded logo in `_storage` with nothing referencing
+ * it, while `hardDeleteOrg` still reported COMPLETED. Mirrors
+ * `deleteOrgSettingsWithStorageBatch`, which exists for exactly this reason on
+ * the sibling table.
+ */
+async function deleteWebsiteSettingsWithStorageBatch(ctx: MutationCtx, orgId: Id<"organizations">) {
+  const settingsRows = await ctx.db
+    .query("websiteSettings")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .take(ORG_DELETION_BATCH_SIZE);
+  const counts: DeletedCounts = {};
+  for (const settings of settingsRows) {
+    addStorageCount(counts, await deleteStorageIds(ctx, settings.logoStorageId ? [settings.logoStorageId] : []));
+    await ctx.db.delete(settings._id);
+  }
+  if (settingsRows.length > 0) {
+    counts.websiteSettings = settingsRows.length;
+  }
+  return counts;
+}
+
 async function deleteSocialPostsWithStorageBatch(ctx: MutationCtx, orgId: Id<"organizations">) {
   const posts = await ctx.db
     .query("socialPosts")
@@ -494,6 +519,9 @@ async function runDeletionStep(ctx: MutationCtx, step: DeletionStep, orgId: Id<"
   }
   if (step.kind === "orgSettingsWithStorage") {
     return await deleteOrgSettingsWithStorageBatch(ctx, orgId);
+  }
+  if (step.kind === "websiteSettingsWithStorage") {
+    return await deleteWebsiteSettingsWithStorageBatch(ctx, orgId);
   }
   if (step.kind === "socialPostsWithStorage") {
     return await deleteSocialPostsWithStorageBatch(ctx, orgId);
