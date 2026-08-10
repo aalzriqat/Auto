@@ -56,7 +56,8 @@ type AuditActionType =
   // settlement advice, with no journal behind it — which is exactly why it
   // needs an audit trail: nothing in the ledger would otherwise show who
   // asserted it, or when.
-  | "CONFIRM_SUPPLIER_DISBURSEMENT";
+  | "CONFIRM_SUPPLIER_DISBURSEMENT"
+  | "AMEND_SUPPLIER_DISBURSEMENT_ADVICE";
 
 // ─── Internal: write audit entry ─────────────────────────────────────────────
 

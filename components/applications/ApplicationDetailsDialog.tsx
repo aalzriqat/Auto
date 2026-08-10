@@ -277,9 +277,20 @@ export function ApplicationDetailsDialog({
   // sends the supplier. Absent on deals whose approved amount was never
   // recorded, where showing a confident-looking zero would be worse than
   // saying nothing.
+  // Labelled in the currency it is actually denominated in, not the org's.
+  //
+  // `currency.format` appends the ORG's display label, so a JOD deal under an
+  // org that now reports in USD was scaled by the deal's factor and then
+  // labelled "$" — a number correct in fils presented as dollars. The two
+  // halves have to come from the same currency or the label contradicts the
+  // figure it is attached to.
+  const formatEconomics = (minor: number) =>
+    `${(minor / economicsFactor).toLocaleString()} ${
+      economicsCurrencyCode === currency.code ? currency.displayLabel : economicsCurrencyCode
+    }`;
   const expectedSupplierDisbursementLabel =
     app.approvedDealerPurchaseAmountMinor !== undefined
-      ? currency.format(app.approvedDealerPurchaseAmountMinor / economicsFactor)
+      ? formatEconomics(app.approvedDealerPurchaseAmountMinor)
       : t("NotRecorded" as any);
   // A consigned car is the supplier's, so this deal has a settlement route: the
   // finance company's cheque is made out to the dealership or to him, depending

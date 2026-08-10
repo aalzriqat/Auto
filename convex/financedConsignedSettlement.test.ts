@@ -1462,6 +1462,50 @@ describe("the deal cockpit, under the conditions that broke it", () => {
    * `deriveFeeStatus` already draws that line: recorded and reconciled are
    * different claims, and only the second may close a deal.
    */
+  /**
+   * SCRUM-30 widened when this headline appears, and that is a deliberate
+   * ruling rather than a side effect.
+   *
+   * It used to require `financierObligation === "CLOSED"` and a recorded
+   * disbursement, because the figure was derived from the advice. It no longer
+   * is: the margin is `approved − entitlement`, both of which are known the
+   * moment the deal is finalized, so withholding it until somebody else's
+   * payment is confirmed would be withholding a number the dealership already
+   * knows.
+   *
+   * What must NOT widen with it is the confidence. An unconfirmed deal shows
+   * the figure and says it is an estimate, because nobody has yet proven the
+   * money moved. Publishing it as actual on the strength of an accrual is the
+   * failure this pins against.
+   */
+  test("a direct deal with no advice yet shows the margin, and says it is only an estimate", async () => {
+    const s = await seedDealership("regAccrual");
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+    // Recorded, so the OTHER reason the headline can be withheld is out of the
+    // way and this test is about the advice and nothing else. An unrecorded
+    // contribution withholds it too, and deliberately — that is pinned
+    // separately.
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, { dealerContributionMinor: 0 });
+    });
+
+    // Nothing confirmed: the finance company has not been recorded as having
+    // paid anyone.
+    const app = (await s.t.run((ctx) => ctx.db.get(applicationId))) as {
+      supplierDisbursementConfirmedAt?: number;
+    };
+    expect(app.supplierDisbursementConfirmedAt).toBeUndefined();
+
+    const view = await cockpitOf(s, applicationId);
+    const profit = view!.money!.managementProfit;
+    // Available — the two figures it is made of are both frozen on the deal.
+    expect(profit.available).toBe(true);
+    if (!profit.available) return;
+    // And explicitly an estimate. This is the assertion that stops a later
+    // change quietly promoting an accrued figure to a settled one.
+    expect(profit.classification).toBe("ESTIMATED_AWAITING_SETTLEMENT");
+  });
+
   test("an unreconciled expense keeps the figure estimated", async () => {
     const s = await seedDealership("regM4");
     const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
@@ -1574,33 +1618,39 @@ describe("proving a deal is settled, rather than assuming it", () => {
    * contradictory records of the same fact and reading the contradiction back as
    * evidence.
    *
-   * So the guarantee is now made one step earlier: the partial advice is refused
-   * outright and never reaches the cockpit at all. That is strictly stronger
-   * than withholding a headline computed from it.
+   * The guarantee therefore moved twice, and this test follows it.
+   *
+   * Refusing the advice was the first answer and was withdrawn: it rolled back
+   * the evidence of the very payment it objected to, and left a funded sale
+   * cancellable. The advice is now recorded and marked
+   * REQUIRES_RECONCILIATION — so this test's original point has to be made
+   * against a STORED contradiction, which is the harder version of it. A
+   * half-sized advice must not carry the deal to a settled state on the
+   * strength of a figure the dealership does not believe.
    */
-  test("a partial supplier disbursement is refused, not recorded and then discounted", async () => {
+  test("a partial supplier disbursement does not settle the deal, even though it is recorded", async () => {
     const s = await seedDealership("redesignPartial");
     const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
 
     // Half of what the financier owes the supplier.
-    await expect(
-      s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
-        orgId: s.orgId,
-        applicationId,
-        disbursedAmountMinor: (VEHICLE_PRICE / 2) * SCALE,
-      })
-    ).rejects.toThrow(/approved .* but the advice records/i);
+    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: (VEHICLE_PRICE / 2) * SCALE,
+    });
+    expect(result.status).toBe("REQUIRES_RECONCILIATION");
 
-    // Nothing was stored on the way to the refusal — a mutation is one
-    // transaction, so a throw rolls back every write it had already made.
+    // Stored, because it is evidence about a payment somebody made.
     const app = (await s.t.run((ctx) => ctx.db.get(applicationId as never))) as {
       supplierDisbursedAmountMinor?: number;
-      supplierDisbursementConfirmedAt?: number;
+      supplierDisbursementStatus?: string;
     };
-    expect(app.supplierDisbursedAmountMinor).toBeUndefined();
-    expect(app.supplierDisbursementConfirmedAt).toBeUndefined();
+    expect(app.supplierDisbursedAmountMinor).toBe((VEHICLE_PRICE / 2) * SCALE);
+    expect(app.supplierDisbursementStatus).toBe("REQUIRES_RECONCILIATION");
 
-    // And the deal is still not settled, which was this test's original point.
+    // And the deal is still not settled, which was this test's original point
+    // and is the assertion that must survive every change to how the mismatch
+    // is handled.
     const view = await cockpitOf(s, applicationId);
     expect(stageOf(view, "SETTLEMENT")).not.toBe("COMPLETE");
   });
@@ -1611,26 +1661,26 @@ describe("proving a deal is settled, rather than assuming it", () => {
    * An advice BELOW the margin used to produce a negative supplier settlement
    * and therefore a profit larger than the entire approved purchase amount. The
    * redesign removes the arithmetic that could do that — the settlement line is
-   * the supplier's recorded entitlement and never `advice − margin` — and the
-   * advice that would have triggered it cannot be recorded in the first place.
+   * the supplier's recorded entitlement and never `advice − margin`.
    *
-   * Both halves are asserted: the refusal, and that the headline is still a
-   * sane figure bounded by the approval afterwards.
+   * That removal is what this test now pins, and it is the stronger claim: the
+   * advice IS recorded, flagged as contradicting the approval, and the headline
+   * is unmoved by it. Under the old arithmetic this exact advice produced a
+   * profit larger than the whole deal; the figure now cannot depend on it at all.
    */
-  test("an advice smaller than the margin is refused, and the headline stays within the approval", async () => {
+  test("an advice smaller than the margin cannot move the headline, and is flagged", async () => {
     const s = await seedDealership("redesignNegative");
     const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
     await s.t.run(async (ctx) => {
       await ctx.db.patch(applicationId, { dealerContributionMinor: 0 });
     });
 
-    await expect(
-      s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
-        orgId: s.orgId,
-        applicationId,
-        disbursedAmountMinor: Math.floor((MARGIN / 2) * SCALE),
-      })
-    ).rejects.toThrow(/approved .* but the advice records/i);
+    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: Math.floor((MARGIN / 2) * SCALE),
+    });
+    expect(result.status).toBe("REQUIRES_RECONCILIATION");
 
     const view = await cockpitOf(s, applicationId);
     const profit = view!.money!.managementProfit;
@@ -3588,5 +3638,311 @@ describe("financed direct evidence that has gone missing fails closed", () => {
     });
     expect(report.totalProfit).toBe(3_000);
     expect(report.unknownMarginSaleCount).toBe(0);
+  });
+});
+
+/**
+ * SCRUM-30 — an advice that disagrees with the approval is evidence, not an error.
+ *
+ * The first attempt at enforcing "one payment, for the approved amount" REFUSED
+ * a mismatched advice. That enforcement was correct about the invariant and
+ * wrong about what to do with a violation of it, in a way that made the system
+ * less safe than before:
+ *
+ *   - the approval is immutable once the deal is finalized — `finalizeDeal`
+ *     closes the application and `approveDealerPurchaseAmount` refuses a closed
+ *     one — so there was no legal way to make the two figures agree. An advice
+ *     differing by a wire fee could never be recorded at all;
+ *   - `supplierDisbursementConfirmedAt` therefore stayed absent, and that field
+ *     is the ONLY thing stopping a sale being cancelled after the finance
+ *     company has paid. So the refusal disarmed the guard it was meant to
+ *     strengthen: the dealership knew the supplier had been paid, held no
+ *     record saying so, and the sale stayed freely cancellable.
+ *
+ * The advice is now always recorded and a disagreement is recorded with it. The
+ * approval is still immutable — nothing here edits it — and the supplier claim
+ * raised against it does not move. What changes is that the contradiction is a
+ * stored fact a human resolves, rather than a mutation that rolls back the
+ * evidence of itself.
+ */
+describe("a settlement advice that contradicts the approval", () => {
+  async function paidDeal(tag: string, approvedAmount: number) {
+    const s = await seedDealership(tag);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
+    });
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: false });
+    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId,
+      applicationId,
+      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+      source: "MANUAL_ENTRY",
+    });
+    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: s.orgId,
+      applicationId,
+      approvedAmountMinor: approvedAmount * SCALE,
+      basis: "MANUAL",
+      notes: `Approved at ${approvedAmount}.`,
+    });
+    const saleId = await s.asUser.mutation(api.applications.finalizeDeal, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    return { s, applicationId, saleId };
+  }
+
+  const cockpit = (s: Seeded, applicationId: string) =>
+    s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId: applicationId as never,
+    });
+
+  const appOf = (s: Seeded, applicationId: string) =>
+    s.t.run((ctx) => ctx.db.get(applicationId as never)) as Promise<{
+      supplierDisbursementConfirmedAt?: number;
+      supplierDisbursedAmountMinor?: number;
+      supplierDisbursementStatus?: string;
+      supplierDisbursementApprovedAtRecordingMinor?: number;
+      approvedDealerPurchaseAmountMinor?: number;
+    }>;
+
+  test("is recorded rather than refused, and flagged for reconciliation", async () => {
+    const { s, applicationId } = await paidDeal("s30Recon", 18_000);
+
+    // 17,995 — the approved amount less a five-dinar wire fee. A real advice,
+    // and one the deal can never be made to agree with, because the approval it
+    // disagrees with is frozen.
+    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 17_995 * SCALE,
+      reference: "WIRE-4471",
+    });
+    expect(result.status).toBe("REQUIRES_RECONCILIATION");
+
+    const app = await appOf(s, applicationId);
+    // The evidence survived. Before this, the mutation threw and Convex rolled
+    // the write back, so nothing about the payment was recorded anywhere.
+    expect(app.supplierDisbursedAmountMinor).toBe(17_995 * SCALE);
+    expect(app.supplierDisbursementConfirmedAt).toBeDefined();
+    expect(app.supplierDisbursementStatus).toBe("REQUIRES_RECONCILIATION");
+    // Frozen beside it, so the discrepancy stays legible later.
+    expect(app.supplierDisbursementApprovedAtRecordingMinor).toBe(18_000 * SCALE);
+
+    // And the approval itself did NOT move. It is the basis the supplier claim,
+    // the agency revenue and the commission were all measured from; recording
+    // what was actually paid must not restate it.
+    expect(app.approvedDealerPurchaseAmountMinor).toBe(18_000 * SCALE);
+  });
+
+  test("the supplier claim is untouched by the disagreement", async () => {
+    const { s, applicationId } = await paidDeal("s30ReconClaim", 18_000);
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 17_995 * SCALE,
+    });
+
+    // Still 18,000 − 15,000. The claim was accrued at finalization against the
+    // approval, and an unresolved contradiction is not authority to restate it.
+    const rows = await supplierClaimsOf(s);
+    const live = rows.find((r) => r.status !== "CANCELLED");
+    expect(live?.amountDue).toBe(3_000);
+  });
+
+  test("locks cancellation, which the refusal had left wide open", async () => {
+    const { s, applicationId, saleId } = await paidDeal("s30ReconCancel", 18_000);
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 17_995 * SCALE,
+    });
+
+    // The whole point. The finance company has demonstrably paid the supplier;
+    // that the amount is disputed is a question about how much, never about
+    // whether. Cancelling here would reverse a funded sale.
+    await expect(
+      s.asApprover.mutation(api.sales.update, {
+        orgId: s.orgId,
+        saleId: saleId as never,
+        status: "CANCELLED",
+      })
+    ).rejects.toThrow(/already paid the supplier/i);
+  });
+
+  test("a funded deal cannot be cancelled even when recording its advice was rejected", async () => {
+    // The hole the refusal opened, reproduced in the shape it actually had.
+    //
+    // The recording attempt is allowed to fail here on purpose: under the old
+    // guard it DID fail, and the point is what the system permitted afterwards.
+    // Refusing the advice left `supplierDisbursementConfirmedAt` unset, and that
+    // field was the only thing standing between a funded sale and cancellation
+    // — so the dealership knew the finance company had paid the supplier, held
+    // no record saying so, and let the sale be reversed anyway.
+    //
+    // This assertion is era-independent: it does not care whether recording
+    // succeeded, only that a deal the company has paid on cannot be cancelled.
+    const { s, applicationId, saleId } = await paidDeal("s30ReconHole", 18_000);
+    try {
+      await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+        orgId: s.orgId,
+        applicationId,
+        disbursedAmountMinor: 17_995 * SCALE,
+        reference: "WIRE-4471",
+      });
+    } catch {
+      // Old behavior. Deliberately swallowed — see above.
+    }
+
+    await expect(
+      s.asApprover.mutation(api.sales.update, {
+        orgId: s.orgId,
+        saleId: saleId as never,
+        status: "CANCELLED",
+      })
+    ).rejects.toThrow(/already paid the supplier/i);
+
+    // And the sale is genuinely still live, rather than merely having thrown.
+    const sale = (await s.t.run((ctx) => ctx.db.get(saleId as never))) as { status: string };
+    expect(sale.status).toBe("COMPLETED");
+  });
+
+  test("cancelling the APPLICATION is locked by the same evidence", async () => {
+    // `sales.update` is not the only door to a reversal. `cancelApplication`
+    // unwinds the sale, the vehicle, the deposits and the posted accounting
+    // records, and it carried its own copy of the same timestamp-only check —
+    // so closing one door and not the other would leave the reversal reachable
+    // by a route nobody was looking at.
+    const { s, applicationId } = await paidDeal("s30ReconCancelApp", 18_000);
+    try {
+      await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+        orgId: s.orgId,
+        applicationId,
+        disbursedAmountMinor: 17_995 * SCALE,
+      });
+    } catch {
+      // Old behavior; the assertion below is what matters either way.
+    }
+
+    await expect(
+      s.asUser.mutation(api.applications.cancelApplication, {
+        orgId: s.orgId,
+        applicationId,
+        reason: "Trying to unwind a deal the company has already funded.",
+      })
+    ).rejects.toThrow(/already paid the supplier/i);
+
+    // And the cockpit says so, rather than leaving the deal stuck in a state
+    // nobody can see it is in.
+    const view = await cockpit(s, applicationId);
+    expect(view!.settlementAdviceDiscrepancy).not.toBeNull();
+    expect(view!.settlementAdviceDiscrepancy!.recordedMinor).toBe(17_995 * SCALE);
+    expect(view!.settlementAdviceDiscrepancy!.approvedMinor).toBe(18_000 * SCALE);
+  });
+
+  test("an agreeing advice is confirmed outright and still locks cancellation", async () => {
+    const { s, applicationId, saleId } = await paidDeal("s30ReconExact", 18_000);
+    const result = await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 18_000 * SCALE,
+    });
+    expect(result.status).toBe("CONFIRMED");
+
+    const app = await appOf(s, applicationId);
+    expect(app.supplierDisbursementStatus).toBe("CONFIRMED");
+    // Not written when there is nothing to reconcile.
+    expect(app.supplierDisbursementApprovedAtRecordingMinor).toBeUndefined();
+
+    await expect(
+      s.asApprover.mutation(api.sales.update, {
+        orgId: s.orgId,
+        saleId: saleId as never,
+        status: "CANCELLED",
+      })
+    ).rejects.toThrow(/already paid the supplier/i);
+  });
+
+  test("a mistyped advice can be corrected, and the correction clears the flag", async () => {
+    const { s, applicationId } = await paidDeal("s30ReconAmend", 18_000);
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 17_995 * SCALE,
+      reference: "WIRE-4471",
+    });
+
+    // The operator transposed two digits; the company really did pay the
+    // approved amount. Correcting the TRANSCRIPTION is legitimate and is the
+    // only restatement this deal allows.
+    const amended = await s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 18_000 * SCALE,
+      reference: "WIRE-4471",
+      reason: "Advice re-read: the amount was transposed on entry.",
+    });
+    expect(amended.status).toBe("CONFIRMED");
+
+    const app = await appOf(s, applicationId);
+    expect(app.supplierDisbursedAmountMinor).toBe(18_000 * SCALE);
+    expect(app.supplierDisbursementStatus).toBe("CONFIRMED");
+    expect(app.supplierDisbursementApprovedAtRecordingMinor).toBeUndefined();
+    // Still never the approval.
+    expect(app.approvedDealerPurchaseAmountMinor).toBe(18_000 * SCALE);
+  });
+
+  test("a correction that still disagrees stays flagged rather than being accepted", async () => {
+    const { s, applicationId } = await paidDeal("s30ReconAmendStill", 18_000);
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 17_995 * SCALE,
+    });
+
+    // The reconciliation state is DERIVED from the evidence every time, so an
+    // amendment is not a way to declare the discrepancy resolved.
+    const amended = await s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 17_990 * SCALE,
+      reason: "Advice re-read: the fee was ten, not five.",
+    });
+    expect(amended.status).toBe("REQUIRES_RECONCILIATION");
+    expect((await appOf(s, applicationId)).supplierDisbursementStatus).toBe(
+      "REQUIRES_RECONCILIATION"
+    );
+  });
+
+  test("an amendment must say why, and cannot invent an advice that was never recorded", async () => {
+    const { s, applicationId } = await paidDeal("s30ReconAmendGuards", 18_000);
+
+    // Nothing recorded yet: there is no transcription to correct.
+    await expect(
+      s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, {
+        orgId: s.orgId,
+        applicationId,
+        disbursedAmountMinor: 18_000 * SCALE,
+        reason: "Trying to record a payment through the correction door.",
+      })
+    ).rejects.toThrow(/no recorded settlement advice/i);
+
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 17_995 * SCALE,
+    });
+
+    // An amendment with no stated cause is indistinguishable from someone
+    // making the discrepancy go away.
+    await expect(
+      s.asUser.mutation(api.applications.amendSupplierDisbursementAdvice, {
+        orgId: s.orgId,
+        applicationId,
+        disbursedAmountMinor: 18_000 * SCALE,
+        reason: "fix",
+      })
+    ).rejects.toThrow(/why the recorded advice was wrong/i);
   });
 });

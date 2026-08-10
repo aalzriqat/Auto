@@ -1558,6 +1558,31 @@ export const dealCockpit = query({
       },
       salespersonName: salesperson?.name ?? "",
       financeCompanyName: company?.name ?? app.manualFinanceSnapshot?.providerName ?? "",
+      /**
+       * Set only when the recorded settlement advice disagrees with what the
+       * deal was approved at, carrying both figures so the screen can state the
+       * discrepancy rather than merely announce one.
+       *
+       * Surfaced on the cockpit because the alternative is a deal sitting in
+       * REQUIRES_RECONCILIATION that nobody can see is in it. The state exists
+       * to be resolved by a human, and a state no human is shown is not a
+       * recovery path — it is the same dead end in a different place.
+       *
+       * Deliberately outside `money`, which the permission gate can withhold:
+       * this is a workflow condition, not a profit figure, and the person who
+       * has to act on it is not always the person allowed to see margins.
+       */
+      settlementAdviceDiscrepancy:
+        app.supplierDisbursementStatus === "REQUIRES_RECONCILIATION"
+          ? {
+              recordedMinor: app.supplierDisbursedAmountMinor ?? null,
+              approvedMinor:
+                app.supplierDisbursementApprovedAtRecordingMinor ??
+                app.approvedDealerPurchaseAmountMinor ??
+                null,
+              currency: app.economicsCurrency ?? null,
+            }
+          : null,
       stages,
       documents,
       timeline: timeline
@@ -1982,9 +2007,20 @@ export const cancelApplication = mutation({
           // inventory while the dealership silently wrote off a margin it is
           // still owed. Handover is a precondition of finalization, so the
           // customer always has the car by this point.
-          if (app.supplierDisbursementConfirmedAt !== undefined) {
+          //
+          // Widened to any recorded advice, matching the guard on
+          // `sales.update`. A mismatched advice is a question about how much the
+          // supplier was paid, never about whether — and the version of this
+          // check that only looked at the timestamp let a deal whose advice had
+          // been rejected cancel as though the company had never paid.
+          if (
+            app.supplierDisbursementConfirmedAt !== undefined ||
+            app.supplierDisbursedAmountMinor !== undefined
+          ) {
             throw new ConvexError(
-              "The finance company has already paid the supplier on this deal. That payment is between the company and the supplier and can't be reversed from here — unwind it with them and record a manual accounting correction instead."
+              app.supplierDisbursementStatus === "REQUIRES_RECONCILIATION"
+                ? "The finance company has already paid the supplier on this deal, and the recorded advice does not agree with the approved amount. Cancelling would reverse a sale that has been funded while that disagreement is still unresolved — settle what was actually paid first, then unwind it with the company and record a manual accounting correction."
+                : "The finance company has already paid the supplier on this deal. That payment is between the company and the supplier and can't be reversed from here — unwind it with them and record a manual accounting correction instead."
             );
           }
 
@@ -2958,6 +2994,30 @@ export const confirmDisbursement = mutation({
  * other parties, and the dealership's approved purchase amount is its
  * expectation of it, not its terms — refusing a mismatch would block recording
  * a fact that is true whether or not it matches.
+ *
+ * It is nonetheless COMPARED, because the supplier's debt was accrued from the
+ * approval and a disagreement means the dealership holds two contradictory
+ * records of one payment. That is recorded as
+ * `supplierDisbursementStatus: "REQUIRES_RECONCILIATION"` rather than raised as
+ * an error, for two reasons:
+ *
+ *   - a throw rolls back the write it is reacting to, so the evidence of the
+ *     discrepancy would be discarded along with the advice, leaving nothing
+ *     for anyone to reconcile;
+ *   - the approval is immutable after finalization by design — it is the frozen
+ *     basis for the supplier claim, the agency revenue, the salesperson's
+ *     commission and the reports — so refusing the advice left the operator
+ *     with no legal move at all.
+ *
+ * Neither the approval nor the claim is touched here. If the ADVICE was
+ * mistyped, `amendSupplierDisbursementAdvice` corrects it under audit. If the
+ * APPROVAL itself turns out to have been wrong, that is a financial correction
+ * against a closed sale — supplier claim, GL, commission and reporting must all
+ * move together — and it does not happen by editing a field.
+ *
+ * A bank or wire fee is not a revised approval. Who bears it is a separate
+ * question with its own answer; it must not be settled by quietly restating
+ * what the finance company approved.
  */
 export const confirmSupplierDisbursement = mutation({
   args: {
@@ -3083,11 +3143,9 @@ export const confirmSupplierDisbursement = mutation({
             "This deal has no approved purchase amount recorded, so there is nothing to check the company's payment against. Record what it approved before confirming what it paid."
           );
         }
-        if (args.disbursedAmountMinor !== app.approvedDealerPurchaseAmountMinor) {
-          throw new ConvexError(
-            `The company approved ${app.approvedDealerPurchaseAmountMinor} minor units on this deal but the advice records ${args.disbursedAmountMinor}. On a direct settlement it pays the supplier the approved amount in one payment, so these must agree: correct the approved amount if the company revised it, or the advice if it was mistyped. The dealership's claim on the supplier was raised against the approved amount, so recording a different payment would leave that claim measured against money he never received.`
-          );
-        }
+        const approvedAtRecordingMinor = app.approvedDealerPurchaseAmountMinor;
+        const adviceAgreesWithApproval =
+          args.disbursedAmountMinor === approvedAtRecordingMinor;
 
         const vehicle = await ctx.db.get(app.vehicleId);
         const supplierName = vehicle?.sourcedFromName ?? "the supplier";
@@ -3109,6 +3167,18 @@ export const confirmSupplierDisbursement = mutation({
           supplierDisbursedAmountMinor: args.disbursedAmountMinor,
           supplierDisbursementReference: args.reference,
           supplierDisbursementConfirmedBy: user._id,
+          // Recorded either way, and NOT thrown on when it disagrees. A throw
+          // here would roll back the very evidence it is reacting to — the
+          // dealership would be left knowing the supplier was paid and holding
+          // no record that he was, which is the state that let a paid deal stay
+          // cancellable. The contradiction is a fact about the deal, so it is
+          // stored as one.
+          supplierDisbursementStatus: adviceAgreesWithApproval
+            ? ("CONFIRMED" as const)
+            : ("REQUIRES_RECONCILIATION" as const),
+          ...(adviceAgreesWithApproval
+            ? {}
+            : { supplierDisbursementApprovedAtRecordingMinor: approvedAtRecordingMinor }),
           updatedAt: Date.now(),
           // Deliberately NOT FULLY_SETTLED. Nothing has been settled to the
           // dealership: the company has paid the supplier, and the dealership's
@@ -3124,17 +3194,197 @@ export const confirmSupplierDisbursement = mutation({
           actionType: "CONFIRM_SUPPLIER_DISBURSEMENT",
           resourceType: "financeApplications",
           resourceId: args.applicationId,
-          description: `${payerName} paid ${supplierName} ${args.disbursedAmountMinor} minor units directly${args.reference ? ` (ref ${args.reference})` : ""}. No dealership cash moved; the dealership's margin remains a claim on ${supplierName}.`,
+          description: `${payerName} paid ${supplierName} ${args.disbursedAmountMinor} minor units directly${args.reference ? ` (ref ${args.reference})` : ""}. No dealership cash moved; the dealership's margin remains a claim on ${supplierName}.${
+            adviceAgreesWithApproval
+              ? ""
+              : ` NEEDS RECONCILIATION: the deal was approved at ${approvedAtRecordingMinor} minor units, so the advice and the approval disagree by ${Math.abs(args.disbursedAmountMinor - approvedAtRecordingMinor)}. The supplier claim was raised against the approval and has NOT been changed.`
+          }`,
           before: { supplierDisbursementConfirmedAt: null },
           after: {
             supplierDisbursementConfirmedAt: confirmedAt,
             supplierDisbursedAmountMinor: args.disbursedAmountMinor,
             settlementCounterparty: payerName,
+            supplierDisbursementStatus: adviceAgreesWithApproval
+              ? "CONFIRMED"
+              : "REQUIRES_RECONCILIATION",
+            ...(adviceAgreesWithApproval
+              ? {}
+              : { approvedDealerPurchaseAmountMinor: approvedAtRecordingMinor }),
           },
           idempotencyKey: args.idempotencyKey,
         });
 
-        return { confirmedAt, disbursedAmountMinor: args.disbursedAmountMinor };
+        if (!adviceAgreesWithApproval) {
+          // A discrepancy nobody is told about is a discrepancy nobody resolves.
+          // Routed to managers on the same channel as the other things that stop
+          // a deal, rather than waiting to be noticed on the cockpit.
+          await notifyManagers(
+            ctx,
+            args.orgId,
+            "application.created" as const,
+            {
+              actorName: await getActorName(ctx),
+              amount: String(args.disbursedAmountMinor),
+            },
+            { link: `/${args.orgId}/applications/${args.applicationId}` }
+          );
+        }
+
+        return {
+          confirmedAt,
+          disbursedAmountMinor: args.disbursedAmountMinor,
+          status: adviceAgreesWithApproval
+            ? ("CONFIRMED" as const)
+            : ("REQUIRES_RECONCILIATION" as const),
+        };
+      }
+    );
+  },
+});
+
+/**
+ * Corrects a settlement advice that was recorded wrongly.
+ *
+ * This is the ONLY thing on a finalized direct deal that may be restated, and
+ * the boundary is deliberate. The advice is the dealership's transcription of a
+ * document from someone else, so a mistyped cheque number or amount is an error
+ * in the transcription and correcting it makes the record more true.
+ *
+ * The approved purchase amount is not in that category and is not touched here.
+ * It is the frozen basis the supplier claim, the agency revenue, the
+ * salesperson's commission and the reports were all measured from. Editing it
+ * after finalization would move a number those four already depend on without
+ * moving any of them, which is strictly more dangerous than leaving a deal in
+ * `REQUIRES_RECONCILIATION` until a human decides what actually happened. If
+ * the approval on file really was wrong, the answer is a financial correction
+ * against a closed sale in which every dependent figure moves together — not
+ * this mutation.
+ *
+ * Amending re-evaluates the advice against the approval, so a correction that
+ * makes the two agree clears the flag, and one that does not leaves it standing.
+ * The reconciliation state is derived from the evidence every time rather than
+ * being something an operator can set.
+ */
+export const amendSupplierDisbursementAdvice = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    /** The corrected amount from the advice. */
+    disbursedAmountMinor: v.number(),
+    reference: v.optional(v.string()),
+    disbursedAt: v.optional(v.number()),
+    /**
+     * Why the recorded advice was wrong. Required, and stored on the audit
+     * record: an amendment with no stated cause is indistinguishable from
+     * someone making the discrepancy go away.
+     */
+    reason: v.string(),
+    idempotencyKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    assertValidMinorAmount(args.disbursedAmountMinor, "disbursed amount");
+    if (args.disbursedAmountMinor <= 0) {
+      throw new ConvexError("Disbursement amount must be positive.");
+    }
+    const reason = args.reason.trim();
+    if (reason.length < 10) {
+      throw new ConvexError(
+        "Say why the recorded advice was wrong. This amendment changes evidence about a payment somebody else made, and the reason is the only account of it."
+      );
+    }
+    // Same validation as recording one: this field is operator-supplied and
+    // Convex stores a NaN as a `v.number()` without complaint.
+    if (args.disbursedAt !== undefined) {
+      if (!Number.isSafeInteger(args.disbursedAt) || args.disbursedAt <= 0) {
+        throw new ConvexError("That disbursement date is not a valid date.");
+      }
+      if (args.disbursedAt > Date.now()) {
+        throw new ConvexError("The disbursement date cannot be in the future.");
+      }
+    }
+    // Deliberately stricter than recording the advice. Recording is routine
+    // back-office work; overwriting a record of somebody else's payment is not,
+    // and MANAGE_FINANCE is the permission the default templates give to the
+    // roles that answer for the deal rather than the ones that key it in.
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "applications.amendSupplierDisbursementAdvice",
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        fingerprint: JSON.stringify({
+          applicationId: args.applicationId,
+          disbursedAmountMinor: args.disbursedAmountMinor,
+          reference: args.reference ?? null,
+          disbursedAt: args.disbursedAt ?? null,
+          reason,
+        }),
+      },
+      async () => {
+        const app = await ctx.db.get(args.applicationId);
+        if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found.");
+        if (app.supplierDisbursementConfirmedAt === undefined) {
+          throw new ConvexError(
+            "There is no recorded settlement advice on this deal to amend. Record what the company paid the supplier first."
+          );
+        }
+        if (app.approvedDealerPurchaseAmountMinor === undefined) {
+          throw new ConvexError(
+            "This deal has no approved purchase amount recorded, so there is nothing to check the corrected advice against."
+          );
+        }
+
+        const previous = {
+          supplierDisbursedAmountMinor: app.supplierDisbursedAmountMinor ?? null,
+          supplierDisbursementReference: app.supplierDisbursementReference ?? null,
+          supplierDisbursementConfirmedAt: app.supplierDisbursementConfirmedAt,
+          supplierDisbursementStatus: app.supplierDisbursementStatus ?? "CONFIRMED",
+        };
+
+        const approvedAtRecordingMinor = app.approvedDealerPurchaseAmountMinor;
+        const agrees = args.disbursedAmountMinor === approvedAtRecordingMinor;
+        const confirmedAt = args.disbursedAt ?? app.supplierDisbursementConfirmedAt;
+
+        await ctx.db.patch(args.applicationId, {
+          supplierDisbursedAmountMinor: args.disbursedAmountMinor,
+          supplierDisbursementReference: args.reference,
+          supplierDisbursementConfirmedAt: confirmedAt,
+          supplierDisbursementConfirmedBy: user._id,
+          supplierDisbursementStatus: agrees
+            ? ("CONFIRMED" as const)
+            : ("REQUIRES_RECONCILIATION" as const),
+          // Cleared when it no longer applies rather than left behind, so the
+          // frozen approval never outlives the discrepancy it was recording.
+          supplierDisbursementApprovedAtRecordingMinor: agrees
+            ? undefined
+            : approvedAtRecordingMinor,
+          updatedAt: Date.now(),
+        });
+
+        await auditLog(ctx, {
+          orgId: args.orgId,
+          actorId: user._id,
+          actionType: "AMEND_SUPPLIER_DISBURSEMENT_ADVICE",
+          resourceType: "financeApplications",
+          resourceId: args.applicationId,
+          description: `Settlement advice corrected to ${args.disbursedAmountMinor} minor units${args.reference ? ` (ref ${args.reference})` : ""}. Reason: ${reason}. The approved purchase amount (${approvedAtRecordingMinor}) and the supplier claim raised against it are unchanged.`,
+          before: previous,
+          after: {
+            supplierDisbursedAmountMinor: args.disbursedAmountMinor,
+            supplierDisbursementReference: args.reference ?? null,
+            supplierDisbursementConfirmedAt: confirmedAt,
+            supplierDisbursementStatus: agrees ? "CONFIRMED" : "REQUIRES_RECONCILIATION",
+          },
+          idempotencyKey: args.idempotencyKey,
+        });
+
+        return {
+          disbursedAmountMinor: args.disbursedAmountMinor,
+          status: agrees ? ("CONFIRMED" as const) : ("REQUIRES_RECONCILIATION" as const),
+        };
       }
     );
   },

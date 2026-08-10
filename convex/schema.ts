@@ -459,6 +459,10 @@ export default defineSchema({
       v.literal("RESOLVE_DEPOSIT_ALLOCATION"),
       v.literal("SET_SUPPLIER_SETTLEMENT_ROUTE"),
       v.literal("CONFIRM_SUPPLIER_DISBURSEMENT"),
+      // Correcting a mistyped settlement advice. Distinct from recording one so
+      // the audit trail shows an amendment as an amendment — a second
+      // CONFIRM would read as a second payment.
+      v.literal("AMEND_SUPPLIER_DISBURSEMENT_ADVICE"),
     ),
     resourceType: v.string(),
     resourceId: v.string(),
@@ -2222,6 +2226,42 @@ export default defineSchema({
     supplierDisbursedAmountMinor: v.optional(v.number()),
     supplierDisbursementReference: v.optional(v.string()),
     supplierDisbursementConfirmedBy: v.optional(v.id("users")),
+    /**
+     * Whether the recorded advice agrees with what the deal was approved at.
+     *
+     * The dealership's ruling is one payment, for the approved amount — so a
+     * different figure is a contradiction between two records of the same fact,
+     * not a partial payment. The first attempt at enforcing that REFUSED the
+     * mismatched advice, and refusing turned out to be worse than the problem:
+     *
+     *   - the approval is immutable once the deal is finalized, so there was no
+     *     legal way to make the two agree and the advice could never be
+     *     recorded at all;
+     *   - `supplierDisbursementConfirmedAt` therefore stayed absent, and that
+     *     field is what stops a sale being cancelled after the finance company
+     *     has paid. A mismatched advice — evidence the supplier WAS paid — left
+     *     the sale freely cancellable. The enforcement disarmed the guard it
+     *     was meant to strengthen.
+     *
+     * So the advice is now always recorded, and a disagreement is recorded WITH
+     * it as a state a human has to resolve. `REQUIRES_RECONCILIATION` is not a
+     * softer CONFIRMED: it says the dealership holds two contradictory records
+     * of one payment and does not yet know which is true.
+     *
+     * Absent means the advice predates this field, which is CONFIRMED by
+     * construction — those rows could only be written when the amounts matched.
+     */
+    supplierDisbursementStatus: v.optional(
+      v.union(v.literal("CONFIRMED"), v.literal("REQUIRES_RECONCILIATION"))
+    ),
+    /**
+     * What the deal was approved at when the advice was recorded, in minor
+     * units. Frozen alongside the advice so the discrepancy stays legible even
+     * if the approval is later corrected through its own audited path — without
+     * it, "the advice disagreed" becomes unfalsifiable the moment either side
+     * moves. Written only when the two disagree.
+     */
+    supplierDisbursementApprovedAtRecordingMinor: v.optional(v.number()),
 
     // Settlement. `expected` is what the company owes; `actual` is what turned
     // up. Keeping them apart is the whole reason confirmDisbursement could not

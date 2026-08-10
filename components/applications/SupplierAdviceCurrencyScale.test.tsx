@@ -157,8 +157,21 @@ describe("a deal pinned to a currency the org no longer uses", () => {
     // 17,450,000 minor units read at the org's two decimals renders 174,500 —
     // ten times the real figure, on the line the operator checks the advice
     // against before typing. A wrong expectation invites a wrong entry.
-    expect(screen.getByText(/\$ 17450($|[^0-9])/)).toBeTruthy();
-    expect(screen.queryByText(/\$ 174500/)).toBeNull();
+    expect(screen.getByText(/17,?450($|[^0-9])/)).toBeTruthy();
+    expect(screen.queryByText(/174,?500/)).toBeNull();
+  });
+
+  test("labels that amount in the deal's currency, not the org's", () => {
+    renderDialog(jodPinnedDeal());
+
+    fireEvent.click(screen.getByRole("button", { name: /ConfirmSupplierDisbursement/ }));
+
+    // Scaling by the deal's currency and then labelling with the org's is the
+    // same defect wearing the other half of the pair: 17,450 dinars presented
+    // as 17,450 dollars is a figure whose label contradicts it. The two halves
+    // must come from one currency.
+    expect(screen.getByText(/17,?450 JOD/)).toBeTruthy();
+    expect(screen.queryByText(/\$ 17,?450/)).toBeNull();
   });
 
   test("a deal with no pinned currency falls back to the org's, as the server does", () => {

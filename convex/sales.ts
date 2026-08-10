@@ -655,9 +655,24 @@ export const update = mutation({
               "The finance company has already paid the dealership on this deal, so it can't be cancelled from here. Void it through a manual accounting correction instead."
             );
           }
-          if (app.supplierDisbursementConfirmedAt !== undefined) {
+          // Any recorded advice locks this, including one whose amount
+          // contradicts the approval.
+          //
+          // A contradiction is a question about HOW MUCH the supplier was paid.
+          // It is not doubt about WHETHER he was, and cancelling on the strength
+          // of that doubt would reverse a sale the finance company has already
+          // funded. `supplierDisbursedAmountMinor` is checked alongside the
+          // timestamp so a row carrying an amount but no date — which no writer
+          // produces today, and which a future one could — still counts as
+          // evidence rather than reading as "not paid".
+          if (
+            app.supplierDisbursementConfirmedAt !== undefined ||
+            app.supplierDisbursedAmountMinor !== undefined
+          ) {
             throw new ConvexError(
-              "The finance company has already paid the supplier on this deal. That payment is between the company and the supplier and can't be reversed from here — unwind it with them and record a manual accounting correction instead."
+              app.supplierDisbursementStatus === "REQUIRES_RECONCILIATION"
+                ? "The finance company has already paid the supplier on this deal, and the recorded advice does not agree with the approved amount. Cancelling would reverse a sale that has been funded while that disagreement is still unresolved — settle what was actually paid first, then unwind it with the company and record a manual accounting correction."
+                : "The finance company has already paid the supplier on this deal. That payment is between the company and the supplier and can't be reversed from here — unwind it with them and record a manual accounting correction instead."
             );
           }
         }

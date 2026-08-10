@@ -426,10 +426,14 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // behind the application, but only after the application itself has been
   // proved to belong to the named org — so the vehicle is reached through an
   // owned row rather than from a caller-supplied id.
+  // SCRUM-30 adds a third: `amendSupplierDisbursementAdvice`, which corrects a
+  // mistyped settlement advice. Same shape as the two above — `orgId` plus a
+  // caller-supplied `applicationId` — so it lands in `analysed` too, and it
+  // satisfies the rule the same inline way.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 472,
-      analysed: 314,
+      totalMutations: 473,
+      analysed: 315,
       skippedNoArgsBlock: 13,
       skippedNoOrgId: 145,
     });
