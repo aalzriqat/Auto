@@ -2607,6 +2607,15 @@ export const finalizeDeal = mutation({
             app.supplierSettlementRoute === "DIRECT_TO_SUPPLIER"
               ? app.approvedDealerPurchaseAmountMinor
               : undefined,
+          // Carried WITH the amount, never assumed. The approval is stored in
+          // minor units of the application's pinned `economicsCurrency`, and
+          // `completeSale` resolves the sale's currency from the org — which can
+          // have changed since the deal was priced. Completion compares the two
+          // and refuses on a mismatch instead of subtracting cents from fils.
+          supplierGrossReceiptCurrency:
+            app.supplierSettlementRoute === "DIRECT_TO_SUPPLIER"
+              ? (app.economicsCurrency ?? undefined)
+              : undefined,
           depositResolution: args.depositResolution as
             | { treatment: DepositTreatment; reason?: string; refundMethod?: DepositMethod }
             | undefined,

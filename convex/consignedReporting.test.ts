@@ -940,21 +940,29 @@ describe("a financed consigned sale settled directly with the supplier", () => {
     };
   }
 
-  test("posts the margin as a claim on the supplier, exactly as a cash deal does", async () => {
+  /**
+   * SUPERSEDED BY SCRUM-30. This used to assert that `sales.create` opened a
+   * claim of `salePrice − entitlement` on a financed direct deal, which is the
+   * defect itself: on this route the FINANCE COMPANY pays the supplier whatever
+   * it approved, and `sales.create` has no field for that amount — it cannot
+   * have one, because the approval lives on the finance application.
+   *
+   * So the writer is refused rather than left guessing. What it used to assert
+   * — the claim runs from the supplier to the dealership and no payable is
+   * opened — is covered in `financedConsignedSettlement.test.ts` through the
+   * application workflow, where the approved amount actually exists.
+   */
+  test("is refused: this writer cannot know what the financier paid the supplier", async () => {
     const { s, vehicleId, attempt } = await financedDirect("finDirect");
-    const saleId = await attempt();
 
-    const route = await s.t.run(async (ctx) => (await ctx.db.get(saleId))?.supplierSettlementRoute);
-    expect(route).toBe("DIRECT_TO_SUPPLIER");
+    await expect(attempt()).rejects.toThrow(/finance application|financing workflow/i);
 
-    // The claim runs from the supplier to the dealership, and there is no
-    // payable — the buyer's financier paid him, so the dealership owes him
-    // nothing. This is the pair of facts the old inversion got backwards.
+    // A mutation is one transaction, so the refusal leaves nothing behind — no
+    // half-built claim, and specifically not one for the sale-price margin.
     const claims = await s.t.run(async (ctx) =>
       (await ctx.db.query("vehicleSupplierReceivables").collect()).filter((r) => r.vehicleId === vehicleId)
     );
-    expect(claims).toHaveLength(1);
-    expect(claims[0]!.amountDue).toBe(SALE_PRICE - ENTITLEMENT);
+    expect(claims).toHaveLength(0);
 
     const payables = await s.t.run(async (ctx) =>
       (await ctx.db.query("vehicleSupplierPayables").collect()).filter((p) => p.vehicleId === vehicleId)
@@ -1037,32 +1045,32 @@ describe("a financed consigned sale settled directly with the supplier", () => {
     expect(payable?.amountDue).toBe(9_500.5);
   });
 
-  test("completes the deal and marks the car sold, owing the supplier nothing", async () => {
+  test("the refusal leaves the car unsold rather than half-completing it", async () => {
     const { s, vehicleId, attempt } = await financedDirect("finDirectState");
-    await attempt();
+    await expect(attempt()).rejects.toThrow(/finance application|financing workflow/i);
 
     const state = await s.t.run(async (ctx) => ({
       sales: (await ctx.db.query("sales").collect()).length,
       payables: (await ctx.db.query("vehicleSupplierPayables").collect()).length,
       status: (await ctx.db.get(vehicleId))?.status,
     }));
-    expect(state.sales).toBe(1);
-    // Still zero, and for the original reason rather than because the sale was
-    // refused: a payable here would be a debt no payment can settle, since the
-    // supplier was already paid by the buyer's financier.
+    // Nothing was written. A refusal that still marked the car SOLD would be
+    // worse than no refusal, because the deal could never then be completed
+    // through the workflow that does know the approved amount.
+    expect(state.sales).toBe(0);
     expect(state.payables).toBe(0);
-    expect(state.status).toBe("SOLD");
+    expect(state.status).toBe("AVAILABLE");
   });
 
-  test("a LEASE settles the same way — it is financed for this purpose too", async () => {
+  test("a LEASE is refused the same way — it is financed for this purpose too", async () => {
     const { s, vehicleId, attempt } = await financedDirect("finLease", { financingType: "LEASE" });
-    await attempt();
+
+    await expect(attempt()).rejects.toThrow(/finance application|financing workflow/i);
 
     const claims = await s.t.run(async (ctx) =>
       (await ctx.db.query("vehicleSupplierReceivables").collect()).filter((r) => r.vehicleId === vehicleId)
     );
-    expect(claims).toHaveLength(1);
-    expect(claims[0]!.amountDue).toBe(SALE_PRICE - ENTITLEMENT);
+    expect(claims).toHaveLength(0);
   });
 
   test("a CASH consigned sale keeps the direct route", async () => {

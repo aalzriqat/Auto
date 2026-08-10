@@ -95,6 +95,14 @@ type SaleCompletionArgs = {
    * `computeConsignedSupplierPosition`.
    */
   supplierGrossReceiptMinor?: number;
+  /**
+   * The currency `supplierGrossReceiptMinor` is denominated in — the
+   * application's pinned `economicsCurrency`, which is NOT always the org's.
+   *
+   * Required whenever the amount is supplied. Completion refuses rather than
+   * converting when the two disagree; see the check in `completeSale`.
+   */
+  supplierGrossReceiptCurrency?: string;
   // What happens to the customer's reservation deposit. Required on a consigned
   // sale that has one — see resolveReservationDeposits.
   depositResolution?: {
@@ -789,9 +797,62 @@ async function applySaleCompletionSideEffects(
   //     is either paid to the dealership directly by the customer or collected
   //     by nobody, and per SCRUM-23 it is a management figure on no invoice.
   //     Measuring his debt against the sale price billed him for it anyway.
-  const supplierGrossReceiptMinor = !dealershipCollectsGross(settlementRoute)
-    ? (args.supplierGrossReceiptMinor ?? toMinorUnits(args.salePrice, prepared.currency))
-    : toMinorUnits(args.salePrice, prepared.currency);
+  const salePriceMinor = toMinorUnits(args.salePrice, prepared.currency);
+  const settlesDirectToSupplier = !dealershipCollectsGross(settlementRoute);
+  // A financed deal on the direct route MUST arrive with the approved amount.
+  //
+  // The fallback below is right for a cash direct sale — the buyer pays the
+  // supplier, and what he pays is the sale price. It is wrong for a financed
+  // one, where the FINANCE COMPANY pays him whatever it approved, and that can
+  // be less than the sale price.
+  //
+  // `sales.create` and the draft-completion path both accept
+  // `financingType: "FINANCED"` alongside `DIRECT_TO_SUPPLIER` and have no field
+  // for the approved amount — they cannot have one, because it lives on the
+  // application. Left to the fallback they recorded the sale price as the
+  // supplier's receipt and opened a claim for `salePrice − entitlement`: the
+  // exact defect this redesign closes, reached through a door that does not go
+  // near `finalizeDeal`.
+  //
+  // So it refuses. A financed direct sale is only constructible through the
+  // application workflow, because only that workflow knows what the financier
+  // approved — and the approval must be a server-side fact, never an amount the
+  // caller supplies alongside the sale.
+  if (
+    isSourced &&
+    settlesDirectToSupplier &&
+    (args.financingType === "FINANCED" || args.financingType === "LEASE") &&
+    args.supplierGrossReceiptMinor === undefined
+  ) {
+    throw new ConvexError(
+      "This is a financed sale of the supplier's car settled directly with him, so what the finance company approved is what he actually receives — and the dealership's claim on him is measured from it. That amount lives on the finance application, so this deal has to be completed through the financing workflow rather than recorded as a sale directly."
+    );
+  }
+  // The supplied amount is denominated in the APPLICATION's pinned currency,
+  // and this sale's currency comes from the ORG. They are not always the same:
+  // `orgSettings` does not count `financeApplications` among the rows that lock
+  // an org's currency, so a deal pinned in JOD can be finalized under an org
+  // that now reports in USD.
+  //
+  // Refused rather than converted. Subtracting an entitlement in cents from an
+  // approval in fils does not produce a slightly wrong claim — at a 20,000 sale
+  // with a 15,000 entitlement and an 18,000 approval it produces 16,500,000
+  // cents against a supplier holding 3,000 dinars, and the GL and the subledger
+  // agree with each other on that figure, so nothing reconciles them. There is
+  // no exchange rate anywhere in this model, and inventing one to keep the deal
+  // moving would be a worse answer than stopping.
+  if (
+    args.supplierGrossReceiptMinor !== undefined &&
+    args.supplierGrossReceiptCurrency !== undefined &&
+    args.supplierGrossReceiptCurrency !== prepared.currency
+  ) {
+    throw new ConvexError(
+      `This deal's financing figures are recorded in ${args.supplierGrossReceiptCurrency} but the dealership now reports in ${prepared.currency}, so what the finance company pays the supplier cannot be compared with what he is owed. Settle the deal's currency before completing it — the amounts cannot be converted here without an exchange rate nobody has recorded.`
+    );
+  }
+  const supplierGrossReceiptMinor = settlesDirectToSupplier
+    ? (args.supplierGrossReceiptMinor ?? salePriceMinor)
+    : salePriceMinor;
   const marginMinor =
     isSourced && costMinor !== undefined
       ? supplierGrossReceiptMinor - costMinor
@@ -965,6 +1026,11 @@ async function applySaleCompletionSideEffects(
           // defect being closed here, and the only way they cannot is if
           // exactly one place decides it.
           supplierGrossReceiptMinor,
+          // So a drained outbox event can tell a pre-field CASH direct sale
+          // (where the sale price genuinely is what the supplier received) from
+          // a financed one (where it is not). Only the current emitter sets it.
+          externallyFinanced:
+            args.financingType === "FINANCED" || args.financingType === "LEASE",
           supplierName: prepared.vehicle.sourcedFromName,
           settlementRoute,
         };

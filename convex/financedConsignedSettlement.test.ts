@@ -3032,3 +3032,119 @@ describe("cancelling a deal whose financing evidence cannot be read", () => {
     expect(sale.status).toBe("CANCELLED");
   });
 });
+
+/**
+ * Round-2 findings from the Codex adversarial review of `deaeff3e`, each
+ * reproduced before it was fixed.
+ *
+ * The first round grounded the supplier claim in `approved − entitlement` and
+ * proved it through `finalizeDeal`. Two ways around that remained, and both
+ * reopen the original defect rather than merely bending it:
+ *
+ *   - the approved amount is denominated in the APPLICATION's pinned
+ *     `economicsCurrency`, while `completeSale` resolves the sale's currency
+ *     from the ORG. When those differ in scale the claim is not slightly off,
+ *     it is off by a factor of ten or more — and the GL and subledger agree
+ *     with each other on the wrong figure, so nothing reconciles them.
+ *   - `sales.create` accepts `financingType: "FINANCED"` together with
+ *     `DIRECT_TO_SUPPLIER` and has no field for the approved amount at all, so
+ *     it fell straight to the sale-price fallback. The first round's tests all
+ *     went through `finalizeDeal` and never touched this door.
+ */
+describe("the claim cannot be reopened through a second door", () => {
+  test("a currency change between approval and finalization is refused, not silently mixed", async () => {
+    const s = await seedDealership("s30CurrencyMix");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
+    });
+
+    const { applicationId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      finalize: false,
+    });
+    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId,
+      applicationId,
+      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+      source: "MANUAL_ENTRY",
+    });
+    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: s.orgId,
+      applicationId,
+      approvedAmountMinor: 18_000 * SCALE,
+      basis: "MANUAL",
+      notes: "Approved in the deal's pinned currency.",
+    });
+
+    // The org switches reporting currency AFTER the approval is frozen.
+    // `orgSettings` does not count `financeApplications` among the rows that
+    // lock an org's currency, so nothing prevents this.
+    await s.t.run(async (ctx) => {
+      const settings = (await ctx.db.query("orgSettings").collect()).find(
+        (row) => row.orgId === s.orgId
+      );
+      if (settings) await ctx.db.patch(settings._id, { currency: "USD" });
+    });
+
+    // 18,000,000 fils compared against an entitlement converted to 1,500,000
+    // cents would derive a claim of 16,500,000 — USD 165,000 against a supplier
+    // holding JOD 3,000 of dealership money. Refusing is the only safe answer:
+    // there is no exchange rate in the model, and inventing one would be worse
+    // than stopping.
+    await expect(
+      s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId })
+    ).rejects.toThrow(/currency/i);
+
+    // Nothing was written on the way to the refusal.
+    const claims = await supplierClaimsOf(s);
+    expect(claims.length).toBe(0);
+  });
+
+  test("a financed direct sale created outside the application workflow is refused", async () => {
+    const s = await seedDealership("s30DirectWriter");
+
+    // `sales.create` takes `financingType` and `supplierSettlementRoute` but has
+    // no field for what the financier approved — it cannot know it. Falling back
+    // to the sale price here opened a claim of 5,000 against a supplier holding
+    // 3,000, which is the exact defect SCRUM-30 exists to close, reached through
+    // a writer the first round's tests never exercised.
+    await expect(
+      s.asUser.mutation(api.sales.create, {
+        orgId: s.orgId,
+        vehicleId: s.vehicleId,
+        customerId: s.customerId,
+        salespersonId: s.userId,
+        salePrice: VEHICLE_PRICE,
+        saleDate: Date.now(),
+        status: "COMPLETED" as const,
+        financingType: "FINANCED" as const,
+        supplierSettlementRoute: "DIRECT_TO_SUPPLIER" as const,
+      })
+    ).rejects.toThrow(/finance application|approved/i);
+
+    const claims = await supplierClaimsOf(s);
+    expect(claims.length).toBe(0);
+  });
+
+  test("a CASH direct sale created the same way still completes, at the sale price", async () => {
+    // The control. The refusal above must be about financing, not about the
+    // direct route — a cash direct sale is exactly the case where the buyer pays
+    // the supplier the sale price, and PR #204 shipped it deliberately.
+    const s = await seedDealership("s30CashWriter");
+
+    await s.asUser.mutation(api.sales.create, {
+      orgId: s.orgId,
+      vehicleId: s.vehicleId,
+      customerId: s.customerId,
+      salespersonId: s.userId,
+      salePrice: VEHICLE_PRICE,
+      saleDate: Date.now(),
+      status: "COMPLETED" as const,
+      financingType: "CASH" as const,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER" as const,
+    });
+
+    const claim = (await supplierClaimsOf(s)).find((r) => r.status !== "CANCELLED")!;
+    expect(claim.amountDue).toBe(VEHICLE_PRICE - SUPPLIER_ENTITLEMENT);
+  });
+});

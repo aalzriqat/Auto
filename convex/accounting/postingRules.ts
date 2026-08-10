@@ -238,6 +238,17 @@ export interface SaleCompletedPayload {
      * the customer is liable for the full sale price.
      */
     supplierGrossReceiptMinor?: number;
+    /**
+     * Whether an outside financier pays for this car, carried so the rule can
+     * tell a legacy CASH direct event from a financed one.
+     *
+     * Without it the fallback below is indistinguishable from a guess: a queued
+     * event with no `supplierGrossReceiptMinor` could be a pre-field cash sale
+     * (where the sale price IS what the supplier received) or a pre-field
+     * financed one (where it is not). Draining the second as though it were the
+     * first posts the very receivable this redesign removes.
+     */
+    externallyFinanced?: boolean;
     supplierName?: string;
     settlementRoute: "DIRECT_TO_SUPPLIER" | "THROUGH_DEALERSHIP";
   };
@@ -551,13 +562,43 @@ function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
   // THROUGH: the dealership collects the gross and the customer is liable for
   // the whole sale price, so the spread genuinely is over `saleAmountMinor`.
   // Unchanged, deliberately — this rule was never wrong on that route.
+  // A financed direct event with no recorded receipt is refused, not guessed.
+  //
+  // The fallback is correct for a CASH direct sale and for every event queued
+  // before the field existed — `main` refuses financed + DIRECT in
+  // `completeSale`, so no such event can be sitting in a production outbox. It
+  // is NOT correct for a financed one, and an event queued by an unreleased
+  // build could be. Draining it against the sale price would post exactly the
+  // receivable this redesign removes, silently, out of sight of whoever sold
+  // the car — and an outbox drains long after anyone is watching.
+  //
+  // Dead-lettering it is the right failure: the entry is repaired and re-posted
+  // deliberately, rather than the ledger quietly acquiring a debt against a
+  // supplier who never received the money.
+  const dims = { customerId: p.customerId, vehicleId: p.vehicleId, salespersonId: p.salespersonId };
+  const supplier = consignment.supplierName ?? "supplier";
+
+  // Scoped to events that explicitly say they are financed, which only the
+  // current emitter sets. An event queued by an older build carries no marker
+  // and falls through to the sale price — and that is correct for it, because
+  // the claim that build opened was raised on the same basis, so the ledger and
+  // the subledger stay consistent with each other. Repairing those rows is a
+  // data question, not a posting-rule question, and dead-lettering them here
+  // would strand entries that currently reconcile.
+  if (
+    consignment.settlementRoute === "DIRECT_TO_SUPPLIER" &&
+    consignment.supplierGrossReceiptMinor === undefined &&
+    consignment.externallyFinanced === true
+  ) {
+    throw new Error(
+      `Consigned sale ${p.saleId} settles directly with ${supplier} and is externally financed, but records no amount actually paid to him. The dealership's claim cannot be measured against the sale price on this route — repair the event with the finance company's approved amount before posting it.`
+    );
+  }
   const settlementBasisMinor =
     consignment.settlementRoute === "DIRECT_TO_SUPPLIER"
       ? (consignment.supplierGrossReceiptMinor ?? p.saleAmountMinor)
       : p.saleAmountMinor;
   const marginMinor = settlementBasisMinor - entitlementMinor;
-  const dims = { customerId: p.customerId, vehicleId: p.vehicleId, salespersonId: p.salespersonId };
-  const supplier = consignment.supplierName ?? "supplier";
 
   // Fail closed. A negative margin means the supplier is paid less than he is
   // owed, which is a real situation but not one this rule may guess at —
