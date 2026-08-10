@@ -51,20 +51,38 @@ jobs:
   # or run. This is the only SCA job that reaches the Security dashboard, so it
   # is what a merge gate can meaningfully be built on.
   #
+  # Three sources, each covering a graph the others cannot see:
+  #   pnpm-lock.yaml                        — web + server + the mobile app's JS
+  #   dealer-worker/package-lock.json       — the Cloudflare worker
+  #   apps/mobile/android/app/gradle.lockfile — the Android release runtime
+  #
   # Scanned explicitly rather than with `--recursive ./`, because a recursive
   # scan also picks up apps/mobile/android/gradle/verification-metadata.xml.
-  # That file is Gradle's append-only artifact *checksum ledger*, not a
-  # dependency manifest: it records every artifact Gradle ever resolved,
-  # including the build classpath (AGP, Kotlin plugin), test-only jars
-  # (junit, assertj, mockwebserver) and several simultaneous versions of the
-  # same library. It contributed 289 of 301 findings here — 4 Critical and 115
-  # High, none of them on a library that ships in the APK — which buried the
-  # runtime signal entirely. It is still scanned, by osv-toolchain below.
+  # That file is Gradle's append-only artifact *checksum ledger*, and the key
+  # point is that it is a MIXED ledger: it records every artifact Gradle ever
+  # resolved, so build plugins (AGP, the Kotlin plugin), test-only jars (junit,
+  # assertj, mockwebserver, robolectric), stale historical versions AND real
+  # shipped runtime libraries all sit in it side by side, with nothing marking
+  # which is which. 2232 components, against 444 that actually ship.
+  #
+  # So it cannot answer "is this in the APK?" in either direction. Measured on
+  # this repo: it lists commons-io at 1.4, 2.4, 2.6 and 2.16.1 while only 1.4
+  # ships, and its 95 advisories include GHSA-574f-3g2m-x479 (CVSS 9.3) against
+  # org.bouncycastle:bcprov-jdk15to18:1.81 — which IS in the release runtime
+  # graph, reached via bcutil-jdk15to18 under `project :expo`. Gating on the
+  # ledger drowns the signal (289 of 301 findings); gating on nothing Android
+  # would have demoted that Critical off the dashboard entirely.
+  #
+  # Hence the split: gate on the resolved release-runtime graph, and keep the
+  # ledger as separate non-blocking supply-chain reporting in osv-toolchain.
   #
   # apps/* is a pnpm workspace member, so pnpm-lock.yaml covers the mobile
-  # app's JS/React Native dependency graph too. What it does not cover is the
-  # Android *native* AAR graph (androidx, com.facebook.react), which only
-  # Gradle can resolve — tracked in docs/security/dependency-scanning.md.
+  # app's JS/React Native dependency graph. What it cannot cover is the Android
+  # *native* AAR/JAR graph — androidx, com.facebook.react:react-android,
+  # okhttp/okio, and everything the autolinked Expo modules and the Clerk
+  # Android SDK drag in. Only Gradle can resolve that, which is what
+  # apps/mobile/android/app/gradle.lockfile records. See
+  # docs/security/dependency-scanning.md for how to regenerate it.
   osv-runtime:
     runs-on: ubuntu-latest
     permissions:
@@ -78,20 +96,30 @@ jobs:
       # Explicit lockfile lists go stale silently: a new workspace or worker
       # added later would simply never be scanned, and the job would stay
       # green. Fail loudly instead so the omission is visible.
-      - name: Fail if an unlisted runtime lockfile appeared
+      #
+      # The invariant this enforces: every dependency source in the repo is
+      # explicitly classified as either GATING (it ships or runs, so a
+      # vulnerability in it blocks) or REPORTING (build-machine only), and
+      # anything unclassified fails CI until a human decides which it is.
+      # Deliberately not "the three files we happen to have today" — this PR
+      # itself adds a fourth, which is exactly the drift the step exists for.
+      - name: Fail if an unclassified dependency manifest appeared
         run: |
-          # Every manifest OSV-Scanner can parse. The two runtime ones are
-          # scanned by this job; the Gradle ledger is handled by osv-toolchain.
-          # Anything else appearing here is unscanned by BOTH, which is the
-          # condition this step exists to surface.
-          expected=$(printf '%s\n' \
-            "./apps/mobile/android/gradle/verification-metadata.xml" \
+          # GATING — scanned by this job, uploaded to code scanning.
+          gating=$(printf '%s\n' \
+            "./apps/mobile/android/app/gradle.lockfile" \
             "./dealer-worker/package-lock.json" \
-            "./pnpm-lock.yaml" | sort)
+            "./pnpm-lock.yaml")
+          # REPORTING — scanned by osv-toolchain, never uploaded. Build-machine
+          # artifacts and mixed ledgers that cannot answer "does this ship?".
+          reporting=$(printf '%s\n' \
+            "./apps/mobile/android/gradle/verification-metadata.xml")
+          expected=$(printf '%s\n%s\n' "$gating" "$reporting" | sed '/^$/d' | sort)
           actual=$(find . \
             \( -name node_modules -o -name .git -o -name .next \) -prune -o \
             \( -name 'pnpm-lock.yaml' -o -name 'package-lock.json' -o -name 'yarn.lock' \
                -o -name 'bun.lock' -o -name 'gradle.lockfile' -o -name 'buildscript-gradle.lockfile' \
+               -o -name 'settings-gradle.lockfile' \
                -o -name 'verification-metadata.xml' -o -name 'pom.xml' -o -name 'go.mod' \
                -o -name 'Cargo.lock' -o -name 'requirements.txt' -o -name 'poetry.lock' \
                -o -name 'uv.lock' -o -name 'pylock.toml' -o -name 'Pipfile.lock' -o -name 'pdm.lock' \
@@ -101,22 +129,29 @@ jobs:
                -o -name 'cabal.project.freeze' -o -name 'stack.yaml.lock' \) \
             -print | sort)
           if [ "$expected" != "$actual" ]; then
-            echo "::error::Runtime lockfile set changed. Update the osv-runtime scan-args below."
+            echo "::error::An unclassified dependency manifest appeared (or a classified one moved)."
+            echo "::error::Decide whether it SHIPS/RUNS (add to the gating list AND to the"
+            echo "::error::osv-runtime scan-args below) or is BUILD-MACHINE ONLY (add to the"
+            echo "::error::reporting list AND to the osv-toolchain scan-args). Do not just"
+            echo "::error::silence this step — an unlisted manifest is scanned by nothing."
+            echo "--- expected (classified) vs actual (found on disk) ---"
             diff <(echo "$expected") <(echo "$actual") || true
             exit 1
           fi
-          echo "Runtime lockfile set unchanged."
+          echo "All dependency manifests are classified."
 
       - name: Run OSV-Scanner (runtime dependencies)
         id: osv-scanner
         continue-on-error: true
         uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
         with:
+          # Keep in sync with the `gating` list in the classification step above.
           scan-args: |-
             --output=osv-results.sarif
             --format=sarif
             --lockfile=pnpm-lock.yaml
             --lockfile=dealer-worker/package-lock.json
+            --lockfile=apps/mobile/android/app/gradle.lockfile
 
       - name: Upload SARIF to GitHub Code Scanning
         uses: github/codeql-action/upload-sarif@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3
@@ -141,12 +176,21 @@ jobs:
           # category that would have orphaned all 307 alerts and added 18 more.
           category: .github/workflows/security.yml:osv-scanner
 
-  # SCA (build toolchain) — supply-chain visibility for the Gradle build
-  # classpath. Deliberately NOT uploaded to code scanning: these are artifacts
-  # that run on the build machine, not in the APK or on any server, and at ~289
-  # findings they drown the runtime dashboard. Kept as a downloadable report and
-  # a job summary so the visibility is not lost, and non-blocking so a build-time
-  # advisory never stops a merge.
+  # SCA (Gradle artifact ledger) — supply-chain visibility for everything
+  # Gradle has ever resolved for this project.
+  #
+  # NOT "build-machine artifacts only". verification-metadata.xml is a mixed
+  # ledger: build plugins, test-only jars, stale versions and genuinely shipped
+  # runtime libraries are all recorded in the same list with nothing
+  # distinguishing them. It therefore cannot be used to decide what ships —
+  # which is why it is not the gating signal, and equally why it is not thrown
+  # away. What ships is gated on separately, from the resolved release-runtime
+  # graph, in osv-runtime above.
+  #
+  # Non-blocking because a ledger advisory does not imply a shipped
+  # vulnerability: the finding may be against a build plugin, a test jar, or a
+  # version that is no longer resolved by anything. Overlap with a real shipped
+  # vulnerability is expected and is caught by osv-runtime, which does block.
   #
   # Note this job has no `security-events: write` — it cannot publish alerts
   # even by accident.
@@ -174,23 +218,48 @@ jobs:
       # green forever. This job is the entire justification for keeping the
       # Gradle findings off the dashboard, so it has to fail when it did not
       # actually run.
-      - name: Fail if the toolchain scan produced no report
+      # Fail-closed. `continue-on-error` above is there so that *vulnerability
+      # findings* do not block a merge — it must never also mean "the scanner
+      # crashed and nobody noticed". On a hard error osv-scanner returns before
+      # writing a report, so without this step a crashed scan and a clean scan
+      # are indistinguishable and the job stays green forever.
+      #
+      # Checks three separate failure modes, because "file exists" is not the
+      # same as "the scan ran": missing/empty, not valid JSON, and valid JSON
+      # that does not actually carry a results array (e.g. an error object).
+      - name: Fail if the toolchain scan did not run
         if: always()
         run: |
           if [ ! -s osv-toolchain.json ]; then
             echo "::error::osv-toolchain produced no report — the scan failed rather than finding nothing."
             exit 1
           fi
-          echo "Toolchain report present ($(wc -c < osv-toolchain.json) bytes)."
+          if ! jq -e . osv-toolchain.json > /dev/null 2>&1; then
+            echo "::error::osv-toolchain report is not valid JSON — treating as a failed scan."
+            head -c 500 osv-toolchain.json
+            exit 1
+          fi
+          if ! jq -e 'has("results")' osv-toolchain.json > /dev/null 2>&1; then
+            echo "::error::osv-toolchain report has no 'results' key — the scanner did not complete a scan."
+            head -c 500 osv-toolchain.json
+            exit 1
+          fi
+          echo "Toolchain report present and well-formed ($(wc -c < osv-toolchain.json) bytes, $(jq '.results | length' osv-toolchain.json) result set(s))."
 
       - name: Summarise toolchain findings
         if: always()
         run: |
           {
-            echo "### Gradle build-toolchain advisories"
+            echo "### Gradle artifact-ledger advisories"
             echo
-            echo "Build-machine artifacts only — these do not ship in the APK."
-            echo "Reported for supply-chain visibility; not a merge gate."
+            echo "Every artifact Gradle has ever resolved for this project: build"
+            echo "plugins, test-only jars, stale versions **and** shipped runtime"
+            echo "libraries, with nothing marking which is which. Reported for"
+            echo "supply-chain visibility only; not a merge gate."
+            echo
+            echo "What actually ships is gated separately, from"
+            echo '`apps/mobile/android/app/gradle.lockfile`, in the **osv-runtime** job.'
+            echo "Findings below may overlap with it — that overlap is real and blocks there."
             echo
             if [ -s osv-toolchain.json ]; then
               total=$(jq '[.results[]?.packages[]?.vulnerabilities[]?] | length' osv-toolchain.json 2>/dev/null || echo "?")
