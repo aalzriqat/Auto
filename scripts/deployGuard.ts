@@ -59,7 +59,14 @@ export type RepoSnapshot = {
   /** Arguments the caller intends to forward to `convex deploy`. */
   forwardedArgs: string[];
   /** Deployment-selecting configuration, resolved the way the CLI resolves it. */
-  env: { CONVEX_DEPLOYMENT?: string; CONVEX_DEPLOY_KEY?: string; source?: string };
+  env: {
+    CONVEX_DEPLOYMENT?: string;
+    CONVEX_DEPLOY_KEY?: string;
+    CONVEX_DEPLOYMENT_TOKEN?: string;
+    CONVEX_SELF_HOSTED_URL?: string;
+    CONVEX_SELF_HOSTED_ADMIN_KEY?: string;
+    source?: string;
+  };
 };
 
 export type DeployOptions = {
@@ -83,14 +90,14 @@ export const ALLOWED_DEPLOY_ARGS = new Set([
   "--typecheck",
   "--typecheck-components",
   "--codegen",
-  "--debug-bundle-path",
   // Long form only: `convex deploy` declares "--message <message>" and
   // registers no `-m`, so advertising one would fail the dry run.
   "--message",
 ]);
 
 /**
- * `--cmd` and `--cmd-url-env-var-name` are deliberately NOT allowlisted.
+ * `--cmd`, `--cmd-url-env-var-name` and `--debug-bundle-path` are deliberately
+ * NOT allowlisted.
  *
  * They ran arbitrary code and undid the guard's central check. From the CLI's
  * own help, `convex deploy` runs in this order:
@@ -111,13 +118,17 @@ export const ALLOWED_DEPLOY_ARGS = new Set([
  * is a separate raw invocation with a deploy key, not this wrapper. If a build
  * command is ever genuinely required here, the wrapper must run it itself,
  * before the final validation, and then deploy without `--cmd`.
+ *
+ * `--debug-bundle-path` is the same class of flag, and is refused for the same
+ * reason the allowlist exists. It is hidden from `--help` (`.hideHelp()` in the
+ * CLI's option registration), it writes files — the directory is created and
+ * filled with `fullConfig.json` plus one `.js` per bundled module — and, worst
+ * of the three, it makes the CLI log "Wrote bundle and metadata … Skipping rest
+ * of push." and **exit 0 without deploying**. A wrapper that reports success on
+ * a deploy that never happened is the "merged is not deployed" failure with a
+ * green checkmark on it. Nothing about a production push needs it.
  */
-const ARGS_TAKING_VALUES = new Set([
-  "--typecheck",
-  "--codegen",
-  "--debug-bundle-path",
-  "--message",
-]);
+const ARGS_TAKING_VALUES = new Set(["--typecheck", "--codegen", "--message"]);
 
 /**
  * Extensions Convex treats as deployable entry points, from its bundler.
@@ -389,14 +400,55 @@ export function describeTargetSelection(env: RepoSnapshot["env"]): string {
  * The deployment-selecting variables, pinned for the whole run.
  *
  * Both dry runs and the real deploy are separate CLI processes that each
- * resolve their own target from the ambient environment. Passing an explicit,
- * frozen selection means the second resolution cannot answer differently from
- * the one the operator confirmed because a `.env.local` changed underneath it.
+ * resolve their own target from the ambient environment — and each re-reads
+ * `.env.local` then `.env` from disk as it starts. Pinning the selection means
+ * an edit to those files between the confirmation and the push cannot silently
+ * redirect the deploy.
+ *
+ * Every variable the CLI consults must be listed, because a missing one is not
+ * neutral — it is ambient. `CONVEX_DEPLOYMENT_TOKEN` is the sharp case: the CLI
+ * reads the deploy key as `CONVEX_DEPLOY_KEY || CONVEX_DEPLOYMENT_TOKEN` and
+ * evaluates that branch *before* `CONVEX_DEPLOYMENT`, so leaving it unfrozen
+ * lets it outrank the variable this type does freeze.
+ *
+ * The freeze narrows the surface; it is not by itself what makes the target
+ * binding. The second dry run is — it reads the same disk the real push will.
  */
 export type FrozenDeployEnv = {
   CONVEX_DEPLOYMENT?: string;
   CONVEX_DEPLOY_KEY?: string;
+  CONVEX_DEPLOYMENT_TOKEN?: string;
+  CONVEX_SELF_HOSTED_URL?: string;
+  CONVEX_SELF_HOSTED_ADMIN_KEY?: string;
 };
+
+/**
+ * The variables above, as a list, so the freeze and the child environment
+ * cannot drift apart.
+ */
+export const FROZEN_DEPLOY_ENV_KEYS = [
+  "CONVEX_DEPLOYMENT",
+  "CONVEX_DEPLOY_KEY",
+  "CONVEX_DEPLOYMENT_TOKEN",
+  "CONVEX_SELF_HOSTED_URL",
+  "CONVEX_SELF_HOSTED_ADMIN_KEY",
+] as const;
+
+/**
+ * Freezes the selection out of a snapshot's environment.
+ *
+ * Unset variables become `""` rather than being left out. Node omits an
+ * `undefined` value from a spawned child's environment entirely, which would
+ * let the child's own `dotenv` load a value from disk for it — the exact
+ * substitution this freeze exists to prevent. The CLI's `getEnv` treats `""` as
+ * unset, and `dotenv` does not overwrite a key already present, so an empty
+ * string reads as "not set" while still shadowing the file.
+ */
+export function freezeDeployEnv(env: RepoSnapshot["env"]): FrozenDeployEnv {
+  const frozen: Record<string, string> = {};
+  for (const key of FROZEN_DEPLOY_ENV_KEYS) frozen[key] = env[key] ?? "";
+  return frozen;
+}
 
 export type DeployIO = {
   collectSnapshot: () => RepoSnapshot;
@@ -488,10 +540,7 @@ export async function runGuardedDeploy(
 
   // Pinned once and used for every child process below, so the target the
   // operator confirms is the target that is resolved again at push time.
-  const frozenEnv: FrozenDeployEnv = {
-    CONVEX_DEPLOYMENT: snapshot.env.CONVEX_DEPLOYMENT,
-    CONVEX_DEPLOY_KEY: snapshot.env.CONVEX_DEPLOY_KEY,
-  };
+  const frozenEnv = freezeDeployEnv(snapshot.env);
 
   const resolved = resolveTarget(io, snapshot, frozenEnv);
   if (typeof resolved === "number") return resolved;
@@ -518,7 +567,8 @@ export async function runGuardedDeploy(
   // Re-validate immediately before pushing. The dry run and the human pause can
   // take minutes, and the bundle is read from disk at push time, not at check
   // time — a file created in that window would otherwise ship unexamined.
-  const recheck = evaluateProdDeploy(io.collectSnapshot(), options);
+  const recheckSnapshot = io.collectSnapshot();
+  const recheck = evaluateProdDeploy(recheckSnapshot, options);
   if (!recheck.ok) {
     io.error("\nThe working tree changed while confirming. Refusing:\n");
     for (const check of recheck.checks) {
@@ -535,7 +585,14 @@ export async function runGuardedDeploy(
   // deploy re-reads the deployment selection, so a change between the
   // confirmation and the push could send it somewhere else. The preconditions
   // do not catch this either — none of them reads the environment.
-  const reresolved = resolveTarget(io, io.collectSnapshot(), frozenEnv);
+  //
+  // This is the check that actually makes the confirmed target binding: it is a
+  // fresh CLI process reading the same disk the real push will read a moment
+  // later. Reuses the recheck's snapshot rather than collecting a third — the
+  // only field read is `forwardedArgs`, which cannot change mid-run, and
+  // collecting again would run another `git fetch` after the operator has
+  // already confirmed, adding a failure surface for no information.
+  const reresolved = resolveTarget(io, recheckSnapshot, frozenEnv);
   if (typeof reresolved === "number") return reresolved;
   if (reresolved.target !== target) {
     io.error(

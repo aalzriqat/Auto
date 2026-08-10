@@ -7,6 +7,8 @@ import {
   describeTargetSelection,
   evaluateProdDeploy,
   extractDeploymentName,
+  freezeDeployEnv,
+  FROZEN_DEPLOY_ENV_KEYS,
   looksLikeProduction,
   runGuardedDeploy,
   type RepoSnapshot,
@@ -123,11 +125,22 @@ describe("production deploy preconditions", () => {
     }
   );
 
-  test("a flag value is never mistaken for a flag", () => {
-    // `--cmd "npx convex deploy -y"` would be alarming, but the value belongs to
-    // --cmd; what matters is that a bare `-y` in flag position is still caught.
+  test("--debug-bundle-path is refused — it reports success without deploying", () => {
+    // Verified in the installed CLI: after bundling it logs "Wrote bundle and
+    // metadata … Skipping rest of push." and exits 0. A wrapper that prints a
+    // successful production deploy for a push that never happened is the
+    // "merged is not deployed" failure with a green checkmark on it. It is also
+    // hidden from --help and writes files, so it is refused on all three counts.
     expect(
-      evaluateProdDeploy({ ...CLEAN, forwardedArgs: ["--cmd", "pnpm build", "-y"] }).ok
+      failureIds({ ...CLEAN, forwardedArgs: ["--debug-bundle-path", "/tmp/dbg"] })
+    ).toContain("allowed-args-only");
+  });
+
+  test("a flag value is never mistaken for a flag", () => {
+    // A disallowed flag and a bare `-y` in flag position must both be caught,
+    // and neither may be excused by being adjacent to the other.
+    expect(
+      evaluateProdDeploy({ ...CLEAN, forwardedArgs: ["--message", "release", "-y"] }).ok
     ).toBe(false);
   });
 
@@ -325,14 +338,17 @@ describe("the enforcement flow", () => {
   function harness(overrides: Partial<Parameters<typeof runGuardedDeploy>[0]> = {}) {
     const deployCalls: string[][] = [];
     const dryCalls: string[][] = [];
+    const envs: unknown[] = [];
     const io = {
       collectSnapshot: () => CLEAN,
-      runDryRun: (args: string[]) => {
+      runDryRun: (args: string[], env: unknown) => {
         dryCalls.push(args);
+        envs.push(env);
         return { status: 0, output: DRY_OUTPUT };
       },
-      runDeploy: (args: string[]) => {
+      runDeploy: (args: string[], env: unknown) => {
         deployCalls.push(args);
+        envs.push(env);
         return 0;
       },
       prompt: async () => "kindly-hound-172",
@@ -341,7 +357,7 @@ describe("the enforcement flow", () => {
       error: () => {},
       ...overrides,
     };
-    return { io, deployCalls, dryCalls };
+    return { io, deployCalls, dryCalls, envs };
   }
 
   test("the happy path deploys, and the real argv carries no confirmation bypass", async () => {
@@ -357,6 +373,54 @@ describe("the enforcement flow", () => {
     expect(dryCalls[0]).toEqual(
       expect.arrayContaining(["--dry-run", "-y", "--allow-deleting-large-indexes"])
     );
+  });
+
+  test("every child process gets the same frozen deployment selection", async () => {
+    // What actually makes the confirmed target binding is that both dry runs
+    // and the real deploy see one pinned selection instead of each resolving
+    // from an environment that can change underneath them. That wiring was
+    // asserted nowhere: the flow tests injected runDryRun handlers that ignored
+    // the parameter entirely, so the freeze could have been dropped in silence.
+    const env = { CONVEX_DEPLOYMENT: "prod:kindly-hound-172", source: "process env" };
+    const { io, envs } = harness({ collectSnapshot: () => ({ ...CLEAN, env }) });
+    expect(await runGuardedDeploy(io)).toBe(0);
+
+    // Two dry runs and one deploy.
+    expect(envs).toHaveLength(3);
+    for (const passed of envs) {
+      expect(passed).toEqual(freezeDeployEnv(env));
+      // Unset selectors must be "" and not absent: Node drops an undefined
+      // value from a child's environment, and the child's own dotenv would then
+      // read it off disk — reintroducing the substitution being prevented.
+      for (const key of FROZEN_DEPLOY_ENV_KEYS) {
+        expect(Object.hasOwn(passed as object, key)).toBe(true);
+      }
+    }
+    expect((envs[0] as Record<string, string>).CONVEX_DEPLOYMENT).toBe(
+      "prod:kindly-hound-172"
+    );
+  });
+
+  test("the frozen selection covers every variable the CLI selects a target with", () => {
+    // A variable the CLI reads but this does not freeze is not neutral — it is
+    // ambient, and it can outrank the ones that are frozen. CONVEX_DEPLOYMENT_TOKEN
+    // is the sharp case: the CLI reads the deploy key as
+    // `CONVEX_DEPLOY_KEY || CONVEX_DEPLOYMENT_TOKEN`, and evaluates that branch
+    // before CONVEX_DEPLOYMENT.
+    expect([...FROZEN_DEPLOY_ENV_KEYS].sort((a, b) => a.localeCompare(b))).toEqual([
+      "CONVEX_DEPLOY_KEY",
+      "CONVEX_DEPLOYMENT",
+      "CONVEX_DEPLOYMENT_TOKEN",
+      "CONVEX_SELF_HOSTED_ADMIN_KEY",
+      "CONVEX_SELF_HOSTED_URL",
+    ]);
+    expect(freezeDeployEnv({})).toEqual({
+      CONVEX_DEPLOYMENT: "",
+      CONVEX_DEPLOY_KEY: "",
+      CONVEX_DEPLOYMENT_TOKEN: "",
+      CONVEX_SELF_HOSTED_URL: "",
+      CONVEX_SELF_HOSTED_ADMIN_KEY: "",
+    });
   });
 
   test("no TTY refuses without deploying", async () => {
@@ -452,8 +516,8 @@ describe("declared Node range matches what CI actually runs", () => {
 
 describe("flag values that look like flags", () => {
   test("--message -y is refused, and for the right reason", () => {
-    // Not a live bypass — commander binds `-y` as --cmd's argument rather than
-    // as auto-confirm — but a rule that reads like one must not rest on
+    // Not a live bypass — commander binds `-y` as --message's argument rather
+    // than as auto-confirm — but a rule that reads like one must not rest on
     // inspection. Before this, the value was skipped unconditionally.
     const result = evaluateProdDeploy({ ...CLEAN, forwardedArgs: ["--message", "-y"] });
     expect(result.ok).toBe(false);

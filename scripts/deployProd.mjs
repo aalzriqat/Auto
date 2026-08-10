@@ -36,7 +36,15 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import path from "node:path";
-import { BUNDLED_EXTENSIONS, runGuardedDeploy } from "./deployGuard.ts";
+import { parseEnv } from "node:util";
+import {
+  BUNDLED_EXTENSIONS,
+  FROZEN_DEPLOY_ENV_KEYS,
+  runGuardedDeploy,
+} from "./deployGuard.ts";
+
+/** The variables that select a deployment, owned by the guard module. */
+const SELECTOR_KEYS = FROZEN_DEPLOY_ENV_KEYS;
 
 const argv = process.argv.slice(2);
 const allowBehind = argv.includes("--allow-behind");
@@ -126,33 +134,31 @@ function bundleFilesOnDisk() {
  * `process.env` alone can report "nothing is set" while a deploy key is in
  * force — and a deploy key is the case where Convex asks nothing.
  * `dotenv.config` does not override an already-set variable, so process env wins.
+ *
+ * Parsed with `node:util`'s `parseEnv` — the same grammar `dotenv` implements —
+ * rather than by hand. What this reads is no longer only advisory text: it is
+ * frozen into the environment of every child process, so it *overrides* the
+ * CLI's own parse. Any disagreement between the two would mean the operator is
+ * shown one target and the deploy is handed another. A hand-rolled reader got
+ * three cases wrong that matter here: `export KEY=value` was skipped entirely,
+ * an inline `#` inside a quoted value truncated it, and an unterminated quote
+ * silently dropped the last character.
  */
 function resolveDeployEnv() {
   const out = {
-    CONVEX_DEPLOYMENT: process.env.CONVEX_DEPLOYMENT,
-    CONVEX_DEPLOY_KEY: process.env.CONVEX_DEPLOY_KEY,
-    source: process.env.CONVEX_DEPLOYMENT || process.env.CONVEX_DEPLOY_KEY ? "process env" : undefined,
+    source: undefined,
   };
+  for (const key of SELECTOR_KEYS) out[key] = process.env[key];
+  if (SELECTOR_KEYS.some((k) => process.env[k])) out.source = "process env";
+
   for (const file of [".env.local", ".env"]) {
     const full = path.join(repoRoot, file);
     if (!existsSync(full)) continue;
-    for (const line of readFileSync(full, "utf8").split("\n")) {
-      const eq = line.indexOf("=");
-      if (eq === -1) continue;
-      const key = line.slice(0, eq).trim();
-      if (key !== "CONVEX_DEPLOYMENT" && key !== "CONVEX_DEPLOY_KEY") continue;
-      // Split rather than matched: the anchored alternation with a trailing
-      // `(.*)$` backtracks super-linearly on long lines, and this file is read
-      // on every deploy.
-      let value = line.slice(eq + 1).trim();
-      const hash = value.indexOf(" #");
-      if (hash !== -1) value = value.slice(0, hash).trim();
-      if (value.length >= 2 && (value.startsWith('"') || value.startsWith("'"))) {
-        value = value.slice(1, -1);
-      }
-      if (!out[key]) {
-        out[key] = value;
-        out.source = file;
+    const parsed = parseEnv(readFileSync(full, "utf8"));
+    for (const key of SELECTOR_KEYS) {
+      if (!out[key] && parsed[key]) {
+        out[key] = parsed[key];
+        out.source ??= file;
       }
     }
   }
@@ -193,16 +199,13 @@ function collectSnapshot() {
  * resolves its own target, so leaving them ambient means the real deploy could
  * answer differently from the dry run the operator approved.
  *
- * Colour is forced off because the production label is matched textually and a
- * forced colour level wraps it in ANSI.
+ * The guard supplies every selector with `""` standing in for unset, which
+ * matters: Node drops an `undefined` value from a child's environment, and a
+ * dropped variable is not neutral — the child's own `dotenv` would then load it
+ * from disk, which is the substitution being prevented.
  */
 function childEnv(frozenEnv) {
-  return {
-    ...process.env,
-    ...frozenEnv,
-    NO_COLOR: "1",
-    FORCE_COLOR: "0",
-  };
+  return { ...process.env, ...frozenEnv };
 }
 
 const io = {
@@ -211,10 +214,11 @@ const io = {
     const r = spawnSync(process.execPath, [CONVEX_CLI, ...args], {
       encoding: "utf8",
       cwd: repoRoot,
-      // Colour off: the production label is matched textually, and a forced
-      // colour level turns "[Production]" into an ANSI-wrapped string that no
-      // longer matches — losing the PRODUCTION warning with no other symptom.
-      env: childEnv(frozenEnv),
+      // Colour off, for this process only: the production label is matched
+      // textually, and a forced colour level turns "[Production]" into an
+      // ANSI-wrapped string that no longer matches — losing the PRODUCTION
+      // warning with no other symptom.
+      env: { ...childEnv(frozenEnv), NO_COLOR: "1", FORCE_COLOR: "0" },
     });
     return {
       status: r.status,
@@ -222,6 +226,10 @@ const io = {
       errorMessage: r.error?.message,
     };
   },
+  // Colour is deliberately left alone here. Nothing parses this process's
+  // output, and the CLI renders "[Production]" as a plain bracket only at
+  // colour level 0 — suppressing colour would strip the production banner of
+  // the emphasis it is designed to have, at the moment it matters most.
   runDeploy: (args, frozenEnv) =>
     spawnSync(process.execPath, [CONVEX_CLI, ...args], {
       stdio: "inherit",
