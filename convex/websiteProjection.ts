@@ -69,6 +69,13 @@ async function publicDealerProfile(
   // to the icon / shortcut icon / apple-touch-icon <link> elements, so every
   // visitor's browser fetches it. That is why the trust boundary has to hold
   // here, in the projection, rather than at each render site.
+  //
+  // Scope, so this does not read as a completeness claim: only the LOGO is
+  // closed. `primaryColor` / `secondaryColor` below are still unvalidated
+  // caller strings, and the themes interpolate them into a raw <style> block —
+  // a live CSS-injection vector on this same anonymous surface, with a
+  // shipped free-text producer in the settings UI. Tracked separately; the
+  // projection is the right choke point for that fix too.
   const logoUrl = orgSettings?.logoStorageId ? await ctx.storage.getUrl(orgSettings.logoStorageId) : null;
 
   const branchRows = await ctx.db
