@@ -668,6 +668,28 @@ export const salesEn = {
   NoAppraisalGap: "None",
   RouteUnknownWarning:
     "The sale behind this deal could not be loaded, so which way it settles cannot be established. The figures that depend on it are withheld.",
+
+  // The settlement advice contradicts the approved purchase amount.
+  SettlementAdviceDiscrepancyTitle: "The settlement advice does not match what was approved",
+  SettlementAdviceDiscrepancyBody:
+    "The finance company was approved to pay the supplier one amount and its advice records another. The supplier's debt is still measured against the approved amount and has not been changed. Check the advice against the document, and correct it here if it was entered wrongly.",
+  SettlementAdviceRecorded: "Advice records",
+  SettlementAdviceApproved: "Approved to pay",
+  SettlementAdviceDifference: "Difference",
+  CorrectSettlementAdvice: "Correct the advice",
+  CorrectSettlementAdviceDescription:
+    "Corrects what was entered from the settlement advice. It does not change the approved purchase amount, which the supplier's debt and this deal's reported profit are both measured from.",
+  SettlementAdviceAmountLabel: "Amount on the advice",
+  SettlementAdviceReferenceLabel: "Cheque or transfer reference",
+  SettlementAdviceDateLabel: "Date paid",
+  SettlementAdviceReasonLabel: "Why the recorded advice was wrong",
+  SettlementAdviceReasonPlaceholder: "e.g. the amount was transposed when it was entered",
+  SettlementAdviceReasonNote:
+    "Kept on the audit record. This changes evidence about a payment somebody else made, and the reason is the only account of it.",
+  SaveCorrection: "Save correction",
+  SettlementAdviceCorrectionSaved: "Correction saved",
+  Unknown: "Unknown",
+
   StatusLogHeading: "Status history",
   DocumentsHeading: "Documents",
   DocumentRequired: "Required",
@@ -1357,6 +1379,27 @@ export const salesAr = {
   NoAppraisalGap: "لا يوجد",
   RouteUnknownWarning:
     "تعذّر تحميل عملية البيع المرتبطة بهذه الصفقة، فلا يمكن تحديد طريقة التسوية. الأرقام المعتمدة عليها محجوبة.",
+
+  SettlementAdviceDiscrepancyTitle: "إشعار التسوية لا يطابق المبلغ المعتمد",
+  SettlementAdviceDiscrepancyBody:
+    "المبلغ الذي اعتُمد لشركة التمويل لدفعه للمورّد يختلف عن المبلغ المسجّل في إشعار التسوية. ما زال دين المورّد محتسباً على المبلغ المعتمد ولم يتغيّر. راجع الإشعار مقابل المستند، وصحّحه هنا إن كان قد أُدخل بشكل خاطئ.",
+  SettlementAdviceRecorded: "المسجّل في الإشعار",
+  SettlementAdviceApproved: "المعتمد للدفع",
+  SettlementAdviceDifference: "الفرق",
+  CorrectSettlementAdvice: "تصحيح الإشعار",
+  CorrectSettlementAdviceDescription:
+    "يصحّح ما أُدخل من إشعار التسوية. ولا يغيّر المبلغ المعتمد للشراء، فهو الأساس الذي يُحتسب عليه دين المورّد وربح هذه الصفقة معاً.",
+  SettlementAdviceAmountLabel: "المبلغ في الإشعار",
+  SettlementAdviceReferenceLabel: "رقم الشيك أو الحوالة",
+  SettlementAdviceDateLabel: "تاريخ الدفع",
+  SettlementAdviceReasonLabel: "سبب الخطأ في الإشعار المسجّل",
+  SettlementAdviceReasonPlaceholder: "مثال: تبديل في ترتيب أرقام المبلغ عند الإدخال",
+  SettlementAdviceReasonNote:
+    "يُحفظ في سجل التدقيق. هذا التعديل يغيّر دليلاً على دفعة قام بها طرف آخر، والسبب هو التوثيق الوحيد لها.",
+  SaveCorrection: "حفظ التصحيح",
+  SettlementAdviceCorrectionSaved: "تم حفظ التصحيح",
+  Unknown: "غير معروف",
+
   StatusLogHeading: "سجل الحالة",
   DocumentsHeading: "المستندات",
   DocumentRequired: "مطلوب",

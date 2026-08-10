@@ -3226,7 +3226,13 @@ export const confirmSupplierDisbursement = mutation({
               actorName: await getActorName(ctx),
               amount: String(args.disbursedAmountMinor),
             },
-            { link: `/${args.orgId}/applications/${args.applicationId}` }
+            // The cockpit route, which is the page that renders the
+            // discrepancy and carries the correction action. There is no page
+            // at `/applications/{id}` and no rewrite covering it — the only
+            // redirect configured is `/login` — so the shorter form 404s, which
+            // on the one notification whose entire job is to get somebody to
+            // the recovery path is worse than not sending it.
+            { link: `/${args.orgId}/applications/${args.applicationId}/deal` }
           );
         }
 

@@ -27,6 +27,9 @@ import {
   Ban,
 } from "lucide-react";
 import { SupplierSettlementDialog } from "./SupplierSettlementDialog";
+import { SettlementAdviceCorrectionDialog } from "./SettlementAdviceCorrectionDialog";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import type { PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 
 /**
@@ -154,10 +157,45 @@ export function DealCockpit({
 }: Readonly<{ orgId: Id<"organizations">; applicationId: Id<"financeApplications"> }>) {
   const deal = useQuery(api.applications.dealCockpit, { orgId, applicationId });
   const recordReceipt = useMutation(api.supplierReceivables.recordReceipt);
+  const amendAdvice = useMutation(api.applications.amendSupplierDisbursementAdvice);
+  const { hasPermission, isLoading: permissionsLoading } = usePermissions();
+  // Hidden while the membership is still loading rather than shown optimistically:
+  // an action that appears and then vanishes reads as a bug, and the server is
+  // the authority either way.
+  const canCorrectAdvice = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
+  // One key per correction attempt, so a retry after a lost response is the same
+  // amendment rather than a second audited one.
+  const correctionKeyRef = useRef<string | null>(null);
 
   return (
     <DealCockpitView
       deal={deal}
+      canCorrectAdvice={canCorrectAdvice}
+      onCorrectSettlementAdvice={async (correction) => {
+        correctionKeyRef.current ??= `amend-supplier-advice:${crypto.randomUUID()}`;
+        await amendAdvice({
+          orgId,
+          applicationId,
+          // Scaled by the currency the SERVER pinned on this discrepancy, which
+          // is the application's `economicsCurrency` — not the org's. The whole
+          // reason this deal is flagged is a disagreement about an amount, and
+          // rescaling it on the way in would manufacture a second one.
+          disbursedAmountMinor: Math.round(
+            correction.amountMajor *
+              Math.pow(
+                10,
+                scaleForCurrency(
+                  deal?.settlementAdviceDiscrepancy?.currency ?? deal?.money?.currency ?? "JOD"
+                )
+              )
+          ),
+          reference: correction.reference,
+          disbursedAt: correction.disbursedAt,
+          reason: correction.reason,
+          idempotencyKey: correctionKeyRef.current,
+        });
+        correctionKeyRef.current = null;
+      }}
       onRecordSupplierReceipt={async (receivableId, receipt) => {
         await recordReceipt({
           orgId,
@@ -262,10 +300,28 @@ function MoneyPanel({
 
 export function DealCockpitView({
   deal,
+  canCorrectAdvice = false,
+  onCorrectSettlementAdvice,
   onRecordSupplierReceipt,
 }: Readonly<{
   /** `undefined` while loading, `null` when the deal is not readable. */
   deal: DealCockpitData | null | undefined;
+  /**
+   * Whether this caller may amend a recorded settlement advice (MANAGE_FINANCE).
+   *
+   * Passed in rather than read from a hook here, for the same reason the rest
+   * of this component takes its data as a prop: the view has to be renderable
+   * against fixtures, and the permission state is exactly the thing the tests
+   * need to vary. Defaults to `false` so a caller that forgets it hides the
+   * action rather than offering one the server will refuse.
+   */
+  canCorrectAdvice?: boolean;
+  onCorrectSettlementAdvice?: (correction: {
+    amountMajor: number;
+    reference?: string;
+    disbursedAt?: number;
+    reason: string;
+  }) => Promise<void>;
   onRecordSupplierReceipt: (
     receivableId: Id<"vehicleSupplierReceivables">,
     receipt: {
@@ -282,6 +338,8 @@ export function DealCockpitView({
 
   const [settlingSupplier, setSettlingSupplier] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [correctingAdvice, setCorrectingAdvice] = useState(false);
+  const [correctionSubmitting, setCorrectionSubmitting] = useState(false);
   // CX-6. `recordReceipt` is ADDITIVE — it adds to `amountReceived` — so a lost
   // outcome or a double invocation records a second receipt and posts a second
   // cash/receivable journal. `submitting` is UI state and cannot deduplicate a
@@ -315,6 +373,36 @@ export function DealCockpitView({
   const marker =
     locale === "ar" && dealCurrency === currency.code ? currency.symbol : dealCurrency;
   const money = (minor: number) => `${(minor / factor).toLocaleString()} ${marker}`;
+
+  // The discrepancy's own figures.
+  //
+  // Scaled by the currency the DISCREPANCY was pinned to, which is not
+  // necessarily `dealCurrency`: the money block can be withheld entirely, and
+  // this strip still has to render. Falling back to the deal's currency and
+  // then the org's mirrors what the server does, so the two never disagree
+  // about the scale. A missing figure renders as unknown rather than as zero —
+  // "the advice says nothing" and "the advice says nought" are different
+  // claims, and only one of them is ever true here.
+  const discrepancy = deal?.settlementAdviceDiscrepancy ?? null;
+  const discrepancyCurrency = discrepancy?.currency ?? dealCurrency;
+  const discrepancyFactor = useMemo(
+    () => Math.pow(10, scaleForCurrency(discrepancyCurrency)),
+    [discrepancyCurrency]
+  );
+  const discrepancyMarker =
+    locale === "ar" && discrepancyCurrency === currency.code ? currency.symbol : discrepancyCurrency;
+  const discrepancyMoney = (minor: number) =>
+    `${(minor / discrepancyFactor).toLocaleString()} ${discrepancyMarker}`;
+  const adviceRecordedLabel =
+    discrepancy?.recordedMinor != null ? discrepancyMoney(discrepancy.recordedMinor) : t("Unknown");
+  const adviceApprovedLabel =
+    discrepancy?.approvedMinor != null ? discrepancyMoney(discrepancy.approvedMinor) : t("Unknown");
+  // Only when BOTH are known. A difference computed against an unknown is not a
+  // smaller difference, it is not a difference.
+  const adviceDifferenceLabel =
+    discrepancy?.recordedMinor != null && discrepancy?.approvedMinor != null
+      ? discrepancyMoney(Math.abs(discrepancy.recordedMinor - discrepancy.approvedMinor))
+      : null;
 
   if (deal === undefined) {
     return (
@@ -379,6 +467,34 @@ export function DealCockpitView({
     }
   };
 
+  const handleCorrectAdvice = async (correction: {
+    amountMajor: number;
+    reference?: string;
+    disbursedAt?: number;
+    reason: string;
+  }) => {
+    if (!onCorrectSettlementAdvice) return;
+    setCorrectionSubmitting(true);
+    try {
+      await onCorrectSettlementAdvice(correction);
+      // Deliberately not "corrected" or "resolved". The server re-derives the
+      // reconciliation state from the evidence, so a correction that still
+      // disagrees leaves the deal flagged — and a toast claiming otherwise
+      // would be the screen telling the operator a discrepancy is closed when
+      // the strip above it still says it is open. The strip is the answer.
+      toast.success(t("SettlementAdviceCorrectionSaved"));
+      setCorrectingAdvice(false);
+    } catch (error) {
+      // The server's refusals here name the thing to change: a reason too
+      // short, an advice that was never recorded, a future date. Replacing them
+      // with "an unexpected error occurred" turns the one recovery path this
+      // state has into a dead end.
+      toast.error(getErrorMessage(error));
+    } finally {
+      setCorrectionSubmitting(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* --- header ------------------------------------------------------ */}
@@ -404,6 +520,82 @@ export function DealCockpitView({
           {t("LastUpdated")}: <bdi>{format(deal.updatedAt ?? deal.createdAt, "d MMM yyyy HH:mm")}</bdi>
         </p>
       </div>
+
+      {/* --- the two records that disagree -------------------------------- */}
+      {/* Above the stage rail, not inside the money column. The rail tells the
+          deal's normal story; this is the exception that has stopped it, so it
+          has to be the first thing read. And it sits outside `deal.money`
+          deliberately: that block is withheld from anyone without permission to
+          see margins, while the person who has to chase a settlement advice
+          often has exactly that permission set. A warning only the accountant
+          can see is not a warning. */}
+      {deal.settlementAdviceDiscrepancy && (
+        <div
+          role="alert"
+          className="rounded-md border border-destructive/40 border-s-4 border-s-destructive bg-destructive/5 p-4"
+        >
+          <div className="flex min-w-0 items-start gap-2.5">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden />
+            <div className="min-w-0 space-y-1">
+              <p className="font-medium text-destructive">
+                {t("SettlementAdviceDiscrepancyTitle")}
+              </p>
+              <p className="max-w-prose text-sm text-muted-foreground">
+                {t("SettlementAdviceDiscrepancyBody")}
+              </p>
+            </div>
+          </div>
+
+          {/* Figures and action on one row, in that order.
+              The discrepancy IS the content, so it is set as the two records
+              facing each other rather than described in a sentence. Each figure
+              is its own `<bdi>` run: an Arabic label beside a Latin amount
+              beside a currency marker is exactly the bidi case that reorders
+              into nonsense when left as one run.
+              The action comes AFTER them and not beside the heading, because on
+              a phone the row wraps in source order — and the first rendered
+              layout put "correct the advice" between the explanation and the
+              evidence, offering the fix before showing what needs fixing.
+              Indented to the text on desktop only; on a 390px screen that
+              indent costs width the three figures need to stay on one line. */}
+          <div className="mt-3 flex flex-wrap items-end justify-between gap-x-6 gap-y-3 sm:ps-6">
+            <dl className="flex flex-wrap gap-x-8 gap-y-2 text-sm">
+              <div className="space-y-0.5">
+                <dt className="text-xs text-muted-foreground">{t("SettlementAdviceRecorded")}</dt>
+                <dd className="font-semibold">
+                  <Money>{adviceRecordedLabel}</Money>
+                </dd>
+              </div>
+              <div className="space-y-0.5">
+                <dt className="text-xs text-muted-foreground">{t("SettlementAdviceApproved")}</dt>
+                <dd className="font-semibold">
+                  <Money>{adviceApprovedLabel}</Money>
+                </dd>
+              </div>
+              {adviceDifferenceLabel && (
+                <div className="space-y-0.5">
+                  <dt className="text-xs text-muted-foreground">
+                    {t("SettlementAdviceDifference")}
+                  </dt>
+                  <dd className="font-semibold text-destructive">
+                    <Money>{adviceDifferenceLabel}</Money>
+                  </dd>
+                </div>
+              )}
+            </dl>
+            {canCorrectAdvice && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                onClick={() => setCorrectingAdvice(true)}
+              >
+                {t("CorrectSettlementAdvice")}
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* --- stage rail: the signature element ---------------------------- */}
       <Card>
@@ -674,6 +866,23 @@ export function DealCockpitView({
           t={t}
           onOpenChange={setSettlingSupplier}
           onConfirm={handleSupplierReceipt}
+        />
+      )}
+
+      {discrepancy && canCorrectAdvice && (
+        <SettlementAdviceCorrectionDialog
+          open={correctingAdvice}
+          submitting={correctionSubmitting}
+          recordedMajor={
+            discrepancy.recordedMinor != null
+              ? discrepancy.recordedMinor / discrepancyFactor
+              : null
+          }
+          recordedLabel={adviceRecordedLabel}
+          approvedLabel={adviceApprovedLabel}
+          t={t}
+          onOpenChange={setCorrectingAdvice}
+          onCorrect={handleCorrectAdvice}
         />
       )}
     </div>
