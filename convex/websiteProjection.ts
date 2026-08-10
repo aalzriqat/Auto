@@ -59,17 +59,17 @@ async function publicDealerProfile(
     .query("orgSettings")
     .withIndex("by_org", (settingsQuery) => settingsQuery.eq("orgId", orgId))
     .unique();
-  // Both branches resolve through ctx.storage.getUrl(), so every URL this
-  // projection can emit points at our own storage backend. The website's own
-  // logo still wins over the org-wide one; what changed is that it can no
-  // longer be an arbitrary origin supplied by the caller.
+  // Resolved through ctx.storage.getUrl(), so the only URL this projection can
+  // emit points at our own storage backend. `websiteSettings` used to carry a
+  // caller-supplied `logoUrl` that won over this one; it was removed (see the
+  // note in schema.ts) because it let a `website.manage` holder aim every
+  // anonymous visitor's browser at an arbitrary origin.
   //
-  // This value is not only rendered as an <img>: the dealer site also assigns
-  // it to the icon / shortcut icon / apple-touch-icon <link> elements, so every
-  // anonymous visitor's browser fetches it. That is why the trust boundary has
-  // to hold here, in the projection, rather than at each render site.
-  const websiteLogoStorageId = websiteSettings.logoStorageId ?? orgSettings?.logoStorageId;
-  const logoUrl = websiteLogoStorageId ? await ctx.storage.getUrl(websiteLogoStorageId) : null;
+  // The value is not only rendered as an <img>: the dealer site also assigns it
+  // to the icon / shortcut icon / apple-touch-icon <link> elements, so every
+  // visitor's browser fetches it. That is why the trust boundary has to hold
+  // here, in the projection, rather than at each render site.
+  const logoUrl = orgSettings?.logoStorageId ? await ctx.storage.getUrl(orgSettings.logoStorageId) : null;
 
   const branchRows = await ctx.db
     .query("branches")

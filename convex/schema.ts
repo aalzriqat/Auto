@@ -3790,23 +3790,29 @@ export default defineSchema({
     supportedLanguages: v.array(v.union(v.literal("en"), v.literal("ar"))),
     primaryColor: v.optional(v.string()),
     secondaryColor: v.optional(v.string()),
-    // Managed storage only. This was `logoUrl: v.optional(v.string())` — a
-    // caller-supplied absolute URL that `websiteProjection` preferred over the
-    // org's own logo and that `websites.resolveDomain` (no auth) served to
-    // anonymous visitors of the published dealer site. Anything stored here is
-    // fetched by every one of those visitors' browsers, so it must name a blob
-    // in this deployment rather than an arbitrary origin. Mirrors
-    // `orgSettings.logoStorageId`.
+    // There is deliberately NO website-level logo field here.
     //
-    // Scope of the guarantee, precisely: `v.id("_storage")` proves the value is
-    // a storage id in THIS deployment. It does not prove the blob belongs to
-    // THIS org — `_storage` is deployment-global — so a `website.manage` holder
-    // could point their site at another tenant's storage id. That is accepted
-    // for now rather than overlooked: Convex storage URLs are unauthenticated
-    // by id, so naming one grants no read access the holder did not already
-    // have; the realistic effect is hotlinking, not disclosure. Closing it means
-    // recording ownership at upload time and validating it here.
-    logoStorageId: v.optional(v.id("_storage")),
+    // This table used to carry `logoUrl: v.optional(v.string())` — a
+    // caller-supplied absolute URL that `websiteProjection` preferred over the
+    // org's own logo, and that `websites.resolveDomain` (no auth) served to
+    // anonymous visitors of the published dealer site. It is not only rendered
+    // as an <img>: the dealer site also assigns it to the icon / shortcut icon
+    // / apple-touch-icon <link> elements, so every anonymous visitor's browser
+    // fetched it. Any `website.manage` holder could therefore point every
+    // visitor at an arbitrary third-party origin.
+    //
+    // The field was removed rather than retyped to `v.id("_storage")`. A
+    // storage id would have closed the arbitrary-origin hole, but it has no
+    // producer: no web or mobile client sends a logo to `websites.saveDraft`,
+    // no settings UI exposes one, and production held zero values. Adding a
+    // second storage-bearing field bought nothing and cost two defects — the
+    // blob outliving the org in `hardDeleteOrg`, and, once that was fixed, a
+    // cross-tenant deletion path (`_storage` is deployment-global, so the id
+    // could name another org's blob and the purge would destroy it).
+    //
+    // The dealer site's logo comes from `orgSettings.logoStorageId`, which is
+    // already storage-backed, already has an upload path, and is already
+    // deleted with the org. See `websiteProjection.publicDealerProfile`.
     heroTitle: v.optional(v.string()),
     heroSubtitle: v.optional(v.string()),
     // Free-text badge shown as a small pill over the hero (e.g. Kinetic Sales'

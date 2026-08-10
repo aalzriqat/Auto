@@ -139,7 +139,6 @@ function tablesCoveredByDeletion(): Set<string> {
     ["financeDealFeesWithStorage", "financeDealFees"],
     ["vehicleOwnershipConversionsWithStorage", "vehicleOwnershipConversions"],
     ["orgSettingsWithStorage", "orgSettings"],
-    ["websiteSettingsWithStorage", "websiteSettings"],
     ["socialPostsWithStorage", "socialPosts"],
     ["dmConversations", "dmConversations"],
     ["liveChatThreads", "liveChatThreads"],
@@ -278,7 +277,6 @@ describe("organization hard-delete coverage", () => {
           ["financeDealFeesWithStorage", "financeDealFees"],
           ["vehicleOwnershipConversionsWithStorage", "vehicleOwnershipConversions"],
           ["orgSettingsWithStorage", "orgSettings"],
-          ["websiteSettingsWithStorage", "websiteSettings"],
           ["socialPostsWithStorage", "socialPosts"],
         ] as const
       )

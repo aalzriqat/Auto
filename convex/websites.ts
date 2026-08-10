@@ -682,10 +682,6 @@ export const saveDraft = mutation({
     supportedLanguages: v.optional(v.array(v.union(v.literal("en"), v.literal("ar")))),
     primaryColor: v.optional(v.string()),
     secondaryColor: v.optional(v.string()),
-    // A storage id, not a URL — see the note on `websiteSettings.logoStorageId`
-    // in schema.ts. `v.id("_storage")` is what makes an arbitrary external
-    // origin unrepresentable here rather than merely discouraged.
-    logoStorageId: v.optional(v.id("_storage")),
     heroTitle: v.optional(v.string()),
     heroSubtitle: v.optional(v.string()),
     heroBadgeText: v.optional(v.string()),
@@ -787,7 +783,6 @@ export const saveDraft = mutation({
       "supportedLanguages",
       "primaryColor",
       "secondaryColor",
-      "logoStorageId",
       "heroTitle",
       "heroSubtitle",
       "heroBadgeText",
