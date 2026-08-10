@@ -401,12 +401,16 @@ const SECRET_SELECTORS = new Set<SelectorKey>([
  * and the prose that follows them describes this wrapper's own behaviour rather
  * than the CLI's — a claim that cannot go stale when the CLI changes.
  *
- * The prose deliberately says nothing about where `convex deploy` would land.
- * An earlier version asserted it "targets the project's PRODUCTION deployment
- * regardless", which is false for a preview deploy key: the CLI's own help says
- * a preview key deploys to a preview deployment, and `kind === "preview"` routes
- * to `deployToNewPreviewDeployment`. That is the same defect one more time —
- * a sentence about the CLI's behaviour, written from a model of it.
+ * The prose deliberately says nothing about what the CLI will do — not where a
+ * deploy would land, and not which variable it will act on. Every defect here
+ * has been a sentence whose subject is the CLI: "targets the project's
+ * PRODUCTION deployment regardless" is false for a preview deploy key, and "the
+ * CLI acts on one of them" is false for the self-hosted pair, which is selected
+ * by two variables together, and for `CONVEX_DEPLOYMENT` alongside a self-hosted
+ * variable, where the CLI acts on none of them and crashes instead.
+ *
+ * Statements about this wrapper are safe: they are verifiable against code in
+ * this repository and cannot be invalidated by a Convex release.
  *
  * Per-key origins matter because the CLI loads `.env.local` and `.env` on its
  * own: a value can be in force without ever appearing in `process.env`.
@@ -426,10 +430,10 @@ export function describeTargetSelection(env: RepoSnapshot["env"]): string {
   return [
     "Deployment selection the CLI will read:",
     ...lines,
-    "More than one of these can be set; the CLI acts on one of them, and this",
-    "wrapper does not guess which. It deploys to production only: the target below",
-    "is read back from the CLI's own dry run, and one that does not announce itself",
-    "as production is refused.",
+    "More than one of these can be set; this wrapper does not guess which the CLI",
+    "will act on. It deploys to production only: the target below is read back from",
+    "the CLI's own dry run, and one that does not announce itself as production is",
+    "refused.",
   ].join("\n");
 }
 

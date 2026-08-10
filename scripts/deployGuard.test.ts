@@ -296,6 +296,19 @@ describe("reading the target back out of the dry run", () => {
 });
 
 describe("target selection is inventoried, not predicted", () => {
+  /** Line breaks are a wrapping decision; the assertions below are about words. */
+  const collapse = (text: string) => text.replace(/\s+/g, " ");
+
+  /** Configurations that have each, at some point, produced a false sentence. */
+  const PROSE_CONFIGURATIONS: RepoSnapshot["env"][] = [
+    { CONVEX_DEPLOY_KEY: "prod:x|abc", CONVEX_SELF_HOSTED_URL: "https://internal" },
+    { CONVEX_SELF_HOSTED_URL: "https://internal" },
+    { CONVEX_SELF_HOSTED_URL: "https://internal", CONVEX_SELF_HOSTED_ADMIN_KEY: "k" },
+    { CONVEX_DEPLOYMENT_TOKEN: "prod:x|abc" },
+    { CONVEX_DEPLOY_KEY: "preview:x|abc" },
+    { CONVEX_DEPLOYMENT: "dev:vibrant-cat-418" },
+  ];
+
   test("every set variable is listed, with where it came from", () => {
     const text = describeTargetSelection({
       CONVEX_DEPLOYMENT: "dev:vibrant-cat-418",
@@ -319,12 +332,13 @@ describe("target selection is inventoried, not predicted", () => {
   });
 
   test("it says more than one may be set and that this wrapper does not guess", () => {
-    // The inventory can list several variables while the CLI acts on exactly
-    // one. Saying so is what keeps a multi-variable listing from reading as
-    // "all of these apply" — without needing to know which one wins.
-    const text = describeTargetSelection({ CONVEX_DEPLOYMENT: "dev:vibrant-cat-418" });
-    expect(text).toMatch(/the CLI acts on one of them/i);
-    expect(text).toMatch(/does not guess which/i);
+    // A multi-variable listing must not read as "all of these apply" — and
+    // saying so needs no claim about which one the CLI picks. An earlier
+    // wording, "the CLI acts on one of them", was itself wrong: the self-hosted
+    // pair is selected by two variables together, and CONVEX_DEPLOYMENT next to
+    // a self-hosted variable makes the CLI act on none of them and crash.
+    const text = collapse(describeTargetSelection({ CONVEX_DEPLOYMENT: "dev:vibrant-cat-418" }));
+    expect(text).toMatch(/this wrapper does not guess which the CLI will act on/i);
   });
 
   test("the explanatory prose is identical in every configuration", () => {
@@ -346,15 +360,7 @@ describe("target selection is inventoried, not predicted", () => {
         .filter((line) => !line.startsWith("  "));
 
     const baseline = prose({ CONVEX_DEPLOYMENT: "prod:kindly-hound-172" });
-    const configurations: RepoSnapshot["env"][] = [
-      { CONVEX_DEPLOY_KEY: "prod:x|abc", CONVEX_SELF_HOSTED_URL: "https://internal" },
-      { CONVEX_SELF_HOSTED_URL: "https://internal" },
-      { CONVEX_SELF_HOSTED_URL: "https://internal", CONVEX_SELF_HOSTED_ADMIN_KEY: "k" },
-      { CONVEX_DEPLOYMENT_TOKEN: "prod:x|abc" },
-      { CONVEX_DEPLOY_KEY: "preview:x|abc" },
-      { CONVEX_DEPLOYMENT: "dev:vibrant-cat-418" },
-    ];
-    for (const env of configurations) {
+    for (const env of PROSE_CONFIGURATIONS) {
       expect(prose(env)).toEqual(baseline);
     }
   });
@@ -365,10 +371,31 @@ describe("target selection is inventoried, not predicted", () => {
     // key deploys to a preview deployment. What this wrapper does is its own
     // property and cannot go stale: it reads the target back and refuses one
     // that is not production.
-    const text = describeTargetSelection({ CONVEX_DEPLOY_KEY: "preview:x|abc" });
+    const text = collapse(describeTargetSelection({ CONVEX_DEPLOY_KEY: "preview:x|abc" }));
     expect(text).not.toMatch(/targets .*PRODUCTION/i);
     expect(text).toMatch(/read back from the CLI's own dry run/i);
-    expect(text).toMatch(/does not announce itself\s+as production is refused/i);
+    expect(text).toMatch(/does not announce itself as production is refused/i);
+  });
+
+  test("the inventory lines carry nothing but the variable, its value and its origin", () => {
+    // The invariance test above filters out the indented lines, so they are
+    // exempt from it by construction — it assumes they are an inventory without
+    // ever checking. That assumption is the same door the last four defects came
+    // through: appending "— this deploys to a self-hosted backend, not to Convex
+    // Cloud" to a variable's row restores the round-3 falsehood and passes every
+    // other test in this file. Verified.
+    //
+    // Asserting the row's shape closes it: non-indented lines are constant,
+    // indented lines are structurally an inventory, so an environment-dependent
+    // claim has nowhere left to live.
+    const ROW = /^ {2}CONVEX_[A-Z_]+ (set|= \S+)( \(from [^)]+\))?$/;
+    for (const env of PROSE_CONFIGURATIONS) {
+      const rows = describeTargetSelection(env)
+        .split("\n")
+        .filter((line) => line.startsWith("  "));
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) expect(row).toMatch(ROW);
+    }
   });
 
   test("an unset environment is described as refusing, not as defaulting", () => {
