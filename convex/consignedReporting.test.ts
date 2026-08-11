@@ -181,6 +181,70 @@ describe("the economics split", () => {
     expect(e.supplierSettlement).toBe(0);
   });
 
+  /**
+   * SCRUM-36. The two figures this function returns for one consigned sale were
+   * derived under DIFFERENT rules about missing frozen evidence: the margin
+   * failed closed to UNKNOWN, while the entitlement fell through to the live
+   * `capitalizedCost` with no `evidenceRequired` arm at all.
+   *
+   * That pairs a frozen margin with a mutable cost. `sourceCost` stays editable
+   * — which is the entire reason the frozen field was introduced — so the
+   * reported supplier settlement could drift arbitrarily far from what the sale
+   * was actually posted on, while the claim and the GL stayed frozen at the
+   * real entitlement. Reporting a supplier's share that no ledger recognizes is
+   * the same defect the recorded margin exists to prevent, wearing the other
+   * figure's name.
+   *
+   * The asymmetry is introduced by this branch: before it, both figures were
+   * live and therefore consistent with each other.
+   */
+  test("a frozen margin beside a missing frozen entitlement is UNKNOWN, never the live cost", () => {
+    // The live cost has moved since the sale — an edit, a repair, a correction.
+    const DRIFTED_COST = ENTITLEMENT + 2_000;
+
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: DRIFTED_COST,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: true,
+      // Frozen at completion, so it is trusted.
+      recordedMargin: MARGIN,
+      // Absent. `saleCompletion` writes both together or throws, so reaching
+      // this state takes a partial repair or a raw-JSON edit of one field —
+      // which is exactly the case a fail-closed rule is for.
+      recordedSupplierEntitlement: undefined,
+    });
+
+    // The half that was already right: the frozen margin is still trusted.
+    expect(e.dealershipMargin).toBe(MARGIN);
+
+    // The half that was not. Anything else republishes a live figure beside a
+    // frozen one, and the drifted cost is the specific wrong answer.
+    expect(e.supplierSettlement).toBeNull();
+    expect(e.supplierSettlement).not.toBe(DRIFTED_COST);
+  });
+
+  /**
+   * The fallback is still CORRECT for a genuine legacy row. For a consigned
+   * sale completed before the frozen fields existed, the live cost IS what the
+   * sale was posted on, and withholding it would blank a figure that was never
+   * in doubt. Only the evidence-required shape may go unknown.
+   */
+  test("a legacy consigned row with no frozen evidence still reads its settlement from the live cost", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: ENTITLEMENT,
+      // No external finance declared and no direct route: this is the cash
+      // shape, where nothing was ever frozen and nothing needs to be.
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: undefined,
+    });
+    expect(e.supplierSettlement).toBe(ENTITLEMENT);
+    expect(e.dealershipMargin).toBe(MARGIN);
+  });
+
   test("margin is the same number under both bases, which is why profit never moves", () => {
     for (const sourceType of ["SOURCED", "STOCK"] as const) {
       const e = saleEconomics({

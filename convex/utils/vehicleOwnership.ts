@@ -231,8 +231,17 @@ export interface SaleEconomics {
    * NOT the dealership's revenue, because the car was never its to sell.
    */
   grossTransactionValue: number;
-  /** The supplier's share of that gross. Zero on dealer-owned stock. */
-  supplierSettlement: number;
+  /**
+   * The supplier's share of that gross. Zero on dealer-owned stock.
+   *
+   * `null` means UNKNOWN, under exactly the same rule as `dealershipMargin`
+   * below and for the same reason. These two are one pair: publishing a frozen
+   * margin beside a live entitlement describes a deal no ledger recognizes,
+   * and `sourceCost` stays editable, so the live figure can drift arbitrarily
+   * far from what the sale was posted on. Callers must withhold it, never read
+   * it as zero and never substitute the vehicle's current cost.
+   */
+  supplierSettlement: number | null;
   /**
    * What the dealership actually earned: its commission, or its gross profit.
    *
@@ -377,7 +386,15 @@ export function saleEconomics(args: {
     // What the sale recorded, when it recorded it. Falls back to the live basis
     // only for rows written before the field existed — for those, the live cost
     // IS what the sale was posted on.
-    supplierSettlement: args.recordedSupplierEntitlement ?? capitalizedCost,
+    //
+    // But it takes the SAME `evidenceRequired` arm as the margin below. Without
+    // it, a row carrying a frozen margin and no frozen entitlement published
+    // the frozen figure beside a live one, and a later `sourceCost` edit moved
+    // the supplier's reported share while the claim and the GL stayed put. The
+    // two figures describe one deal; deriving them under different rules about
+    // missing evidence is what makes the report disagree with the ledger.
+    supplierSettlement:
+      args.recordedSupplierEntitlement ?? (evidenceRequired ? null : capitalizedCost),
     dealershipMargin: margin,
     // The whole point. Turnover is what the dealership sold, and on a consigned
     // car that is its service, not the vehicle.

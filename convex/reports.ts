@@ -201,7 +201,12 @@ export const getSalesAndProfitReport = query({
       // and not the sale-price spread. It is left out of the totals and counted,
       // so the owner is told the report is incomplete rather than being handed a
       // confident figure built on a number the ledger never recognized.
-      if (economics.dealershipMargin === null) unknownMarginSaleCount += 1;
+      // Either half unknown makes the row incomplete. The entitlement can be
+      // missing while the margin is present, and counting only the margin left
+      // `totalSupplierSettlement` quietly short by that row while the header
+      // still called the report complete.
+      if (economics.dealershipMargin === null || economics.supplierSettlement === null)
+        unknownMarginSaleCount += 1;
       totalRevenue += economics.recognizedRevenue ?? 0;
       totalCost += economics.recognizedCost;
       // Unchanged by the agent split, and deliberately so: price less cost is
@@ -209,7 +214,9 @@ export const getSalesAndProfitReport = query({
       // sale moves turnover and cost of sales but never profit.
       totalProfit += economics.dealershipMargin ?? 0;
       totalGrossTransactionValue += economics.grossTransactionValue;
-      totalSupplierSettlement += economics.supplierSettlement;
+      // Excluded rather than guessed, exactly as `totalProfit` treats an
+      // unknown margin: this total is a floor when the count above is non-zero.
+      totalSupplierSettlement += economics.supplierSettlement ?? 0;
       if (economics.isAgentSale) agentSaleCount += 1;
 
       return {

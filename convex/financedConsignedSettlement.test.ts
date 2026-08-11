@@ -16,6 +16,7 @@
  * return value: the defects being pinned were all cases of a posting that looked
  * right in principle and landed against the wrong account.
  */
+import { readFileSync } from "node:fs";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
@@ -4618,9 +4619,17 @@ describe("a settlement advice that contradicts the approval", () => {
   test("no exported query hands settlement evidence to a sales-only caller", async () => {
     // Two approvals, not one. `recordOverride` fires only when an approval
     // MATERIALLY CHANGES, so a singly-approved deal has an empty override
-    // history — and this test would then pass for the overrides door while
-    // proving nothing about it. The anti-vacuity guard below caught exactly
-    // that on the first run of this test.
+    // history and `getEconomics` would return an empty array — a door with
+    // nothing behind it. The anti-vacuity guard below caught exactly that on
+    // the first run of this test.
+    //
+    // Be precise about what that buys, because it is easy to overclaim: the
+    // override carries the approved amount, which is TIER 2, and tier 2 is
+    // asserted nowhere in this test because it is not a boundary — see the
+    // characterization test below and SCRUM-35. What the populated history
+    // buys here is that `getEconomics` is exercised with a non-empty nested
+    // array at all, so the TIER 1 scan below is searching a realistic payload
+    // rather than an empty one.
     const FIRST_APPROVED = 18_437;
     const SECOND_APPROVED = 18_902;
     const DISBURSED = 17_995;
@@ -4698,6 +4707,14 @@ describe("a settlement advice that contradicts the approval", () => {
     expect(economics.overrides.length).toBeGreaterThan(0);
     expect(queue.page.length).toBeGreaterThan(0);
 
+    const suggestion = await s.asUser.query(api.financingEconomics.suggestQuotation, {
+      orgId: s.orgId,
+      companyId: s.companyId,
+      targetSellingAmountMinor: VEHICLE_PRICE * SCALE,
+      estimatedDealerBorneExpensesMinor: 0,
+      customerFirstPaymentMinor: 0,
+    });
+
     const doors: Array<[string, unknown]> = [
       ["applications.list", listed],
       ["applications.get", detail],
@@ -4706,7 +4723,23 @@ describe("a settlement advice that contradicts the approval", () => {
       ["financingEconomics.getEconomics", economics],
       ["financingEconomics.listNeedingReconciliation", queue],
       ["financingEconomics.suggestQuotationForApplication", quotation],
+      ["financingEconomics.suggestQuotation", suggestion],
     ];
+
+    // COMPLETENESS, enforced rather than asserted in a comment. The list above
+    // is hand-written, so on its own it proves nothing about a query added
+    // tomorrow — it would simply not be covered, and this test would stay green
+    // while the new door leaked. Deriving the expected set from the modules
+    // themselves turns that silent gap into a failure.
+    const exportedQueries = (file: string, module: string) =>
+      [...readFileSync(file, "utf8").matchAll(/^export const (\w+) = query\(/gm)].map(
+        (m) => `${module}.${m[1]}`
+      );
+    const mustCover = [
+      ...exportedQueries("convex/applications.ts", "applications"),
+      ...exportedQueries("convex/financingEconomics.ts", "financingEconomics"),
+    ].sort();
+    expect(doors.map(([name]) => name).sort()).toEqual(mustCover);
 
     for (const [name, response] of doors) {
       // Prefixed with the query name so a failure names the door rather than
@@ -4715,6 +4748,54 @@ describe("a settlement advice that contradicts the approval", () => {
       expect(serialized).not.toContain("WIRE-4471");
       expect(serialized).not.toContain(String(DISBURSED * SCALE));
     }
+  });
+
+  /**
+   * A CHARACTERIZATION test. It pins what is true today, not what ought to be.
+   *
+   * `redactSettlementEvidence` blanks `approvedDealerPurchaseAmountMinor` for a
+   * caller without finance permissions, and the comments around it used to read
+   * as though that closed something. It does not: the same caller recovers the
+   * figure from `applications.list` alone. This asserts that reality so nobody
+   * infers a boundary from the presence of the gate.
+   *
+   * ⚠️ WHEN SCRUM-35 IS DONE THIS TEST MUST FAIL, and that failure is the point
+   * — it is what forces the decision to be made deliberately. Do not "repair"
+   * it by closing only the override history and the reconciliation queue: both
+   * derivations below live in a query that already applies the redaction, so
+   * that repair would leave this test passing and the exposure intact.
+   */
+  test("the approved amount is NOT confidential today — a sales-only caller derives it", async () => {
+    const APPROVED = 18_437;
+    const { s, applicationId } = await paidDeal("s30Tier2Characterize", APPROVED);
+    await s.t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === s.orgId)!;
+      await ctx.db.patch(role._id, {
+        permissions: ["view:sales", "view:finance_applications"],
+        isSystemOwnerRole: false,
+      });
+    });
+
+    const listed = (await s.asUser.query(api.applications.list, {
+      orgId: s.orgId,
+      paginationOpts: { numItems: 20, cursor: null },
+    })) as unknown as { page: Array<Record<string, unknown>> };
+    const row = listed.page.find((r) => r._id === applicationId)!;
+    expect(row).toBeTruthy();
+
+    // The gate itself works — the field really is blanked.
+    expect(row.approvedDealerPurchaseAmountMinor).toBeUndefined();
+
+    // ...and the number is right there anyway, twice.
+    //
+    // 1. The funded portion and the LTV travel together, so the approval is one
+    //    division away. At 100% LTV, which this fixture uses, they are equal.
+    const funded = row.financeCompanyFundedPortionMinor as number;
+    const ltv = row.appliedLtvPercent as number;
+    expect(Math.round(funded / (ltv / 100))).toBe(APPROVED * SCALE);
+
+    // 2. And the approval notes record it as free text.
+    expect(String(row.approvedPurchaseNotes)).toContain(String(APPROVED));
   });
 
   test("and the same query gives a finance-permitted caller the evidence in full", async () => {
