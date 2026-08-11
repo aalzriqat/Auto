@@ -344,6 +344,43 @@ describe("the cash rail is shorter, not greyed out", () => {
     renderCockpit(cashDealFixture());
     expect(screen.getByText("DealPartiesHeading")).toBeTruthy();
   });
+
+  test("a cash deal with no fee records renders no expenses card", () => {
+    // A cash sale's costs are already capitalized into the vehicle cost and so
+    // already inside the margin above. A card reading "expenses: 0" invites the
+    // owner to subtract them a second time.
+    renderCockpit(cashDealFixture());
+    expect(screen.queryByText("ActualExpensesHeading")).toBeNull();
+  });
+
+  /**
+   * The absent-not-empty rule is for CASH. Applying it on emptiness alone
+   * silently changed the SHIPPED financed screen — on `origin/main` this card is
+   * unconditional, so a financed deal awaiting its actuals showed "none recorded
+   * yet", and gating it on `lines.length` removed that from production inside a
+   * PR whose frozen scope explicitly excludes touching it.
+   *
+   * Missed by both adversarial reviewers and by me; caught by CodeRabbit.
+   */
+  test("a financed deal keeps its expenses card even with nothing recorded", () => {
+    renderCockpit(
+      dealFixture({
+        money: {
+          ...dealFixture().money,
+          expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
+        },
+      })
+    );
+    expect(screen.getAllByText("ActualExpensesHeading").length).toBeGreaterThan(0);
+    expect(screen.getByText("NoExpensesRecorded")).toBeTruthy();
+  });
+
+  test("a cash deal renders no appraisal-gap line", () => {
+    // The gap is the finance company's valuation against the price. A cash deal
+    // has no appraisal, so the line has no meaning rather than a value of zero.
+    renderCockpit(cashDealFixture());
+    expect(screen.queryByText("AppraisalGapLabel")).toBeNull();
+  });
 });
 
 describe("a caller who cannot see the money", () => {

@@ -2293,6 +2293,20 @@ export const dealCockpit = query({
         actorName,
       });
     }
+    /**
+     * Sorted, because `saleDate` is caller-supplied and routinely BACK-DATED —
+     * a dealership recording on Tuesday a sale that happened last week enters a
+     * `saleDate` earlier than the row's own `_creationTime`. The view renders
+     * this array in order, so unsorted it printed a history in which the sale
+     * completed before it was created.
+     *
+     * There is deliberately no CANCELLED entry. `sales` records no cancellation
+     * timestamp, so emitting one would mean inventing a moment — the single
+     * thing this timeline refuses to do. A cancelled sale is already stated
+     * twice on the screen: the status badge reads CANCELLED and the headline
+     * refuses with `DealCancelled`.
+     */
+    timeline.sort((a, b) => a.changedAt - b.changedAt);
 
     /**
      * A sale that came from a finance application is NOT this screen's deal.

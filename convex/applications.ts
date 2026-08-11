@@ -23,7 +23,6 @@ import {
 import {
   toMinorUnits,
   assertValidMinorAmount,
-  scaleForCurrency,
   toMinorSameCurrencyOrUndefined,
   outstandingMinorFromMajor,
 } from "./utils/money";

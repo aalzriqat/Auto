@@ -25,7 +25,6 @@ import {
 } from "./utils/vehicleOwnership";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { getOrgCurrency } from "./accounting/workflowHooks";
-import { fromMinorUnits } from "./utils/money";
 
 /*
  * `recordedConsignedMargin` and `recordedSupplierEntitlement` moved to

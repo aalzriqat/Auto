@@ -346,8 +346,14 @@ describe("an unreadable figure never renders as a zero line", () => {
     // The headline is intact — it came from the frozen margin.
     expect(profit.amountMinor).toBe(MARGIN * SCALE);
     // ...and no line may assert the car sold for nothing.
-    const salePriceLine = profit.lines.find((line) => line.key === "SALE_PRICE");
-    expect(salePriceLine?.amountMinor).not.toBe(0);
+    //
+    // Asserted as ABSENCE of the whole breakdown, not as `?.amountMinor !== 0`.
+    // That earlier form passed when the line was MISSING — `undefined !== 0` —
+    // so it would equally have passed against a breakdown full of garbage. An
+    // unreadable sale price makes every line unverifiable, so the all-or-nothing
+    // rule drops the breakdown entirely rather than printing a partial one.
+    expect(profit.lines).toEqual([]);
+    expect(profit.lines.some((line) => line.key === "SALE_PRICE")).toBe(false);
   });
 
   /**
@@ -659,5 +665,54 @@ describe("a consigned cash deal's supplier row, and UNKNOWN never reading as set
     // Rendering "owes 0" would report a real debt as settled.
     expect(supplier!.position).toBe("UNKNOWN");
     expect(settlement!.state).not.toBe("COMPLETE");
+  });
+});
+
+/**
+ * The status history has to read forwards.
+ *
+ * `saleDate` is caller-supplied and routinely BACK-DATED — a dealership
+ * recording on Tuesday a sale that happened last week enters a `saleDate`
+ * earlier than the row's own `_creationTime`. The view renders this array in
+ * order, so unsorted it printed a history in which the sale completed before it
+ * was created.
+ */
+describe("the cash timeline", () => {
+  test("a back-dated sale still reads forwards", async () => {
+    const s = await seed("backdated");
+    const vehicleId = await ownedVehicle(s, "BACKDATED0000001");
+    // A week before the row exists — the ordinary case, not a corrupt one.
+    const saleId = await insertSale(s, vehicleId, {
+      saleDate: Date.now() - 7 * 24 * 60 * 60 * 1000,
+    });
+
+    const deal = await s.asUser.query(api.sales.dealCockpit, { orgId: s.orgId, saleId });
+    const timeline = deal!.timeline;
+
+    expect(timeline.length).toBeGreaterThan(1);
+    for (let i = 1; i < timeline.length; i++) {
+      expect(timeline[i].changedAt).toBeGreaterThanOrEqual(timeline[i - 1].changedAt);
+    }
+  });
+
+  /**
+   * No CANCELLED entry is emitted, and that is deliberate: `sales` records no
+   * cancellation timestamp, so one could only be invented — the single thing
+   * this timeline refuses to do. The cancellation is already stated twice, by
+   * the status badge and by the headline's refusal, and this pins that the
+   * screen says so rather than staying silent about it.
+   */
+  test("a cancelled sale is reported by the headline, not by a fabricated entry", async () => {
+    const s = await seed("cancelled");
+    const vehicleId = await ownedVehicle(s, "CANCELLED0000001");
+    const saleId = await insertSale(s, vehicleId, { status: "CANCELLED" });
+
+    const deal = await s.asUser.query(api.sales.dealCockpit, { orgId: s.orgId, saleId });
+
+    expect(deal!.status).toBe("CANCELLED");
+    expect(deal!.timeline.some((entry) => entry.toStatus === "CANCELLED")).toBe(false);
+    const profit = deal!.money!.profit;
+    if (profit.available) throw new Error("a cancelled deal must not publish a headline");
+    expect(profit.reason).toBe("DealCancelled");
   });
 });

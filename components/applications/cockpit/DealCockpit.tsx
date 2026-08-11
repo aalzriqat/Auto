@@ -898,12 +898,21 @@ export function DealCockpitView({
               )}
 
               {/* --- actual expenses -------------------------------------- */}
-              {/* ABSENT on a deal that has no fee records at all, rather than a
-                  card reading "expenses: 0" on every cash deal forever. A cash
-                  sale's costs are already inside the vehicle's capitalized cost
-                  and therefore already inside the margin above — listing them
-                  again here would show the owner a cost subtracted twice. */}
-              {(deal.money.expenses.lines.length > 0 ||
+              {/* ABSENT on a CASH deal with no fee records, rather than a card
+                  reading "expenses: 0" on every cash deal forever. A cash sale's
+                  costs are already inside the vehicle's capitalized cost and
+                  therefore already inside the margin above — listing them again
+                  here would show the owner a cost subtracted twice.
+
+                  Gated on the deal KIND, not merely on emptiness. A financed
+                  deal keeps the card unconditionally because that is how the
+                  shipped screen behaves: its expenses are real pending actuals
+                  an operator is waiting on, so "none recorded yet" is
+                  information rather than noise. Hiding it on emptiness alone
+                  silently changed a production screen from inside a PR whose
+                  scope excludes touching it. */}
+              {(deal.dealKind === "FINANCED" ||
+                deal.money.expenses.lines.length > 0 ||
                 deal.money.expenses.actualTotalMinor !== 0) && (
               <Card>
                 <CardHeader className="pb-3">
