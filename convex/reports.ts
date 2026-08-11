@@ -52,6 +52,24 @@ function recordedConsignedMargin(sale: Doc<"sales">): number | undefined {
   return fromMinorUnits(minor, currency);
 }
 
+/**
+ * What the supplier was owed on this sale, frozen at completion.
+ *
+ * Same guards and the same currency as the margin beside it, and for the same
+ * reason: `sourceCost` stays editable after a consigned sale, so deriving the
+ * supplier's entitlement from the live vehicle reported a settlement figure the
+ * GL, the subledger and the claim never used. A sale frozen at a 3,000 margin
+ * against a 15,000 entitlement would show 3,000 beside a live 16,000 — two
+ * halves of one deal on two different bases.
+ */
+function recordedSupplierEntitlement(sale: Doc<"sales">): number | undefined {
+  const minor = sale.consignedSupplierEntitlementMinor;
+  const currency = sale.consignedMarginCurrency;
+  if (minor === undefined || !currency) return undefined;
+  if (!Number.isFinite(minor) || minor < 0) return undefined;
+  return fromMinorUnits(minor, currency);
+}
+
 /** Longest span an interactive report may request. */
 const MAX_REPORT_RANGE_MS = 366 * 24 * 60 * 60 * 1000;
 
@@ -174,6 +192,7 @@ export const getSalesAndProfitReport = query({
         // deal re-deriving it from the sale price overstates by
         // salePrice - approved, which is money that reaches no party.
         recordedMargin: recordedConsignedMargin(sale),
+        recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
         externallyFinanced:
           sale.financingType === "FINANCED" || sale.financingType === "LEASE",
       });
@@ -779,6 +798,7 @@ export const getSalespersonPerformance = query({
           // the dealership actually earned rather than on a spread that
           // includes money no party paid.
           recordedMargin: recordedConsignedMargin(sale),
+          recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
           externallyFinanced:
             sale.financingType === "FINANCED" || sale.financingType === "LEASE",
         });

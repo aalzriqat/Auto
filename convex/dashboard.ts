@@ -503,18 +503,30 @@ export const stats = query({
      * short and saying so, which is the failure this whole change prefers.
      */
     /**
-     * The vehicle was actually read, and belongs to this org.
+     * What this query managed to learn about a sale's vehicle, per window.
      *
-     * `costedVehicleIdSet` is not the same question — it holds the ids this
-     * query INTENDED to cost, including ones whose row turned out to be gone.
-     * Only a populated cost proves the document was read.
+     * `known` means the document was actually read and belongs to this org —
+     * `costedVehicleIdSet` is a different question, holding the ids this query
+     * INTENDED to cost including ones whose row turned out to be gone.
+     *
+     * Taken as a parameter because the two windows read their vehicles into
+     * different maps. Reading the current window's map for a comparison-window
+     * sale answers "not known" for every one of them, which quietly reverts
+     * that window to the vehicle-independent rule this change exists to
+     * replace — the rule would then be the same everywhere only in the half of
+     * the query anybody looked at.
      */
-    const vehicleKnown = (sale: Doc<"sales">): boolean =>
-      capitalizedCostByVehicle.has(sale.vehicleId);
+    type WindowVehicleFacts = { known: boolean; consigned: boolean };
+    const currentVehicleFacts = (sale: Doc<"sales">): WindowVehicleFacts => ({
+      known: capitalizedCostByVehicle.has(sale.vehicleId),
+      consigned: consignedVehicleIds.has(sale.vehicleId),
+    });
 
-    const recognizedEarningIsUnknown = (sale: Doc<"sales">): boolean =>
-      frozenConsignedMargin(sale) === undefined &&
-      needsFrozenMarginEvidence(sale) &&
+    const earningIsUnknownGiven = (
+      facts: (sale: Doc<"sales">) => WindowVehicleFacts
+    ) => (sale: Doc<"sales">): boolean => {
+      if (frozenConsignedMargin(sale) !== undefined) return false;
+      if (!needsFrozenMarginEvidence(sale)) return false;
       // The vehicle answers whenever it is present, exactly as it does in
       // `saleEconomics`. Making this rule vehicle-independent was never the
       // goal — being the SAME rule as the sales report, the supplier claim and
@@ -522,7 +534,11 @@ export const stats = query({
       // carrying a settlement route left over from when it was thought to be
       // the supplier's: the report and the ledger counted it in full while the
       // dashboard excluded it and called the remainder complete.
-      !(vehicleKnown(sale) && !consignedVehicleIds.has(sale.vehicleId));
+      const vehicle = facts(sale);
+      return !(vehicle.known && !vehicle.consigned);
+    };
+
+    const recognizedEarningIsUnknown = earningIsUnknownGiven(currentVehicleFacts);
 
     /**
      * The one authority for what a sale contributed, shared by the turnover
@@ -533,18 +549,20 @@ export const stats = query({
      * `null` means "cannot be established": excluded and flagged, never zeroed
      * and never grossed up.
      */
-    const earningReader = (onUnknown: () => void) => (sale: Doc<"sales">) => {
-      const frozen = frozenConsignedMargin(sale);
-      if (frozen !== undefined) return frozen;
-      // The same predicate the ranking asks, so the two cannot come to
-      // different conclusions about one sale — the tile would then omit a row
-      // the totals kept, or rank on a row the totals withheld.
-      if (recognizedEarningIsUnknown(sale)) {
-        onUnknown();
-        return null;
-      }
-      return undefined;
-    };
+    const earningReader =
+      (onUnknown: () => void, isUnknown: (sale: Doc<"sales">) => boolean) =>
+      (sale: Doc<"sales">) => {
+        const frozen = frozenConsignedMargin(sale);
+        if (frozen !== undefined) return frozen;
+        // The same predicate the ranking asks, so the two cannot come to
+        // different conclusions about one sale — the tile would then omit a row
+        // the totals kept, or rank on a row the totals withheld.
+        if (isUnknown(sale)) {
+          onUnknown();
+          return null;
+        }
+        return undefined;
+      };
 
     /**
      * One rule, two windows. The comparison period gets its own instance rather
@@ -555,7 +573,7 @@ export const stats = query({
      */
     const recognizedEarningOfSale = earningReader(() => {
       unknownMarginExcluded = true;
-    });
+    }, recognizedEarningIsUnknown);
 
     const recognizedRevenueOfSale = (sale: Doc<"sales">): number => {
       if (!canViewProfitMetrics) return sale.salePrice;
@@ -923,9 +941,23 @@ export const stats = query({
     }
 
     let previousUnknownMarginExcluded = false;
-    const previousRecognizedEarningOfSale = earningReader(() => {
-      previousUnknownMarginExcluded = true;
-    });
+    // The comparison window's own vehicle facts. `previousRevenueBasisByVehicle`
+    // already holds exactly what the predicate needs — whether the row was read
+    // and whether it is consigned — so this costs no extra reads. Asking the
+    // CURRENT window's map instead answered "vehicle unknown" for every
+    // comparison-window sale, which reverted that window to the rule this
+    // change replaced and suppressed the period delta for a correct row.
+    const previousRecognizedEarningOfSale = earningReader(
+      () => {
+        previousUnknownMarginExcluded = true;
+      },
+      earningIsUnknownGiven((sale) => {
+        const basis = previousRevenueBasisByVehicle.get(sale.vehicleId);
+        return basis
+          ? { known: true, consigned: basis.consigned }
+          : { known: false, consigned: false };
+      })
+    );
 
     const previousRecognizedRevenueOfSale = (sale: Doc<"sales">): number => {
       if (!canViewProfitMetrics) return sale.salePrice;

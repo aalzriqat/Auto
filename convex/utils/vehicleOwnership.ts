@@ -310,6 +310,16 @@ export function saleEconomics(args: {
    */
   recordedMargin?: number;
   /**
+   * What the supplier was owed, frozen at completion, when the sale recorded it.
+   *
+   * `capitalizedCost` is the live vehicle's basis and it moves: a consigned car
+   * is never capitalized into inventory, so `sourceCost` remains editable after
+   * the sale. Reporting the supplier's settlement from it put the frozen margin
+   * and a live entitlement side by side in one row, disagreeing with the GL and
+   * the subledger that raised the claim.
+   */
+  recordedSupplierEntitlement?: number;
+  /**
    * Whether a third party financed this sale (FINANCED or LEASE).
    *
    * It is what separates the two readings of an absent `recordedMargin`. On a
@@ -364,7 +374,10 @@ export function saleEconomics(args: {
     isAgentSale: true,
     settlementRoute: consignedSettlementRoute(args),
     grossTransactionValue: grossTransactionValueForSale({ salePrice }),
-    supplierSettlement: capitalizedCost,
+    // What the sale recorded, when it recorded it. Falls back to the live basis
+    // only for rows written before the field existed — for those, the live cost
+    // IS what the sale was posted on.
+    supplierSettlement: args.recordedSupplierEntitlement ?? capitalizedCost,
     dealershipMargin: margin,
     // The whole point. Turnover is what the dealership sold, and on a consigned
     // car that is its service, not the vehicle.

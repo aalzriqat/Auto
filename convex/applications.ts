@@ -1411,10 +1411,54 @@ export const get = query({
     applicationId: v.id("financeApplications"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
     const app = await ctx.db.get(args.applicationId);
     if (!app || app.orgId !== args.orgId) return null;
+
+    /**
+     * Settlement evidence is withheld from a caller who may not see money.
+     *
+     * This query authorizes on VIEW_SALES and returns the whole application
+     * document, which predates this release — but the settlement fields inside
+     * it do not. `supplierDisbursedAmountMinor`, `supplierDisbursementReference`,
+     * `supplierDisbursementStatus` and `supplierDisbursementApprovedAtRecordingMinor`
+     * appear nowhere in `origin/main`'s schema. So the release put exactly the
+     * figures `dealCockpit` gates behind VIEW_FINANCE into a payload the default
+     * SALES template can read, and gating one of the two queries that return the
+     * same document gates nothing.
+     *
+     * `approvedDealerPurchaseAmountMinor` goes with them even though the field
+     * itself predates the release. The discrepancy IS the difference between
+     * approved and disbursed; withholding one side while publishing the other
+     * closes nothing, and the approved amount is one subtraction from the
+     * supplier's entitlement — the disclosure the cockpit's split exists to
+     * prevent.
+     *
+     * The ROUTE stays visible. It is a workflow fact about how the deal
+     * settles, not an amount, and the cockpit likewise leaves
+     * `settlementAdviceRequiresReconciliation` ungated so a stuck deal is still
+     * visible to the people who work it.
+     */
+    const canSeeFinance =
+      isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_FINANCE);
+    // Set to `undefined` rather than destructured away, so the field stays in
+    // the query's TYPE (every one is already optional) while being genuinely
+    // absent from the serialized payload — Convex drops undefined values. A
+    // rest-spread narrowed the type instead, which broke the callers that
+    // legitimately read these fields when they ARE permitted.
+    const visibleApp: typeof app = canSeeFinance
+      ? app
+      : {
+          ...app,
+          supplierDisbursedAmountMinor: undefined,
+          supplierDisbursementReference: undefined,
+          supplierDisbursementConfirmedAt: undefined,
+          supplierDisbursementConfirmedBy: undefined,
+          supplierDisbursementStatus: undefined,
+          supplierDisbursementApprovedAtRecordingMinor: undefined,
+          approvedDealerPurchaseAmountMinor: undefined,
+        };
 
     const customer = await ctx.db.get(app.customerId);
     const vehicle = await ctx.db.get(app.vehicleId);
@@ -1446,7 +1490,7 @@ export const get = query({
     const payerAllowsDirect = payer.external && payer.counterparty !== null;
 
     return {
-      ...app,
+      ...visibleApp,
       customer,
       vehicle,
       company,
@@ -3144,6 +3188,26 @@ export const confirmSupplierDisbursement = mutation({
             "The company's payment to the supplier can only be recorded once the deal is finalized."
           );
         }
+        // CLOSED is not the same as live: `sales.update` can cancel a completed
+        // sale and nothing in that path touches the application, so it stays
+        // CLOSED carrying every field this mutation writes.
+        //
+        // The payment is still RECORDED. What the finance company paid the
+        // supplier is a fact about two other parties, true whether or not the
+        // dealership's sale survived — and this mutation already records an
+        // advice that contradicts the approval for exactly that reason. Refusing
+        // here would leave an operator unable to write down a payment that
+        // really happened, and `sales.update` refuses to cancel a sale whose
+        // disbursement is already confirmed, so cancel-then-confirm is the only
+        // order in which this can occur at all.
+        //
+        // What is suppressed is the CALL TO ACTION. The reconciliation notice
+        // exists to send somebody to the cockpit to resolve a stuck deal; on a
+        // cancelled one there is nothing to resolve, the cockpit renders it
+        // STOPPED, and the notice would be an alarm about a deal that no longer
+        // exists.
+        const linkedSale = app.finalizedSaleId ? await ctx.db.get(app.finalizedSaleId) : null;
+        const saleIsCancelled = linkedSale?.status === "CANCELLED";
         // The payer has to be nameable, because that is what this record IS —
         // evidence that a specific third party paid the supplier. A configured
         // finance company is identified by id; a manual provider by the name
@@ -3281,7 +3345,7 @@ export const confirmSupplierDisbursement = mutation({
           idempotencyKey: args.idempotencyKey,
         });
 
-        if (!adviceAgreesWithApproval) {
+        if (!adviceAgreesWithApproval && !saleIsCancelled) {
           // A discrepancy nobody is told about is a discrepancy nobody resolves.
           //
           // Its own type, because it borrowed `application.created` — whose

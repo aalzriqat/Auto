@@ -4332,6 +4332,128 @@ describe("a settlement advice that contradicts the approval", () => {
     }
   });
 
+  /**
+   * The other query that returns the same document.
+   *
+   * Round 4 gated `dealCockpit`, and gating one of two doors is not a gate.
+   * `applications.get` authorizes on VIEW_SALES and spreads the whole
+   * application — a query that predates this release, carrying settlement
+   * fields that do not: `supplierDisbursedAmountMinor`,
+   * `supplierDisbursementReference`, `supplierDisbursementStatus` and
+   * `supplierDisbursementApprovedAtRecordingMinor` appear nowhere in
+   * `origin/main`'s schema. The default SALES template holds `view:sales`
+   * without `view:finance`, so it could read exactly what the cockpit withholds.
+   */
+  /**
+   * A cancelled sale leaves its application CLOSED — `saleCancellation` never
+   * touches `financeApplications` — so the application's own status cannot
+   * answer whether the deal is still live. The cockpit already shows such a
+   * deal as STOPPED; the mutation behind it did not know.
+   */
+  test("a disbursement on a cancelled deal is still recorded, but nobody is sent to reconcile it", async () => {
+    const { s, applicationId } = await paidDeal("s30CancelledSettle", 18_000);
+
+    await s.t.run(async (ctx) => {
+      const sale = (await ctx.db.query("sales").collect()).find((x) => x.orgId === s.orgId)!;
+      await ctx.db.patch(sale._id, { status: "CANCELLED" });
+    });
+
+    // Disagrees with the approval, so on a LIVE deal this is precisely the case
+    // that raises the reconciliation notice.
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 17_995 * SCALE,
+      reference: "WIRE-DEAD",
+    });
+
+    // The payment is a fact about two other parties and it is written down.
+    // Refusing would leave an operator unable to record money that really moved,
+    // and `sales.update` will not cancel a sale whose disbursement is already
+    // confirmed — so this order is the only one in which it can happen.
+    const app = (await s.t.run((ctx) => ctx.db.get(applicationId as never))) as unknown as {
+      supplierDisbursedAmountMinor?: number;
+      supplierDisbursementStatus?: string;
+    };
+    expect(app.supplierDisbursedAmountMinor).toBe(17_995 * SCALE);
+    expect(app.supplierDisbursementStatus).toBe("REQUIRES_RECONCILIATION");
+
+    // But nobody is told to go and resolve a deal that no longer exists. The
+    // cockpit already renders it STOPPED; an urgent notice pointing at it would
+    // be an alarm with no action behind it.
+    const notices = await s.t.run(async (ctx) =>
+      (await ctx.db.query("notifications").collect()).filter(
+        (n) => n.type === "application.settlement_advice_discrepancy"
+      )
+    );
+    expect(notices).toHaveLength(0);
+  });
+
+  test("the application query withholds settlement evidence from a caller who cannot see money", async () => {
+    const { s, applicationId } = await paidDeal("s30GetGate", 18_000);
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 17_995 * SCALE,
+      reference: "WIRE-4471",
+    });
+
+    await s.t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === s.orgId)!;
+      await ctx.db.patch(role._id, {
+        permissions: role.permissions.filter((p) => p !== "view:finance"),
+        isSystemOwnerRole: false,
+      });
+    });
+
+    const view = (await s.asUser.query(api.applications.get, {
+      orgId: s.orgId,
+      applicationId,
+    })) as unknown as Record<string, unknown>;
+
+    // The premise: this caller can still read the application at all.
+    expect(view).toBeTruthy();
+    expect(view.status).toBe("CLOSED");
+
+    for (const field of [
+      "supplierDisbursedAmountMinor",
+      "supplierDisbursementReference",
+      "supplierDisbursementConfirmedAt",
+      "supplierDisbursementStatus",
+      "supplierDisbursementApprovedAtRecordingMinor",
+      "approvedDealerPurchaseAmountMinor",
+    ]) {
+      expect(view[field]).toBeUndefined();
+    }
+    // Nothing anywhere in the payload carries the figures either.
+    const serialized = JSON.stringify(view);
+    expect(serialized).not.toContain("WIRE-4471");
+    expect(serialized).not.toContain(String(17_995 * SCALE));
+
+    // The route is deliberately still visible: it says HOW the deal settles,
+    // not what anyone was paid, and the people who work the deal need it.
+    expect(view.supplierSettlementRoute).toBe("DIRECT_TO_SUPPLIER");
+  });
+
+  test("and the same query gives a finance-permitted caller the evidence in full", async () => {
+    const { s, applicationId } = await paidDeal("s30GetGateAllowed", 18_000);
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 17_995 * SCALE,
+      reference: "WIRE-4471",
+    });
+
+    const view = (await s.asUser.query(api.applications.get, {
+      orgId: s.orgId,
+      applicationId,
+    })) as unknown as Record<string, unknown>;
+
+    expect(view.supplierDisbursedAmountMinor).toBe(17_995 * SCALE);
+    expect(view.supplierDisbursementReference).toBe("WIRE-4471");
+    expect(view.approvedDealerPurchaseAmountMinor).toBe(18_000 * SCALE);
+  });
+
   test("and a role holding view:finance receives the evidence in full", async () => {
     const { s, applicationId } = await paidDeal("s30ReconGateAllowed", 18_000);
     await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
@@ -4898,6 +5020,39 @@ describe("one recognized-earning rule, asked identically by every surface", () =
   });
 
   /**
+   * The same sale, in the comparison window instead of the current one.
+   *
+   * `vehicleKnown` was answered from a map populated only from CURRENT-window
+   * sales, so every comparison-window sale looked like "vehicle unknown" and
+   * that window silently kept the rule this change replaced. It errs closed —
+   * the delta is withheld rather than wrong — but a correct owned-stock sale
+   * suppressed the period comparison and marked the current month's exact
+   * turnover "Partial". The rule has to hold in both windows or it is not the
+   * same rule.
+   */
+  test("and it holds in the comparison window too, not only the current one", async () => {
+    const { s } = await staleRouteOnOwnedStock("s30StalePrev");
+    await s.t.run(async (ctx) => {
+      const sale = (await ctx.db.query("sales").collect()).find((x) => x.orgId === s.orgId)!;
+      await ctx.db.patch(sale._id, { saleDate: Date.now() - 45 * 86_400_000 });
+    });
+
+    const dash = (await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId,
+      timeRange: "MONTH",
+    })) as {
+      previousPeriod?: { sales?: number; netProfit?: number };
+      truncated: { turnover: boolean; profit: boolean };
+    };
+
+    // The comparison window counted it, exactly as the report does.
+    expect(dash.previousPeriod?.sales).toBe(20_000);
+    // And nothing was withheld or marked partial over a row that is complete.
+    expect(dash.truncated.turnover).toBe(false);
+    expect(dash.truncated.profit).toBe(false);
+  });
+
+  /**
    * A viewer without profit permission is ranked on GROSS, and on that basis
    * nothing is unknown — every sale contributes its full price. Excluding a
    * salesperson there withholds a complete number for a reason that does not
@@ -4977,6 +5132,43 @@ describe("one recognized-earning rule, asked identically by every surface", () =
     // Specifically not the whole ticket against a cost basis that vanished
     // along with the vehicle.
     expect(report.totalRevenue).not.toBe(20_000);
+  });
+
+  /**
+   * Both halves of one row have to be on one basis.
+   *
+   * The margin was moved onto the figure the sale froze; the supplier
+   * settlement beside it was still derived from the live vehicle. A consigned
+   * car is never capitalized into inventory, so `sourceCost` stays editable
+   * after the sale — and the deal then reported the frozen 3,000 next to a
+   * live 16,000, disagreeing with the GL, the subledger and the claim that was
+   * actually raised.
+   */
+  test("a supplier cost corrected after the sale does not restate what the supplier was owed", async () => {
+    const { s, saleId } = await financedDirectDeal("s30FrozenEntitlement");
+
+    const before = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId,
+      ...range(),
+    });
+    expect(before.totalSupplierSettlement).toBe(15_000);
+
+    await s.t.run(async (ctx) => {
+      const sale = (await ctx.db.get(saleId)) as unknown as { vehicleId: Id<"vehicles"> };
+      await ctx.db.patch(sale.vehicleId, { sourceCost: 16_000 });
+    });
+
+    const after = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId,
+      ...range(),
+    });
+
+    // The entitlement the claim was raised against, unchanged by a later edit.
+    expect(after.totalSupplierSettlement).toBe(15_000);
+    expect(after.totalSupplierSettlement).not.toBe(16_000);
+    // And the margin beside it is still the one the ledger recognized, so the
+    // two halves of the row remain on the same basis.
+    expect(after.totalProfit).toBe(3_000);
   });
 
   /**

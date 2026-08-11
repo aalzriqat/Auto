@@ -29,9 +29,29 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/** Runs the scheduled work this suite queues, instead of leaking it. */
+/**
+ * Runs the scheduled work this suite queues, instead of leaking it.
+ *
+ * Retried, because the budget is a fixed number of PUMPS and not a deadline.
+ * `finishAllScheduledFunctions` gives up after 10,000 advances, and under a
+ * loaded full-suite run the awaited work between advances can starve long
+ * enough to exhaust them while still being perfectly healthy — the file then
+ * fails on machine load rather than on anything it asserts. It went red in two
+ * of three full-suite runs while passing 24/24 in isolation, and a gate that
+ * teaches people to re-run is not a gate.
+ *
+ * Each retry buys another full budget. A genuine hang still fails, three times
+ * as slowly, which is the right trade for a suite this is meant to protect.
+ */
 async function drainScheduled(t: ReturnType<typeof convexTestWithComponents>) {
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      return;
+    } catch (error) {
+      if (attempt >= 2) throw error;
+    }
+  }
 }
 
 const paginationOpts = { numItems: 20, cursor: null };

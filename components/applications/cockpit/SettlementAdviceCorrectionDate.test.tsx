@@ -135,3 +135,73 @@ describe("the date a settlement-advice correction is recorded under", () => {
     expect(captured[0]!.disbursedAt).toBeUndefined();
   });
 });
+
+/**
+ * The reference has the same three-way problem the date has, and the predicate
+ * that resolves it lives here rather than on the server.
+ *
+ * Omission means "not part of this correction" — that is what stops an
+ * amount-only correction from erasing a cheque number. But an operator who
+ * EMPTIES the field is giving an instruction, and both used to arrive as
+ * `undefined`. The server cannot tell them apart, so if this predicate is wrong
+ * the whole tri-state is wrong, and the server test alone would not notice.
+ */
+describe("clearing the reference on a settlement-advice correction", () => {
+  type Correction = { reference?: string; clearReference?: boolean };
+
+  test("emptying a reference that was on file asks for it to be removed", () => {
+    const captured: Correction[] = [];
+    renderCorrection((c) => captured.push(c as Correction));
+
+    fireEvent.change(screen.getByLabelText("SettlementAdviceReferenceLabel"), {
+      target: { value: "" },
+    });
+    fillReason();
+    fireEvent.click(screen.getByRole("button", { name: "SaveCorrection" }));
+
+    expect(captured[0]!.clearReference).toBe(true);
+    expect(captured[0]!.reference).toBeUndefined();
+  });
+
+  test("and leaving it alone asks for nothing, so the server keeps what it holds", () => {
+    const captured: Correction[] = [];
+    renderCorrection((c) => captured.push(c as Correction));
+
+    fireEvent.change(screen.getByLabelText("SettlementAdviceAmountLabel"), {
+      target: { value: "18000" },
+    });
+    fillReason();
+    fireEvent.click(screen.getByRole("button", { name: "SaveCorrection" }));
+
+    // Not `clearReference: false` — absent. The server distinguishes the three
+    // cases by presence, and sending a false here would be a fourth.
+    expect(captured[0]!.clearReference).toBeUndefined();
+    expect(captured[0]!.reference).toBe("WIRE-4471");
+  });
+});
+
+describe("clearing a reference that was never recorded", () => {
+  test("asks for nothing, because there is nothing to remove", () => {
+    const captured: Array<{ clearReference?: boolean }> = [];
+    render(
+      <SettlementAdviceCorrectionDialog
+        open
+        submitting={false}
+        recordedMajor={17_995}
+        // Nothing on file — the advice carried no cheque number.
+        recordedReference={null}
+        recordedAt={RECORDED_AT}
+        approvedLabel="JD 18,000"
+        recordedLabel="JD 17,995"
+        t={(key: string) => key}
+        onOpenChange={() => {}}
+        onCorrect={((c: unknown) => captured.push(c as { clearReference?: boolean })) as never}
+      />
+    );
+
+    fillReason();
+    fireEvent.click(screen.getByRole("button", { name: "SaveCorrection" }));
+
+    expect(captured[0]!.clearReference).toBeUndefined();
+  });
+});
