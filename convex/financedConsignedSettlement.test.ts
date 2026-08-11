@@ -4821,7 +4821,7 @@ describe("a settlement advice that contradicts the approval", () => {
         "supplierDisbursementReference",
         "supplierDisbursedAmountMinor",
         "supplierDisbursementApprovedAtRecordingMinor",
-        // Added when these two moved behind `canWorkDisbursement`. The whole
+        // Added when these two moved behind VIEW_FINANCE. The whole
         // point of this sweep is that a new gated class gets asserted on EVERY
         // door rather than on the one it was fixed in — without these names the
         // new gate was pinned only against `applications.get`, and dropping
@@ -5011,6 +5011,13 @@ describe("a settlement advice that contradicts the approval", () => {
     expect(view.supplierDisbursedAmountMinor).toBe(17_995 * SCALE);
     expect(view.supplierDisbursementReference).toBe("WIRE-4471");
     expect(view.approvedDealerPurchaseAmountMinor).toBe(18_000 * SCALE);
+    // The other half of the gate, and the reason this assertion exists: the
+    // tests above prove the timestamp and recorder are withheld from a sales
+    // caller and from a confirm-only caller. Without this one, tightening the
+    // gate until NOBODY receives them would pass the whole suite. A boundary
+    // needs pinning on both sides or it only ever moves one way.
+    expect(view.supplierDisbursementConfirmedAt).toBeDefined();
+    expect(view.supplierDisbursementConfirmedBy).toBeDefined();
   });
 
   test("and a role holding view:finance receives the evidence in full", async () => {

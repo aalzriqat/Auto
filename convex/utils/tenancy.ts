@@ -545,7 +545,23 @@ export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
     // advice. The schema says so where it is declared — "Absent means the
     // advice predates this field, which is CONFIRMED by construction" — and
     // `amendSupplierDisbursementAdvice` codes to the same invariant with
-    // `?? "CONFIRMED"`. Publishing the raw value handed that row a permanent
+    // `?? "CONFIRMED"`.
+    //
+    // ⚠️ THE PUBLISHED VALUE IS A DISPLAY PROXY FOR "AN ADVICE IS ON FILE",
+    // NOT AN ASSERTION THAT IT AGREED WITH THE APPROVAL. The schema's "could
+    // only be written when the amounts matched" does not survive checking: the
+    // pre-status writer validated only that the amount was positive and never
+    // compared it against `approvedDealerPurchaseAmountMinor` — that comparison
+    // first exists in this release. So a legacy row may hold an advice that
+    // disagreed, and this derivation would still publish CONFIRMED for it.
+    //
+    // Harmless today because every consumer tests truthiness only, and because
+    // reconciliation, obligations and cancellation all read the RAW field on
+    // the document rather than this projection. Do not branch on
+    // `=== "CONFIRMED"` from a redacted payload; ask the raw field, as
+    // `dealCockpit` does for `settlementAdviceRequiresReconciliation`.
+    //
+    // Publishing the raw value handed that row a permanent
     // "awaiting supplier disbursement", a hidden paid badge, and a confirm
     // button that reappears and throws against the server's `confirmedAt`
     // guard — rounds 9 and 10 both back, for every role including OWNER.
