@@ -360,6 +360,23 @@ export function saleEconomics(args: {
   // not the whole ticket.
   const evidenceRequired =
     agent && ((settlesDirect && args.externallyFinanced === true) || vehicleUnknown);
+  // A reviewer proposed generalizing the arm below to "if either frozen half is
+  // present, fail its missing sibling closed", on the theory that partial
+  // evidence is always corruption. It is not, and the rule was REJECTED after
+  // it broke two existing tests that encode a deliberate decision:
+  // `convex/consignedReporting.test.ts` "a negative recorded margin is not read
+  // as a loss" and "NaN does not poison the profit of every other sale". Those
+  // rows complete through the real writer — so BOTH fields are set — and are
+  // then corrupted on the margin alone. The established behaviour is to fall
+  // back to `salePrice − capitalizedCost`, because on a route where the
+  // dealership collects the gross that basis is genuinely correct, and a
+  // surviving entitlement is not a reason to blank a figure the route can
+  // still answer. Failing it closed would withhold a number that is known.
+  //
+  // See SCRUM-36 for the remaining question this leaves open: whether a THROUGH
+  // row whose entitlement drifts after a `sourceCost` edit should pin the
+  // entitlement too. That is a design decision about what the live basis means
+  // per route, not something to settle inside a release round.
   const margin =
     agent && args.recordedMargin !== undefined
       ? args.recordedMargin
@@ -387,12 +404,13 @@ export function saleEconomics(args: {
     // only for rows written before the field existed — for those, the live cost
     // IS what the sale was posted on.
     //
-    // But it takes the SAME `evidenceRequired` arm as the margin below. Without
-    // it, a row carrying a frozen margin and no frozen entitlement published
-    // the frozen figure beside a live one, and a later `sourceCost` edit moved
-    // the supplier's reported share while the claim and the GL stayed put. The
-    // two figures describe one deal; deriving them under different rules about
-    // missing evidence is what makes the report disagree with the ledger.
+    // But it takes the SAME `evidenceRequired` arm as the margin. Without it, a
+    // financed-direct row carrying a frozen margin and no frozen entitlement
+    // published the frozen figure beside a live one, and a later `sourceCost`
+    // edit moved the supplier's reported share while the claim and the GL
+    // stayed put. The two figures describe one deal; deriving them under
+    // different rules about missing evidence is what makes the report disagree
+    // with the ledger.
     supplierSettlement:
       args.recordedSupplierEntitlement ?? (evidenceRequired ? null : capitalizedCost),
     dealershipMargin: margin,

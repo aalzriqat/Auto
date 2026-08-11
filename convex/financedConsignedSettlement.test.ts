@@ -4731,10 +4731,28 @@ describe("a settlement advice that contradicts the approval", () => {
     // tomorrow — it would simply not be covered, and this test would stay green
     // while the new door leaked. Deriving the expected set from the modules
     // themselves turns that silent gap into a failure.
-    const exportedQueries = (file: string, module: string) =>
-      [...readFileSync(file, "utf8").matchAll(/^export const (\w+) = query\(/gm)].map(
-        (m) => `${module}.${m[1]}`
-      );
+    const exportedQueries = (file: string, module: string) => {
+      const src = readFileSync(file, "utf8");
+      const named = [...src.matchAll(/^export const (\w+)\s*=\s*query\(/gm)].map((m) => m[1]);
+
+      // TRIPWIRE. The pattern above only recognizes the single-line form. A
+      // query wrapped by prettier across two lines, built through a factory, or
+      // exported later via `export { … }` would match nothing, drop out of the
+      // expected set, and leave this test green while a new door went uncovered
+      // — the exact silent gap the guard exists to close.
+      //
+      // So count the public `query({` call sites independently and require the
+      // two to agree. `.query(` (Convex's ctx.db reader) and `internalQuery(`
+      // are excluded: the first is not a definition, the second is not a door.
+      // If they ever disagree, this fails loudly and someone parses properly
+      // instead of trusting a regex.
+      const callSites = [...src.matchAll(/(?<![.\w])query\(\s*\{/g)].length;
+      expect(
+        `${file}: ${named.length} named exports vs ${callSites} public query definitions`
+      ).toBe(`${file}: ${callSites} named exports vs ${callSites} public query definitions`);
+
+      return named.map((name) => `${module}.${name}`);
+    };
     const mustCover = [
       ...exportedQueries("convex/applications.ts", "applications"),
       ...exportedQueries("convex/financingEconomics.ts", "financingEconomics"),
@@ -4747,6 +4765,22 @@ describe("a settlement advice that contradicts the approval", () => {
       const serialized = `${name} → ${JSON.stringify(response ?? null)}`;
       expect(serialized).not.toContain("WIRE-4471");
       expect(serialized).not.toContain(String(DISBURSED * SCALE));
+
+      // Value scanning alone is weaker than it looks: a leak rendered in major
+      // units (`17995`) or formatted (`17,995.000`) walks straight past a
+      // substring check, and the third tier-1 field cannot be value-scanned at
+      // all because its value equals the derivable tier-2 approval.
+      //
+      // Key absence covers all three and is representation-independent —
+      // `JSON.stringify` drops undefined-valued keys, so a redacted field is
+      // gone from the payload entirely rather than present and blank.
+      for (const field of [
+        "supplierDisbursementReference",
+        "supplierDisbursedAmountMinor",
+        "supplierDisbursementApprovedAtRecordingMinor",
+      ]) {
+        expect(serialized).not.toContain(`"${field}"`);
+      }
     }
   });
 

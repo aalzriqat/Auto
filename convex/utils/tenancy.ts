@@ -478,9 +478,14 @@ export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
     //
     // Closing any one of those does not create the boundary, which is why they
     // were NOT patched here — a partial fix would leave the same false
-    // assurance behind a longer comment. Tier 1 below IS a real boundary and is
-    // pinned across every exported query by the structural test in
-    // convex/financedConsignedSettlement.test.ts. Establishing a genuine tier-2
+    // assurance behind a longer comment. Tier 1 below IS a real boundary,
+    // pinned across every exported query OF `applications.ts` AND
+    // `financingEconomics.ts` — the two application-facing modules, not the
+    // whole backend — by the structural test in
+    // convex/financedConsignedSettlement.test.ts, which asserts those three
+    // field names are absent by KEY from each whole serialized response. Any
+    // other module that learns to return a `financeApplications` row is outside
+    // that guard and must call this helper. Establishing a genuine tier-2
     // boundary means reworking the economics projection as a whole; tracked
     // separately rather than improvised inside this release.
     //

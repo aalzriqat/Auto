@@ -142,6 +142,7 @@ export const getSalesAndProfitReport = query({
     // a count, because an understated total presented as complete is the same
     // failure as an overstated one.
     let unknownMarginSaleCount = 0;
+    let unknownSupplierSettlementSaleCount = 0;
 
     const vehicleIds = Array.from(new Set(salesInDateRange.map(s => s.vehicleId)));
     const vehicles = await Promise.all(vehicleIds.map(id => ctx.db.get(id)));
@@ -201,12 +202,15 @@ export const getSalesAndProfitReport = query({
       // and not the sale-price spread. It is left out of the totals and counted,
       // so the owner is told the report is incomplete rather than being handed a
       // confident figure built on a number the ledger never recognized.
-      // Either half unknown makes the row incomplete. The entitlement can be
-      // missing while the margin is present, and counting only the margin left
-      // `totalSupplierSettlement` quietly short by that row while the header
-      // still called the report complete.
-      if (economics.dealershipMargin === null || economics.supplierSettlement === null)
-        unknownMarginSaleCount += 1;
+      // Counted SEPARATELY, not folded together. Each counter names the totals
+      // it actually qualifies: folding the settlement into the margin counter
+      // made the margin counter's own contract false — it is documented as
+      // counting rows left out of `totalRevenue` and `totalProfit`, and a row
+      // with a known margin and an unknown entitlement is in both of those.
+      // Telling an owner their profit is a floor when it is exact is a smaller
+      // error than the reverse, but it is still a false statement.
+      if (economics.dealershipMargin === null) unknownMarginSaleCount += 1;
+      if (economics.supplierSettlement === null) unknownSupplierSettlementSaleCount += 1;
       totalRevenue += economics.recognizedRevenue ?? 0;
       totalCost += economics.recognizedCost;
       // Unchanged by the agent split, and deliberately so: price less cost is
@@ -257,6 +261,14 @@ export const getSalesAndProfitReport = query({
        * totals are a floor, not the answer.
        */
       unknownMarginSaleCount,
+      /**
+       * The same thing for `totalSupplierSettlement`, and deliberately a
+       * SEPARATE number. A row can have a known margin and an unknown
+       * entitlement, in which case revenue and profit are exact while the
+       * supplier total is a floor — one counter cannot say that, and folding
+       * the two made the counter above claim exclusions it had not made.
+       */
+      unknownSupplierSettlementSaleCount,
       sales: enrichedSales,
     };
   },

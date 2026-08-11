@@ -226,6 +226,32 @@ describe("the economics split", () => {
   });
 
   /**
+   * The boundary of the rule above, pinned so it is not "generalized" later by
+   * someone reasoning that partial frozen evidence must always be corruption.
+   *
+   * On a route where the dealership collects the gross, a surviving entitlement
+   * beside a missing margin still reads its margin from the live basis, because
+   * that basis is genuinely correct there. A reviewer proposed failing it closed
+   * instead; that rule breaks "a negative recorded margin is not read as a loss"
+   * and "NaN does not poison the profit of every other sale" below, both of
+   * which complete through the real writer (so BOTH fields are set) and then
+   * corrupt the margin alone. Withholding a number the route can answer is not
+   * the safe direction — it is a different wrong answer.
+   */
+  test("a THROUGH row keeps the live basis when only the margin is missing", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: ENTITLEMENT,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: ENTITLEMENT,
+    });
+    expect(e.supplierSettlement).toBe(ENTITLEMENT);
+    expect(e.dealershipMargin).toBe(MARGIN);
+  });
+
+  /**
    * The fallback is still CORRECT for a genuine legacy row. For a consigned
    * sale completed before the frozen fields existed, the live cost IS what the
    * sale was posted on, and withholding it would blank a figure that was never
@@ -382,6 +408,44 @@ describe("a recorded margin the reader cannot trust", () => {
     });
 
     expect(report.totalProfit).toBe(MARGIN);
+  });
+
+  /**
+   * The query-level half of the entitlement fix. The pure-function test proves
+   * `saleEconomics` returns null; this proves `getSalesAndProfitReport` does
+   * something sensible with it, which nothing exercised — the branch could have
+   * been reverted and the suite would have stayed green.
+   *
+   * It also pins the distinction the two counters exist for: this row's PROFIT
+   * is exact, and only its supplier total is a floor. One counter cannot say
+   * that, which is why folding them made the margin counter claim an exclusion
+   * it never made.
+   */
+  test("an erased entitlement makes the supplier total a floor without touching profit", async () => {
+    const s = await seedDealer("reportEntitlementGone");
+    const saleId = await sellConsigned(s, "VINENT1");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, {
+        // The financed DIRECT shape, where the frozen evidence is required.
+        financingType: "FINANCED",
+        supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+        consignedMarginMinor: MARGIN * 1_000,
+        // ...and the half that was erased afterwards.
+        consignedSupplierEntitlementMinor: undefined,
+      });
+    });
+
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId, ...range(),
+    });
+
+    // The margin survived, so the earning is known and belongs in the totals.
+    expect(report.totalProfit).toBe(MARGIN);
+    expect(report.unknownMarginSaleCount).toBe(0);
+
+    // The entitlement did not, so the supplier total excludes it and says so.
+    expect(report.unknownSupplierSettlementSaleCount).toBe(1);
+    expect(report.totalSupplierSettlement).toBe(0);
   });
 
   test("and the salesperson ranking is protected by the same reader", async () => {
