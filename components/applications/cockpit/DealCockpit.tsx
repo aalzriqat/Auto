@@ -619,9 +619,13 @@ export function DealCockpitView({
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">
-              {/* `dealRef` rather than the application id, because a cash deal
-                  has no application. Both queries supply it. */}
-              {t("DealCockpitTitle")} <bdi className="text-muted-foreground">#{String(deal.dealRef).slice(-4)}</bdi>
+              {/* The TITLE is polymorphic too, and this was only visible by
+                  rendering: a cash deal headed `طلب تمويل` ("finance
+                  application") names a record that does not exist for it.
+                  `dealRef` rather than the application id, for the same reason —
+                  a cash deal has no application. Both queries supply it. */}
+              {t(deal.dealKind === "CASH" ? "DealCockpitTitleCash" : "DealCockpitTitle")}{" "}
+              <bdi className="text-muted-foreground">#{String(deal.dealRef).slice(-4)}</bdi>
             </h1>
             <Badge variant={deal.status === "APPROVED" || deal.status === "CLOSED" ? "default" : "secondary"}>
               {t(STATUS_LABEL[deal.status] ?? deal.status)}

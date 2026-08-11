@@ -660,6 +660,7 @@ export const salesEn = {
   // --- Cash deal: the same screen, a different KIND of money ------------
   // The cash headline is an ordinary accounting result and reconciles to the
   // books, so it carries no "estimated / never posted" qualifier at all.
+  DealCockpitTitleCash: "Sale",
   StageSaleAgreed: "Sale agreed",
   // Named for the STATUS enum they render. `SaleCompleted` already exists as the
   // completion toast ("Sale Completed ✓"), and reusing it would have put a
@@ -1387,6 +1388,7 @@ export const salesAr = {
   LineDealerContribution: "مساهمة المعرض في التمويل",
   LineActualExpenses: "مصاريف فعلية",
   // --- صفقة نقدية: نفس الشاشة، ونوع مختلف من الأرقام ---------------------
+  DealCockpitTitleCash: "صفقة بيع",
   StageSaleAgreed: "اتفاق البيع",
   SaleStatusPending: "قيد الإنجاز",
   SaleStatusCompleted: "مكتملة",

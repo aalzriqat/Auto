@@ -308,6 +308,23 @@ describe("the cash rail is shorter, not greyed out", () => {
     renderCockpit(cashDealFixture());
     expect(screen.queryByText(/شركة التمويل الوطني/)).toBeNull();
   });
+
+  /**
+   * Found by RENDERING the screen, not by reading it. The header used the one
+   * title `DealCockpitTitle` — "Finance application" / `طلب تمويل` — so a cash
+   * deal was headed by the name of a record it does not have. Invisible to
+   * every test that existed, and plain the moment the page was looked at.
+   */
+  test("a cash deal is not titled 'finance application'", () => {
+    renderCockpit(cashDealFixture());
+    expect(screen.queryByText(/DealCockpitTitle$/)).toBeNull();
+    expect(screen.getByText(/DealCockpitTitleCash/)).toBeTruthy();
+  });
+
+  test("a financed deal keeps the finance-application title", () => {
+    renderCockpit();
+    expect(screen.getByText(/DealCockpitTitle$/)).toBeTruthy();
+  });
 });
 
 describe("a caller who cannot see the money", () => {
