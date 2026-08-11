@@ -407,6 +407,46 @@ describe("a sale financed WITHOUT an application", () => {
    * this (`FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT`); this proves the READ path
    * also refuses, which is what protects rows that predate that guard.
    */
+  /**
+   * The counterexample an adversarial reviewer produced AFTER I had rejected
+   * the weaker form of this claim — and it was right.
+   *
+   * I had checked that the dangerous shape could not be CREATED (the write path
+   * refuses it since SCRUM-30) and failed to check whether it could already
+   * EXIST. `sales.create` accepts `financingType` and `supplierSettlementRoute`
+   * together, and the write guard only arrived on 2026-08-11, so a row completed
+   * before it can carry `consignedMarginMinor` frozen at the SALE-PRICE spread.
+   *
+   * `saleEconomics` returns a recorded margin unconditionally — its
+   * recorded-margin branch is checked before the evidence rule — so this row
+   * would have published a POSTABLE 5,000 for a deal that earned 3,000: the
+   * financier pays the supplier what it APPROVED (18,000), so the earning is
+   * 18,000 − 15,000, and 20,000 − 15,000 reaches nobody.
+   */
+  test("refuses a LEGACY financed DIRECT row whose frozen margin is the sale-price spread", async () => {
+    const s = await seed("legacyfd");
+    const vehicleId = await consignedVehicle(s, "LEGACYFINDIR0001");
+    const saleId = await insertSale(s, vehicleId, {
+      salePrice: CONSIGNED_PRICE, // 20,000
+      financingType: "FINANCED",
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      // What a pre-guard completion froze: salePrice − entitlement = 5,000.
+      // The real earning was approved (18,000) − entitlement (15,000) = 3,000.
+      consignedMarginMinor: (CONSIGNED_PRICE - ENTITLEMENT) * SCALE,
+      consignedSupplierEntitlementMinor: ENTITLEMENT * SCALE,
+      consignedMarginCurrency: "JOD",
+    });
+
+    const deal = await s.asUser.query(api.sales.dealCockpit, { orgId: s.orgId, saleId });
+    const profit = deal!.money!.profit;
+
+    // Withheld, not published. Nothing on this row can prove what the finance
+    // company approved, and 5,000 overstates the deal by 2,000.
+    expect(profit.available).toBe(false);
+    if (profit.available) throw new Error("unreachable");
+    expect(profit.reason).toBe("FinancedDirectUnverified");
+  });
+
   test("refuses the headline on a financed DIRECT consigned row with no recorded margin", async () => {
     const s = await seed("findirect");
     const vehicleId = await consignedVehicle(s, "FINDIRECT0000001");
@@ -423,7 +463,11 @@ describe("a sale financed WITHOUT an application", () => {
     // Never the sale-price spread, which reaches nobody on this route.
     expect(profit.available).toBe(false);
     if (profit.available) throw new Error("unreachable");
-    expect(profit.reason).toBe("UnknownMargin");
+    // `FinancedDirectUnverified` rather than `UnknownMargin`: the route-level
+    // guard fires before the margin is consulted at all, and it names the actual
+    // reason — the approved amount is unrecorded — instead of the symptom.
+    // Both are refusals; this one tells the operator what is missing.
+    expect(profit.reason).toBe("FinancedDirectUnverified");
   });
 });
 

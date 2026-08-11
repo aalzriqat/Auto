@@ -1136,7 +1136,11 @@ export type AccountingProfit =
     }
   | {
       available: false;
-      reason: "UnknownMargin" | "DealCancelled" | "SaleNotCompleted";
+      reason:
+        | "UnknownMargin"
+        | "DealCancelled"
+        | "SaleNotCompleted"
+        | "FinancedDirectUnverified";
     };
 
 /**
@@ -1304,6 +1308,32 @@ export function deriveAccountingProfit(args: {
    * the opposite direction, as dropping the qualifier from the financed figure.
    */
   saleCompleted: boolean;
+  /**
+   * Externally financed AND settled DIRECT_TO_SUPPLIER, with no application to
+   * prove what the financier approved.
+   *
+   * ⚠️ Refuses even when a frozen margin is present, and that is the whole
+   * point. On this route the earning is `approved − entitlement`; the finance
+   * company pays the supplier what it approved, and `salePrice − entitlement`
+   * reaches no party at all. `sales.create` accepts `financingType` and
+   * `supplierSettlementRoute` together, and the write-path guard
+   * (`FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT`) only arrived with the SCRUM-30
+   * release — so rows completed before it can carry a `consignedMarginMinor`
+   * frozen at the sale-price spread. `saleEconomics` returns that recorded
+   * margin unconditionally (its recorded-margin branch is checked before the
+   * evidence rule), so on a 20,000 sale against a 15,000 entitlement where the
+   * financier actually paid 18,000, the screen would publish a POSTABLE 5,000
+   * for a deal that earned 3,000.
+   *
+   * There is no field on such a row that can prove otherwise, so the figure is
+   * withheld rather than guessed. New rows of this shape cannot be created, so
+   * refusing costs nothing going forward and protects every legacy one.
+   *
+   * Found by an adversarial reviewer AFTER I had rejected the weaker form of
+   * the same claim. The rejection was wrong: I checked that the dangerous shape
+   * could not be CREATED and failed to check whether it could already EXIST.
+   */
+  financedDirectWithoutApproval?: boolean;
   /** `saleEconomics().dealershipMargin` — `null` means genuinely UNKNOWN. */
   dealershipMarginMinor: number | null;
   /**
@@ -1329,6 +1359,10 @@ export function deriveAccountingProfit(args: {
   // Before the margin is even consulted: a draft has earned nothing yet, and
   // saying so is not the same as saying the figure is unknown.
   if (!args.saleCompleted) return { available: false, reason: "SaleNotCompleted" };
+  // Before the recorded margin is consulted, because on this route the recorded
+  // margin is exactly what cannot be trusted.
+  if (args.financedDirectWithoutApproval)
+    return { available: false, reason: "FinancedDirectUnverified" };
   // Never coerced to zero. `reports.salesReport` counts these rows separately
   // and excludes them from `totalProfit` precisely so an incomplete report is
   // visible as incomplete; a screen that rendered 0 here would be the confident

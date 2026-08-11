@@ -125,7 +125,9 @@ const PROFIT_BLOCKED_REASON: Record<
   /** CASH only: `dealershipMargin === null`, which is UNKNOWN and never zero. */
   | "UnknownMargin"
   /** CASH only: a draft has posted no journal, so nothing is postable yet. */
-  | "SaleNotCompleted",
+  | "SaleNotCompleted"
+  /** Financed + DIRECT with no application: the recorded margin cannot be trusted. */
+  | "FinancedDirectUnverified",
   string
 > = {
   NoApprovedPurchaseAmount: "ProfitNeedsApprovedPurchase",
@@ -135,6 +137,7 @@ const PROFIT_BLOCKED_REASON: Record<
   DealCancelled: "ProfitDealCancelled",
   UnknownMargin: "ProfitUnknownMargin",
   SaleNotCompleted: "ProfitSaleNotCompleted",
+  FinancedDirectUnverified: "ProfitFinancedDirectUnverified",
 };
 
 /**

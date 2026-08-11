@@ -2468,6 +2468,18 @@ export const dealCockpit = query({
           // A PENDING draft has posted nothing, so it has no journal to call
           // this figure postable against.
           saleCompleted: sale.status === "COMPLETED",
+          /**
+           * The financed DIRECT route with no application behind it.
+           *
+           * Reached only by rows that predate the write-path guard, and their
+           * frozen margin may be the sale-price spread — a figure that reaches
+           * no party on this route. Nothing on the row can prove what the
+           * financier approved, so the headline is withheld rather than guessed.
+           * A row WITH an application never gets here: `money` is already null
+           * for those, because its deal screen is the application-keyed one.
+           */
+          financedDirectWithoutApproval:
+            consigned && externallyFinanced && !collectsGross && !financingApplicationId,
           dealershipMarginMinor: marginMinor,
           // `?? null`, never `?? 0`. An amount that could not be READ is not an
           // amount of nought, and these two used to be `?? 0` — which printed
