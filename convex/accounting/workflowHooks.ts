@@ -624,6 +624,10 @@ export async function hookSaleCompleted(
     /** Present when the vehicle is the supplier's and this sale is on agent basis — see SaleCompletedPayload. */
     consignment?: {
       supplierEntitlementMinor: number;
+      /** What the third party actually pays the supplier on the direct route — see SaleCompletedPayload. */
+      supplierGrossReceiptMinor?: number;
+      /** Whether an outside financier pays for the car — see SaleCompletedPayload. */
+      externallyFinanced?: boolean;
       supplierName?: string;
       settlementRoute: "DIRECT_TO_SUPPLIER" | "THROUGH_DEALERSHIP";
     };

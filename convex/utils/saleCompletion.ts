@@ -27,6 +27,7 @@ import {
 import { computeResoldProductMargin } from "../accounting/postingRules";
 import { toMinorUnits, fromMinorUnits } from "./money";
 import { computeVehicleCapitalizedCost, vehicleHasCostBasis } from "./vehicleCost";
+import { computeConsignedSupplierPosition } from "../../lib/financingEconomics";
 import { openSupplierReceivable } from "../supplierReceivables";
 import {
   allocatedDepositForVehicle,
@@ -38,6 +39,7 @@ import { planDepositSettlementApplication } from "./depositSettlementPlan";
 import {
   consignedSettlementRoute,
   dealershipCollectsGross,
+  isConsignedAgentSale,
   type ConsignedSettlementRoute,
 } from "./vehicleOwnership";
 import {
@@ -81,6 +83,27 @@ type SaleCompletionArgs = {
   // means THROUGH_DEALERSHIP — see consignedSettlementRoute(). Ignored for
   // dealer-owned stock, which has no supplier to settle with.
   supplierSettlementRoute?: ConsignedSettlementRoute;
+  /**
+   * What the third party pays the supplier DIRECTLY, in minor units, on the
+   * direct route only. Omitted means "the buyer pays him the sale price", which
+   * is the cash direct case and stays exactly as it was.
+   *
+   * A FINANCED direct deal must pass the finance company's approved purchase
+   * amount here, because that — not the sale price — is what reaches him. The
+   * two differ whenever the company approves below the quotation, and deriving
+   * the dealership's claim from the sale price in that case made the supplier
+   * debtor for money that never passed through his hands. See
+   * `computeConsignedSupplierPosition`.
+   */
+  supplierGrossReceiptMinor?: number;
+  /**
+   * The currency `supplierGrossReceiptMinor` is denominated in — the
+   * application's pinned `economicsCurrency`, which is NOT always the org's.
+   *
+   * Required whenever the amount is supplied. Completion refuses rather than
+   * converting when the two disagree; see the check in `completeSale`.
+   */
+  supplierGrossReceiptCurrency?: string;
   // What happens to the customer's reservation deposit. Required on a consigned
   // sale that has one — see resolveReservationDeposits.
   depositResolution?: {
@@ -127,6 +150,28 @@ type PreparedSaleCompletion = {
   // alone, so the mode no longer decides it.
   accrueAtCompletion: boolean;
 };
+
+/**
+ * Why a financed sale settled directly with the supplier cannot be recorded as
+ * a plain sale. Shared so the refusal reads identically wherever it fires, and
+ * so the two places that enforce it cannot drift into describing it differently.
+ */
+export const FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT =
+  "This is a financed sale of the supplier's car settled directly with him, so what the finance company approved is what he actually receives — and the dealership's claim on him is measured from it. That amount lives on the finance application, so this deal has to be completed through the financing workflow rather than recorded as a sale directly.";
+
+/**
+ * Why a commission cannot be recalculated on an already-completed financed
+ * direct sale that has no usable record of what it earned.
+ *
+ * Deliberately NOT `FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT`, which tells the
+ * operator to complete the deal through the financing workflow. That is right
+ * advice when the sale is being created and useless when it was completed
+ * months ago — the sale exists, the ledger has moved, and the missing thing is
+ * the sale's own recorded earning. Pointing a manager at the wrong remedy on a
+ * refusal that concerns somebody's pay is worse than saying less.
+ */
+export const CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN =
+  "This sale is the supplier's car, financed, and settled directly with him, but it carries no usable record of what the dealership earned on it — so a commission cannot be worked out. Its recorded margin is missing, unreadable, or in a different currency from the organization's. Have the deal's figures corrected before recalculating; the existing commission has been left untouched.";
 
 async function prepareSaleCompletion(
   ctx: MutationCtx,
@@ -207,6 +252,32 @@ async function prepareSaleCompletion(
   // PAYMENT (the previous behavior) recognized the expense on a cash basis
   // inside an accrual ledger: a car sold in July with its commission paid in
   // August showed full margin in July and a naked expense in August.
+  // Resolved before the commission block, which needs it to read the supplier
+  // receipt: that amount arrives in MINOR units and this calculator works in
+  // major ones, and converting with the wrong scale is the exact class of
+  // defect this change exists to remove.
+  const currency = await getOrgCurrency(ctx, args.orgId);
+
+  // Refused BEFORE the commission is worked out, not after.
+  //
+  // Both this and the commission calculator refuse the same missing fact, and
+  // the commission block runs first — so without this the operator recording a
+  // financed direct sale was told his salesperson's commission could not be
+  // calculated, when the real answer is that this deal does not belong in this
+  // form at all. The specific refusal has to reach him first, and it applies to
+  // a draft as much as to a completion: a draft that can never be completed is
+  // not a useful thing to have created.
+  if (
+    isConsignedAgentSale(vehicle) &&
+    !dealershipCollectsGross(
+      consignedSettlementRoute({ supplierSettlementRoute: args.supplierSettlementRoute })
+    ) &&
+    (args.financingType === "FINANCED" || args.financingType === "LEASE") &&
+    args.supplierGrossReceiptMinor === undefined
+  ) {
+    throw new ConvexError(FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT);
+  }
+
   let accrueAtCompletion = false;
   if (commissionMode === "MANUAL") {
     commissionAmount = args.existingCommissionAmount;
@@ -218,11 +289,19 @@ async function prepareSaleCompletion(
       commissionMode,
       memberCommissionRate: membership.commissionRate,
       commissionTiers: orgSettings?.commissionTiers ?? [],
+      // The same settlement facts the claim and the journal are built from, so
+      // payroll cannot be measured on a spread the ledger never recognized.
+      // In MAJOR units here because this calculator works in them; the amount
+      // itself is validated against the currency further down.
+      supplierGrossReceipt:
+        args.supplierGrossReceiptMinor !== undefined
+          ? fromMinorUnits(args.supplierGrossReceiptMinor, currency)
+          : undefined,
+      settlementRoute: args.supplierSettlementRoute,
+      externallyFinanced: args.financingType === "FINANCED" || args.financingType === "LEASE",
     });
     accrueAtCompletion = commissionAmount != null;
   }
-
-  const currency = await getOrgCurrency(ctx, args.orgId);
 
   return { vehicle, customer, leadId, commissionAmount, currency, accrueAtCompletion };
 }
@@ -247,19 +326,132 @@ export async function computeAutoCommissionAmount(
     commissionMode: string;
     memberCommissionRate: number | undefined;
     commissionTiers: CommissionTier[];
+    /**
+     * What actually reaches the supplier on a consigned DIRECT sale, in major
+     * units. Omitted means "the sale price", which is the cash direct case and
+     * every owned sale.
+     *
+     * Required on a financed direct deal, where it is the approved purchase
+     * amount. See `commissionableEarnings` below for why it may not be inferred.
+     */
+    supplierGrossReceipt?: number;
+    /** The route this sale settles on; absent reads as THROUGH_DEALERSHIP. */
+    settlementRoute?: ConsignedSettlementRoute;
+    /**
+     * Whether a third party financed this sale (FINANCED or LEASE). It decides
+     * whether an absent `supplierGrossReceipt` is the ordinary cash-direct case
+     * or missing evidence that must be refused — see `commissionableEarnings`.
+     */
+    externallyFinanced: boolean;
+    /**
+     * What a COMPLETED consigned sale already recorded as its recognized
+     * earning, in major units. When given it is used verbatim and nothing is
+     * read from the vehicle.
+     *
+     * Only recalculation supplies this, and only for a sale that has one.
+     * Completion cannot: it is the thing computing the figure in the first
+     * place. The distinction matters because the two operands age differently
+     * — the supplier receipt is frozen on the sale, while the vehicle's
+     * capitalized cost is a live row that a later correction can move. Deriving
+     * a commission from one frozen and one live operand produced a payable the
+     * GL, the supplier claim and every report disagreed with.
+     */
+    frozenRecognizedEarnings?: number;
   }
 ): Promise<number | undefined> {
-  if (!vehicleHasCostBasis(args.vehicle)) return undefined;
-  // Same cost basis the GL uses for COGS (purchase + landed costs + capitalized
-  // reconditioning expenses) so commission, the GL, and the operational reports
-  // all show the same margin for a sale.
-  const vehicleCost = await computeVehicleCapitalizedCost(ctx, args.vehicle);
-  const grossProfit = Math.max(0, args.salePrice - vehicleCost);
+  let grossProfit: number;
+  if (args.frozenRecognizedEarnings !== undefined) {
+    // The sale already recorded what it earned, and that figure is what the
+    // ledger booked. Nothing is re-derived from the vehicle here — not even
+    // its cost — because the vehicle is a live row and the earning is not.
+    grossProfit = args.frozenRecognizedEarnings;
+  } else {
+    if (!vehicleHasCostBasis(args.vehicle)) return undefined;
+    // Same cost basis the GL uses for COGS (purchase + landed costs +
+    // capitalized reconditioning expenses) so commission, the GL, and the
+    // operational reports all show the same margin for a sale.
+    const vehicleCost = await computeVehicleCapitalizedCost(ctx, args.vehicle);
+    grossProfit = commissionableEarnings({
+      salePrice: args.salePrice,
+      vehicleCost,
+      vehicle: args.vehicle,
+      supplierGrossReceipt: args.supplierGrossReceipt,
+      settlementRoute: args.settlementRoute,
+      externallyFinanced: args.externallyFinanced,
+    });
+  }
   if (args.commissionMode === "AUTO_TIERS") {
     return calculateCommissionFromTiers(grossProfit, args.commissionTiers);
   }
   const rate = args.memberCommissionRate ?? 0;
   return rate > 0 ? grossProfit * (rate / 100) : 0;
+}
+
+/**
+ * The base automatic salesperson commission is calculated on.
+ *
+ * **Dealership ruling (SCRUM-30):** commission is measured on *recognized,
+ * realized dealership earnings* — never on `salePrice − cost` merely because
+ * that happens to equal the commercial spread.
+ *
+ * On a financed DIRECT deal those are not the same number. With a sale at
+ * 20,000, a supplier entitlement of 15,000 and an approved purchase amount of
+ * 18,000, the dealership recognizes 3,000 of agency revenue. The remaining
+ * 2,000 is `salePrice − approved`: per SCRUM-23 it appears on no invoice and no
+ * receipt, and it is a management figure. Commissioning it would pay real
+ * payroll money — an accrued expense and an employee payable — against an
+ * earning the ledger never recognized.
+ *
+ * It stays out of the base even when the customer pays that 2,000 directly to
+ * the dealership. Such a payment must first be explicitly recorded and
+ * classified as dealership income belonging to this sale; if the commission
+ * plan then marks that component commission-eligible, the base becomes the SUM
+ * of two recognized components. It must never be reached by falling back to
+ * `salePrice − cost`, because that route also moves payroll whenever an
+ * internal quotation or sale-price figure changes with no money attached to it.
+ *
+ * Every other case is unchanged and deliberately so:
+ *   - an owned sale — the dealership sells its own car and the whole spread is
+ *     its earning;
+ *   - a consigned THROUGH_DEALERSHIP sale — the dealership collects the gross
+ *     and the customer is contractually liable for the full sale price, so the
+ *     spread over the entitlement is genuinely recognized;
+ *   - a cash DIRECT sale — the buyer pays the supplier the sale price, so the
+ *     basis IS the sale price.
+ *
+ * **Missing evidence is not a cash sale.** On a financed DIRECT deal the
+ * supplier receipt is the approved purchase amount, and it is the only thing
+ * that distinguishes the recognized 3,000 from the commercial 5,000. Reading an
+ * absent value as "then use the sale price" would restore the exact basis this
+ * ruling removed, silently, on the one path that pays real payroll money — and
+ * it is reachable: `/admin`'s raw-JSON record editor can clear the field on a
+ * completed sale, and rows written before this branch never carried it. So the
+ * calculator refuses instead. In `recalculateCommission` the throw rolls the
+ * mutation back, which is precisely the required outcome: the existing
+ * commission is left exactly as it was rather than being replaced by a number
+ * nobody can substantiate.
+ */
+function commissionableEarnings(args: {
+  salePrice: number;
+  vehicleCost: number;
+  vehicle: Doc<"vehicles">;
+  supplierGrossReceipt?: number;
+  settlementRoute?: ConsignedSettlementRoute;
+  externallyFinanced: boolean;
+}): number {
+  const settlesDirect = !dealershipCollectsGross(
+    consignedSettlementRoute({ supplierSettlementRoute: args.settlementRoute })
+  );
+  const consignedDirect = isConsignedAgentSale(args.vehicle) && settlesDirect;
+  if (consignedDirect && args.externallyFinanced && args.supplierGrossReceipt === undefined) {
+    throw new ConvexError(
+      "This sale is the supplier's car, financed, and settled directly with him, but the amount the finance company actually paid him was not recorded on it. Commission is earned on what the dealership recognized over the supplier's entitlement, and without that amount it cannot be worked out. Record the approved purchase amount on the deal first."
+    );
+  }
+  const realizedBasis = consignedDirect
+    ? (args.supplierGrossReceipt ?? args.salePrice)
+    : args.salePrice;
+  return Math.max(0, realizedBasis - args.vehicleCost);
 }
 
 async function insertSaleRecord(
@@ -754,9 +946,97 @@ async function applySaleCompletionSideEffects(
   // capped at the margin, and the margin cannot be known without the cost.
   const costAmount = await computeVehicleCapitalizedCost(ctx, prepared.vehicle);
   const costMinor = costAmount > 0 ? toMinorUnits(costAmount, prepared.currency) : undefined;
+
+  // The ONE derivation of this deal's supplier economics. Everything downstream
+  // — the recognized revenue, the margin recorded on the sale, the supplier
+  // claim, the GL entry and the cockpit — consumes it. It used to be computed
+  // twice from two different quantities, and the two disagreed on exactly the
+  // deals where it mattered.
+  //
+  // What the dealership's margin is measured AGAINST is the amount that reaches
+  // the supplier, and that is not always the sale price:
+  //
+  //   THROUGH_DEALERSHIP — the dealership collects the gross and owes him his
+  //     entitlement, so its spread is over the SALE PRICE. Unchanged, and
+  //     correct: the customer is contractually liable for the whole price, and
+  //     that liability is on the books as a receivable.
+  //   DIRECT, cash — the BUYER pays him, and what he pays is the sale price.
+  //     Also unchanged.
+  //   DIRECT, financed — the FINANCE COMPANY pays him its APPROVED amount, and
+  //     `finalizeDeal` passes it. `salePrice − approved` never reaches him; it
+  //     is either paid to the dealership directly by the customer or collected
+  //     by nobody, and per SCRUM-23 it is a management figure on no invoice.
+  //     Measuring his debt against the sale price billed him for it anyway.
+  const salePriceMinor = toMinorUnits(args.salePrice, prepared.currency);
+  const settlesDirectToSupplier = !dealershipCollectsGross(settlementRoute);
+  // A financed deal on the direct route MUST arrive with the approved amount.
+  //
+  // The fallback below is right for a cash direct sale — the buyer pays the
+  // supplier, and what he pays is the sale price. It is wrong for a financed
+  // one, where the FINANCE COMPANY pays him whatever it approved, and that can
+  // be less than the sale price.
+  //
+  // `sales.create` and the draft-completion path both accept
+  // `financingType: "FINANCED"` alongside `DIRECT_TO_SUPPLIER` and have no field
+  // for the approved amount — they cannot have one, because it lives on the
+  // application. Left to the fallback they recorded the sale price as the
+  // supplier's receipt and opened a claim for `salePrice − entitlement`: the
+  // exact defect this redesign closes, reached through a door that does not go
+  // near `finalizeDeal`.
+  //
+  // So it refuses. A financed direct sale is only constructible through the
+  // application workflow, because only that workflow knows what the financier
+  // approved — and the approval must be a server-side fact, never an amount the
+  // caller supplies alongside the sale.
+  // Asserted here as well as in `prepareSaleCompletion`, which reaches it first
+  // and is where the refusal actually fires. Kept because this is the function
+  // that goes on to USE the amount: a later caller that reaches the posting
+  // without going through prepare would otherwise reintroduce the fallback
+  // silently, and this is the line that must not be quietly true.
+  if (
+    isSourced &&
+    settlesDirectToSupplier &&
+    (args.financingType === "FINANCED" || args.financingType === "LEASE") &&
+    args.supplierGrossReceiptMinor === undefined
+  ) {
+    throw new ConvexError(FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT);
+  }
+  // The supplied amount is denominated in the APPLICATION's pinned currency,
+  // and this sale's currency comes from the ORG. They are not always the same:
+  // `orgSettings` does not count `financeApplications` among the rows that lock
+  // an org's currency, so a deal pinned in JOD can be finalized under an org
+  // that now reports in USD.
+  //
+  // Refused rather than converted. Subtracting an entitlement in cents from an
+  // approval in fils does not produce a slightly wrong claim — at a 20,000 sale
+  // with a 15,000 entitlement and an 18,000 approval it produces 16,500,000
+  // cents against a supplier holding 3,000 dinars, and the GL and the subledger
+  // agree with each other on that figure, so nothing reconciles them. There is
+  // no exchange rate anywhere in this model, and inventing one to keep the deal
+  // moving would be a worse answer than stopping.
+  if (
+    args.supplierGrossReceiptMinor !== undefined &&
+    args.supplierGrossReceiptCurrency !== undefined &&
+    args.supplierGrossReceiptCurrency !== prepared.currency
+  ) {
+    throw new ConvexError(
+      `This deal's financing figures are recorded in ${args.supplierGrossReceiptCurrency} but the dealership now reports in ${prepared.currency}, so what the finance company pays the supplier cannot be compared with what he is owed. Settle the deal's currency before completing it — the amounts cannot be converted here without an exchange rate nobody has recorded.`
+    );
+  }
+  const supplierGrossReceiptMinor = settlesDirectToSupplier
+    ? (args.supplierGrossReceiptMinor ?? salePriceMinor)
+    : salePriceMinor;
+  // The same quantity `computeConsignedSupplierPosition` calls
+  // `dealershipClaimMinor`, and deliberately still spelled out here rather than
+  // taken from it: that function REFUSES a receipt below the entitlement, and it
+  // is called further down inside the consignment block, after the checks that
+  // decide whether a shortfall is even possible. Calling it here instead would
+  // move that refusal ahead of them and change which error an operator sees.
+  // The shared derivation remains the authority on whether this number is legal;
+  // this is the same arithmetic under a guard that has not run yet.
   const marginMinor =
     isSourced && costMinor !== undefined
-      ? toMinorUnits(args.salePrice, prepared.currency) - costMinor
+      ? supplierGrossReceiptMinor - costMinor
       : null;
 
   const { previouslyCollected, appliedDeposits, appliedToSupplierSettlement } =
@@ -862,42 +1142,58 @@ async function applySaleCompletionSideEffects(
         // entitlement, so the dealership owes the supplier more than the deal
         // collected with nothing on the books saying so. Paying it later
         // debits an AP that the sale never credited.
-        if (toMinorUnits(args.salePrice, prepared.currency) < costMinor) {
+        //
+        // Measured against what actually REACHES him, not against the sale
+        // price. On a financed direct deal the finance company's approved
+        // amount is what he is paid, and it can fall below his entitlement
+        // while the sale price stays comfortably above it — so the sale-price
+        // form of this check passed on precisely the deals where the supplier
+        // ends up short. `computeConsignedSupplierPosition` is the shared
+        // derivation that refuses it, and it refuses rather than clamping to
+        // zero: a shortfall means somebody has to fund the difference, and
+        // silently treating it as "no claim" makes that somebody the supplier
+        // without anyone deciding so.
+        try {
+          computeConsignedSupplierPosition({
+            supplierEntitlementMinor: costMinor,
+            supplierGrossReceiptMinor,
+          });
+        } catch (error) {
+          // Rethrown as a ConvexError: Convex redacts a plain Error's message
+          // from a production deployment, and the operator would meet this as
+          // "An unexpected error occurred" on a form whose only fix is a number
+          // they have no reason to suspect.
+          console.error(error);
+          const paidLabel = fromMinorUnits(supplierGrossReceiptMinor, prepared.currency);
           throw new ConvexError(
-            `This car is ${prepared.vehicle.sourcedFromName ?? "the supplier"}'s and the dealership sells it as his agent, but the sale price is below the supplier's entitlement of ${costAmount} — the amount he is owed for it. The deal would lose money the dealership has to fund, which is a real situation but not one that can be assumed. Record the shortfall against the supplier agreement, or agree a lower supplier amount, before completing the sale.`
+            `This car is ${prepared.vehicle.sourcedFromName ?? "the supplier"}'s and the dealership sells it as his agent, but he is only being paid ${paidLabel} against an entitlement of ${costAmount} — the amount he is owed for it. The deal would leave him short by money somebody has to fund, which is a real situation but not one that can be assumed. Record the shortfall against the supplier agreement, or agree a lower supplier amount, before completing the sale.`
           );
         }
-        // A financed deal cannot be settled directly with the supplier — yet.
+        // A financed deal settled directly with the supplier used to be refused
+        // here, because the finance company's side of the settlement had no way
+        // to record it. It does now, so the refusal is gone rather than
+        // weakened — but what it was protecting against is worth keeping in
+        // view, because none of it is enforced by this function.
         //
-        // Refused rather than silently redirected. `finalizeDeal` calls
-        // `completeSale` with no `supplierSettlementRoute` at all, and an
-        // absent route reads as THROUGH_DEALERSHIP (`consignedSettlementRoute`).
-        // So an operator who chose DIRECT_TO_SUPPLIER on a financed quote had
-        // the deal posted the opposite way: the dealership booked a receivable
-        // from the customer for the gross and a payable to the supplier, when
-        // the buyer's financier had in fact paid the supplier and the supplier
-        // owed the dealership only its margin. Both sides of the settlement
-        // were inverted, quietly.
+        // The hazard was never the journal. This rule posts from
+        // `settlementRoute` and always has: on the direct route it debits the
+        // supplier claim and credits commission, and nothing about financing
+        // changes that. The hazard was everything `finalizeDeal` does AFTER the
+        // sale — a finance-company receivable for the principal, a
+        // customer-receivable transfer, and a DR AR-Finance / CR AR-Customers
+        // posting — all of which describe money coming to the dealership on a
+        // deal where it comes to the supplier. Those are now skipped on this
+        // route, in `applications.settlesDirectToSupplier`.
         //
-        // Supporting the route properly is not one persisted field: the
-        // finance-company receivable, the expected dealer remittance,
-        // disbursement confirmation, the customer contribution, the supplier
-        // receivable, cancellation/reversal and settlement reconciliation all
-        // have to agree. That is the settlement work this PR deliberately does
-        // not contain. Until it exists, the honest answer is a refusal —
-        // enforced HERE and not by hiding a radio button, because the form is
-        // not the only caller.
+        // The other half was that the route could not be expressed at all:
+        // `finalizeDeal` called `completeSale` with no `supplierSettlementRoute`,
+        // so an absent route read as THROUGH_DEALERSHIP and posted the deal the
+        // opposite way from what was agreed. It is now recorded on the
+        // application and carried through.
         //
-        // Cash consigned sales keep both routes.
-        const financed =
-          args.financingType === "FINANCED" ||
-          args.financingType === "LEASE" ||
-          args.applicationId != null;
-        if (financed && !dealershipCollectsGross(settlementRoute)) {
-          throw new ConvexError(
-            `This is a financed deal on ${prepared.vehicle.sourcedFromName ?? "the supplier"}'s car, and paying the supplier directly is not supported on financed sales yet — the finance company's side of the settlement has no way to record it. Settle it through the dealership, or complete the sale as a cash deal.`
-          );
-        }
+        // Everything else in this block still refuses, and deliberately: a
+        // missing supplier entitlement, a sale below it, and a taxed agency
+        // sale are unchanged by who financed the buyer.
         if (args.taxAmount != null && args.taxAmount > 0) {
           throw new ConvexError(
             `This is an agency sale — the dealership sells this car as ${prepared.vehicle.sourcedFromName ?? "the supplier"}'s agent — and agency sales have no agreed tax treatment yet, so whether the tax is his liability or the dealership's changes who owes the money. Record the tax against the supplier agreement, or sell the car as dealership stock, before completing the sale.`
@@ -905,6 +1201,17 @@ async function applySaleCompletionSideEffects(
         }
         return {
           supplierEntitlementMinor: costMinor,
+          // Carried so the posting rule consumes this deal's actual settlement
+          // basis rather than recomputing one from the sale price. The GL and
+          // the subledger disagreeing about the size of the same claim is the
+          // defect being closed here, and the only way they cannot is if
+          // exactly one place decides it.
+          supplierGrossReceiptMinor,
+          // So a drained outbox event can tell a pre-field CASH direct sale
+          // (where the sale price genuinely is what the supplier received) from
+          // a financed one (where it is not). Only the current emitter sets it.
+          externallyFinanced:
+            args.financingType === "FINANCED" || args.financingType === "LEASE",
           supplierName: prepared.vehicle.sourcedFromName,
           settlementRoute,
         };
@@ -1103,6 +1410,39 @@ async function applySaleCompletionSideEffects(
   // sourced sale without a positive `costMinor` throws further up.
   const marginMinorForClaim = Math.max(0, marginMinor ?? 0);
   const supplierOwesMargin = marginMinorForClaim > 0;
+  // Recorded on the sale itself, including when it is zero.
+  //
+  // A zero margin opens no claim below, and the cockpit used to read that
+  // absence as proof the deal earned nothing. Absence proves no such thing: it
+  // is also what a sale predating the claims table looks like, and what a
+  // `hardDeleteOrg` that fails between removing receivables and removing sales
+  // leaves behind. Both would have shown the deal as fully settled with the
+  // margin still uncollected. Writing the fact costs one patch; deducing it
+  // from a gap cost three review rounds and two wrong answers.
+  if (isSourced && marginMinor !== null) {
+    await ctx.db.patch(saleId, {
+      consignedMarginMinor: marginMinor,
+      // Denominated, not assumed: the reader resolves its currency from the
+      // application, which can differ from the org's.
+      consignedMarginCurrency: prepared.currency,
+      // The supplier's own side of the same settlement, recorded rather than
+      // left to be re-derived. `costMinor` is non-undefined wherever
+      // `marginMinor` is non-null on a sourced sale — the consignment block
+      // above throws otherwise — but it is read defensively because a future
+      // edit to that block must not silently start writing `undefined` here.
+      //
+      // The cockpit renders the entitlement as the supplier's settlement line
+      // and cancellation reverses against it, and both would otherwise have to
+      // recompute it from a vehicle cost that is editable after the sale.
+      ...(costMinor !== undefined ? { consignedSupplierEntitlementMinor: costMinor } : {}),
+      // Only on the direct route: on THROUGH_DEALERSHIP nobody pays him
+      // directly, and writing the sale price here would assert a receipt that
+      // never happened.
+      ...(!dealershipCollectsGross(settlementRoute)
+        ? { consignedSupplierGrossReceiptMinor: supplierGrossReceiptMinor }
+        : {}),
+    });
+  }
   if (isSourced && costAmount > 0 && supplierOwesMargin && !dealershipCollectsGross(settlementRoute)) {
     const marginAmount = fromMinorUnits(marginMinorForClaim, prepared.currency);
     await openSupplierReceivable(ctx, {

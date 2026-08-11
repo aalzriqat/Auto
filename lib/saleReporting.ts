@@ -24,11 +24,60 @@ function finiteOrZero(value: number | null | undefined): number {
 }
 
 /**
+ * An explicit `null` is the backend saying it could not establish what this
+ * deal earned — a financed sale settled directly with the supplier whose
+ * recorded margin is missing. It is NOT the same as the field being absent.
+ *
+ * The distinction decides real money on screen. `recognizedRevenueOf` falls
+ * back to `salePrice` for an absent field, which is right for a client running
+ * ahead of a backend deploy; applying that same fallback to a withheld value
+ * would answer 20,000 for a deal that earned 3,000 — turning a deliberate
+ * refusal into the largest wrong number available.
+ */
+export function marginIsUnknown(sale: ReportedSaleRow): boolean {
+  return sale?.netProfit === null || sale?.recognizedRevenue === null;
+}
+
+/** How many of these rows contribute nothing to the totals because their earning is unknown. */
+export function countUnknownMargin(sales: ReportedSaleRow[] | undefined | null): number {
+  return (sales ?? []).filter((sale) => marginIsUnknown(sale)).length;
+}
+
+/** A salesperson row from the performance report. Both fields are new. */
+export interface ReportedPerformanceRow {
+  marginComplete?: boolean;
+  unknownMarginSaleCount?: number;
+}
+
+/**
+ * The absent-versus-withheld rule above, applied to the salesperson table.
+ *
+ * `main` auto-deploys the frontend while the Convex backend deploy is manual,
+ * so this page will run for a while against a server that has never heard of
+ * either field. Read as a plain falsy boolean, that marks EVERY salesperson
+ * incomplete and prints `String(undefined)` as the count — while the notice
+ * above the table, which already defaults with `?? 0`, says none. Absent is a
+ * server that has not deployed yet; only an explicit `false` is the server
+ * saying it could not count something.
+ */
+export function performanceMarginIsIncomplete(perf: ReportedPerformanceRow | undefined | null): boolean {
+  return perf?.marginComplete === false;
+}
+
+/** Never `undefined`, so the count can never reach the screen as text. */
+export function unknownMarginCountOf(perf: ReportedPerformanceRow | undefined | null): number {
+  return perf?.unknownMarginSaleCount ?? 0;
+}
+
+/**
  * Falls back to `salePrice` only when the row predates `recognizedRevenue` —
  * a client running ahead of a backend deploy. Showing the old number beats
  * showing nothing, and for owned stock the two are identical anyway.
+ *
+ * A withheld (`null`) value never takes that path: see `marginIsUnknown`.
  */
 export function recognizedRevenueOf(sale: ReportedSaleRow): number {
+  if (marginIsUnknown(sale)) return 0;
   if (typeof sale?.recognizedRevenue === "number" && Number.isFinite(sale.recognizedRevenue)) {
     return sale.recognizedRevenue;
   }

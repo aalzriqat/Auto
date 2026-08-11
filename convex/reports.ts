@@ -21,6 +21,54 @@ import {
 import { saleEconomics } from "./utils/vehicleOwnership";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { getOrgCurrency } from "./accounting/workflowHooks";
+import { fromMinorUnits } from "./utils/money";
+
+/**
+ * The margin a consigned sale FROZE at completion, or `undefined` when the row
+ * does not carry one this reader is willing to believe.
+ *
+ * Deliberately the same discipline as `applications.saleTimeMarginMinor`, which
+ * guards the identical field for the cockpit and states the reason: the write
+ * path cannot produce a non-finite or negative margin — `saleCompletion`
+ * refuses a sourced sale below the supplier's entitlement — which is exactly
+ * why the READER rejects one. `sales` is editable through the super-admin
+ * raw-JSON editor, so a corrupt value arrives here, not there.
+ *
+ * `NaN` is the one that does real damage. Convex accepts it under a
+ * `v.number()` validator, it is not `null` so it is never counted among the
+ * unknown-margin rows, and one `total += NaN` renders the whole org's profit as
+ * `NaN` for every other sale in the range.
+ *
+ * Returning `undefined` hands the decision back to `saleEconomics`, which is
+ * where "what does an absent margin mean on THIS route" already lives: UNKNOWN
+ * on a financed direct deal whose evidence is required, and the sale-price
+ * spread where that genuinely is the answer.
+ */
+function recordedConsignedMargin(sale: Doc<"sales">): number | undefined {
+  const minor = sale.consignedMarginMinor;
+  const currency = sale.consignedMarginCurrency;
+  if (minor === undefined || !currency) return undefined;
+  if (!Number.isFinite(minor) || minor < 0) return undefined;
+  return fromMinorUnits(minor, currency);
+}
+
+/**
+ * What the supplier was owed on this sale, frozen at completion.
+ *
+ * Same guards and the same currency as the margin beside it, and for the same
+ * reason: `sourceCost` stays editable after a consigned sale, so deriving the
+ * supplier's entitlement from the live vehicle reported a settlement figure the
+ * GL, the subledger and the claim never used. A sale frozen at a 3,000 margin
+ * against a 15,000 entitlement would show 3,000 beside a live 16,000 — two
+ * halves of one deal on two different bases.
+ */
+function recordedSupplierEntitlement(sale: Doc<"sales">): number | undefined {
+  const minor = sale.consignedSupplierEntitlementMinor;
+  const currency = sale.consignedMarginCurrency;
+  if (minor === undefined || !currency) return undefined;
+  if (!Number.isFinite(minor) || minor < 0) return undefined;
+  return fromMinorUnits(minor, currency);
+}
 
 /** Longest span an interactive report may request. */
 const MAX_REPORT_RANGE_MS = 366 * 24 * 60 * 60 * 1000;
@@ -88,6 +136,13 @@ export const getSalesAndProfitReport = query({
     let totalGrossTransactionValue = 0;
     let totalSupplierSettlement = 0;
     let agentSaleCount = 0;
+    // Sales whose earning could not be established (financed, settled directly
+    // with the supplier, and missing the margin the completion should have
+    // frozen). They are excluded from every profit figure below and reported as
+    // a count, because an understated total presented as complete is the same
+    // failure as an overstated one.
+    let unknownMarginSaleCount = 0;
+    let unknownSupplierSettlementSaleCount = 0;
 
     const vehicleIds = Array.from(new Set(salesInDateRange.map(s => s.vehicleId)));
     const vehicles = await Promise.all(vehicleIds.map(id => ctx.db.get(id)));
@@ -130,19 +185,42 @@ export const getSalesAndProfitReport = query({
       const cost = capitalizedCostByVehicle.get(sale.vehicleId) ?? 0;
       const economics = saleEconomics({
         salePrice: sale.salePrice,
-        vehicle: vehicle ?? {},
+        vehicle: vehicle ?? null,
         capitalizedCost: cost,
         supplierSettlementRoute: sale.supplierSettlementRoute,
+        // The margin the sale froze at completion, so this report agrees with
+        // the GL and the P&L about what the deal earned. On a financed DIRECT
+        // deal re-deriving it from the sale price overstates by
+        // salePrice - approved, which is money that reaches no party.
+        recordedMargin: recordedConsignedMargin(sale),
+        recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
+        externallyFinanced:
+          sale.financingType === "FINANCED" || sale.financingType === "LEASE",
       });
 
-      totalRevenue += economics.recognizedRevenue;
+      // A financed direct row with no recorded margin earns UNKNOWN, not zero
+      // and not the sale-price spread. It is left out of the totals and counted,
+      // so the owner is told the report is incomplete rather than being handed a
+      // confident figure built on a number the ledger never recognized.
+      // Counted SEPARATELY, not folded together. Each counter names the totals
+      // it actually qualifies: folding the settlement into the margin counter
+      // made the margin counter's own contract false — it is documented as
+      // counting rows left out of `totalRevenue` and `totalProfit`, and a row
+      // with a known margin and an unknown entitlement is in both of those.
+      // Telling an owner their profit is a floor when it is exact is a smaller
+      // error than the reverse, but it is still a false statement.
+      if (economics.dealershipMargin === null) unknownMarginSaleCount += 1;
+      if (economics.supplierSettlement === null) unknownSupplierSettlementSaleCount += 1;
+      totalRevenue += economics.recognizedRevenue ?? 0;
       totalCost += economics.recognizedCost;
       // Unchanged by the agent split, and deliberately so: price less cost is
       // the same number either way, which is exactly why restating a consigned
       // sale moves turnover and cost of sales but never profit.
-      totalProfit += economics.dealershipMargin;
+      totalProfit += economics.dealershipMargin ?? 0;
       totalGrossTransactionValue += economics.grossTransactionValue;
-      totalSupplierSettlement += economics.supplierSettlement;
+      // Excluded rather than guessed, exactly as `totalProfit` treats an
+      // unknown margin: this total is a floor when the count above is non-zero.
+      totalSupplierSettlement += economics.supplierSettlement ?? 0;
       if (economics.isAgentSale) agentSaleCount += 1;
 
       return {
@@ -177,6 +255,20 @@ export const getSalesAndProfitReport = query({
       // What of that gross belongs to suppliers and never was the dealership's.
       totalSupplierSettlement,
       agentSaleCount,
+      /**
+       * How many sales in this range were left out of `totalRevenue` and
+       * `totalProfit` because what they earned is unknown. Non-zero means these
+       * totals are a floor, not the answer.
+       */
+      unknownMarginSaleCount,
+      /**
+       * The same thing for `totalSupplierSettlement`, and deliberately a
+       * SEPARATE number. A row can have a known margin and an unknown
+       * entitlement, in which case revenue and profit are exact while the
+       * supplier total is a floor — one counter cannot say that, and folding
+       * the two made the counter above claim exclusions it had not made.
+       */
+      unknownSupplierSettlementSaleCount,
       sales: enrichedSales,
     };
   },
@@ -707,6 +799,9 @@ export const getSalespersonPerformance = query({
       let totalRevenue = 0;
       let totalProfit = 0;
       let totalGrossTransactionValue = 0;
+      // Same rule as getSalesAndProfitReport: a rep is never ranked on an
+      // earning nobody can substantiate, and never on an implicit zero either.
+      let unknownMarginSaleCount = 0;
 
       const user = userMap.get(userId as Id<"users">);
       const userName = (user && "name" in user ? user.name : null) ?? "Unknown";
@@ -715,16 +810,24 @@ export const getSalespersonPerformance = query({
         const cost = capitalizedCostByVehicle.get(sale.vehicleId) ?? 0;
         const economics = saleEconomics({
           salePrice: sale.salePrice,
-          vehicle: vehicleMap.get(sale.vehicleId) ?? {},
+          vehicle: vehicleMap.get(sale.vehicleId) ?? null,
           capitalizedCost: cost,
           supplierSettlementRoute: sale.supplierSettlementRoute,
+          // As above: the margin the sale recorded, so a rep is ranked on what
+          // the dealership actually earned rather than on a spread that
+          // includes money no party paid.
+          recordedMargin: recordedConsignedMargin(sale),
+          recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
+          externallyFinanced:
+            sale.financingType === "FINANCED" || sale.financingType === "LEASE",
         });
 
+        if (economics.dealershipMargin === null) unknownMarginSaleCount += 1;
         // Same exclusion as getSalesAndProfitReport: a rep who sold a consigned
         // car did not turn over its sticker price. Ranking on that would rank
         // them above someone who sold twice the margin on owned stock.
-        totalRevenue += economics.recognizedRevenue;
-        totalProfit += economics.dealershipMargin;
+        totalRevenue += economics.recognizedRevenue ?? 0;
+        totalProfit += economics.dealershipMargin ?? 0;
         totalGrossTransactionValue += economics.grossTransactionValue;
       }
 
@@ -735,10 +838,36 @@ export const getSalespersonPerformance = query({
         totalRevenue,
         totalProfit,
         totalGrossTransactionValue,
+        /** Of `vehiclesSold`, how many contributed nothing because their earning is unknown. */
+        unknownMarginSaleCount,
+        /**
+         * Whether `totalRevenue` and `totalProfit` account for every sale in
+         * `vehiclesSold`, or only for the ones whose earning could be
+         * established.
+         *
+         * `false` makes the row's two halves legible: the count is over ALL the
+         * rep's sales and the money is over a subset, and without this the
+         * table shows them side by side as one complete statement.
+         */
+        marginComplete: unknownMarginSaleCount === 0,
       };
     });
 
-    return result.sort((a, b) => b.totalProfit - a.totalProfit);
+    /**
+     * Complete rows ranked by profit; incomplete rows after all of them.
+     *
+     * The incomplete ones are NOT ranked among the others, because the number
+     * that would rank them is missing a sale — a rep whose known-only profit is
+     * larger than a colleague's complete total was placed above them, which is
+     * a claim about who earned more that the data does not support. Ordering
+     * them by profit *within* their own group would make the same claim on a
+     * smaller stage, so they are ordered by name instead: a list, not a ranking.
+     */
+    return result.sort((a, b) => {
+      if (a.marginComplete !== b.marginComplete) return a.marginComplete ? -1 : 1;
+      if (!a.marginComplete) return a.userName.localeCompare(b.userName);
+      return b.totalProfit - a.totalProfit;
+    });
   },
 });
 

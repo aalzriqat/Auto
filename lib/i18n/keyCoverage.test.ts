@@ -116,3 +116,63 @@ describe("i18n key coverage", () => {
     expect(missing).toEqual([]);
   });
 });
+
+/**
+ * The blind spot the scan above declares: `t(SOME_MAP[value] ?? value)`.
+ *
+ * The cockpit routes every workflow enum through a lookup table, precisely so
+ * the raw enum never reaches the screen. But the `t()` call site is then a
+ * variable, so `LITERAL_T_CALL` cannot see it, and a member missing from the
+ * dictionaries is invisible to every assertion above — it simply renders as the
+ * key. `STATUS_LABEL.DRAFT` shipped that way: a draft application showed the
+ * English word "Draft" on an otherwise fully Arabic page, which is the exact
+ * defect the table exists to prevent.
+ *
+ * Scoped to this one file on purpose. A repo-wide sweep of `*_LABEL` maps has
+ * false positives — `app/(dashboard)/[orgId]/leads/page.tsx`'s `STAGE_LABELS`
+ * holds display text ("Test Drive"), not keys — and a test that cries wolf gets
+ * deleted. Widen it by adding files here deliberately.
+ *
+ * The key type is deliberately NOT pinned to `Record<string, string>`: the
+ * blocked-profit reasons are keyed by their union (`Record<"NoApproved…" | …,
+ * string>`), so a scan written for the looser type covered five maps while its
+ * own description claimed all of them — a gate overstating its reach, which is
+ * the defect this whole file exists to prevent.
+ *
+ * Still NOT covered, and left alone deliberately: `t(`Blocker${stage.blocker}`)`
+ * builds its key by interpolation rather than by lookup, so neither scan can see
+ * it. Every member of `DealStageBlocker` resolves today. Closing that one means
+ * exporting the union for the test to enumerate, which edits backend source for
+ * a test's benefit — worth doing, not worth doing here.
+ */
+describe("cockpit label maps resolve through the dictionaries", () => {
+  const COCKPIT = path.join("components", "applications", "cockpit", "DealCockpit.tsx");
+  const source = fs.readFileSync(COCKPIT, "utf8");
+  // `\s*` around the closing `>` because a union-keyed map is written across
+  // several lines, so `string` and `>` are not adjacent.
+  const maps = [
+    ...source.matchAll(/const (\w+): Record<[\s\S]*?,\s*string\s*>\s*= \{([\s\S]*?)\n\};/g),
+  ];
+  // Quote style and the trailing comma are conventions nothing enforces — this
+  // repo has an empty `.prettierrc`, `lint` is `eslint .`, and no workflow runs
+  // a format check. A scan that only matched double quotes with a trailing
+  // comma would drop entries silently and still report itself clean.
+  const entries = maps.flatMap(([, name, body]) =>
+    [...body.matchAll(/^\s*[\w"']+:\s*["']([^"']+)["'],?\s*$/gm)].map(([, key]) => ({ name, key }))
+  );
+
+  test("finds the maps to check", () => {
+    // Without this the whole describe passes by matching nothing the moment the
+    // declaration style changes. Floors, not exact counts, so adding a label is
+    // not a failing test — but tight enough that losing a whole map is.
+    expect(maps.length).toBeGreaterThanOrEqual(6);
+    expect(entries.length).toBeGreaterThanOrEqual(34);
+  });
+
+  test("every mapped key exists in both dictionaries", () => {
+    const missing = entries
+      .filter(({ key }) => !(key in dictionaries.en) || !(key in dictionaries.ar))
+      .map(({ name, key }) => `${name} -> ${key}`);
+    expect(missing).toEqual([]);
+  });
+});

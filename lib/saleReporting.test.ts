@@ -1,9 +1,13 @@
 import { describe, expect, test } from "vitest";
 import {
+  countUnknownMargin,
+  marginIsUnknown,
+  performanceMarginIsIncomplete,
   recognizedRevenueOf,
   sumRecognizedRevenue,
   sumReportedCost,
   sumReportedProfit,
+  unknownMarginCountOf,
 } from "./saleReporting";
 
 /**
@@ -58,5 +62,76 @@ describe("rows that do not carry the field", () => {
     expect(sumRecognizedRevenue(undefined)).toBe(0);
     expect(sumReportedCost(null)).toBe(0);
     expect(sumReportedProfit([])).toBe(0);
+  });
+});
+
+/**
+ * SCRUM-30 — a withheld figure and a missing one are not the same row.
+ *
+ * The backend now answers `null` when it cannot establish what a deal earned: a
+ * financed sale settled directly with the supplier whose recorded margin is
+ * gone. The fallback directly above exists for the OTHER case — a field the
+ * backend has not started sending yet — and applying it to a withheld value
+ * would answer with the sale price, which on exactly these rows is the largest
+ * wrong number available. A deliberate refusal would have become 20,000.
+ */
+describe("a figure the backend withheld", () => {
+  const WITHHELD = { salePrice: 20_000, recognizedRevenue: null, totalCost: 0, netProfit: null };
+
+  test("is recognized as unknown rather than as an old row", () => {
+    expect(marginIsUnknown(WITHHELD)).toBe(true);
+    // The genuinely-old row, which must keep its fallback.
+    expect(marginIsUnknown({ salePrice: 8_000 })).toBe(false);
+  });
+
+  test("contributes nothing, and never the sale price", () => {
+    expect(recognizedRevenueOf(WITHHELD)).toBe(0);
+    expect(recognizedRevenueOf(WITHHELD)).not.toBe(20_000);
+  });
+
+  test("is excluded from the filtered totals the cards are drawn from", () => {
+    expect(sumRecognizedRevenue([AGENT_SALE, WITHHELD])).toBe(3_000);
+    expect(sumReportedProfit([AGENT_SALE, WITHHELD])).toBe(3_000);
+  });
+
+  test("is counted, so an understated total is never shown as complete", () => {
+    expect(countUnknownMargin([AGENT_SALE, WITHHELD, OWNED_SALE])).toBe(1);
+    expect(countUnknownMargin([AGENT_SALE, OWNED_SALE])).toBe(0);
+    expect(countUnknownMargin(undefined)).toBe(0);
+  });
+});
+
+/**
+ * The same absent-versus-withheld distinction, on the salesperson table.
+ *
+ * `main` auto-deploys the FRONTEND; the Convex backend deploy is manual. So
+ * there is a guaranteed window in which this page runs against a server that
+ * has never heard of `marginComplete` or `unknownMarginSaleCount`, and every
+ * row arrives with both absent.
+ *
+ * Read as a falsy boolean, absent means "incomplete": every salesperson is
+ * marked as having uncounted deals, and `String(undefined)` renders the literal
+ * text "undefined not counted" — "undefined غير محتسبة" in Arabic — beside each
+ * one, while the notice above the table says zero, because it already defaults
+ * with `?? 0`. The rows and the summary contradict each other on the same
+ * screen.
+ *
+ * Absent is a server that has not deployed yet. Only an explicit `false` is the
+ * server saying it could not count something.
+ */
+describe("a performance row from a backend that predates these fields", () => {
+  test("is treated as complete, not as incomplete", () => {
+    expect(performanceMarginIsIncomplete({})).toBe(false);
+    expect(performanceMarginIsIncomplete({ marginComplete: undefined })).toBe(false);
+    expect(performanceMarginIsIncomplete({ marginComplete: true })).toBe(false);
+    // Only the explicit refusal counts as incomplete.
+    expect(performanceMarginIsIncomplete({ marginComplete: false })).toBe(true);
+  });
+
+  test("never renders a count of 'undefined'", () => {
+    expect(unknownMarginCountOf({})).toBe(0);
+    expect(unknownMarginCountOf({ unknownMarginSaleCount: undefined })).toBe(0);
+    expect(String(unknownMarginCountOf({}))).not.toBe("undefined");
+    expect(unknownMarginCountOf({ unknownMarginSaleCount: 3 })).toBe(3);
   });
 });

@@ -11,10 +11,16 @@ import { validateInput } from "./utils/validation";
 import { CreateDraftSaleSchema, CreateSaleSchema, UpdateSaleSchema } from "./validations/sales";
 import { restoreVehicleFromSale } from "./utils/saleHelpers";
 import { vehicleHasCostBasis, computeVehicleCapitalizedCost } from "./utils/vehicleCost";
-import { saleEconomics, dealershipCollectsGross } from "./utils/vehicleOwnership";
+import {
+  saleEconomics,
+  dealershipCollectsGross,
+  consignedSettlementRoute,
+  consignedSettlementRouteValidator,
+  isConsignedAgentSale,
+} from "./utils/vehicleOwnership";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
-import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale } from "./utils/saleCompletion";
+import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
@@ -40,10 +46,10 @@ const saleStatus = v.union(
  * there; sale completion drops it for dealer-owned stock. Omitted means
  * THROUGH_DEALERSHIP — see `consignedSettlementRoute` in utils/vehicleOwnership.
  */
-const supplierSettlementRouteValidator = v.union(
-  v.literal("THROUGH_DEALERSHIP"),
-  v.literal("DIRECT_TO_SUPPLIER")
-);
+// The shared one, not a third hand-written copy. Declaring it here again is
+// exactly what `consignedSettlementRouteValidator` exists to prevent, and
+// leaving both meant the deduplication it documents had not actually happened.
+const supplierSettlementRouteValidator = consignedSettlementRouteValidator;
 
 /**
  * What happens to the customer's reservation deposit (عربون) when the deal
@@ -619,6 +625,61 @@ export const update = mutation({
         sale.salespersonId,
         "Salesperson cannot approve cancellation of their own sale."
       );
+
+      // The finance side's payment locks, enforced here as well as in
+      // `cancelApplication` — because this is the other door into the same
+      // reversal, and a lock bolted on only one of them is not a lock.
+      //
+      // The direct route makes this reachable in a way it was not before.
+      // `confirmSupplierDisbursement` deliberately records NO receipt against
+      // the margin claim (the supplier being paid is not the dealership being
+      // paid), so `cancelSupplierReceivablesForSale`'s receipt guard stays
+      // silent. Without this check the sale reversed, the claim was cancelled,
+      // a car already handed to the customer returned to sellable inventory,
+      // and the application stayed CLOSED still carrying the confirmation that
+      // the financier had paid for it.
+      if (sale.applicationId) {
+        const app = await ctx.db.get(sale.applicationId);
+        // Fails CLOSED. Written as `if (app && app.orgId === args.orgId)` this
+        // skipped BOTH refusals whenever the application could not be read —
+        // a missing row, or one belonging to another org. That is a guard whose
+        // evidence being unavailable becomes permission to proceed, on a
+        // cancellation that reverses money the finance company has already
+        // paid. Unreadable evidence refuses, and says which case it is.
+        if (!app || app.orgId !== args.orgId) {
+          throw new ConvexError(
+            "This sale's financing application can't be read, so it isn't possible to confirm whether the finance company has already paid. Resolve the application first, or void the sale through a manual accounting correction."
+          );
+        }
+        {
+          if (app.disbursedAt) {
+            throw new ConvexError(
+              "The finance company has already paid the dealership on this deal, so it can't be cancelled from here. Void it through a manual accounting correction instead."
+            );
+          }
+          // Any recorded advice locks this, including one whose amount
+          // contradicts the approval.
+          //
+          // A contradiction is a question about HOW MUCH the supplier was paid.
+          // It is not doubt about WHETHER he was, and cancelling on the strength
+          // of that doubt would reverse a sale the finance company has already
+          // funded. `supplierDisbursedAmountMinor` is checked alongside the
+          // timestamp so a row carrying an amount but no date — which no writer
+          // produces today, and which a future one could — still counts as
+          // evidence rather than reading as "not paid".
+          if (
+            app.supplierDisbursementConfirmedAt !== undefined ||
+            app.supplierDisbursedAmountMinor !== undefined
+          ) {
+            throw new ConvexError(
+              app.supplierDisbursementStatus === "REQUIRES_RECONCILIATION"
+                ? "The finance company has already paid the supplier on this deal, and the recorded advice does not agree with the approved amount. Cancelling would reverse a sale that has been funded while that disagreement is still unresolved — settle what was actually paid first, then unwind it with the company and record a manual accounting correction."
+                : "The finance company has already paid the supplier on this deal. That payment is between the company and the supplier and can't be reversed from here — unwind it with them and record a manual accounting correction instead."
+            );
+          }
+        }
+      }
+
       const cancellationDate = Date.now();
       // Only a sale that actually COMPLETED has operational records to reverse.
       // This branch used to run for any non-CANCELLED sale, which included
@@ -1659,12 +1720,79 @@ export const recalculateCommission = mutation({
         .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", sale.salespersonId))
         .unique();
 
+      /**
+       * What this sale recorded as its recognized earning, for a consigned car.
+       *
+       * `recalculateCommission` already refused to read the supplier receipt
+       * from the vehicle or the application, on the grounds that both move
+       * after completion. The cost was still being read from the vehicle, so
+       * only half of that principle was in force: with the receipt frozen at
+       * 18,000 and the entitlement later corrected from 15,000 to 16,000, the
+       * calculator produced 2,000 of "earnings" against 3,000 the GL, the
+       * supplier claim and every report had recognized.
+       *
+       * A consigned car is never capitalized into Vehicle Inventory, so the
+       * acquisition lock that stops an owned vehicle's cost being edited after
+       * posting never engages for one — the edit is an ordinary, permitted
+       * correction, which is exactly why the commission must not follow it.
+       *
+       * Owned sales are untouched: they have no frozen margin, they keep the
+       * vehicle-cost derivation, and that remains right for them.
+       */
+      const marginCurrency = sale.consignedMarginCurrency;
+      const frozenMarginMinor = sale.consignedMarginMinor;
+      const frozenRecognizedEarnings =
+        isConsignedAgentSale(vehicle) &&
+        frozenMarginMinor !== undefined &&
+        Number.isFinite(frozenMarginMinor) &&
+        frozenMarginMinor >= 0 &&
+        marginCurrency === (await getOrgCurrency(ctx, args.orgId))
+          ? fromMinorUnits(frozenMarginMinor, marginCurrency)
+          : undefined;
+
+      // Fail closed rather than fall back to the vehicle. A financed direct
+      // sale whose frozen margin is absent, corrupt or in another currency is
+      // the one shape where re-deriving is most wrong — the sale price is not
+      // what the supplier received and the live cost is not what he was owed —
+      // so the commission is left exactly as it is and the mutation rolls back.
+      if (
+        frozenRecognizedEarnings === undefined &&
+        isConsignedAgentSale(vehicle) &&
+        !dealershipCollectsGross(
+          consignedSettlementRoute({ supplierSettlementRoute: sale.supplierSettlementRoute })
+        ) &&
+        (sale.financingType === "FINANCED" || sale.financingType === "LEASE")
+      ) {
+        throw new ConvexError(CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN);
+      }
+
       const amount = await computeAutoCommissionAmount(ctx, {
         salePrice: sale.salePrice,
         vehicle,
+        frozenRecognizedEarnings,
         commissionMode: mode,
         memberCommissionRate: membership?.commissionRate,
         commissionTiers: orgSettings?.commissionTiers ?? [],
+        // From the fact the SALE froze at completion, not from the vehicle or
+        // the application — both can move afterwards, and a recalculation that
+        // silently re-based payroll on a later edit is how a commission comes
+        // to disagree with the revenue it was earned against.
+        //
+        // Absent means the row predates the field, the sale is not a direct
+        // consigned one, or the value was cleared. On a cash direct sale the
+        // calculator then uses the sale price, which is the correct basis; on a
+        // FINANCED one it refuses rather than guessing, and this whole mutation
+        // rolls back with the existing commission untouched.
+        supplierGrossReceipt:
+          sale.consignedSupplierGrossReceiptMinor !== undefined
+            ? fromMinorUnits(
+                sale.consignedSupplierGrossReceiptMinor,
+                sale.consignedMarginCurrency ?? (await getOrgCurrency(ctx, args.orgId))
+              )
+            : undefined,
+        settlementRoute: sale.supplierSettlementRoute,
+        externallyFinanced:
+          sale.financingType === "FINANCED" || sale.financingType === "LEASE",
       });
       // Cost basis was just verified, so the calculator always returns a number.
       const commissionAmount = amount ?? 0;

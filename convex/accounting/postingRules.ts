@@ -223,6 +223,32 @@ export interface SaleCompletedPayload {
    */
   consignment?: {
     supplierEntitlementMinor: number;
+    /**
+     * What the third party actually pays the supplier on the DIRECT route — the
+     * basis the dealership's commission is measured against.
+     *
+     * Absent means "the sale price", which is what a cash direct sale and every
+     * event queued before this field existed both mean. A FINANCED direct deal
+     * sets it to the finance company's approved purchase amount, because that
+     * is the money that reaches him; measuring the commission against the sale
+     * price there credited revenue on a spread no party ever paid, and debited
+     * a supplier receivable to match.
+     *
+     * Unused on THROUGH_DEALERSHIP, where the dealership collects the gross and
+     * the customer is liable for the full sale price.
+     */
+    supplierGrossReceiptMinor?: number;
+    /**
+     * Whether an outside financier pays for this car, carried so the rule can
+     * tell a legacy CASH direct event from a financed one.
+     *
+     * Without it the fallback below is indistinguishable from a guess: a queued
+     * event with no `supplierGrossReceiptMinor` could be a pre-field cash sale
+     * (where the sale price IS what the supplier received) or a pre-field
+     * financed one (where it is not). Draining the second as though it were the
+     * first posts the very receivable this redesign removes.
+     */
+    externallyFinanced?: boolean;
     supplierName?: string;
     settlementRoute: "DIRECT_TO_SUPPLIER" | "THROUGH_DEALERSHIP";
   };
@@ -521,17 +547,66 @@ function addResoldProductLines(
 function consignedAgentSaleLines(p: SaleCompletedPayload): RuleResult {
   const consignment = p.consignment!;
   const entitlementMinor = consignment.supplierEntitlementMinor;
-  const marginMinor = p.saleAmountMinor - entitlementMinor;
+  // The dealership's commission is its spread over the supplier's entitlement —
+  // but over WHICH amount depends on who paid him, and the two are not the same
+  // number on a financed direct deal.
+  //
+  // DIRECT: the basis is what actually reaches the supplier. `saleAmountMinor`
+  // would include `salePrice − approved`, an amount no party pays him, and
+  // crediting commission revenue for it also debits AR-Suppliers for it — the
+  // GL asserting a collectable debt against somebody who never received the
+  // money. Absent, it falls back to the sale price, which is exactly right for
+  // a cash direct sale (the buyer pays him the price) and for any event queued
+  // before this field existed.
+  //
+  // THROUGH: the dealership collects the gross and the customer is liable for
+  // the whole sale price, so the spread genuinely is over `saleAmountMinor`.
+  // Unchanged, deliberately — this rule was never wrong on that route.
+  // A financed direct event with no recorded receipt is refused, not guessed.
+  //
+  // The fallback is correct for a CASH direct sale and for every event queued
+  // before the field existed — `main` refuses financed + DIRECT in
+  // `completeSale`, so no such event can be sitting in a production outbox. It
+  // is NOT correct for a financed one, and an event queued by an unreleased
+  // build could be. Draining it against the sale price would post exactly the
+  // receivable this redesign removes, silently, out of sight of whoever sold
+  // the car — and an outbox drains long after anyone is watching.
+  //
+  // Dead-lettering it is the right failure: the entry is repaired and re-posted
+  // deliberately, rather than the ledger quietly acquiring a debt against a
+  // supplier who never received the money.
   const dims = { customerId: p.customerId, vehicleId: p.vehicleId, salespersonId: p.salespersonId };
   const supplier = consignment.supplierName ?? "supplier";
 
-  // Fail closed. A negative margin means the car sold for less than the
-  // supplier is owed, which is a real situation but not one this rule may
-  // guess at — posting a negative commission would misstate revenue and hide
-  // a loss the dealership has to fund. It needs a decision, not a default.
+  // Scoped to events that explicitly say they are financed, which only the
+  // current emitter sets. An event queued by an older build carries no marker
+  // and falls through to the sale price — and that is correct for it, because
+  // the claim that build opened was raised on the same basis, so the ledger and
+  // the subledger stay consistent with each other. Repairing those rows is a
+  // data question, not a posting-rule question, and dead-lettering them here
+  // would strand entries that currently reconcile.
+  if (
+    consignment.settlementRoute === "DIRECT_TO_SUPPLIER" &&
+    consignment.supplierGrossReceiptMinor === undefined &&
+    consignment.externallyFinanced === true
+  ) {
+    throw new Error(
+      `Consigned sale ${p.saleId} settles directly with ${supplier} and is externally financed, but records no amount actually paid to him. The dealership's claim cannot be measured against the sale price on this route — repair the event with the finance company's approved amount before posting it.`
+    );
+  }
+  const settlementBasisMinor =
+    consignment.settlementRoute === "DIRECT_TO_SUPPLIER"
+      ? (consignment.supplierGrossReceiptMinor ?? p.saleAmountMinor)
+      : p.saleAmountMinor;
+  const marginMinor = settlementBasisMinor - entitlementMinor;
+
+  // Fail closed. A negative margin means the supplier is paid less than he is
+  // owed, which is a real situation but not one this rule may guess at —
+  // posting a negative commission would misstate revenue and hide a loss the
+  // dealership has to fund. It needs a decision, not a default.
   if (marginMinor < 0) {
     throw new Error(
-      `Consigned sale ${p.saleId} is ${Math.abs(marginMinor)} minor units below the supplier's entitlement of ${entitlementMinor}. Record the shortfall against the supplier agreement before completing the sale.`
+      `Consigned sale ${p.saleId} settles ${Math.abs(marginMinor)} minor units below the supplier's entitlement of ${entitlementMinor}. Record the shortfall against the supplier agreement before completing the sale.`
     );
   }
 

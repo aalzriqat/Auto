@@ -46,6 +46,38 @@ export const NOTIFICATION_TYPES = {
   "sale.deleted": { category: "sales", priority: "normal", criticalDefault: false },
   "application.created": { category: "sales", priority: "normal", criticalDefault: false },
   "application.cancelled": { category: "sales", priority: "normal", criticalDefault: false },
+  /**
+   * A financed consigned deal whose settlement advice contradicts the approved
+   * purchase amount, which stops the deal until somebody reconciles the two.
+   *
+   * `finance`, not `sales`, because the people who can act on it are the ones
+   * holding the finance authority — and the category is what the per-user
+   * preference is keyed on, so filing it under sales would let it be silenced
+   * alongside routine lead traffic.
+   *
+   * Urgent and `criticalDefault`, because this is the only push signal for the
+   * one state in this workflow a deal cannot leave by itself.
+   */
+  "application.settlement_advice_discrepancy": {
+    category: "finance",
+    priority: "urgent",
+    criticalDefault: true,
+  },
+  /**
+   * The finance company paid the supplier on a deal whose sale was cancelled.
+   *
+   * A distinct type rather than the reconciliation one, because it is a
+   * different problem with a different resolution: nothing can be reconciled on
+   * a cancelled deal, and sending the reconciliation notice would point somebody
+   * at a cockpit that correctly renders the deal as STOPPED. This says a payment
+   * landed outside a live deal and needs a human, which is true whether or not
+   * the amount agreed with the approval.
+   */
+  "application.payment_on_cancelled_deal": {
+    category: "finance",
+    priority: "urgent",
+    criticalDefault: true,
+  },
   "guarantor.added": { category: "sales", priority: "normal", criticalDefault: false },
   "quote.accepted": { category: "sales", priority: "normal", criticalDefault: false },
   "quote.declined": { category: "sales", priority: "normal", criticalDefault: false },

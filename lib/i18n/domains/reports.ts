@@ -74,6 +74,19 @@ export const reportsEn = {
     "All expenses here have posted. This operational total is {capitalized} higher than the Income Statement because that much was capitalized to inventory, which is reported as an asset rather than an expense.",
   OperationalReportAllPosted: "Every expense in this period has posted to the ledger as a P&L expense, so this report and the Income Statement agree.",
   ResolveUnpostedEntries: "Resolve unposted entries",
+  ProfitUnknownForSale:
+    "This sale was financed and settled directly with the supplier, and the amount the finance company actually paid him was not recorded on it, so what the dealership earned cannot be worked out.",
+  ProfitUnknownNotice:
+    "{count} sale(s) are excluded from revenue and profit above because what they earned could not be established. Those totals are therefore a minimum, not the full picture.",
+  PerformanceUnknownNotice:
+    "{count} sale(s) could not have their earnings established, so the salespeople who made them are listed separately at the bottom and are not ranked. Their totals cover only the sales that are known.",
+  /**
+   * Deliberately short. This sits inside a narrow numeric table cell, and the
+   * full sentence — which is the notice above the table — wrapped onto four
+   * lines at 390px and doubled the row's height. The explanation belongs where
+   * there is room for it; the cell needs a marker.
+   */
+  ProfitKnownOnly: "{count} not counted",
 
   // Empty states
   NoSalesFoundPeriod: "No sales found in this period.",
@@ -156,6 +169,13 @@ export const reportsAr = {
     "جميع المصروفات هنا مُرحّلة. هذا الإجمالي التشغيلي يزيد عن قائمة الدخل بمقدار {capitalized} لأن هذا المبلغ رُسمل ضمن المخزون، ويظهر كأصل وليس كمصروف.",
   OperationalReportAllPosted: "جميع مصروفات هذه الفترة مُرحّلة إلى دفتر الأستاذ كمصروف في قائمة الدخل، لذلك يتطابق هذا التقرير مع قائمة الدخل.",
   ResolveUnpostedEntries: "معالجة القيود غير المُرحّلة",
+  ProfitUnknownForSale:
+    "هذه المركبة بيعت بالتمويل وتمت تسوية ثمنها مع المورّد مباشرة، ولم يُسجَّل عليها المبلغ الذي دفعته شركة التمويل له فعلياً، لذلك لا يمكن احتساب ما حققه المعرض منها.",
+  ProfitUnknownNotice:
+    "تم استثناء {count} عملية بيع من الإيرادات والأرباح أعلاه لتعذُّر تحديد ما حققته. لذلك فإن هذه الإجماليات تمثّل الحد الأدنى وليست الصورة الكاملة.",
+  PerformanceUnknownNotice:
+    "تعذّر تحديد ما حققته {count} عملية بيع، لذلك يظهر البائعون الذين نفّذوها في أسفل الجدول بشكل منفصل ولا يدخلون في الترتيب. الإجماليات الخاصة بهم تشمل المبيعات المعروفة فقط.",
+  ProfitKnownOnly: "{count} غير محتسبة",
 
   // Empty states
   NoSalesFoundPeriod: "لم يتم العثور على مبيعات في هذه الفترة.",

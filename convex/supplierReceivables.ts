@@ -7,7 +7,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
-import { toMinorUnits } from "./utils/money";
+import { fromMinorUnits, toMinorUnits } from "./utils/money";
 import { hookSupplierReceivableCollected } from "./accounting/workflowHooks";
 import { auditLog } from "./financialAudit";
 
@@ -240,11 +240,19 @@ export const recordReceipt = mutation({
         operation: "supplierReceivables.recordReceipt",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        // EVERY persisted input that can change the stored record. `receivedAt`
+        // was missing, and it is the one the cockpit lets an operator correct:
+        // because the caller deliberately REUSES its key after a lost response,
+        // a retry with a fixed date produced an identical fingerprint and was
+        // replayed back as success while the ledger kept the original date.
         fingerprint: JSON.stringify({
           receivableId: args.receivableId,
           amount: args.amount,
           receiptMethod,
           receiptReference: args.receiptReference ?? null,
+          receiptAccountId: args.receiptAccountId ?? null,
+          receiptNotes: args.receiptNotes ?? null,
+          receivedAt: args.receivedAt ?? null,
         }),
       },
       async () => {
@@ -253,6 +261,29 @@ export const recordReceipt = mutation({
 
         if (!Number.isFinite(args.amount) || args.amount <= 0) {
           throw new ConvexError("A receipt must be greater than zero.");
+        }
+        // The amount must be representable in the claim's currency. JOD carries
+        // three decimals, so a half-fils receipt cannot be posted: the subledger
+        // would store it verbatim while the journal rounded, and two receipts of
+        // 0.0005 would mark a 0.001 claim PAID while crediting two fils against
+        // a one-fils receivable. Checked here rather than in the dialog, because
+        // this mutation is now reachable from a browser.
+        if (fromMinorUnits(toMinorUnits(args.amount, row.currency), row.currency) !== args.amount) {
+          throw new ConvexError(
+            `A receipt in ${row.currency} cannot be finer than the currency allows. Round ${args.amount} to the nearest representable amount.`
+          );
+        }
+        // `receivedAt` reaches `settledAt` and the accounting event. A skewed
+        // clock, a modified client or a direct call could otherwise mark a large
+        // claim paid against a journal dated in the future — or NaN, which every
+        // comparison guard silently passes.
+        if (args.receivedAt !== undefined) {
+          if (!Number.isSafeInteger(args.receivedAt) || args.receivedAt <= 0) {
+            throw new ConvexError("The receipt date is not a valid instant.");
+          }
+          if (args.receivedAt > Date.now()) {
+            throw new ConvexError("A receipt cannot be dated in the future.");
+          }
         }
         if (row.status === "CANCELLED") {
           throw new ConvexError("This claim was cancelled with its sale.");
@@ -268,17 +299,28 @@ export const recordReceipt = mutation({
 
         const alreadyReceived = row.amountReceived ?? 0;
         const projected = alreadyReceived + args.amount;
+        // Both comparisons below are made in the currency's integer minor units.
+        //
+        // In major units they were float comparisons against an accumulated
+        // float, and that combination made a claim permanently unsettleable: a
+        // 4.440 JOD claim collected as three receipts of 1.480 accumulates to
+        // 4.4399999999999995, so `=== amountDue` was false and the claim stayed
+        // PARTIALLY_PAID — while `> amountDue` rejected any further receipt,
+        // because the residue owing is under a thousandth of a fils. The
+        // supplier had paid in full and no amount existed that could close it.
+        const dueMinor = toMinorUnits(row.amountDue, row.currency);
+        const projectedMinor = toMinorUnits(projected, row.currency);
         // Being paid more than you are owed is a real error with real money
         // behind it, and absorbing it into the claim hides which deal it
         // happened on. Same refusal as the payable side.
-        if (projected > row.amountDue) {
+        if (projectedMinor > dueMinor) {
           throw new ConvexError(
-            `That would record ${projected} against ${row.amountDue} owed. Reduce the amount, or correct the claim first.`
+            `That would record ${fromMinorUnits(projectedMinor, row.currency)} against ${fromMinorUnits(dueMinor, row.currency)} owed. Reduce the amount, or correct the claim first.`
           );
         }
 
         const now = args.receivedAt ?? Date.now();
-        const settlesInFull = projected === row.amountDue;
+        const settlesInFull = projectedMinor === dueMinor;
         const receiptSeq = receiptSeqFor(row) + 1;
 
         await ctx.db.patch(args.receivableId, {

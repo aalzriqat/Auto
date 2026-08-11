@@ -181,6 +181,283 @@ describe("the economics split", () => {
     expect(e.supplierSettlement).toBe(0);
   });
 
+  /**
+   * SCRUM-36. The two figures this function returns for one consigned sale were
+   * derived under DIFFERENT rules about missing frozen evidence: the margin
+   * failed closed to UNKNOWN, while the entitlement fell through to the live
+   * `capitalizedCost` with no `evidenceRequired` arm at all.
+   *
+   * That pairs a frozen margin with a mutable cost. `sourceCost` stays editable
+   * — which is the entire reason the frozen field was introduced — so the
+   * reported supplier settlement could drift arbitrarily far from what the sale
+   * was actually posted on, while the claim and the GL stayed frozen at the
+   * real entitlement. Reporting a supplier's share that no ledger recognizes is
+   * the same defect the recorded margin exists to prevent, wearing the other
+   * figure's name.
+   *
+   * The asymmetry is introduced by this branch: before it, both figures were
+   * live and therefore consistent with each other.
+   */
+  test("a frozen margin beside a missing frozen entitlement is UNKNOWN, never the live cost", () => {
+    // The live cost has moved since the sale — an edit, a repair, a correction.
+    const DRIFTED_COST = ENTITLEMENT + 2_000;
+
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: DRIFTED_COST,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: true,
+      // Frozen at completion, so it is trusted.
+      recordedMargin: MARGIN,
+      // Absent. `saleCompletion` writes both together or throws, so reaching
+      // this state takes a partial repair or a raw-JSON edit of one field —
+      // which is exactly the case a fail-closed rule is for.
+      recordedSupplierEntitlement: undefined,
+    });
+
+    // The half that was already right: the frozen margin is still trusted.
+    expect(e.dealershipMargin).toBe(MARGIN);
+
+    // The half that was not. Anything else republishes a live figure beside a
+    // frozen one, and the drifted cost is the specific wrong answer.
+    expect(e.supplierSettlement).toBeNull();
+    expect(e.supplierSettlement).not.toBe(DRIFTED_COST);
+  });
+
+  /**
+   * The boundary of the rule above, pinned so it is not "generalized" later by
+   * someone reasoning that partial frozen evidence must always be corruption.
+   *
+   * On a route where the dealership collects the gross, a surviving entitlement
+   * beside a missing margin rebuilds the margin from THAT entitlement — the
+   * basis the sale was actually posted on — not from the live cost and not
+   * from null.
+   *
+   * Both alternatives were tried and both are wrong. FAILING IT CLOSED breaks
+   * "a negative recorded margin is not read as a loss" and "NaN does not poison
+   * the profit of every other sale" below, which complete through the real
+   * writer (so BOTH fields are set) and then corrupt the margin alone;
+   * withholding a number that is still derivable is a different wrong answer,
+   * not a safer one. THE LIVE COST is also wrong: `sourceCost` stays editable
+   * after the sale, because the acquisition lock only fires on a posted
+   * VEHICLE_ACQUIRED event and a consigned car never emits one — so the margin
+   * would be re-derived against a basis the sale never used while the
+   * settlement stayed frozen, and the row would stop reconciling.
+   */
+  test("a THROUGH row rebuilds the missing margin from the entitlement it still has", () => {
+    // The cost has DRIFTED since the sale. This is what makes the test able to
+    // discriminate at all: with `capitalizedCost === ENTITLEMENT` the live
+    // basis and the frozen basis produce the identical number, so the earlier
+    // version of this test could not tell the two apart and would have passed
+    // either way.
+    const DRIFTED_COST = ENTITLEMENT + 2_000;
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: DRIFTED_COST,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: ENTITLEMENT,
+    });
+
+    // Both halves come off the SAME basis — the frozen one, because it is the
+    // one that survived. The row still reconciles: margin + settlement = gross.
+    expect(e.supplierSettlement).toBe(ENTITLEMENT);
+    expect(e.dealershipMargin).toBe(MARGIN);
+    expect(e.dealershipMargin! + e.supplierSettlement!).toBe(SALE_PRICE);
+
+    // And specifically NOT the live re-derivation, which would report 1,000
+    // against a frozen 9,500 settlement and no longer sum to the 12,500 gross.
+    expect(e.dealershipMargin).not.toBe(SALE_PRICE - DRIFTED_COST);
+  });
+
+  /**
+   * The frozen entitlement belongs to CONSIGNED sales only, and the rule that
+   * rebuilds a missing margin from it must not cross that boundary.
+   *
+   * The margin is computed before the non-agent branch returns, so a dealer-
+   * owned row carrying a stale `consignedSupplierEntitlementMinor` — reachable
+   * through the admin raw editor — would derive its profit from the supplier's
+   * basis while still reporting the full sale price as revenue and the vehicle's
+   * own cost as cost. `recognizedRevenue − recognizedCost` would then disagree
+   * with `dealershipMargin` on the same row: a split-brain sale.
+   */
+  test("a dealer-owned row ignores a stale supplier entitlement", () => {
+    const STALE = OWNED_COST - 1_500;
+    const e = saleEconomics({
+      salePrice: OWNED_PRICE,
+      vehicle: { sourceType: "STOCK" },
+      capitalizedCost: OWNED_COST,
+      recordedSupplierEntitlement: STALE,
+    });
+    expect(e.isAgentSale).toBe(false);
+    expect(e.dealershipMargin).toBe(OWNED_MARGIN);
+    expect(e.dealershipMargin).not.toBe(OWNED_PRICE - STALE);
+    // The identity that makes the row internally consistent at all.
+    expect(e.recognizedRevenue! - e.recognizedCost).toBe(e.dealershipMargin);
+  });
+
+  /**
+   * And a corrupt entitlement must not reconstruct a loss. The existing
+   * "a negative recorded margin is not read as a loss" defence covers a
+   * corrupted MARGIN; rebuilding the margin from the entitlement opened a
+   * second way to the same wrong answer, since an entitlement above the gross
+   * subtracts to a negative. Same posture: corruption is not a loss.
+   */
+  test("an entitlement above the sale price does not reconstruct a loss", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: ENTITLEMENT,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: SALE_PRICE + 1_000,
+    });
+    expect(e.dealershipMargin).toBeGreaterThanOrEqual(0);
+    expect(e.dealershipMargin).toBe(MARGIN);
+
+    // ONE eligibility rule has to govern BOTH halves. Guarding only the margin
+    // left the settlement reading the corrupt value, so the row summed to more
+    // than the whole car — the inverse of the identity the frozen-basis rule
+    // exists to preserve, and `totalSupplierSettlement` inflated by the excess.
+    expect(e.supplierSettlement).toBe(ENTITLEMENT);
+    expect(e.dealershipMargin! + e.supplierSettlement!).toBe(SALE_PRICE);
+  });
+
+  /**
+   * The same guard, in the direction it was not looking.
+   *
+   * The eligibility rule only refused an entitlement ABOVE the gross, so a
+   * negative one passed straight through — and `salePrice − (−n)` is LARGER
+   * than the whole car, with the supplier's own share published as a negative
+   * number. Corruption is not a windfall any more than it is a loss, and the
+   * asymmetry left one field guarded on one side only.
+   *
+   * `NaN` is excluded by both comparisons rather than by a separate check:
+   * every comparison against `NaN` is false, so it can satisfy neither bound.
+   */
+  test("a negative entitlement does not inflate the margin beyond the gross", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: ENTITLEMENT,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: -5_000,
+    });
+    // Never more than the car sold for.
+    expect(e.dealershipMargin!).toBeLessThanOrEqual(SALE_PRICE);
+    expect(e.dealershipMargin).toBe(MARGIN);
+    // And the supplier's share is never published as a negative.
+    expect(e.supplierSettlement!).toBeGreaterThanOrEqual(0);
+    expect(e.supplierSettlement).toBe(ENTITLEMENT);
+    expect(e.dealershipMargin! + e.supplierSettlement!).toBe(SALE_PRICE);
+  });
+
+  /**
+   * A hard-deleted vehicle must not turn the supplier's car into pure profit.
+   *
+   * With the vehicle row gone, `capitalizedCost` arrives as 0, so anything that
+   * falls through to `salePrice − cost` reports the ENTIRE ticket as the
+   * dealership's earning on a car it never owned. The frozen entitlement is the
+   * evidence that survives exactly this: it exists only on consigned sales, so
+   * it is a consignment signal in its own right, and it supplies the basis the
+   * missing vehicle can no longer provide.
+   *
+   * Gating the frozen basis on `agent` — correct for keeping a supplier basis
+   * off dealer-owned rows — discarded it here, because the classifier does not
+   * (yet) read the entitlement as a consignment signal when the vehicle is
+   * absent.
+   */
+  test("a hard-deleted consigned vehicle recovers its margin from the surviving entitlement", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: null,
+      // What reports pass when the vehicle row is gone.
+      capitalizedCost: 0,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: ENTITLEMENT,
+    });
+
+    expect(e.isAgentSale).toBe(true);
+    expect(e.dealershipMargin).toBe(MARGIN);
+    // And emphatically not the whole car.
+    expect(e.dealershipMargin).not.toBe(SALE_PRICE);
+    expect(e.supplierSettlement).toBe(ENTITLEMENT);
+    expect(e.dealershipMargin! + e.supplierSettlement!).toBe(SALE_PRICE);
+  });
+
+  /**
+   * ...but the financed DIRECT route stays UNKNOWN even with the entitlement,
+   * because there the earning is `supplierGrossReceipt − entitlement`, not
+   * `salePrice − entitlement`. Deriving it from the sale price is the exact
+   * 5,000-instead-of-3,000 overstatement SCRUM-30 exists to stop, so a
+   * surviving entitlement must not become a back door to it.
+   */
+  test("a hard-deleted financed DIRECT row stays UNKNOWN despite the entitlement", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: null,
+      capitalizedCost: 0,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: true,
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: ENTITLEMENT,
+    });
+    expect(e.isAgentSale).toBe(true);
+    expect(e.dealershipMargin).toBeNull();
+    expect(e.dealershipMargin).not.toBe(SALE_PRICE - ENTITLEMENT);
+  });
+
+  /**
+   * The precedence that must not be "simplified" away.
+   *
+   * The comment on the rule reads "rebuild it from the surviving frozen basis
+   * BEFORE reaching for the live one", which invites hoisting the entitlement
+   * preference above the `evidenceRequired` arm. Doing that would republish
+   * `salePrice − entitlement` on exactly the row SCRUM-30 exists to stop — a
+   * financed DIRECT sale whose margin is missing — and the whole suite would
+   * stay green, because nothing pinned this combination. Now it does.
+   */
+  test("a financed DIRECT row with an entitlement but no margin is still UNKNOWN", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: ENTITLEMENT,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: true,
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: ENTITLEMENT,
+    });
+    // The entitlement is known and is used. The EARNING is not, and no
+    // surviving sibling makes it knowable on this route.
+    expect(e.supplierSettlement).toBe(ENTITLEMENT);
+    expect(e.dealershipMargin).toBeNull();
+    expect(e.recognizedRevenue).toBeNull();
+  });
+
+  /**
+   * The fallback is still CORRECT for a genuine legacy row. For a consigned
+   * sale completed before the frozen fields existed, the live cost IS what the
+   * sale was posted on, and withholding it would blank a figure that was never
+   * in doubt. Only the evidence-required shape may go unknown.
+   */
+  test("a legacy consigned row with no frozen evidence still reads its settlement from the live cost", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: ENTITLEMENT,
+      // No external finance declared and no direct route: this is the cash
+      // shape, where nothing was ever frozen and nothing needs to be.
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: undefined,
+    });
+    expect(e.supplierSettlement).toBe(ENTITLEMENT);
+    expect(e.dealershipMargin).toBe(MARGIN);
+  });
+
   test("margin is the same number under both bases, which is why profit never moves", () => {
     for (const sourceType of ["SOURCED", "STOCK"] as const) {
       const e = saleEconomics({
@@ -190,7 +467,10 @@ describe("the economics split", () => {
       });
       expect(e.dealershipMargin).toBe(MARGIN);
       // ...and revenue less cost always equals it, whichever way it is split.
-      expect(e.recognizedRevenue - e.recognizedCost).toBe(MARGIN);
+      // Neither is withheld here: no external finance is declared, so this is
+      // the cash shape where `salePrice - cost` genuinely is the earning.
+      expect(e.recognizedRevenue).not.toBeNull();
+      expect(e.recognizedRevenue! - e.recognizedCost).toBe(MARGIN);
     }
   });
 });
@@ -262,6 +542,214 @@ describe("turnover excludes agent gross", () => {
     expect(row.totalRevenue).toBe(MARGIN);
     expect(row.totalProfit).toBe(MARGIN);
     expect(row.totalGrossTransactionValue).toBe(SALE_PRICE);
+  });
+});
+
+/**
+ * SCRUM-30 — the reporting reader of `consignedMarginMinor` must be as strict
+ * as the cockpit's reader of the same field.
+ *
+ * `saleTimeMarginMinor` rejects a non-finite or negative value and answers
+ * UNKNOWN, and says why: the write path cannot produce either, but `sales` is
+ * editable through the super-admin raw-JSON editor, so the READER is where the
+ * rejection has to live. This reader was added in the same change and took the
+ * value straight through `fromMinorUnits`.
+ *
+ * `NaN` is the sharp one. Convex stores it under a `v.number()` validator
+ * without complaint, `NaN === null` is false so it is not counted as unknown,
+ * and `total += NaN` poisons the figure for EVERY OTHER SALE in the range — one
+ * corrupt row turns the whole org's profit into `NaN` on screen.
+ */
+describe("a recorded margin the reader cannot trust", () => {
+  test("NaN does not poison the profit of every other sale in the range", async () => {
+    const s = await seedDealer("reportNaN");
+    const saleId = await sellConsigned(s, "VINNAN1");
+    await sellOwned(s, "VINNAN2");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { consignedMarginMinor: NaN });
+    });
+
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId, ...range(),
+    });
+
+    expect(Number.isFinite(report.totalProfit)).toBe(true);
+    expect(Number.isFinite(report.totalRevenue)).toBe(true);
+    // The owned sale is untouched by its neighbour, and the consigned row falls
+    // back to the basis its route makes correct rather than to a number.
+    expect(report.totalProfit).toBe(MARGIN + OWNED_MARGIN);
+  });
+
+  test("a negative recorded margin is not read as a loss", async () => {
+    // The write path refuses a sourced sale below the supplier's entitlement,
+    // so a negative here is corruption. Read literally it credits the org with
+    // a loss it never made, and the arithmetic flows on into the totals.
+    const s = await seedDealer("reportNegative");
+    const saleId = await sellConsigned(s, "VINNEG1");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { consignedMarginMinor: -5_000 * 1_000 });
+    });
+
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId, ...range(),
+    });
+
+    expect(report.totalProfit).toBe(MARGIN);
+  });
+
+  /**
+   * The query-level half of the entitlement fix. The pure-function test proves
+   * `saleEconomics` returns null; this proves `getSalesAndProfitReport` does
+   * something sensible with it, which nothing exercised — the branch could have
+   * been reverted and the suite would have stayed green.
+   *
+   * It also pins the distinction the two counters exist for: this row's PROFIT
+   * is exact, and only its supplier total is a floor. One counter cannot say
+   * that, which is why folding them made the margin counter claim an exclusion
+   * it never made.
+   */
+  test("an erased entitlement makes the supplier total a floor without touching profit", async () => {
+    const s = await seedDealer("reportEntitlementGone");
+    const saleId = await sellConsigned(s, "VINENT1");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, {
+        // The financed DIRECT shape, where the frozen evidence is required.
+        financingType: "FINANCED",
+        supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+        consignedMarginMinor: MARGIN * 1_000,
+        // ...and the half that was erased afterwards.
+        consignedSupplierEntitlementMinor: undefined,
+      });
+    });
+
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId, ...range(),
+    });
+
+    // The margin survived, so the earning is known and belongs in the totals.
+    expect(report.totalProfit).toBe(MARGIN);
+    expect(report.unknownMarginSaleCount).toBe(0);
+
+    // The entitlement did not, so the supplier total excludes it and says so.
+    expect(report.unknownSupplierSettlementSaleCount).toBe(1);
+    expect(report.totalSupplierSettlement).toBe(0);
+  });
+
+  test("and the salesperson ranking is protected by the same reader", async () => {
+    const s = await seedDealer("perfNaN");
+    const saleId = await sellConsigned(s, "VINNAN3");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { consignedMarginMinor: NaN });
+    });
+
+    const rows = await s.asUser.query(api.reports.getSalespersonPerformance, {
+      orgId: s.orgId, ...range(),
+    });
+    expect(rows.every((r) => Number.isFinite(r.totalProfit))).toBe(true);
+  });
+});
+
+/**
+ * SCRUM-30 — a rep carrying an unknown-margin sale must not be ranked as though
+ * their partial profit were the whole of it.
+ *
+ * `getSalespersonPerformance` counts every sale in `vehiclesSold`, drops the
+ * unknown-margin ones out of `totalProfit` with `?? 0`, and then sorts the reps
+ * by that incomplete number — so two columns computed over different sets of
+ * rows sit side by side in one row of a table that claims to rank people by
+ * what they earned. Before this release `dealershipMargin` could not be null,
+ * `?? 0` never fired, and the two always agreed; the divergence is new here.
+ *
+ * Warning the owner is not sufficient on its own while the ORDER is still
+ * derived from the partial figure. The incomplete rows come out of the ranking.
+ */
+describe("ranking a salesperson whose earnings are not fully known", () => {
+  /** A financed direct sale that never recorded what the supplier received. */
+  async function sellFinancedDirectWithoutEvidence(
+    s: Awaited<ReturnType<typeof seedDealer>>,
+    vin: string,
+    salespersonId: string
+  ) {
+    const vehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin, make: "Toyota", model: "Camry", year: 2024, mileage: 10,
+        color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
+        status: "SOLD", sourceType: "SOURCED",
+        sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+      })
+    );
+    // Inserted rather than written through `sales.create`, which now refuses
+    // this exact shape. It is the row a deal completed before the refusal
+    // leaves behind, and the reader has to cope with it.
+    return await s.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: s.orgId, vehicleId, customerId: s.customerId,
+        salespersonId: salespersonId as never,
+        salePrice: SALE_PRICE, saleDate: Date.now(), status: "COMPLETED",
+        financingType: "FINANCED", supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      })
+    );
+  }
+
+  test("their partial total does not out-rank a colleague whose figures are complete", async () => {
+    const s = await seedDealer("perfRank");
+    // A second rep, so there is an ordering to get wrong.
+    const otherId = await s.t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "perfRank_u2", email: "u2@e.com", name: "Second Rep" })
+    );
+
+    // The complete rep: one owned sale, every figure known.
+    await sellOwned(s, "VINRANK1");
+    // The incomplete rep: a KNOWN consigned sale plus one whose earning cannot
+    // be established. Their known-only profit is deliberately larger than the
+    // complete rep's whole total, which is the only arrangement that can tell
+    // "ranked on a partial number" apart from "ranked correctly".
+    const known = await sellConsigned(s, "VINRANK2");
+    const unknown = await sellFinancedDirectWithoutEvidence(s, "VINRANK3", otherId);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(known, { salespersonId: otherId });
+    });
+
+    const rows = await s.asUser.query(api.reports.getSalespersonPerformance, {
+      orgId: s.orgId, ...range(),
+    });
+
+    const incomplete = rows.find((r) => r.userId === otherId)!;
+    const complete = rows.find((r) => r.userId !== otherId)!;
+
+    // The premise: the incomplete rep's PARTIAL figure really is the larger one,
+    // so a naive sort puts them first.
+    expect(incomplete.totalProfit).toBeGreaterThan(complete.totalProfit);
+    expect(incomplete.unknownMarginSaleCount).toBe(1);
+    expect(incomplete.vehiclesSold).toBe(2);
+
+    // The claim: they are marked as not fully known, and they are ordered
+    // AFTER every rep who is — not ahead of them on a number that is missing a
+    // sale.
+    expect(rows.indexOf(complete)).toBeLessThan(rows.indexOf(incomplete));
+    expect(incomplete.marginComplete).toBe(false);
+    expect(complete.marginComplete).toBe(true);
+    expect(unknown).toBeTruthy();
+  });
+
+  test("and a board where everybody's figures are complete still ranks by profit", async () => {
+    // The control. Separating the incomplete rows must not disturb the ordinary
+    // ranking, which is what this screen is for.
+    const s = await seedDealer("perfRankControl");
+    const otherId = await s.t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "perfRankControl_u2", email: "u2b@e.com", name: "Second Rep" })
+    );
+    await sellOwned(s, "VINRANK4");
+    const bigger = await sellConsigned(s, "VINRANK5");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(bigger, { salespersonId: otherId });
+    });
+
+    const rows = await s.asUser.query(api.reports.getSalespersonPerformance, {
+      orgId: s.orgId, ...range(),
+    });
+    expect(rows.every((r) => r.marginComplete)).toBe(true);
+    expect(rows[0]!.totalProfit).toBeGreaterThanOrEqual(rows[1]!.totalProfit);
   });
 });
 
@@ -891,18 +1379,27 @@ describe("tax on an agency sale, with no open accounting period", () => {
 });
 
 /**
- * A financed consigned deal cannot be settled directly with the supplier.
+ * A financed consigned deal settled directly with the supplier.
  *
- * `finalizeDeal` calls `completeSale` with no `supplierSettlementRoute`, and an
- * absent route reads as THROUGH_DEALERSHIP. So the wizard offered the choice,
- * the operator picked DIRECT_TO_SUPPLIER, and the deal posted the opposite way
- * — dealership owing the supplier the gross and the customer owing the
- * dealership, when the financier had paid the supplier and the supplier owed
- * the dealership its margin. Both sides inverted, with nothing on screen or in
- * the ledger saying so.
+ * This was refused outright until the finance company's side of the settlement
+ * could be represented. The refusal existed because `finalizeDeal` called
+ * `completeSale` with no `supplierSettlementRoute` at all, and an absent route
+ * reads as THROUGH_DEALERSHIP — so the wizard offered the choice, the operator
+ * picked DIRECT_TO_SUPPLIER, and the deal posted the opposite way: dealership
+ * owing the supplier the gross and the customer owing the dealership, when the
+ * financier had paid the supplier and the supplier owed the dealership its
+ * margin. Both sides inverted, with nothing on screen or in the ledger saying so.
  *
- * The refusal is enforced at the mutation boundary rather than by hiding the
- * control, because the form is not the only caller.
+ * What changed is not the refusal being relaxed. The route is now recorded on
+ * the finance application and carried onto the sale, and the three postings
+ * `finalizeDeal` makes afterwards — the finance-company receivable, the
+ * customer-receivable transfer and the AR-Finance/AR-Customers journal — are
+ * skipped on this route, because all three describe money arriving at the
+ * dealership. See `financedConsignedSettlement.test.ts`, which covers that half.
+ *
+ * These tests cover the sale boundary itself: what `sales.create` does when a
+ * financed deal names the direct route. The posting is identical to the cash
+ * case, because who financed the buyer has never changed whose car it was.
  */
 describe("a financed consigned sale settled directly with the supplier", () => {
   async function financedDirect(
@@ -931,9 +1428,34 @@ describe("a financed consigned sale settled directly with the supplier", () => {
     };
   }
 
-  test("is refused rather than posted the other way round", async () => {
-    const { attempt } = await financedDirect("finDirect");
-    await expect(attempt()).rejects.toThrow(/financed/i);
+  /**
+   * SUPERSEDED BY SCRUM-30. This used to assert that `sales.create` opened a
+   * claim of `salePrice − entitlement` on a financed direct deal, which is the
+   * defect itself: on this route the FINANCE COMPANY pays the supplier whatever
+   * it approved, and `sales.create` has no field for that amount — it cannot
+   * have one, because the approval lives on the finance application.
+   *
+   * So the writer is refused rather than left guessing. What it used to assert
+   * — the claim runs from the supplier to the dealership and no payable is
+   * opened — is covered in `financedConsignedSettlement.test.ts` through the
+   * application workflow, where the approved amount actually exists.
+   */
+  test("is refused: this writer cannot know what the financier paid the supplier", async () => {
+    const { s, vehicleId, attempt } = await financedDirect("finDirect");
+
+    await expect(attempt()).rejects.toThrow(/finance application|financing workflow/i);
+
+    // A mutation is one transaction, so the refusal leaves nothing behind — no
+    // half-built claim, and specifically not one for the sale-price margin.
+    const claims = await s.t.run(async (ctx) =>
+      (await ctx.db.query("vehicleSupplierReceivables").collect()).filter((r) => r.vehicleId === vehicleId)
+    );
+    expect(claims).toHaveLength(0);
+
+    const payables = await s.t.run(async (ctx) =>
+      (await ctx.db.query("vehicleSupplierPayables").collect()).filter((p) => p.vehicleId === vehicleId)
+    );
+    expect(payables).toHaveLength(0);
   });
 
   /**
@@ -1011,23 +1533,32 @@ describe("a financed consigned sale settled directly with the supplier", () => {
     expect(payable?.amountDue).toBe(9_500.5);
   });
 
-  test("leaves nothing behind — no sale, no sold vehicle, no supplier payable", async () => {
+  test("the refusal leaves the car unsold rather than half-completing it", async () => {
     const { s, vehicleId, attempt } = await financedDirect("finDirectState");
-    await expect(attempt()).rejects.toThrow();
+    await expect(attempt()).rejects.toThrow(/finance application|financing workflow/i);
 
     const state = await s.t.run(async (ctx) => ({
       sales: (await ctx.db.query("sales").collect()).length,
       payables: (await ctx.db.query("vehicleSupplierPayables").collect()).length,
       status: (await ctx.db.get(vehicleId))?.status,
     }));
+    // Nothing was written. A refusal that still marked the car SOLD would be
+    // worse than no refusal, because the deal could never then be completed
+    // through the workflow that does know the approved amount.
     expect(state.sales).toBe(0);
     expect(state.payables).toBe(0);
     expect(state.status).toBe("AVAILABLE");
   });
 
-  test("a LEASE is treated as financed too", async () => {
-    const { attempt } = await financedDirect("finLease", { financingType: "LEASE" });
-    await expect(attempt()).rejects.toThrow(/financed/i);
+  test("a LEASE is refused the same way — it is financed for this purpose too", async () => {
+    const { s, vehicleId, attempt } = await financedDirect("finLease", { financingType: "LEASE" });
+
+    await expect(attempt()).rejects.toThrow(/finance application|financing workflow/i);
+
+    const claims = await s.t.run(async (ctx) =>
+      (await ctx.db.query("vehicleSupplierReceivables").collect()).filter((r) => r.vehicleId === vehicleId)
+    );
+    expect(claims).toHaveLength(0);
   });
 
   test("a CASH consigned sale keeps the direct route", async () => {

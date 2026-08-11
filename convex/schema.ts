@@ -22,6 +22,7 @@ import {
   quotationSourceValidator,
   settlementStatusValidator,
 } from "./utils/financingEconomics";
+import { consignedSettlementRouteValidator } from "./utils/vehicleOwnership";
 
 const organizationDeletionRequestStatus = v.union(
   v.literal("PENDING_REVIEW"),
@@ -456,6 +457,12 @@ export default defineSchema({
       // Multi-vehicle reservation-deposit allocation — see depositAllocation.ts.
       v.literal("ALLOCATE_DEPOSIT"),
       v.literal("RESOLVE_DEPOSIT_ALLOCATION"),
+      v.literal("SET_SUPPLIER_SETTLEMENT_ROUTE"),
+      v.literal("CONFIRM_SUPPLIER_DISBURSEMENT"),
+      // Correcting a mistyped settlement advice. Distinct from recording one so
+      // the audit trail shows an amendment as an amendment — a second
+      // CONFIRM would read as a second payment.
+      v.literal("AMEND_SUPPLIER_DISBURSEMENT_ADVICE"),
     ),
     resourceType: v.string(),
     resourceId: v.string(),
@@ -1332,6 +1339,79 @@ export default defineSchema({
     supplierSettlementRoute: v.optional(
       v.union(v.literal("THROUGH_DEALERSHIP"), v.literal("DIRECT_TO_SUPPLIER"))
     ),
+    /**
+     * What the dealership earned on a consigned sale, in minor units, frozen at
+     * completion. Written on every sourced sale — INCLUDING a zero — because
+     * zero is the fact that most needs recording.
+     *
+     * Absent means the row predates this field, and readers must treat that as
+     * UNKNOWN rather than as zero. Never defaulted at write time, for the same
+     * reason `supplierSettlementRoute` above is not.
+     *
+     * The cockpit previously inferred a zero margin from the ABSENCE of a
+     * `vehicleSupplierReceivables` row, on the grounds that sale completion
+     * opens one only when the margin is positive. That inference was unsound:
+     * absence is also what a legacy sale looks like, and what a `hardDeleteOrg`
+     * that fails between deleting receivables and deleting sales leaves behind.
+     * Either way the screen would have reported a deal settled with money still
+     * uncollected. A fact this important is recorded, not deduced from a gap.
+     */
+    consignedMarginMinor: v.optional(v.number()),
+    /**
+     * The currency `consignedMarginMinor` is denominated in — the org's, as it
+     * stood when the sale completed.
+     *
+     * Stored rather than assumed, like every other money row in this schema
+     * (`vehicleSupplierReceivables.currency`, `financeDealFees.currency`,
+     * `deposits.currency`). The cockpit resolves its own currency from
+     * `financeApplications.economicsCurrency`, and `orgSettings` does not count
+     * `financeApplications` among the rows that lock an org's currency — so a
+     * young org can record deal economics in JOD and later switch to USD. The
+     * reader would then have subtracted USD cents from JOD fils and published
+     * the difference as profit.
+     */
+    consignedMarginCurrency: v.optional(v.string()),
+    /**
+     * What the supplier is owed for the car, in minor units, frozen at
+     * completion — his entitlement, denominated in `consignedMarginCurrency`.
+     *
+     * Recorded rather than re-derived because every later reader needs it and
+     * every source it could be re-derived FROM can move underneath them: the
+     * vehicle's `sourceCost` is editable, and the capitalized cost is a sum over
+     * rows that can be added after the sale. The cockpit renders this as the
+     * supplier's settlement line on both routes.
+     *
+     * Cancellation does NOT read it: `makeReversalHook` reverses the original
+     * journal entry line for line, which is stronger — it cannot disagree with
+     * what was posted even if this field were wrong. Said explicitly because the
+     * opposite claim was written here first, and a comment that overstates who
+     * depends on a field is how a field survives long after its last reader.
+     *
+     * Absent means the row predates this field: UNKNOWN, never zero. A zero
+     * entitlement and an unrecorded one are different facts, and only one of
+     * them means "the supplier is owed nothing".
+     */
+    consignedSupplierEntitlementMinor: v.optional(v.number()),
+    /**
+     * What a third party paid the supplier DIRECTLY, in minor units, frozen at
+     * completion. Written only on the direct route; absent on
+     * THROUGH_DEALERSHIP, where nobody pays him directly and the dealership
+     * owes him his entitlement as a payable instead.
+     *
+     * On a cash direct sale this is the sale price — the buyer pays him. On a
+     * financed direct sale it is the finance company's approved purchase
+     * amount, which is frequently NOT the sale price. Recording which quantity
+     * actually applied is what stops a later reader from assuming the sale
+     * price and reopening the defect this field was added to close: the
+     * dealership's claim is `this − entitlement`, so a claim can never exceed
+     * the dealership money the supplier is genuinely holding.
+     *
+     * Read by `sales.recalculateCommission`, which measures the salesperson's
+     * commission on what this sale actually recognized. On a FINANCED direct row
+     * its absence is refused rather than defaulted — see `commissionableEarnings`
+     * in convex/utils/saleCompletion.ts.
+     */
+    consignedSupplierGrossReceiptMinor: v.optional(v.number()),
     canonicalReceivableDocumentId: v.optional(v.id("receivableDocuments")),
     commissionAmount: v.optional(v.number()), // Calculated at sale time
     // How many COMMISSION_ADJUSTED corrections have been posted against this
@@ -2118,6 +2198,77 @@ export default defineSchema({
     dealerContributionMinor: v.optional(v.number()),
     dealerContributionSettlement: v.optional(dealerContributionSettlementValidator),
     customerContributionSettlement: v.optional(customerContributionSettlementValidator),
+
+    // Who the finance company actually pays when the car is the supplier's.
+    //
+    // Not derivable, and not the same question as who owns the car: the same
+    // consigned vehicle can be financed with the cheque made out to the
+    // dealership or made out to the supplier, and only the agreement says
+    // which (`حسب ملكية السيارة`). Recorded here rather than on the sale
+    // because the sale does not exist yet when the deal is arranged, and
+    // `finalizeDeal` is what carries it onto the sale.
+    //
+    // Absent means THROUGH_DEALERSHIP — the same reading `consignedSettlementRoute`
+    // gives an absent route on a sale, and what every financed consigned deal
+    // finalized before this field existed actually posted. Reading absent as
+    // anything else would restate them.
+    supplierSettlementRoute: v.optional(consignedSettlementRouteValidator),
+
+    // The finance company's disbursement TO THE SUPPLIER, on the direct route.
+    //
+    // Kept apart from `disbursedAt`/`disbursedAmountMinor` above, which mean
+    // money that arrived in the dealership's own bank. This money never touches
+    // the dealership's books: it is a fact read off the settlement advice,
+    // recorded because it is what makes the supplier's margin collectable, and
+    // it posts no journal. Folding the two together would let a disbursement
+    // the dealership never received satisfy a check for one it did.
+    supplierDisbursementConfirmedAt: v.optional(v.number()),
+    supplierDisbursedAmountMinor: v.optional(v.number()),
+    supplierDisbursementReference: v.optional(v.string()),
+    supplierDisbursementConfirmedBy: v.optional(v.id("users")),
+    /**
+     * Whether the recorded advice agrees with what the deal was approved at.
+     *
+     * The dealership's ruling is one payment, for the approved amount — so a
+     * different figure is a contradiction between two records of the same fact,
+     * not a partial payment. The first attempt at enforcing that REFUSED the
+     * mismatched advice, and refusing turned out to be worse than the problem:
+     *
+     *   - the approval is immutable once the deal is finalized, so there was no
+     *     legal way to make the two agree and the advice could never be
+     *     recorded at all;
+     *   - `supplierDisbursementConfirmedAt` therefore stayed absent, and that
+     *     field is what stops a sale being cancelled after the finance company
+     *     has paid. A mismatched advice — evidence the supplier WAS paid — left
+     *     the sale freely cancellable. The enforcement disarmed the guard it
+     *     was meant to strengthen.
+     *
+     * So the advice is now always recorded, and a disagreement is recorded WITH
+     * it as a state a human has to resolve. `REQUIRES_RECONCILIATION` is not a
+     * softer CONFIRMED: it says the dealership holds two contradictory records
+     * of one payment and does not yet know which is true.
+     *
+     * Absent means the advice predates this field. It means an advice is ON
+     * FILE — NOT that the amounts agreed. The claim that they must have is
+     * false: the pre-status writer validated only that the amount was positive
+     * and never compared it against `approvedDealerPurchaseAmountMinor`, and
+     * that comparison first exists in this release. `redactSettlementEvidence`
+     * normalizes absence to `CONFIRMED` for DISPLAY, and says the same thing
+     * there — do not read either as evidence of agreement, and never branch on
+     * `status === "CONFIRMED"` from a redacted payload to decide whether a
+     * disbursement reconciled. Ask the raw fields, as `dealCockpit` does.
+     */
+    supplierDisbursementStatus: v.optional(
+      v.union(v.literal("CONFIRMED"), v.literal("REQUIRES_RECONCILIATION"))
+    ),
+    /**
+     * What the deal was approved at when the advice was recorded, in minor
+     * units. Frozen alongside the advice so the discrepancy stays legible even
+     * if the approval is later corrected through its own audited path — without
+     * it, "the advice disagreed" becomes unfalsifiable the moment either side
+     * moves. Written only when the two disagree.
+     */
+    supplierDisbursementApprovedAtRecordingMinor: v.optional(v.number()),
 
     // Settlement. `expected` is what the company owes; `actual` is what turned
     // up. Keeping them apart is the whole reason confirmDisbursement could not

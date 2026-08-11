@@ -44,7 +44,20 @@ type AuditActionType =
   // Not a posting — the money does not move — but it decides where a customer's
   // deposit lands, so it is not a decision that may go unrecorded.
   | "ALLOCATE_DEPOSIT"
-  | "RESOLVE_DEPOSIT_ALLOCATION";
+  | "RESOLVE_DEPOSIT_ALLOCATION"
+  // Who decided that a financed consigned deal settles with the supplier
+  // directly rather than through the dealership. Like the deposit allocation
+  // above it moves no money by itself, and like it, it decides which way the
+  // money moves afterwards: whether the dealership ends up owing the supplier
+  // his entitlement or holding a claim on him for its margin. The two produce
+  // opposite balance sheets from the same sale.
+  | "SET_SUPPLIER_SETTLEMENT_ROUTE"
+  // The finance company paid the supplier. Recorded as a fact off the
+  // settlement advice, with no journal behind it — which is exactly why it
+  // needs an audit trail: nothing in the ledger would otherwise show who
+  // asserted it, or when.
+  | "CONFIRM_SUPPLIER_DISBURSEMENT"
+  | "AMEND_SUPPLIER_DISBURSEMENT_ADVICE";
 
 // ─── Internal: write audit entry ─────────────────────────────────────────────
 

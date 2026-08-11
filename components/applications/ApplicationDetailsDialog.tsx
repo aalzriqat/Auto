@@ -19,6 +19,7 @@ import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useCurrency } from "@/hooks/useCurrency";
 import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
 import { DisbursementConfirmationDialog } from "./DisbursementConfirmationDialog";
+import { getErrorMessage } from "@/lib/errors";
 import { VehicleHandoverDialog } from "./VehicleHandoverDialog";
 import { RegisterExpectedPaymentDialog, type ExpectedPaymentMethod } from "./RegisterExpectedPaymentDialog";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
@@ -67,6 +68,8 @@ export function ApplicationDetailsDialog({
   const finalizeDealIdempotencyKeyRef = useRef<string | null>(null);
   const cancelApplicationIdempotencyKeyRef = useRef<string | null>(null);
   const confirmDisbursementIdempotencyKeyRef = useRef<string | null>(null);
+  const confirmSupplierDisbursementIdempotencyKeyRef = useRef<string | null>(null);
+  const [isSupplierDisbursementDialogOpen, setIsSupplierDisbursementDialogOpen] = useState(false);
 
   const app = useQuery(api.applications.get, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
   const documents = useQuery(api.documents.getForApplication, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
@@ -76,6 +79,8 @@ export function ApplicationDetailsDialog({
   const cancelApplication = useMutation(api.applications.cancelApplication);
   const finalizeDeal = useMutation(api.applications.finalizeDeal);
   const confirmDisbursement = useMutation(api.applications.confirmDisbursement);
+  const confirmSupplierDisbursement = useMutation(api.applications.confirmSupplierDisbursement);
+  const setSupplierSettlementRoute = useMutation(api.applications.setSupplierSettlementRoute);
   const registerVehicleHandover = useMutation(api.applications.registerVehicleHandover);
   const registerExpectedPayment = useMutation(api.applications.registerExpectedPayment);
   const releaseDeposit = useMutation(api.deposits.release);
@@ -198,8 +203,14 @@ export function ApplicationDetailsDialog({
       finalizeDealIdempotencyKeyRef.current = null;
       toast.success(t("DealFinalizedSuccess" as any));
       onOpenChange(false);
-    } catch {
-      toast.error(t("UnexpectedError" as any));
+    } catch (error) {
+      // Every refusal reachable from this button is actionable and names what
+      // to change — an unrecorded settlement route, an unresolved عربون, a
+      // missing approved purchase amount. Collapsing them all into "unexpected
+      // error" left the operator with a deal they could neither complete nor
+      // diagnose, and the only apparent way forward was to change the route and
+      // post the deal the wrong way round.
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -238,6 +249,23 @@ export function ApplicationDetailsDialog({
   if (!app) return null;
   const currencyScale = scaleForCurrency(currency.code);
   const currencyFactor = Math.pow(10, currencyScale);
+  // The dealer-side economics are denominated in the application's OWN pinned
+  // currency, not the org's current one — `financeApplications.economicsCurrency`
+  // governs every `*Minor` field in that block, including the approved purchase
+  // amount and the supplier advice.
+  //
+  // They are not always the same currency, and `orgSettings` does not count
+  // `financeApplications` among the rows that lock an org's. A young dealership
+  // can record a deal in JOD (scale 3) and later switch to USD (scale 2), and
+  // this component read and WROTE both figures at the org's scale — so
+  // confirming a 17,450 advice on a JOD-pinned deal under a USD org sent
+  // 1,745,000 minor units instead of 17,450,000, understating by 10×.
+  //
+  // Absent means the row predates the field, and the org's currency is then the
+  // only reading available — which is what the server falls back to as well, so
+  // the two agree rather than each guessing separately.
+  const economicsCurrencyCode = app.economicsCurrency ?? currency.code;
+  const economicsFactor = Math.pow(10, scaleForCurrency(economicsCurrencyCode));
   const expectedDisbursementAmount = app.quote?.totalFinancedAmount ?? 0;
   const expectedDisbursementMinor = Math.round(expectedDisbursementAmount * currencyFactor);
   const expectsFinanceCompanyDisbursement = Boolean(app.companyId && expectedDisbursementMinor > 0);
@@ -245,11 +273,81 @@ export function ApplicationDetailsDialog({
     ? currency.format(app.disbursedAmountMinor / currencyFactor)
     : null;
   const expectedDisbursementLabel = currency.format(expectedDisbursementMinor / currencyFactor);
+  // What the finance company approved to pay for the CAR, which is what it
+  // sends the supplier. Absent on deals whose approved amount was never
+  // recorded, where showing a confident-looking zero would be worse than
+  // saying nothing.
+  // Labelled in the currency it is actually denominated in, not the org's.
+  //
+  // `currency.format` appends the ORG's display label, so a JOD deal under an
+  // org that now reports in USD was scaled by the deal's factor and then
+  // labelled "$" — a number correct in fils presented as dollars. The two
+  // halves have to come from the same currency or the label contradicts the
+  // figure it is attached to.
+  const formatEconomics = (minor: number) =>
+    `${(minor / economicsFactor).toLocaleString()} ${
+      economicsCurrencyCode === currency.code ? currency.displayLabel : economicsCurrencyCode
+    }`;
+  const expectedSupplierDisbursementLabel =
+    app.approvedDealerPurchaseAmountMinor !== undefined
+      ? formatEconomics(app.approvedDealerPurchaseAmountMinor)
+      : t("NotRecorded" as any);
+  // A consigned car is the supplier's, so this deal has a settlement route: the
+  // finance company's cheque is made out to the dealership or to him, depending
+  // on who owns the car. Absent reads as THROUGH_DEALERSHIP, matching the server.
+  const isConsignedDeal = app.vehicle?.sourceType === "SOURCED";
+  const settlesDirectToSupplier =
+    isConsignedDeal && app.supplierSettlementRoute === "DIRECT_TO_SUPPLIER";
+  const supplierName = app.vehicle?.sourcedFromName;
+  // The route is a decision about a deal that has not posted yet. Once the
+  // application closes, the sale has booked either a payable to the supplier or
+  // a claim on him, and changing it is a correction rather than an edit — the
+  // server refuses it there too.
+  //
+  // Keyed on FINALIZE_FINANCED_DEAL, matching the server. It was MANAGE_FINANCE,
+  // which the default MANAGER and SALES templates do not hold — so the selector
+  // was hidden from exactly the people who close these deals and know which way
+  // the cheque was made out, and they would finalize with no route recorded.
+  const canChooseSettlementRoute =
+    canFinalizeApplication &&
+    isConsignedDeal &&
+    app.status !== "CLOSED" &&
+    app.status !== "CANCELLED";
+
+  // On the direct route the company pays the supplier, so there is no
+  // dealership receipt to confirm — `confirmDisbursement` posts DR Bank and
+  // would invent cash. Offering it would be offering an action the server
+  // refuses; the supplier confirmation below is the one that applies.
   const canConfirmDisbursement =
     canConfirmFinanceDisbursement &&
     app.status === "CLOSED" &&
     expectsFinanceCompanyDisbursement &&
+    !settlesDirectToSupplier &&
     !app.disbursedAt;
+
+  // Gated on the same facts the server enforces. Without
+  // `expectsFinanceCompanyDisbursement` the button appeared on a closed direct
+  // deal with no finance company, where the handler returned silently and the
+  // server would have refused anyway — a control that looks available and does
+  // nothing.
+  const canConfirmSupplierDisbursement =
+    canConfirmFinanceDisbursement &&
+    app.status === "CLOSED" &&
+    settlesDirectToSupplier &&
+    // The server's own answer, not `companyId`. That field is only ever set on
+    // CONFIGURED_FINANCE_COMPANY deals, so gating on it hid this button on
+    // every MANUAL_FINANCE_COMPANY deal — a supported external financier —
+    // while the server would have accepted the confirmation.
+    //
+    // Not `expectsFinanceCompanyDisbursement` either: that flag also requires
+    // `totalFinancedAmount > 0`, which the server never reads here. The
+    // dealership button keeps that flag, because it does compare against it.
+    app.canSettleDirectToSupplier &&
+    // Also the status rather than the timestamp. This caller does hold
+    // CONFIRM_FINANCE_DISBURSEMENT and can therefore see both, but keeping the
+    // button's condition off gated fields means it cannot silently change
+    // meaning if that gate is ever tightened again.
+    !app.supplierDisbursementStatus;
 
   const handleConfirmDisbursement = async () => {
     if (!activeOrgId || !expectedDisbursementMinor) return;
@@ -272,8 +370,93 @@ export function ApplicationDetailsDialog({
       setIsConfirmingDisbursement(false);
     }
   };
+  const handleChooseSettlementRoute = async (route: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER") => {
+    if (!activeOrgId) return;
+    try {
+      await setSupplierSettlementRoute({ orgId: activeOrgId, applicationId, route });
+    } catch (error) {
+      // MEDIUM-4's refusals live behind this button — no finance company, or a
+      // held deposit that has to be settled first. Both name what to do next,
+      // and both were being discarded into "an unexpected error occurred".
+      toast.error(getErrorMessage(error));
+    }
+  };
+
+  const handleConfirmSupplierDisbursement = async (advice: {
+    amountMajor: number;
+    reference?: string;
+    disbursedAt?: number;
+  }) => {
+    if (!activeOrgId) return;
+    setIsConfirmingDisbursement(true);
+    try {
+      confirmSupplierDisbursementIdempotencyKeyRef.current ??= `confirm-supplier-disbursement:${crypto.randomUUID()}`;
+      await confirmSupplierDisbursement({
+        orgId: activeOrgId,
+        applicationId,
+        // The advice's own figure, not the dealership's expectation.
+        // Scaled by the APPLICATION's pinned economics currency — this figure is
+        // stored as `supplierDisbursedAmountMinor`, which lives in that block.
+        disbursedAmountMinor: Math.round(advice.amountMajor * economicsFactor),
+        reference: advice.reference,
+        disbursedAt: advice.disbursedAt,
+        idempotencyKey: confirmSupplierDisbursementIdempotencyKeyRef.current,
+      });
+      confirmSupplierDisbursementIdempotencyKeyRef.current = null;
+      toast.success(t("SupplierDisbursementConfirmedSuccess" as any));
+      setIsSupplierDisbursementDialogOpen(false);
+    } catch (error) {
+      // The server's refusals here name the amount, the route or the date the
+      // operator has to change. Replacing them with "unexpected error" turns a
+      // decision point into a dead end.
+      toast.error(getErrorMessage(error));
+    } finally {
+      setIsConfirmingDisbursement(false);
+    }
+  };
+
   const applicationDeposits = app.deposits ?? [];
   const pendingDeposits = applicationDeposits.filter((deposit) => deposit.status === "HELD");
+
+  const supplierLabel = supplierName ?? t("TheSupplier" as any);
+  const disbursementStatusLabel = (() => {
+    if (settlesDirectToSupplier) {
+      // The STATUS, not the timestamp. Both answer "has he been paid", but the
+      // timestamp is gated to finance-facing roles, so branching on it here
+      // would tell a sales user "awaiting supplier disbursement" forever on a
+      // deal the financier had already settled — the exact dead-end this label
+      // exists to avoid. The status is written only when an advice is recorded,
+      // so its presence is the same signal without the evidence.
+      const key = app.supplierDisbursementStatus
+        ? "SupplierPaidByFinanceCompany"
+        : "AwaitingSupplierDisbursement";
+      return t(key as any).replace("{supplier}", supplierLabel);
+    }
+    if (app.disbursedAt) return `${t("DisbursementReceived" as any)} - ${confirmedDisbursementLabel}`;
+    return t("AwaitingDisbursement" as any);
+  })();
+  // A configured company has a row to name; a manual provider has only the name
+  // snapshotted at submission; a lease has neither.
+  //
+  // A lease has an external financier and no name for it anywhere, so it fell
+  // to "Finance provider (not named)" here while the applications list called
+  // the same deal "Lease" — two descriptions of one deal, and this was the
+  // inaccurate one: it has a leasing provider, not an unnamed finance company.
+  //
+  // `||` throughout rather than `??`: a whitespace-only provider name is
+  // reachable (`saveQuote` applies no trim) and `??` would keep the trimmed
+  // empty string, rendering a blank label beside "Company" while the server's
+  // own resolver correctly calls that payer unnamed.
+  const financierLabel =
+    app.company?.name ||
+    app.manualFinanceSnapshot?.providerName?.trim() ||
+    (app.directRouteRefusal === "LEASE"
+      ? t("LeaseFinancing" as any)
+      : t("UnnamedFinanceProvider" as any));
+  // The dealership-side disbursement compares against the customer's principal,
+  // so it keeps `expectsFinanceCompanyDisbursement`. The supplier-side status is
+  // about a payment that never touches that figure, so it must not.
+  const showDisbursementStatus = settlesDirectToSupplier || expectsFinanceCompanyDisbursement;
   const showDepositResolution =
     (app.status === "REJECTED" || app.status === "CANCELLED") && pendingDeposits.length > 0;
   const showApplicationDeposits =
@@ -361,7 +544,13 @@ export function ApplicationDetailsDialog({
           </div>
         </DialogHeader>
 
-        <div className="grid grid-cols-2 gap-6 my-4">
+        {/* Single column below `sm`. This was a hard two-column grid, which on
+            a 390px phone left each column around 180px — every label wrapping
+            after two or three words. That was survivable while the right column
+            only displayed figures; it stopped being survivable when the
+            settlement-route control moved in, because the operator now has to
+            READ two options and choose between them there. */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 my-4">
           <div className="space-y-4">
             <div>
               <h4 className="font-semibold text-sm mb-2">{t("CustomerInfo" as any)}</h4>
@@ -386,18 +575,24 @@ export function ApplicationDetailsDialog({
             <div>
               <h4 className="font-semibold text-sm mb-2">{t("FinancingDetails" as any)}</h4>
               <div className="bg-muted/50 p-3 rounded-lg text-sm">
-                {app.company ? (
+                {/* Branched on the server's own answer, not on `app.company`.
+                    That row is null for every MANUAL_FINANCE_COMPANY deal by
+                    construction — `quotes.saveQuote` refuses a `companyId` on
+                    that mode — so an externally financed deal was labelled
+                    "Cash Deal" directly above the control that decides which
+                    balance sheet posts, and its disbursement status was hidden
+                    entirely. Harmless while the route could not be chosen here;
+                    actively misleading now that it can. */}
+                {app.hasExternalFinancier ? (
                   <>
-                    <p><strong>{t("Company" as any)}:</strong> {app.company.name}</p>
+                    <p><strong>{t("Company" as any)}:</strong> {financierLabel}</p>
                     <p><strong>{t("DownPayment" as any)}:</strong> {app.quote?.downPayment?.toLocaleString()} {t("JOD" as any)}</p>
                     <p><strong>{t("TermMonths" as any)}:</strong> {app.quote?.termMonths} {t("Months" as any)}</p>
                     <p><strong>{t("MonthlyInstallment" as any)}:</strong> <span className="font-semibold text-primary">{app.quote?.monthlyInstallment?.toLocaleString(undefined, { minimumFractionDigits: 2 })} {t("JOD" as any)}</span></p>
-                    {expectsFinanceCompanyDisbursement && (
+                    {showDisbursementStatus && (
                       <p>
                         <strong>{t("DisbursementStatus" as any)}:</strong>{" "}
-                        {app.disbursedAt
-                          ? `${t("DisbursementReceived" as any)} - ${confirmedDisbursementLabel}`
-                          : t("AwaitingDisbursement" as any)}
+                        {disbursementStatusLabel}
                       </p>
                     )}
                   </>
@@ -409,6 +604,90 @@ export function ApplicationDetailsDialog({
                 )}
               </div>
             </div>
+
+            {/* The car is the supplier's, so who the finance company pays is a
+                decision this deal cannot infer — and it decides whether the
+                dealership ends up owing him his entitlement or holding a claim
+                on him for its margin. Asked before finalization, because
+                afterwards the sale has already posted one of the two.
+
+                Deliberately NOT the sale form's ConsignedSettlementSection,
+                though it duplicates its labels. That component renders nothing
+                unless `sales.consignedSalePreview` answers, and that query
+                withholds its cost-bearing reply from any role without cost
+                visibility — which the default SALES template lacks while
+                holding FINALIZE_FINANCED_DEAL. Reusing it hid the control from
+                exactly the role the server requires to set it. The duplication
+                is the price of a control that does not depend on seeing cost. */}
+            {canChooseSettlementRoute && (
+              <fieldset className="space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.04] p-4">
+                <legend className="px-1 text-xs font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">
+                  {t("SupplierSettlementRoute" as any)}
+                </legend>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  {t("ConsignedSaleSettlementDesc" as any).replace("{supplier}", supplierLabel)}
+                </p>
+                {/* `role="radio"` elements must be owned by a `radiogroup`;
+                    fieldset/legend group them visually but establish no ARIA
+                    ownership, so without this they announce as two unrelated
+                    radios with no set name. */}
+                <div
+                  role="radiogroup"
+                  aria-label={t("SupplierSettlementRoute" as any)}
+                  className="grid gap-2 sm:grid-cols-2"
+                >
+                  {(
+                    [
+                      ["THROUGH_DEALERSHIP", "RouteThroughDealership", "RouteThroughDealershipHint"],
+                      ["DIRECT_TO_SUPPLIER", "RouteDirectToSupplier", "RouteDirectToSupplierHint"],
+                    ] as const
+                  ).map(([route, labelKey, hintKey]) => {
+                    // Nothing is preselected when no route has been recorded.
+                    // Defaulting the control to THROUGH_DEALERSHIP showed it as
+                    // already chosen while the server still considered the deal
+                    // unanswered, so an operator who wanted it saw no reason to
+                    // click and hit the refusal at finalization.
+                    const selected = app.supplierSettlementRoute === route;
+                    // The direct route needs somebody outside the dealership
+                    // who pays the supplier AND who the settlement advice can
+                    // name. Shown disabled with the reason rather than hidden:
+                    // an operator looking for the option they were told to pick
+                    // needs to know why it is not there, and a missing control
+                    // answers nothing.
+                    const unavailable =
+                      route === "DIRECT_TO_SUPPLIER" && !app.canSettleDirectToSupplier;
+                    const reasonKey =
+                      app.directRouteRefusal === "LEASE"
+                        ? "RouteDirectUnavailableLease"
+                        : app.directRouteRefusal === "PAYER_UNNAMED"
+                          ? "RouteDirectUnavailableUnnamedProvider"
+                          : app.directRouteRefusal === "HeldDeposit"
+                            ? "RouteDirectUnavailableHeldDeposit"
+                            : "RouteDirectUnavailableNoExternalFinancier";
+                    return (
+                      <button
+                        key={route}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        disabled={unavailable}
+                        onClick={() => handleChooseSettlementRoute(route)}
+                        className={`rounded-md border p-3 text-start transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-60 ${
+                          selected
+                            ? "border-amber-500 bg-background shadow-sm"
+                            : "border-border bg-background/40 enabled:hover:bg-background"
+                        }`}
+                      >
+                        <span className="block text-sm font-medium">{t(labelKey as any)}</span>
+                        <span className="mt-0.5 block text-xs leading-snug text-muted-foreground">
+                          {t((unavailable ? reasonKey : hintKey) as any)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </fieldset>
+            )}
 
             <div>
               <h4 className="font-semibold text-sm mb-2">{t("AppActions" as any)}</h4>
@@ -511,6 +790,51 @@ export function ApplicationDetailsDialog({
                     t={(key) => t(key as any)}
                     onOpenChange={setIsDisbursementDialogOpen}
                     onConfirm={handleConfirmDisbursement}
+                  />
+                )}
+
+                {/* The direct route's counterpart. Deliberately a separate
+                    action rather than the same button behaving differently:
+                    this one records that somebody ELSE was paid, moves no
+                    dealership money, and posts no journal. Collapsing the two
+                    would make "confirm the disbursement" mean two different
+                    things depending on a field further up the screen. */}
+                {/* Same reason as the label above: the status is visible to
+                    every role, the timestamp is not. */}
+                {settlesDirectToSupplier && app.status === "CLOSED" && app.supplierDisbursementStatus && (
+                  <Badge variant="outline" className="justify-center py-2">
+                    {t("SupplierPaidByFinanceCompany" as any).replace("{supplier}", supplierLabel)}
+                  </Badge>
+                )}
+
+                {canConfirmSupplierDisbursement && (
+                  <DisbursementConfirmationDialog
+                    mode="SUPPLIER"
+                    supplierName={supplierName}
+                    open={isSupplierDisbursementDialogOpen}
+                    disabled={isConfirmingDisbursement}
+                    submitting={isConfirmingDisbursement}
+                    // The same figure the field is prefilled with. This label
+                    // was showing `totalFinancedAmount` — the customer's
+                    // principal — beside a prefill deliberately taken from the
+                    // approved purchase amount, so on any deal with a down
+                    // payment the dialog stated one number and offered another,
+                    // inviting the operator to "correct" the right one to the
+                    // wrong one.
+                    amountLabel={expectedSupplierDisbursementLabel}
+                    // Prefilled from what the company APPROVED to pay for the
+                    // car, which is the figure the advice should carry — not
+                    // `totalFinancedAmount`, the customer's principal, which
+                    // differs by the down payment on every deal that has one.
+                    defaultAmountMajor={
+                      app.approvedDealerPurchaseAmountMinor !== undefined
+                        ? app.approvedDealerPurchaseAmountMinor / economicsFactor
+                        : undefined
+                    }
+                    t={(key) => t(key as any)}
+                    onOpenChange={setIsSupplierDisbursementDialogOpen}
+                    onConfirm={() => undefined}
+                    onConfirmSupplier={handleConfirmSupplierDisbursement}
                   />
                 )}
 

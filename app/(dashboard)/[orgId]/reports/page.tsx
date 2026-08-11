@@ -47,7 +47,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { downloadCSV } from "@/lib/utils/export";
-import { sumRecognizedRevenue, sumReportedCost, sumReportedProfit } from "@/lib/saleReporting";
+import {
+  countUnknownMargin,
+  performanceMarginIsIncomplete,
+  sumRecognizedRevenue,
+  sumReportedCost,
+  sumReportedProfit,
+  unknownMarginCountOf,
+} from "@/lib/saleReporting";
 import { RoleGuard } from "@/components/auth/RoleGuard";
 import { paginationOptsValidator } from "convex/server";
 import { dateInputToUtcMs, dateInputEndToUtcMs, todayDateInput, daysFromTodayDateInput } from "@/lib/dateInput";
@@ -213,6 +220,17 @@ export default function ReportsPage() {
   const filteredRevenue = sumRecognizedRevenue(filteredSales);
   const filteredCost = sumReportedCost(filteredSales);
   const filteredProfit = sumReportedProfit(filteredSales);
+  // Counted from the SAME rows the cards are summed from, so the notice cannot
+  // claim a different number of exclusions than the totals actually made.
+  const filteredUnknownMargin = countUnknownMargin(filteredSales);
+  // Summed from the SERVER's per-rep counts rather than recounted here, so the
+  // notice cannot claim a different number of exclusions than the rows made.
+  // Through the same reader the rows use, so the notice and the rows cannot
+  // disagree about what an absent field means.
+  const performanceUnknownMargin = (performanceReport ?? []).reduce(
+    (sum: number, perf: { unknownMarginSaleCount?: number }) => sum + unknownMarginCountOf(perf),
+    0
+  );
 
   const handlePrint = () => window.print();
   const dateFilterProps = { startDateStr, endDateStr, setStartDateStr, setEndDateStr, selectedSalesperson, setSelectedSalesperson, salespersonOptions };
@@ -303,6 +321,15 @@ export default function ReportsPage() {
               </Card>
             </div>
 
+            {/* An understated total presented as complete is the same failure as
+                an overstated one, so the exclusions are stated next to the
+                figures they changed rather than only in the row itself. */}
+            {filteredUnknownMargin > 0 && (
+              <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
+                {t("ProfitUnknownNotice").replace("{count}", String(filteredUnknownMargin))}
+              </div>
+            )}
+
             <Card className="print-shadow-none border print:border-gray-200 overflow-x-auto">
               <Table>
                 <TableHeader>
@@ -325,7 +352,21 @@ export default function ReportsPage() {
                       <TableCell>{sale.salespersonName || "-"}</TableCell>
                       <TableCell className="text-right">{format(sale.salePrice)}</TableCell>
                       <TableCell className="text-right">{format(sale.totalCost)}</TableCell>
-                      <TableCell className="text-right text-green-600 font-medium">{format(sale.netProfit)}</TableCell>
+                      {/* `null` is the server saying it cannot establish what
+                          this deal earned — a financed sale settled directly
+                          with the supplier whose recorded margin is missing. It
+                          is shown as a dash and excluded from the totals above,
+                          because formatting it as 0 would read as "this sale
+                          made nothing", which is a different and false claim. */}
+                      <TableCell className="text-right text-green-600 font-medium">
+                        {sale.netProfit === null ? (
+                          <span className="text-muted-foreground" title={t("ProfitUnknownForSale")}>
+                            —
+                          </span>
+                        ) : (
+                          format(sale.netProfit)
+                        )}
+                      </TableCell>
                     </TableRow>
                   ))}
                   {!filteredSales?.length && (
@@ -619,6 +660,18 @@ export default function ReportsPage() {
               </div>
             </div>
 
+            {/* The ranking is over the reps whose figures are complete. Saying
+                so where the table is read is the difference between a partial
+                league table and a wrong one. */}
+            {performanceUnknownMargin > 0 && (
+              <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
+                {t("PerformanceUnknownNotice").replace(
+                  "{count}",
+                  String(performanceUnknownMargin)
+                )}
+              </div>
+            )}
+
             <Card className="print-shadow-none border print:border-gray-200 overflow-x-auto">
               <Table>
                 <TableHeader>
@@ -630,12 +683,54 @@ export default function ReportsPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {performanceReport?.map((perf: any) => (
-                    <TableRow key={perf.userId}>
+                  {performanceReport?.map((perf: any, index: number) => (
+                    <TableRow
+                      key={perf.userId}
+                      /* The first row whose figures are incomplete opens the
+                         separated group. A rule rather than a heading, because
+                         these reps have not been demoted — the server stopped
+                         ranking them, and the table has to stop looking like it
+                         is still counting down from the top. */
+                      className={
+                        // `index > 0` because this rule separates two groups,
+                        // and there is nothing above the first row to separate
+                        // it from — without it, a table whose every rep has an
+                        // uncounted deal draws an amber rule directly under the
+                        // header, which reads as a divider rather than a
+                        // boundary. The old `?.marginComplete` form got this
+                        // right only by accident, via `undefined` being falsy.
+                        index > 0 &&
+                        performanceMarginIsIncomplete(perf) &&
+                        !performanceMarginIsIncomplete(performanceReport[index - 1])
+                          ? "border-t-2 border-t-amber-300 dark:border-t-amber-900"
+                          : undefined
+                      }
+                    >
                       <TableCell className="font-medium">{perf.userName}</TableCell>
                       <TableCell className="text-right">{perf.vehiclesSold}</TableCell>
                       <TableCell className="text-right">{format(perf.totalRevenue)}</TableCell>
-                      <TableCell className="text-right text-green-600 font-medium">{format(perf.totalProfit)}</TableCell>
+                      {/* Labelled, not dashed. Unlike a single sale, a rep's
+                          total is a real figure for the sales that ARE known —
+                          it is just not all of them, and `vehiclesSold` beside
+                          it counts every one. Rendering it bare is what let a
+                          partial number read as a complete one. */}
+                      <TableCell className="text-right font-medium">
+                        <span
+                          className={
+                            performanceMarginIsIncomplete(perf) ? undefined : "text-green-600"
+                          }
+                        >
+                          {format(perf.totalProfit)}
+                        </span>
+                        {performanceMarginIsIncomplete(perf) && (
+                          <span className="block whitespace-nowrap text-xs font-normal text-amber-700 dark:text-amber-400">
+                            {t("ProfitKnownOnly").replace(
+                              "{count}",
+                              String(unknownMarginCountOf(perf))
+                            )}
+                          </span>
+                        )}
+                      </TableCell>
                     </TableRow>
                   ))}
                   {!performanceReport?.length && (

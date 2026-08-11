@@ -20,7 +20,6 @@ import { toast } from "@/components/ui/sonner";
 import { downloadElementAsPdf } from "@/lib/htmlToPdf";
 import { getErrorMessage } from "@/lib/errors";
 import { decideDepositSubmission } from "@/lib/depositSettlementSubmission";
-import { consignedRouteRefusal } from "@/lib/consignedRouteGuard";
 
 interface Step4QuoteSuccessProps {
   paymentType: PaymentType;
@@ -213,20 +212,10 @@ export function Step4QuoteSuccess({
   );
   const firstConsignedVehicleId = quoteVehicleIds.find((id) => consignedLines[id]);
 
-  // An INSTALLMENT quote on a consigned car cannot settle direct-to-supplier.
-  // Gated here rather than corrected inside the section: a route the screen
-  // rewrites on the operator's behalf is a route the server never refuses,
-  // because THROUGH_DEALERSHIP is the one value it accepts. `undefined` while
-  // no line has reported yet, which is not a refusal — the server still holds
-  // the line at the mutation boundary.
-  const routeRefusal = consignedRouteRefusal({
-    financed: paymentType === "INSTALLMENT",
-    route: settlementRoute,
-    isConsigned: firstConsignedVehicleId !== undefined ? true : undefined,
-    // This button only ever completes a sale; the wizard has no draft or
-    // cancel transition of its own.
-    status: "COMPLETED",
-  });
+  // An INSTALLMENT quote on a consigned car may now settle direct-to-supplier:
+  // the finance company's side of that settlement is recorded on the finance
+  // application, and the postings that assumed the money arrived here are
+  // skipped. The section still never rewrites the operator's choice.
 
   const orgBranding = {
     name: orgSettings?.dealershipName,
@@ -358,10 +347,7 @@ export function Step4QuoteSuccess({
                   // some of them are confirmed. Either way the deal cannot be
                   // submitted coherently — and letting it through produced a
                   // refusal naming no vehicle, on a multi-car quote.
-                  !depositDecision.canSubmit ||
-                  // Financed + consigned + direct-to-supplier. The section says
-                  // why; this is what stops it.
-                  routeRefusal !== null
+                  !depositDecision.canSubmit
                 }
                 variant="outline"
                 size="lg"
@@ -445,10 +431,6 @@ export function Step4QuoteSuccess({
               orgId={activeOrgId}
               vehicleId={vehicleId}
               quoteId={quoteId}
-              // The wizard's own branch: an INSTALLMENT quote goes to a finance
-              // company, whose side of the settlement cannot record a direct
-              // payment to the supplier yet.
-              financed={paymentType === "INSTALLMENT"}
               value={settlementRoute}
               onChange={setSettlementRoute}
               // On the first CONSIGNED line, not the first line. A quote whose
