@@ -408,3 +408,63 @@ export async function requireOwnedRow<T extends OrgScopedTable>(
   }
   return doc;
 }
+
+/**
+ * What a caller may see of a finance application's settlement evidence.
+ *
+ * One rule, called by every query that returns the document, because this
+ * release learned the cost of the alternative twice: `dealCockpit` was gated
+ * while `applications.get` returned the same fields wholesale, and gating that
+ * still left `financingEconomics.getEconomics` open to a weaker role again.
+ * Gating one of three doors gates nothing.
+ *
+ * The split is between EVIDENCE and WORKFLOW, not between two grades of
+ * secrecy:
+ *
+ *  - What the advice says was paid, its reference, and the approval frozen
+ *    beside a discrepancy are evidence about money. They need VIEW_FINANCE.
+ *  - The approved amount, whether a disbursement is already recorded, and its
+ *    status are what the CONFIRMATION SCREEN runs on. Withholding them from the
+ *    people who hold the confirmation permission does not protect anything — it
+ *    opens the amount field blank so the figure gets typed from memory, leaves
+ *    the confirm button showing on an already-paid deal, and reports "awaiting
+ *    disbursement" for a deal the financier has settled. A mistyped figure then
+ *    locks the deal in REQUIRES_RECONCILIATION, which only MANAGE_FINANCE can
+ *    repair. That is a worse outcome than the disclosure it was avoiding, and
+ *    it discloses nothing new anyway: the default MANAGER already holds
+ *    VIEW_COST_PRICE, so the supplier's entitlement is visible to them.
+ *
+ * SALES holds neither permission and keeps the full redaction.
+ *
+ * Fields are BLANKED rather than omitted so the returned shape is identical for
+ * every caller — Convex drops undefined values from the wire, so nothing leaks,
+ * while consumers keep one type instead of a union they must narrow.
+ */
+export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
+  app: T,
+  role: Doc<"roles">
+): T {
+  const has = (permission: Permission) =>
+    isSystemOwnerRole(role) || role.permissions.includes(permission);
+  const canSeeFinance = has("view:finance" as Permission);
+  const canWorkDisbursement = canSeeFinance || has("confirm:finance_disbursement" as Permission);
+
+  return {
+    ...app,
+    supplierDisbursedAmountMinor: canSeeFinance ? app.supplierDisbursedAmountMinor : undefined,
+    supplierDisbursementReference: canSeeFinance ? app.supplierDisbursementReference : undefined,
+    supplierDisbursementApprovedAtRecordingMinor: canSeeFinance
+      ? app.supplierDisbursementApprovedAtRecordingMinor
+      : undefined,
+    approvedDealerPurchaseAmountMinor: canWorkDisbursement
+      ? app.approvedDealerPurchaseAmountMinor
+      : undefined,
+    supplierDisbursementConfirmedAt: canWorkDisbursement
+      ? app.supplierDisbursementConfirmedAt
+      : undefined,
+    supplierDisbursementConfirmedBy: canWorkDisbursement
+      ? app.supplierDisbursementConfirmedBy
+      : undefined,
+    supplierDisbursementStatus: canWorkDisbursement ? app.supplierDisbursementStatus : undefined,
+  };
+}

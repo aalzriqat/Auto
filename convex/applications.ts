@@ -3,7 +3,7 @@ import { MutationCtx, QueryCtx, query } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireTenantAuth, redactSettlementEvidence } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
@@ -1440,25 +1440,7 @@ export const get = query({
      * `settlementAdviceRequiresReconciliation` ungated so a stuck deal is still
      * visible to the people who work it.
      */
-    const canSeeFinance =
-      isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_FINANCE);
-    // Set to `undefined` rather than destructured away, so the field stays in
-    // the query's TYPE (every one is already optional) while being genuinely
-    // absent from the serialized payload — Convex drops undefined values. A
-    // rest-spread narrowed the type instead, which broke the callers that
-    // legitimately read these fields when they ARE permitted.
-    const visibleApp: typeof app = canSeeFinance
-      ? app
-      : {
-          ...app,
-          supplierDisbursedAmountMinor: undefined,
-          supplierDisbursementReference: undefined,
-          supplierDisbursementConfirmedAt: undefined,
-          supplierDisbursementConfirmedBy: undefined,
-          supplierDisbursementStatus: undefined,
-          supplierDisbursementApprovedAtRecordingMinor: undefined,
-          approvedDealerPurchaseAmountMinor: undefined,
-        };
+    const visibleApp = redactSettlementEvidence(app, role);
 
     const customer = await ctx.db.get(app.customerId);
     const vehicle = await ctx.db.get(app.vehicleId);
@@ -3345,7 +3327,28 @@ export const confirmSupplierDisbursement = mutation({
           idempotencyKey: args.idempotencyKey,
         });
 
-        if (!adviceAgreesWithApproval && !saleIsCancelled) {
+        if (saleIsCancelled) {
+          // Its own exception, with its own owner.
+          //
+          // Suppressing the reconciliation notice was right — nothing can be
+          // reconciled on a cancelled deal and the cockpit renders it STOPPED —
+          // but suppression alone left a payment recorded outside any live deal
+          // with nobody told about it at all. The supplier has been paid for a
+          // car whose sale was reversed and which may already be back in
+          // sellable inventory; that is a human problem, and it is a different
+          // one from a discrepancy.
+          //
+          // Fires whether or not the amount agreed with the approval: the
+          // exception is WHERE the money landed, not how much of it.
+          await notifyByPermission(
+            ctx,
+            args.orgId,
+            PERMISSIONS.MANAGE_FINANCE,
+            "application.payment_on_cancelled_deal" as const,
+            { actorName: await getActorName(ctx) },
+            { link: `/${args.orgId}/applications/${args.applicationId}/deal` }
+          );
+        } else if (!adviceAgreesWithApproval) {
           // A discrepancy nobody is told about is a discrepancy nobody resolves.
           //
           // Its own type, because it borrowed `application.created` — whose

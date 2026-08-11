@@ -63,6 +63,21 @@ export const NOTIFICATION_TYPES = {
     priority: "urgent",
     criticalDefault: true,
   },
+  /**
+   * The finance company paid the supplier on a deal whose sale was cancelled.
+   *
+   * A distinct type rather than the reconciliation one, because it is a
+   * different problem with a different resolution: nothing can be reconciled on
+   * a cancelled deal, and sending the reconciliation notice would point somebody
+   * at a cockpit that correctly renders the deal as STOPPED. This says a payment
+   * landed outside a live deal and needs a human, which is true whether or not
+   * the amount agreed with the approval.
+   */
+  "application.payment_on_cancelled_deal": {
+    category: "finance",
+    priority: "urgent",
+    criticalDefault: true,
+  },
   "guarantor.added": { category: "sales", priority: "normal", criticalDefault: false },
   "quote.accepted": { category: "sales", priority: "normal", criticalDefault: false },
   "quote.declined": { category: "sales", priority: "normal", criticalDefault: false },

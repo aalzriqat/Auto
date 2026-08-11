@@ -40,6 +40,11 @@ export const notificationsEn = {
   Notif_ApplicationSettlementAdviceDiscrepancy_Title: "Settlement Advice Needs Reconciling",
   Notif_ApplicationSettlementAdviceDiscrepancy_Message:
     "The settlement advice {actorName} recorded disagrees with the approved purchase amount. The deal is on hold until the two are reconciled — open it to review and correct the advice.",
+  // No amount here either: the recipients hold the finance ACTION permission,
+  // which is independent of permission to see the figures.
+  Notif_ApplicationPaymentOnCancelledDeal_Title: "Payment Recorded on a Cancelled Deal",
+  Notif_ApplicationPaymentOnCancelledDeal_Message:
+    "{actorName} recorded that the finance company paid the supplier on a deal whose sale was cancelled. The money is outside this deal now — settle it with the finance company and the supplier, and record an accounting correction.",
   Notif_GuarantorAdded_Title: "Guarantor Added",
   Notif_GuarantorAdded_Message: "{actorName} added a guarantor for {customerName}",
   Notif_QuoteAccepted_Title: "Quote Accepted",
@@ -261,6 +266,9 @@ export const notificationsAr = {
   Notif_ApplicationSettlementAdviceDiscrepancy_Title: "إشعار التسوية بحاجة إلى مطابقة",
   Notif_ApplicationSettlementAdviceDiscrepancy_Message:
     "إشعار التسوية الذي سجّله {actorName} لا يطابق مبلغ الشراء المعتمد. الصفقة متوقفة حتى تتم مطابقتهما — افتحها لمراجعة الإشعار وتصحيحه.",
+  Notif_ApplicationPaymentOnCancelledDeal_Title: "دفعة مسجّلة على صفقة ملغاة",
+  Notif_ApplicationPaymentOnCancelledDeal_Message:
+    "سجّل {actorName} أن شركة التمويل دفعت للمورد على صفقة أُلغي بيعها. المبلغ صار خارج هذه الصفقة — سوّه مع شركة التمويل والمورد، وسجّل قيد تصحيح محاسبي.",
   Notif_GuarantorAdded_Title: "تمت إضافة ضامن",
   Notif_GuarantorAdded_Message: "أضاف {actorName} ضامناً لـ {customerName}",
   Notif_QuoteAccepted_Title: "تم قبول عرض السعر",

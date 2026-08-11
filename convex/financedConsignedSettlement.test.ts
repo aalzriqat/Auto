@@ -4378,15 +4378,28 @@ describe("a settlement advice that contradicts the approval", () => {
     expect(app.supplierDisbursedAmountMinor).toBe(17_995 * SCALE);
     expect(app.supplierDisbursementStatus).toBe("REQUIRES_RECONCILIATION");
 
-    // But nobody is told to go and resolve a deal that no longer exists. The
-    // cockpit already renders it STOPPED; an urgent notice pointing at it would
-    // be an alarm with no action behind it.
-    const notices = await s.t.run(async (ctx) =>
-      (await ctx.db.query("notifications").collect()).filter(
-        (n) => n.type === "application.settlement_advice_discrepancy"
-      )
+    // Nobody is told to go and RECONCILE it: nothing can be reconciled on a
+    // cancelled deal, and the cockpit already renders it STOPPED.
+    const all = await s.t.run(async (ctx) => await ctx.db.query("notifications").collect());
+    expect(all.filter((n) => n.type === "application.settlement_advice_discrepancy")).toHaveLength(
+      0
     );
-    expect(notices).toHaveLength(0);
+
+    // But the exception still has an owner. Suppression alone left a payment
+    // recorded outside any live deal with nobody told at all — the supplier has
+    // been paid for a car whose sale was reversed and which may be back in
+    // sellable inventory.
+    const onCancelled = all.filter((n) => n.type === "application.payment_on_cancelled_deal");
+    expect(onCancelled.length).toBeGreaterThan(0);
+    const rendered = renderNotification("en", onCancelled[0].type as string, onCancelled[0].data);
+    expect(rendered.title + rendered.message).not.toContain("{");
+    expect(renderNotification("ar", onCancelled[0].type as string, onCancelled[0].data).message)
+      .not.toContain("{");
+    // Qualitative only — these recipients hold the finance ACTION permission,
+    // which is independent of permission to see the figures.
+    const payload = JSON.stringify(onCancelled[0].data ?? {});
+    expect(payload).not.toContain(String(17_995 * SCALE));
+    expect(payload).not.toContain("WIRE-DEAD");
   });
 
   test("the application query withholds settlement evidence from a caller who cannot see money", async () => {
@@ -4401,7 +4414,13 @@ describe("a settlement advice that contradicts the approval", () => {
     await s.t.run(async (ctx) => {
       const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === s.orgId)!;
       await ctx.db.patch(role._id, {
-        permissions: role.permissions.filter((p) => p !== "view:finance"),
+        // Neither permission. Dropping `view:finance` alone is not this case —
+        // the confirmation permission legitimately carries the workflow fields
+        // (see the MANAGER test above), so a role that keeps it is a different
+        // caller with a different, correct answer.
+        permissions: role.permissions.filter(
+          (p) => p !== "view:finance" && p !== "confirm:finance_disbursement"
+        ),
         isSystemOwnerRole: false,
       });
     });
@@ -4433,6 +4452,99 @@ describe("a settlement advice that contradicts the approval", () => {
     // The route is deliberately still visible: it says HOW the deal settles,
     // not what anyone was paid, and the people who work the deal need it.
     expect(view.supplierSettlementRoute).toBe("DIRECT_TO_SUPPLIER");
+  });
+
+  /**
+   * The gate has to distinguish EVIDENCE from WORKFLOW.
+   *
+   * The default MANAGER holds `confirm:finance_disbursement` and `view:sales`
+   * but NOT `view:finance`. Withholding the approved amount and the "is one
+   * already recorded" facts from that role protects nothing — it opens the
+   * confirmation dialog with an empty amount so the figure is typed from
+   * memory, leaves the confirm button showing on an already-paid deal, and
+   * reports the deal as awaiting a disbursement the financier has made. A
+   * mistyped figure then locks it in REQUIRES_RECONCILIATION, which only
+   * `manage:finance` can repair. Worse than the disclosure it was avoiding, and
+   * it discloses nothing new: MANAGER already holds `view:cost_price`.
+   */
+  test("a role that may confirm a disbursement can still see what it needs to confirm it", async () => {
+    const { s, applicationId } = await paidDeal("s30ConfirmRole", 18_000);
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 18_000 * SCALE,
+      reference: "WIRE-OK",
+    });
+
+    await s.t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === s.orgId)!;
+      await ctx.db.patch(role._id, {
+        permissions: ["view:sales", "view:finance_applications", "confirm:finance_disbursement"],
+        isSystemOwnerRole: false,
+      });
+    });
+
+    const view = (await s.asUser.query(api.applications.get, {
+      orgId: s.orgId,
+      applicationId,
+    })) as unknown as Record<string, unknown>;
+
+    // What the screen runs on.
+    expect(view.approvedDealerPurchaseAmountMinor).toBe(18_000 * SCALE);
+    expect(view.supplierDisbursementConfirmedAt).toBeDefined();
+    expect(view.supplierDisbursementStatus).toBe("CONFIRMED");
+    // What it does not need, and may not see.
+    expect(view.supplierDisbursedAmountMinor).toBeUndefined();
+    expect(view.supplierDisbursementReference).toBeUndefined();
+    expect(JSON.stringify(view)).not.toContain("WIRE-OK");
+  });
+
+  /**
+   * The third door. `financingEconomics.getEconomics` authorizes on
+   * `view:finance_applications` — which the default SALES template holds — and
+   * spread the whole application while redacting exactly one field. Gating the
+   * cockpit and `applications.get` left the same evidence readable here by a
+   * weaker role than the one that had just been closed.
+   */
+  test("the economics query answers the same question the same way", async () => {
+    const { s, applicationId } = await paidDeal("s30EconGate", 18_000);
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 17_995 * SCALE,
+      reference: "WIRE-4471",
+    });
+
+    await s.t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === s.orgId)!;
+      // A sales-shaped role: may see finance APPLICATIONS, may not see money.
+      await ctx.db.patch(role._id, {
+        permissions: ["view:sales", "view:finance_applications"],
+        isSystemOwnerRole: false,
+      });
+    });
+
+    const economics = (await s.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: s.orgId,
+      applicationId,
+    })) as unknown as { application: Record<string, unknown> };
+
+    // The premise: this caller is still allowed to read the deal.
+    expect(economics.application).toBeTruthy();
+
+    for (const field of [
+      "supplierDisbursedAmountMinor",
+      "supplierDisbursementReference",
+      "supplierDisbursementConfirmedAt",
+      "supplierDisbursementStatus",
+      "supplierDisbursementApprovedAtRecordingMinor",
+      "approvedDealerPurchaseAmountMinor",
+    ]) {
+      expect(economics.application[field]).toBeUndefined();
+    }
+    const serialized = JSON.stringify(economics.application);
+    expect(serialized).not.toContain("WIRE-4471");
+    expect(serialized).not.toContain(String(17_995 * SCALE));
   });
 
   test("and the same query gives a finance-permitted caller the evidence in full", async () => {

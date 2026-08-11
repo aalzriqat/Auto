@@ -49,7 +49,12 @@ async function drainScheduled(t: ReturnType<typeof convexTestWithComponents>) {
       await t.finishAllScheduledFunctions(vi.runAllTimers);
       return;
     } catch (error) {
-      if (attempt >= 2) throw error;
+      // ONLY an exhausted pump budget is retried. A blanket catch would swallow
+      // an assertion thrown from inside a scheduled function for two attempts
+      // and then report it as a drain failure — turning a real defect into a
+      // confusing timeout, which is the opposite of what this retry is for.
+      const exhausted = String((error as Error)?.message ?? error).includes("timer pumps");
+      if (!exhausted || attempt >= 4) throw error;
     }
   }
 }

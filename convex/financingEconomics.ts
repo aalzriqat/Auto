@@ -4,7 +4,7 @@ import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
-import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
+import { requireOwnedRow, requireTenantAuth, redactSettlementEvidence } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { computeSubmittedQuotation } from "../lib/financingEconomics";
@@ -614,7 +614,12 @@ export const getEconomics = query({
 
     return {
       application: {
-        ...app,
+        // Through the SAME helper `applications.get` uses. This query authorizes
+        // on VIEW_FINANCE_APPLICATIONS, which the default SALES template holds,
+        // and spread the whole document while redacting exactly one field — so
+        // gating the other two doors left the settlement evidence readable here
+        // by a weaker role than the one that had just been closed.
+        ...redactSettlementEvidence(app, auth.role),
         vehiclePurchaseCostMinor: canSeeCost ? app.vehiclePurchaseCostMinor : undefined,
       },
       appraisals: appraisals.sort((a, b) => b.appraisedAt - a.appraisedAt),
