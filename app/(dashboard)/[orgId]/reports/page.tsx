@@ -692,6 +692,14 @@ export default function ReportsPage() {
                          ranking them, and the table has to stop looking like it
                          is still counting down from the top. */
                       className={
+                        // `index > 0` because this rule separates two groups,
+                        // and there is nothing above the first row to separate
+                        // it from — without it, a table whose every rep has an
+                        // uncounted deal draws an amber rule directly under the
+                        // header, which reads as a divider rather than a
+                        // boundary. The old `?.marginComplete` form got this
+                        // right only by accident, via `undefined` being falsy.
+                        index > 0 &&
                         performanceMarginIsIncomplete(perf) &&
                         !performanceMarginIsIncomplete(performanceReport[index - 1])
                           ? "border-t-2 border-t-amber-300 dark:border-t-amber-900"

@@ -542,10 +542,8 @@ export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
     // closed while the evidence beside it is gated.
     //
     // NORMALIZED, because the field is legitimately absent on a recorded
-    // advice. The schema says so where it is declared — "Absent means the
-    // advice predates this field, which is CONFIRMED by construction" — and
-    // `amendSupplierDisbursementAdvice` codes to the same invariant with
-    // `?? "CONFIRMED"`.
+    // advice: it post-dates those rows. `amendSupplierDisbursementAdvice`
+    // treats absence the same way, with `?? "CONFIRMED"`.
     //
     // ⚠️ THE PUBLISHED VALUE IS A DISPLAY PROXY FOR "AN ADVICE IS ON FILE",
     // NOT AN ASSERTION THAT IT AGREED WITH THE APPROVAL. The schema's "could

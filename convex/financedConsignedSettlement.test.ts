@@ -4952,19 +4952,24 @@ describe("a settlement advice that contradicts the approval", () => {
   /**
    * The legacy shape the schema documents, which the gate above nearly broke.
    *
-   * `convex/schema.ts` says of `supplierDisbursementStatus`: "Absent means the
-   * advice predates this field, which is CONFIRMED by construction — those rows
-   * could only be written when the amounts matched." `amendSupplierDisbursementAdvice`
-   * codes to the same belief with `?? "CONFIRMED"`, and `sales.ts` is
-   * deliberately defensive about the mirror shape (an amount with no date).
+   * `supplierDisbursementStatus` post-dates these rows, so it is legitimately
+   * absent on an advice that really was recorded.
+   * `amendSupplierDisbursementAdvice` treats absence the same way with
+   * `?? "CONFIRMED"`, and `sales.ts` is deliberately defensive about the mirror
+   * shape (an amount with no date).
+   *
+   * ⚠️ Absence means an advice is ON FILE — NOT that its amount agreed with the
+   * approval. The schema used to claim those rows "could only be written when
+   * the amounts matched"; that claim was false and has been removed. What this
+   * test pins is the DISPLAY behaviour below, not any assertion of agreement.
    *
    * Moving the label, the badge and the confirm button onto the status alone
    * therefore handed exactly that row a permanent "awaiting supplier
    * disbursement", a hidden paid badge, and a confirm button that reappears and
    * throws against the server's `confirmedAt` guard — rounds 9 and 10 both
-   * back, for every role including OWNER. So the helper now normalizes what it
-   * publishes to the same invariant the schema asserts, rather than leaving
-   * three consumers to each rediscover it.
+   * resurrected, for every role including OWNER. So the helper now normalizes
+   * what it publishes on the one boundary that already decides what "paid"
+   * means, rather than leaving three consumers to each rediscover it.
    */
   test("an advice recorded before the status field existed still reads as paid", async () => {
     const { s, applicationId } = await paidDeal("s30LegacyStatus", 18_000);
