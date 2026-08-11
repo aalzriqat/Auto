@@ -353,8 +353,15 @@ export function saleEconomics(args: {
   // Validated BEFORE classification, because it is itself one of the signals.
   // Not agent-gated here for the same reason: asking "is this consigned" using
   // an answer that already assumed it would be circular.
+  // Bounded on BOTH sides. An entitlement above the gross subtracts to a
+  // negative margin; a negative one subtracts to a margin LARGER than the whole
+  // car and publishes the supplier's own share as a negative number. Same
+  // corruption class, opposite directions, so one rule refuses both. `NaN`
+  // needs no separate case: every comparison against it is false, so it can
+  // satisfy neither bound.
   const validFrozenEntitlement =
     args.recordedSupplierEntitlement !== undefined &&
+    args.recordedSupplierEntitlement >= 0 &&
     args.recordedSupplierEntitlement <= salePrice
       ? args.recordedSupplierEntitlement
       : undefined;

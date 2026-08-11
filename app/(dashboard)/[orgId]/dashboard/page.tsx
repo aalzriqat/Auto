@@ -279,8 +279,18 @@ export default function DashboardPage() {
                       makes the name shown true only if the reader can tell some
                       were omitted. Same trailing "+" the turnover figure uses,
                       so the two mean one thing across the screen. */}
+                  {/* The "+" carries the entire meaning, and `title` reaches
+                      neither a screen reader nor a touch device — so a
+                      non-sighted reader heard the name and a bare plus, which is
+                      indistinguishable from a complete ranking. The marker stays
+                      visual; the sentence is what gets announced. */}
                   {stats?.truncated?.topPerformer ? (
-                    <span title={t("RankingIncompleteExplain" as any)}> +</span>
+                    <>
+                      <span title={t("RankingIncompleteExplain" as any)} aria-hidden="true">
+                        {" +"}
+                      </span>
+                      <span className="sr-only">{t("RankingIncompleteExplain" as any)}</span>
+                    </>
                   ) : null}
                 </span>
               </div>

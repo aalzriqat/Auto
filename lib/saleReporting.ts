@@ -43,6 +43,32 @@ export function countUnknownMargin(sales: ReportedSaleRow[] | undefined | null):
   return (sales ?? []).filter((sale) => marginIsUnknown(sale)).length;
 }
 
+/** A salesperson row from the performance report. Both fields are new. */
+export interface ReportedPerformanceRow {
+  marginComplete?: boolean;
+  unknownMarginSaleCount?: number;
+}
+
+/**
+ * The absent-versus-withheld rule above, applied to the salesperson table.
+ *
+ * `main` auto-deploys the frontend while the Convex backend deploy is manual,
+ * so this page will run for a while against a server that has never heard of
+ * either field. Read as a plain falsy boolean, that marks EVERY salesperson
+ * incomplete and prints `String(undefined)` as the count — while the notice
+ * above the table, which already defaults with `?? 0`, says none. Absent is a
+ * server that has not deployed yet; only an explicit `false` is the server
+ * saying it could not count something.
+ */
+export function performanceMarginIsIncomplete(perf: ReportedPerformanceRow | undefined | null): boolean {
+  return perf?.marginComplete === false;
+}
+
+/** Never `undefined`, so the count can never reach the screen as text. */
+export function unknownMarginCountOf(perf: ReportedPerformanceRow | undefined | null): number {
+  return perf?.unknownMarginSaleCount ?? 0;
+}
+
 /**
  * Falls back to `salePrice` only when the row predates `recognizedRevenue` —
  * a client running ahead of a backend deploy. Showing the old number beats

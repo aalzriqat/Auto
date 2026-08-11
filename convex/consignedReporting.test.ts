@@ -326,6 +326,36 @@ describe("the economics split", () => {
   });
 
   /**
+   * The same guard, in the direction it was not looking.
+   *
+   * The eligibility rule only refused an entitlement ABOVE the gross, so a
+   * negative one passed straight through — and `salePrice − (−n)` is LARGER
+   * than the whole car, with the supplier's own share published as a negative
+   * number. Corruption is not a windfall any more than it is a loss, and the
+   * asymmetry left one field guarded on one side only.
+   *
+   * `NaN` is excluded by both comparisons rather than by a separate check:
+   * every comparison against `NaN` is false, so it can satisfy neither bound.
+   */
+  test("a negative entitlement does not inflate the margin beyond the gross", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: ENTITLEMENT,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: -5_000,
+    });
+    // Never more than the car sold for.
+    expect(e.dealershipMargin!).toBeLessThanOrEqual(SALE_PRICE);
+    expect(e.dealershipMargin).toBe(MARGIN);
+    // And the supplier's share is never published as a negative.
+    expect(e.supplierSettlement!).toBeGreaterThanOrEqual(0);
+    expect(e.supplierSettlement).toBe(ENTITLEMENT);
+    expect(e.dealershipMargin! + e.supplierSettlement!).toBe(SALE_PRICE);
+  });
+
+  /**
    * A hard-deleted vehicle must not turn the supplier's car into pure profit.
    *
    * With the vehicle row gone, `capitalizedCost` arrives as 0, so anything that

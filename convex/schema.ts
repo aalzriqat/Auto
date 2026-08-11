@@ -2248,8 +2248,15 @@ export default defineSchema({
      * softer CONFIRMED: it says the dealership holds two contradictory records
      * of one payment and does not yet know which is true.
      *
-     * Absent means the advice predates this field, which is CONFIRMED by
-     * construction — those rows could only be written when the amounts matched.
+     * Absent means the advice predates this field. It means an advice is ON
+     * FILE — NOT that the amounts agreed. The claim that they must have is
+     * false: the pre-status writer validated only that the amount was positive
+     * and never compared it against `approvedDealerPurchaseAmountMinor`, and
+     * that comparison first exists in this release. `redactSettlementEvidence`
+     * normalizes absence to `CONFIRMED` for DISPLAY, and says the same thing
+     * there — do not read either as evidence of agreement, and never branch on
+     * `status === "CONFIRMED"` from a redacted payload to decide whether a
+     * disbursement reconciled. Ask the raw fields, as `dealCockpit` does.
      */
     supplierDisbursementStatus: v.optional(
       v.union(v.literal("CONFIRMED"), v.literal("REQUIRES_RECONCILIATION"))

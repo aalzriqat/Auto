@@ -47,7 +47,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { downloadCSV } from "@/lib/utils/export";
-import { countUnknownMargin, sumRecognizedRevenue, sumReportedCost, sumReportedProfit } from "@/lib/saleReporting";
+import {
+  countUnknownMargin,
+  performanceMarginIsIncomplete,
+  sumRecognizedRevenue,
+  sumReportedCost,
+  sumReportedProfit,
+  unknownMarginCountOf,
+} from "@/lib/saleReporting";
 import { RoleGuard } from "@/components/auth/RoleGuard";
 import { paginationOptsValidator } from "convex/server";
 import { dateInputToUtcMs, dateInputEndToUtcMs, todayDateInput, daysFromTodayDateInput } from "@/lib/dateInput";
@@ -218,9 +225,10 @@ export default function ReportsPage() {
   const filteredUnknownMargin = countUnknownMargin(filteredSales);
   // Summed from the SERVER's per-rep counts rather than recounted here, so the
   // notice cannot claim a different number of exclusions than the rows made.
+  // Through the same reader the rows use, so the notice and the rows cannot
+  // disagree about what an absent field means.
   const performanceUnknownMargin = (performanceReport ?? []).reduce(
-    (sum: number, perf: { unknownMarginSaleCount?: number }) =>
-      sum + (perf?.unknownMarginSaleCount ?? 0),
+    (sum: number, perf: { unknownMarginSaleCount?: number }) => sum + unknownMarginCountOf(perf),
     0
   );
 
@@ -684,7 +692,8 @@ export default function ReportsPage() {
                          ranking them, and the table has to stop looking like it
                          is still counting down from the top. */
                       className={
-                        !perf.marginComplete && performanceReport[index - 1]?.marginComplete
+                        performanceMarginIsIncomplete(perf) &&
+                        !performanceMarginIsIncomplete(performanceReport[index - 1])
                           ? "border-t-2 border-t-amber-300 dark:border-t-amber-900"
                           : undefined
                       }
@@ -698,14 +707,18 @@ export default function ReportsPage() {
                           it counts every one. Rendering it bare is what let a
                           partial number read as a complete one. */}
                       <TableCell className="text-right font-medium">
-                        <span className={perf.marginComplete ? "text-green-600" : undefined}>
+                        <span
+                          className={
+                            performanceMarginIsIncomplete(perf) ? undefined : "text-green-600"
+                          }
+                        >
                           {format(perf.totalProfit)}
                         </span>
-                        {!perf.marginComplete && (
+                        {performanceMarginIsIncomplete(perf) && (
                           <span className="block whitespace-nowrap text-xs font-normal text-amber-700 dark:text-amber-400">
                             {t("ProfitKnownOnly").replace(
                               "{count}",
-                              String(perf.unknownMarginSaleCount)
+                              String(unknownMarginCountOf(perf))
                             )}
                           </span>
                         )}

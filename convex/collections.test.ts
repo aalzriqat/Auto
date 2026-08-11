@@ -40,9 +40,12 @@ afterEach(() => {
  * of three full-suite runs while passing 24/24 in isolation, and a gate that
  * teaches people to re-run is not a gate.
  *
- * Each retry buys another full budget. A genuine hang still fails, three times
- * as slowly, which is the right trade for a suite this is meant to protect.
+ * Each retry buys another full budget, up to `MAX_DRAIN_ATTEMPTS` calls in
+ * total. A genuine hang still fails, that many times as slowly, which is the
+ * right trade for a suite this is meant to protect.
  */
+const MAX_DRAIN_ATTEMPTS = 5;
+
 async function drainScheduled(t: ReturnType<typeof convexTestWithComponents>) {
   for (let attempt = 0; ; attempt += 1) {
     try {
@@ -50,11 +53,11 @@ async function drainScheduled(t: ReturnType<typeof convexTestWithComponents>) {
       return;
     } catch (error) {
       // ONLY an exhausted pump budget is retried. A blanket catch would swallow
-      // an assertion thrown from inside a scheduled function for two attempts
-      // and then report it as a drain failure — turning a real defect into a
-      // confusing timeout, which is the opposite of what this retry is for.
+      // an assertion thrown from inside a scheduled function for every attempt
+      // but the last and then report it as a drain failure — turning a real
+      // defect into a confusing timeout, the opposite of what this retry is for.
       const exhausted = String((error as Error)?.message ?? error).includes("timer pumps");
-      if (!exhausted || attempt >= 4) throw error;
+      if (!exhausted || attempt >= MAX_DRAIN_ATTEMPTS - 1) throw error;
     }
   }
 }
