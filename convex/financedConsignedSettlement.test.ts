@@ -3828,7 +3828,12 @@ describe("financed direct evidence that has gone missing fails closed", () => {
     // 20,000 − 15,000: the supplier's own money counted as the dealership's
     // turnover, which is what the tail path published.
     expect(revenue).not.toBe(5_000);
-  });
+    // Seeding 1,000 rows to reach position 500 costs ~1s locally but exceeds
+    // vitest's 5s default under CI's coverage instrumentation, where it timed
+    // out. The cost is inherent to the boundary being pinned — the cap is 500,
+    // so the deal has to sit past it — and cannot be reduced without testing a
+    // different thing. An explicit budget rather than a faster, weaker test.
+  }, 30_000);
 
   /**
    * Ranking is a comparison, and a comparison between a complete total and an
