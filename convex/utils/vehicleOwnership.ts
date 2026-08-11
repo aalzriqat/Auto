@@ -360,29 +360,34 @@ export function saleEconomics(args: {
   // not the whole ticket.
   const evidenceRequired =
     agent && ((settlesDirect && args.externallyFinanced === true) || vehicleUnknown);
-  // A reviewer proposed generalizing the arm below to "if either frozen half is
-  // present, fail its missing sibling closed", on the theory that partial
-  // evidence is always corruption. It is not, and the rule was REJECTED after
-  // it broke two existing tests that encode a deliberate decision:
-  // `convex/consignedReporting.test.ts` "a negative recorded margin is not read
-  // as a loss" and "NaN does not poison the profit of every other sale". Those
-  // rows complete through the real writer — so BOTH fields are set — and are
-  // then corrupted on the margin alone. The established behaviour is to fall
-  // back to `salePrice − capitalizedCost`, because on a route where the
-  // dealership collects the gross that basis is genuinely correct, and a
-  // surviving entitlement is not a reason to blank a figure the route can
-  // still answer. Failing it closed would withhold a number that is known.
+  // When the margin is missing, rebuild it from the SURVIVING FROZEN basis
+  // before reaching for the live one.
   //
-  // See SCRUM-36 for the remaining question this leaves open: whether a THROUGH
-  // row whose entitlement drifts after a `sourceCost` edit should pin the
-  // entitlement too. That is a design decision about what the live basis means
-  // per route, not something to settle inside a release round.
+  // This arrived by elimination, and both reviewers landed on it independently.
+  // The first proposal was to fail the missing half closed whenever its sibling
+  // was present. That was implemented and REJECTED: it broke "a negative
+  // recorded margin is not read as a loss" and "NaN does not poison the profit
+  // of every other sale", whose rows complete through the real writer and are
+  // then corrupted on the margin alone. Nulling withholds a number that is
+  // still perfectly derivable, which is not the safe direction.
+  //
+  // But the live fallback was not right either. `sourceCost` stays editable
+  // after the sale — the acquisition lock only fires on a posted VEHICLE_ACQUIRED
+  // event, which a consigned car never emits — so re-deriving from it reports a
+  // margin against a basis the sale never used, beside a settlement still
+  // frozen at the old one. The row then fails to reconcile: margin + settlement
+  // no longer equals the gross.
+  //
+  // Preferring the frozen entitlement keeps BOTH halves on ONE basis, which is
+  // the invariant this whole change exists to enforce, and withholds nothing.
+  // The live cost remains the answer for a genuine legacy row that carries
+  // neither frozen field — for those it IS what the sale was posted on.
   const margin =
     agent && args.recordedMargin !== undefined
       ? args.recordedMargin
       : evidenceRequired
         ? null
-        : salePrice - capitalizedCost;
+        : salePrice - (args.recordedSupplierEntitlement ?? capitalizedCost);
 
   if (!agent) {
     return {

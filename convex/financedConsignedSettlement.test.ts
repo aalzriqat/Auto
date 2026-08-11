@@ -16,7 +16,8 @@
  * return value: the defects being pinned were all cases of a posting that looked
  * right in principle and landed against the wrong account.
  */
-import { readFileSync } from "node:fs";
+import * as applicationsModule from "./applications";
+import * as financingEconomicsModule from "./financingEconomics";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
@@ -4715,6 +4716,18 @@ describe("a settlement advice that contradicts the approval", () => {
       customerFirstPaymentMinor: 0,
     });
 
+    const keysOf = (value: unknown, into = new Set<string>()): Set<string> => {
+      if (Array.isArray(value)) {
+        for (const item of value) keysOf(item, into);
+      } else if (value !== null && typeof value === "object") {
+        for (const [key, nested] of Object.entries(value)) {
+          into.add(key);
+          keysOf(nested, into);
+        }
+      }
+      return into;
+    };
+
     const doors: Array<[string, unknown]> = [
       ["applications.list", listed],
       ["applications.get", detail],
@@ -4731,32 +4744,40 @@ describe("a settlement advice that contradicts the approval", () => {
     // tomorrow — it would simply not be covered, and this test would stay green
     // while the new door leaked. Deriving the expected set from the modules
     // themselves turns that silent gap into a failure.
-    const exportedQueries = (file: string, module: string) => {
-      const src = readFileSync(file, "utf8");
-      const named = [...src.matchAll(/^export const (\w+)\s*=\s*query\(/gm)].map((m) => m[1]);
+    // Enumerated from the REGISTERED FUNCTIONS, not from the source text.
+    //
+    // An earlier version regex-matched `^export const NAME = query(` and
+    // cross-checked it against a count of `query({` call sites. A review
+    // demonstrated that guard was weaker than its own comment: a query built
+    // through a wrapper factory (`export const x = orgScopedQuery({...})`)
+    // produces neither a named match NOR a call site, so the counts agreed and
+    // the door passed unnoticed — precisely the silent gap the guard existed to
+    // close. It also tripped on `query({` appearing inside a comment or a
+    // string, and these are two of the most prose-dense modules in the repo, so
+    // it would have cried wolf until somebody deleted it.
+    //
+    // Convex stamps `isQuery` and `isPublic` on every registered function, so
+    // asking the module what it exports is exact and form-independent: it sees
+    // factories, re-exports and any future wrapper, and it cannot see prose.
+    // (`api` itself is `anyApi`, a non-enumerable proxy, so enumerating
+    // `api.applications` would NOT work — this reads the modules directly.)
+    const publicQueriesOf = (module: string, mod: Record<string, unknown>) =>
+      Object.entries(mod)
+        .filter(([, value]) => {
+          const fn = value as { isQuery?: boolean; isPublic?: boolean } | null;
+          return fn?.isQuery === true && fn?.isPublic === true;
+        })
+        .map(([name]) => `${module}.${name}`);
 
-      // TRIPWIRE. The pattern above only recognizes the single-line form. A
-      // query wrapped by prettier across two lines, built through a factory, or
-      // exported later via `export { … }` would match nothing, drop out of the
-      // expected set, and leave this test green while a new door went uncovered
-      // — the exact silent gap the guard exists to close.
-      //
-      // So count the public `query({` call sites independently and require the
-      // two to agree. `.query(` (Convex's ctx.db reader) and `internalQuery(`
-      // are excluded: the first is not a definition, the second is not a door.
-      // If they ever disagree, this fails loudly and someone parses properly
-      // instead of trusting a regex.
-      const callSites = [...src.matchAll(/(?<![.\w])query\(\s*\{/g)].length;
-      expect(
-        `${file}: ${named.length} named exports vs ${callSites} public query definitions`
-      ).toBe(`${file}: ${callSites} named exports vs ${callSites} public query definitions`);
-
-      return named.map((name) => `${module}.${name}`);
-    };
     const mustCover = [
-      ...exportedQueries("convex/applications.ts", "applications"),
-      ...exportedQueries("convex/financingEconomics.ts", "financingEconomics"),
+      ...publicQueriesOf("applications", applicationsModule),
+      ...publicQueriesOf("financingEconomics", financingEconomicsModule),
     ].sort();
+
+    // Anti-vacuity for the enumeration itself: if the markers ever stop being
+    // set, every filter returns nothing and this test would assert an empty
+    // list against an empty list while covering nothing at all.
+    expect(mustCover.length).toBeGreaterThanOrEqual(doors.length);
     expect(doors.map(([name]) => name).sort()).toEqual(mustCover);
 
     for (const [name, response] of doors) {
@@ -4774,12 +4795,20 @@ describe("a settlement advice that contradicts the approval", () => {
       // Key absence covers all three and is representation-independent —
       // `JSON.stringify` drops undefined-valued keys, so a redacted field is
       // gone from the payload entirely rather than present and blank.
+      //
+      // Walked as real keys rather than searched as text: a response whose
+      // VALUE happens to equal a field name produces the same quoted substring
+      // and would raise a false alarm, and a guard that cries wolf gets
+      // deleted. Recursive, because every door found after the first hid its
+      // payload inside a nested array.
       for (const field of [
         "supplierDisbursementReference",
         "supplierDisbursedAmountMinor",
         "supplierDisbursementApprovedAtRecordingMinor",
       ]) {
-        expect(serialized).not.toContain(`"${field}"`);
+        expect(`${name} exposes ${field}: ${keysOf(response).has(field)}`).toBe(
+          `${name} exposes ${field}: false`
+        );
       }
     }
   });

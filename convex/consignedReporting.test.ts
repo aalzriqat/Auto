@@ -238,17 +238,31 @@ describe("the economics split", () => {
    * corrupt the margin alone. Withholding a number the route can answer is not
    * the safe direction — it is a different wrong answer.
    */
-  test("a THROUGH row keeps the live basis when only the margin is missing", () => {
+  test("a THROUGH row rebuilds the missing margin from the entitlement it still has", () => {
+    // The cost has DRIFTED since the sale. This is what makes the test able to
+    // discriminate at all: with `capitalizedCost === ENTITLEMENT` the live
+    // basis and the frozen basis produce the identical number, so the earlier
+    // version of this test could not tell the two apart and would have passed
+    // either way.
+    const DRIFTED_COST = ENTITLEMENT + 2_000;
     const e = saleEconomics({
       salePrice: SALE_PRICE,
       vehicle: { sourceType: "SOURCED" },
-      capitalizedCost: ENTITLEMENT,
+      capitalizedCost: DRIFTED_COST,
       supplierSettlementRoute: "THROUGH_DEALERSHIP",
       recordedMargin: undefined,
       recordedSupplierEntitlement: ENTITLEMENT,
     });
+
+    // Both halves come off the SAME basis — the frozen one, because it is the
+    // one that survived. The row still reconciles: margin + settlement = gross.
     expect(e.supplierSettlement).toBe(ENTITLEMENT);
     expect(e.dealershipMargin).toBe(MARGIN);
+    expect(e.dealershipMargin! + e.supplierSettlement!).toBe(SALE_PRICE);
+
+    // And specifically NOT the live re-derivation, which would report 1,000
+    // against a frozen 9,500 settlement and no longer sum to the 12,500 gross.
+    expect(e.dealershipMargin).not.toBe(SALE_PRICE - DRIFTED_COST);
   });
 
   /**
