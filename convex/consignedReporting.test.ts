@@ -266,6 +266,52 @@ describe("the economics split", () => {
   });
 
   /**
+   * The frozen entitlement belongs to CONSIGNED sales only, and the rule that
+   * rebuilds a missing margin from it must not cross that boundary.
+   *
+   * The margin is computed before the non-agent branch returns, so a dealer-
+   * owned row carrying a stale `consignedSupplierEntitlementMinor` — reachable
+   * through the admin raw editor — would derive its profit from the supplier's
+   * basis while still reporting the full sale price as revenue and the vehicle's
+   * own cost as cost. `recognizedRevenue − recognizedCost` would then disagree
+   * with `dealershipMargin` on the same row: a split-brain sale.
+   */
+  test("a dealer-owned row ignores a stale supplier entitlement", () => {
+    const STALE = OWNED_COST - 1_500;
+    const e = saleEconomics({
+      salePrice: OWNED_PRICE,
+      vehicle: { sourceType: "STOCK" },
+      capitalizedCost: OWNED_COST,
+      recordedSupplierEntitlement: STALE,
+    });
+    expect(e.isAgentSale).toBe(false);
+    expect(e.dealershipMargin).toBe(OWNED_MARGIN);
+    expect(e.dealershipMargin).not.toBe(OWNED_PRICE - STALE);
+    // The identity that makes the row internally consistent at all.
+    expect(e.recognizedRevenue! - e.recognizedCost).toBe(e.dealershipMargin);
+  });
+
+  /**
+   * And a corrupt entitlement must not reconstruct a loss. The existing
+   * "a negative recorded margin is not read as a loss" defence covers a
+   * corrupted MARGIN; rebuilding the margin from the entitlement opened a
+   * second way to the same wrong answer, since an entitlement above the gross
+   * subtracts to a negative. Same posture: corruption is not a loss.
+   */
+  test("an entitlement above the sale price does not reconstruct a loss", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: ENTITLEMENT,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: SALE_PRICE + 1_000,
+    });
+    expect(e.dealershipMargin).toBeGreaterThanOrEqual(0);
+    expect(e.dealershipMargin).toBe(MARGIN);
+  });
+
+  /**
    * The fallback is still CORRECT for a genuine legacy row. For a consigned
    * sale completed before the frozen fields existed, the live cost IS what the
    * sale was posted on, and withholding it would blank a figure that was never

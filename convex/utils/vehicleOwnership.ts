@@ -382,12 +382,30 @@ export function saleEconomics(args: {
   // the invariant this whole change exists to enforce, and withholds nothing.
   // The live cost remains the answer for a genuine legacy row that carries
   // neither frozen field — for those it IS what the sale was posted on.
+  //
+  // Two guards on which basis is eligible, both learned the hard way:
+  //
+  // • AGENT ONLY. This expression runs before the non-agent branch returns, so
+  //   without the check a dealer-owned row carrying a stale entitlement would
+  //   take its profit from the supplier's basis while still reporting the full
+  //   sale price as revenue and the vehicle's own cost as cost — `revenue −
+  //   cost` would disagree with `margin` on the same row.
+  // • NOT ABOVE THE GROSS. An entitlement larger than the sale price subtracts
+  //   to a negative, which is a second route to the answer that "a negative
+  //   recorded margin is not read as a loss" already refuses. Corruption is not
+  //   a loss, whichever field it arrives in.
+  const frozenMarginBasis =
+    agent &&
+    args.recordedSupplierEntitlement !== undefined &&
+    args.recordedSupplierEntitlement <= salePrice
+      ? args.recordedSupplierEntitlement
+      : undefined;
   const margin =
     agent && args.recordedMargin !== undefined
       ? args.recordedMargin
       : evidenceRequired
         ? null
-        : salePrice - (args.recordedSupplierEntitlement ?? capitalizedCost);
+        : salePrice - (frozenMarginBasis ?? capitalizedCost);
 
   if (!agent) {
     return {
