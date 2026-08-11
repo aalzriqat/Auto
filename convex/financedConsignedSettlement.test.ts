@@ -4437,13 +4437,18 @@ describe("a settlement advice that contradicts the approval", () => {
     for (const field of [
       "supplierDisbursedAmountMinor",
       "supplierDisbursementReference",
-      "supplierDisbursementConfirmedAt",
-      "supplierDisbursementStatus",
       "supplierDisbursementApprovedAtRecordingMinor",
       "approvedDealerPurchaseAmountMinor",
     ]) {
       expect(view[field]).toBeUndefined();
     }
+    // Deliberately still visible, and it carries no amount. Hiding WHETHER a
+    // disbursement happened left this role reading "awaiting supplier
+    // disbursement" on a deal the financier had already settled — permanently,
+    // and contradicting `dealCockpit`, which tells the same caller the advice
+    // needs reconciling.
+    expect(view.supplierDisbursementConfirmedAt).toBeDefined();
+    expect(view.supplierDisbursementStatus).toBe("REQUIRES_RECONCILIATION");
     // Nothing anywhere in the payload carries the figures either.
     const serialized = JSON.stringify(view);
     expect(serialized).not.toContain("WIRE-4471");
@@ -4535,8 +4540,6 @@ describe("a settlement advice that contradicts the approval", () => {
     for (const field of [
       "supplierDisbursedAmountMinor",
       "supplierDisbursementReference",
-      "supplierDisbursementConfirmedAt",
-      "supplierDisbursementStatus",
       "supplierDisbursementApprovedAtRecordingMinor",
       "approvedDealerPurchaseAmountMinor",
     ]) {
@@ -4545,6 +4548,51 @@ describe("a settlement advice that contradicts the approval", () => {
     const serialized = JSON.stringify(economics.application);
     expect(serialized).not.toContain("WIRE-4471");
     expect(serialized).not.toContain(String(17_995 * SCALE));
+  });
+
+  /**
+   * The fourth door. `applications.list` authorizes on the same VIEW_SALES as
+   * the detail query and spreads the whole document per row, so redacting the
+   * detail endpoints while leaving the list open hands the same evidence to the
+   * same caller one screen earlier.
+   */
+  test("the applications list redacts what the detail query redacts", async () => {
+    const { s, applicationId } = await paidDeal("s30ListGate", 18_000);
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 17_995 * SCALE,
+      reference: "WIRE-4471",
+    });
+
+    await s.t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === s.orgId)!;
+      await ctx.db.patch(role._id, {
+        permissions: role.permissions.filter(
+          (p) => p !== "view:finance" && p !== "confirm:finance_disbursement"
+        ),
+        isSystemOwnerRole: false,
+      });
+    });
+
+    const listed = (await s.asUser.query(api.applications.list, {
+      orgId: s.orgId,
+      paginationOpts: { numItems: 20, cursor: null },
+    })) as unknown as { page: Array<Record<string, unknown>> };
+    const rows = listed.page ?? [];
+
+    // The premise: this caller still sees the deal in the list at all.
+    expect(rows.length).toBeGreaterThan(0);
+
+    const serialized = JSON.stringify(rows);
+    expect(serialized).not.toContain("WIRE-4471");
+    expect(serialized).not.toContain(String(17_995 * SCALE));
+    for (const row of rows) {
+      expect(row.supplierDisbursedAmountMinor).toBeUndefined();
+      expect(row.supplierDisbursementReference).toBeUndefined();
+      expect(row.supplierDisbursementApprovedAtRecordingMinor).toBeUndefined();
+      expect(row.approvedDealerPurchaseAmountMinor).toBeUndefined();
+    }
   });
 
   test("and the same query gives a finance-permitted caller the evidence in full", async () => {

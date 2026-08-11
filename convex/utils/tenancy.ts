@@ -1,7 +1,7 @@
 import { QueryCtx, MutationCtx } from "../_generated/server";
 import { Id, Doc, TableNames } from "../_generated/dataModel";
 import { ConvexError } from "convex/values";
-import { Permission, isSystemOwnerRole } from "./permissions";
+import { Permission, PERMISSIONS, isSystemOwnerRole } from "./permissions";
 import { throwAppError, AppErrorCode } from "./errors";
 import { getValidatedEnv } from "./env";
 import { writeAuditLog } from "./auditLog";
@@ -446,25 +446,44 @@ export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
 ): T {
   const has = (permission: Permission) =>
     isSystemOwnerRole(role) || role.permissions.includes(permission);
-  const canSeeFinance = has("view:finance" as Permission);
-  const canWorkDisbursement = canSeeFinance || has("confirm:finance_disbursement" as Permission);
+  const canSeeFinance = has(PERMISSIONS.VIEW_FINANCE);
+  const canWorkDisbursement = canSeeFinance || has(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
 
   return {
     ...app,
+
+    // Tier 1 — AMOUNTS. What the advice says was paid, the cheque or wire
+    // reference, and the approval frozen beside a discrepancy.
     supplierDisbursedAmountMinor: canSeeFinance ? app.supplierDisbursedAmountMinor : undefined,
     supplierDisbursementReference: canSeeFinance ? app.supplierDisbursementReference : undefined,
     supplierDisbursementApprovedAtRecordingMinor: canSeeFinance
       ? app.supplierDisbursementApprovedAtRecordingMinor
       : undefined,
+
+    // Tier 2 — the one figure the confirmation SCREEN needs to prefill. Without
+    // it the amount field opens blank and gets typed from memory, and a typo
+    // locks the deal in a state only MANAGE_FINANCE can repair.
     approvedDealerPurchaseAmountMinor: canWorkDisbursement
       ? app.approvedDealerPurchaseAmountMinor
       : undefined,
-    supplierDisbursementConfirmedAt: canWorkDisbursement
-      ? app.supplierDisbursementConfirmedAt
-      : undefined,
-    supplierDisbursementConfirmedBy: canWorkDisbursement
-      ? app.supplierDisbursementConfirmedBy
-      : undefined,
-    supplierDisbursementStatus: canWorkDisbursement ? app.supplierDisbursementStatus : undefined,
+
+    // Tier 3 — WHETHER, not how much. Deliberately ungated.
+    //
+    // These carry no monetary quantity, and withholding them was actively
+    // harmful: `settlesDirectToSupplier` stays visible, so a role without them
+    // read "awaiting supplier disbursement" on a deal the financier had already
+    // settled — permanently, with no state that could ever clear it. The same
+    // user is told by `dealCockpit` that the advice needs reconciling, because
+    // that query publishes `settlementAdviceRequiresReconciliation` to every
+    // VIEW_SALES caller on the stated principle that a state nobody is shown is
+    // not a recovery path. Two doors were giving one fact opposite answers, and
+    // the cancellation refusal discloses it in its message regardless.
+    //
+    // Gating them also bought nothing it did not cost: the reconstruction risk
+    // was never the timestamp, it was `CONFIRMED` beside a visible approved
+    // amount — which tier 2 already governs.
+    supplierDisbursementConfirmedAt: app.supplierDisbursementConfirmedAt,
+    supplierDisbursementConfirmedBy: app.supplierDisbursementConfirmedBy,
+    supplierDisbursementStatus: app.supplierDisbursementStatus,
   };
 }

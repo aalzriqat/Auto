@@ -1313,7 +1313,7 @@ export const list = query({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]); // Reusing sales permission for now
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]); // Reusing sales permission for now
 
     let pageResult;
     if (args.status) {
@@ -1356,7 +1356,11 @@ export const list = query({
         const manualProviderName = app.manualFinanceSnapshot?.providerName?.trim() || undefined;
 
         return {
-          ...app,
+          // The list spreads the whole document too, and it authorizes on the
+          // same VIEW_SALES as the detail query — so redacting the three detail
+          // endpoints while leaving this one open would hand the same evidence
+          // to the same caller through the paginated list. The fourth door.
+          ...redactSettlementEvidence(app, role),
           customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
           vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
           // Not `company ? company.name : "Cash / Direct"`. A
