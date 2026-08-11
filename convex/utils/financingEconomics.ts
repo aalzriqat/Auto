@@ -1136,7 +1136,7 @@ export type AccountingProfit =
     }
   | {
       available: false;
-      reason: "UnknownMargin" | "DealCancelled";
+      reason: "UnknownMargin" | "DealCancelled" | "SaleNotCompleted";
     };
 
 /**
@@ -1293,45 +1293,94 @@ export function deriveManagementProfit(args: {
 export function deriveAccountingProfit(args: {
   /** A cancelled sale's journal was reversed; it has no profit to report. */
   dealCancelled?: boolean;
+  /**
+   * Whether the sale has actually COMPLETED — i.e. whether a journal exists.
+   *
+   * ⚠️ `postable: true` is a claim that this figure has a journal behind it.
+   * On a PENDING draft that claim is false: `createDraftSale` performs no
+   * accounting side effects, so there is nothing posted to reconcile against.
+   * Publishing an unqualified accounting headline for a draft would assert a
+   * ledger entry that does not exist — the same class of false statement, in
+   * the opposite direction, as dropping the qualifier from the financed figure.
+   */
+  saleCompleted: boolean;
   /** `saleEconomics().dealershipMargin` — `null` means genuinely UNKNOWN. */
   dealershipMarginMinor: number | null;
-  salePriceMinor: number;
-  /** Zero on an agent sale. */
-  recognizedCostMinor: number;
+  /**
+   * `null` means the figure could not be READ — a corrupt or foreign-currency
+   * amount — never that the car sold for nothing.
+   *
+   * ⚠️ These were plain `number`s reached through `?? 0`, and that was a
+   * confirmed defect. On an agent sale carrying a recorded margin the HEADLINE
+   * does not depend on `salePrice` at all, so a `NaN` price (Convex accepts it
+   * under a `v.number()` validator) left a valid, postable headline sitting
+   * above a breakdown line reading "Sale price: 0.000" — a false statement about
+   * a real deal, on an owner-facing screen. Nullable so the refusal survives all
+   * the way to the renderer.
+   */
+  salePriceMinor: number | null;
+  /** Zero on an agent sale; `null` under the same unreadable rule. */
+  recognizedCostMinor: number | null;
   /** `saleEconomics().supplierSettlement` — `null` under the same UNKNOWN rule. */
   supplierEntitlementMinor: number | null;
   currency: string;
 }): AccountingProfit {
   if (args.dealCancelled) return { available: false, reason: "DealCancelled" };
+  // Before the margin is even consulted: a draft has earned nothing yet, and
+  // saying so is not the same as saying the figure is unknown.
+  if (!args.saleCompleted) return { available: false, reason: "SaleNotCompleted" };
   // Never coerced to zero. `reports.salesReport` counts these rows separately
   // and excludes them from `totalProfit` precisely so an incomplete report is
   // visible as incomplete; a screen that rendered 0 here would be the confident
   // wrong answer that refusal exists to prevent.
   if (args.dealershipMarginMinor === null) return { available: false, reason: "UnknownMargin" };
 
-  const lines: AccountingProfitLine[] = [
-    { key: "SALE_PRICE", sign: 1, amountMinor: args.salePriceMinor },
-    { key: "VEHICLE_COST", sign: -1, amountMinor: args.recognizedCostMinor },
-    // Withheld rather than shown as zero when unknown, for the same reason the
-    // headline is. An entitlement of nought and an entitlement nobody can state
-    // are different claims about what the supplier is owed.
-    ...(args.supplierEntitlementMinor !== null
-      ? [
-          {
-            key: "SUPPLIER_ENTITLEMENT" as const,
-            sign: -1 as const,
-            amountMinor: args.supplierEntitlementMinor,
-          },
-        ]
-      : []),
-  ];
+  /**
+   * The breakdown is ALL-OR-NOTHING, and that is the point.
+   *
+   * These lines exist to explain the headline. A breakdown missing a term, or
+   * one that does not add up to the figure above it, is worse than no breakdown
+   * at all — it invites the reader to check the arithmetic and find it wrong.
+   *
+   * So: every term must be readable, and their signed sum must equal the
+   * headline. Otherwise no lines are emitted and the screen shows the figure
+   * alone. The headline itself is unaffected — it comes from
+   * `dealershipMargin`, which has its own evidence.
+   *
+   * The sum check is not paranoia about arithmetic. `dealershipMargin` can come
+   * from the FROZEN recorded margin while these lines are built from the sale
+   * price and the entitlement, and those are separately stored, separately
+   * editable fields. Nothing enforces that they agree, so this asks.
+   */
+  const supplierEntitlementLine =
+    args.supplierEntitlementMinor !== null
+      ? {
+          key: "SUPPLIER_ENTITLEMENT" as const,
+          sign: -1 as const,
+          amountMinor: args.supplierEntitlementMinor,
+        }
+      : null;
+
+  const lines: AccountingProfitLine[] =
+    args.salePriceMinor === null || args.recognizedCostMinor === null
+      ? []
+      : [
+          { key: "SALE_PRICE", sign: 1, amountMinor: args.salePriceMinor },
+          { key: "VEHICLE_COST", sign: -1, amountMinor: args.recognizedCostMinor },
+          ...(supplierEntitlementLine ? [supplierEntitlementLine] : []),
+        ];
+
+  const reconciles =
+    lines.length > 0 &&
+    lines.reduce((total, line) => total + line.sign * line.amountMinor, 0) ===
+      args.dealershipMarginMinor;
 
   return {
     available: true,
     basis: "ACCOUNTING_RESULT",
     amountMinor: args.dealershipMarginMinor,
     currency: args.currency,
-    lines,
+    lines: reconciles ? lines : [],
     postable: true,
   };
 }

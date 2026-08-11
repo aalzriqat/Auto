@@ -123,7 +123,9 @@ const PROFIT_BLOCKED_REASON: Record<
   | "CorruptInput"
   | "DealCancelled"
   /** CASH only: `dealershipMargin === null`, which is UNKNOWN and never zero. */
-  | "UnknownMargin",
+  | "UnknownMargin"
+  /** CASH only: a draft has posted no journal, so nothing is postable yet. */
+  | "SaleNotCompleted",
   string
 > = {
   NoApprovedPurchaseAmount: "ProfitNeedsApprovedPurchase",
@@ -132,6 +134,7 @@ const PROFIT_BLOCKED_REASON: Record<
   CorruptInput: "ProfitInputCorrupt",
   DealCancelled: "ProfitDealCancelled",
   UnknownMargin: "ProfitUnknownMargin",
+  SaleNotCompleted: "ProfitSaleNotCompleted",
 };
 
 /**
@@ -819,6 +822,12 @@ export function DealCockpitView({
               />
 
               {/* --- أطراف الصفقة ------------------------------------------ */}
+              {/* ABSENT when there is nobody to list. An OWNED cash sale has no
+                  third party at all — no supplier, no financier — so the card
+                  would render a heading over nothing, which is the "empty
+                  rather than absent" pattern this screen removes everywhere
+                  else. The financed path always has rows, so it is unaffected. */}
+              {(deal.money.parties.length > 0 || deal.applicationId !== null) && (
               <Card>
                 <CardHeader className="pb-3">
                   <CardTitle className="text-base">{t("DealPartiesHeading")}</CardTitle>
@@ -883,6 +892,7 @@ export function DealCockpitView({
                   )}
                 </CardContent>
               </Card>
+              )}
 
               {/* --- actual expenses -------------------------------------- */}
               {/* ABSENT on a deal that has no fee records at all, rather than a

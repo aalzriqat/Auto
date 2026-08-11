@@ -672,6 +672,8 @@ export const salesEn = {
   LineSupplierEntitlement: "Supplier's entitlement",
   ProfitUnknownMargin:
     "What this deal earned is not recorded, so it cannot be shown. It is not zero.",
+  ProfitSaleNotCompleted:
+    "This sale has not been completed, so nothing has been posted to the books yet.",
   ActualExpensesHeading: "Actual expenses",
   ExpensesAwaitingActuals: "still without a recorded actual",
   NoExpensesRecorded: "No expenses recorded yet.",
@@ -1396,6 +1398,7 @@ export const salesAr = {
   LineVehicleCost: "تكلفة المركبة",
   LineSupplierEntitlement: "مستحق المورد",
   ProfitUnknownMargin: "ربح هذه الصفقة غير مُسجَّل، لذا لا يمكن عرضه. وهو ليس صفراً.",
+  ProfitSaleNotCompleted: "لم تكتمل عملية البيع بعد، فلا توجد قيود مُرحَّلة إلى الدفاتر.",
   ActualExpensesHeading: "المصاريف الفعلية",
   ExpensesAwaitingActuals: "بلا مبلغ فعلي مُسجَّل",
   NoExpensesRecorded: "لا توجد مصاريف مُسجَّلة بعد.",

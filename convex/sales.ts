@@ -19,6 +19,7 @@ import {
   isConsignedAgentSale,
   recordedConsignedMargin,
   recordedSupplierEntitlement,
+  saleIsAgentSale,
 } from "./utils/vehicleOwnership";
 import {
   deriveAccountingProfit,
@@ -2163,7 +2164,6 @@ export const dealCockpit = query({
     // ten — the same trap the financed cockpit solved with `economicsCurrency`.
     const currency = sale.consignedMarginCurrency ?? (await getOrgCurrency(ctx, args.orgId));
 
-    const consigned = vehicle ? isConsignedAgentSale(vehicle) : false;
     const dealCancelled = sale.status === "CANCELLED";
 
     // --- the supplier's obligation, which drives both the rail and the row ---
@@ -2175,6 +2175,26 @@ export const dealCockpit = query({
       supplierSettlementRoute: sale.supplierSettlementRoute,
     });
     const collectsGross = dealershipCollectsGross(route);
+
+    /**
+     * Through the SHARED classifier, not a local rule.
+     *
+     * This read `vehicle ? isConsignedAgentSale(vehicle) : false`, which is
+     * narrower than what `saleEconomics` applies, and the two disagreed exactly
+     * when the vehicle row was hard-deleted and the sale's frozen evidence
+     * survived. The headline then reported a real agency margin while this flag
+     * said "not consigned" — skipping the supplier-obligation lookup, so the
+     * rail read SETTLEMENT: COMPLETE and the supplier row vanished, hiding an
+     * open claim. One classification, so the rail and the headline cannot reach
+     * different verdicts about the same deal.
+     */
+    const consigned = saleIsAgentSale({
+      vehicle: vehicle ?? null,
+      salePrice: sale.salePrice,
+      recordedMargin: recordedConsignedMargin(sale),
+      recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
+      settlesDirect: !collectsGross,
+    });
 
     let supplierObligation: ObligationState = "NONE";
     let supplierOutstandingMinor: number | undefined;
@@ -2294,12 +2314,36 @@ export const dealCockpit = query({
      */
     const financingApplicationId = sale.applicationId ?? null;
 
+    /**
+     * FINANCED is a property of the SALE, not of whether an application exists.
+     *
+     * `sales.create` accepts `financingType: "FINANCED" | "LEASE"` and has no
+     * `applicationId` field at all, so an applicationless financed sale is
+     * ordinary and creatable. Deriving the kind from `applicationId` alone
+     * labelled those "CASH" and titled them "Sale".
+     *
+     * This is a LABELLING fix, and deliberately not a refusal. The dangerous
+     * shape — financed + consigned + DIRECT_TO_SUPPLIER without an approved
+     * amount, where `salePrice − entitlement` reaches no party — is already
+     * refused at the write path (`FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT` in
+     * `prepareSaleCompletion`) and, for rows predating that guard, at the read
+     * path: `saleEconomics` returns a null margin for it because
+     * `externallyFinanced` is passed through. For every other financed shape
+     * there is no management figure to be confused with — no application means
+     * no approved-purchase spread — so the ordinary margin IS the postable
+     * accounting result, and reporting it is correct rather than a misstatement.
+     */
+    const externallyFinanced =
+      sale.financingType === "FINANCED" || sale.financingType === "LEASE";
+
     const base = {
       /**
        * What KIND of deal this is, read from the row rather than assumed. The
        * view branches on it; it never guesses.
        */
-      dealKind: (financingApplicationId ? "FINANCED" : "CASH") as "CASH" | "FINANCED",
+      dealKind: (financingApplicationId || externallyFinanced ? "FINANCED" : "CASH") as
+        | "CASH"
+        | "FINANCED",
       /** Set when this deal's real screen is the application-keyed one. */
       financingApplicationId,
       /** The id whose tail the header shows. */
@@ -2421,10 +2465,18 @@ export const dealCockpit = query({
         routeKnown: true,
         profit: deriveAccountingProfit({
           dealCancelled,
+          // A PENDING draft has posted nothing, so it has no journal to call
+          // this figure postable against.
+          saleCompleted: sale.status === "COMPLETED",
           dealershipMarginMinor: marginMinor,
-          salePriceMinor: toMinorSameCurrencyOrUndefined(sale.salePrice, currency, currency) ?? 0,
+          // `?? null`, never `?? 0`. An amount that could not be READ is not an
+          // amount of nought, and these two used to be `?? 0` — which printed
+          // "Sale price: 0.000" beside a valid headline whenever a corrupt price
+          // sat on a sale whose margin was frozen independently.
+          salePriceMinor:
+            toMinorSameCurrencyOrUndefined(sale.salePrice, currency, currency) ?? null,
           recognizedCostMinor:
-            toMinorSameCurrencyOrUndefined(economics.recognizedCost, currency, currency) ?? 0,
+            toMinorSameCurrencyOrUndefined(economics.recognizedCost, currency, currency) ?? null,
           supplierEntitlementMinor: consigned ? entitlementMinor : null,
           currency,
         }),

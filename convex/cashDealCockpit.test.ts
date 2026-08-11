@@ -269,6 +269,185 @@ describe("a financed sale never publishes a SECOND profit here", () => {
   });
 });
 
+describe("the rail and the headline never disagree about whether a deal is consigned", () => {
+  /**
+   * A hard-deleted vehicle is the threat model this codebase already documents:
+   * reachable through the `/admin` raw-JSON editor, and the reason
+   * `saleEconomics` accepts `vehicle: null` and falls back to the SALE's own
+   * evidence — a recorded margin, a direct settlement route, or a surviving
+   * frozen entitlement — to decide the deal was consigned.
+   *
+   * The cockpit used a narrower rule (`vehicle ? isConsignedAgentSale(vehicle)
+   * : false`), so the two disagreed exactly here: the headline reported a real
+   * agency margin while the rail reported the deal fully settled and the
+   * supplier row vanished — hiding an open claim for money the supplier still
+   * owes. Found independently by the primary agent and an adversarial reviewer.
+   */
+  test("a hard-deleted consigned vehicle does not silently settle an open supplier claim", async () => {
+    const s = await seed("ghost");
+    const vehicleId = await consignedVehicle(s, "GHOSTVEHICLE0001");
+    const saleId = await insertSale(s, vehicleId, {
+      salePrice: CONSIGNED_PRICE,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      consignedMarginMinor: MARGIN * SCALE,
+      consignedSupplierEntitlementMinor: ENTITLEMENT * SCALE,
+      consignedMarginCurrency: "JOD",
+    });
+    await s.t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierReceivables", {
+        orgId: s.orgId, vehicleId, saleId,
+        sourcedFromName: "Amman Importer Co",
+        // Still entirely uncollected.
+        amountDue: MARGIN, currency: "JOD", status: "OPEN",
+        createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
+    // The vehicle row disappears; the sale's frozen evidence survives.
+    await s.t.run((ctx) => ctx.db.delete(vehicleId));
+
+    const deal = await s.asUser.query(api.sales.dealCockpit, { orgId: s.orgId, saleId });
+    const settlement = deal!.stages.find((stage) => stage.key === "SETTLEMENT");
+    const supplier = deal!.money!.parties.find((party) => party.party === "SUPPLIER");
+
+    // The claim is open, so the deal is not settled and the supplier must appear.
+    expect(settlement!.state).not.toBe("COMPLETE");
+    expect(supplier).toBeTruthy();
+    expect(supplier!.position).toBe("OWED_TO_DEALERSHIP");
+  });
+});
+
+describe("an unreadable figure never renders as a zero line", () => {
+  /**
+   * On an agent sale carrying a recorded margin, the HEADLINE does not depend on
+   * `sale.salePrice` at all — `saleEconomics` reads the frozen margin. So a
+   * corrupt `salePrice` leaves a perfectly valid, postable headline sitting
+   * above a breakdown line claiming the car sold for nothing.
+   *
+   * Convex accepts `NaN` under a `v.number()` validator, so this arrives from
+   * the raw-JSON editor looking valid. `toMinorSameCurrencyOrUndefined`
+   * correctly refuses it; the defect was the `?? 0` that turned that refusal
+   * into a confident zero on an owner-facing financial screen.
+   */
+  test("a corrupt sale price does not print 'sale price: 0' beside a valid margin", async () => {
+    const s = await seed("nanprice");
+    const vehicleId = await consignedVehicle(s, "NANPRICE00000001");
+    const saleId = await insertSale(s, vehicleId, {
+      salePrice: Number.NaN,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      consignedMarginMinor: MARGIN * SCALE,
+      consignedSupplierEntitlementMinor: ENTITLEMENT * SCALE,
+      consignedMarginCurrency: "JOD",
+    });
+
+    const deal = await s.asUser.query(api.sales.dealCockpit, { orgId: s.orgId, saleId });
+    const profit = deal!.money!.profit;
+
+    if (!profit.available) throw new Error("expected the frozen margin to still carry the headline");
+    // The headline is intact — it came from the frozen margin.
+    expect(profit.amountMinor).toBe(MARGIN * SCALE);
+    // ...and no line may assert the car sold for nothing.
+    const salePriceLine = profit.lines.find((line) => line.key === "SALE_PRICE");
+    expect(salePriceLine?.amountMinor).not.toBe(0);
+  });
+
+  /**
+   * The lines exist to EXPLAIN the headline. A breakdown that does not add up to
+   * the figure above it is worse than no breakdown at all.
+   */
+  test("the breakdown always reconciles to the headline, or is not shown", async () => {
+    const s = await seed("reconcile");
+    const vehicleId = await consignedVehicle(s, "RECONCILE0000001");
+    const saleId = await insertSale(s, vehicleId, {
+      salePrice: CONSIGNED_PRICE,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      consignedMarginMinor: MARGIN * SCALE,
+      consignedSupplierEntitlementMinor: ENTITLEMENT * SCALE,
+      consignedMarginCurrency: "JOD",
+    });
+
+    const deal = await s.asUser.query(api.sales.dealCockpit, { orgId: s.orgId, saleId });
+    const profit = deal!.money!.profit;
+    if (!profit.available) throw new Error("expected a profit");
+
+    if (profit.lines.length > 0) {
+      const sum = profit.lines.reduce((total, line) => total + line.sign * line.amountMinor, 0);
+      expect(sum).toBe(profit.amountMinor);
+    }
+  });
+});
+
+describe("a sale financed WITHOUT an application", () => {
+  /**
+   * `sales.create` accepts `financingType: "FINANCED" | "LEASE"` and has no
+   * `applicationId` field at all, so these rows are ordinary. Deriving the deal
+   * kind from `applicationId` alone labelled them CASH and titled them "Sale".
+   */
+  test("is labelled FINANCED even with no application", async () => {
+    const s = await seed("nofapp");
+    const vehicleId = await ownedVehicle(s, "FINNOAPP00000001");
+    const saleId = await insertSale(s, vehicleId, { financingType: "FINANCED" });
+
+    const deal = await s.asUser.query(api.sales.dealCockpit, { orgId: s.orgId, saleId });
+
+    expect(deal!.dealKind).toBe("FINANCED");
+    // No application exists, so there is no OTHER screen holding a management
+    // figure — nothing is being hidden and nothing can be confused. The money
+    // is therefore shown, and it is a genuine accounting result.
+    expect(deal!.financingApplicationId).toBeNull();
+    const profit = deal!.money!.profit;
+    if (!profit.available) throw new Error("expected a profit for an owned financed sale");
+    expect(profit.basis).toBe("ACCOUNTING_RESULT");
+    expect(profit.postable).toBe(true);
+  });
+
+  /**
+   * The genuinely dangerous shape: consigned + DIRECT_TO_SUPPLIER + externally
+   * financed. There `salePrice − entitlement` reaches no party, so the earning
+   * cannot be derived from the sale price. The write path refuses to CREATE
+   * this (`FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT`); this proves the READ path
+   * also refuses, which is what protects rows that predate that guard.
+   */
+  test("refuses the headline on a financed DIRECT consigned row with no recorded margin", async () => {
+    const s = await seed("findirect");
+    const vehicleId = await consignedVehicle(s, "FINDIRECT0000001");
+    const saleId = await insertSale(s, vehicleId, {
+      salePrice: CONSIGNED_PRICE,
+      financingType: "FINANCED",
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      // No consignedMarginMinor: the frozen evidence is absent.
+    });
+
+    const deal = await s.asUser.query(api.sales.dealCockpit, { orgId: s.orgId, saleId });
+    const profit = deal!.money!.profit;
+
+    // Never the sale-price spread, which reaches nobody on this route.
+    expect(profit.available).toBe(false);
+    if (profit.available) throw new Error("unreachable");
+    expect(profit.reason).toBe("UnknownMargin");
+  });
+});
+
+describe("a draft has no journal, so it has nothing postable", () => {
+  /**
+   * `postable: true` is a claim that a journal exists. `createDraftSale`
+   * performs no accounting side effects, so on a PENDING sale that claim is
+   * false — the same class of false statement as dropping the qualifier from
+   * the financed figure, in the opposite direction.
+   */
+  test("a PENDING sale reports no accounting profit rather than an unposted one", async () => {
+    const s = await seed("draftprofit");
+    const vehicleId = await ownedVehicle(s, "DRAFTPROFIT00001");
+    const saleId = await insertSale(s, vehicleId, { status: "PENDING" });
+
+    const deal = await s.asUser.query(api.sales.dealCockpit, { orgId: s.orgId, saleId });
+    const profit = deal!.money!.profit;
+
+    expect(profit.available).toBe(false);
+    if (profit.available) throw new Error("unreachable");
+    expect(profit.reason).toBe("SaleNotCompleted");
+  });
+});
+
 describe("the cash rail is shorter, and never permanently grey", () => {
   test("a cash deal has three stages and none of the finance-company ones", async () => {
     const s = await seed("rail");

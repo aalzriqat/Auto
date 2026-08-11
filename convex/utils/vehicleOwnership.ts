@@ -325,6 +325,63 @@ export function recordedSupplierEntitlement(sale: Doc<"sales">): number | undefi
   return fromMinorUnits(minor, currency);
 }
 
+/**
+ * The supplier's frozen entitlement, if the row carries one worth believing.
+ *
+ * Bounded on BOTH sides. An entitlement above the gross subtracts to a negative
+ * margin; a negative one subtracts to a margin LARGER than the whole car and
+ * publishes the supplier's own share as a negative number. Same corruption
+ * class, opposite directions, so one rule refuses both. `NaN` needs no separate
+ * case: every comparison against it is false, so it can satisfy neither bound.
+ */
+function validFrozenEntitlementFor(
+  recordedSupplierEntitlement: number | undefined,
+  salePrice: number
+): number | undefined {
+  return recordedSupplierEntitlement !== undefined &&
+    recordedSupplierEntitlement >= 0 &&
+    recordedSupplierEntitlement <= salePrice
+    ? recordedSupplierEntitlement
+    : undefined;
+}
+
+/**
+ * Whether this sale is an AGENT (consigned) sale — the one classification.
+ *
+ * ⚠️ Extracted for SCRUM-29 because a second surface needed the answer and got
+ * it wrong. `sales.dealCockpit` asked `vehicle ? isConsignedAgentSale(vehicle) :
+ * false`, which is the narrow rule; this one is what `saleEconomics` has always
+ * used. They disagree precisely when the vehicle row is GONE — reachable through
+ * the `/admin` raw-JSON editor — and the sale's own frozen evidence survives.
+ *
+ * The consequence was not cosmetic: the cockpit's headline reported a real
+ * agency margin (because `saleEconomics` classified it correctly) while the
+ * stage rail reported the deal fully settled and the supplier row disappeared,
+ * because the narrow rule skipped the supplier-obligation lookup entirely. The
+ * screen hid an open claim for money the supplier still owed.
+ *
+ * The vehicle answers whenever it is present. Only when the row is genuinely
+ * gone does the sale's own evidence stand in: a recorded consigned margin, a
+ * direct settlement route — which `setSupplierSettlementRoute` refuses on
+ * dealer-owned stock, making it a positive consignment signal — or a surviving
+ * frozen entitlement, which exists ONLY on a consigned sale.
+ */
+export function saleIsAgentSale(args: {
+  vehicle: OwnershipFacts | null;
+  salePrice: number;
+  recordedMargin?: number;
+  recordedSupplierEntitlement?: number;
+  /** DIRECT_TO_SUPPLIER — itself a positive consignment signal. */
+  settlesDirect: boolean;
+}): boolean {
+  if (args.vehicle !== null) return isConsignedAgentSale(args.vehicle);
+  return (
+    args.recordedMargin !== undefined ||
+    args.settlesDirect ||
+    validFrozenEntitlementFor(args.recordedSupplierEntitlement, args.salePrice) !== undefined
+  );
+}
+
 export function saleEconomics(args: {
   salePrice: number;
   /**
@@ -399,30 +456,24 @@ export function saleEconomics(args: {
   // Validated BEFORE classification, because it is itself one of the signals.
   // Not agent-gated here for the same reason: asking "is this consigned" using
   // an answer that already assumed it would be circular.
-  // Bounded on BOTH sides. An entitlement above the gross subtracts to a
-  // negative margin; a negative one subtracts to a margin LARGER than the whole
-  // car and publishes the supplier's own share as a negative number. Same
-  // corruption class, opposite directions, so one rule refuses both. `NaN`
-  // needs no separate case: every comparison against it is false, so it can
-  // satisfy neither bound.
-  const validFrozenEntitlement =
-    args.recordedSupplierEntitlement !== undefined &&
-    args.recordedSupplierEntitlement >= 0 &&
-    args.recordedSupplierEntitlement <= salePrice
-      ? args.recordedSupplierEntitlement
-      : undefined;
-  const agent =
-    vehicle === null
-      ? args.recordedMargin !== undefined ||
-        settlesDirect ||
-        // A supplier entitlement exists ONLY on a consigned sale, so its
-        // presence is as strong a consignment signal as the recorded margin.
-        // Without it, a hard-deleted consigned vehicle was classified as
-        // dealer-owned and — since `capitalizedCost` arrives as 0 for a missing
-        // vehicle — reported the ENTIRE ticket as profit on a car the
-        // dealership never owned.
-        validFrozenEntitlement !== undefined
-      : isConsignedAgentSale(vehicle);
+  const validFrozenEntitlement = validFrozenEntitlementFor(
+    args.recordedSupplierEntitlement,
+    salePrice
+  );
+  // Through the shared classifier, which is the same rule this function has
+  // always applied — including the case where a supplier entitlement survives a
+  // hard-deleted vehicle. Without that signal such a sale was classified as
+  // dealer-owned and, since `capitalizedCost` arrives as 0 for a missing
+  // vehicle, reported the ENTIRE ticket as profit on a car the dealership never
+  // owned. SCRUM-29 exported it so the deal screen cannot reach a different
+  // verdict than the economics do.
+  const agent = saleIsAgentSale({
+    vehicle,
+    salePrice,
+    recordedMargin: args.recordedMargin,
+    recordedSupplierEntitlement: args.recordedSupplierEntitlement,
+    settlesDirect,
+  });
   // AGENT ONLY. A supplier basis must never derive a dealer-owned row's profit:
   // that row keeps its own cost, and mixing the two makes `revenue − cost`
   // disagree with `margin` on the same sale.

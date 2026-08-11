@@ -325,6 +325,25 @@ describe("the cash rail is shorter, not greyed out", () => {
     renderCockpit();
     expect(screen.getByText(/DealCockpitTitle$/)).toBeTruthy();
   });
+
+  /**
+   * An OWNED cash sale has no third party at all — no supplier, no financier —
+   * so the parties card would render a heading over nothing. Both existing
+   * fixtures are consigned, which is why nothing caught this.
+   */
+  test("an owned cash deal renders no empty 'deal parties' card", () => {
+    renderCockpit(
+      cashDealFixture({
+        money: { ...cashDealFixture().money, parties: [] },
+      })
+    );
+    expect(screen.queryByText("DealPartiesHeading")).toBeNull();
+  });
+
+  test("a consigned cash deal still shows the parties card", () => {
+    renderCockpit(cashDealFixture());
+    expect(screen.getByText("DealPartiesHeading")).toBeTruthy();
+  });
 });
 
 describe("a caller who cannot see the money", () => {
