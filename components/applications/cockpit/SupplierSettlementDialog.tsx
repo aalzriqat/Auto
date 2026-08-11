@@ -135,7 +135,10 @@ export function SupplierSettlementDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="supplier-receipt-method">{t("SupplierReceiptAccount")}</Label>
+            {/* No `htmlFor`: `PaymentMethodSelect` takes `ariaLabel` and never
+                renders an id, so the association pointed at nothing. The
+                accessible name comes from the `ariaLabel` below. */}
+            <Label>{t("SupplierReceiptAccount")}</Label>
             <PaymentMethodSelect
               t={t}
               value={method}

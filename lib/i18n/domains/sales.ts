@@ -452,6 +452,12 @@ export const salesEn = {
   DepositStatusApplied: "Applied",
   UploadSuccess: "Document uploaded successfully",
   UploadFail: "Upload failed",
+  // The cockpit reaches these through `STATUS_LABEL[status]`, a DYNAMIC lookup
+  // that `keyCoverage.test.ts` cannot scan — it matches literal `t("Key")` call
+  // sites only. So a missing member here is invisible to that gate and reaches
+  // the screen as the raw key: `Draft` was absent, and a draft application
+  // rendered the English word on an otherwise fully Arabic page.
+  Draft: "Draft",
   PendingDocs: "Pending Documents",
   UnderReview: "Under Review",
   Approved: "Approved",
@@ -705,6 +711,9 @@ export const salesEn = {
   SupplierReceiptDate: "Date received",
   SupplierReceiptAccount: "Received into",
   RecordReceipt: "Record receipt",
+  // The button label is an instruction; a success toast that repeats it reads
+  // as if nothing happened yet.
+  ReceiptRecorded: "Receipt recorded",
   ReceiptAmountInvalid: "Enter an amount greater than zero.",
   ReceiptExceedsClaim: "That is more than the supplier still owes.",
   SupplierSettledInFull: "This claim is settled in full.",
@@ -1092,6 +1101,7 @@ export const salesAr = {
   DocUploaded: "مرفوع",
   DocVerified: "تم التحقق",
   DocRejected: "مرفوض",
+  Draft: "مسودة",
   PendingDocs: "المستندات المعلقة",
   UnderReview: "قيد المراجعة",
   Approved: "مقبول",
@@ -1415,6 +1425,7 @@ export const salesAr = {
   SupplierReceiptDate: "تاريخ الاستلام",
   SupplierReceiptAccount: "أُودع في",
   RecordReceipt: "تسجيل الاستلام",
+  ReceiptRecorded: "تم تسجيل الاستلام",
   ReceiptAmountInvalid: "أدخل مبلغاً أكبر من صفر.",
   ReceiptExceedsClaim: "المبلغ أكبر من المتبقي على المورد.",
   SupplierSettledInFull: "تمت تسوية هذه المطالبة بالكامل.",

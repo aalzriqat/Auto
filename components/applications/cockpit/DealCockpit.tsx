@@ -464,7 +464,7 @@ export function DealCockpitView({
       // Only now: a failed attempt keeps its key so retrying is the same
       // receipt rather than a second one.
       receiptKeyRef.current = null;
-      toast.success(t("RecordReceipt"));
+      toast.success(t("ReceiptRecorded"));
       setSettlingSupplier(false);
     } catch (error) {
       toast.error(getErrorMessage(error));

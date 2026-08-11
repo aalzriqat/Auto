@@ -116,3 +116,42 @@ describe("i18n key coverage", () => {
     expect(missing).toEqual([]);
   });
 });
+
+/**
+ * The blind spot the scan above declares: `t(SOME_MAP[value] ?? value)`.
+ *
+ * The cockpit routes every workflow enum through a lookup table, precisely so
+ * the raw enum never reaches the screen. But the `t()` call site is then a
+ * variable, so `LITERAL_T_CALL` cannot see it, and a member missing from the
+ * dictionaries is invisible to every assertion above — it simply renders as the
+ * key. `STATUS_LABEL.DRAFT` shipped that way: a draft application showed the
+ * English word "Draft" on an otherwise fully Arabic page, which is the exact
+ * defect the table exists to prevent.
+ *
+ * Scoped to this one file on purpose. A repo-wide sweep of `*_LABEL` maps has
+ * false positives — `app/(dashboard)/[orgId]/leads/page.tsx`'s `STAGE_LABELS`
+ * holds display text ("Test Drive"), not keys — and a test that cries wolf gets
+ * deleted. Widen it by adding files here deliberately.
+ */
+describe("cockpit label maps resolve through the dictionaries", () => {
+  const COCKPIT = path.join("components", "applications", "cockpit", "DealCockpit.tsx");
+  const source = fs.readFileSync(COCKPIT, "utf8");
+  const maps = [...source.matchAll(/const (\w+): Record<string, string> = \{([\s\S]*?)\n\};/g)];
+  const entries = maps.flatMap(([, name, body]) =>
+    [...body.matchAll(/^\s*[\w"']+:\s*"([^"]+)",/gm)].map(([, key]) => ({ name, key }))
+  );
+
+  test("finds the maps to check", () => {
+    // Without this the whole describe passes by matching nothing the moment the
+    // declaration style changes.
+    expect(maps.length).toBeGreaterThanOrEqual(5);
+    expect(entries.length).toBeGreaterThanOrEqual(25);
+  });
+
+  test("every mapped key exists in both dictionaries", () => {
+    const missing = entries
+      .filter(({ key }) => !(key in dictionaries.en) || !(key in dictionaries.ar))
+      .map(({ name, key }) => `${name} -> ${key}`);
+    expect(missing).toEqual([]);
+  });
+});
