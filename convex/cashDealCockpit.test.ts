@@ -669,16 +669,22 @@ describe("a consigned cash deal's supplier row, and UNKNOWN never reading as set
 });
 
 /**
- * The status history has to read forwards.
+ * The status history has to read forwards — as a STATE SEQUENCE, not as a
+ * timestamp sort.
  *
- * `saleDate` is caller-supplied and routinely BACK-DATED — a dealership
+ * `saleDate` is caller-supplied and routinely BACK-DATED: a dealership
  * recording on Tuesday a sale that happened last week enters a `saleDate`
- * earlier than the row's own `_creationTime`. The view renders this array in
- * order, so unsorted it printed a history in which the sale completed before it
- * was created.
+ * earlier than the row's own `_creationTime`. An earlier round "fixed" that by
+ * sorting on `changedAt`, which produced `COMPLETED -> PENDING` — a completed
+ * deal whose history ends in "pending".
+ *
+ * The first version of this test asserted monotonically increasing `changedAt`
+ * and so PASSED against that broken output, because it asserted the property
+ * that had been implemented rather than the property that matters. It now
+ * asserts the status sequence itself.
  */
 describe("the cash timeline", () => {
-  test("a back-dated sale still reads forwards", async () => {
+  test("a back-dated sale still reads pending -> completed", async () => {
     const s = await seed("backdated");
     const vehicleId = await ownedVehicle(s, "BACKDATED0000001");
     // A week before the row exists — the ordinary case, not a corrupt one.
@@ -687,20 +693,47 @@ describe("the cash timeline", () => {
     });
 
     const deal = await s.asUser.query(api.sales.dealCockpit, { orgId: s.orgId, saleId });
-    const timeline = deal!.timeline;
 
-    expect(timeline.length).toBeGreaterThan(1);
-    for (let i = 1; i < timeline.length; i++) {
-      expect(timeline[i].changedAt).toBeGreaterThanOrEqual(timeline[i - 1].changedAt);
-    }
+    expect(deal!.timeline.map((entry) => entry.toStatus)).toEqual(["PENDING", "COMPLETED"]);
   });
 
   /**
-   * No CANCELLED entry is emitted, and that is deliberate: `sales` records no
-   * cancellation timestamp, so one could only be invented — the single thing
-   * this timeline refuses to do. The cancellation is already stated twice, by
-   * the status badge and by the headline's refusal, and this pins that the
-   * screen says so rather than staying silent about it.
+   * An unreadable moment must not take the screen down with it.
+   *
+   * Convex's `v.number()` accepts NaN, so a corrupt `saleDate` is stored
+   * verbatim. The view renders every entry through date-fns `format`, which
+   * throws `RangeError: Invalid time value` on a non-finite input — and an
+   * uncaught throw during render loses the WHOLE deal screen, not one row.
+   */
+  test("a corrupt sale date is withheld rather than crashing the screen", async () => {
+    const s = await seed("nandate");
+    const vehicleId = await ownedVehicle(s, "NANDATE000000001");
+    const saleId = await insertSale(s, vehicleId, { saleDate: Number.NaN });
+
+    const deal = await s.asUser.query(api.sales.dealCockpit, { orgId: s.orgId, saleId });
+
+    // Every emitted moment is renderable...
+    for (const entry of deal!.timeline) {
+      expect(Number.isFinite(entry.changedAt)).toBe(true);
+    }
+    // ...and the completion is still reported, by the status rather than a date.
+    expect(deal!.status).toBe("COMPLETED");
+  });
+
+  /**
+   * No CANCELLED entry is emitted, and the honest reason is narrower than the
+   * one first written here.
+   *
+   * A real cancellation moment IS captured in the system — `sales.update`
+   * stamps one onto the reversal records it writes — but it is never persisted
+   * onto the sale row this query reads, and a cancelled PENDING sale has no
+   * reversal records at all, so for that case no moment exists anywhere.
+   * Emitting an entry would mean inventing a time for some deals and guessing
+   * for others. Surfacing it honestly needs a persisted `cancelledAt`, which is
+   * a schema change and a tracked follow-up.
+   *
+   * This pins that the screen still SAYS the deal is cancelled — via the status
+   * and the headline's refusal — rather than going quiet about it.
    */
   test("a cancelled sale is reported by the headline, not by a fabricated entry", async () => {
     const s = await seed("cancelled");

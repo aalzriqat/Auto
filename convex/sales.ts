@@ -2285,7 +2285,18 @@ export const dealCockpit = query({
       actorName: string;
       note?: string;
     }> = [{ toStatus: "PENDING", changedAt: sale._creationTime, actorName }];
-    if (sale.status === "COMPLETED") {
+    /**
+     * `Number.isFinite` because Convex's `v.number()` ACCEPTS NaN, so a corrupt
+     * `saleDate` reaches this row intact — and the view renders every entry
+     * through date-fns `format`, which throws `RangeError: Invalid time value`
+     * on a non-finite input. That is not a malformed date in one table cell: an
+     * uncaught throw during render takes down the ENTIRE deal screen.
+     *
+     * Dropped rather than displayed, the same rule the headline follows for an
+     * unreadable amount. The sale is still reported as completed by its status
+     * badge, so the fact survives; only the unreadable moment is withheld.
+     */
+    if (sale.status === "COMPLETED" && Number.isFinite(sale.saleDate)) {
       timeline.push({
         fromStatus: "PENDING",
         toStatus: "COMPLETED",
@@ -2294,19 +2305,32 @@ export const dealCockpit = query({
       });
     }
     /**
-     * Sorted, because `saleDate` is caller-supplied and routinely BACK-DATED —
-     * a dealership recording on Tuesday a sale that happened last week enters a
-     * `saleDate` earlier than the row's own `_creationTime`. The view renders
-     * this array in order, so unsorted it printed a history in which the sale
-     * completed before it was created.
+     * DELIBERATELY NOT SORTED BY `changedAt`, and the reason is worth keeping.
      *
-     * There is deliberately no CANCELLED entry. `sales` records no cancellation
-     * timestamp, so emitting one would mean inventing a moment — the single
-     * thing this timeline refuses to do. A cancelled sale is already stated
-     * twice on the screen: the status badge reads CANCELLED and the headline
-     * refuses with `DealCancelled`.
+     * A review round asked for a chronological sort, on the grounds that a
+     * back-dated sale could otherwise print a later transition above an earlier
+     * one. Sorting was implemented and was WRONG: `saleDate` is a caller-supplied
+     * BUSINESS date, not a status-transition timestamp, so for the ordinary
+     * back-dated sale — recorded Tuesday for last week — sorting by it yields
+     * `COMPLETED -> PENDING`, a completed deal whose history ends in "pending".
+     *
+     * These two entries are a STATE SEQUENCE, not independent timestamped
+     * events. A sale is pending before it is completed regardless of which
+     * clock recorded which moment, so the order is the logical one and the dates
+     * are rendered as-is. A `saleDate` earlier than `_creationTime` is not a
+     * corruption to be sorted away — it is the true statement that the sale
+     * happened before it was entered.
+     *
+     * There is also no CANCELLED entry. A real cancellation moment IS captured
+     * in the system — `sales.update` stamps one onto the reversal records it
+     * writes — but it is never persisted onto the sale row this query reads,
+     * and a cancelled PENDING sale has no reversal records at all, so for that
+     * case no moment exists anywhere. Emitting an entry would therefore mean
+     * inventing a time for some deals and guessing for others. Surfacing it
+     * honestly needs a persisted `cancelledAt` on `sales`, which is a schema
+     * change and a tracked follow-up. Until then the cancellation is stated by
+     * the status badge and by the headline's `DealCancelled` refusal.
      */
-    timeline.sort((a, b) => a.changedAt - b.changedAt);
 
     /**
      * A sale that came from a finance application is NOT this screen's deal.
