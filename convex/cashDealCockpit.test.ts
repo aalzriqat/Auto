@@ -369,10 +369,15 @@ describe("an unreadable figure never renders as a zero line", () => {
     const profit = deal!.money!.profit;
     if (!profit.available) throw new Error("expected a profit");
 
-    if (profit.lines.length > 0) {
-      const sum = profit.lines.reduce((total, line) => total + line.sign * line.amountMinor, 0);
-      expect(sum).toBe(profit.amountMinor);
-    }
+    // The POSITIVE path, asserted explicitly. A reviewer mutated
+    // `lines: reconciles ? lines : []` to an unconditional `[]` — a total
+    // regression where no deal ever shows its breakdown — and all 21 tests
+    // still passed, because every assertion about lines was guarded by
+    // `if (lines.length > 0)` and so held vacuously. A well-formed consigned
+    // sale MUST produce a breakdown.
+    expect(profit.lines.length).toBeGreaterThan(0);
+    const sum = profit.lines.reduce((total, line) => total + line.sign * line.amountMinor, 0);
+    expect(sum).toBe(profit.amountMinor);
   });
 });
 
