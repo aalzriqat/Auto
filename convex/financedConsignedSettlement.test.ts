@@ -4502,11 +4502,21 @@ describe("a settlement advice that contradicts the approval", () => {
       applicationId,
     })) as unknown as Record<string, unknown>;
 
-    // What the screen runs on.
+    // What the screen runs on: the approved figure the confirmation dialog
+    // prefills, and whether a disbursement is already recorded. Withholding
+    // either is round 9's MANAGER trap.
     expect(view.approvedDealerPurchaseAmountMinor).toBe(18_000 * SCALE);
-    expect(view.supplierDisbursementConfirmedAt).toBeDefined();
     expect(view.supplierDisbursementStatus).toBe("CONFIRMED");
     // What it does not need, and may not see.
+    //
+    // `supplierDisbursementConfirmedAt` was on the first list until this round.
+    // The claim that the confirmation screen prefilled from it stopped being
+    // true when the label, badge and button moved onto the status — both
+    // reviewers enumerated the repo and found no client read of it or of
+    // `…ConfirmedBy` at all. Evidence with no consumer belongs with the rest of
+    // the evidence, behind VIEW_FINANCE.
+    expect(view.supplierDisbursementConfirmedAt).toBeUndefined();
+    expect(view.supplierDisbursementConfirmedBy).toBeUndefined();
     expect(view.supplierDisbursedAmountMinor).toBeUndefined();
     expect(view.supplierDisbursementReference).toBeUndefined();
     expect(JSON.stringify(view)).not.toContain("WIRE-OK");
@@ -4811,6 +4821,14 @@ describe("a settlement advice that contradicts the approval", () => {
         "supplierDisbursementReference",
         "supplierDisbursedAmountMinor",
         "supplierDisbursementApprovedAtRecordingMinor",
+        // Added when these two moved behind `canWorkDisbursement`. The whole
+        // point of this sweep is that a new gated class gets asserted on EVERY
+        // door rather than on the one it was fixed in — without these names the
+        // new gate was pinned only against `applications.get`, and dropping
+        // `redactSettlementEvidence` from `list` or `getEconomics` would have
+        // left this test green.
+        "supplierDisbursementConfirmedAt",
+        "supplierDisbursementConfirmedBy",
       ]) {
         expect(`${name} exposes ${field}: ${keysOf(response).has(field)}`).toBe(
           `${name} exposes ${field}: false`
@@ -4926,8 +4944,25 @@ describe("a settlement advice that contradicts the approval", () => {
     }
   });
 
-  test("and a caller who may work the disbursement still gets the timestamp and recorder", async () => {
-    const { s, applicationId } = await paidDeal("s30WhetherAllowed", 18_000);
+  /**
+   * The legacy shape the schema documents, which the gate above nearly broke.
+   *
+   * `convex/schema.ts` says of `supplierDisbursementStatus`: "Absent means the
+   * advice predates this field, which is CONFIRMED by construction — those rows
+   * could only be written when the amounts matched." `amendSupplierDisbursementAdvice`
+   * codes to the same belief with `?? "CONFIRMED"`, and `sales.ts` is
+   * deliberately defensive about the mirror shape (an amount with no date).
+   *
+   * Moving the label, the badge and the confirm button onto the status alone
+   * therefore handed exactly that row a permanent "awaiting supplier
+   * disbursement", a hidden paid badge, and a confirm button that reappears and
+   * throws against the server's `confirmedAt` guard — rounds 9 and 10 both
+   * back, for every role including OWNER. So the helper now normalizes what it
+   * publishes to the same invariant the schema asserts, rather than leaving
+   * three consumers to each rediscover it.
+   */
+  test("an advice recorded before the status field existed still reads as paid", async () => {
+    const { s, applicationId } = await paidDeal("s30LegacyStatus", 18_000);
     await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
       orgId: s.orgId,
       applicationId,
@@ -4936,12 +4971,13 @@ describe("a settlement advice that contradicts the approval", () => {
     });
 
     await s.t.run(async (ctx) => {
+      // The legacy row: the advice is recorded, the status field is not.
+      await ctx.db.patch(applicationId as never, {
+        supplierDisbursementStatus: undefined,
+      } as never);
       const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === s.orgId)!;
       await ctx.db.patch(role._id, {
-        // No `view:finance` — this is the confirmation-screen role, which
-        // prefills from these fields and would otherwise re-open round 9's
-        // MANAGER dead-end.
-        permissions: ["view:sales", "view:finance_applications", "confirm:finance_disbursement"],
+        permissions: ["view:sales", "view:finance_applications"],
         isSystemOwnerRole: false,
       });
     });
@@ -4950,12 +4986,12 @@ describe("a settlement advice that contradicts the approval", () => {
       orgId: s.orgId,
       applicationId,
     })) as unknown as Record<string, unknown>;
+
+    // Reads as paid, so the label, the badge and the button all behave — while
+    // the evidence stays gated exactly as it is on a modern row.
     expect(detail.supplierDisbursementStatus).toBe("CONFIRMED");
-    expect(detail.supplierDisbursementConfirmedAt).toBeDefined();
-    expect(detail.supplierDisbursementConfirmedBy).toBeDefined();
-    // ...but still not the money or the cheque number.
+    expect(detail.supplierDisbursementConfirmedAt).toBeUndefined();
     expect(detail.supplierDisbursementReference).toBeUndefined();
-    expect(detail.supplierDisbursedAmountMinor).toBeUndefined();
   });
 
   test("and the same query gives a finance-permitted caller the evidence in full", async () => {

@@ -508,14 +508,19 @@ export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
     // has. They are settlement-evidence metadata that happened to be sitting
     // next to a deliberately public field.
     //
-    // Gated at `canWorkDisbursement` rather than `VIEW_FINANCE` because the
-    // confirmation screen prefills from them and its role holds
-    // CONFIRM_FINANCE_DISBURSEMENT without VIEW_FINANCE — blanking them there
-    // would reopen round 9's MANAGER trap.
-    supplierDisbursementConfirmedAt: canWorkDisbursement
+    // Gated at VIEW_FINANCE, with the tier-1 evidence, and NOT at
+    // `canWorkDisbursement`. The first attempt used the looser gate on the
+    // rationale that the confirmation screen prefills from these — but moving
+    // the label, badge and button onto the status in that same change removed
+    // the last client read of either field. Both reviewers enumerated the repo
+    // independently and found none: the confirmation dialog prefills only an
+    // amount, and the correction screen takes `recordedAt` from `dealCockpit`,
+    // which is already VIEW_FINANCE-gated. A justification that described
+    // behaviour the same commit deleted is not a justification.
+    supplierDisbursementConfirmedAt: canSeeFinance
       ? app.supplierDisbursementConfirmedAt
       : undefined,
-    supplierDisbursementConfirmedBy: canWorkDisbursement
+    supplierDisbursementConfirmedBy: canSeeFinance
       ? app.supplierDisbursementConfirmedBy
       : undefined,
     //
@@ -535,6 +540,23 @@ export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
     // branch on the timestamp — the status label and the paid badge in
     // `ApplicationDetailsDialog` — now read this field, so the dead-end stays
     // closed while the evidence beside it is gated.
-    supplierDisbursementStatus: app.supplierDisbursementStatus,
+    //
+    // NORMALIZED, because the field is legitimately absent on a recorded
+    // advice. The schema says so where it is declared — "Absent means the
+    // advice predates this field, which is CONFIRMED by construction" — and
+    // `amendSupplierDisbursementAdvice` codes to the same invariant with
+    // `?? "CONFIRMED"`. Publishing the raw value handed that row a permanent
+    // "awaiting supplier disbursement", a hidden paid badge, and a confirm
+    // button that reappears and throws against the server's `confirmedAt`
+    // guard — rounds 9 and 10 both back, for every role including OWNER.
+    //
+    // Derived here rather than in the three consumers so the invariant is
+    // stated once, on the boundary that already decides what "paid" means.
+    supplierDisbursementStatus:
+      app.supplierDisbursementStatus ??
+      (app.supplierDisbursementConfirmedAt !== undefined ||
+      app.supplierDisbursedAmountMinor !== undefined
+        ? ("CONFIRMED" as const)
+        : undefined),
   };
 }
