@@ -230,13 +230,20 @@ describe("the economics split", () => {
    * someone reasoning that partial frozen evidence must always be corruption.
    *
    * On a route where the dealership collects the gross, a surviving entitlement
-   * beside a missing margin still reads its margin from the live basis, because
-   * that basis is genuinely correct there. A reviewer proposed failing it closed
-   * instead; that rule breaks "a negative recorded margin is not read as a loss"
-   * and "NaN does not poison the profit of every other sale" below, both of
-   * which complete through the real writer (so BOTH fields are set) and then
-   * corrupt the margin alone. Withholding a number the route can answer is not
-   * the safe direction — it is a different wrong answer.
+   * beside a missing margin rebuilds the margin from THAT entitlement — the
+   * basis the sale was actually posted on — not from the live cost and not
+   * from null.
+   *
+   * Both alternatives were tried and both are wrong. FAILING IT CLOSED breaks
+   * "a negative recorded margin is not read as a loss" and "NaN does not poison
+   * the profit of every other sale" below, which complete through the real
+   * writer (so BOTH fields are set) and then corrupt the margin alone;
+   * withholding a number that is still derivable is a different wrong answer,
+   * not a safer one. THE LIVE COST is also wrong: `sourceCost` stays editable
+   * after the sale, because the acquisition lock only fires on a posted
+   * VEHICLE_ACQUIRED event and a consigned car never emits one — so the margin
+   * would be re-derived against a basis the sale never used while the
+   * settlement stayed frozen, and the row would stop reconciling.
    */
   test("a THROUGH row rebuilds the missing margin from the entitlement it still has", () => {
     // The cost has DRIFTED since the sale. This is what makes the test able to
@@ -309,6 +316,96 @@ describe("the economics split", () => {
     });
     expect(e.dealershipMargin).toBeGreaterThanOrEqual(0);
     expect(e.dealershipMargin).toBe(MARGIN);
+
+    // ONE eligibility rule has to govern BOTH halves. Guarding only the margin
+    // left the settlement reading the corrupt value, so the row summed to more
+    // than the whole car — the inverse of the identity the frozen-basis rule
+    // exists to preserve, and `totalSupplierSettlement` inflated by the excess.
+    expect(e.supplierSettlement).toBe(ENTITLEMENT);
+    expect(e.dealershipMargin! + e.supplierSettlement!).toBe(SALE_PRICE);
+  });
+
+  /**
+   * A hard-deleted vehicle must not turn the supplier's car into pure profit.
+   *
+   * With the vehicle row gone, `capitalizedCost` arrives as 0, so anything that
+   * falls through to `salePrice − cost` reports the ENTIRE ticket as the
+   * dealership's earning on a car it never owned. The frozen entitlement is the
+   * evidence that survives exactly this: it exists only on consigned sales, so
+   * it is a consignment signal in its own right, and it supplies the basis the
+   * missing vehicle can no longer provide.
+   *
+   * Gating the frozen basis on `agent` — correct for keeping a supplier basis
+   * off dealer-owned rows — discarded it here, because the classifier does not
+   * (yet) read the entitlement as a consignment signal when the vehicle is
+   * absent.
+   */
+  test("a hard-deleted consigned vehicle recovers its margin from the surviving entitlement", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: null,
+      // What reports pass when the vehicle row is gone.
+      capitalizedCost: 0,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: ENTITLEMENT,
+    });
+
+    expect(e.isAgentSale).toBe(true);
+    expect(e.dealershipMargin).toBe(MARGIN);
+    // And emphatically not the whole car.
+    expect(e.dealershipMargin).not.toBe(SALE_PRICE);
+    expect(e.supplierSettlement).toBe(ENTITLEMENT);
+    expect(e.dealershipMargin! + e.supplierSettlement!).toBe(SALE_PRICE);
+  });
+
+  /**
+   * ...but the financed DIRECT route stays UNKNOWN even with the entitlement,
+   * because there the earning is `supplierGrossReceipt − entitlement`, not
+   * `salePrice − entitlement`. Deriving it from the sale price is the exact
+   * 5,000-instead-of-3,000 overstatement SCRUM-30 exists to stop, so a
+   * surviving entitlement must not become a back door to it.
+   */
+  test("a hard-deleted financed DIRECT row stays UNKNOWN despite the entitlement", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: null,
+      capitalizedCost: 0,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: true,
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: ENTITLEMENT,
+    });
+    expect(e.isAgentSale).toBe(true);
+    expect(e.dealershipMargin).toBeNull();
+    expect(e.dealershipMargin).not.toBe(SALE_PRICE - ENTITLEMENT);
+  });
+
+  /**
+   * The precedence that must not be "simplified" away.
+   *
+   * The comment on the rule reads "rebuild it from the surviving frozen basis
+   * BEFORE reaching for the live one", which invites hoisting the entitlement
+   * preference above the `evidenceRequired` arm. Doing that would republish
+   * `salePrice − entitlement` on exactly the row SCRUM-30 exists to stop — a
+   * financed DIRECT sale whose margin is missing — and the whole suite would
+   * stay green, because nothing pinned this combination. Now it does.
+   */
+  test("a financed DIRECT row with an entitlement but no margin is still UNKNOWN", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: ENTITLEMENT,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: true,
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: ENTITLEMENT,
+    });
+    // The entitlement is known and is used. The EARNING is not, and no
+    // surviving sibling makes it knowable on this route.
+    expect(e.supplierSettlement).toBe(ENTITLEMENT);
+    expect(e.dealershipMargin).toBeNull();
+    expect(e.recognizedRevenue).toBeNull();
   });
 
   /**

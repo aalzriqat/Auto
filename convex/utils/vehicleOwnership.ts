@@ -350,16 +350,45 @@ export function saleEconomics(args: {
   // refuses on dealer-owned stock, making it a positive consignment signal.
   const vehicle = args.vehicle;
   const vehicleUnknown = vehicle === null;
+  // Validated BEFORE classification, because it is itself one of the signals.
+  // Not agent-gated here for the same reason: asking "is this consigned" using
+  // an answer that already assumed it would be circular.
+  const validFrozenEntitlement =
+    args.recordedSupplierEntitlement !== undefined &&
+    args.recordedSupplierEntitlement <= salePrice
+      ? args.recordedSupplierEntitlement
+      : undefined;
   const agent =
     vehicle === null
-      ? args.recordedMargin !== undefined || settlesDirect
+      ? args.recordedMargin !== undefined ||
+        settlesDirect ||
+        // A supplier entitlement exists ONLY on a consigned sale, so its
+        // presence is as strong a consignment signal as the recorded margin.
+        // Without it, a hard-deleted consigned vehicle was classified as
+        // dealer-owned and — since `capitalizedCost` arrives as 0 for a missing
+        // vehicle — reported the ENTIRE ticket as profit on a car the
+        // dealership never owned.
+        validFrozenEntitlement !== undefined
       : isConsignedAgentSale(vehicle);
+  // AGENT ONLY. A supplier basis must never derive a dealer-owned row's profit:
+  // that row keeps its own cost, and mixing the two makes `revenue − cost`
+  // disagree with `margin` on the same sale.
+  const eligibleSupplierEntitlement = agent ? validFrozenEntitlement : undefined;
   // With no vehicle there is no cost basis either — `capitalizedCost` arrives as
   // 0 — so `salePrice − cost` would report the entire ticket as the dealership's
   // margin. An agent sale whose earning cannot be read from the sale is UNKNOWN,
   // not the whole ticket.
+  //
+  // ...unless the frozen entitlement survived, which IS a basis. The missing
+  // vehicle is then no longer the reason to withhold, so it stops being one.
+  // The financed-direct arm is untouched: there the earning is
+  // `supplierGrossReceipt − entitlement`, never `salePrice − entitlement`, so a
+  // surviving entitlement must not become a back door to the sale-price spread
+  // this whole change exists to stop reporting.
   const evidenceRequired =
-    agent && ((settlesDirect && args.externallyFinanced === true) || vehicleUnknown);
+    agent &&
+    ((settlesDirect && args.externallyFinanced === true) ||
+      (vehicleUnknown && eligibleSupplierEntitlement === undefined));
   // When the margin is missing, rebuild it from the SURVIVING FROZEN basis
   // before reaching for the live one.
   //
@@ -394,18 +423,20 @@ export function saleEconomics(args: {
   //   to a negative, which is a second route to the answer that "a negative
   //   recorded margin is not read as a loss" already refuses. Corruption is not
   //   a loss, whichever field it arrives in.
-  const frozenMarginBasis =
-    agent &&
-    args.recordedSupplierEntitlement !== undefined &&
-    args.recordedSupplierEntitlement <= salePrice
-      ? args.recordedSupplierEntitlement
-      : undefined;
+  //
+  // ONE predicate, used by BOTH halves below. Guarding only the margin left the
+  // settlement reading the corrupt value, so a row could report a margin from
+  // the clean basis and a settlement from the dirty one and sum to more than
+  // the whole car — the exact inverse of the identity this rule exists to keep.
+  // If an entitlement is not fit to derive the margin, it is not fit to be
+  // published as the supplier's share either.
+
   const margin =
     agent && args.recordedMargin !== undefined
       ? args.recordedMargin
       : evidenceRequired
         ? null
-        : salePrice - (frozenMarginBasis ?? capitalizedCost);
+        : salePrice - (eligibleSupplierEntitlement ?? capitalizedCost);
 
   if (!agent) {
     return {
@@ -435,7 +466,7 @@ export function saleEconomics(args: {
     // different rules about missing evidence is what makes the report disagree
     // with the ledger.
     supplierSettlement:
-      args.recordedSupplierEntitlement ?? (evidenceRequired ? null : capitalizedCost),
+      eligibleSupplierEntitlement ?? (evidenceRequired ? null : capitalizedCost),
     dealershipMargin: margin,
     // The whole point. Turnover is what the dealership sold, and on a consigned
     // car that is its service, not the vehicle.
