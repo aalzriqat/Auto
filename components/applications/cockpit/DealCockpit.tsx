@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -260,6 +261,24 @@ export function CashDealCockpit({
 }: Readonly<{ orgId: Id<"organizations">; saleId: Id<"sales"> }>) {
   const deal = useQuery(api.sales.dealCockpit, { orgId, saleId });
   const recordReceipt = useMutation(api.supplierReceivables.recordReceipt);
+  const router = useRouter();
+
+  /**
+   * A financed deal's screen is the application-keyed one, so this route hands
+   * it over rather than rendering a second view of the same deal.
+   *
+   * The server has already withheld the money for this case, so the redirect is
+   * the courtesy and the withholding is the guarantee — if this effect never
+   * ran, the screen would still not show a second profit figure.
+   */
+  const financingApplicationId = deal?.financingApplicationId ?? null;
+  useEffect(() => {
+    if (financingApplicationId) {
+      router.replace(`/${orgId}/applications/${financingApplicationId}/deal`);
+    }
+  }, [financingApplicationId, orgId, router]);
+
+  if (financingApplicationId) return <Skeleton className="h-64 w-full" />;
 
   return (
     <DealCockpitView
@@ -840,11 +859,15 @@ export function DealCockpitView({
                       </div>
                     </div>
                   ))}
-                  {/* FINANCED only. `فرق تخمين` is the difference between the
-                      finance company's appraisal and the price — a cash deal has
-                      no appraisal, so "no appraisal gap" would not be reassuring,
-                      it would be answering a question nobody asked. */}
-                  {deal.dealKind === "FINANCED" && (
+                  {/* Only where an APPLICATION exists. `فرق تخمين` is the
+                      difference between the finance company's appraisal and the
+                      price — a cash deal has no appraisal, so "no appraisal gap"
+                      would not be reassuring, it would be answering a question
+                      nobody asked.
+                      Gated on the data rather than on `dealKind`, because a
+                      financed SALE opened on the sale-keyed route is
+                      `dealKind: "FINANCED"` and still has no appraisal payload. */}
+                  {deal.applicationId !== null && (
                     <p className="text-xs text-muted-foreground">
                       {t("AppraisalGapLabel")}:{" "}
                       {deal.money.appraisalGapMinor ? (

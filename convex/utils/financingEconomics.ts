@@ -918,7 +918,12 @@ export function deriveCashDealStages(facts: CashDealStageFacts): DealStage[] {
     // supports. Inventing a richer handover state here would be asserting
     // something no row records.
     HANDOVER: facts.saleStatus === "COMPLETED",
-    SETTLEMENT: facts.settlementComplete === true,
+    // Requires the sale to have COMPLETED as well as the supplier obligation to
+    // be closed or absent. Without the status condition a PENDING sale of
+    // dealership-owned stock reported its settlement finished the moment it was
+    // drafted — there is no supplier to owe, so "nothing outstanding" was true
+    // and vacuous. A deal that has not happened has not settled.
+    SETTLEMENT: facts.saleStatus === "COMPLETED" && facts.settlementComplete === true,
   };
 
   const blockers: Partial<Record<CashDealStageKey, DealStageBlocker>> = {

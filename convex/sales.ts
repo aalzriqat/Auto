@@ -2274,9 +2274,34 @@ export const dealCockpit = query({
       });
     }
 
+    /**
+     * A sale that came from a finance application is NOT this screen's deal.
+     *
+     * ⚠️ This is the sharpest edge in SCRUM-29 and it fails CLOSED.
+     *
+     * `sales.applicationId` is set on every financed deal once `finalizeDeal`
+     * runs, so the sale-keyed route can be opened on a financed sale. If this
+     * query answered normally, that deal would show `NetDealershipProfit` as the
+     * POSTABLE accounting margin, while `/applications/[id]/deal` shows the same
+     * label carrying the UNPOSTABLE management figure — two different
+     * owner-facing profit numbers for one deal, under one label, on two screens.
+     * That is precisely the defect the cockpit was built to remove, arriving by
+     * the back door.
+     *
+     * So the money is withheld outright and the caller is told where the deal
+     * actually lives. Both halves matter: the client redirects, and even if it
+     * did not, there is no second profit here to misread.
+     */
+    const financingApplicationId = sale.applicationId ?? null;
+
     const base = {
-      /** What KIND of deal this is. The view branches on it; it never guesses. */
-      dealKind: "CASH" as const,
+      /**
+       * What KIND of deal this is, read from the row rather than assumed. The
+       * view branches on it; it never guesses.
+       */
+      dealKind: (financingApplicationId ? "FINANCED" : "CASH") as "CASH" | "FINANCED",
+      /** Set when this deal's real screen is the application-keyed one. */
+      financingApplicationId,
       /** The id whose tail the header shows. */
       dealRef: sale._id as string,
       saleId: sale._id,
@@ -2328,7 +2353,10 @@ export const dealCockpit = query({
       timeline,
     };
 
-    if (!canSeeMoney) return { ...base, money: null };
+    // Withheld for a financed deal even from a caller who may see money — see
+    // the note above. Not a permission decision: there is no second profit for
+    // this deal to publish, at any permission level.
+    if (!canSeeMoney || financingApplicationId) return { ...base, money: null };
 
     const capitalizedCost = vehicle ? await computeVehicleCapitalizedCost(ctx, vehicle) : 0;
     // The SAME call the sales report makes, with the same recorded inputs. Not a
