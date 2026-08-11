@@ -47,7 +47,10 @@ const SCALE = 1_000;
 
 function dealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
   return {
+    dealKind: "FINANCED",
+    dealRef: "app_2048",
     applicationId: "app_2048",
+    saleId: null,
     status: "APPROVED",
     createdAt: Date.UTC(2026, 6, 28),
     updatedAt: Date.UTC(2026, 7, 9),
@@ -74,8 +77,9 @@ function dealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
       currency: "JOD",
       settlesDirectToSupplier: false,
       routeKnown: true,
-      managementProfit: {
+      profit: {
         available: true,
+        basis: "MANAGEMENT_ESTIMATE",
         amountMinor: 2_410 * SCALE,
         currency: "JOD",
         classification: "ESTIMATED_AWAITING_SETTLEMENT",
@@ -161,12 +165,148 @@ describe("the headline figure", () => {
       dealFixture({
         money: {
           ...dealFixture().money,
-          managementProfit: { available: false, reason: "NoApprovedPurchaseAmount" },
+          profit: { available: false, reason: "NoApprovedPurchaseAmount" },
         },
       })
     );
     expect(screen.getByText("ProfitNotCalculable")).toBeTruthy();
     expect(screen.getByText("ProfitNeedsApprovedPurchase")).toBeTruthy();
+  });
+});
+
+/**
+ * SCRUM-29's central risk, pinned on the rendered screen.
+ *
+ * One screen now shows two genuinely different kinds of money. A financed
+ * deal's headline is a MANAGEMENT figure built on a spread that appears on no
+ * invoice — it must always carry its qualifier and must never be posted. A cash
+ * deal's is an ordinary accounting result that reconciles to the GL — stamping
+ * "estimated, never posted" on it would be a false statement about a real
+ * accounting figure, and it is the failure this whole polymorphic design exists
+ * to prevent.
+ *
+ * These assert the qualifier's PRESENCE on one and its ABSENCE on the other, in
+ * both directions, because a test that only checked the financed side would pass
+ * happily against a screen that badged everything.
+ */
+function cashDealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
+  return dealFixture({
+    dealKind: "CASH",
+    dealRef: "sale_7731",
+    applicationId: null,
+    saleId: "sale_7731",
+    status: "COMPLETED",
+    financeCompanyName: "",
+    // The shorter rail: no credit decision, appraisal or gap stages at all.
+    stages: [
+      { key: "SALE_AGREED", state: "COMPLETE" },
+      { key: "HANDOVER", state: "COMPLETE" },
+      { key: "SETTLEMENT", state: "BLOCKED", blocker: "AwaitingSettlement" },
+    ],
+    documents: [],
+    timeline: [
+      { toStatus: "COMPLETED", changedAt: Date.UTC(2026, 7, 1), actorName: "ليث العمري" },
+    ],
+    money: {
+      currency: "JOD",
+      settlesDirectToSupplier: true,
+      routeKnown: true,
+      profit: {
+        available: true,
+        basis: "ACCOUNTING_RESULT",
+        amountMinor: 3_000 * SCALE,
+        currency: "JOD",
+        postable: true,
+        lines: [
+          { key: "SALE_PRICE", sign: 1, amountMinor: 20_000 * SCALE },
+          { key: "SUPPLIER_ENTITLEMENT", sign: -1, amountMinor: 17_000 * SCALE },
+        ],
+      },
+      expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
+      parties: [
+        {
+          party: "SUPPLIER",
+          name: "شركة عمّان للاستيراد",
+          position: "OWED_TO_DEALERSHIP",
+          amountMinor: 3_000 * SCALE,
+          currency: "JOD",
+          receivableId: "recv_1",
+        },
+      ],
+      appraisalGapMinor: undefined,
+    },
+    ...overrides,
+  });
+}
+
+describe("a cash headline and a financed headline cannot be confused", () => {
+  test("the FINANCED headline always carries its unpostable qualifier", () => {
+    renderCockpit();
+    expect(screen.getByText("ProfitEstimatedAwaitingSettlement")).toBeTruthy();
+    expect(screen.getByText("ManagementFigureNote")).toBeTruthy();
+  });
+
+  test("the CASH headline carries NO estimate badge and NO management-figure note", () => {
+    renderCockpit(cashDealFixture());
+
+    // The amount is still shown — this is not "the figure is withheld".
+    // `getAllByText`: 3,000 is also the supplier's outstanding claim on this
+    // fixture, and the point here is that the headline renders at all.
+    expect(screen.getAllByText(/3,000/).length).toBeGreaterThan(0);
+
+    // ...but nothing on the screen may describe it as an estimate or as a
+    // number that is never posted. It is a real accounting result.
+    expect(screen.queryByText("ProfitEstimatedAwaitingSettlement")).toBeNull();
+    expect(screen.queryByText("ProfitActualUnpostable")).toBeNull();
+    expect(screen.queryByText("ManagementFigureNote")).toBeNull();
+  });
+
+  test("a cash deal whose earnings were never recorded refuses rather than showing zero", () => {
+    const { container } = renderCockpit(
+      cashDealFixture({
+        money: {
+          ...cashDealFixture().money,
+          profit: { available: false, reason: "UnknownMargin" },
+        },
+      })
+    );
+    expect(screen.getByText("ProfitNotCalculable")).toBeTruthy();
+    expect(screen.getByText("ProfitUnknownMargin")).toBeTruthy();
+    // The specific damage this prevents: a formatted amount standing in for
+    // "nobody recorded what this deal earned". `.text-3xl` is the headline
+    // figure's own class, so this asserts no headline NUMBER was rendered —
+    // scoped deliberately, because a zero elsewhere on the screen (an expense
+    // total that really is nil) is honest and must not fail this test.
+    expect(container.querySelector(".text-3xl")).toBeNull();
+  });
+});
+
+describe("the cash rail is shorter, not greyed out", () => {
+  test("the finance-only stages are ABSENT from a cash deal, not rendered inactive", () => {
+    renderCockpit(cashDealFixture());
+    // Not merely "not COMPLETE" — not present at all. A permanently-grey stage
+    // teaches operators that grey means ignore, and this rail has to carry a
+    // real blocker.
+    expect(screen.queryByText("StageCreditDecision")).toBeNull();
+    expect(screen.queryByText("StageAppraisal")).toBeNull();
+    expect(screen.queryByText("StageGapResolution")).toBeNull();
+    expect(screen.queryByText("StageApprovedPurchase")).toBeNull();
+    // The stages it does have are there. `getAllByText` because the live stage
+    // is named twice by design — once on the rail, once in the next-step card.
+    expect(screen.getAllByText("StageSettlement").length).toBeGreaterThan(0);
+  });
+
+  test("a cash deal renders no document checklist at all rather than an empty one", () => {
+    renderCockpit(cashDealFixture());
+    // The rules are per finance company and their per-deal status lives on the
+    // application, so a cash deal has nothing to show and no way to acquire it.
+    // An empty card would invite a hunt for an upload control that does not exist.
+    expect(screen.queryByText("DocumentsHeading")).toBeNull();
+  });
+
+  test("a cash deal shows no finance-company line in the header", () => {
+    renderCockpit(cashDealFixture());
+    expect(screen.queryByText(/شركة التمويل الوطني/)).toBeNull();
   });
 });
 

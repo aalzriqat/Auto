@@ -51,6 +51,8 @@ import type { PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 type StageState = "COMPLETE" | "CURRENT" | "BLOCKED" | "PENDING" | "STOPPED";
 
 const STAGE_LABEL: Record<string, string> = {
+  /** CASH only — the cash rail's anchor stage. */
+  SALE_AGREED: "StageSaleAgreed",
   APPLICATION: "StageApplication",
   CREDIT_DECISION: "StageCreditDecision",
   APPRAISAL: "StageAppraisal",
@@ -82,6 +84,9 @@ const POSITION_LABEL: Record<string, string> = {
  * screen — visible the moment it was rendered, and invisible to every test.
  */
 const STATUS_LABEL: Record<string, string> = {
+  /** CASH only — `sales.status`, a different enum from the application's. */
+  PENDING: "SaleStatusPending",
+  COMPLETED: "SaleStatusCompleted",
   DRAFT: "Draft",
   PENDING_DOCS: "PendingDocs",
   UNDER_REVIEW: "UnderReview",
@@ -97,6 +102,10 @@ const PROFIT_LINE_LABEL: Record<string, string> = {
   SUPPLIER_SETTLEMENT: "LineSupplierSettlement",
   DEALER_CONTRIBUTION: "LineDealerContribution",
   ACTUAL_EXPENSES: "LineActualExpenses",
+  /** CASH only. A different derivation, so deliberately different keys. */
+  SALE_PRICE: "LineSalePrice",
+  VEHICLE_COST: "LineVehicleCost",
+  SUPPLIER_ENTITLEMENT: "LineSupplierEntitlement",
 };
 
 /**
@@ -111,7 +120,9 @@ const PROFIT_BLOCKED_REASON: Record<
   | "NoSupplierSettlement"
   | "NoDealerContribution"
   | "CorruptInput"
-  | "DealCancelled",
+  | "DealCancelled"
+  /** CASH only: `dealershipMargin === null`, which is UNKNOWN and never zero. */
+  | "UnknownMargin",
   string
 > = {
   NoApprovedPurchaseAmount: "ProfitNeedsApprovedPurchase",
@@ -119,6 +130,7 @@ const PROFIT_BLOCKED_REASON: Record<
   NoDealerContribution: "ProfitNeedsDealerContribution",
   CorruptInput: "ProfitInputCorrupt",
   DealCancelled: "ProfitDealCancelled",
+  UnknownMargin: "ProfitUnknownMargin",
 };
 
 /**
@@ -139,9 +151,21 @@ function Money({ children }: Readonly<{ children: React.ReactNode }>) {
   return <bdi className="tabular-nums">{children}</bdi>;
 }
 
-export type DealCockpitData = NonNullable<
-  (typeof api.applications.dealCockpit)["_returnType"]
->;
+/**
+ * One deal, whichever way it was paid for.
+ *
+ * A union of the two queries rather than a widened single type, because the two
+ * genuinely differ: a financed deal is keyed on an application that may not have
+ * a sale yet, and a cash deal is keyed on a sale that has no application at all.
+ * `dealKind` is the discriminant.
+ *
+ * Everything the SPINE renders — the stage rail, the parties, the vehicle,
+ * the timeline — is common to both and rendered by the same code below. The one
+ * thing that must not be shared is the headline: see `MoneyPanel`.
+ */
+export type DealCockpitData =
+  | NonNullable<(typeof api.applications.dealCockpit)["_returnType"]>
+  | NonNullable<(typeof api.sales.dealCockpit)["_returnType"]>;
 
 /**
  * The data half: one query, one mutation, no presentation.
@@ -216,6 +240,46 @@ export function DealCockpit({
 }
 
 /**
+ * The same screen, for a CASH deal.
+ *
+ * A second thin data wrapper, not a second screen: it renders the identical
+ * `DealCockpitView` and differs only in which query it calls and which actions
+ * exist. There is no settlement-advice correction here because there is no
+ * finance company to have issued one — the action is ABSENT rather than shown
+ * disabled, which is the same rule the rest of this screen follows.
+ *
+ * The supplier receipt action IS wired, and deliberately. A consigned CASH deal
+ * settled DIRECT_TO_SUPPLIER leaves the supplier holding the dealership's margin
+ * exactly as a financed one does, and `supplierReceivables.recordReceipt` is
+ * keyed on the claim rather than on any financing — so the collection workflow
+ * the previous release built works here unchanged.
+ */
+export function CashDealCockpit({
+  orgId,
+  saleId,
+}: Readonly<{ orgId: Id<"organizations">; saleId: Id<"sales"> }>) {
+  const deal = useQuery(api.sales.dealCockpit, { orgId, saleId });
+  const recordReceipt = useMutation(api.supplierReceivables.recordReceipt);
+
+  return (
+    <DealCockpitView
+      deal={deal}
+      onRecordSupplierReceipt={async (receivableId, receipt) => {
+        await recordReceipt({
+          orgId,
+          receivableId,
+          amount: receipt.amount,
+          receiptMethod: receipt.receiptMethod,
+          receiptReference: receipt.receiptReference,
+          receivedAt: receipt.receivedAt,
+          idempotencyKey: receipt.idempotencyKey,
+        });
+      }}
+    />
+  );
+}
+
+/**
  * The money summary card, extracted so `DealCockpitView` clears the cognitive
  * complexity gate. Presentation only: every figure and every classification
  * arrives already derived from `applications.dealCockpit`, and nothing here
@@ -224,34 +288,57 @@ export function DealCockpit({
  */
 function MoneyPanel({
   money,
-  managementProfit,
+  profit,
   t,
 }: Readonly<{
   money: (minor: number) => string;
-  managementProfit: NonNullable<DealCockpitData["money"]>["managementProfit"];
+  profit: NonNullable<DealCockpitData["money"]>["profit"];
   t: (key: string) => string;
 }>) {
+  // The ONE branch this screen is not allowed to get wrong.
+  //
+  // A financed deal's headline is a MANAGEMENT figure built on a spread that
+  // appears on no invoice: it is `postable: false` and must never be shown
+  // without its qualifier. A cash deal's is an ordinary accounting result that
+  // reconciles to the GL, and stamping an "estimated / never postable" badge on
+  // it would be just as false in the other direction.
+  //
+  // Read off `basis` rather than from the presence of a `classification` field,
+  // so the distinction is one the type system enforces: `AccountingProfit` has
+  // no `classification` to read, and TypeScript refuses the access outside this
+  // branch. That is what makes the two impossible to confuse rather than merely
+  // unlikely to be.
+  const isManagementEstimate = profit.available && profit.basis === "MANAGEMENT_ESTIMATE";
+
   return (
   <Card>
     <CardContent className="space-y-4 pt-6">
       <div className="space-y-1">
         <p className="text-sm text-muted-foreground">{t("NetDealershipProfit")}</p>
-        {managementProfit.available ? (
+        {profit.available ? (
           <>
             <div className="flex flex-wrap items-baseline gap-3">
               <p className="text-3xl font-semibold">
-                <Money>{money(managementProfit.amountMinor)}</Money>
+                <Money>{money(profit.amountMinor)}</Money>
               </p>
               {/* The qualifier is not decoration. It renders from
                   the same object as the amount, so there is no code
-                  path that shows one without the other. */}
-              <Badge variant="outline" className="border-amber-500/60 text-amber-700 dark:text-amber-400">
-                {managementProfit.classification === "ACTUAL_UNPOSTABLE"
-                  ? t("ProfitActualUnpostable")
-                  : t("ProfitEstimatedAwaitingSettlement")}
-              </Badge>
+                  path that shows one without the other.
+                  A cash deal gets NO badge here — not a green one
+                  saying "postable". The absence of a caveat is the
+                  normal case, and labelling it would train the eye to
+                  skip the badge that actually matters. */}
+              {profit.basis === "MANAGEMENT_ESTIMATE" && (
+                <Badge variant="outline" className="border-amber-500/60 text-amber-700 dark:text-amber-400">
+                  {profit.classification === "ACTUAL_UNPOSTABLE"
+                    ? t("ProfitActualUnpostable")
+                    : t("ProfitEstimatedAwaitingSettlement")}
+                </Badge>
+              )}
             </div>
-            <p className="text-xs text-muted-foreground">{t("ManagementFigureNote")}</p>
+            {isManagementEstimate && (
+              <p className="text-xs text-muted-foreground">{t("ManagementFigureNote")}</p>
+            )}
           </>
         ) : (
           <>
@@ -259,29 +346,34 @@ function MoneyPanel({
               {t("ProfitNotCalculable")}
             </p>
             <p className="text-xs text-muted-foreground">
-              {t(PROFIT_BLOCKED_REASON[managementProfit.reason])}
+              {t(PROFIT_BLOCKED_REASON[profit.reason])}
             </p>
           </>
         )}
       </div>
 
-      {managementProfit.available && (
+      {profit.available && (
         <>
           <Separator />
           <dl className="space-y-1.5 text-sm">
-            {managementProfit.lines
+            {profit.lines
               // A zero on an OPTIONAL line is noise, not information:
               // the customer-direct amount has no writer yet, so it
               // would read "0.000" on every deal forever, and the
               // dealer contribution is zero on any fully funded deal.
-              // The three lines the mockup always shows stay, so the
+              // The lines the mockup always shows stay, so the
               // derivation never looks like it is hiding a term.
+              // The cash lines are all always-shown: three terms, and
+              // a zero cost on an agent sale is a fact worth stating.
               .filter(
                 (line) =>
                   line.amountMinor !== 0 ||
                   line.key === "APPROVED_PURCHASE" ||
                   line.key === "SUPPLIER_SETTLEMENT" ||
-                  line.key === "ACTUAL_EXPENSES"
+                  line.key === "ACTUAL_EXPENSES" ||
+                  line.key === "SALE_PRICE" ||
+                  line.key === "VEHICLE_COST" ||
+                  line.key === "SUPPLIER_ENTITLEMENT"
               )
               .map((line) => (
               <div key={line.key} className="flex items-center justify-between gap-4">
@@ -508,7 +600,9 @@ export function DealCockpitView({
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">
-              {t("DealCockpitTitle")} <bdi className="text-muted-foreground">#{String(deal.applicationId).slice(-4)}</bdi>
+              {/* `dealRef` rather than the application id, because a cash deal
+                  has no application. Both queries supply it. */}
+              {t("DealCockpitTitle")} <bdi className="text-muted-foreground">#{String(deal.dealRef).slice(-4)}</bdi>
             </h1>
             <Badge variant={deal.status === "APPROVED" || deal.status === "CLOSED" ? "default" : "secondary"}>
               {t(STATUS_LABEL[deal.status] ?? deal.status)}
@@ -697,7 +791,7 @@ export function DealCockpitView({
 
               <MoneyPanel
                 money={money}
-                managementProfit={deal.money.managementProfit}
+                profit={deal.money.profit}
                 t={t}
               />
 
@@ -746,18 +840,31 @@ export function DealCockpitView({
                       </div>
                     </div>
                   ))}
-                  <p className="text-xs text-muted-foreground">
-                    {t("AppraisalGapLabel")}:{" "}
-                    {deal.money.appraisalGapMinor ? (
-                      <Money>{money(deal.money.appraisalGapMinor)}</Money>
-                    ) : (
-                      t("NoAppraisalGap")
-                    )}
-                  </p>
+                  {/* FINANCED only. `فرق تخمين` is the difference between the
+                      finance company's appraisal and the price — a cash deal has
+                      no appraisal, so "no appraisal gap" would not be reassuring,
+                      it would be answering a question nobody asked. */}
+                  {deal.dealKind === "FINANCED" && (
+                    <p className="text-xs text-muted-foreground">
+                      {t("AppraisalGapLabel")}:{" "}
+                      {deal.money.appraisalGapMinor ? (
+                        <Money>{money(deal.money.appraisalGapMinor)}</Money>
+                      ) : (
+                        t("NoAppraisalGap")
+                      )}
+                    </p>
+                  )}
                 </CardContent>
               </Card>
 
               {/* --- actual expenses -------------------------------------- */}
+              {/* ABSENT on a deal that has no fee records at all, rather than a
+                  card reading "expenses: 0" on every cash deal forever. A cash
+                  sale's costs are already inside the vehicle's capitalized cost
+                  and therefore already inside the margin above — listing them
+                  again here would show the owner a cost subtracted twice. */}
+              {(deal.money.expenses.lines.length > 0 ||
+                deal.money.expenses.actualTotalMinor !== 0) && (
               <Card>
                 <CardHeader className="pb-3">
                   <CardTitle className="text-base">{t("ActualExpensesHeading")}</CardTitle>
@@ -793,6 +900,7 @@ export function DealCockpitView({
                   )}
                 </CardContent>
               </Card>
+              )}
             </>
           )}
         </div>
@@ -826,6 +934,11 @@ export function DealCockpitView({
             </Card>
           )}
 
+          {/* ABSENT, not empty. A cash deal has no document checklist at all —
+              the rules are per finance company and their per-deal status lives
+              on the application — so an empty card would invite an operator to
+              look for an upload control that does not exist. */}
+          {deal.documents.length > 0 && (
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base">{t("DocumentsHeading")}</CardTitle>
@@ -848,6 +961,7 @@ export function DealCockpitView({
               ))}
             </CardContent>
           </Card>
+          )}
 
           <Card>
             <CardHeader className="pb-3">

@@ -657,6 +657,20 @@ export const salesEn = {
   LineSupplierSettlement: "Supplier settlement",
   LineDealerContribution: "Dealership contribution to financing",
   LineActualExpenses: "Actual expenses",
+  // --- Cash deal: the same screen, a different KIND of money ------------
+  // The cash headline is an ordinary accounting result and reconciles to the
+  // books, so it carries no "estimated / never posted" qualifier at all.
+  StageSaleAgreed: "Sale agreed",
+  // Named for the STATUS enum they render. `SaleCompleted` already exists as the
+  // completion toast ("Sale Completed ✓"), and reusing it would have put a
+  // celebratory tick inside a status timeline.
+  SaleStatusPending: "Pending",
+  SaleStatusCompleted: "Completed",
+  LineSalePrice: "Sale price",
+  LineVehicleCost: "Vehicle cost",
+  LineSupplierEntitlement: "Supplier's entitlement",
+  ProfitUnknownMargin:
+    "What this deal earned is not recorded, so it cannot be shown. It is not zero.",
   ActualExpensesHeading: "Actual expenses",
   ExpensesAwaitingActuals: "still without a recorded actual",
   NoExpensesRecorded: "No expenses recorded yet.",
@@ -1372,6 +1386,14 @@ export const salesAr = {
   LineSupplierSettlement: "تسوية المورد",
   LineDealerContribution: "مساهمة المعرض في التمويل",
   LineActualExpenses: "مصاريف فعلية",
+  // --- صفقة نقدية: نفس الشاشة، ونوع مختلف من الأرقام ---------------------
+  StageSaleAgreed: "اتفاق البيع",
+  SaleStatusPending: "قيد الإنجاز",
+  SaleStatusCompleted: "مكتملة",
+  LineSalePrice: "سعر البيع",
+  LineVehicleCost: "تكلفة المركبة",
+  LineSupplierEntitlement: "مستحق المورد",
+  ProfitUnknownMargin: "ربح هذه الصفقة غير مُسجَّل، لذا لا يمكن عرضه. وهو ليس صفراً.",
   ActualExpensesHeading: "المصاريف الفعلية",
   ExpensesAwaitingActuals: "بلا مبلغ فعلي مُسجَّل",
   NoExpensesRecorded: "لا توجد مصاريف مُسجَّلة بعد.",

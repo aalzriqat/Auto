@@ -1,5 +1,7 @@
 import { v } from "convex/values";
+import { Doc } from "../_generated/dataModel";
 import { grossTransactionValueForSale } from "./grossTransactionValue";
+import { fromMinorUnits } from "./money";
 
 /**
  * Who owns a vehicle, and what the dealership is when it sells one.
@@ -279,6 +281,50 @@ export interface SaleEconomics {
  * ones that read the cashflow ledger cannot drift apart. See
  * utils/grossTransactionValue.
  */
+/**
+ * The margin the SALE froze at completion, in major units, or `undefined`.
+ *
+ * Moved here from `reports.ts` for SCRUM-29, unchanged. The deal screen reads
+ * the same frozen figure the sales report reads, so an owner cannot open one
+ * deal and see a different profit from the one the report totalled — which is
+ * the entire reason `saleEconomics` takes a recorded margin at all.
+ *
+ * Every guard is deliberate. `sales` is editable through the super-admin
+ * raw-JSON editor, so a corrupt value arrives at the READER, not at the write
+ * path — `saleCompletion` already refuses a sourced sale below the supplier's
+ * entitlement. `NaN` is the one that does real damage: Convex accepts it under a
+ * `v.number()` validator, it is not `null` so it escapes every unknown-margin
+ * count, and one `total += NaN` renders an entire org's profit as `NaN`.
+ *
+ * Returning `undefined` hands the decision back to `saleEconomics`, which is
+ * where "what does an absent margin mean on THIS route" already lives.
+ */
+export function recordedConsignedMargin(sale: Doc<"sales">): number | undefined {
+  const minor = sale.consignedMarginMinor;
+  const currency = sale.consignedMarginCurrency;
+  if (minor === undefined || !currency) return undefined;
+  if (!Number.isFinite(minor) || minor < 0) return undefined;
+  return fromMinorUnits(minor, currency);
+}
+
+/**
+ * What the supplier was owed on this sale, frozen at completion, in major units.
+ *
+ * Same guards and the same currency as the margin beside it, and for the same
+ * reason: `sourceCost` stays editable after a consigned sale, so deriving the
+ * supplier's entitlement from the live vehicle reports a settlement figure the
+ * GL, the subledger and the claim never used. A sale frozen at a 3,000 margin
+ * against a 15,000 entitlement would show 3,000 beside a live 16,000 — two
+ * halves of one deal on two different bases.
+ */
+export function recordedSupplierEntitlement(sale: Doc<"sales">): number | undefined {
+  const minor = sale.consignedSupplierEntitlementMinor;
+  const currency = sale.consignedMarginCurrency;
+  if (minor === undefined || !currency) return undefined;
+  if (!Number.isFinite(minor) || minor < 0) return undefined;
+  return fromMinorUnits(minor, currency);
+}
+
 export function saleEconomics(args: {
   salePrice: number;
   /**

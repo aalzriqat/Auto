@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { Doc } from "../_generated/dataModel";
+import { toMinorSameCurrencyOrUndefined } from "./money";
 import {
   PERCENT_DECIMAL_PLACES,
   percentRoundsToZero,
@@ -687,9 +688,34 @@ export type DealStageKey =
   | "APPROVED_PURCHASE"
   | "DELIVERY_ACTIONS"
   | "HANDOVER"
-  | "SETTLEMENT";
+  | "SETTLEMENT"
+  /**
+   * CASH only. The moment a sale record exists at all — the cash equivalent of
+   * `APPLICATION`, and deliberately not the same key: "finance application
+   * submitted" is not a thing that happens on a cash deal, and reusing the key
+   * would have put a stage on the rail whose label lies about what it means.
+   */
+  | "SALE_AGREED";
 
-export const DEAL_STAGE_ORDER: DealStageKey[] = [
+/**
+ * The stages a FINANCED deal has — every key except the cash-only one.
+ *
+ * Written as an exclusion rather than a second hand-maintained list so the two
+ * cannot drift. It exists to keep `deriveDealStages` exhaustively checked: its
+ * `complete` map is a total `Record` over these keys, so adding a financed stage
+ * fails the build instead of silently inheriting whichever branch happened to be
+ * the fallback. Widening that map to a `Partial` to accommodate `SALE_AGREED`
+ * would have quietly discarded that guarantee.
+ */
+export type FinancedDealStageKey = Exclude<DealStageKey, "SALE_AGREED">;
+
+/** The three stages a CASH deal has, kept exhaustive for the same reason. */
+export type CashDealStageKey = Extract<
+  DealStageKey,
+  "SALE_AGREED" | "HANDOVER" | "SETTLEMENT"
+>;
+
+export const DEAL_STAGE_ORDER: FinancedDealStageKey[] = [
   "APPLICATION",
   "CREDIT_DECISION",
   "APPRAISAL",
@@ -783,7 +809,7 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
   // A gap of zero is not a gap, and `undefined` means none was ever recorded.
   const hasGap = (facts.rawAppraisalGapMinor ?? 0) !== 0;
 
-  const complete: Record<DealStageKey, boolean> = {
+  const complete: Record<FinancedDealStageKey, boolean> = {
     APPLICATION: credit !== "DRAFT",
     CREDIT_DECISION: credit === "APPROVED",
     // A legacy row records no appraisal dimension at all. An approved credit
@@ -808,7 +834,7 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
       (settlement === "FULLY_SETTLED" || settlement === "RECONCILED"),
   };
 
-  const blockers: Partial<Record<DealStageKey, DealStageBlocker>> = {
+  const blockers: Partial<Record<FinancedDealStageKey, DealStageBlocker>> = {
     CREDIT_DECISION: "AwaitingCreditDecision",
     APPRAISAL: "AwaitingAppraisal",
     GAP_RESOLUTION: gap === "FAILED" ? "GapNegotiationFailed" : "GapUnresolved",
@@ -821,6 +847,87 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
   const firstIncomplete = DEAL_STAGE_ORDER.find((key) => !complete[key]);
 
   return DEAL_STAGE_ORDER.map((key): DealStage => {
+    if (complete[key]) return { key, state: "COMPLETE" };
+    if (stopped) return { key, state: "STOPPED" };
+    if (key !== firstIncomplete) return { key, state: "PENDING" };
+    const blocker = blockers[key];
+    return blocker ? { key, state: "BLOCKED", blocker } : { key, state: "CURRENT" };
+  });
+}
+
+/**
+ * The stages a CASH deal actually has — three, not eight.
+ *
+ * Credit decision, appraisal, gap resolution and approved purchase are things a
+ * FINANCE COMPANY does. A cash deal does not skip them; it does not have them.
+ * That difference is why this is a different ORDER rather than the financed rail
+ * with stages greyed out: a permanently-inactive stage teaches operators that
+ * grey means "ignore", and this same rail has to carry a real blocker.
+ *
+ * `DELIVERY_ACTIONS` is absent for the same reason, and it is the one that took
+ * an argument to settle. The document checklist is driven by
+ * `companyDocumentRules` and its per-deal status lives in `applicationDocuments`,
+ * keyed by APPLICATION — a cash sale has no row there and no way to acquire one.
+ * Including the stage would have produced either a permanently blocked stage
+ * (status can never become VERIFIED) or a permanently complete one (no rule can
+ * ever be unsatisfied). Both are noise dressed as workflow, and the second is
+ * worse: a stage that is always green is a checklist item nobody checked.
+ */
+export const CASH_DEAL_STAGE_ORDER: CashDealStageKey[] = [
+  "SALE_AGREED",
+  "HANDOVER",
+  "SETTLEMENT",
+];
+
+export interface CashDealStageFacts {
+  /** `sales.status`. */
+  saleStatus: "PENDING" | "COMPLETED" | "CANCELLED";
+  /**
+   * Whether the money is finished — the supplier's claim or payable closed on a
+   * consigned sale, and trivially true on dealer-owned stock where there is no
+   * third party to settle with.
+   *
+   * `undefined` is NOT "settled". It means the caller could not establish the
+   * obligation, and the stage stays open rather than reporting a deal finished
+   * on the strength of a missing answer. Same UNKNOWN-never-zero rule the
+   * financed rail follows.
+   */
+  settlementComplete?: boolean;
+}
+
+/**
+ * The stage rail for one CASH deal.
+ *
+ * A sale row is the anchor: if the screen is rendering, the deal was agreed, so
+ * `SALE_AGREED` is complete by construction rather than by a field. The rest is
+ * read from evidence, and each stage is judged on its OWN evidence — the same
+ * rule `deriveDealStages` follows, so a sale delivered before anyone filled in
+ * the document checklist still shows the handover complete.
+ *
+ * A CANCELLED sale stops the rail rather than leaving it pending, for the same
+ * reason a rejected application does: the remaining stages will never happen,
+ * and rendering them as merely "pending" invites an operator to work a dead deal.
+ */
+export function deriveCashDealStages(facts: CashDealStageFacts): DealStage[] {
+  const stopped = facts.saleStatus === "CANCELLED";
+
+  const complete: Record<CashDealStageKey, boolean> = {
+    SALE_AGREED: true,
+    // A cash sale carries no handover dimension of its own — `sales` has no
+    // handover field — so COMPLETED is the delivery fact the data actually
+    // supports. Inventing a richer handover state here would be asserting
+    // something no row records.
+    HANDOVER: facts.saleStatus === "COMPLETED",
+    SETTLEMENT: facts.settlementComplete === true,
+  };
+
+  const blockers: Partial<Record<CashDealStageKey, DealStageBlocker>> = {
+    SETTLEMENT: "AwaitingSettlement",
+  };
+
+  const firstIncomplete = CASH_DEAL_STAGE_ORDER.find((key) => !complete[key]);
+
+  return CASH_DEAL_STAGE_ORDER.map((key): DealStage => {
     if (complete[key]) return { key, state: "COMPLETE" };
     if (stopped) return { key, state: "STOPPED" };
     if (key !== firstIncomplete) return { key, state: "PENDING" };
@@ -865,6 +972,65 @@ export function settlementIsComplete(obligations: SettlementObligations): boolea
 }
 
 /**
+ * What a subledger row says about its obligation, decided in integer minor units.
+ *
+ * Returns the state rather than a boolean because "not settled" and "cannot be
+ * read" are different answers, and a boolean forces them together. A predecessor
+ * returned `false` for an unreadable amount, so a claim with a corrupt
+ * `amountDue` rendered as `OWED_TO_DEALERSHIP` — the screen asserting a debt on
+ * the strength of a figure it had just failed to parse. Unreadable evidence is
+ * UNKNOWN in both directions: it is no more proof of a debt than of settlement.
+ *
+ * Moved here from `applications.ts` for SCRUM-29, unchanged, so the cash deal
+ * path reaches the same verdict about a supplier row as the financed one.
+ */
+export function obligationFromRow(args: {
+  due: number;
+  settled: number;
+  rowCurrency: string;
+  queryCurrency: string;
+  /** The row's own stored status, which is evidence but not the only evidence. */
+  storedPaid: boolean;
+}): ObligationState {
+  const dueMinor = toMinorSameCurrencyOrUndefined(args.due, args.rowCurrency, args.queryCurrency);
+  const settledMinor = toMinorSameCurrencyOrUndefined(
+    args.settled,
+    args.rowCurrency,
+    args.queryCurrency
+  );
+  if (dueMinor === undefined || settledMinor === undefined) return "UNKNOWN";
+  return args.storedPaid || dueMinor - settledMinor <= 0 ? "CLOSED" : "OPEN";
+}
+
+/**
+ * How a party row reads an obligation.
+ *
+ * One translation, used by every row on every deal screen, so a row can never
+ * disagree with the settlement stage about whether somebody still owes money.
+ * `openPosition` is the only per-row difference — which way an OPEN obligation
+ * points, since the dealership owes the supplier on one route and is owed by him
+ * on the other.
+ *
+ * NONE is "nothing outstanding", not "cannot tell": a zero-margin deal has no
+ * claim, and that absence is the correct answer rather than missing evidence.
+ */
+export function positionForObligation(
+  obligation: ObligationState,
+  openPosition: "DEALERSHIP_OWES" | "OWED_TO_DEALERSHIP"
+) {
+  switch (obligation) {
+    case "CLOSED":
+      return "SETTLED" as const;
+    case "NONE":
+      return "NOT_INVOLVED" as const;
+    case "OPEN":
+      return openPosition;
+    default:
+      return "UNKNOWN" as const;
+  }
+}
+
+/**
  * How settled the headline figure's inputs are.
  *
  * `ACTUAL_UNPOSTABLE` is deliberately not called "settled" or "final": even
@@ -897,6 +1063,17 @@ export type ManagementProfitLine =
 export type ManagementProfit =
   | {
       available: true;
+      /**
+       * Which KIND of number this is, carried in the payload rather than
+       * inferred by the reader from the presence of a classification.
+       *
+       * SCRUM-29 put a second, genuinely different profit on the same screen —
+       * a cash deal's margin, which IS an accounting result and DOES reconcile
+       * to the GL. The two must never be confused in either direction, so the
+       * distinction is a discriminant on the type instead of a convention: a
+       * renderer that forgets to branch on it does not compile.
+       */
+      basis: "MANAGEMENT_ESTIMATE";
       amountMinor: number;
       currency: string;
       classification: ManagementProfitClassification;
@@ -913,6 +1090,58 @@ export type ManagementProfit =
         | "CorruptInput"
         | "DealCancelled";
     };
+
+/**
+ * The lines behind a CASH deal's profit.
+ *
+ * Deliberately a different set from `ManagementProfitLine`. A cash deal has no
+ * approved purchase amount and no dealer contribution — those are things a
+ * finance company does — and reusing the financed line keys would have produced
+ * a derivation that renders plausibly and means nothing.
+ */
+export type AccountingProfitLine =
+  | { key: "SALE_PRICE"; sign: 1; amountMinor: number }
+  | { key: "VEHICLE_COST"; sign: -1; amountMinor: number }
+  | { key: "SUPPLIER_ENTITLEMENT"; sign: -1; amountMinor: number };
+
+/**
+ * A CASH deal's profit — an ordinary accounting result, and postable.
+ *
+ * The opposite of `ManagementProfit` in the one way that matters. This figure
+ * IS what the ledger recognizes: it is `saleEconomics().dealershipMargin`, the
+ * same number `reports.salesReport` totals into `totalProfit` and the same one
+ * the P&L is built from. It carries no `تقديري` qualifier because there is
+ * nothing estimated about it.
+ *
+ * `available: false` with `reason: "UnknownMargin"` is NOT a zero. It is the
+ * `dealershipMargin === null` case — a consigned sale whose frozen margin is
+ * missing — and the reports already refuse to guess at it, counting such rows
+ * separately so an owner is told the figure is incomplete rather than handed a
+ * confident wrong one. This screen refuses on the same evidence.
+ */
+export type AccountingProfit =
+  | {
+      available: true;
+      basis: "ACCOUNTING_RESULT";
+      amountMinor: number;
+      currency: string;
+      lines: AccountingProfitLine[];
+      /** It has a journal. That is the whole difference from the financed one. */
+      postable: true;
+    }
+  | {
+      available: false;
+      reason: "UnknownMargin" | "DealCancelled";
+    };
+
+/**
+ * What the deal screen's headline can be.
+ *
+ * A union rather than one widened type, so the two cannot be built from each
+ * other's parts. `basis` is the discriminant; `postable` follows from it and is
+ * never independently settable.
+ */
+export type DealProfit = ManagementProfit | AccountingProfit;
 
 /**
  * Returns `available: false` rather than a zero when an input is missing.
@@ -1029,6 +1258,7 @@ export function deriveManagementProfit(args: {
 
   return {
     available: true,
+    basis: "MANAGEMENT_ESTIMATE",
     // Summed from the same lines the screen renders, so the headline and its
     // derivation cannot disagree — the arithmetic happens once, here.
     amountMinor: lines.reduce((total, line) => total + line.sign * line.amountMinor, 0),
@@ -1036,5 +1266,67 @@ export function deriveManagementProfit(args: {
     classification: args.fullySettled ? "ACTUAL_UNPOSTABLE" : "ESTIMATED_AWAITING_SETTLEMENT",
     lines,
     postable: false,
+  };
+}
+
+/**
+ * A CASH deal's profit, from the figures the ledger was posted on.
+ *
+ * ⚠️ This function performs NO arithmetic of its own on the headline. The
+ * amount is `saleEconomics().dealershipMargin` exactly as computed there — the
+ * single definition the GL, the P&L, `reports.salesReport` and the commission
+ * engine already share. Re-deriving `salePrice − cost` here would have created a
+ * THIRD profit formula for one deal, which is the defect SCRUM-26 spent three
+ * review rounds removing from the financed side.
+ *
+ * The lines are presentational only: they explain the figure, they do not
+ * produce it. They are therefore NOT summed to reach `amountMinor`, unlike
+ * `deriveManagementProfit` where the lines genuinely are the derivation. On an
+ * agent sale `VEHICLE_COST` is zero — there is no cost of a car the dealership
+ * never bought — and the supplier's entitlement carries the subtraction instead.
+ */
+export function deriveAccountingProfit(args: {
+  /** A cancelled sale's journal was reversed; it has no profit to report. */
+  dealCancelled?: boolean;
+  /** `saleEconomics().dealershipMargin` — `null` means genuinely UNKNOWN. */
+  dealershipMarginMinor: number | null;
+  salePriceMinor: number;
+  /** Zero on an agent sale. */
+  recognizedCostMinor: number;
+  /** `saleEconomics().supplierSettlement` — `null` under the same UNKNOWN rule. */
+  supplierEntitlementMinor: number | null;
+  currency: string;
+}): AccountingProfit {
+  if (args.dealCancelled) return { available: false, reason: "DealCancelled" };
+  // Never coerced to zero. `reports.salesReport` counts these rows separately
+  // and excludes them from `totalProfit` precisely so an incomplete report is
+  // visible as incomplete; a screen that rendered 0 here would be the confident
+  // wrong answer that refusal exists to prevent.
+  if (args.dealershipMarginMinor === null) return { available: false, reason: "UnknownMargin" };
+
+  const lines: AccountingProfitLine[] = [
+    { key: "SALE_PRICE", sign: 1, amountMinor: args.salePriceMinor },
+    { key: "VEHICLE_COST", sign: -1, amountMinor: args.recognizedCostMinor },
+    // Withheld rather than shown as zero when unknown, for the same reason the
+    // headline is. An entitlement of nought and an entitlement nobody can state
+    // are different claims about what the supplier is owed.
+    ...(args.supplierEntitlementMinor !== null
+      ? [
+          {
+            key: "SUPPLIER_ENTITLEMENT" as const,
+            sign: -1 as const,
+            amountMinor: args.supplierEntitlementMinor,
+          },
+        ]
+      : []),
+  ];
+
+  return {
+    available: true,
+    basis: "ACCOUNTING_RESULT",
+    amountMinor: args.dealershipMarginMinor,
+    currency: args.currency,
+    lines,
+    postable: true,
   };
 }

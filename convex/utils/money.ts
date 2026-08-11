@@ -39,6 +39,56 @@ export function fromMinorUnits(amountMinor: number, currency: string): number {
   return amountMinor / factor;
 }
 
+/**
+ * A subledger row's major-unit amount in the query's currency, or `undefined`.
+ *
+ * `undefined` is the single way a bad amount leaves this function, and every
+ * caller must treat it as UNKNOWN rather than as zero. Three separate things
+ * produce it: a row denominated in another currency (a balance nobody here can
+ * state), a non-finite amount, and one that would overflow a safe integer.
+ *
+ * The overflow check is deliberately performed BEFORE delegating to
+ * `toMinorUnits`, which throws on an unsafe result — inspecting its return value
+ * would be too late to avoid the throw, and one corrupt row must not blank a
+ * whole screen. `NaN` is the case that does real damage: Convex accepts it under
+ * a `v.number()` validator, so it arrives from the raw-JSON editor looking valid.
+ *
+ * Extracted from `applications.ts` for SCRUM-29 so the cash deal path resolves
+ * party balances through the same conversion the financed path already used.
+ * Two implementations of "what does this row owe" is precisely how one screen
+ * comes to contradict another about the same deal.
+ */
+export function toMinorSameCurrencyOrUndefined(
+  amount: number,
+  rowCurrency: string,
+  queryCurrency: string
+): number | undefined {
+  if (rowCurrency !== queryCurrency) return undefined;
+  if (!Number.isFinite(amount)) return undefined;
+  const candidate = Math.round(amount * Math.pow(10, scaleForCurrency(rowCurrency)));
+  if (!Number.isSafeInteger(candidate)) return undefined;
+  return toMinorUnits(amount, rowCurrency);
+}
+
+/**
+ * What is LEFT on a subledger row, in minor units — never what it started at.
+ *
+ * Floored at zero: an overpayment is not a negative debt on a party row.
+ * `undefined` propagates from either side under the rule above, because a
+ * difference computed against an unknown is not a smaller difference, it is not
+ * a difference.
+ */
+export function outstandingMinorFromMajor(
+  dueMajor: number,
+  settledMajor: number,
+  rowCurrency: string,
+  currency: string
+): number | undefined {
+  const due = toMinorSameCurrencyOrUndefined(dueMajor, rowCurrency, currency);
+  const settled = toMinorSameCurrencyOrUndefined(settledMajor, rowCurrency, currency);
+  return due === undefined || settled === undefined ? undefined : Math.max(0, due - settled);
+}
+
 export function addMinor(a: number, b: number): number {
   const result = a + b;
   if (!Number.isSafeInteger(result)) {

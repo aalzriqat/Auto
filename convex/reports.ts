@@ -18,57 +18,24 @@ import {
   queuedEntryCountsInRange,
   type RecognitionState,
 } from "./utils/prepaidRecognitionEvents";
-import { saleEconomics } from "./utils/vehicleOwnership";
+import {
+  saleEconomics,
+  recordedConsignedMargin,
+  recordedSupplierEntitlement,
+} from "./utils/vehicleOwnership";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { fromMinorUnits } from "./utils/money";
 
-/**
- * The margin a consigned sale FROZE at completion, or `undefined` when the row
- * does not carry one this reader is willing to believe.
- *
- * Deliberately the same discipline as `applications.saleTimeMarginMinor`, which
- * guards the identical field for the cockpit and states the reason: the write
- * path cannot produce a non-finite or negative margin — `saleCompletion`
- * refuses a sourced sale below the supplier's entitlement — which is exactly
- * why the READER rejects one. `sales` is editable through the super-admin
- * raw-JSON editor, so a corrupt value arrives here, not there.
- *
- * `NaN` is the one that does real damage. Convex accepts it under a
- * `v.number()` validator, it is not `null` so it is never counted among the
- * unknown-margin rows, and one `total += NaN` renders the whole org's profit as
- * `NaN` for every other sale in the range.
- *
- * Returning `undefined` hands the decision back to `saleEconomics`, which is
- * where "what does an absent margin mean on THIS route" already lives: UNKNOWN
- * on a financed direct deal whose evidence is required, and the sale-price
- * spread where that genuinely is the answer.
+/*
+ * `recordedConsignedMargin` and `recordedSupplierEntitlement` moved to
+ * `utils/vehicleOwnership.ts` for SCRUM-29, unchanged, and are imported above.
+ * The deal screen reads the same frozen figures this report reads, so opening a
+ * deal cannot show a different profit from the one the report totalled. Their
+ * full reasoning — the raw-JSON-editor threat model, why the READER guards a
+ * value the write path cannot produce, and why `NaN` is the dangerous case —
+ * travelled with them.
  */
-function recordedConsignedMargin(sale: Doc<"sales">): number | undefined {
-  const minor = sale.consignedMarginMinor;
-  const currency = sale.consignedMarginCurrency;
-  if (minor === undefined || !currency) return undefined;
-  if (!Number.isFinite(minor) || minor < 0) return undefined;
-  return fromMinorUnits(minor, currency);
-}
-
-/**
- * What the supplier was owed on this sale, frozen at completion.
- *
- * Same guards and the same currency as the margin beside it, and for the same
- * reason: `sourceCost` stays editable after a consigned sale, so deriving the
- * supplier's entitlement from the live vehicle reported a settlement figure the
- * GL, the subledger and the claim never used. A sale frozen at a 3,000 margin
- * against a 15,000 entitlement would show 3,000 beside a live 16,000 — two
- * halves of one deal on two different bases.
- */
-function recordedSupplierEntitlement(sale: Doc<"sales">): number | undefined {
-  const minor = sale.consignedSupplierEntitlementMinor;
-  const currency = sale.consignedMarginCurrency;
-  if (minor === undefined || !currency) return undefined;
-  if (!Number.isFinite(minor) || minor < 0) return undefined;
-  return fromMinorUnits(minor, currency);
-}
 
 /** Longest span an interactive report may request. */
 const MAX_REPORT_RANGE_MS = 366 * 24 * 60 * 60 * 1000;
