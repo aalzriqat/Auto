@@ -2321,15 +2321,22 @@ export const dealCockpit = query({
      * corruption to be sorted away — it is the true statement that the sale
      * happened before it was entered.
      *
-     * There is also no CANCELLED entry. A real cancellation moment IS captured
-     * in the system — `sales.update` stamps one onto the reversal records it
-     * writes — but it is never persisted onto the sale row this query reads,
-     * and a cancelled PENDING sale has no reversal records at all, so for that
-     * case no moment exists anywhere. Emitting an entry would therefore mean
-     * inventing a time for some deals and guessing for others. Surfacing it
-     * honestly needs a persisted `cancelledAt` on `sales`, which is a schema
-     * change and a tracked follow-up. Until then the cancellation is stated by
-     * the status badge and by the headline's `DealCancelled` refusal.
+     * There is also no CANCELLED entry, and the reason is narrower than "no
+     * such timestamp exists".
+     *
+     * One IS computed: `sales.update` derives `cancellationDate` and
+     * `saleCancellation.ts` writes it as `cancelledAt` onto the receivable and
+     * payable rows it closes. But it is never persisted onto the `sales` row
+     * this query reads; it only exists at all for a CONSIGNED deal with a live
+     * supplier leg; and the obligation lookups above deliberately skip
+     * `status === "CANCELLED"` rows, so it is unreachable from here regardless.
+     *
+     * The one field within reach is `saleDate`, and labelling a "Cancelled"
+     * event with the ORIGINAL sale date would state something false. So the
+     * entry is omitted rather than guessed. Surfacing it honestly needs a
+     * persisted `cancelledAt` on `sales` — a schema change, tracked separately.
+     * Until then the cancellation is stated by the status badge and by the
+     * headline's `DealCancelled` refusal.
      */
 
     /**
