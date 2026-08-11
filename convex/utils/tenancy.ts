@@ -496,7 +496,28 @@ export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
       ? app.approvedDealerPurchaseAmountMinor
       : undefined,
 
-    // Tier 3 — WHETHER, not how much. Deliberately ungated.
+    // Tier 3 — WHETHER, not how much, and not WHEN or BY WHOM.
+    //
+    // Round 11 ungated all three of these together. That was right about the
+    // status and wrong about its two siblings, and it took an external reviewer
+    // four rounds to make the distinction stick: the dead-end below is caused by
+    // hiding *whether* the supplier was paid, and `supplierDisbursementStatus`
+    // answers that on its own — it is written only when an advice is recorded,
+    // so its mere presence is the signal. The exact payment timestamp and the
+    // identity of the person who recorded it answer no question a sales caller
+    // has. They are settlement-evidence metadata that happened to be sitting
+    // next to a deliberately public field.
+    //
+    // Gated at `canWorkDisbursement` rather than `VIEW_FINANCE` because the
+    // confirmation screen prefills from them and its role holds
+    // CONFIRM_FINANCE_DISBURSEMENT without VIEW_FINANCE — blanking them there
+    // would reopen round 9's MANAGER trap.
+    supplierDisbursementConfirmedAt: canWorkDisbursement
+      ? app.supplierDisbursementConfirmedAt
+      : undefined,
+    supplierDisbursementConfirmedBy: canWorkDisbursement
+      ? app.supplierDisbursementConfirmedBy
+      : undefined,
     //
     // These carry no monetary quantity, and withholding them was actively
     // harmful: `settlesDirectToSupplier` stays visible, so a role without them
@@ -508,13 +529,12 @@ export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
     // not a recovery path. Two doors were giving one fact opposite answers, and
     // the cancellation refusal discloses it in its message regardless.
     //
-    // Gating them also bought nothing it did not cost: the reconstruction risk
-    // was never the timestamp, it was `CONFIRMED` beside a visible approved
-    // amount — and, as the tier-2 note above records, that amount is derivable
-    // by this caller regardless. Gating the timestamp would have restored the
-    // workflow dead-end while leaving the reconstruction it was meant to stop.
-    supplierDisbursementConfirmedAt: app.supplierDisbursementConfirmedAt,
-    supplierDisbursementConfirmedBy: app.supplierDisbursementConfirmedBy,
+    // The status alone carries that, and it is written only when an advice is
+    // recorded, so its presence answers "has the supplier been paid" without
+    // disclosing anything about the payment. The two consumers that used to
+    // branch on the timestamp — the status label and the paid badge in
+    // `ApplicationDetailsDialog` — now read this field, so the dead-end stays
+    // closed while the evidence beside it is gated.
     supplierDisbursementStatus: app.supplierDisbursementStatus,
   };
 }

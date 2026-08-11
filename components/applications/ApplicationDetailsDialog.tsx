@@ -343,7 +343,11 @@ export function ApplicationDetailsDialog({
     // `totalFinancedAmount > 0`, which the server never reads here. The
     // dealership button keeps that flag, because it does compare against it.
     app.canSettleDirectToSupplier &&
-    !app.supplierDisbursementConfirmedAt;
+    // Also the status rather than the timestamp. This caller does hold
+    // CONFIRM_FINANCE_DISBURSEMENT and can therefore see both, but keeping the
+    // button's condition off gated fields means it cannot silently change
+    // meaning if that gate is ever tightened again.
+    !app.supplierDisbursementStatus;
 
   const handleConfirmDisbursement = async () => {
     if (!activeOrgId || !expectedDisbursementMinor) return;
@@ -417,7 +421,13 @@ export function ApplicationDetailsDialog({
   const supplierLabel = supplierName ?? t("TheSupplier" as any);
   const disbursementStatusLabel = (() => {
     if (settlesDirectToSupplier) {
-      const key = app.supplierDisbursementConfirmedAt
+      // The STATUS, not the timestamp. Both answer "has he been paid", but the
+      // timestamp is gated to finance-facing roles, so branching on it here
+      // would tell a sales user "awaiting supplier disbursement" forever on a
+      // deal the financier had already settled — the exact dead-end this label
+      // exists to avoid. The status is written only when an advice is recorded,
+      // so its presence is the same signal without the evidence.
+      const key = app.supplierDisbursementStatus
         ? "SupplierPaidByFinanceCompany"
         : "AwaitingSupplierDisbursement";
       return t(key as any).replace("{supplier}", supplierLabel);
@@ -789,7 +799,9 @@ export function ApplicationDetailsDialog({
                     dealership money, and posts no journal. Collapsing the two
                     would make "confirm the disbursement" mean two different
                     things depending on a field further up the screen. */}
-                {settlesDirectToSupplier && app.status === "CLOSED" && app.supplierDisbursementConfirmedAt && (
+                {/* Same reason as the label above: the status is visible to
+                    every role, the timestamp is not. */}
+                {settlesDirectToSupplier && app.status === "CLOSED" && app.supplierDisbursementStatus && (
                   <Badge variant="outline" className="justify-center py-2">
                     {t("SupplierPaidByFinanceCompany" as any).replace("{supplier}", supplierLabel)}
                   </Badge>

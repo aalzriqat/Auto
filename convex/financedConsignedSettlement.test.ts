@@ -4444,13 +4444,19 @@ describe("a settlement advice that contradicts the approval", () => {
     ]) {
       expect(view[field]).toBeUndefined();
     }
-    // Deliberately still visible, and it carries no amount. Hiding WHETHER a
-    // disbursement happened left this role reading "awaiting supplier
-    // disbursement" on a deal the financier had already settled — permanently,
-    // and contradicting `dealCockpit`, which tells the same caller the advice
-    // needs reconciling.
-    expect(view.supplierDisbursementConfirmedAt).toBeDefined();
+    // The STATUS is deliberately still visible, and it carries no amount.
+    // Hiding WHETHER a disbursement happened left this role reading "awaiting
+    // supplier disbursement" on a deal the financier had already settled —
+    // permanently, and contradicting `dealCockpit`, which tells the same caller
+    // the advice needs reconciling.
     expect(view.supplierDisbursementStatus).toBe("REQUIRES_RECONCILIATION");
+    // Its two former companions are NOT. This assertion used to require the
+    // opposite: round 11 ungated all three together, and an external reviewer
+    // spent four rounds pointing out that the workflow argument covers the
+    // status only. The timestamp and the recorder answer no question this
+    // caller has.
+    expect(view.supplierDisbursementConfirmedAt).toBeUndefined();
+    expect(view.supplierDisbursementConfirmedBy).toBeUndefined();
     // Nothing anywhere in the payload carries the figures either.
     const serialized = JSON.stringify(view);
     expect(serialized).not.toContain("WIRE-4471");
@@ -4859,6 +4865,97 @@ describe("a settlement advice that contradicts the approval", () => {
 
     // 2. And the approval notes record it as free text.
     expect(String(row.approvedPurchaseNotes)).toContain(String(APPROVED));
+  });
+
+  /**
+   * WHETHER, without WHEN or WHO.
+   *
+   * Round 11 ungated all three tier-3 fields together, on the reasoning that
+   * hiding "whether the supplier was paid" created a workflow dead-end: a
+   * settled deal read "awaiting supplier disbursement" forever. That reasoning
+   * was right about the STATUS and wrong about the other two. The dead-end is
+   * solved by `supplierDisbursementStatus` alone — its presence is the whole
+   * signal, since it is written only when an advice is recorded. The exact
+   * payment timestamp and the identity of the person who recorded it answer no
+   * workflow question a sales caller has; they are settlement-evidence
+   * metadata, and they sat beside a deliberately public field for four rounds.
+   *
+   * The two consumers that branched on the timestamp — the status label and the
+   * paid badge — now read the status, so the dead-end stays closed with the
+   * metadata gated.
+   */
+  test("a sales-only caller learns THAT the supplier was paid, not when or by whom", async () => {
+    const { s, applicationId } = await paidDeal("s30WhetherOnly", 18_000);
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 18_000 * SCALE,
+      reference: "WIRE-4471",
+    });
+
+    await s.t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === s.orgId)!;
+      await ctx.db.patch(role._id, {
+        permissions: ["view:sales", "view:finance_applications"],
+        isSystemOwnerRole: false,
+      });
+    });
+
+    const detail = (await s.asUser.query(api.applications.get, {
+      orgId: s.orgId,
+      applicationId,
+    })) as unknown as Record<string, unknown>;
+    expect(detail).toBeTruthy();
+
+    // THE WORKFLOW HALF — truthful, and the reason the dead-end stays closed.
+    // Without this the screen would say "awaiting supplier disbursement" on a
+    // deal the financier has already settled, with no state that ever clears.
+    expect(detail.supplierDisbursementStatus).toBe("CONFIRMED");
+
+    // THE EVIDENCE HALF — absent. Checked as keys, because Convex drops
+    // undefined-valued keys on the wire, so a gated field is gone rather than
+    // present and blank.
+    for (const field of [
+      "supplierDisbursementConfirmedAt",
+      "supplierDisbursementConfirmedBy",
+      "supplierDisbursementReference",
+      "supplierDisbursedAmountMinor",
+      "supplierDisbursementApprovedAtRecordingMinor",
+    ]) {
+      expect(`${field}: ${Object.hasOwn(detail, field)}`).toBe(`${field}: false`);
+    }
+  });
+
+  test("and a caller who may work the disbursement still gets the timestamp and recorder", async () => {
+    const { s, applicationId } = await paidDeal("s30WhetherAllowed", 18_000);
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: 18_000 * SCALE,
+      reference: "WIRE-4471",
+    });
+
+    await s.t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === s.orgId)!;
+      await ctx.db.patch(role._id, {
+        // No `view:finance` — this is the confirmation-screen role, which
+        // prefills from these fields and would otherwise re-open round 9's
+        // MANAGER dead-end.
+        permissions: ["view:sales", "view:finance_applications", "confirm:finance_disbursement"],
+        isSystemOwnerRole: false,
+      });
+    });
+
+    const detail = (await s.asUser.query(api.applications.get, {
+      orgId: s.orgId,
+      applicationId,
+    })) as unknown as Record<string, unknown>;
+    expect(detail.supplierDisbursementStatus).toBe("CONFIRMED");
+    expect(detail.supplierDisbursementConfirmedAt).toBeDefined();
+    expect(detail.supplierDisbursementConfirmedBy).toBeDefined();
+    // ...but still not the money or the cheque number.
+    expect(detail.supplierDisbursementReference).toBeUndefined();
+    expect(detail.supplierDisbursedAmountMinor).toBeUndefined();
   });
 
   test("and the same query gives a finance-permitted caller the evidence in full", async () => {
