@@ -4595,6 +4595,128 @@ describe("a settlement advice that contradicts the approval", () => {
     }
   });
 
+  /**
+   * THE STRUCTURAL TEST — the one meant to end the door-by-door pattern.
+   *
+   * Six doors were found one at a time, each by a different reviewer pointing
+   * at the next, because every test above pins ONE query's shape. This pins the
+   * property instead: no exported query in the two application-facing modules
+   * may hand settlement evidence to a caller holding only `view:sales` and
+   * `view:finance_applications` — the default SALES template.
+   *
+   * It serializes the WHOLE response rather than one field of it. Both of the
+   * last two doors hid inside nested arrays — `getEconomics.overrides`, where
+   * the approval writer records the exact amount as a formatted string, and the
+   * reconciliation queue's `page` — and the third-door test above could not see
+   * either, because it serialized `economics.application` alone. A test scoped
+   * to the field you already thought of cannot find the door you did not.
+   *
+   * The approved amount is deliberately an odd figure. A round 18,000 collides
+   * with the quotation and the vehicle price, so a leak would be indistinguishable
+   * from a legitimate figure and the assertion would be worthless.
+   */
+  test("no exported query hands settlement evidence to a sales-only caller", async () => {
+    // Two approvals, not one. `recordOverride` fires only when an approval
+    // MATERIALLY CHANGES, so a singly-approved deal has an empty override
+    // history — and this test would then pass for the overrides door while
+    // proving nothing about it. The anti-vacuity guard below caught exactly
+    // that on the first run of this test.
+    const FIRST_APPROVED = 18_437;
+    const SECOND_APPROVED = 18_902;
+    const DISBURSED = 17_995;
+
+    const s = await seedDealership("s30AllDoors");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
+    });
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: false });
+    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId,
+      applicationId,
+      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+      source: "MANUAL_ENTRY",
+    });
+    for (const amount of [FIRST_APPROVED, SECOND_APPROVED]) {
+      await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: s.orgId,
+        applicationId,
+        approvedAmountMinor: amount * SCALE,
+        basis: "MANUAL",
+        notes: `Approved at ${amount}.`,
+      });
+    }
+    await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: DISBURSED * SCALE,
+      reference: "WIRE-4471",
+    });
+
+    await s.t.run(async (ctx) => {
+      // The queue returns flagged deals only, and an unflagged deal would make
+      // this assertion vacuous for exactly the door it is here to cover.
+      await ctx.db.patch(applicationId as never, {
+        needsFinancingReconciliation: true,
+        financingReconciliationReason: "Flagged so the queue actually returns this deal.",
+      } as never);
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === s.orgId)!;
+      await ctx.db.patch(role._id, {
+        permissions: ["view:sales", "view:finance_applications"],
+        isSystemOwnerRole: false,
+      });
+    });
+
+    const paginationOpts = { numItems: 20, cursor: null };
+    const listed = (await s.asUser.query(api.applications.list, {
+      orgId: s.orgId,
+      paginationOpts,
+    })) as unknown as { page: unknown[] };
+    const detail = await s.asUser.query(api.applications.get, { orgId: s.orgId, applicationId });
+    const cockpitView = await cockpit(s, applicationId);
+    const log = await s.asUser.query(api.applications.getLog, { orgId: s.orgId, applicationId });
+    const economics = (await s.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: s.orgId,
+      applicationId,
+    })) as unknown as { application: unknown; overrides: unknown[] };
+    const queue = (await s.asUser.query(api.financingEconomics.listNeedingReconciliation, {
+      orgId: s.orgId,
+      paginationOpts,
+    })) as unknown as { page: unknown[] };
+    const quotation = await s.asUser.query(
+      api.financingEconomics.suggestQuotationForApplication,
+      { orgId: s.orgId, applicationId }
+    );
+
+    // ANTI-VACUITY. Every door must have actually returned this deal. An empty
+    // page or a null document contains no evidence for the trivial reason, and
+    // would let this test pass while proving nothing at all.
+    expect(listed.page.length).toBeGreaterThan(0);
+    expect(detail).toBeTruthy();
+    expect(cockpitView).toBeTruthy();
+    expect(economics.application).toBeTruthy();
+    expect(economics.overrides.length).toBeGreaterThan(0);
+    expect(queue.page.length).toBeGreaterThan(0);
+
+    const doors: Array<[string, unknown]> = [
+      ["applications.list", listed],
+      ["applications.get", detail],
+      ["applications.dealCockpit", cockpitView],
+      ["applications.getLog", log],
+      ["financingEconomics.getEconomics", economics],
+      ["financingEconomics.listNeedingReconciliation", queue],
+      ["financingEconomics.suggestQuotationForApplication", quotation],
+    ];
+
+    for (const [name, response] of doors) {
+      // Prefixed with the query name so a failure names the door rather than
+      // making the next reader diff two anonymous JSON blobs.
+      const serialized = `${name} → ${JSON.stringify(response ?? null)}`;
+      expect(serialized).not.toContain("WIRE-4471");
+      expect(serialized).not.toContain(String(DISBURSED * SCALE));
+    }
+  });
+
   test("and the same query gives a finance-permitted caller the evidence in full", async () => {
     const { s, applicationId } = await paidDeal("s30GetGateAllowed", 18_000);
     await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {

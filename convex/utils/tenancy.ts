@@ -463,6 +463,30 @@ export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
     // Tier 2 — the one figure the confirmation SCREEN needs to prefill. Without
     // it the amount field opens blank and gets typed from memory, and a typo
     // locks the deal in a state only MANAGE_FINANCE can repair.
+    //
+    // ⚠️ THIS IS A DISPLAY GATE, NOT A CONFIDENTIALITY BOUNDARY. Do not build
+    // anything on the assumption that a caller without the permission cannot
+    // learn this number. Measured at 6f63c35a, a `view:sales` caller recovers
+    // it from `applications.list` alone, three independent ways:
+    //
+    //   • `financeCompanyFundedPortionMinor ÷ (appliedLtvPercent / 100)` —
+    //     both fields are in the same row, and at 100% LTV they are equal;
+    //   • `approvedPurchaseNotes`, free text that in practice records it
+    //     ("Approved at 18902.");
+    //   • `financingEconomics.getEconomics().overrides[]`, where
+    //     `recordOverride` stringifies the amount into previousValue/newValue.
+    //
+    // Closing any one of those does not create the boundary, which is why they
+    // were NOT patched here — a partial fix would leave the same false
+    // assurance behind a longer comment. Tier 1 below IS a real boundary and is
+    // pinned across every exported query by the structural test in
+    // convex/financedConsignedSettlement.test.ts. Establishing a genuine tier-2
+    // boundary means reworking the economics projection as a whole; tracked
+    // separately rather than improvised inside this release.
+    //
+    // Note the direction of travel is still correct: `origin/main` returned
+    // this field outright from `getEconomics` and `applications.get`, so this
+    // release strictly reduces exposure. It just does not eliminate it.
     approvedDealerPurchaseAmountMinor: canWorkDisbursement
       ? app.approvedDealerPurchaseAmountMinor
       : undefined,
@@ -481,7 +505,9 @@ export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
     //
     // Gating them also bought nothing it did not cost: the reconstruction risk
     // was never the timestamp, it was `CONFIRMED` beside a visible approved
-    // amount — which tier 2 already governs.
+    // amount — and, as the tier-2 note above records, that amount is derivable
+    // by this caller regardless. Gating the timestamp would have restored the
+    // workflow dead-end while leaving the reconstruction it was meant to stop.
     supplierDisbursementConfirmedAt: app.supplierDisbursementConfirmedAt,
     supplierDisbursementConfirmedBy: app.supplierDisbursementConfirmedBy,
     supplierDisbursementStatus: app.supplierDisbursementStatus,
