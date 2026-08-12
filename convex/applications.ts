@@ -130,9 +130,30 @@ async function getActiveReceivableAllocations(
  */
 function assertDealerEconomicsRecorded(
   app: Doc<"financeApplications">,
-  action: "handing over the vehicle" | "finalizing"
+  action: "handing over the vehicle" | "finalizing",
+  quoteMode: QuoteMode | undefined
 ): void {
-  if (app.submittedQuotationMinor === undefined) return;
+  // A CONFIGURED deal is the one shape where the financier's economics are
+  // always knowable: a configured company approves a purchase amount, and that
+  // amount is what the dealership's profit is measured from. Letting one through
+  // without it produced a deal that is CLOSED — which is terminal, see
+  // VALID_STATUS_TRANSITIONS — with no way to ever record the amount afterwards:
+  // `recordSubmittedQuotation`, `approveDealerPurchaseAmount` and
+  // `reopenApproval` all refuse a closed application. The dealership's profit on
+  // that deal is then permanently uncomputable and the deal cockpit asks the
+  // operator for a figure nothing will accept.
+  //
+  // Deliberately NOT extended to the other modes. MANUAL_FINANCE_COMPANY, LEASE
+  // and INTERNAL_INSTALLMENT may not produce this artefact at all, and demanding
+  // it there would invent a business rule and dead-end those deals instead —
+  // the same defect wearing different clothes.
+  const financierEconomicsAreKnowable = quoteMode === "CONFIGURED_FINANCE_COMPANY";
+  if (app.submittedQuotationMinor === undefined) {
+    if (!financierEconomicsAreKnowable) return;
+    throw new ConvexError(
+      `The finance company's submitted quotation is not recorded on this deal. Record it before ${action}.`
+    );
+  }
   if (app.approvedDealerPurchaseAmountMinor === undefined) {
     throw new ConvexError(
       `The finance company's approved purchase amount is not recorded on this deal. Record it before ${action}.`
@@ -229,15 +250,20 @@ async function closedDealSettlesDirectToSupplier(
  * and is refused the direct route, rather than being attributed to whoever the
  * quote happens to name today.
  */
+async function resolveQuoteMode(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">
+): Promise<QuoteMode | undefined> {
+  if (app.quoteModeAtSubmission !== undefined) return app.quoteModeAtSubmission;
+  const quote = await ctx.db.get(app.quoteId);
+  return quote && quote.orgId === app.orgId ? quote.mode : undefined;
+}
+
 async function settlementPayerForApplication(
   ctx: QueryCtx | MutationCtx,
   app: Doc<"financeApplications">
 ): Promise<SettlementPayer> {
-  let quoteMode = app.quoteModeAtSubmission;
-  if (quoteMode === undefined) {
-    const quote = await ctx.db.get(app.quoteId);
-    if (quote && quote.orgId === app.orgId) quoteMode = quote.mode;
-  }
+  const quoteMode = await resolveQuoteMode(ctx, app);
   return settlementPayer({
     quoteMode,
     financeCompanyId: app.companyId,
@@ -2291,7 +2317,7 @@ export const registerVehicleHandover = mutation({
     if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
     if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before registering handover.");
     if (app.vehicleHandoverAt) throw new ConvexError("Vehicle handover has already been registered.");
-    assertDealerEconomicsRecorded(app, "handing over the vehicle");
+    assertDealerEconomicsRecorded(app, "handing over the vehicle", await resolveQuoteMode(ctx, app));
 
     const now = Date.now();
     await ctx.db.patch(args.applicationId, {
@@ -2562,7 +2588,7 @@ export const finalizeDeal = mutation({
         // Same guard as registerVehicleHandover: an approval cleared by a
         // reappraisal leaves status APPROVED, so this is the only thing
         // stopping a sale being completed on economics nothing supports.
-        assertDealerEconomicsRecorded(app, "finalizing");
+        assertDealerEconomicsRecorded(app, "finalizing", await resolveQuoteMode(ctx, app));
 
         // On a consigned car financed by an external company, the route decides
         // opposite balance sheets from the same sale — a payable to the supplier
