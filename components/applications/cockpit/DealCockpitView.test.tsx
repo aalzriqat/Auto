@@ -375,6 +375,30 @@ describe("the cash rail is shorter, not greyed out", () => {
     expect(screen.getByText("NoExpensesRecorded")).toBeTruthy();
   });
 
+  /**
+   * The server may emit a transition whose moment is unknown — `changedAt` is
+   * optional precisely so a status is never withheld for want of a timestamp.
+   *
+   * The view must render that entry rather than throw. date-fns `format` raises
+   * `RangeError: Invalid time value` on a non-finite input, and an uncaught
+   * throw during render loses the WHOLE screen, not one row.
+   */
+  test("a transition with no recorded moment still renders its status", () => {
+    renderCockpit(
+      cashDealFixture({
+        timeline: [
+          { toStatus: "PENDING", changedAt: Date.UTC(2026, 6, 28), actorName: "ليث العمري" },
+          { toStatus: "COMPLETED", actorName: "ليث العمري" },
+        ],
+      })
+    );
+    // Both transitions are stated...
+    expect(screen.getAllByText("SaleStatusPending").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("SaleStatusCompleted").length).toBeGreaterThan(0);
+    // ...and the missing moment leaves no orphaned separator behind it.
+    expect(screen.queryByText(/Invalid Date/)).toBeNull();
+  });
+
   test("a cash deal renders no appraisal-gap line", () => {
     // The gap is the finance company's valuation against the price. A cash deal
     // has no appraisal, so the line has no meaning rather than a value of zero.

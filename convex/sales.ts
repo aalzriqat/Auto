@@ -2272,35 +2272,56 @@ export const dealCockpit = query({
     });
 
     /**
-     * A cash sale has no status-log table, so the timeline is built from the
-     * timestamps the row actually carries — never invented. Only entries backed
-     * by a real recorded moment are emitted, which is why a PENDING sale shows
-     * one entry rather than a padded history.
+     * A cash sale has no status-log table, so the timeline is derived from the
+     * sale row itself.
+     *
+     * `changedAt` is OPTIONAL, and that is the whole design. Two earlier
+     * attempts failed because this entry conflated a STATUS TRANSITION with a
+     * moment that must exist and must be renderable:
+     *
+     *  - Sorting on `changedAt` inverted the labels. `saleDate` is a
+     *    caller-supplied BUSINESS date, so an ordinary back-dated sale sorted to
+     *    `COMPLETED -> PENDING` — a completed deal whose history ends in
+     *    "pending".
+     *  - Dropping the entry when the moment was unreadable produced a screen
+     *    that badged the sale COMPLETED while its own history stopped at
+     *    PENDING, which contradicts itself.
+     *
+     * Separating the two removes both classes at once. The transition is ALWAYS
+     * emitted, so a status is never withheld for want of a timestamp; the moment
+     * rides along only when it is real. Order is causal by construction —
+     * pending precedes completed because a sale is pending before it completes,
+     * whichever clock recorded which — so nothing needs sorting, and a
+     * `saleDate` earlier than `_creationTime` is not a corruption but the true
+     * statement that the sale happened before it was entered.
+     *
+     * `Number.isFinite` because Convex's `v.number()` accepts NaN and Infinity,
+     * so a corrupt `saleDate` arrives intact, and the view renders moments
+     * through date-fns `format`, which throws `RangeError: Invalid time value`
+     * on a non-finite input — an uncaught throw during render takes down the
+     * whole screen, not one row.
      */
     const actorName = salesperson && "name" in salesperson ? (salesperson.name ?? "") : "";
     const timeline: Array<{
       fromStatus?: string;
       toStatus: string;
-      changedAt: number;
+      changedAt?: number;
       actorName: string;
       note?: string;
-    }> = [{ toStatus: "PENDING", changedAt: sale._creationTime, actorName }];
-    /**
-     * `Number.isFinite` because Convex's `v.number()` ACCEPTS NaN, so a corrupt
-     * `saleDate` reaches this row intact — and the view renders every entry
-     * through date-fns `format`, which throws `RangeError: Invalid time value`
-     * on a non-finite input. That is not a malformed date in one table cell: an
-     * uncaught throw during render takes down the ENTIRE deal screen.
-     *
-     * Dropped rather than displayed, the same rule the headline follows for an
-     * unreadable amount. The sale is still reported as completed by its status
-     * badge, so the fact survives; only the unreadable moment is withheld.
-     */
-    if (sale.status === "COMPLETED" && Number.isFinite(sale.saleDate)) {
+    }> = [
+      {
+        toStatus: "PENDING",
+        // System-stamped and therefore always real, but read through the same
+        // rule as every other moment rather than trusted for its provenance.
+        ...(Number.isFinite(sale._creationTime) ? { changedAt: sale._creationTime } : {}),
+        actorName,
+      },
+    ];
+    if (sale.status === "COMPLETED") {
       timeline.push({
         fromStatus: "PENDING",
         toStatus: "COMPLETED",
-        changedAt: sale.saleDate,
+        ...(Number.isFinite(sale.saleDate) ? { changedAt: sale.saleDate } : {}),
         actorName,
       });
     }

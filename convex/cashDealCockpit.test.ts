@@ -705,20 +705,34 @@ describe("the cash timeline", () => {
    * throws `RangeError: Invalid time value` on a non-finite input — and an
    * uncaught throw during render loses the WHOLE deal screen, not one row.
    */
-  test("a corrupt sale date is withheld rather than crashing the screen", async () => {
-    const s = await seed("nandate");
-    const vehicleId = await ownedVehicle(s, "NANDATE000000001");
-    const saleId = await insertSale(s, vehicleId, { saleDate: Number.NaN });
+  test.each([
+    ["NaN", Number.NaN, "NANDATE000000001"],
+    ["Infinity", Number.POSITIVE_INFINITY, "INFDATE000000001"],
+  ])(
+    "a %s sale date withholds the moment but keeps the transition",
+    async (_label, badDate, vin) => {
+      const s = await seed(`baddate${vin}`);
+      const vehicleId = await ownedVehicle(s, vin);
+      const saleId = await insertSale(s, vehicleId, { saleDate: badDate });
 
-    const deal = await s.asUser.query(api.sales.dealCockpit, { orgId: s.orgId, saleId });
+      const deal = await s.asUser.query(api.sales.dealCockpit, { orgId: s.orgId, saleId });
 
-    // Every emitted moment is renderable...
-    for (const entry of deal!.timeline) {
-      expect(Number.isFinite(entry.changedAt)).toBe(true);
+      // The transition SURVIVES. Dropping it produced a screen that badged the
+      // sale COMPLETED while its own history stopped at PENDING.
+      expect(deal!.timeline.map((entry) => entry.toStatus)).toEqual(["PENDING", "COMPLETED"]);
+
+      // Only the unreadable moment is withheld — and every moment that IS
+      // emitted must be renderable, because date-fns `format` throws
+      // `RangeError` on a non-finite input and that throw loses the screen.
+      const completed = deal!.timeline.find((entry) => entry.toStatus === "COMPLETED");
+      expect(completed!.changedAt).toBeUndefined();
+      for (const entry of deal!.timeline) {
+        if (entry.changedAt !== undefined) {
+          expect(Number.isFinite(entry.changedAt)).toBe(true);
+        }
+      }
     }
-    // ...and the completion is still reported, by the status rather than a date.
-    expect(deal!.status).toBe("COMPLETED");
-  });
+  );
 
   /**
    * No CANCELLED entry is emitted, and the honest reason is narrower than the

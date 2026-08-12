@@ -1018,14 +1018,23 @@ export function DealCockpitView({
             </CardHeader>
             <CardContent className="space-y-3">
               {deal.timeline.map((entry, index) => (
-                <div key={`${entry.changedAt}-${index}`} className="flex gap-3 text-sm">
+                <div key={`${entry.changedAt ?? "no-date"}-${index}`} className="flex gap-3 text-sm">
                   <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                   <div className="min-w-0">
                     <p>{t(STATUS_LABEL[entry.toStatus] ?? entry.toStatus)}</p>
                     <p className="text-xs text-muted-foreground">
                       <bdi>{entry.actorName}</bdi>
-                      {" · "}
-                      <bdi>{format(entry.changedAt, "d MMM yyyy HH:mm")}</bdi>
+                      {/* The transition is stated whether or not its moment is
+                          known. `changedAt` is optional precisely so a status is
+                          never withheld for want of a timestamp — and `format`
+                          throws `RangeError` on a non-finite input, which during
+                          render loses the whole screen rather than one row. */}
+                      {entry.changedAt !== undefined && (
+                        <>
+                          {" · "}
+                          <bdi>{format(entry.changedAt, "d MMM yyyy HH:mm")}</bdi>
+                        </>
+                      )}
                     </p>
                   </div>
                 </div>
