@@ -290,7 +290,17 @@ async function runDeal(
    */
   if (opts.stopAtApproved) return { quoteId, applicationId, saleId: null };
 
-  const configured = !opts.omitMode && mode === "CONFIGURED_FINANCE_COMPANY";
+  /**
+   * `omitMode` does NOT exempt the deal.
+   *
+   * That fixture still attaches `s.companyId` to the quote — it omits the mode
+   * FIELD, not the finance company — and a quote carrying a real company is
+   * held to the requirement whether or not anyone wrote the mode down. Treating
+   * the missing field as an exemption is precisely the bypass two reviews
+   * found: it reached the terminal CLOSED state with no economics while naming
+   * a real financier.
+   */
+  const configured = mode === "CONFIGURED_FINANCE_COMPANY";
   if (opts.beforeHandover) {
     await opts.beforeHandover(applicationId);
   } else if (configured) {
@@ -3043,6 +3053,36 @@ describe("the supplier is never made debtor for money that did not reach him", (
         route: "DIRECT_TO_SUPPLIER",
       })
     ).rejects.toThrow(/he is owed/i);
+  });
+
+  test("a MANUAL direct deal with no approved amount is still refused at finalization", async () => {
+    /**
+     * Pins the FINALIZE-time direct-route check on its own.
+     *
+     * A reviewer caught that moving the CONFIGURED version of this test to
+     * handover left `finalizeDeal`'s own check with no coverage: a configured
+     * deal can no longer reach finalization in that state at all, so the
+     * assertion that used to exercise this line now exercises the handover
+     * guard instead. Both messages happen to match the same pattern, so it went
+     * green while covering a different branch.
+     *
+     * MANUAL_FINANCE_COMPANY reaches it, because the economics requirement
+     * deliberately does not apply to that mode — yet the direct route still
+     * measures the supplier's debt from what the financier approved. Without it
+     * `completeSale` falls back to the sale price and opens a debt for money
+     * that never reached him.
+     */
+    const s = await seedDealership("s30ManualDirectNoApproval");
+    const { applicationId } = await runDeal(s, {
+      mode: "MANUAL_FINANCE_COMPANY",
+      manualProviderName: "شركة تمويل يدوية",
+      route: "DIRECT_TO_SUPPLIER",
+      finalize: false,
+    });
+
+    await expect(
+      s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId })
+    ).rejects.toThrow(/approved purchase amount is not recorded/i);
   });
 
   test("a direct deal with no approved amount is refused rather than settled at the sale price", async () => {

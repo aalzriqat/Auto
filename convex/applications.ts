@@ -147,7 +147,10 @@ function assertDealerEconomicsRecorded(
   // and INTERNAL_INSTALLMENT may not produce this artefact at all, and demanding
   // it there would invent a business rule and dead-end those deals instead —
   // the same defect wearing different clothes.
-  const financierEconomicsAreKnowable = quoteMode === "CONFIGURED_FINANCE_COMPANY";
+  const financierEconomicsAreKnowable = financierApprovesPurchase({
+    quoteMode,
+    companyId: app.companyId,
+  });
   if (app.submittedQuotationMinor === undefined) {
     if (!financierEconomicsAreKnowable) return;
     throw new ConvexError(
@@ -257,6 +260,38 @@ async function resolveQuoteMode(
   if (app.quoteModeAtSubmission !== undefined) return app.quoteModeAtSubmission;
   const quote = await ctx.db.get(app.quoteId);
   return quote && quote.orgId === app.orgId ? quote.mode : undefined;
+}
+
+/**
+ * Whether this deal is one a configured finance company approves a purchase on.
+ *
+ * NOT `quoteMode === "CONFIGURED_FINANCE_COMPANY"`. `mode` is optional on both
+ * the quote and the application, and `quotes.saveQuote` rejects a `companyId`
+ * only when a mode is present and is not the configured one — so a quote
+ * carrying a real finance company with NO mode is creatable today through the
+ * ordinary public mutation, not merely inherited from history.
+ *
+ * Keying the guard on the mode alone left exactly that shape failing OPEN: two
+ * independent reviews found it and one reproduced it end to end, reaching the
+ * terminal CLOSED state with no economics while carrying a real `companyId` —
+ * the precise defect this issue exists to remove.
+ *
+ * So the company itself is evidence, which is the rule `settlementPayer`
+ * already applies to the same shape: "when it carries a configured finance
+ * company, that company IS the answer the mode cannot give"
+ * (`vehicleOwnership.ts`). Two derivations disagreeing about what kind of deal
+ * this is was the second source of truth this work set out to avoid.
+ */
+function financierApprovesPurchase(args: {
+  quoteMode: QuoteMode | undefined;
+  companyId: Id<"financeCompanies"> | undefined;
+}): boolean {
+  if (args.quoteMode === "CONFIGURED_FINANCE_COMPANY") return true;
+  // A mode that IS recorded and is not configured settles the question — the
+  // company field must not drag a LEASE or an internal-instalment deal into a
+  // requirement its mode says it does not have.
+  if (args.quoteMode !== undefined) return false;
+  return args.companyId !== undefined;
 }
 
 async function settlementPayerForApplication(
@@ -1129,8 +1164,10 @@ async function buildCockpitMoney(
       // the operator to record something nothing will accept. Same resolution
       // the guard uses, so the two cannot disagree about what kind of deal
       // this is.
-      financierEconomicsApplicable:
-        (await resolveQuoteMode(ctx, app)) === "CONFIGURED_FINANCE_COMPANY",
+      financierEconomicsApplicable: financierApprovesPurchase({
+        quoteMode: await resolveQuoteMode(ctx, app),
+        companyId: app.companyId,
+      }),
     });
 
   return {

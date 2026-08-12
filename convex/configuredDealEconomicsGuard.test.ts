@@ -53,7 +53,13 @@ type Mode =
   | "CONFIGURED_FINANCE_COMPANY"
   | "MANUAL_FINANCE_COMPANY"
   | "LEASE"
-  | "INTERNAL_INSTALLMENT";
+  | "INTERNAL_INSTALLMENT"
+  /**
+   * A real finance company with NO mode recorded — creatable today through
+   * `quotes.saveQuote`, which rejects a `companyId` only when a mode is present
+   * and is not the configured one.
+   */
+  | "OMIT_MODE";
 
 /** An APPROVED application with NO economics recorded, in the given quote mode. */
 async function seedApprovedApplication(mode: Mode) {
@@ -97,7 +103,7 @@ async function seedApprovedApplication(mode: Mode) {
   // Only a CONFIGURED deal carries a finance company; `quotes.saveQuote` rejects
   // a companyId on every other mode, so this is not an incidental difference.
   const companyId =
-    mode === "CONFIGURED_FINANCE_COMPANY"
+    mode === "CONFIGURED_FINANCE_COMPANY" || mode === "OMIT_MODE"
       ? await t.run((ctx) =>
           ctx.db.insert("financeCompanies", {
             orgId,
@@ -124,7 +130,8 @@ async function seedApprovedApplication(mode: Mode) {
     vehiclePrice: 20000,
     downPayment: 3000,
     termMonths: 48,
-    mode,
+    // OMIT_MODE sends no mode at all, which is the whole point of that case.
+    ...(mode === "OMIT_MODE" ? {} : { mode }),
     ...(companyId ? { companyId } : {}),
     totalFinancedAmount: 17000,
   });
@@ -216,6 +223,52 @@ describe("SCRUM-61: a CONFIGURED deal may not close without its economics", () =
     await expect(
       asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })
     ).rejects.toThrow(/approved purchase amount/i);
+  });
+});
+
+describe("SCRUM-61: a finance company is evidence, even when the mode is missing", () => {
+  /**
+   * The bypass two independent reviews found, one of them by reproducing it end
+   * to end: a quote carrying a real `companyId` with `mode` OMITTED.
+   *
+   * `quotes.saveQuote` rejects a `companyId` only when a mode is present and is
+   * not the configured one, so this shape is creatable today through the
+   * ordinary public mutation with ordinary permissions — it is not a legacy
+   * artefact. Keying the guard on the mode alone let it reach the terminal
+   * CLOSED state with no economics at all, while carrying a real finance
+   * company: exactly the defect this issue exists to remove, through a door the
+   * fix had left open.
+   *
+   * `settlementPayer` already treats this shape as externally financed by that
+   * company. The guard now agrees with it, because two derivations disagreeing
+   * about what kind of deal this is was the second source of truth this work set
+   * out to avoid.
+   */
+  test("a quote with a finance company but no mode is still held to the requirement", async () => {
+    const { orgId, applicationId, asUser, t } = await seedApprovedApplication("OMIT_MODE");
+
+    // The shape is what the finding describes: no mode anywhere, real company.
+    const app = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(app?.quoteModeAtSubmission).toBeUndefined();
+    expect(app?.companyId).toBeDefined();
+    const quote = await t.run((ctx) => ctx.db.get(app!.quoteId));
+    expect(quote?.mode).toBeUndefined();
+
+    await expect(
+      asUser.mutation(api.applications.registerVehicleHandover, { orgId, applicationId })
+    ).rejects.toThrow(/submitted quotation is not recorded/i);
+  });
+
+  test("and its cockpit calls the amount unrecorded, not inapplicable", async () => {
+    // The other half: if the guard now demands the economics, the screen must
+    // say they are missing rather than that this kind of deal never has them.
+    const { orgId, applicationId, asUser } = await seedApprovedApplication("OMIT_MODE");
+
+    const view = await asUser.query(api.applications.dealCockpit, { orgId, applicationId });
+    const profit = view!.money!.managementProfit;
+    expect(profit.available).toBe(false);
+    if (profit.available) return;
+    expect(profit.reason).toBe("NoApprovedPurchaseAmount");
   });
 });
 
