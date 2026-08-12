@@ -1221,7 +1221,7 @@ export const commonAr = {
   OpeningBalanceRejectionReasonPlaceholder: "ما سبب الرفض؟",
   OpeningBalanceRejectionReasonRequired: "يجب إدخال سبب للرفض.",
   OpeningBalanceCurrencyUnknown:
-    "أُنشئ هذا المسودة قبل تسجيل عملتها، لذا لا يمكن ترحيل مبالغها بأمان. ارفضها وأعد إرسالها.",
+    "أُنشئت هذه المسودة قبل تسجيل عملتها، لذا لا يمكن ترحيل مبالغها بأمان. ارفضها وأعد إرسالها.",
   OpeningBalanceApprovedToast: "تمت الموافقة على الرصيد الافتتاحي وترحيله.",
   OpeningBalanceRejectedToast: "تم رفض الرصيد الافتتاحي.",
   OpeningBalancePostedToast: "تم ترحيل الرصيد الافتتاحي.",
