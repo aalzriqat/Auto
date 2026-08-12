@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Loader2, Gauge, Check } from "lucide-react";
+import { Loader2, Gauge } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { cn } from "@/lib/utils";
+import { RadioCardGroup } from "./RadioCardGroup";
 import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
 import {
   Dialog,
@@ -145,37 +145,17 @@ export function RecordAppraisalDialog({
 
           <div className="space-y-1.5">
             <Label>{t("AppraisalProviderLabel")}</Label>
-            {/* Same button-radio pattern as the approval dialog, for the same
-                reason: this project carries no radix radio primitive. */}
-            <div role="radiogroup" aria-label={t("AppraisalProviderLabel")} className="flex gap-2">
-              {providers.map((provider) => {
-                const selected = providerType === provider.value;
-                return (
-                  <button
-                    key={provider.value}
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    onClick={() => setProviderType(provider.value)}
-                    className={cn(
-                      "flex flex-1 items-center gap-2 rounded-md border p-2.5 text-start text-sm transition-colors",
-                      selected ? "border-primary bg-primary/[0.06]" : "hover:bg-muted/60"
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
-                        selected ? "border-primary bg-primary text-primary-foreground" : ""
-                      )}
-                      aria-hidden
-                    >
-                      {selected && <Check className="h-3 w-3" />}
-                    </span>
-                    {provider.label}
-                  </button>
-                );
-              })}
-            </div>
+            <RadioCardGroup
+              ariaLabel={t("AppraisalProviderLabel")}
+              value={providerType}
+              idPrefix="appraisal-provider"
+              layout="inline"
+              onChange={setProviderType}
+              options={providers.map((provider) => ({
+                value: provider.value,
+                label: provider.label,
+              }))}
+            />
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">

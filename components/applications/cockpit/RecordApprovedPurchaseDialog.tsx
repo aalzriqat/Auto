@@ -6,8 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Check } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { RadioCardGroup } from "./RadioCardGroup";
 import {
   Dialog,
   DialogContent,
@@ -150,56 +149,29 @@ export function RecordApprovedPurchaseDialog({
             {!appraisal && (
               <p className="text-xs text-muted-foreground">{t("NoAppraisalOnFile")}</p>
             )}
-            {/* A radio group built from buttons rather than pulling in a radix
-                primitive this project does not have. `role="radio"` +
-                `aria-checked` keeps it a real radio group for assistive
-                technology and for keyboard users, and each option carries the
-                amount it implies so the choice is made against the figure it
-                will record. */}
-            <div role="radiogroup" aria-label={t("ApprovalBasisLabel")} className="space-y-2">
-              {options.map((option) => {
-                const selected = basis === option.value;
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    onClick={() => setBasis(option.value)}
-                    className={cn(
-                      "flex w-full items-start gap-2.5 rounded-md border p-3 text-start transition-colors",
-                      selected ? "border-primary bg-primary/[0.06]" : "hover:bg-muted/60"
+            <RadioCardGroup
+              ariaLabel={t("ApprovalBasisLabel")}
+              value={basis}
+              idPrefix="approval-basis"
+              onChange={setBasis}
+              options={options.map((option) => ({
+                value: option.value,
+                label: (
+                  <>
+                    {option.label}
+                    {option.amountMinor !== null && (
+                      <>
+                        {" — "}
+                        <bdi className="tabular-nums font-medium">
+                          {money(option.amountMinor)}
+                        </bdi>
+                      </>
                     )}
-                  >
-                    <span
-                      className={cn(
-                        "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
-                        selected ? "border-primary bg-primary text-primary-foreground" : ""
-                      )}
-                      aria-hidden
-                    >
-                      {selected && <Check className="h-3 w-3" />}
-                    </span>
-                    <span className="min-w-0 space-y-0.5">
-                      <span className="block text-sm leading-snug">
-                        {option.label}
-                        {option.amountMinor !== null && (
-                          <>
-                            {" — "}
-                            <bdi className="tabular-nums font-medium">
-                              {money(option.amountMinor)}
-                            </bdi>
-                          </>
-                        )}
-                      </span>
-                      {option.hint && (
-                        <span className="block text-xs text-muted-foreground">{option.hint}</span>
-                      )}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+                  </>
+                ),
+                hint: option.hint || undefined,
+              }))}
+            />
           </div>
 
           {/* Typed only under MANUAL. Under the other two the amount IS the

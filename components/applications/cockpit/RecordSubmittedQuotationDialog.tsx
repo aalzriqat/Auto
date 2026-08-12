@@ -126,7 +126,11 @@ export function RecordSubmittedQuotationDialog({
     : matchesCalculation
       ? ("SYSTEM_CALCULATED" as const)
       : ("CALCULATED_WITH_OVERRIDE" as const);
-  const reasonRequired = source === "CALCULATED_WITH_OVERRIDE";
+  // Only once an amount exists. With a calculation on file and the field still
+  // empty, `enteredMinor` is null and therefore does not match it — so the
+  // source read as an override and the form demanded a reason, in red, before
+  // the operator had typed anything at all.
+  const reasonRequired = enteredMinor !== null && source === "CALCULATED_WITH_OVERRIDE";
   const reasonMissing = reasonRequired && reason.trim() === "";
 
   // Nothing may be submitted while the calculator is still answering. Every

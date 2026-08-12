@@ -704,6 +704,60 @@ describe("recording what the finance company approved", () => {
     });
   });
 
+  test("arrow keys move between the bases, and the group is one tab stop", () => {
+    renderCockpit(
+      wiring({
+        facts: quotationRecorded,
+        appraisal: { id: "appraisal_9", amountMinor: 11_800 * JOD },
+      })
+    );
+
+    fireEvent.click(cardButton("RecordApprovedPurchaseAction")!);
+    const dialog = screen.getByRole("dialog");
+    const radios = within(dialog).getAllByRole("radio");
+
+    // A radio group is ONE tab stop with arrow keys inside it. Hand-rolled from
+    // buttons it was neither: every option was tab-focusable and the arrows did
+    // nothing, so a keyboard user tabbed through the options of one control.
+    expect(radios.filter((radio) => radio.getAttribute("tabindex") === "0")).toHaveLength(1);
+    expect(radios[0].getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.keyDown(radios[0], { key: "ArrowDown" });
+    expect(radios[1].getAttribute("aria-checked")).toBe("true");
+    expect(radios[0].getAttribute("aria-checked")).toBe("false");
+
+    // ...and it wraps rather than dead-ending at the last option.
+    fireEvent.keyDown(radios[1], { key: "ArrowUp" });
+    expect(radios[0].getAttribute("aria-checked")).toBe("true");
+  });
+
+  test("the server's refusal on the approval is shown in its form too", async () => {
+    const onRecordApproved = vi.fn(async () => {
+      throw new Error("You cannot approve the purchase amount on your own application.");
+    });
+    renderCockpit(
+      wiring({
+        facts: quotationRecorded,
+        appraisal: { id: "appraisal_9", amountMinor: 11_800 * JOD },
+        onRecordApproved,
+      })
+    );
+
+    fireEvent.click(cardButton("RecordApprovedPurchaseAction")!);
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "RecordApprovedPurchaseAction" }));
+
+    // The quotation dialog had this pinned and this one did not, though both
+    // rely on it: the refusals here name the rule to fix, and a faded toast is
+    // not a recovery path.
+    await waitFor(() =>
+      expect(
+        screen.getByText("You cannot approve the purchase amount on your own application.")
+      ).toBeTruthy()
+    );
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
   test("an appraisal-based approval sends the appraisal's own figure and its id", async () => {
     const onRecordApproved = vi.fn(noopAsync);
     renderCockpit(
