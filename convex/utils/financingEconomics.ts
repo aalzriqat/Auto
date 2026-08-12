@@ -770,6 +770,18 @@ export interface DealStageFacts extends LifecycleFacts {
    * that was already approved.
    */
   approvedPurchaseBasis?: "APPRAISAL" | "QUOTATION_EXCEPTION" | "MANUAL";
+  /**
+   * Whether the funding split actually came out.
+   *
+   * The companion to the basis above, and it is what stops the rail lying in
+   * the other direction. `approveDealerPurchaseAmount` permits MANUAL with no
+   * appraisal even for a company whose LTV rule multiplies the APPRAISAL — and
+   * there the split cannot be computed at all, so an appraisal IS still needed
+   * whatever the basis says. Reporting the stage complete then hid a real
+   * prerequisite until the operator hit a handover refusal with nothing on the
+   * rail to explain it.
+   */
+  fundingSplitComputed?: boolean;
   /** Every required document uploaded, verified or waived. */
   requiredDocumentsComplete: boolean;
   /**
@@ -840,7 +852,8 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
       // unaffected, and an approval with no recorded basis is not evidence of a
       // manual decision.
       (facts.approvedPurchaseBasis === "MANUAL" &&
-        facts.approvedDealerPurchaseAmountMinor !== undefined),
+        facts.approvedDealerPurchaseAmountMinor !== undefined &&
+        facts.fundingSplitComputed === true),
     GAP_RESOLUTION:
       gap === "NOT_REQUIRED" ||
       gap === "CUSTOMER_ABSORBS" ||

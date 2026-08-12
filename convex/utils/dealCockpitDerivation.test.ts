@@ -59,8 +59,26 @@ describe("an approval the finance company named without an appraisal", () => {
       appraisalStatus: "PENDING",
       approvedDealerPurchaseAmountMinor: 12_200_000,
       approvedPurchaseBasis: "MANUAL",
+      fundingSplitComputed: true,
     });
     expect(manuallyApproved.state("APPRAISAL")).toBe("COMPLETE");
+  });
+
+  test("but not when the company's own rule still needs an appraisal to compute the funding", () => {
+    // `approveDealerPurchaseAmount` permits MANUAL with no appraisal even for a
+    // company whose LTV rule multiplies the APPRAISAL. There the funding split
+    // cannot be computed at all — and SCRUM-61's guard refuses handover for
+    // exactly that. Reporting the stage complete would hide the real
+    // prerequisite until the operator hit the later refusal with nothing on the
+    // rail explaining it.
+    const ruleStillNeedsOne = stages({
+      appraisalStatus: "PENDING",
+      approvedDealerPurchaseAmountMinor: 12_200_000,
+      approvedPurchaseBasis: "MANUAL",
+      fundingSplitComputed: false,
+    });
+    expect(ruleStillNeedsOne.state("APPRAISAL")).toBe("BLOCKED");
+    expect(ruleStillNeedsOne.blocker("APPRAISAL")).toBe("AwaitingAppraisal");
   });
 
   test("and still demands one for a basis that rests on appraisal evidence", () => {

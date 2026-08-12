@@ -58,6 +58,14 @@ export type FinanceDecisionFacts = {
    */
   ltvMissing: boolean;
   /**
+   * The vehicle has gone out to the customer.
+   *
+   * `recordAppraisal` REFUSES outright once it has — it does not supersede the
+   * approval, it declines. So the action is withdrawn rather than offered with
+   * a warning that promises a withdrawal the server will never perform.
+   */
+  handedOver: boolean;
+  /**
    * The appraisal on file, when there is one.
    *
    * Sending the quotation moves the appraisal dimension to PENDING, so the stage
@@ -148,7 +156,7 @@ export function FinanceCompanyDecisionCard({
   // one screen that can record one must also be able to correct it. The server
   // already handles the consequence: a replacement appraisal supersedes its
   // predecessor and clears the approval that was based on it, on the record.
-  const appraisalActionAvailable = canRecordAppraisal && !facts.closed;
+  const appraisalActionAvailable = canRecordAppraisal && !facts.closed && !facts.handedOver;
 
   const derived: Array<{ key: string; label: string; value: string }> = [];
   if (facts.financeCompanyFundedPortionMinor !== null) {

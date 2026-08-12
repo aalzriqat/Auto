@@ -199,6 +199,20 @@ export function RecordAppraisalDialog({
             </div>
           </div>
 
+          {/* The withdrawal warning keys off the APPROVAL, not off whether an
+              appraisal already exists.
+              `recordAppraisal` treats ANY real appraisal recorded against an
+              approved deal as superseding that approval — including the FIRST
+              appraisal on a deal approved manually without one. Showing this
+              only for a reappraisal meant an ordinary-looking first appraisal
+              silently cleared the approved amount, the funding split, the gap
+              resolution and handover readiness. */}
+          {approvalWouldBeReopened && !isReappraisal && (
+            <p role="alert" className="text-sm font-medium text-destructive">
+              {t("AppraisalWithdrawsApproval")}
+            </p>
+          )}
+
           {isReappraisal && (
             <div className="space-y-1.5">
               <Label htmlFor="reappraisal-reason">{t("ReappraisalReasonLabel")}</Label>
@@ -257,7 +271,7 @@ export function RecordAppraisalDialog({
             ) : (
               <Gauge className="h-4 w-4 me-2" />
             )}
-            {t("RecordAppraisalAction")}
+            {t(isReappraisal ? "ReplaceAppraisalAction" : "RecordAppraisalAction")}
           </Button>
         </DialogFooter>
       </DialogContent>

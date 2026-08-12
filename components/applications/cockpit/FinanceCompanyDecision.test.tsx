@@ -131,6 +131,7 @@ function wiring(overrides: WiringOverrides = {}): FinanceDecisionWiring {
       appliedLtvPercent: null,
       closed: false,
       ltvMissing: false,
+      handedOver: false,
       appraisalAmountMinor: null,
       ...(facts ?? {}),
     },
@@ -562,11 +563,13 @@ describe("recording their appraisal", () => {
     });
 
     // The server refuses a reappraisal with no reason, and clears the approval
-    // it invalidates — both said before the operator commits.
+    // it invalidates — both said before the operator commits. The submit button
+    // names the action it performs, like the heading above it: a dialog titled
+    // "replace" whose button says "record" disagrees with itself.
     expect(
       (
         within(dialog).getByRole("button", {
-          name: "RecordAppraisalAction",
+          name: "ReplaceAppraisalAction",
         }) as HTMLButtonElement
       ).disabled
     ).toBe(true);
@@ -575,13 +578,53 @@ describe("recording their appraisal", () => {
     fireEvent.change(within(dialog).getByLabelText("ReappraisalReasonLabel"), {
       target: { value: "أُدخل الرقم الأول خطأً" },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "RecordAppraisalAction" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "ReplaceAppraisalAction" }));
 
     await waitFor(() => expect(onRecordAppraisal).toHaveBeenCalled());
     expect(onRecordAppraisal.mock.calls[0][0]).toMatchObject({
       appraisalAmountMinor: 11_900 * JOD,
       reappraisalReason: "أُدخل الرقم الأول خطأً",
     });
+  });
+
+  test("warns before a FIRST appraisal silently withdraws a manual approval", () => {
+    // `recordAppraisal` supersedes any approval on the deal, not only one that
+    // was based on an appraisal — so the first appraisal on a manually approved
+    // deal clears the approved amount, the funding split, the gap resolution
+    // and handover readiness. Keying the warning on "is this a reappraisal"
+    // left that case silent: an ordinary-looking first appraisal reopened the
+    // whole deal.
+    renderCockpit(
+      wiring({
+        facts: {
+          submittedQuotationMinor: 12_500 * JOD,
+          appraisalAmountMinor: null,
+          approvedPurchaseRecorded: true,
+          approvedPurchaseAmountMinor: 12_200 * JOD,
+        },
+      })
+    );
+
+    fireEvent.click(cardButton("RecordAppraisalAction")!);
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("AppraisalWithdrawsApproval")).toBeTruthy();
+  });
+
+  test("is withdrawn once the vehicle has gone out, because the server refuses then", () => {
+    // `recordAppraisal` does not supersede after handover — it declines. An
+    // action offered there would promise a withdrawal that never happens.
+    renderCockpit(
+      wiring({
+        facts: {
+          submittedQuotationMinor: 12_500 * JOD,
+          appraisalAmountMinor: 11_500 * JOD,
+          handedOver: true,
+        },
+      })
+    );
+
+    expect(cardButton("ReplaceAppraisalAction")).toBeUndefined();
+    expect(cardButton("RecordAppraisalAction")).toBeUndefined();
   });
 
   test("tells a caller who cannot record one who does", () => {

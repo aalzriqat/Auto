@@ -408,6 +408,12 @@ export function DealCockpit({
             appliedLtvPercent: economicsApp.appliedLtvPercent ?? null,
             closed: economicsApp.status === "CLOSED" || economicsApp.status === "CANCELLED",
             ltvMissing,
+            // From the stage rail, like the approval fact above it: once the
+            // vehicle has gone out `recordAppraisal` refuses rather than
+            // superseding, so the action is withdrawn instead of promising
+            // something the server will decline.
+            handedOver:
+              deal.stages.find((stage) => stage.key === "HANDOVER")?.state === "COMPLETE",
             // The same live appraisal the approval bases are offered against,
             // so the row and those options can never disagree about whether one
             // exists.

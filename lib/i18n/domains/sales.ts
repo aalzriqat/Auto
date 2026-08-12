@@ -818,6 +818,8 @@ export const salesEn = {
   ReappraisalSupersedes: "This replaces the appraisal of {amount} currently on file.",
   ReappraisalReopensApproval:
     "The approved purchase amount was based on it, so recording this withdraws that approval and it will have to be recorded again.",
+  AppraisalWithdrawsApproval:
+    "This deal already has an approved purchase amount recorded without an appraisal. Recording one now withdraws that approval, and the finance company's amount will have to be recorded again.",
 
   RecordApprovedPurchaseTitle: "Record what the finance company approved",
   RecordApprovedPurchaseDesc:
@@ -1635,6 +1637,8 @@ export const salesAr = {
   ReappraisalSupersedes: "يحل هذا محل التخمين المسجَّل حالياً بمبلغ {amount}.",
   ReappraisalReopensApproval:
     "المبلغ المعتمد كان مبنياً عليه، لذا يؤدي تسجيل هذا إلى سحب ذلك الاعتماد وسيلزم تسجيله من جديد.",
+  AppraisalWithdrawsApproval:
+    "لهذه الصفقة مبلغ معتمد مسجَّل بدون تخمين. تسجيل تخمين الآن يسحب ذلك الاعتماد، وسيلزم تسجيل مبلغ شركة التمويل من جديد.",
 
   RecordApprovedPurchaseTitle: "تسجيل ما اعتمدته شركة التمويل",
   RecordApprovedPurchaseDesc:
