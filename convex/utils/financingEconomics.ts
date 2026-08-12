@@ -1090,6 +1090,11 @@ export type ManagementProfit =
       available: false;
       reason:
         | "NoApprovedPurchaseAmount"
+        /**
+         * The figure does not exist for this kind of deal, and no screen will
+         * ever accept it — as distinct from nobody having recorded it yet.
+         */
+        | "NotApplicableForFinancingMode"
         | "NoSupplierSettlement"
         | "NoDealerContribution"
         | "CorruptInput"
@@ -1237,14 +1242,39 @@ export function deriveManagementProfit(args: {
   actualExpensesMinor: number;
   currency: string;
   fullySettled: boolean;
+  /**
+   * Whether a finance company's approved purchase amount is something this
+   * deal's financing mode produces at all.
+   *
+   * `false` for MANUAL_FINANCE_COMPANY, LEASE and INTERNAL_INSTALLMENT — a
+   * dealership financing its own customer has no external company to approve a
+   * purchase, and there is nothing anyone can go and record. Saying "not
+   * recorded" about those deals describes a step that does not exist and sends
+   * the operator looking for a screen that will never accept the figure. That
+   * is the same dead end SCRUM-61 is about, reached through the copy instead of
+   * through the guard.
+   *
+   * Defaults to `true` so a caller that has not been taught the distinction
+   * keeps today's wording rather than silently claiming inapplicability.
+   */
+  financierEconomicsApplicable?: boolean;
 }): ManagementProfit {
   // Checked first. A cancelled sale still carries its approval, its recorded
   // margin and its disbursement, so every input below remains computable — and
   // the figure they produce describes a deal whose journal has been reversed.
   // Reporting a profit for it is not a smaller error than reporting none.
   if (args.dealCancelled) return { available: false, reason: "DealCancelled" };
-  if (args.approvedDealerPurchaseAmountMinor === undefined)
-    return { available: false, reason: "NoApprovedPurchaseAmount" };
+  if (args.approvedDealerPurchaseAmountMinor === undefined) {
+    // "Nobody has recorded it" and "this kind of deal never has one" are
+    // different facts, and only the first names an action.
+    return {
+      available: false,
+      reason:
+        args.financierEconomicsApplicable === false
+          ? "NotApplicableForFinancingMode"
+          : "NoApprovedPurchaseAmount",
+    };
+  }
   if (args.supplierSettlementMinor === undefined)
     return { available: false, reason: "NoSupplierSettlement" };
   // Defaulting this to zero would be the very error H-7 corrects, just reached

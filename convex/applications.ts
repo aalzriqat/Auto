@@ -1123,6 +1123,14 @@ async function buildCockpitMoney(
       actualExpensesMinor,
       currency,
       fullySettled,
+      // Only a configured finance company approves a purchase amount. On the
+      // other modes the figure is not late, it does not exist — so the screen
+      // must say "not available for this financing mode" rather than sending
+      // the operator to record something nothing will accept. Same resolution
+      // the guard uses, so the two cannot disagree about what kind of deal
+      // this is.
+      financierEconomicsApplicable:
+        (await resolveQuoteMode(ctx, app)) === "CONFIGURED_FINANCE_COMPANY",
     });
 
   return {

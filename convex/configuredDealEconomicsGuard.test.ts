@@ -44,6 +44,9 @@ const PERMISSIONS = [
   "register:vehicle_handover",
   "register:expected_payment",
   "manage:finance",
+  // The cockpit returns `money: null` to a caller without it, so the profit
+  // assertions below would read a null rather than the reason under test.
+  "view:finance",
 ];
 
 type Mode =
@@ -213,6 +216,45 @@ describe("SCRUM-61: a CONFIGURED deal may not close without its economics", () =
     await expect(
       asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })
     ).rejects.toThrow(/approved purchase amount/i);
+  });
+});
+
+describe("SCRUM-61: the cockpit says why a profit is missing, and does not promise one", () => {
+  /**
+   * The other half of the ruling. Refusing the deal is not enough if the screen
+   * then tells the operator to go and record a figure that does not exist for
+   * their kind of deal — that is the same dead end reached through the copy.
+   *
+   * "Not recorded" names an action. "Not available for this financing mode"
+   * names a fact. Only one of them is true on a deal the dealership financed
+   * itself, and only one of them can be acted on.
+   */
+  test("a mode with no finance company reports the profit as inapplicable, not as pending", async () => {
+    const { t, orgId, applicationId, asUser } =
+      await seedApprovedApplication("INTERNAL_INSTALLMENT");
+    void t;
+
+    const view = await asUser.query(api.applications.dealCockpit, { orgId, applicationId });
+    const profit = view!.money!.managementProfit;
+
+    expect(profit.available).toBe(false);
+    if (profit.available) return;
+    expect(profit.reason).toBe("NotApplicableForFinancingMode");
+  });
+
+  test("a CONFIGURED deal still reports the amount as merely unrecorded", async () => {
+    // The control. Without it, the change above could be widened to every mode
+    // and this file would stay green while telling a configured dealership that
+    // a figure it genuinely must record is "not available".
+    const { orgId, applicationId, asUser } =
+      await seedApprovedApplication("CONFIGURED_FINANCE_COMPANY");
+
+    const view = await asUser.query(api.applications.dealCockpit, { orgId, applicationId });
+    const profit = view!.money!.managementProfit;
+
+    expect(profit.available).toBe(false);
+    if (profit.available) return;
+    expect(profit.reason).toBe("NoApprovedPurchaseAmount");
   });
 });
 
