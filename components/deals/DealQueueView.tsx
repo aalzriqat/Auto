@@ -7,7 +7,7 @@ import { AlertTriangle, ChevronLeft, ChevronRight, Inbox } from "lucide-react";
 import {
   DEAL_STAGE_LABEL,
   DEAL_STATUS_LABEL,
-  daysWaiting,
+  daysSinceLastActivity,
   stallLevel,
   type StallLevel,
 } from "@/lib/deals/queueLabels";
@@ -211,7 +211,7 @@ export function DealQueueView({
               needsAttention: row.needsAttention,
               now: now ?? row.lastActivityAt,
             });
-            const days = now === null ? null : daysWaiting(row.lastActivityAt, now);
+            const days = now === null ? null : daysSinceLastActivity(row.lastActivityAt, now);
             const primary = primaryLine(row);
 
             return (
@@ -302,16 +302,27 @@ export function DealQueueView({
                   </p>
                 </div>
 
-                {/* Waiting time, and the chevron that says the row opens. */}
+                {/* How long the deal has been SILENT, and the chevron that says
+                    the row opens.
+
+                    Deliberately not "waiting", which the first version said.
+                    `lastActivityAt` is the last time anything on the deal moved
+                    — it is not when the current step began, and no such
+                    timestamp exists in the model — so a row that read "6 days
+                    waiting" put a precise claim on a number that does not carry
+                    it. What the data does support is "nobody has touched this in
+                    6 days", which is also the thing an operator triaging a floor
+                    actually needs. */}
                 <div className="flex shrink-0 items-center gap-2 pt-0.5">
-                  <span className={`text-xs tabular-nums ${STALL_TEXT[level]}`}>
+                  <span className={`max-w-24 text-end text-xs tabular-nums ${STALL_TEXT[level]}`}>
                     {days === null ? (
                       ""
                     ) : days === 0 ? (
-                      t("WaitingToday")
+                      t("DealActivityToday")
                     ) : (
                       <>
-                        <bdi>{days}</bdi> {t(days === 1 ? "DayWaiting" : "DaysWaiting")}
+                        <bdi>{days}</bdi>{" "}
+                        {t(days === 1 ? "DealDayNoActivity" : "DealDaysNoActivity")}
                       </>
                     )}
                   </span>

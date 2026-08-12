@@ -48,13 +48,16 @@ export const DEAL_STATUS_LABEL: Record<string, string> = {
 };
 
 /**
- * How long a deal has sat before the queue calls it stalled.
+ * How long a deal has gone without activity before the queue draws attention.
  *
  * These are DISPLAY thresholds, not business rules. Nothing in the accounting
  * or lifecycle model says a deal is late at seven days; this is the queue
  * deciding how loudly to draw a row so an operator can triage a floor at a
  * glance. Named and exported so the values are reviewable in one place rather
  * than buried as magic numbers in a class name.
+ *
+ * ⚠️ They measure SILENCE, not time in the current stage. See
+ * `daysSinceLastActivity`.
  */
 export const STALL_ATTENTION_DAYS = 3;
 export const STALL_URGENT_DAYS = 7;
@@ -62,7 +65,7 @@ export const STALL_URGENT_DAYS = 7;
 export type StallLevel = "FRESH" | "ATTENTION" | "URGENT";
 
 /**
- * How stalled a row is.
+ * How long a row has been silent, banded for display.
  *
  * A deal nobody is waiting on is never stalled, however old it is — a closed
  * deal from March is not urgent, it is finished. Age only means something while
@@ -81,7 +84,18 @@ export function stallLevel(args: {
   return "FRESH";
 }
 
-/** Whole days waited, floored, never negative. */
-export function daysWaiting(lastActivityAt: number, now: number): number {
+/**
+ * Whole days since the deal last moved at all — floored, never negative.
+ *
+ * ⚠️ This is NOT how long the deal has been in its current stage, and the
+ * wording it feeds must never say so. There is no canonical stage-entered
+ * timestamp in the model: `lastActivityAt` is the application's `updatedAt`, or
+ * a sale's creation when no application exists. An edit that touches nothing
+ * about the stage still resets it. Presenting that as "waiting since this step
+ * began" would be a precise-sounding number that is simply not the number the
+ * data holds — an independent review caught the earlier copy doing exactly
+ * that. Staleness is what this measures, so staleness is what it may claim.
+ */
+export function daysSinceLastActivity(lastActivityAt: number, now: number): number {
   return Math.max(0, Math.floor((now - lastActivityAt) / 86_400_000));
 }

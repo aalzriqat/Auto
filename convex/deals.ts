@@ -120,7 +120,14 @@ export interface DealQueueRow {
   needsAttention: boolean;
   /** A held deposit awaiting refund or forfeit — the state that lives ONLY on the old applications list today. */
   depositPending: boolean;
-  /** When this deal last moved. Sales record no update time, so this is their creation. */
+  /**
+   * When this deal last moved. Sales record no update time, so this is their
+   * creation.
+   *
+   * ⚠️ NOT when the current stage began — the model records no such timestamp,
+   * and an edit that changes nothing about the stage still advances this. It
+   * measures silence, and the UI may only claim silence.
+   */
   lastActivityAt: number;
 }
 
@@ -530,7 +537,7 @@ export const queue = query({
     const wantsHistory = view === "ALL" || view === "CASH" || view === "FINANCED";
     const cap = limit + 1;
 
-    const [actionableApps, openSales, heldDeposits, rules, historySales, historyApps] =
+    const [appPages, openSales, heldDeposits, rules, historySales, historyApps] =
       await Promise.all([
         Promise.all(
           ACTIONABLE_APP_STATUSES.map((status) =>
@@ -539,7 +546,7 @@ export const queue = query({
               .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", status))
               .take(cap)
           )
-        ).then((pages) => pages.flat()),
+        ),
         ctx.db
           .query("sales")
           .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
@@ -593,7 +600,7 @@ export const queue = query({
     ] as const;
     const OPEN_RECEIVABLE_STATUSES = ["OPEN", "PARTIALLY_PAID", "DISPUTED"] as const;
 
-    const [openPayables, openReceivables] = await Promise.all([
+    const [payablePages, receivablePages] = await Promise.all([
       Promise.all(
         OPEN_PAYABLE_STATUSES.map((status) =>
           ctx.db
@@ -601,7 +608,7 @@ export const queue = query({
             .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", status))
             .take(cap)
         )
-      ).then((pages) => pages.flat()),
+      ),
       Promise.all(
         OPEN_RECEIVABLE_STATUSES.map((status) =>
           ctx.db
@@ -609,11 +616,11 @@ export const queue = query({
             .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", status))
             .take(cap)
         )
-      ).then((pages) => pages.flat()),
+      ),
     ]);
 
     const unsettledSaleIds = new Set<string>();
-    for (const row of [...openPayables, ...openReceivables]) {
+    for (const row of [...payablePages.flat(), ...receivablePages.flat()]) {
       if (row.saleId) unsettledSaleIds.add(row.saleId);
     }
     const unsettledSales = (
@@ -658,21 +665,38 @@ export const queue = query({
     ).flat();
 
     /**
-     * Truncation is now a statement about HISTORY.
+     * EVERY capped scan reports its own overflow. No exceptions.
      *
-     * The actionable population is reached by status, so a needs-attention
-     * queue is never silently short. If one actionable status alone overflows
-     * the cap the org genuinely has more open work than a page, and that is
-     * said too rather than hidden.
+     * The previous version checked the sales, deposit and application buckets
+     * and silently omitted the two supplier-obligation sweeps, which are capped
+     * exactly like the others. An independent review reproduced the
+     * consequence: put more open payables in one status than a page holds, and
+     * the obligation past the cap left `unsettledSaleIds`, left the candidate
+     * set, and left NEEDS_ATTENTION — while this function still answered
+     * `truncated: false`. Unpaid supplier money, on deals already filed as
+     * finished, hidden by a queue asserting it had shown everything.
+     *
+     * So overflow is derived from the pages themselves rather than restated per
+     * source. A capped page is `limit + 1` rows wide precisely so that "one more
+     * than fits" is observable, and every such page is now folded in here — the
+     * bug was possible only because one scan could be added without its cap
+     * being accounted for.
+     *
+     * Per STATUS, not per flattened list: `[...a, ...b].length > limit` would
+     * fire on two half-full buckets that lost nothing, and stay silent on the
+     * one bucket that actually did.
      */
-    const actionableOverflow =
-      openSales.length > limit ||
-      heldDeposits.length > limit ||
-      ACTIONABLE_APP_STATUSES.some(
-        (status) => actionableApps.filter((app) => app.status === status).length > limit
-      );
-    const truncated =
-      actionableOverflow || historySales.length > limit || historyApps.length > limit;
+    const overflowed = (pages: Array<Array<unknown>>): boolean =>
+      pages.some((page) => page.length > limit);
+
+    const actionableOverflow = overflowed([
+      openSales,
+      heldDeposits,
+      ...appPages,
+      ...payablePages,
+      ...receivablePages,
+    ]);
+    const truncated = actionableOverflow || overflowed([historySales, historyApps]);
 
     /**
      * One entry per DEAL, keyed on the identity its row will use.
@@ -719,6 +743,8 @@ export const queue = query({
      * rendered twice. Sequencing the two phases is what makes the sale the
      * canonical anchor whenever one exists, in BOTH pointer directions.
      */
+    const actionableApps = appPages.flat();
+
     await Promise.all([...openSales, ...unsettledSales, ...historySales].map(addSale));
     const claimedByASale = new Set<string>();
     for (const candidate of candidates.values()) {
@@ -752,13 +778,18 @@ export const queue = query({
     ).filter((row): row is DealQueueRow => row !== null);
 
     /**
-     * Attention first, then longest-waiting first.
+     * Attention first, then longest SILENT first.
      *
      * Not newest-first, which is what both existing lists do. This queue exists
-     * to answer "what needs me", and the deal that has been stuck longest is
-     * the one nobody has looked at — putting it last is how a financing company
-     * goes quiet for three weeks without anyone noticing. Finished and stopped
-     * deals sort below everything actionable regardless of age.
+     * to answer "what needs me", and the deal nobody has touched in weeks is the
+     * one nobody has looked at — putting it last is how a financing company goes
+     * quiet without anyone noticing. Finished and stopped deals sort below
+     * everything actionable regardless of age.
+     *
+     * The key is time since the deal last MOVED, not time in its current stage:
+     * no stage-entered timestamp exists in the model, and an ordering is allowed
+     * to be a heuristic. The wording it drives is not, which is why the row says
+     * "days since update" rather than "days waiting".
      */
     const ALL_VIEWS: DealQueueView[] = [
       "ALL",

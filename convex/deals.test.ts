@@ -702,4 +702,157 @@ describe("deals.queue — a finished deal that still owes its supplier", () => {
     });
     expect(attention.rows.map((r) => r.href)).toContain(`/${env.orgId}/sales/${saleId}/deal`);
   });
+
+  test("more unsettled suppliers than the page cap is never reported as a complete worklist", async () => {
+    const env = await setup();
+
+    /**
+     * FAILING FIRST against `f8233afe`.
+     *
+     * The sweep that reaches these deals takes `limit + 1` rows per obligation
+     * status, but the overflow test counted only the sales, deposit and
+     * application buckets — never the payables or receivables. So the obligation
+     * past that cap fell out of `unsettledSaleIds`, out of the candidates and
+     * out of NEEDS_ATTENTION, while the queue still answered `truncated: false`.
+     *
+     * That is the failure this whole screen exists to prevent, in its most
+     * expensive form: unpaid supplier money on deals everyone has already filed
+     * as finished, omitted by a queue asserting it had shown everything.
+     *
+     * The invariant is a disjunction, deliberately: EITHER every actionable
+     * obligation is represented, OR the queue says out loud that it is not
+     * showing everything. It may never quietly claim a complete worklist.
+     */
+    const LIMIT = 2;
+    const OBLIGATIONS = LIMIT + 2;
+    const saleIds: string[] = [];
+
+    for (let index = 0; index < OBLIGATIONS; index += 1) {
+      const vehicleId = await env.t.run((ctx) =>
+        ctx.db.insert("vehicles", {
+          orgId: env.orgId,
+          vin: `1HGCM82633A5000${index}`,
+          make: "Honda",
+          model: "Civic",
+          year: 2020,
+          color: "White",
+          fuelType: "Gasoline",
+          transmission: "Automatic",
+          mileage: 1000,
+          sellingPrice: 12000,
+          status: "SOLD",
+          sourcedFromName: "Waleed",
+          sourceType: "SOURCED",
+        })
+      );
+      const saleId = await env.t.run((ctx) =>
+        ctx.db.insert("sales", {
+          orgId: env.orgId,
+          vehicleId,
+          customerId: env.customerId,
+          salespersonId: env.userId,
+          salePrice: 12000,
+          saleDate: Date.now(),
+          status: "COMPLETED",
+          consignedMarginCurrency: "JOD",
+          supplierSettlementRoute: "THROUGH_DEALERSHIP",
+        })
+      );
+      saleIds.push(saleId);
+      // Every obligation in the SAME status, so one bucket alone overflows.
+      await env.t.run((ctx) =>
+        ctx.db.insert("vehicleSupplierPayables", {
+          orgId: env.orgId,
+          saleId,
+          vehicleId,
+          amountDue: 11000,
+          amountPaid: 0,
+          currency: "JOD",
+          status: "PENDING",
+          sourcedFromName: "Waleed",
+          createdAt: Date.now(),
+          createdBy: env.userId,
+          updatedAt: Date.now(),
+        })
+      );
+    }
+
+    const attention = await env.asUser.query(api.deals.queue, {
+      orgId: env.orgId,
+      view: "NEEDS_ATTENTION",
+      limit: LIMIT,
+    });
+
+    const scanned = new Set(attention.rows.map((row) => row.key));
+    const everyObligationRepresented = saleIds.every((id) => scanned.has(`sale:${id}`));
+    expect(everyObligationRepresented || attention.truncated).toBe(true);
+
+    // And the concrete choice this implementation makes: a single overflowing
+    // obligation bucket is reported, not absorbed. Asserted separately so the
+    // disjunction above cannot be satisfied by an accident of page size.
+    expect(attention.truncated).toBe(true);
+  });
+
+  test("an overflowing receivable bucket is reported too", async () => {
+    const env = await setup();
+
+    // The payable sweep and the receivable sweep are separate queries, so a fix
+    // applied to one proves nothing about the other. DIRECT_TO_SUPPLIER is the
+    // route where the supplier owes the dealership its margin back.
+    const LIMIT = 2;
+    for (let index = 0; index < LIMIT + 2; index += 1) {
+      const vehicleId = await env.t.run((ctx) =>
+        ctx.db.insert("vehicles", {
+          orgId: env.orgId,
+          vin: `1HGCM82633A6000${index}`,
+          make: "Toyota",
+          model: "Yaris",
+          year: 2021,
+          color: "Grey",
+          fuelType: "Gasoline",
+          transmission: "Automatic",
+          mileage: 800,
+          sellingPrice: 10000,
+          status: "SOLD",
+          sourcedFromName: "Waleed",
+          sourceType: "SOURCED",
+        })
+      );
+      const saleId = await env.t.run((ctx) =>
+        ctx.db.insert("sales", {
+          orgId: env.orgId,
+          vehicleId,
+          customerId: env.customerId,
+          salespersonId: env.userId,
+          salePrice: 10000,
+          saleDate: Date.now(),
+          status: "COMPLETED",
+          consignedMarginCurrency: "JOD",
+          supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+        })
+      );
+      await env.t.run((ctx) =>
+        ctx.db.insert("vehicleSupplierReceivables", {
+          orgId: env.orgId,
+          saleId,
+          vehicleId,
+          amountDue: 1000,
+          amountReceived: 0,
+          currency: "JOD",
+          status: "OPEN",
+          sourcedFromName: "Waleed",
+          createdAt: Date.now(),
+          createdBy: env.userId,
+          updatedAt: Date.now(),
+        })
+      );
+    }
+
+    const attention = await env.asUser.query(api.deals.queue, {
+      orgId: env.orgId,
+      view: "NEEDS_ATTENTION",
+      limit: LIMIT,
+    });
+    expect(attention.truncated).toBe(true);
+  });
 });

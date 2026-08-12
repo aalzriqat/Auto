@@ -218,20 +218,32 @@ describe("Arabic RTL and bidi", () => {
     const dealRow = screen.getByTestId("deal-queue-row");
     const isolated = Array.from(dealRow.querySelectorAll("bdi")).map((el) => el.textContent);
     expect(isolated).toContain("5");
-    expect(within(dealRow).getByText("DaysWaiting")).toBeTruthy();
+    expect(within(dealRow).getByText("DealDaysNoActivity")).toBeTruthy();
   });
 
   test("one day reads as singular, not as '1 days'", () => {
     renderQueue({ data: data({ rows: [row({ lastActivityAt: NOW - 1 * DAY })] }) });
-    expect(screen.getByText("DayWaiting")).toBeTruthy();
-    expect(screen.queryByText("DaysWaiting")).toBeNull();
+    expect(screen.getByText("DealDayNoActivity")).toBeTruthy();
+    expect(screen.queryByText("DealDaysNoActivity")).toBeNull();
   });
 
   test("today is a word, not a zero", () => {
     renderQueue({ data: data({ rows: [row({ lastActivityAt: NOW - 60_000 })] }) });
-    // "0 days waiting" reads as broken. A deal touched an hour ago has not been
-    // waiting a countable number of days.
-    expect(screen.getByText("WaitingToday")).toBeTruthy();
+    // "0 days" reads as broken. A deal touched an hour ago has not been silent
+    // for a countable number of days.
+    expect(screen.getByText("DealActivityToday")).toBeTruthy();
+  });
+
+  test("the row never claims time spent in the current stage", () => {
+    // The metric is silence since the deal last moved. `lastActivityAt` is an
+    // application's `updatedAt` or a sale's creation, and an edit that changes
+    // nothing about the stage still resets it — so wording built on "waiting"
+    // put a precise claim on a number that does not carry one. Asserted as a
+    // rendered fact, because the previous copy compiled perfectly.
+    renderQueue({ data: data({ rows: [row({ lastActivityAt: NOW - 9 * DAY })] }) });
+    const dealRow = screen.getByTestId("deal-queue-row");
+    expect(within(dealRow).queryByText(/Waiting$/)).toBeNull();
+    expect(within(dealRow).queryByText("DaysWaiting")).toBeNull();
   });
 });
 

@@ -676,7 +676,7 @@ export const salesEn = {
   Deals: "Deals",
   DealsQueueTitle: "Deals",
   DealsQueueSubtitle:
-    "Every cash and financed deal on the floor, with whatever is holding it up. The longest-stuck work is at the top.",
+    "Every cash and financed deal on the floor, with whatever is holding it up. Whatever has gone longest without an update is at the top.",
   DealViewNeedsAttention: "Needs attention",
   DealViewAll: "All",
   // Named for who is being waited ON, not for what the dealership should do —
@@ -691,8 +691,11 @@ export const salesEn = {
   DealNoOpenStep: "Nothing outstanding",
   DealDepositAwaitingResolution: "The customer's deposit still has to be refunded or forfeited",
   UnknownCustomer: "Customer not recorded",
-  WaitingToday: "today",
-  DayWaiting: "day waiting",
+  // Silence since the deal last moved — NOT time spent in the current step,
+  // which nothing in the model records. See `daysSinceLastActivity`.
+  DealActivityToday: "active today",
+  DealDayNoActivity: "day since update",
+  DealDaysNoActivity: "days since update",
   DealsQueueEmptyTitle: "Nothing here",
   DealsQueueEmptyNeedsAttention: "Every deal on the floor is waiting on someone else, or finished.",
   DealsQueueEmptyView: "No deals match this view yet.",
@@ -1435,7 +1438,7 @@ export const salesAr = {
   Deals: "الصفقات",
   DealsQueueTitle: "الصفقات",
   DealsQueueSubtitle:
-    "كل صفقات المعرض، نقدية وتمويلية، مع ما يعيق كل واحدة منها. الأطول توقّفاً في الأعلى.",
+    "كل صفقات المعرض، نقدية وتمويلية، مع ما يعيق كل واحدة منها. الأطول بلا تحديث في الأعلى.",
   DealViewNeedsAttention: "تحتاج إجراءً",
   DealViewAll: "الكل",
   // مُسمّاة بمن ننتظره، لا بما على المعرض فعله — فلا إجراء هنا، وهذا هو مغزى العرض.
@@ -1449,8 +1452,9 @@ export const salesAr = {
   DealNoOpenStep: "لا يوجد ما ينتظر",
   DealDepositAwaitingResolution: "دفعة العميل المقدَّمة لم تُرَدّ ولم تُصادَر بعد",
   UnknownCustomer: "العميل غير مُسجَّل",
-  WaitingToday: "اليوم",
-  DayWaiting: "يوم انتظار",
+  DealActivityToday: "نشاط اليوم",
+  DealDayNoActivity: "يوم بلا تحديث",
+  DealDaysNoActivity: "أيام بلا تحديث",
   DealsQueueEmptyTitle: "لا يوجد شيء هنا",
   DealsQueueEmptyNeedsAttention: "كل صفقات المعرض إمّا بانتظار طرف آخر أو منتهية.",
   DealsQueueEmptyView: "لا توجد صفقات مطابقة لهذا العرض.",
