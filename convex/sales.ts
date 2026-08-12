@@ -17,7 +17,17 @@ import {
   consignedSettlementRoute,
   consignedSettlementRouteValidator,
   isConsignedAgentSale,
+  recordedConsignedMargin,
+  recordedSupplierEntitlement,
+  saleIsAgentSale,
 } from "./utils/vehicleOwnership";
+import {
+  deriveAccountingProfit,
+  deriveCashDealStages,
+  obligationFromRow,
+  positionForObligation,
+  type ObligationState,
+} from "./utils/financingEconomics";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
 import { completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN } from "./utils/saleCompletion";
@@ -28,7 +38,13 @@ import { throwAppError, AppErrorCode } from "./utils/errors";
 import { getOrgCurrency, hookCommissionAccrued, hookCommissionAdjusted, hookCommissionPaid, hookSaleCancelled, isPostableNow, reverseCommissionForSale, commissionAccountingDate, commissionAccrualStrandedReason, commissionEntriesOutstandingStatus, hasCommissionAccrual, recognizedCommissionMinor, safeAdjustmentSeq, MAX_COMMISSION_ADJUSTMENTS } from "./accounting/workflowHooks";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 import { depositMethodValidator } from "./utils/depositRecording";
-import { toMinorUnits, fromMinorUnits, assertFiniteNumber } from "./utils/money";
+import {
+  toMinorUnits,
+  fromMinorUnits,
+  assertFiniteNumber,
+  toMinorSameCurrencyOrUndefined,
+  outstandingMinorFromMajor,
+} from "./utils/money";
 import { allocatedDepositForVehicle } from "./utils/depositAllocation";
 import { planDepositSettlementApplication } from "./utils/depositSettlementPlan";
 import { checkPostingAllowed } from "./accountingPeriods";
@@ -2086,6 +2102,484 @@ export const consignedSalePreview = query({
        * disagreeing with the posting.
        */
       depositSettlement,
+    };
+  },
+});
+
+/**
+ * Everything the deal screen renders for a CASH sale, from one query.
+ *
+ * The sibling of `applications.dealCockpit`, and deliberately a sibling rather
+ * than a branch inside it: a financed deal is keyed on an application that may
+ * not have a sale yet, and a cash deal is keyed on a sale that has no
+ * application at all. One handler taking either id would have spent its whole
+ * body asking which of the two it was holding.
+ *
+ * What is NOT duplicated is anything that decides a number or a state. The
+ * headline comes from `saleEconomics`, the same function `reports.salesReport`
+ * totals into `totalProfit`; the party row reads `obligationFromRow` /
+ * `positionForObligation`, the same translation the financed cockpit uses; and
+ * the frozen margin is read through `recordedConsignedMargin`, the same guarded
+ * reader. SCRUM-29's one hard rule is that unifying the screen must not fork the
+ * arithmetic, and shared helpers are how that is enforced rather than promised.
+ *
+ * The money here is a DIFFERENT KIND of number from the financed screen's, and
+ * that difference is the point. A cash deal's profit is an ordinary accounting
+ * result with a journal behind it, so it is `reconcilesToLedger: true` and
+ * carries no estimate qualifier — note it does NOT claim to be `postable`, which
+ * would read as a licence to post from a derived figure. The financed headline is
+ * a management figure built on a spread that appears on no invoice, and carries
+ * `postable: false`. `basis` keeps them apart at the type level, so no renderer
+ * can show one wearing the other's label.
+ *
+ * Returns `null` for a sale that does not exist, is deleted, or belongs to
+ * another org — indistinguishable on purpose, so a probe cannot use this screen
+ * to discover which ids are real.
+ */
+export const dealCockpit = query({
+  args: {
+    orgId: v.id("organizations"),
+    saleId: v.id("sales"),
+  },
+  handler: async (ctx, args) => {
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+
+    const sale = await ctx.db.get(args.saleId);
+    if (!sale || sale.orgId !== args.orgId || sale.isDeleted) return null;
+
+    // Same split as the financed cockpit: a salesperson follows their own deal's
+    // progress without seeing what the dealership made on it. Enforced on the
+    // SERVER, because a permission enforced by rendering is not enforced.
+    const canSeeMoney =
+      isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_FINANCE);
+
+    const [vehicle, customer, salesperson] = await Promise.all([
+      ctx.db.get(sale.vehicleId),
+      ctx.db.get(sale.customerId),
+      ctx.db.get(sale.salespersonId),
+    ]);
+
+    // The currency the sale FROZE in when it is consigned, falling back to the
+    // org's. Not the org's current setting on a consigned row: that field is what
+    // every frozen figure below is denominated in, and rescaling by a currency
+    // the org switched to later renders an in-flight deal at the wrong power of
+    // ten — the same trap the financed cockpit solved with `economicsCurrency`.
+    const currency = sale.consignedMarginCurrency ?? (await getOrgCurrency(ctx, args.orgId));
+
+    const dealCancelled = sale.status === "CANCELLED";
+
+    // --- the supplier's obligation, which drives both the rail and the row ---
+    // Resolved ONCE and shared, so the terminal stage and the party row can never
+    // disagree about whether the supplier still owes anything. That exact
+    // disagreement — a rail saying COMPLETE beside a row saying UNKNOWN — was a
+    // confirmed defect on the financed screen.
+    const route = consignedSettlementRoute({
+      supplierSettlementRoute: sale.supplierSettlementRoute,
+    });
+    const collectsGross = dealershipCollectsGross(route);
+
+    /**
+     * Through the SHARED classifier, not a local rule.
+     *
+     * This read `vehicle ? isConsignedAgentSale(vehicle) : false`, which is
+     * narrower than what `saleEconomics` applies, and the two disagreed exactly
+     * when the vehicle row was hard-deleted and the sale's frozen evidence
+     * survived. The headline then reported a real agency margin while this flag
+     * said "not consigned" — skipping the supplier-obligation lookup, so the
+     * rail read SETTLEMENT: COMPLETE and the supplier row vanished, hiding an
+     * open claim. One classification, so the rail and the headline cannot reach
+     * different verdicts about the same deal.
+     */
+    const consigned = saleIsAgentSale({
+      vehicle: vehicle ?? null,
+      salePrice: sale.salePrice,
+      recordedMargin: recordedConsignedMargin(sale),
+      recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
+      settlesDirect: !collectsGross,
+    });
+
+    let supplierObligation: ObligationState = "NONE";
+    let supplierOutstandingMinor: number | undefined;
+    let supplierReference: string | undefined;
+    let supplierReceivableId: Id<"vehicleSupplierReceivables"> | undefined;
+
+    if (consigned && collectsGross) {
+      // THROUGH_DEALERSHIP: the gross landed here, so his share is a payable.
+      const payables = await ctx.db
+        .query("vehicleSupplierPayables")
+        .withIndex("by_sale", (q) => q.eq("saleId", sale._id))
+        .collect();
+      const payable = payables.find(
+        (row) => row.orgId === args.orgId && row.status !== "CANCELLED"
+      );
+      supplierObligation = payable
+        ? obligationFromRow({
+            due: payable.amountDue,
+            settled: payable.amountPaid ?? 0,
+            rowCurrency: payable.currency,
+            queryCurrency: currency,
+            storedPaid: payable.status === "PAID",
+          })
+        : // A consigned sale with no payable row is missing the evidence, not
+          // proof of settlement. UNKNOWN keeps the stage open; NONE would report
+          // a deal finished on the strength of an absent record.
+          "UNKNOWN";
+      supplierOutstandingMinor = payable
+        ? outstandingMinorFromMajor(
+            payable.amountDue,
+            payable.amountPaid ?? 0,
+            payable.currency,
+            currency
+          )
+        : undefined;
+    } else if (consigned) {
+      // DIRECT_TO_SUPPLIER: the buyer paid him, so he holds the dealership's
+      // margin and owes it back.
+      const receivables = await ctx.db
+        .query("vehicleSupplierReceivables")
+        .withIndex("by_sale", (q) => q.eq("saleId", sale._id))
+        .collect();
+      const claim = receivables.find(
+        (row) => row.orgId === args.orgId && row.status !== "CANCELLED"
+      );
+      supplierObligation = claim
+        ? obligationFromRow({
+            due: claim.amountDue,
+            settled: claim.amountReceived ?? 0,
+            rowCurrency: claim.currency,
+            queryCurrency: currency,
+            storedPaid: claim.status === "PAID",
+          })
+        : "UNKNOWN";
+      supplierOutstandingMinor = claim
+        ? outstandingMinorFromMajor(
+            claim.amountDue,
+            claim.amountReceived ?? 0,
+            claim.currency,
+            currency
+          )
+        : undefined;
+      supplierReference = claim?.receiptReference;
+      supplierReceivableId = claim?._id;
+    }
+
+    // A cancelled sale's obligations were cancelled with it, so the rail must not
+    // sit blocked on a settlement that will never happen.
+    const settlementComplete =
+      dealCancelled || supplierObligation === "CLOSED" || supplierObligation === "NONE";
+
+    const stages = deriveCashDealStages({
+      saleStatus: sale.status,
+      settlementComplete,
+    });
+
+    /**
+     * A cash sale has no status-log table, so the timeline is derived from the
+     * sale row itself.
+     *
+     * `changedAt` is OPTIONAL, and that is the whole design. Two earlier
+     * attempts failed because this entry conflated a STATUS TRANSITION with a
+     * moment that must exist and must be renderable:
+     *
+     *  - Sorting on `changedAt` inverted the labels. `saleDate` is a
+     *    caller-supplied BUSINESS date, so an ordinary back-dated sale sorted to
+     *    `COMPLETED -> PENDING` — a completed deal whose history ends in
+     *    "pending".
+     *  - Dropping the entry when the moment was unreadable produced a screen
+     *    that badged the sale COMPLETED while its own history stopped at
+     *    PENDING, which contradicts itself.
+     *
+     * Separating the two removes both classes at once. The transition is ALWAYS
+     * emitted, so a status is never withheld for want of a timestamp; the moment
+     * rides along only when it is real. Order is causal by construction —
+     * pending precedes completed because a sale is pending before it completes,
+     * whichever clock recorded which — so nothing needs sorting, and a
+     * `saleDate` earlier than `_creationTime` is not a corruption but the true
+     * statement that the sale happened before it was entered.
+     *
+     * `Number.isFinite` because Convex's `v.number()` accepts NaN and Infinity,
+     * so a corrupt `saleDate` arrives intact, and the view renders moments
+     * through date-fns `format`, which throws `RangeError: Invalid time value`
+     * on a non-finite input — an uncaught throw during render takes down the
+     * whole screen, not one row.
+     */
+    const actorName = salesperson && "name" in salesperson ? (salesperson.name ?? "") : "";
+    const timeline: Array<{
+      fromStatus?: string;
+      toStatus: string;
+      changedAt?: number;
+      actorName: string;
+      note?: string;
+    }> = [
+      {
+        toStatus: "PENDING",
+        // System-stamped and therefore always real, but read through the same
+        // rule as every other moment rather than trusted for its provenance.
+        ...(Number.isFinite(sale._creationTime) ? { changedAt: sale._creationTime } : {}),
+        actorName,
+      },
+    ];
+    if (sale.status === "COMPLETED") {
+      timeline.push({
+        fromStatus: "PENDING",
+        toStatus: "COMPLETED",
+        ...(Number.isFinite(sale.saleDate) ? { changedAt: sale.saleDate } : {}),
+        actorName,
+      });
+    }
+    /**
+     * DELIBERATELY NOT SORTED BY `changedAt`, and the reason is worth keeping.
+     *
+     * A review round asked for a chronological sort, on the grounds that a
+     * back-dated sale could otherwise print a later transition above an earlier
+     * one. Sorting was implemented and was WRONG: `saleDate` is a caller-supplied
+     * BUSINESS date, not a status-transition timestamp, so for the ordinary
+     * back-dated sale — recorded Tuesday for last week — sorting by it yields
+     * `COMPLETED -> PENDING`, a completed deal whose history ends in "pending".
+     *
+     * These two entries are a STATE SEQUENCE, not independent timestamped
+     * events. A sale is pending before it is completed regardless of which
+     * clock recorded which moment, so the order is the logical one and the dates
+     * are rendered as-is. A `saleDate` earlier than `_creationTime` is not a
+     * corruption to be sorted away — it is the true statement that the sale
+     * happened before it was entered.
+     *
+     * There is also no CANCELLED entry, and the reason is narrower than "no
+     * such timestamp exists".
+     *
+     * One IS computed: `sales.update` derives `cancellationDate` and
+     * `saleCancellation.ts` writes it as `cancelledAt` onto the receivable and
+     * payable rows it closes. But it is never persisted onto the `sales` row
+     * this query reads; it only exists at all for a CONSIGNED deal with a live
+     * supplier leg; and the obligation lookups above deliberately skip
+     * `status === "CANCELLED"` rows, so it is unreachable from here regardless.
+     *
+     * The one field within reach is `saleDate`, and labelling a "Cancelled"
+     * event with the ORIGINAL sale date would state something false. So the
+     * entry is omitted rather than guessed. Surfacing it honestly needs a
+     * persisted `cancelledAt` on `sales` — a schema change, tracked separately.
+     * Until then the cancellation is stated by the status badge and by the
+     * headline's `DealCancelled` refusal.
+     */
+
+    /**
+     * A sale that came from a finance application is NOT this screen's deal.
+     *
+     * ⚠️ This is the sharpest edge in SCRUM-29 and it fails CLOSED.
+     *
+     * `sales.applicationId` is set on every financed deal once `finalizeDeal`
+     * runs, so the sale-keyed route can be opened on a financed sale. If this
+     * query answered normally, that deal would show `NetDealershipProfit` as the
+     * POSTABLE accounting margin, while `/applications/[id]/deal` shows the same
+     * label carrying the UNPOSTABLE management figure — two different
+     * owner-facing profit numbers for one deal, under one label, on two screens.
+     * That is precisely the defect the cockpit was built to remove, arriving by
+     * the back door.
+     *
+     * So the money is withheld outright and the caller is told where the deal
+     * actually lives. Both halves matter: the client redirects, and even if it
+     * did not, there is no second profit here to misread.
+     */
+    const financingApplicationId = sale.applicationId ?? null;
+
+    /**
+     * FINANCED is a property of the SALE, not of whether an application exists.
+     *
+     * `sales.create` accepts `financingType: "FINANCED" | "LEASE"` and has no
+     * `applicationId` field at all, so an applicationless financed sale is
+     * ordinary and creatable. Deriving the kind from `applicationId` alone
+     * labelled those "CASH" and titled them "Sale".
+     *
+     * This is a LABELLING fix, and deliberately not a refusal. The dangerous
+     * shape — financed + consigned + DIRECT_TO_SUPPLIER without an approved
+     * amount, where `salePrice − entitlement` reaches no party — is already
+     * refused at the write path (`FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT` in
+     * `prepareSaleCompletion`) and, for rows predating that guard, at the read
+     * path: `saleEconomics` returns a null margin for it because
+     * `externallyFinanced` is passed through. For every other financed shape
+     * there is no management figure to be confused with — no application means
+     * no approved-purchase spread — so the ordinary margin IS the postable
+     * accounting result, and reporting it is correct rather than a misstatement.
+     */
+    const externallyFinanced =
+      sale.financingType === "FINANCED" || sale.financingType === "LEASE";
+
+    const base = {
+      /**
+       * What KIND of deal this is, read from the row rather than assumed. The
+       * view branches on it; it never guesses.
+       */
+      dealKind: (financingApplicationId || externallyFinanced ? "FINANCED" : "CASH") as
+        | "CASH"
+        | "FINANCED",
+      /** Set when this deal's real screen is the application-keyed one. */
+      financingApplicationId,
+      /** The id whose tail the header shows. */
+      dealRef: sale._id as string,
+      saleId: sale._id,
+      /** Absent, not empty: a cash deal has no finance application. */
+      applicationId: null,
+      status: sale.status,
+      createdAt: sale._creationTime,
+      /**
+       * `sales` records no update timestamp, so this is genuinely unknown rather
+       * than "same as created". The view falls back to `createdAt`; substituting
+       * it here would assert the row had never been touched since.
+       */
+      updatedAt: undefined as number | undefined,
+      customer: customer && {
+        id: customer._id,
+        name: `${customer.firstName} ${customer.lastName}`.trim(),
+        phone: customer.phone,
+      },
+      vehicle: vehicle && {
+        id: vehicle._id,
+        label: `${vehicle.make} ${vehicle.model} ${vehicle.year}`.trim(),
+        vin: vehicle.vin,
+        consigned,
+        supplierName: vehicle.sourcedFromName,
+      },
+      salespersonName: actorName,
+      /** Empty on a cash deal, and the view renders no financier row at all. */
+      financeCompanyName: "",
+      /**
+       * Financed-only conditions, constant here rather than absent so the view's
+       * shape stays one type across both kinds of deal.
+       */
+      settlementAdviceRequiresReconciliation: false,
+      settlementAdviceDiscrepancy: null,
+      stages,
+      /**
+       * Empty, and the view hides the card rather than showing an empty one. The
+       * checklist is driven by `companyDocumentRules` with per-deal status in
+       * `applicationDocuments`, keyed by APPLICATION — a cash sale has no row
+       * there and no way to acquire one, so there is genuinely nothing to show.
+       */
+      documents: [] as Array<{
+        ruleId: string;
+        name: string;
+        required: boolean;
+        status: string;
+        uploadedAt?: number;
+      }>,
+      timeline,
+    };
+
+    // Withheld for a financed deal even from a caller who may see money — see
+    // the note above. Not a permission decision: there is no second profit for
+    // this deal to publish, at any permission level.
+    if (!canSeeMoney || financingApplicationId) return { ...base, money: null };
+
+    const capitalizedCost = vehicle ? await computeVehicleCapitalizedCost(ctx, vehicle) : 0;
+    // The SAME call the sales report makes, with the same recorded inputs. Not a
+    // re-derivation: `salePrice - cost` is the wrong answer on a consigned direct
+    // row, and this is the one function that already knows that.
+    const economics = saleEconomics({
+      salePrice: sale.salePrice,
+      vehicle: vehicle ?? null,
+      capitalizedCost,
+      supplierSettlementRoute: sale.supplierSettlementRoute,
+      recordedMargin: recordedConsignedMargin(sale),
+      recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
+      externallyFinanced:
+        sale.financingType === "FINANCED" || sale.financingType === "LEASE",
+    });
+
+    // Major to minor happens HERE and only here. `saleEconomics` works in MAJOR
+    // units — `recordedConsignedMargin` converts on the way in — while the screen
+    // renders minor. `toMinorSameCurrencyOrUndefined` is used rather than
+    // `toMinorUnits` because it refuses NaN and overflow instead of throwing, and
+    // a throw inside a query blanks the whole screen over one corrupt row.
+    const marginMinor =
+      economics.dealershipMargin === null
+        ? null
+        : (toMinorSameCurrencyOrUndefined(economics.dealershipMargin, currency, currency) ?? null);
+    const entitlementMinor =
+      economics.supplierSettlement === null
+        ? null
+        : (toMinorSameCurrencyOrUndefined(economics.supplierSettlement, currency, currency) ?? null);
+
+    const parties = consigned
+      ? [
+          {
+            party: "SUPPLIER" as const,
+            name: vehicle?.sourcedFromName ?? "",
+            position: positionForObligation(
+              supplierObligation,
+              // Same row, opposite direction, decided by the route: the
+              // dealership owes him a share of the gross on one, and he owes the
+              // margin back on the other.
+              collectsGross ? "DEALERSHIP_OWES" : "OWED_TO_DEALERSHIP"
+            ),
+            amountMinor: supplierOutstandingMinor ?? 0,
+            currency,
+            reference: supplierReference,
+            receivableId: supplierReceivableId,
+          },
+        ]
+      : [];
+
+    return {
+      ...base,
+      money: {
+        currency,
+        settlesDirectToSupplier: consigned && !collectsGross,
+        /**
+         * Always true here. The route is recorded per deal and an absent value
+         * reads as THROUGH_DEALERSHIP, which is what those rows actually posted —
+         * so unlike the financed screen there is no unknown-route state to warn
+         * about.
+         */
+        routeKnown: true,
+        profit: deriveAccountingProfit({
+          dealCancelled,
+          // A PENDING draft has posted nothing, so it has no journal to call
+          // this figure postable against.
+          saleCompleted: sale.status === "COMPLETED",
+          /**
+           * The financed DIRECT route with no application behind it.
+           *
+           * Reached only by rows that predate the write-path guard, and their
+           * frozen margin may be the sale-price spread — a figure that reaches
+           * no party on this route. Nothing on the row can prove what the
+           * financier approved, so the headline is withheld rather than guessed.
+           * A row WITH an application never gets here: `money` is already null
+           * for those, because its deal screen is the application-keyed one.
+           */
+          financedDirectWithoutApproval:
+            consigned && externallyFinanced && !collectsGross && !financingApplicationId,
+          dealershipMarginMinor: marginMinor,
+          // `?? null`, never `?? 0`. An amount that could not be READ is not an
+          // amount of nought, and these two used to be `?? 0` — which printed
+          // "Sale price: 0.000" beside a valid headline whenever a corrupt price
+          // sat on a sale whose margin was frozen independently.
+          salePriceMinor:
+            toMinorSameCurrencyOrUndefined(sale.salePrice, currency, currency) ?? null,
+          recognizedCostMinor:
+            toMinorSameCurrencyOrUndefined(economics.recognizedCost, currency, currency) ?? null,
+          supplierEntitlementMinor: consigned ? entitlementMinor : null,
+          currency,
+        }),
+        /**
+         * Empty, and honestly so. Vehicle expenses are already inside
+         * `capitalizedCost` and therefore already inside the margin above;
+         * listing them again as a separate deduction would show the owner a cost
+         * subtracted twice. The financed screen's expense lines are FEE records
+         * on the application, which a cash sale does not have.
+         */
+        expenses: {
+          lines: [] as Array<{
+            id: string;
+            feeType: string;
+            description?: string;
+            actualAmountMinor?: number;
+          }>,
+          actualTotalMinor: 0,
+          awaitingActuals: 0,
+        },
+        parties,
+        appraisalGapMinor: undefined as number | undefined,
+      },
     };
   },
 });

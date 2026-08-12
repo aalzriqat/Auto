@@ -52,8 +52,30 @@ test.describe("sales", () => {
     await expect(
       page.getByText("Cash sale completed successfully"),
     ).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: "Sale Completed ✓" }),
-    ).toBeVisible();
+
+    /**
+     * SCRUM-29: completing a cash sale opens the DEAL, not the sales list.
+     *
+     * This previously asserted a "Sale Completed ✓" link, which pointed at
+     * `/sales?highlightId=…` — it returned the operator to the LIST, which is
+     * the thing this issue exists to stop being the destination. That assertion
+     * failing is how the change was confirmed to reach the real workflow rather
+     * than only the component tests.
+     *
+     * The `href` is asserted as well as the label, because a link whose text
+     * changed while it still went to the list would satisfy a text-only check.
+     */
+    const openDeal = page.getByRole("link", { name: "Open Deal" });
+    await expect(openDeal).toBeVisible();
+    await expect(openDeal).toHaveAttribute("href", /\/sales\/[^/]+\/deal$/);
+
+    // And it actually arrives: the sale-keyed deal route is new in SCRUM-29, so
+    // this is the only place that proves it resolves and renders in a browser
+    // rather than in jsdom. "Status history" is present for every deal, at every
+    // permission level — the money panel is not, so it is the wrong thing to
+    // wait on here.
+    await openDeal.click();
+    await expect(page).toHaveURL(/\/sales\/[^/]+\/deal$/);
+    await expect(page.getByText("Status history")).toBeVisible();
   });
 });

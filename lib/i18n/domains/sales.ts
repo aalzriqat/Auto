@@ -95,6 +95,10 @@ export const salesEn = {
   SubmitSale: "Submit Sale",
   SaleCompleted: "Sale Completed ✓",
   SaleCompletedSuccess: "Cash sale completed successfully",
+  // Where completing a cash sale now sends the operator: the deal's own screen,
+  // not the sales list. One per car when the quote completed several.
+  OpenDeal: "Open Deal",
+  DealsCreatedForEachVehicle: "A deal was created for each vehicle",
   StartFinanceApplication: "Start Finance Application",
   ViewApplication: "View Application →",
   ApplicationStartedSuccess: "Finance application started successfully",
@@ -657,6 +661,25 @@ export const salesEn = {
   LineSupplierSettlement: "Supplier settlement",
   LineDealerContribution: "Dealership contribution to financing",
   LineActualExpenses: "Actual expenses",
+  // --- Cash deal: the same screen, a different KIND of money ------------
+  // The cash headline is an ordinary accounting result and reconciles to the
+  // books, so it carries no "estimated / never posted" qualifier at all.
+  DealCockpitTitleCash: "Sale",
+  StageSaleAgreed: "Sale agreed",
+  // Named for the STATUS enum they render. `SaleCompleted` already exists as the
+  // completion toast ("Sale Completed ✓"), and reusing it would have put a
+  // celebratory tick inside a status timeline.
+  SaleStatusPending: "Pending",
+  SaleStatusCompleted: "Completed",
+  LineSalePrice: "Sale price",
+  LineVehicleCost: "Vehicle cost",
+  LineSupplierEntitlement: "Supplier's entitlement",
+  ProfitUnknownMargin:
+    "What this deal earned is not recorded, so it cannot be shown. It is not zero.",
+  ProfitSaleNotCompleted:
+    "This sale has not been completed, so nothing has been posted to the books yet.",
+  ProfitFinancedDirectUnverified:
+    "This deal was financed and settled directly with the supplier, and what the finance company approved is not recorded — so what the dealership earned cannot be shown.",
   ActualExpensesHeading: "Actual expenses",
   ExpensesAwaitingActuals: "still without a recorded actual",
   NoExpensesRecorded: "No expenses recorded yet.",
@@ -808,6 +831,8 @@ export const salesAr = {
   SubmitSale: "إرسال البيع",
   SaleCompleted: "تم البيع ✓",
   SaleCompletedSuccess: "تم إتمام البيع النقدي بنجاح",
+  OpenDeal: "فتح الصفقة",
+  DealsCreatedForEachVehicle: "تم إنشاء صفقة لكل مركبة",
   StartFinanceApplication: "بدء طلب التمويل",
   ViewApplication: "عرض الطلب ←",
   ApplicationStartedSuccess: "تم بدء طلب التمويل بنجاح",
@@ -1372,6 +1397,18 @@ export const salesAr = {
   LineSupplierSettlement: "تسوية المورد",
   LineDealerContribution: "مساهمة المعرض في التمويل",
   LineActualExpenses: "مصاريف فعلية",
+  // --- صفقة نقدية: نفس الشاشة، ونوع مختلف من الأرقام ---------------------
+  DealCockpitTitleCash: "صفقة بيع",
+  StageSaleAgreed: "اتفاق البيع",
+  SaleStatusPending: "قيد الإنجاز",
+  SaleStatusCompleted: "مكتملة",
+  LineSalePrice: "سعر البيع",
+  LineVehicleCost: "تكلفة المركبة",
+  LineSupplierEntitlement: "مستحق المورد",
+  ProfitUnknownMargin: "ربح هذه الصفقة غير مُسجَّل، لذا لا يمكن عرضه. وهو ليس صفراً.",
+  ProfitSaleNotCompleted: "لم تكتمل عملية البيع بعد، فلا توجد قيود مُرحَّلة إلى الدفاتر.",
+  ProfitFinancedDirectUnverified:
+    "صفقة مموَّلة وتمت تسويتها مباشرة مع المورد، وقيمة الشراء المعتمدة من شركة التمويل غير مُسجَّلة، لذا لا يمكن عرض ربح المعرض.",
   ActualExpensesHeading: "المصاريف الفعلية",
   ExpensesAwaitingActuals: "بلا مبلغ فعلي مُسجَّل",
   NoExpensesRecorded: "لا توجد مصاريف مُسجَّلة بعد.",

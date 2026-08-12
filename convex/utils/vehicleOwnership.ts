@@ -1,5 +1,7 @@
 import { v } from "convex/values";
+import { Doc } from "../_generated/dataModel";
 import { grossTransactionValueForSale } from "./grossTransactionValue";
+import { fromMinorUnits } from "./money";
 
 /**
  * Who owns a vehicle, and what the dealership is when it sells one.
@@ -279,6 +281,107 @@ export interface SaleEconomics {
  * ones that read the cashflow ledger cannot drift apart. See
  * utils/grossTransactionValue.
  */
+/**
+ * The margin the SALE froze at completion, in major units, or `undefined`.
+ *
+ * Moved here from `reports.ts` for SCRUM-29, unchanged. The deal screen reads
+ * the same frozen figure the sales report reads, so an owner cannot open one
+ * deal and see a different profit from the one the report totalled — which is
+ * the entire reason `saleEconomics` takes a recorded margin at all.
+ *
+ * Every guard is deliberate. `sales` is editable through the super-admin
+ * raw-JSON editor, so a corrupt value arrives at the READER, not at the write
+ * path — `saleCompletion` already refuses a sourced sale below the supplier's
+ * entitlement. `NaN` is the one that does real damage: Convex accepts it under a
+ * `v.number()` validator, it is not `null` so it escapes every unknown-margin
+ * count, and one `total += NaN` renders an entire org's profit as `NaN`.
+ *
+ * Returning `undefined` hands the decision back to `saleEconomics`, which is
+ * where "what does an absent margin mean on THIS route" already lives.
+ */
+export function recordedConsignedMargin(sale: Doc<"sales">): number | undefined {
+  const minor = sale.consignedMarginMinor;
+  const currency = sale.consignedMarginCurrency;
+  if (minor === undefined || !currency) return undefined;
+  if (!Number.isFinite(minor) || minor < 0) return undefined;
+  return fromMinorUnits(minor, currency);
+}
+
+/**
+ * What the supplier was owed on this sale, frozen at completion, in major units.
+ *
+ * Same guards and the same currency as the margin beside it, and for the same
+ * reason: `sourceCost` stays editable after a consigned sale, so deriving the
+ * supplier's entitlement from the live vehicle reports a settlement figure the
+ * GL, the subledger and the claim never used. A sale frozen at a 3,000 margin
+ * against a 15,000 entitlement would show 3,000 beside a live 16,000 — two
+ * halves of one deal on two different bases.
+ */
+export function recordedSupplierEntitlement(sale: Doc<"sales">): number | undefined {
+  const minor = sale.consignedSupplierEntitlementMinor;
+  const currency = sale.consignedMarginCurrency;
+  if (minor === undefined || !currency) return undefined;
+  if (!Number.isFinite(minor) || minor < 0) return undefined;
+  return fromMinorUnits(minor, currency);
+}
+
+/**
+ * The supplier's frozen entitlement, if the row carries one worth believing.
+ *
+ * Bounded on BOTH sides. An entitlement above the gross subtracts to a negative
+ * margin; a negative one subtracts to a margin LARGER than the whole car and
+ * publishes the supplier's own share as a negative number. Same corruption
+ * class, opposite directions, so one rule refuses both. `NaN` needs no separate
+ * case: every comparison against it is false, so it can satisfy neither bound.
+ */
+function validFrozenEntitlementFor(
+  recordedSupplierEntitlement: number | undefined,
+  salePrice: number
+): number | undefined {
+  return recordedSupplierEntitlement !== undefined &&
+    recordedSupplierEntitlement >= 0 &&
+    recordedSupplierEntitlement <= salePrice
+    ? recordedSupplierEntitlement
+    : undefined;
+}
+
+/**
+ * Whether this sale is an AGENT (consigned) sale — the one classification.
+ *
+ * ⚠️ Extracted for SCRUM-29 because a second surface needed the answer and got
+ * it wrong. `sales.dealCockpit` asked `vehicle ? isConsignedAgentSale(vehicle) :
+ * false`, which is the narrow rule; this one is what `saleEconomics` has always
+ * used. They disagree precisely when the vehicle row is GONE — reachable through
+ * the `/admin` raw-JSON editor — and the sale's own frozen evidence survives.
+ *
+ * The consequence was not cosmetic: the cockpit's headline reported a real
+ * agency margin (because `saleEconomics` classified it correctly) while the
+ * stage rail reported the deal fully settled and the supplier row disappeared,
+ * because the narrow rule skipped the supplier-obligation lookup entirely. The
+ * screen hid an open claim for money the supplier still owed.
+ *
+ * The vehicle answers whenever it is present. Only when the row is genuinely
+ * gone does the sale's own evidence stand in: a recorded consigned margin, a
+ * direct settlement route — which `setSupplierSettlementRoute` refuses on
+ * dealer-owned stock, making it a positive consignment signal — or a surviving
+ * frozen entitlement, which exists ONLY on a consigned sale.
+ */
+export function saleIsAgentSale(args: {
+  vehicle: OwnershipFacts | null;
+  salePrice: number;
+  recordedMargin?: number;
+  recordedSupplierEntitlement?: number;
+  /** DIRECT_TO_SUPPLIER — itself a positive consignment signal. */
+  settlesDirect: boolean;
+}): boolean {
+  if (args.vehicle !== null) return isConsignedAgentSale(args.vehicle);
+  return (
+    args.recordedMargin !== undefined ||
+    args.settlesDirect ||
+    validFrozenEntitlementFor(args.recordedSupplierEntitlement, args.salePrice) !== undefined
+  );
+}
+
 export function saleEconomics(args: {
   salePrice: number;
   /**
@@ -353,30 +456,24 @@ export function saleEconomics(args: {
   // Validated BEFORE classification, because it is itself one of the signals.
   // Not agent-gated here for the same reason: asking "is this consigned" using
   // an answer that already assumed it would be circular.
-  // Bounded on BOTH sides. An entitlement above the gross subtracts to a
-  // negative margin; a negative one subtracts to a margin LARGER than the whole
-  // car and publishes the supplier's own share as a negative number. Same
-  // corruption class, opposite directions, so one rule refuses both. `NaN`
-  // needs no separate case: every comparison against it is false, so it can
-  // satisfy neither bound.
-  const validFrozenEntitlement =
-    args.recordedSupplierEntitlement !== undefined &&
-    args.recordedSupplierEntitlement >= 0 &&
-    args.recordedSupplierEntitlement <= salePrice
-      ? args.recordedSupplierEntitlement
-      : undefined;
-  const agent =
-    vehicle === null
-      ? args.recordedMargin !== undefined ||
-        settlesDirect ||
-        // A supplier entitlement exists ONLY on a consigned sale, so its
-        // presence is as strong a consignment signal as the recorded margin.
-        // Without it, a hard-deleted consigned vehicle was classified as
-        // dealer-owned and — since `capitalizedCost` arrives as 0 for a missing
-        // vehicle — reported the ENTIRE ticket as profit on a car the
-        // dealership never owned.
-        validFrozenEntitlement !== undefined
-      : isConsignedAgentSale(vehicle);
+  const validFrozenEntitlement = validFrozenEntitlementFor(
+    args.recordedSupplierEntitlement,
+    salePrice
+  );
+  // Through the shared classifier, which is the same rule this function has
+  // always applied — including the case where a supplier entitlement survives a
+  // hard-deleted vehicle. Without that signal such a sale was classified as
+  // dealer-owned and, since `capitalizedCost` arrives as 0 for a missing
+  // vehicle, reported the ENTIRE ticket as profit on a car the dealership never
+  // owned. SCRUM-29 exported it so the deal screen cannot reach a different
+  // verdict than the economics do.
+  const agent = saleIsAgentSale({
+    vehicle,
+    salePrice,
+    recordedMargin: args.recordedMargin,
+    recordedSupplierEntitlement: args.recordedSupplierEntitlement,
+    settlesDirect,
+  });
   // AGENT ONLY. A supplier basis must never derive a dealer-owned row's profit:
   // that row keeps its own cost, and mixing the two makes `revenue − cost`
   // disagree with `margin` on the same sale.

@@ -20,7 +20,12 @@ import {
   reverseCommissionForSale,
   getOrgCurrency,
 } from "./accounting/workflowHooks";
-import { toMinorUnits, assertValidMinorAmount, scaleForCurrency } from "./utils/money";
+import {
+  toMinorUnits,
+  assertValidMinorAmount,
+  toMinorSameCurrencyOrUndefined,
+  outstandingMinorFromMajor,
+} from "./utils/money";
 import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
 import {
   buildRuleSnapshot,
@@ -28,6 +33,8 @@ import {
   deriveDealStages,
   deriveManagementProfit,
   handoverStatusForFacts,
+  obligationFromRow,
+  positionForObligation,
   settlementIsComplete,
   settlementStatusForFacts,
   type FinanceCompanyRuleSnapshot,
@@ -331,33 +338,6 @@ const VALID_STATUS_TRANSITIONS: Record<FinanceApplicationStatus, readonly Financ
   CLOSED: [],
   CANCELLED: [],
 };
-
-/**
- * How a party row reads an obligation.
- *
- * One translation, used by every row, so a row can never disagree with the
- * settlement stage about whether somebody still owes money. `openPosition` is
- * the only per-row difference — which way an OPEN obligation points, since the
- * dealership owes the supplier on one route and is owed by him on the other.
- *
- * NONE is "nothing outstanding", not "cannot tell": a zero-margin deal has no
- * claim, and that absence is the correct answer rather than missing evidence.
- */
-function positionForObligation(
-  obligation: ObligationState,
-  openPosition: "DEALERSHIP_OWES" | "OWED_TO_DEALERSHIP"
-) {
-  switch (obligation) {
-    case "CLOSED":
-      return "SETTLED" as const;
-    case "NONE":
-      return "NOT_INVOLVED" as const;
-    case "OPEN":
-      return openPosition;
-    default:
-      return "UNKNOWN" as const;
-  }
-}
 
 /**
  * The money half of the cockpit: `أطراف الصفقة` and the headline figure.
@@ -750,69 +730,17 @@ async function saleTimeSupplierEntitlementMinor(
   return { known: true, minor: recorded };
 }
 
-/**
- * The ONLY conversion this query performs, and the only place it can refuse.
- *
- * `amountDue`, `amountReceived` and `amountPaid` are MAJOR units — floats — so
- * comparing them directly left a binary residue: a 2.410 JOD claim collected as
- * 1.205 twice ends about 4.4e-16 short, which is greater than zero, so the claim
- * stayed OPEN permanently and the collection button kept inviting a receipt from
- * a supplier who owed nothing. Money is compared as integers or not at all.
- *
- * `toMinorUnits` throws on anything it cannot represent as a safe integer, and
- * Convex accepts `NaN` as a `v.number()`. This runs inside a QUERY whose
- * contract is to degrade one row to UNKNOWN rather than refuse, because a throw
- * blanks the entire cockpit.
- *
- * A first attempt guarded `rowFullySettled` and the margin resolution with
- * `Number.isFinite`, which was on the wrong side of the problem: the same NaN
- * reached `toMinorUnits` again through the party-row conversions a few lines
- * later, and finiteness says nothing about overflow — `1e18` is finite and
- * `1e21` is not a safe integer. Every conversion in this query now goes through
- * here, and `undefined` is the single way a bad amount leaves it.
+/*
+ * SCRUM-29 moved four helpers out of this file, unchanged:
+ * `toMinorSameCurrencyOrUndefined` and `outstandingMinorFromMajor` to
+ * `utils/money.ts`, `obligationFromRow` and `positionForObligation` to
+ * `utils/financingEconomics.ts`. The CASH deal screen resolves the same supplier
+ * rows, and a second implementation of "what does this row owe" is how two
+ * screens come to describe one deal differently. Their reasoning travelled with
+ * them — including the binary-residue defect that kept a fully collected claim
+ * OPEN forever, and the rule that a query degrades one row to UNKNOWN rather
+ * than throwing, because a throw blanks the whole cockpit.
  */
-function toMinorSameCurrencyOrUndefined(
-  amount: number,
-  rowCurrency: string,
-  queryCurrency: string
-): number | undefined {
-  if (rowCurrency !== queryCurrency) return undefined;
-  if (!Number.isFinite(amount)) return undefined;
-  // Computed the same way `toMinorUnits` computes it, and checked BEFORE
-  // calling it — that function raises on an unsafe result, so inspecting its
-  // return value is too late to avoid the throw.
-  const candidate = Math.round(amount * Math.pow(10, scaleForCurrency(rowCurrency)));
-  if (!Number.isSafeInteger(candidate)) return undefined;
-  return toMinorUnits(amount, rowCurrency);
-}
-
-/**
- * What a subledger row says about its obligation, decided in integer minor units.
- *
- * Returns the state rather than a boolean because "not settled" and "cannot be
- * read" are different answers, and a boolean forces them together. A predecessor
- * returned `false` for an unreadable amount, so a claim with a corrupt
- * `amountDue` rendered as `OWED_TO_DEALERSHIP` — the screen asserting a debt on
- * the strength of a figure it had just failed to parse. Unreadable evidence is
- * UNKNOWN in both directions: it is no more proof of a debt than of settlement.
- */
-function obligationFromRow(args: {
-  due: number;
-  settled: number;
-  rowCurrency: string;
-  queryCurrency: string;
-  /** The row's own stored status, which is evidence but not the only evidence. */
-  storedPaid: boolean;
-}): ObligationState {
-  const dueMinor = toMinorSameCurrencyOrUndefined(args.due, args.rowCurrency, args.queryCurrency);
-  const settledMinor = toMinorSameCurrencyOrUndefined(
-    args.settled,
-    args.rowCurrency,
-    args.queryCurrency
-  );
-  if (dueMinor === undefined || settledMinor === undefined) return "UNKNOWN";
-  return args.storedPaid || dueMinor - settledMinor <= 0 ? "CLOSED" : "OPEN";
-}
 
 /**
  * `المصاريف الفعلية` — the deal's fee lines and what they total. Extracted from
@@ -933,17 +861,6 @@ async function resolveCustomerDeposits(
  *  read as a 2-decimal one. Both callers subtract AFTER conversion: taking the
  *  difference in major units first leaves a float residue that the row then
  *  displays as a balance still outstanding. */
-function outstandingMinorFromMajor(
-  dueMajor: number,
-  settledMajor: number,
-  rowCurrency: string,
-  currency: string
-): number | undefined {
-  const due = toMinorSameCurrencyOrUndefined(dueMajor, rowCurrency, currency);
-  const settled = toMinorSameCurrencyOrUndefined(settledMajor, rowCurrency, currency);
-  return due === undefined || settled === undefined ? undefined : Math.max(0, due - settled);
-}
-
 function customerPosition(args: {
   routeKnown: boolean;
   unreadableDeposits: number;
@@ -1159,11 +1076,7 @@ async function buildCockpitMoney(
   // deals that were completely finished.
   const fullySettled = moneySettled && expensesFullyReconciled;
 
-  return {
-    currency,
-    settlesDirectToSupplier: settlesDirect,
-    routeKnown,
-    managementProfit: deriveManagementProfit({
+  const managementProfit = deriveManagementProfit({
       // A cancelled sale keeps its approval, its recorded margin and its
       // disbursement, so every input stays computable and the figure they
       // produce describes a deal whose journal was reversed.
@@ -1184,7 +1097,30 @@ async function buildCockpitMoney(
       actualExpensesMinor,
       currency,
       fullySettled,
-    }),
+    });
+
+  return {
+    currency,
+    settlesDirectToSupplier: settlesDirect,
+    routeKnown,
+    /**
+     * The canonical headline field, shared with the cash deal screen and typed
+     * as the `DealProfit` union so a renderer must branch on `basis`.
+     */
+    profit: managementProfit,
+    /**
+     * ⚠️ TRANSITIONAL DUPLICATE — remove once the frontend carrying `profit` is
+     * deployed. Tracked as a SCRUM-29 follow-up.
+     *
+     * This is not indecision about the field name. The Convex backend deploys
+     * BEFORE the frontend (merging auto-deploys Vercel, so the order is forced),
+     * which means that between the two there is a live frontend reading
+     * `money.managementProfit`. Renaming outright would have made that read
+     * `undefined` and `undefined.available` throws — white-screening the
+     * financed cockpit, a production accounting surface, for the length of the
+     * deploy. Emitting both keys costs one line and removes the window entirely.
+     */
+    managementProfit,
     expenses: {
       lines: feeLines,
       actualTotalMinor: actualExpensesMinor,
@@ -1530,13 +1466,36 @@ export const dealCockpit = query({
     const canSeeMoney =
       isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_FINANCE);
 
-    const [customer, vehicle, company, salesperson, quote] = await Promise.all([
+    const [customer, vehicle, company, salesperson, quote, finalizedSale] = await Promise.all([
       ctx.db.get(app.customerId),
       ctx.db.get(app.vehicleId),
       app.companyId ? ctx.db.get(app.companyId) : Promise.resolve(null),
       ctx.db.get(app.salespersonId),
       ctx.db.get(app.quoteId),
+      app.finalizedSaleId ? ctx.db.get(app.finalizedSaleId) : Promise.resolve(null),
     ]);
+
+    /**
+     * The sale this deal should be READ at — or null when there is no sale that
+     * can actually render one.
+     *
+     * Deliberately NOT `app.finalizedSaleId`. That id survives operations which
+     * make the sale unreadable: `sales.softDelete` sets `isDeleted` and nothing
+     * anywhere clears `finalizedSaleId`, so a finalized deal whose sale was
+     * deleted still carries a perfectly plausible-looking id. `sales.dealCockpit`
+     * returns `null` for a deleted sale, so sending a caller there would replace
+     * a screen that renders with one that says the sale does not exist — and the
+     * application cockpit, which still renders fine, would have become
+     * unreachable. Settlement notifications deep-link to the application URL, so
+     * that is a live audit path, not a hypothetical one.
+     *
+     * Validated on the server because the client cannot see `isDeleted` and must
+     * not be the thing deciding whether a redirect target is real.
+     */
+    const canonicalSaleId =
+      finalizedSale && !finalizedSale.isDeleted && finalizedSale.orgId === app.orgId
+        ? finalizedSale._id
+        : null;
 
     // --- documents, which drive both the checklist and the delivery stage ----
     const rules = await ctx.db
@@ -1635,7 +1594,26 @@ export const dealCockpit = query({
         : null;
 
     const base = {
+      /**
+       * What KIND of deal this is. SCRUM-29 put a cash deal on the same screen,
+       * and the view branches on this rather than inferring the kind from which
+       * fields happen to be populated.
+       */
+      dealKind: "FINANCED" as const,
+      /** The id whose tail the header shows — the application on this side. */
+      dealRef: app._id as string,
       applicationId: app._id,
+      /** The sale this became, once it has one. Absent before finalization. */
+      saleId: app.finalizedSaleId ?? null,
+      /**
+       * Where this deal's canonical screen lives, or null when it lives here.
+       *
+       * Differs from `saleId` exactly when the sale exists but cannot be read —
+       * see the derivation above. Callers routing on this must use it rather than
+       * `saleId`, or they will send an operator to a screen that reports the sale
+       * does not exist.
+       */
+      canonicalSaleId,
       status: app.status,
       createdAt: app.createdAt,
       updatedAt: app.updatedAt,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { PaymentType, WizardData } from "../types";
@@ -63,7 +63,16 @@ export function Step4QuoteSuccess({
   const [isStartingApplication, setIsStartingApplication] = useState(false);
   const createApplication = useMutation(api.applications.createFromQuote);
 
-  const [saleId, setSaleId] = useState<Id<"sales"> | null>(null);
+  /**
+   * EVERY sale this quote produced, not just the first.
+   *
+   * A multi-vehicle quote completes one sale per car, so keeping only `ids[0]`
+   * silently discarded the rest — and then linked as though that one id stood
+   * for the whole quote. The deal screen is keyed on a single sale, so the honest
+   * shape here is the list.
+   */
+  const [saleIds, setSaleIds] = useState<Id<"sales">[]>([]);
+  const saleSubmitted = saleIds.length > 0;
   const [isCompletingSale, setIsCompletingSale] = useState(false);
   const completeSaleIdempotencyKeyRef = useRef<string | null>(null);
   const completeFromQuote = useMutation(api.sales.completeFromQuote);
@@ -181,7 +190,7 @@ export function Step4QuoteSuccess({
           : {}),
         idempotencyKey: completeSaleIdempotencyKeyRef.current,
       });
-      setSaleId(ids[0]);
+      setSaleIds(ids);
       completeSaleIdempotencyKeyRef.current = null;
       toast.success(t("SaleCompletedSuccess" as any) ?? "Cash sale completed");
     } catch (error) {
@@ -198,6 +207,108 @@ export function Step4QuoteSuccess({
   const quoteVehicleIds = (
     quote?.vehicleItems ?? (quote ? [{ vehicleId: quote.vehicleId }] : [])
   ).map((item) => item.vehicleId);
+
+  /**
+   * Each completed sale paired with the car it was completed for.
+   *
+   * The pairing is POSITIONAL, and that is safe here for a specific reason
+   * rather than by luck: `completeSalesForLineItems` pushes one sale id per
+   * iteration of the quote's `vehicleItems` (`convex/utils/saleCompletion.ts`),
+   * and the server builds that array with exactly the expression used for
+   * `quoteVehicleIds` above — `quote.vehicleItems ?? [the single legacy line]`
+   * (`convex/sales.ts`). Same source array, same order, so index i is the same
+   * car on both sides.
+   *
+   * `saleCompletion.test.ts` pins that order contract, because a link that opens
+   * a different car's deal than the one it names is worse than no label at all.
+   *
+   * `label` is null when the car is not among the props — the link still works
+   * and falls back to the generic wording rather than inventing a name.
+   */
+  const completedDeals = saleIds.map((id, index) => {
+    const vehicleId = quoteVehicleIds[index];
+    const vehicle =
+      selectedVehicles?.find((item) => item.vehicle._id === vehicleId)?.vehicle ??
+      (selectedVehicle?._id === vehicleId ? selectedVehicle : undefined);
+    return {
+      saleId: id,
+      label: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : null,
+    };
+  });
+
+  /**
+   * What replaces the submit button once the sale exists.
+   *
+   * Extracted as a statement rather than left inline. Inline it was a three-deep
+   * ternary wrapping fifty lines of JSX — `paymentType === "CASH" ? (submitted ?
+   * (one ? … : …) : …)` — and working out which condition produced which control
+   * meant holding three open ternaries at once (Sonar S3358). Same markup, same
+   * behaviour; only the reader's job changes.
+   */
+  let completedDealActions: ReactNode = null;
+  if (completedDeals.length === 1) {
+    completedDealActions = (
+      <Button asChild size="lg" className="min-w-[200px] bg-emerald-600 hover:bg-emerald-700">
+        <Link
+          href={activeOrgId ? `/${activeOrgId}/sales/${completedDeals[0].saleId}/deal` : "#"}
+        >
+          <BadgeCheck className="w-4 h-4 me-2" />
+          {t("OpenDeal" as any) ?? "Open Deal"}
+        </Link>
+      </Button>
+    );
+  } else if (completedDeals.length > 1) {
+    /**
+     * One row per car, each naming the car it belongs to.
+     *
+     * A quote for three cars completes three separate deals, and the deal screen
+     * is keyed on ONE sale — so there is no single link that could be correct
+     * here. Numbered links ("Deal 1, 2, 3") would make the operator open each one
+     * to find out which car it is; the car's own name is the label that saves
+     * that trip.
+     *
+     * Two nested elements, and the outer one carries NO max-width on purpose.
+     * `w-full` alone does not win a row in a `flex-wrap` strip: `max-w-md` clamps
+     * the item's hypothetical size, so the sibling buttons still fit beside it
+     * and the list rendered shoulder-to-shoulder with them — caught by looking at
+     * the render, not by any test. The outer div is genuinely full-width so it
+     * takes its own line; the inner one does the measuring.
+     */
+    completedDealActions = (
+      <div className="w-full">
+        <div className="mx-auto w-full max-w-md space-y-2 text-start">
+          <p className="text-sm text-muted-foreground">
+            {t("DealsCreatedForEachVehicle" as any) ?? "A deal was created for each vehicle"}
+          </p>
+          {completedDeals.map((deal, index) => (
+            <Button
+              key={deal.saleId}
+              asChild
+              variant="outline"
+              size="lg"
+              className="w-full justify-between border-emerald-500/40 text-emerald-700 hover:bg-emerald-500/10 dark:text-emerald-400"
+            >
+              <Link href={activeOrgId ? `/${activeOrgId}/sales/${deal.saleId}/deal` : "#"}>
+                {/* Isolated: a "2020 Toyota Camry" beside Arabic UI text is a
+                    mixed run, and bidi reordering will scramble the year into the
+                    neighbouring Arabic without this. */}
+                <bdi className="truncate">
+                  {/* The position is a FALLBACK label, never a decoration beside
+                      a real one. Unnamed rows are the case where the car is not
+                      among the props, and without the number every one of them
+                      read "Open Deal" — three identical buttons the operator has
+                      to open one by one, which is exactly what naming the car
+                      exists to avoid. */}
+                  {deal.label ?? `${t("OpenDeal" as any) ?? "Open Deal"} ${index + 1}`}
+                </bdi>
+                <BadgeCheck className="w-4 h-4 ms-2 shrink-0" />
+              </Link>
+            </Button>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   // Which lines turned out to be consigned. Only the preview can say, so the
   // sections report it up and the route selector goes on the first line that
@@ -281,7 +392,7 @@ export function Step4QuoteSuccess({
 
           <Button
             onClick={() => setDepositDialogOpen(true)}
-            disabled={depositRecorded || !!saleId}
+            disabled={depositRecorded || saleSubmitted}
             variant="outline"
             size="lg"
             className="min-w-[200px] border-amber-500/40 text-amber-600 hover:bg-amber-500/10"
@@ -329,13 +440,8 @@ export function Step4QuoteSuccess({
           )}
 
           {paymentType === "CASH" && (
-            saleId ? (
-              <Button asChild variant="outline" size="lg" className="min-w-[200px] border-emerald-500/40 text-emerald-600 hover:bg-emerald-500/10">
-                <Link href={activeOrgId ? `/${activeOrgId}/sales?highlightId=${saleId}` : "#"}>
-                  <BadgeCheck className="w-4 h-4 me-2" />
-                  {t("SaleCompleted" as any) ?? "Sale Completed ✓"}
-                </Link>
-              </Button>
+            saleSubmitted ? (
+              completedDealActions
             ) : (
               <Button
                 onClick={handleSubmitSale}
@@ -372,7 +478,7 @@ export function Step4QuoteSuccess({
           the submit was simply withheld, and the server's refusal names no
           vehicle, so on a multi-car quote the operator was told a deposit was
           too large without being told whose. */}
-      {activeOrgId && !depositDecision.canSubmit && !saleId ? (
+      {activeOrgId && !depositDecision.canSubmit && !saleSubmitted ? (
         <p className="mx-auto flex max-w-2xl items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/[0.06] px-3 py-2.5 text-xs leading-relaxed text-amber-800 dark:text-amber-400">
           <span aria-hidden>⚠</span>
           <span>
@@ -409,7 +515,7 @@ export function Step4QuoteSuccess({
               // Only while the sale can still be completed. Once it has, the
               // decision is made and offering it again would be a control that
               // does nothing.
-              paymentType === "CASH" && !saleId
+              paymentType === "CASH" && !saleSubmitted
                 ? {
                     vehicleIds: quoteVehicleIds,
                     settlementRoute,

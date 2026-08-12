@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -14,7 +15,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/sonner";
 import { getErrorMessage } from "@/lib/errors";
-import { format } from "date-fns";
+import { format, isValid } from "date-fns";
 import {
   AlertTriangle,
   Check,
@@ -48,9 +49,35 @@ import type { PaymentMethod } from "@/components/payments/PaymentMethodSelect";
  * own `<bdi>` so bidi reordering cannot scramble one into its neighbour.
  */
 
+/**
+ * Whether a stored moment can actually be formatted.
+ *
+ * `Number.isFinite` is NOT sufficient, which cost two review rounds to learn.
+ * JavaScript's `Date` domain is ±8,640,000,000,000,000 ms, so `8640000000000001`,
+ * `1e300` and `Number.MAX_VALUE` are all finite yet outside it — and date-fns
+ * `format` throws `RangeError: Invalid time value` on every one of them. An
+ * uncaught throw during render loses the WHOLE screen, not one row, which is the
+ * defect class this cockpit has already been repaired for twice.
+ *
+ * Those values are reachable rather than theoretical: `z.number()` accepts any
+ * finite number and Convex's `v.number()` stores it verbatim, so a corrupt row
+ * arrives intact. SCRUM-45 tracks the same class in the posting path, where the
+ * consequence is an aborted accounting drain rather than a lost screen.
+ *
+ * `isValid(new Date(v))` subsumes `undefined`, `NaN`, `±Infinity` and the
+ * out-of-range case in one test. The `typeof` narrowing is load-bearing, not
+ * decorative: neither `isValid` nor `Number.isFinite` is a type predicate, so
+ * without it `format(entry.changedAt)` is a compile error on `number | undefined`.
+ */
+function isRenderableMoment(value: number | undefined): value is number {
+  return typeof value === "number" && isValid(new Date(value));
+}
+
 type StageState = "COMPLETE" | "CURRENT" | "BLOCKED" | "PENDING" | "STOPPED";
 
 const STAGE_LABEL: Record<string, string> = {
+  /** CASH only — the cash rail's anchor stage. */
+  SALE_AGREED: "StageSaleAgreed",
   APPLICATION: "StageApplication",
   CREDIT_DECISION: "StageCreditDecision",
   APPRAISAL: "StageAppraisal",
@@ -82,6 +109,9 @@ const POSITION_LABEL: Record<string, string> = {
  * screen — visible the moment it was rendered, and invisible to every test.
  */
 const STATUS_LABEL: Record<string, string> = {
+  /** CASH only — `sales.status`, a different enum from the application's. */
+  PENDING: "SaleStatusPending",
+  COMPLETED: "SaleStatusCompleted",
   DRAFT: "Draft",
   PENDING_DOCS: "PendingDocs",
   UNDER_REVIEW: "UnderReview",
@@ -97,6 +127,10 @@ const PROFIT_LINE_LABEL: Record<string, string> = {
   SUPPLIER_SETTLEMENT: "LineSupplierSettlement",
   DEALER_CONTRIBUTION: "LineDealerContribution",
   ACTUAL_EXPENSES: "LineActualExpenses",
+  /** CASH only. A different derivation, so deliberately different keys. */
+  SALE_PRICE: "LineSalePrice",
+  VEHICLE_COST: "LineVehicleCost",
+  SUPPLIER_ENTITLEMENT: "LineSupplierEntitlement",
 };
 
 /**
@@ -111,7 +145,13 @@ const PROFIT_BLOCKED_REASON: Record<
   | "NoSupplierSettlement"
   | "NoDealerContribution"
   | "CorruptInput"
-  | "DealCancelled",
+  | "DealCancelled"
+  /** CASH only: `dealershipMargin === null`, which is UNKNOWN and never zero. */
+  | "UnknownMargin"
+  /** CASH only: a draft has posted no journal, so nothing is postable yet. */
+  | "SaleNotCompleted"
+  /** Financed + DIRECT with no application: the recorded margin cannot be trusted. */
+  | "FinancedDirectUnverified",
   string
 > = {
   NoApprovedPurchaseAmount: "ProfitNeedsApprovedPurchase",
@@ -119,6 +159,9 @@ const PROFIT_BLOCKED_REASON: Record<
   NoDealerContribution: "ProfitNeedsDealerContribution",
   CorruptInput: "ProfitInputCorrupt",
   DealCancelled: "ProfitDealCancelled",
+  UnknownMargin: "ProfitUnknownMargin",
+  SaleNotCompleted: "ProfitSaleNotCompleted",
+  FinancedDirectUnverified: "ProfitFinancedDirectUnverified",
 };
 
 /**
@@ -139,9 +182,21 @@ function Money({ children }: Readonly<{ children: React.ReactNode }>) {
   return <bdi className="tabular-nums">{children}</bdi>;
 }
 
-export type DealCockpitData = NonNullable<
-  (typeof api.applications.dealCockpit)["_returnType"]
->;
+/**
+ * One deal, whichever way it was paid for.
+ *
+ * A union of the two queries rather than a widened single type, because the two
+ * genuinely differ: a financed deal is keyed on an application that may not have
+ * a sale yet, and a cash deal is keyed on a sale that has no application at all.
+ * `dealKind` is the discriminant.
+ *
+ * Everything the SPINE renders — the stage rail, the parties, the vehicle,
+ * the timeline — is common to both and rendered by the same code below. The one
+ * thing that must not be shared is the headline: see `MoneyPanel`.
+ */
+export type DealCockpitData =
+  | NonNullable<(typeof api.applications.dealCockpit)["_returnType"]>
+  | NonNullable<(typeof api.sales.dealCockpit)["_returnType"]>;
 
 /**
  * The data half: one query, one mutation, no presentation.
@@ -154,11 +209,50 @@ export type DealCockpitData = NonNullable<
 export function DealCockpit({
   orgId,
   applicationId,
-}: Readonly<{ orgId: Id<"organizations">; applicationId: Id<"financeApplications"> }>) {
+  canonicalizeUrl = true,
+}: Readonly<{
+  orgId: Id<"organizations">;
+  applicationId: Id<"financeApplications">;
+  /**
+   * Whether this instance owns the address bar and may correct it.
+   *
+   * A deal gets ONE canonical identity, and once a sale exists that identity is
+   * the SALE — so the application-keyed URL sends the operator to
+   * `/sales/{saleId}/deal` rather than becoming a second permanent home for the
+   * same deal.
+   *
+   * `false` when the sale-keyed route is already showing this deal and has
+   * delegated the financed wiring here. Without that, the two routes would
+   * canonicalize into each other: the sale URL renders this component, which
+   * would redirect to the sale URL, forever. Expressed as ownership rather than
+   * as "don't redirect" because the question is which component is responsible
+   * for the URL, and only one ever is.
+   */
+  canonicalizeUrl?: boolean;
+}>) {
   const deal = useQuery(api.applications.dealCockpit, { orgId, applicationId });
   const recordReceipt = useMutation(api.supplierReceivables.recordReceipt);
   const amendAdvice = useMutation(api.applications.amendSupplierDisbursementAdvice);
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
+  const router = useRouter();
+
+  /**
+   * Once the application has become a sale, the sale owns the deal's identity.
+   *
+   * `canonicalSaleId`, NOT `saleId`. The server validates that the sale is
+   * actually readable before offering it as a destination: `finalizedSaleId`
+   * survives `sales.softDelete`, and redirecting to a deleted sale would trade a
+   * screen that renders for one that reports the sale does not exist — stranding
+   * the settlement notifications that deep-link to this application URL. The
+   * client cannot see `isDeleted`, so this decision is not the client's to make.
+   */
+  const finalizedSaleId = canonicalizeUrl ? (deal?.canonicalSaleId ?? null) : null;
+  useEffect(() => {
+    if (finalizedSaleId) {
+      router.replace(`/${orgId}/sales/${finalizedSaleId}/deal`);
+    }
+  }, [finalizedSaleId, orgId, router]);
+
   // Hidden while the membership is still loading rather than shown optimistically:
   // an action that appears and then vanishes reads as a bug, and the server is
   // the authority either way.
@@ -166,6 +260,11 @@ export function DealCockpit({
   // One key per correction attempt, so a retry after a lost response is the same
   // amendment rather than a second audited one.
   const correctionKeyRef = useRef<string | null>(null);
+
+  // Below every hook, deliberately. An early return placed above `useRef` changes
+  // the hook order between renders — eslint's rules-of-hooks caught exactly that
+  // here, and the redirect is a render-time courtesy that can wait three lines.
+  if (finalizedSaleId) return <Skeleton className="h-64 w-full" />;
 
   return (
     <DealCockpitView
@@ -216,6 +315,79 @@ export function DealCockpit({
 }
 
 /**
+ * THE canonical deal screen, keyed on the sale — cash or financed.
+ *
+ * This is the one address a deal has once it exists. It is not a cash-only
+ * screen: a sale with a finance application is rendered HERE, by delegating the
+ * financed wiring to `DealCockpit` above, so the operator never has to know
+ * which kind of deal they are looking at to find it.
+ *
+ * The delegation is what keeps this honest. The financed deal's money still
+ * comes from `applications.dealCockpit` — the shipped, reviewed query that
+ * understands approved purchase amounts, supplier settlement routes and the
+ * `postable: false` management headline. Teaching `sales.dealCockpit` to
+ * compute financed money would have produced a SECOND source of truth for the
+ * same figures, which is the one thing SCRUM-26 and SCRUM-30 forbade outright.
+ * So: one URL, one view, and each kind's money answered by the query that
+ * already knows it.
+ *
+ * There is no settlement-advice correction on the cash path because there is no
+ * finance company to have issued one — the action is ABSENT rather than shown
+ * disabled, which is the same rule the rest of this screen follows.
+ *
+ * The supplier receipt action IS wired, and deliberately. A consigned CASH deal
+ * settled DIRECT_TO_SUPPLIER leaves the supplier holding the dealership's margin
+ * exactly as a financed one does, and `supplierReceivables.recordReceipt` is
+ * keyed on the claim rather than on any financing — so the collection workflow
+ * the previous release built works here unchanged.
+ */
+export function SaleDealCockpit({
+  orgId,
+  saleId,
+}: Readonly<{ orgId: Id<"organizations">; saleId: Id<"sales"> }>) {
+  const deal = useQuery(api.sales.dealCockpit, { orgId, saleId });
+  const recordReceipt = useMutation(api.supplierReceivables.recordReceipt);
+
+  /**
+   * A financed sale is rendered here, not sent elsewhere.
+   *
+   * `sales.dealCockpit` deliberately withholds money for a financed sale — there
+   * is no second profit for this deal to publish at any permission level — so the
+   * financed money must come from `applications.dealCockpit`. Delegating gets
+   * that without duplicating it, and without moving the operator off the URL they
+   * are on. `canonicalizeUrl={false}` because THIS route is already the canonical
+   * one; the delegate must not send it back to itself.
+   */
+  const financingApplicationId = deal?.financingApplicationId ?? null;
+  if (financingApplicationId) {
+    return (
+      <DealCockpit
+        orgId={orgId}
+        applicationId={financingApplicationId}
+        canonicalizeUrl={false}
+      />
+    );
+  }
+
+  return (
+    <DealCockpitView
+      deal={deal}
+      onRecordSupplierReceipt={async (receivableId, receipt) => {
+        await recordReceipt({
+          orgId,
+          receivableId,
+          amount: receipt.amount,
+          receiptMethod: receipt.receiptMethod,
+          receiptReference: receipt.receiptReference,
+          receivedAt: receipt.receivedAt,
+          idempotencyKey: receipt.idempotencyKey,
+        });
+      }}
+    />
+  );
+}
+
+/**
  * The money summary card, extracted so `DealCockpitView` clears the cognitive
  * complexity gate. Presentation only: every figure and every classification
  * arrives already derived from `applications.dealCockpit`, and nothing here
@@ -224,34 +396,57 @@ export function DealCockpit({
  */
 function MoneyPanel({
   money,
-  managementProfit,
+  profit,
   t,
 }: Readonly<{
   money: (minor: number) => string;
-  managementProfit: NonNullable<DealCockpitData["money"]>["managementProfit"];
+  profit: NonNullable<DealCockpitData["money"]>["profit"];
   t: (key: string) => string;
 }>) {
+  // The ONE branch this screen is not allowed to get wrong.
+  //
+  // A financed deal's headline is a MANAGEMENT figure built on a spread that
+  // appears on no invoice: it is `postable: false` and must never be shown
+  // without its qualifier. A cash deal's is an ordinary accounting result that
+  // reconciles to the GL, and stamping an "estimated / never postable" badge on
+  // it would be just as false in the other direction.
+  //
+  // Read off `basis` rather than from the presence of a `classification` field,
+  // so the distinction is one the type system enforces: `AccountingProfit` has
+  // no `classification` to read, and TypeScript refuses the access outside this
+  // branch. That is what makes the two impossible to confuse rather than merely
+  // unlikely to be.
+  const isManagementEstimate = profit.available && profit.basis === "MANAGEMENT_ESTIMATE";
+
   return (
   <Card>
     <CardContent className="space-y-4 pt-6">
       <div className="space-y-1">
         <p className="text-sm text-muted-foreground">{t("NetDealershipProfit")}</p>
-        {managementProfit.available ? (
+        {profit.available ? (
           <>
             <div className="flex flex-wrap items-baseline gap-3">
               <p className="text-3xl font-semibold">
-                <Money>{money(managementProfit.amountMinor)}</Money>
+                <Money>{money(profit.amountMinor)}</Money>
               </p>
               {/* The qualifier is not decoration. It renders from
                   the same object as the amount, so there is no code
-                  path that shows one without the other. */}
-              <Badge variant="outline" className="border-amber-500/60 text-amber-700 dark:text-amber-400">
-                {managementProfit.classification === "ACTUAL_UNPOSTABLE"
-                  ? t("ProfitActualUnpostable")
-                  : t("ProfitEstimatedAwaitingSettlement")}
-              </Badge>
+                  path that shows one without the other.
+                  A cash deal gets NO badge here — not a green one
+                  saying "postable". The absence of a caveat is the
+                  normal case, and labelling it would train the eye to
+                  skip the badge that actually matters. */}
+              {profit.basis === "MANAGEMENT_ESTIMATE" && (
+                <Badge variant="outline" className="border-amber-500/60 text-amber-700 dark:text-amber-400">
+                  {profit.classification === "ACTUAL_UNPOSTABLE"
+                    ? t("ProfitActualUnpostable")
+                    : t("ProfitEstimatedAwaitingSettlement")}
+                </Badge>
+              )}
             </div>
-            <p className="text-xs text-muted-foreground">{t("ManagementFigureNote")}</p>
+            {isManagementEstimate && (
+              <p className="text-xs text-muted-foreground">{t("ManagementFigureNote")}</p>
+            )}
           </>
         ) : (
           <>
@@ -259,29 +454,34 @@ function MoneyPanel({
               {t("ProfitNotCalculable")}
             </p>
             <p className="text-xs text-muted-foreground">
-              {t(PROFIT_BLOCKED_REASON[managementProfit.reason])}
+              {t(PROFIT_BLOCKED_REASON[profit.reason])}
             </p>
           </>
         )}
       </div>
 
-      {managementProfit.available && (
+      {profit.available && (
         <>
           <Separator />
           <dl className="space-y-1.5 text-sm">
-            {managementProfit.lines
+            {profit.lines
               // A zero on an OPTIONAL line is noise, not information:
               // the customer-direct amount has no writer yet, so it
               // would read "0.000" on every deal forever, and the
               // dealer contribution is zero on any fully funded deal.
-              // The three lines the mockup always shows stay, so the
+              // The lines the mockup always shows stay, so the
               // derivation never looks like it is hiding a term.
+              // The cash lines are all always-shown: three terms, and
+              // a zero cost on an agent sale is a fact worth stating.
               .filter(
                 (line) =>
                   line.amountMinor !== 0 ||
                   line.key === "APPROVED_PURCHASE" ||
                   line.key === "SUPPLIER_SETTLEMENT" ||
-                  line.key === "ACTUAL_EXPENSES"
+                  line.key === "ACTUAL_EXPENSES" ||
+                  line.key === "SALE_PRICE" ||
+                  line.key === "VEHICLE_COST" ||
+                  line.key === "SUPPLIER_ENTITLEMENT"
               )
               .map((line) => (
               <div key={line.key} className="flex items-center justify-between gap-4">
@@ -508,7 +708,13 @@ export function DealCockpitView({
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">
-              {t("DealCockpitTitle")} <bdi className="text-muted-foreground">#{String(deal.applicationId).slice(-4)}</bdi>
+              {/* The TITLE is polymorphic too, and this was only visible by
+                  rendering: a cash deal headed `طلب تمويل` ("finance
+                  application") names a record that does not exist for it.
+                  `dealRef` rather than the application id, for the same reason —
+                  a cash deal has no application. Both queries supply it. */}
+              {t(deal.dealKind === "CASH" ? "DealCockpitTitleCash" : "DealCockpitTitle")}{" "}
+              <bdi className="text-muted-foreground">#{String(deal.dealRef).slice(-4)}</bdi>
             </h1>
             <Badge variant={deal.status === "APPROVED" || deal.status === "CLOSED" ? "default" : "secondary"}>
               {t(STATUS_LABEL[deal.status] ?? deal.status)}
@@ -697,11 +903,17 @@ export function DealCockpitView({
 
               <MoneyPanel
                 money={money}
-                managementProfit={deal.money.managementProfit}
+                profit={deal.money.profit}
                 t={t}
               />
 
               {/* --- أطراف الصفقة ------------------------------------------ */}
+              {/* ABSENT when there is nobody to list. An OWNED cash sale has no
+                  third party at all — no supplier, no financier — so the card
+                  would render a heading over nothing, which is the "empty
+                  rather than absent" pattern this screen removes everywhere
+                  else. The financed path always has rows, so it is unaffected. */}
+              {(deal.money.parties.length > 0 || deal.applicationId !== null) && (
               <Card>
                 <CardHeader className="pb-3">
                   <CardTitle className="text-base">{t("DealPartiesHeading")}</CardTitle>
@@ -746,18 +958,45 @@ export function DealCockpitView({
                       </div>
                     </div>
                   ))}
-                  <p className="text-xs text-muted-foreground">
-                    {t("AppraisalGapLabel")}:{" "}
-                    {deal.money.appraisalGapMinor ? (
-                      <Money>{money(deal.money.appraisalGapMinor)}</Money>
-                    ) : (
-                      t("NoAppraisalGap")
-                    )}
-                  </p>
+                  {/* Only where an APPLICATION exists. `فرق تخمين` is the
+                      difference between the finance company's appraisal and the
+                      price — a cash deal has no appraisal, so "no appraisal gap"
+                      would not be reassuring, it would be answering a question
+                      nobody asked.
+                      Gated on the data rather than on `dealKind`, because a
+                      financed SALE opened on the sale-keyed route is
+                      `dealKind: "FINANCED"` and still has no appraisal payload. */}
+                  {deal.applicationId !== null && (
+                    <p className="text-xs text-muted-foreground">
+                      {t("AppraisalGapLabel")}:{" "}
+                      {deal.money.appraisalGapMinor ? (
+                        <Money>{money(deal.money.appraisalGapMinor)}</Money>
+                      ) : (
+                        t("NoAppraisalGap")
+                      )}
+                    </p>
+                  )}
                 </CardContent>
               </Card>
+              )}
 
               {/* --- actual expenses -------------------------------------- */}
+              {/* ABSENT on a CASH deal with no fee records, rather than a card
+                  reading "expenses: 0" on every cash deal forever. A cash sale's
+                  costs are already inside the vehicle's capitalized cost and
+                  therefore already inside the margin above — listing them again
+                  here would show the owner a cost subtracted twice.
+
+                  Gated on the deal KIND, not merely on emptiness. A financed
+                  deal keeps the card unconditionally because that is how the
+                  shipped screen behaves: its expenses are real pending actuals
+                  an operator is waiting on, so "none recorded yet" is
+                  information rather than noise. Hiding it on emptiness alone
+                  silently changed a production screen from inside a PR whose
+                  scope excludes touching it. */}
+              {(deal.dealKind === "FINANCED" ||
+                deal.money.expenses.lines.length > 0 ||
+                deal.money.expenses.actualTotalMinor !== 0) && (
               <Card>
                 <CardHeader className="pb-3">
                   <CardTitle className="text-base">{t("ActualExpensesHeading")}</CardTitle>
@@ -793,6 +1032,7 @@ export function DealCockpitView({
                   )}
                 </CardContent>
               </Card>
+              )}
             </>
           )}
         </div>
@@ -826,6 +1066,11 @@ export function DealCockpitView({
             </Card>
           )}
 
+          {/* ABSENT, not empty. A cash deal has no document checklist at all —
+              the rules are per finance company and their per-deal status lives
+              on the application — so an empty card would invite an operator to
+              look for an upload control that does not exist. */}
+          {deal.documents.length > 0 && (
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base">{t("DocumentsHeading")}</CardTitle>
@@ -848,6 +1093,7 @@ export function DealCockpitView({
               ))}
             </CardContent>
           </Card>
+          )}
 
           <Card>
             <CardHeader className="pb-3">
@@ -855,14 +1101,23 @@ export function DealCockpitView({
             </CardHeader>
             <CardContent className="space-y-3">
               {deal.timeline.map((entry, index) => (
-                <div key={`${entry.changedAt}-${index}`} className="flex gap-3 text-sm">
+                <div key={`${entry.changedAt ?? "no-date"}-${index}`} className="flex gap-3 text-sm">
                   <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                   <div className="min-w-0">
                     <p>{t(STATUS_LABEL[entry.toStatus] ?? entry.toStatus)}</p>
                     <p className="text-xs text-muted-foreground">
                       <bdi>{entry.actorName}</bdi>
-                      {" · "}
-                      <bdi>{format(entry.changedAt, "d MMM yyyy HH:mm")}</bdi>
+                      {/* The transition is stated whether or not its moment is
+                          known. `changedAt` is optional precisely so a status is
+                          never withheld for want of a timestamp — and `format`
+                          throws `RangeError` on an unrenderable input, which
+                          during render loses the whole screen, not one row. */}
+                      {isRenderableMoment(entry.changedAt) && (
+                        <>
+                          {" · "}
+                          <bdi>{format(entry.changedAt, "d MMM yyyy HH:mm")}</bdi>
+                        </>
+                      )}
                     </p>
                   </div>
                 </div>

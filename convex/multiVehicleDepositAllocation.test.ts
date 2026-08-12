@@ -2511,3 +2511,68 @@ describe("a deposit with money assigned to no car at all", () => {
     expect(await cashOut(s)).toEqual([]);
   });
 });
+
+/**
+ * The order `completeFromQuote` returns its sale ids in.
+ *
+ * Not an academic contract. `Step4QuoteSuccess` pairs each returned id with a car
+ * POSITIONALLY in order to label the "open deal" link per vehicle, and a link
+ * that opens a different car's deal than the one it names is worse than no label
+ * at all. The pairing is sound because `completeSalesForLineItems` pushes one id
+ * per iteration of the quote's `vehicleItems`, and the wizard derives its own
+ * list with the same expression the server uses — but nothing enforced that, so
+ * a future reorder (a `Promise.all`, a sort, a filter) would silently mislabel
+ * money screens rather than fail a test.
+ */
+describe("completeFromQuote returns one sale per line, in line order", () => {
+  test("id[i] is the sale for the quote's line i", async () => {
+    const s = await seed("order");
+
+    const ids = await s.asUser.mutation(api.sales.completeFromQuote, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      idempotencyKey: "line-order-contract",
+    });
+
+    expect(ids).toHaveLength(2);
+    // Read the vehicle off each returned sale rather than trusting the position.
+    const vehicleIds = await s.t.run(async (ctx) =>
+      Promise.all(ids.map(async (id) => (await ctx.db.get(id))!.vehicleId))
+    );
+    expect(vehicleIds).toEqual([s.vehicleA, s.vehicleB]);
+  });
+
+  /**
+   * The LEGACY single-line shape, which is where the two derivations could
+   * actually diverge.
+   *
+   * A quote written before multi-vehicle support carries no `vehicleItems` at
+   * all, only `vehicleId`. Both sides then fall back INDEPENDENTLY — the server
+   * with `quote.vehicleItems ?? [{ vehicleId: quote.vehicleId, ... }]` and the
+   * wizard with the same expression — so this is the branch where one could be
+   * changed without the other. The `vehicleItems` case above cannot catch that.
+   */
+  test("a legacy quote with no vehicleItems returns exactly its one line", async () => {
+    const s = await seed("orderLegacy", { vehicleCount: 1 });
+
+    const hasNoItems = await s.t.run(async (ctx) => {
+      const quote = await ctx.db.get(s.quoteId);
+      return quote!.vehicleItems === undefined;
+    });
+    // Guards the fixture itself: if `seed` ever starts writing `vehicleItems`
+    // for one car, this test would silently stop covering the legacy branch.
+    expect(hasNoItems).toBe(true);
+
+    const ids = await s.asUser.mutation(api.sales.completeFromQuote, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      idempotencyKey: "line-order-contract-legacy",
+    });
+
+    expect(ids).toHaveLength(1);
+    const vehicleIds = await s.t.run(async (ctx) =>
+      Promise.all(ids.map(async (id) => (await ctx.db.get(id))!.vehicleId))
+    );
+    expect(vehicleIds).toEqual([s.vehicleA]);
+  });
+});

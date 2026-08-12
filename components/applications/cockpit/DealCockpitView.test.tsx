@@ -47,7 +47,10 @@ const SCALE = 1_000;
 
 function dealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
   return {
+    dealKind: "FINANCED",
+    dealRef: "app_2048",
     applicationId: "app_2048",
+    saleId: null,
     status: "APPROVED",
     createdAt: Date.UTC(2026, 6, 28),
     updatedAt: Date.UTC(2026, 7, 9),
@@ -74,8 +77,9 @@ function dealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
       currency: "JOD",
       settlesDirectToSupplier: false,
       routeKnown: true,
-      managementProfit: {
+      profit: {
         available: true,
+        basis: "MANAGEMENT_ESTIMATE",
         amountMinor: 2_410 * SCALE,
         currency: "JOD",
         classification: "ESTIMATED_AWAITING_SETTLEMENT",
@@ -107,6 +111,28 @@ function dealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
 
 function renderCockpit(deal: DealCockpitData | null | undefined = dealFixture()) {
   return render(<DealCockpitView deal={deal} onRecordSupplierReceipt={async () => {}} />);
+}
+
+/**
+ * The statuses rendered INSIDE the Status Log card, in document order.
+ *
+ * Scoped deliberately. Both fixtures also render the deal's current status in
+ * the HEADER BADGE, so a global `getAllByText("SaleStatusCompleted")` is
+ * satisfied whether or not the timeline row exists — which let a row-dropping
+ * renderer pass an earlier version of these tests. Reading the sequence from
+ * within the card asserts what the operator actually reads as history.
+ *
+ * The card is located from its own heading (`CardTitle` → `CardHeader` → `Card`)
+ * rather than by a test id, so the shared component needs no test-only markup.
+ * Each entry renders its status as the first `<p>` of the row and its actor and
+ * moment as the second.
+ */
+function statusLogStatuses(): string[] {
+  const card = screen.getByText("StatusLogHeading").parentElement?.parentElement;
+  if (!card) throw new Error("Status Log card not found — the heading moved.");
+  return Array.from(card.querySelectorAll<HTMLElement>("p:first-of-type")).map(
+    (p) => p.textContent?.trim() ?? ""
+  );
 }
 
 afterEach(() => {
@@ -161,12 +187,290 @@ describe("the headline figure", () => {
       dealFixture({
         money: {
           ...dealFixture().money,
-          managementProfit: { available: false, reason: "NoApprovedPurchaseAmount" },
+          profit: { available: false, reason: "NoApprovedPurchaseAmount" },
         },
       })
     );
     expect(screen.getByText("ProfitNotCalculable")).toBeTruthy();
     expect(screen.getByText("ProfitNeedsApprovedPurchase")).toBeTruthy();
+  });
+});
+
+/**
+ * SCRUM-29's central risk, pinned on the rendered screen.
+ *
+ * One screen now shows two genuinely different kinds of money. A financed
+ * deal's headline is a MANAGEMENT figure built on a spread that appears on no
+ * invoice — it must always carry its qualifier and must never be posted. A cash
+ * deal's is an ordinary accounting result that reconciles to the GL — stamping
+ * "estimated, never posted" on it would be a false statement about a real
+ * accounting figure, and it is the failure this whole polymorphic design exists
+ * to prevent.
+ *
+ * These assert the qualifier's PRESENCE on one and its ABSENCE on the other, in
+ * both directions, because a test that only checked the financed side would pass
+ * happily against a screen that badged everything.
+ */
+function cashDealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
+  return dealFixture({
+    dealKind: "CASH",
+    dealRef: "sale_7731",
+    applicationId: null,
+    saleId: "sale_7731",
+    status: "COMPLETED",
+    financeCompanyName: "",
+    // The shorter rail: no credit decision, appraisal or gap stages at all.
+    stages: [
+      { key: "SALE_AGREED", state: "COMPLETE" },
+      { key: "HANDOVER", state: "COMPLETE" },
+      { key: "SETTLEMENT", state: "BLOCKED", blocker: "AwaitingSettlement" },
+    ],
+    documents: [],
+    timeline: [
+      { toStatus: "COMPLETED", changedAt: Date.UTC(2026, 7, 1), actorName: "ليث العمري" },
+    ],
+    money: {
+      currency: "JOD",
+      settlesDirectToSupplier: true,
+      routeKnown: true,
+      profit: {
+        available: true,
+        basis: "ACCOUNTING_RESULT",
+        amountMinor: 3_000 * SCALE,
+        currency: "JOD",
+        reconcilesToLedger: true,
+        lines: [
+          { key: "SALE_PRICE", sign: 1, amountMinor: 20_000 * SCALE },
+          { key: "SUPPLIER_ENTITLEMENT", sign: -1, amountMinor: 17_000 * SCALE },
+        ],
+      },
+      expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
+      parties: [
+        {
+          party: "SUPPLIER",
+          name: "شركة عمّان للاستيراد",
+          position: "OWED_TO_DEALERSHIP",
+          amountMinor: 3_000 * SCALE,
+          currency: "JOD",
+          receivableId: "recv_1",
+        },
+      ],
+      appraisalGapMinor: undefined,
+    },
+    ...overrides,
+  });
+}
+
+describe("a cash headline and a financed headline cannot be confused", () => {
+  test("the FINANCED headline always carries its unpostable qualifier", () => {
+    renderCockpit();
+    expect(screen.getByText("ProfitEstimatedAwaitingSettlement")).toBeTruthy();
+    expect(screen.getByText("ManagementFigureNote")).toBeTruthy();
+  });
+
+  test("the CASH headline carries NO estimate badge and NO management-figure note", () => {
+    renderCockpit(cashDealFixture());
+
+    // The amount is still shown — this is not "the figure is withheld".
+    // `getAllByText`: 3,000 is also the supplier's outstanding claim on this
+    // fixture, and the point here is that the headline renders at all.
+    expect(screen.getAllByText(/3,000/).length).toBeGreaterThan(0);
+
+    // ...but nothing on the screen may describe it as an estimate or as a
+    // number that is never posted. It is a real accounting result.
+    expect(screen.queryByText("ProfitEstimatedAwaitingSettlement")).toBeNull();
+    expect(screen.queryByText("ProfitActualUnpostable")).toBeNull();
+    expect(screen.queryByText("ManagementFigureNote")).toBeNull();
+  });
+
+  test("a cash deal whose earnings were never recorded refuses rather than showing zero", () => {
+    const { container } = renderCockpit(
+      cashDealFixture({
+        money: {
+          ...cashDealFixture().money,
+          profit: { available: false, reason: "UnknownMargin" },
+        },
+      })
+    );
+    expect(screen.getByText("ProfitNotCalculable")).toBeTruthy();
+    expect(screen.getByText("ProfitUnknownMargin")).toBeTruthy();
+    // The specific damage this prevents: a formatted amount standing in for
+    // "nobody recorded what this deal earned". `.text-3xl` is the headline
+    // figure's own class, so this asserts no headline NUMBER was rendered —
+    // scoped deliberately, because a zero elsewhere on the screen (an expense
+    // total that really is nil) is honest and must not fail this test.
+    expect(container.querySelector(".text-3xl")).toBeNull();
+  });
+});
+
+describe("the cash rail is shorter, not greyed out", () => {
+  test("the finance-only stages are ABSENT from a cash deal, not rendered inactive", () => {
+    renderCockpit(cashDealFixture());
+    // Not merely "not COMPLETE" — not present at all. A permanently-grey stage
+    // teaches operators that grey means ignore, and this rail has to carry a
+    // real blocker.
+    expect(screen.queryByText("StageCreditDecision")).toBeNull();
+    expect(screen.queryByText("StageAppraisal")).toBeNull();
+    expect(screen.queryByText("StageGapResolution")).toBeNull();
+    expect(screen.queryByText("StageApprovedPurchase")).toBeNull();
+    // The stages it does have are there. `getAllByText` because the live stage
+    // is named twice by design — once on the rail, once in the next-step card.
+    expect(screen.getAllByText("StageSettlement").length).toBeGreaterThan(0);
+  });
+
+  test("a cash deal renders no document checklist at all rather than an empty one", () => {
+    renderCockpit(cashDealFixture());
+    // The rules are per finance company and their per-deal status lives on the
+    // application, so a cash deal has nothing to show and no way to acquire it.
+    // An empty card would invite a hunt for an upload control that does not exist.
+    expect(screen.queryByText("DocumentsHeading")).toBeNull();
+  });
+
+  test("a cash deal shows no finance-company line in the header", () => {
+    renderCockpit(cashDealFixture());
+    expect(screen.queryByText(/شركة التمويل الوطني/)).toBeNull();
+  });
+
+  /**
+   * Found by RENDERING the screen, not by reading it. The header used the one
+   * title `DealCockpitTitle` — "Finance application" / `طلب تمويل` — so a cash
+   * deal was headed by the name of a record it does not have. Invisible to
+   * every test that existed, and plain the moment the page was looked at.
+   */
+  test("a cash deal is not titled 'finance application'", () => {
+    renderCockpit(cashDealFixture());
+    expect(screen.queryByText(/DealCockpitTitle$/)).toBeNull();
+    expect(screen.getByText(/DealCockpitTitleCash/)).toBeTruthy();
+  });
+
+  test("a financed deal keeps the finance-application title", () => {
+    renderCockpit();
+    expect(screen.getByText(/DealCockpitTitle$/)).toBeTruthy();
+  });
+
+  /**
+   * An OWNED cash sale has no third party at all — no supplier, no financier —
+   * so the parties card would render a heading over nothing. Both existing
+   * fixtures are consigned, which is why nothing caught this.
+   */
+  test("an owned cash deal renders no empty 'deal parties' card", () => {
+    renderCockpit(
+      cashDealFixture({
+        money: { ...cashDealFixture().money, parties: [] },
+      })
+    );
+    expect(screen.queryByText("DealPartiesHeading")).toBeNull();
+  });
+
+  test("a consigned cash deal still shows the parties card", () => {
+    renderCockpit(cashDealFixture());
+    expect(screen.getByText("DealPartiesHeading")).toBeTruthy();
+  });
+
+  test("a cash deal with no fee records renders no expenses card", () => {
+    // A cash sale's costs are already capitalized into the vehicle cost and so
+    // already inside the margin above. A card reading "expenses: 0" invites the
+    // owner to subtract them a second time.
+    renderCockpit(cashDealFixture());
+    expect(screen.queryByText("ActualExpensesHeading")).toBeNull();
+  });
+
+  /**
+   * The absent-not-empty rule is for CASH. Applying it on emptiness alone
+   * silently changed the SHIPPED financed screen — on `origin/main` this card is
+   * unconditional, so a financed deal awaiting its actuals showed "none recorded
+   * yet", and gating it on `lines.length` removed that from production inside a
+   * PR whose frozen scope explicitly excludes touching it.
+   *
+   * Missed by both adversarial reviewers and by me; caught by CodeRabbit.
+   */
+  test("a financed deal keeps its expenses card even with nothing recorded", () => {
+    renderCockpit(
+      dealFixture({
+        money: {
+          ...dealFixture().money,
+          expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
+        },
+      })
+    );
+    expect(screen.getAllByText("ActualExpensesHeading").length).toBeGreaterThan(0);
+    expect(screen.getByText("NoExpensesRecorded")).toBeTruthy();
+  });
+
+  /**
+   * The server may emit a transition whose moment is unknown — `changedAt` is
+   * optional precisely so a status is never withheld for want of a timestamp.
+   *
+   * The view must render that entry rather than throw. date-fns `format` raises
+   * `RangeError: Invalid time value` on a non-finite input, and an uncaught
+   * throw during render loses the WHOLE screen, not one row.
+   */
+  test("a transition with no recorded moment still renders its status", () => {
+    renderCockpit(
+      cashDealFixture({
+        timeline: [
+          { toStatus: "PENDING", changedAt: Date.UTC(2026, 6, 28), actorName: "ليث العمري" },
+          { toStatus: "COMPLETED", actorName: "ليث العمري" },
+        ],
+      })
+    );
+    /**
+     * Scoped to the Status Log, and asserting the SEQUENCE rather than mere
+     * presence. A global `getAllByText("SaleStatusCompleted")` is satisfied by
+     * the HEADER BADGE alone, so it passes even when the dateless row is
+     * dropped — the precise regression this test exists to catch. Proven: with
+     * the renderer mutated to filter out dateless rows, the earlier version of
+     * this file passed 39/39.
+     */
+    expect(statusLogStatuses()).toEqual(["SaleStatusPending", "SaleStatusCompleted"]);
+    // The missing moment leaves no orphaned separator behind it.
+    expect(screen.queryByText(/Invalid Date/)).toBeNull();
+  });
+
+  /**
+   * The same rule for a moment that is present but unreadable.
+   *
+   * This renderer is SHARED, and the FINANCED timeline feeds it
+   * `applicationStatusLog.changedAt` directly — declared `v.number()`, which
+   * accepts NaN and Infinity. A guard of `changedAt !== undefined` passes both
+   * straight into date-fns `format`, which throws `RangeError` and takes the
+   * whole cockpit down. Guarding only the cash path would have left the screen
+   * this component was originally built for still able to crash.
+   */
+  test.each([
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    /**
+     * FINITE IS NOT RENDERABLE. `Number.isFinite` passes all three of these and
+     * date-fns `format` throws `RangeError` on every one, because JavaScript's
+     * `Date` domain stops at ±8,640,000,000,000,000 ms. `z.number()` accepts
+     * them and `v.number()` stores them verbatim, so the corrupt row is
+     * reachable through the ordinary public write path — not hypothetical.
+     */
+    ["one millisecond past the Date domain", 8640000000000001],
+    ["1e300", 1e300],
+    ["Number.MAX_VALUE", Number.MAX_VALUE],
+    ["a negative epoch past the domain", -8640000000000001],
+  ])("a %s moment renders the status instead of crashing the cockpit", (_label, bad) => {
+    renderCockpit(
+      dealFixture({
+        timeline: [{ toStatus: "APPROVED", changedAt: bad, actorName: "ليث العمري" }],
+      })
+    );
+    /**
+     * Scoped to the Status Log: the header badge also renders "Approved", so a
+     * global query passes even if the row is dropped entirely. Exactly one row
+     * was fed in, so exactly one must survive.
+     */
+    expect(statusLogStatuses()).toEqual(["Approved"]);
+    expect(screen.queryByText(/Invalid Date/)).toBeNull();
+  });
+
+  test("a cash deal renders no appraisal-gap line", () => {
+    // The gap is the finance company's valuation against the price. A cash deal
+    // has no appraisal, so the line has no meaning rather than a value of zero.
+    renderCockpit(cashDealFixture());
+    expect(screen.queryByText("AppraisalGapLabel")).toBeNull();
   });
 });
 
