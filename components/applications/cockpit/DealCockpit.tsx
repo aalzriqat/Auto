@@ -15,7 +15,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/sonner";
 import { getErrorMessage } from "@/lib/errors";
-import { format } from "date-fns";
+import { format, isValid } from "date-fns";
 import {
   AlertTriangle,
   Check,
@@ -48,6 +48,30 @@ import type { PaymentMethod } from "@/components/payments/PaymentMethodSelect";
  * Arabic/Latin run — VIN, currency, references, timestamps — is isolated in its
  * own `<bdi>` so bidi reordering cannot scramble one into its neighbour.
  */
+
+/**
+ * Whether a stored moment can actually be formatted.
+ *
+ * `Number.isFinite` is NOT sufficient, which cost two review rounds to learn.
+ * JavaScript's `Date` domain is ±8,640,000,000,000,000 ms, so `8640000000000001`,
+ * `1e300` and `Number.MAX_VALUE` are all finite yet outside it — and date-fns
+ * `format` throws `RangeError: Invalid time value` on every one of them. An
+ * uncaught throw during render loses the WHOLE screen, not one row, which is the
+ * defect class this cockpit has already been repaired for twice.
+ *
+ * Those values are reachable rather than theoretical: `z.number()` accepts any
+ * finite number and Convex's `v.number()` stores it verbatim, so a corrupt row
+ * arrives intact. SCRUM-45 tracks the same class in the posting path, where the
+ * consequence is an aborted accounting drain rather than a lost screen.
+ *
+ * `isValid(new Date(v))` subsumes `undefined`, `NaN`, `±Infinity` and the
+ * out-of-range case in one test. The `typeof` narrowing is load-bearing, not
+ * decorative: neither `isValid` nor `Number.isFinite` is a type predicate, so
+ * without it `format(entry.changedAt)` is a compile error on `number | undefined`.
+ */
+function isRenderableMoment(value: number | undefined): value is number {
+  return typeof value === "number" && isValid(new Date(value));
+}
 
 type StageState = "COMPLETE" | "CURRENT" | "BLOCKED" | "PENDING" | "STOPPED";
 
@@ -1027,16 +1051,9 @@ export function DealCockpitView({
                       {/* The transition is stated whether or not its moment is
                           known. `changedAt` is optional precisely so a status is
                           never withheld for want of a timestamp — and `format`
-                          throws `RangeError` on a non-finite input, which during
-                          render loses the whole screen rather than one row.
-
-                          `Number.isFinite`, not merely `!== undefined`. This
-                          renderer is SHARED, and the financed timeline feeds it
-                          `applicationStatusLog.changedAt` straight through —
-                          declared `v.number()`, which accepts NaN and Infinity.
-                          Guarding only the cash path would have left the screen
-                          this component was built for still able to crash. */}
-                      {typeof entry.changedAt === "number" && Number.isFinite(entry.changedAt) && (
+                          throws `RangeError` on an unrenderable input, which
+                          during render loses the whole screen, not one row. */}
+                      {isRenderableMoment(entry.changedAt) && (
                         <>
                           {" · "}
                           <bdi>{format(entry.changedAt, "d MMM yyyy HH:mm")}</bdi>

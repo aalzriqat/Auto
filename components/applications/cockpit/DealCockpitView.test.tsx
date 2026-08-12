@@ -113,6 +113,28 @@ function renderCockpit(deal: DealCockpitData | null | undefined = dealFixture())
   return render(<DealCockpitView deal={deal} onRecordSupplierReceipt={async () => {}} />);
 }
 
+/**
+ * The statuses rendered INSIDE the Status Log card, in document order.
+ *
+ * Scoped deliberately. Both fixtures also render the deal's current status in
+ * the HEADER BADGE, so a global `getAllByText("SaleStatusCompleted")` is
+ * satisfied whether or not the timeline row exists — which let a row-dropping
+ * renderer pass an earlier version of these tests. Reading the sequence from
+ * within the card asserts what the operator actually reads as history.
+ *
+ * The card is located from its own heading (`CardTitle` → `CardHeader` → `Card`)
+ * rather than by a test id, so the shared component needs no test-only markup.
+ * Each entry renders its status as the first `<p>` of the row and its actor and
+ * moment as the second.
+ */
+function statusLogStatuses(): string[] {
+  const card = screen.getByText("StatusLogHeading").parentElement?.parentElement;
+  if (!card) throw new Error("Status Log card not found — the heading moved.");
+  return Array.from(card.querySelectorAll<HTMLElement>("p:first-of-type")).map(
+    (p) => p.textContent?.trim() ?? ""
+  );
+}
+
 afterEach(() => {
   cleanup();
   language.locale = "ar";
@@ -392,10 +414,16 @@ describe("the cash rail is shorter, not greyed out", () => {
         ],
       })
     );
-    // Both transitions are stated...
-    expect(screen.getAllByText("SaleStatusPending").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("SaleStatusCompleted").length).toBeGreaterThan(0);
-    // ...and the missing moment leaves no orphaned separator behind it.
+    /**
+     * Scoped to the Status Log, and asserting the SEQUENCE rather than mere
+     * presence. A global `getAllByText("SaleStatusCompleted")` is satisfied by
+     * the HEADER BADGE alone, so it passes even when the dateless row is
+     * dropped — the precise regression this test exists to catch. Proven: with
+     * the renderer mutated to filter out dateless rows, the earlier version of
+     * this file passed 39/39.
+     */
+    expect(statusLogStatuses()).toEqual(["SaleStatusPending", "SaleStatusCompleted"]);
+    // The missing moment leaves no orphaned separator behind it.
     expect(screen.queryByText(/Invalid Date/)).toBeNull();
   });
 
@@ -412,13 +440,29 @@ describe("the cash rail is shorter, not greyed out", () => {
   test.each([
     ["NaN", Number.NaN],
     ["Infinity", Number.POSITIVE_INFINITY],
+    /**
+     * FINITE IS NOT RENDERABLE. `Number.isFinite` passes all three of these and
+     * date-fns `format` throws `RangeError` on every one, because JavaScript's
+     * `Date` domain stops at ±8,640,000,000,000,000 ms. `z.number()` accepts
+     * them and `v.number()` stores them verbatim, so the corrupt row is
+     * reachable through the ordinary public write path — not hypothetical.
+     */
+    ["one millisecond past the Date domain", 8640000000000001],
+    ["1e300", 1e300],
+    ["Number.MAX_VALUE", Number.MAX_VALUE],
+    ["a negative epoch past the domain", -8640000000000001],
   ])("a %s moment renders the status instead of crashing the cockpit", (_label, bad) => {
     renderCockpit(
       dealFixture({
         timeline: [{ toStatus: "APPROVED", changedAt: bad, actorName: "ليث العمري" }],
       })
     );
-    expect(screen.getAllByText("Approved").length).toBeGreaterThan(0);
+    /**
+     * Scoped to the Status Log: the header badge also renders "Approved", so a
+     * global query passes even if the row is dropped entirely. Exactly one row
+     * was fed in, so exactly one must survive.
+     */
+    expect(statusLogStatuses()).toEqual(["Approved"]);
     expect(screen.queryByText(/Invalid Date/)).toBeNull();
   });
 
