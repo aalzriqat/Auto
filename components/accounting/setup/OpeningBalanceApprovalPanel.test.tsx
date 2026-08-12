@@ -58,6 +58,7 @@ function draftFixture(
     createdBy: "user_accountant",
     preparedByName: "Layla Haddad",
     currency: "JOD",
+    denominationKnown: true,
     lines: [
       { accountId: "acc_bank", accountName: "Bank — Arab Bank", debitMinor: 10_000 * SCALE, creditMinor: 0 },
       { accountId: "acc_inv", accountName: "Vehicle Inventory", debitMinor: 90_000 * SCALE, creditMinor: 0 },
@@ -163,6 +164,27 @@ describe("opening-balance approval panel", () => {
     // Posting an opening balance twice is not recoverable in-product.
     expect(screen.getByTestId("opening-balance-approve").hasAttribute("disabled")).toBe(true);
     expect(screen.getByTestId("opening-balance-reject").hasAttribute("disabled")).toBe(true);
+  });
+
+  test("a draft with no recorded currency is not approvable, and says why (Sonnet round 2)", () => {
+    // Not hypothetical: `draftOpeningBalance` was already reachable from
+    // OpeningBalanceCard before this panel existed, so every org whose
+    // accountant hit the dead-end has a stranded draft in exactly this state —
+    // and those are the orgs this panel is built for. approveOpeningBalance
+    // refuses them server-side; the UI must not offer the click.
+    render(
+      <OpeningBalanceApprovalView
+        draft={draftFixture({ denominationKnown: false })}
+        isOwnDraft={false}
+        busy={false}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+      />
+    );
+    expect(screen.getByTestId("opening-balance-unknown-currency")).toBeTruthy();
+    expect(screen.getByTestId("opening-balance-approve").hasAttribute("disabled")).toBe(true);
+    // Reject must stay live, or the stranded draft becomes a second dead end.
+    expect(screen.getByTestId("opening-balance-reject").hasAttribute("disabled")).toBe(false);
   });
 
   test("an unbalanced draft is shown as unbalanced rather than silently approvable", () => {

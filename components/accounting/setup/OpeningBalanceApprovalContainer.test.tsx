@@ -153,6 +153,22 @@ describe("opening-balance approval container", () => {
     expect(screen.getByTestId("opening-balance-approve").hasAttribute("disabled")).toBe(true);
   });
 
+  test("a legacy draft with no recorded currency reaches the view as unapprovable", () => {
+    // Sonnet round 2: the container built its `draft` object without
+    // `denominationKnown`, so the server's refusal never reached the UI and
+    // Approve stayed clickable for exactly the stranded drafts this panel
+    // surfaces for the first time.
+    const [draft] = pendingDraft();
+    queryResults.set(DRAFTS, [{ ...draft, currency: "JOD", denominationKnown: false }]);
+    queryResults.set(ACCOUNTS, [{ _id: "a1", name: "Bank" }, { _id: "a2", name: "Capital" }]);
+    queryResults.set(ME, { _id: "user_owner" });
+
+    render(<OpeningBalanceApprovalPanel orgId={ORG} canManageFinance />);
+
+    expect(screen.getByTestId("opening-balance-unknown-currency")).toBeTruthy();
+    expect(screen.getByTestId("opening-balance-approve").hasAttribute("disabled")).toBe(true);
+  });
+
   test("once both resolve, a reviewer can act", () => {
     queryResults.set(DRAFTS, pendingDraft());
     queryResults.set(ACCOUNTS, [{ _id: "a1", name: "Bank" }, { _id: "a2", name: "Capital" }]);

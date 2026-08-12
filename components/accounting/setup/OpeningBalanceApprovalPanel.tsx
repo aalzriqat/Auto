@@ -26,6 +26,20 @@ export type PendingOpeningBalanceDraft = {
   createdBy: string;
   preparedByName: string;
   currency: string;
+  /**
+   * Whether the draft recorded the currency its amounts were entered in.
+   *
+   * False for any draft created before that snapshot existed — which is NOT
+   * hypothetical: `draftOpeningBalance` was already reachable from
+   * OpeningBalanceCard, so every org whose accountant hit the approval
+   * dead-end has a stranded draft in exactly this state. Those are the orgs
+   * this panel is built for, so they are the ones most likely to meet it.
+   *
+   * `approveOpeningBalance` refuses such a draft rather than guessing its
+   * denomination. Mirroring that refusal here is the difference between an
+   * explained disabled button and a raw error toast after the click.
+   */
+  denominationKnown: boolean;
   lines: PendingOpeningBalanceLine[];
 };
 
@@ -88,7 +102,7 @@ export function OpeningBalanceApprovalView({
   // An unbalanced draft is refused by validateManualJournalLines at approval
   // time. Disabling here turns a red toast after the fact into information
   // before the decision.
-  const approveDisabled = isOwnDraft || busy || !balanced;
+  const approveDisabled = isOwnDraft || busy || !balanced || !draft.denominationKnown;
 
   return (
     <section
@@ -156,6 +170,12 @@ export function OpeningBalanceApprovalView({
       {!balanced && (
         <p data-testid="opening-balance-unbalanced" className="text-sm font-medium text-red-700">
           {t("OpeningBalanceUnbalanced")}
+        </p>
+      )}
+
+      {!draft.denominationKnown && (
+        <p data-testid="opening-balance-unknown-currency" className="text-sm font-medium text-red-700">
+          {t("OpeningBalanceCurrencyUnknown")}
         </p>
       )}
 
@@ -279,6 +299,7 @@ export function OpeningBalanceApprovalPanel({
     createdBy: raw.createdBy,
     preparedByName: raw.preparedByName,
     currency: raw.currency,
+    denominationKnown: raw.denominationKnown,
     lines: raw.lines.map((line) => ({
       accountId: line.accountId as string,
       // Falling back to the id keeps an unresolved account visible rather than
