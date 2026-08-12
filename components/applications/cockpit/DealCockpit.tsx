@@ -1028,8 +1028,15 @@ export function DealCockpitView({
                           known. `changedAt` is optional precisely so a status is
                           never withheld for want of a timestamp — and `format`
                           throws `RangeError` on a non-finite input, which during
-                          render loses the whole screen rather than one row. */}
-                      {entry.changedAt !== undefined && (
+                          render loses the whole screen rather than one row.
+
+                          `Number.isFinite`, not merely `!== undefined`. This
+                          renderer is SHARED, and the financed timeline feeds it
+                          `applicationStatusLog.changedAt` straight through —
+                          declared `v.number()`, which accepts NaN and Infinity.
+                          Guarding only the cash path would have left the screen
+                          this component was built for still able to crash. */}
+                      {typeof entry.changedAt === "number" && Number.isFinite(entry.changedAt) && (
                         <>
                           {" · "}
                           <bdi>{format(entry.changedAt, "d MMM yyyy HH:mm")}</bdi>

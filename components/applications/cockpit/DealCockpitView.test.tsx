@@ -399,6 +399,29 @@ describe("the cash rail is shorter, not greyed out", () => {
     expect(screen.queryByText(/Invalid Date/)).toBeNull();
   });
 
+  /**
+   * The same rule for a moment that is present but unreadable.
+   *
+   * This renderer is SHARED, and the FINANCED timeline feeds it
+   * `applicationStatusLog.changedAt` directly — declared `v.number()`, which
+   * accepts NaN and Infinity. A guard of `changedAt !== undefined` passes both
+   * straight into date-fns `format`, which throws `RangeError` and takes the
+   * whole cockpit down. Guarding only the cash path would have left the screen
+   * this component was originally built for still able to crash.
+   */
+  test.each([
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+  ])("a %s moment renders the status instead of crashing the cockpit", (_label, bad) => {
+    renderCockpit(
+      dealFixture({
+        timeline: [{ toStatus: "APPROVED", changedAt: bad, actorName: "ليث العمري" }],
+      })
+    );
+    expect(screen.getAllByText("Approved").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Invalid Date/)).toBeNull();
+  });
+
   test("a cash deal renders no appraisal-gap line", () => {
     // The gap is the finance company's valuation against the price. A cash deal
     // has no appraisal, so the line has no meaning rather than a value of zero.
