@@ -46,7 +46,11 @@ const PERMISSIONS = [
   "manage:finance",
 ];
 
-type Mode = "CONFIGURED_FINANCE_COMPANY" | "MANUAL_FINANCE_COMPANY" | "LEASE";
+type Mode =
+  | "CONFIGURED_FINANCE_COMPANY"
+  | "MANUAL_FINANCE_COMPANY"
+  | "LEASE"
+  | "INTERNAL_INSTALLMENT";
 
 /** An APPROVED application with NO economics recorded, in the given quote mode. */
 async function seedApprovedApplication(mode: Mode) {
@@ -232,6 +236,34 @@ describe("SCRUM-61: the requirement is scoped to CONFIGURED, not to financing in
   test("a LEASE deal is not blocked by the configured-mode requirement", async () => {
     const { t, orgId, applicationId, asUser, registerExpectedPayment } =
       await seedApprovedApplication("LEASE");
+
+    await asUser.mutation(api.applications.registerVehicleHandover, { orgId, applicationId });
+    await registerExpectedPayment();
+    await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
+
+    const after = await t.run((ctx) => ctx.db.get(applicationId));
+    expect(after?.status).toBe("CLOSED");
+    expect(after?.finalizedSaleId).toBeDefined();
+  });
+
+  /**
+   * The third mode the product ruling names, and the one this file originally
+   * left unpinned.
+   *
+   * It is covered because INTERNAL_INSTALLMENT genuinely travels this
+   * lifecycle — verified rather than assumed: `createFromQuote` applies no mode
+   * filter at all, `finalizeDeal` maps the mode to `financingType: "FINANCED"`
+   * when completing the sale (`applications.ts`), and
+   * `setSupplierSettlementRoute` reasons about these deals explicitly. So the
+   * guard CAN reach them, and something has to say that it must not.
+   *
+   * The dealership finances this one itself — the customer pays it over time.
+   * There is no external company to submit a quotation to, so demanding one
+   * would dead-end exactly the deals this ruling set out to protect.
+   */
+  test("an INTERNAL_INSTALLMENT deal is not blocked by the configured-mode requirement", async () => {
+    const { t, orgId, applicationId, asUser, registerExpectedPayment } =
+      await seedApprovedApplication("INTERNAL_INSTALLMENT");
 
     await asUser.mutation(api.applications.registerVehicleHandover, { orgId, applicationId });
     await registerExpectedPayment();
