@@ -21,9 +21,16 @@ const PERMISSIONS = [
 /**
  * A caller with `view:sales` but WITHOUT `view:finance`.
  *
- * This is the role the money-leak test turns on: the queue authorizes on
- * `view:sales`, exactly like the two lists it replaces, and one of those lists
- * hands financed amounts to this role today.
+ * The queue authorizes on `view:sales`, exactly like the two lists it replaces,
+ * and one of those lists hands financed amounts to this role today. So the
+ * allow-list assertion below runs as this role deliberately.
+ *
+ * ⚠️ It proves the projection SHAPE — that no money field can reach any caller —
+ * not that a lower-permission role sees less than a higher one. Those are
+ * different claims, and the earlier wording here asserted the second while
+ * testing the first. A permission-differential test would need a second role;
+ * it is not needed while the row type carries no amount at all, and the
+ * allow-list is what enforces that.
  */
 async function setup() {
   const t = convexTestWithComponents(schema, MODULES);
@@ -383,6 +390,107 @@ describe("deals.queue — the state that only lived on the old list", () => {
     expect(view.rows).toHaveLength(1);
     expect(view.rows[0].href).toContain(applicationId);
   });
+
+  test("deposits on live deals cannot crowd out the one that needs resolving", async () => {
+    const env = await setup();
+    const { applicationId, quoteId, vehicleId: depositVehicleId } = await preSaleApplication(env);
+
+    /**
+     * The held-deposit scan is filtered AFTER it is bounded: it takes a page of
+     * HELD deposits, then keeps only those whose application was rejected or
+     * cancelled. Bound that page to the caller's `limit` and a floor with a few
+     * live deposits fills it entirely with rows that all fail the filter — so
+     * DEPOSIT_PENDING renders EMPTY while a customer's money sits unrefunded.
+     *
+     * `truncated` was true throughout, so the screen never claimed to be
+     * complete. It just showed nothing, which is a poor way to say "there is
+     * more" on the one view that exists to find this.
+     */
+    for (let index = 0; index < 5; index += 1) {
+      const liveVehicleId = await env.t.run((ctx) =>
+        ctx.db.insert("vehicles", {
+          orgId: env.orgId,
+          vin: `1HGCM82633A8000${index}`,
+          make: "Kia",
+          model: "Rio",
+          year: 2023,
+          color: "Red",
+          fuelType: "Gasoline",
+          transmission: "Automatic",
+          mileage: 100,
+          sellingPrice: 9000,
+          status: "RESERVED",
+        })
+      );
+      // Their OWN quote, with no rejected application behind it — otherwise
+      // every deposit resolves to the same rejected deal and the test passes
+      // whether or not the scan ever reached the sixth row. The first draft of
+      // this test did exactly that.
+      const liveQuoteId = await env.t.run((ctx) =>
+        ctx.db.insert("quotes", {
+          orgId: env.orgId,
+          customerId: env.customerId,
+          vehicleId: liveVehicleId,
+          vehiclePrice: 9000,
+          downPayment: 1000,
+          termMonths: 24,
+          status: "SHARED",
+          createdBy: env.userId,
+          createdAt: Date.now(),
+        })
+      );
+      await env.t.run((ctx) =>
+        ctx.db.insert("deposits", {
+          orgId: env.orgId,
+          quoteId: liveQuoteId,
+          vehicleId: liveVehicleId,
+          customerId: env.customerId,
+          amount: 300,
+          method: "CASH",
+          status: "HELD",
+          holdActive: true,
+          createdAt: Date.now(),
+          createdBy: env.userId,
+        })
+      );
+    }
+
+    // The one that matters is inserted LAST, so a page bounded by `limit` never
+    // reaches it.
+    await env.t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId: env.orgId,
+        quoteId,
+        vehicleId: depositVehicleId,
+        customerId: env.customerId,
+        amount: 500,
+        method: "CASH",
+        status: "HELD",
+        holdActive: true,
+        createdAt: Date.now(),
+        createdBy: env.userId,
+      })
+    );
+    await env.asUser.mutation(api.applications.updateStatus, {
+      orgId: env.orgId,
+      applicationId,
+      status: "UNDER_REVIEW",
+    });
+    await env.asUser.mutation(api.applications.updateStatus, {
+      orgId: env.orgId,
+      applicationId,
+      status: "REJECTED",
+    });
+
+    const view = await env.asUser.query(api.deals.queue, {
+      orgId: env.orgId,
+      view: "DEPOSIT_PENDING",
+      limit: 2,
+    });
+    expect(view.rows.map((r) => r.href)).toContain(
+      `/${env.orgId}/applications/${applicationId}/deal`
+    );
+  });
 });
 
 describe("deals.queue — ordering and limits", () => {
@@ -426,6 +534,18 @@ describe("deals.queue — ordering and limits", () => {
     // Silence here would read as "you are done" on a worklist that is not done.
     expect(result.truncated).toBe(true);
     expect(result.limit).toBe(1);
+
+    /**
+     * `limit` bounds each SCAN, not the number of rows returned — pinned here
+     * so the two cannot drift apart unnoticed.
+     *
+     * Deliberate. Slicing the result to `limit` would mean deciding, on the
+     * server, which actionable deals an operator is not allowed to see, on a
+     * screen whose entire purpose is that nothing outstanding goes unnoticed.
+     * A scan that stopped early says so through `truncated`; work that was
+     * found is always handed over.
+     */
+    expect(result.rows.length).toBeGreaterThan(result.limit);
   });
 
   test("a non-finite limit cannot turn the scan unbounded", async () => {
@@ -791,6 +911,121 @@ describe("deals.queue — a finished deal that still owes its supplier", () => {
     // obligation bucket is reported, not absorbed. Asserted separately so the
     // disjunction above cannot be satisfied by an accident of page size.
     expect(attention.truncated).toBe(true);
+  });
+
+  test("a FULLY_SETTLED stamp cannot outrank an open supplier payable", async () => {
+    const env = await setup();
+
+    /**
+     * The sweep found this deal BECAUSE the supplier is still owed. If the row
+     * it produces then reads "nothing outstanding", the sweep has surfaced a
+     * deal and immediately hidden it again.
+     *
+     * `deriveDealStages` falls back to `settlementStatus` whenever
+     * `settlementComplete` is undefined, and the queue passed undefined for
+     * every financed row — so a deal stamped FULLY_SETTLED while a payable sat
+     * open reported settled here and unsettled in the cockpit, which resolves
+     * the obligation from the subledger. Two screens, same deal, opposite
+     * answers about whether money is owed.
+     *
+     * The queue may only use the subledger to REFUSE to call a deal settled.
+     * Declaring settlement stays with the cockpit, which resolves route,
+     * currency and entitlement to do it.
+     */
+    const vehicleId = await env.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: env.orgId,
+        vin: "1HGCM82633A777777",
+        make: "Mazda",
+        model: "CX-5",
+        year: 2022,
+        color: "Blue",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 500,
+        sellingPrice: 16000,
+        status: "SOLD",
+        sourcedFromName: "Waleed",
+        sourceType: "SOURCED",
+      })
+    );
+    const quoteId = await env.t.run((ctx) =>
+      ctx.db.insert("quotes", {
+        orgId: env.orgId,
+        customerId: env.customerId,
+        vehicleId,
+        vehiclePrice: 16000,
+        downPayment: 2000,
+        termMonths: 48,
+        mode: "CONFIGURED_FINANCE_COMPANY",
+        status: "ACCEPTED",
+        createdBy: env.userId,
+        createdAt: Date.now(),
+      })
+    );
+    const saleId = await env.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: env.orgId,
+        vehicleId,
+        customerId: env.customerId,
+        salespersonId: env.userId,
+        salePrice: 16000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        financingType: "FINANCED",
+        consignedMarginCurrency: "JOD",
+        supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      })
+    );
+    const applicationId = await env.t.run((ctx) =>
+      ctx.db.insert("financeApplications", {
+        orgId: env.orgId,
+        quoteId,
+        customerId: env.customerId,
+        vehicleId,
+        salespersonId: env.userId,
+        status: "CLOSED",
+        // The stamp that used to win the argument on its own.
+        settlementStatus: "FULLY_SETTLED",
+        // Every earlier stage is deliberately COMPLETE, so SETTLEMENT is the
+        // only one that can be live. Without this the rail stalls at an earlier
+        // step and the test passes whether or not the fix exists — which is
+        // exactly what the first draft of it did.
+        creditDecision: "APPROVED",
+        appraisalStatus: "COMPLETED",
+        gapResolution: "NOT_REQUIRED",
+        approvedDealerPurchaseAmountMinor: 15_000_000,
+        handoverStatus: "HANDED_OVER",
+        finalizedSaleId: saleId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+    await env.t.run((ctx) => ctx.db.patch(saleId, { applicationId }));
+    await env.t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierPayables", {
+        orgId: env.orgId,
+        saleId,
+        vehicleId,
+        amountDue: 15000,
+        amountPaid: 0,
+        currency: "JOD",
+        status: "PENDING",
+        sourcedFromName: "Waleed",
+        createdAt: Date.now(),
+        createdBy: env.userId,
+        updatedAt: Date.now(),
+      })
+    );
+
+    const attention = await env.asUser.query(api.deals.queue, {
+      orgId: env.orgId,
+      view: "NEEDS_ATTENTION",
+    });
+    const row = attention.rows.find((r) => r.key === `sale:${saleId}`);
+    expect(row).toBeDefined();
+    expect(row?.needsAttention).toBe(true);
+    expect(row?.stageKey).toBe("SETTLEMENT");
   });
 
   test("an overflowing receivable bucket is reported too", async () => {

@@ -59,6 +59,14 @@ import { getOrgCurrency } from "./accounting/workflowHooks";
 /** How many rows the projection will scan per source before it stops. */
 const DEFAULT_LIMIT = 40;
 const MAX_LIMIT = 100;
+/**
+ * The held-deposit scan is bounded independently of the caller's page size.
+ *
+ * Held deposits are filtered AFTER the scan, down to the few whose deal was
+ * rejected or cancelled — so a bound tied to `limit` lets deposits on live deals
+ * crowd out the ones the DEPOSIT_PENDING view exists to show.
+ */
+const DEPOSIT_SCAN_CAP = MAX_LIMIT + 1;
 
 /**
  * The views the queue offers.
@@ -152,6 +160,15 @@ export interface DealQueueResult {
    * whose entire job is "what still needs attention".
    */
   truncated: boolean;
+  /**
+   * The bound applied to each individual SCAN — not a cap on `rows`.
+   *
+   * `rows` is deliberately never sliced to it. Trimming the result would mean
+   * choosing, on the server, which outstanding deals an operator does not get
+   * to see, on the one screen whose purpose is that nothing outstanding goes
+   * unnoticed. A scan that stopped early reports itself through `truncated`;
+   * work that was found is always returned.
+   */
   limit: number;
 }
 
@@ -375,6 +392,21 @@ async function buildRow(
     sale: Doc<"sales"> | null;
     application: Doc<"financeApplications"> | null;
     rules: Array<Doc<"companyDocumentRules">>;
+    /**
+     * The subledger still carries an open obligation against this sale.
+     *
+     * Used in ONE direction only: it can refuse to call a deal settled, and it
+     * can never declare one settled. Declaring settlement is the cockpit's job —
+     * it resolves route, currency and entitlement to do so, and a second
+     * derivation of that here would be a second answer waiting to disagree.
+     *
+     * The asymmetry is the point. Without it, `deriveDealStages` falls back to
+     * `settlementStatus` alone, so a financed deal stamped FULLY_SETTLED reads
+     * as finished even though an open payable is what put it in this queue —
+     * the supplier sweep would surface the row and then mark it needing
+     * nothing. Erring the other way merely shows a human a deal they can close.
+     */
+    hasOpenObligation: boolean;
   }
 ): Promise<DealQueueRow | null> {
   const { sale, application, rules, orgId } = args;
@@ -424,7 +456,7 @@ async function buildRow(
     const docsComplete = await requiredDocumentsComplete(ctx, application, rules, quote?.companyId);
 
     stages = deriveDealStages({
-      settlementComplete: undefined,
+      settlementComplete: args.hasOpenObligation ? false : undefined,
       dealCancelled: sale?.status === "CANCELLED",
       status: application.status,
       vehicleHandoverAt: application.vehicleHandoverAt,
@@ -447,7 +479,9 @@ async function buildRow(
     const cashSale = sale!;
     stages = deriveCashDealStages({
       saleStatus: cashSale.status,
-      settlementComplete: await cashSettlementComplete(ctx, cashSale, vehicle),
+      settlementComplete: args.hasOpenObligation
+        ? false
+        : await cashSettlementComplete(ctx, cashSale, vehicle),
     });
     statusKey = cashSale.status;
     // FINANCED is a property of the SALE, not of whether an application row
@@ -555,10 +589,19 @@ export const queue = query({
         // A held deposit is the ONLY thing that makes a rejected or cancelled
         // deal actionable, and it is indexed directly — so that population is
         // reached by what it is rather than through a window over dead rows.
+        //
+        // Its bound is DELIBERATELY not `cap`. Only a fraction of held deposits
+        // belong to a rejected or cancelled deal, and the filter that finds them
+        // runs after this scan — so on a floor with many live deposits, a
+        // `limit`-sized page fills with rows that all fail the filter and the
+        // DEPOSIT_PENDING view renders empty while unresolved deposits exist.
+        // `truncated` still tells the truth, but a view that shows nothing is a
+        // poor way to say "there is more". A cap that does not shrink with the
+        // caller's page size costs one wider scan of a small table.
         ctx.db
           .query("deposits")
           .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "HELD"))
-          .take(cap),
+          .take(DEPOSIT_SCAN_CAP),
         ctx.db
           .query("companyDocumentRules")
           .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
@@ -689,13 +732,11 @@ export const queue = query({
     const overflowed = (pages: Array<Array<unknown>>): boolean =>
       pages.some((page) => page.length > limit);
 
-    const actionableOverflow = overflowed([
-      openSales,
-      heldDeposits,
-      ...appPages,
-      ...payablePages,
-      ...receivablePages,
-    ]);
+    const actionableOverflow =
+      // Measured against its own wider bound, since that is the bound it was
+      // actually cut off at.
+      heldDeposits.length > DEPOSIT_SCAN_CAP - 1 ||
+      overflowed([openSales, ...appPages, ...payablePages, ...receivablePages]);
     const truncated = actionableOverflow || overflowed([historySales, historyApps]);
 
     /**
@@ -772,6 +813,9 @@ export const queue = query({
             sale: candidate.sale,
             application: candidate.application,
             rules,
+            // The sweep above already asked the subledger this question, so the
+            // answer travels with the candidate rather than being asked again.
+            hasOpenObligation: candidate.sale !== null && unsettledSaleIds.has(candidate.sale._id),
           })
         )
       )

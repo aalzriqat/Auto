@@ -234,6 +234,19 @@ describe("Arabic RTL and bidi", () => {
     expect(screen.getByText("DealActivityToday")).toBeTruthy();
   });
 
+  test("before the clock is known, no duration is shown and no row looks stalled", () => {
+    // The first paint of EVERY visit runs this branch: `now` is null until the
+    // client clock starts, because a duration computed during server render
+    // disagrees with the client by however long the request took and React
+    // reports that as a hydration error. A guessed age would also colour rows
+    // red for a moment on a screen whose colours mean "nobody has touched this".
+    renderQueue({ data: data({ rows: [row({ lastActivityAt: NOW - 30 * DAY })] }), now: null });
+    const dealRow = screen.getByTestId("deal-queue-row");
+    expect(dealRow.getAttribute("data-stall")).toBe("FRESH");
+    expect(within(dealRow).queryByText("DealDaysNoActivity")).toBeNull();
+    expect(within(dealRow).queryByText("DealActivityToday")).toBeNull();
+  });
+
   test("the row never claims time spent in the current stage", () => {
     // The metric is silence since the deal last moved. `lastActivityAt` is an
     // application's `updatedAt` or a sale's creation, and an edit that changes
@@ -285,12 +298,19 @@ describe("states the screen must not get wrong", () => {
 });
 
 describe("views", () => {
-  test("the active view is the selected tab and carries its count", () => {
+  test("exactly one view reads as pressed, and carries its count", () => {
     renderQueue({ data: data({ counts: { ALL: 9, NEEDS_ATTENTION: 3 } }) });
-    const selected = screen.getAllByRole("tab").filter((el) => el.getAttribute("aria-selected") === "true");
-    expect(selected).toHaveLength(1);
-    expect(selected[0].textContent).toContain("DealViewNeedsAttention");
-    expect(selected[0].textContent).toContain("3");
+    // Toggle buttons, not tabs. `role="tablist"` announced a widget whose
+    // arrow-key navigation this control never implemented; `aria-pressed` says
+    // what is actually true, which is that a filter is on.
+    const pressed = screen
+      .getAllByRole("button")
+      .filter((el) => el.getAttribute("aria-pressed") === "true");
+    expect(pressed).toHaveLength(1);
+    expect(pressed[0].textContent).toContain("DealViewNeedsAttention");
+    expect(pressed[0].textContent).toContain("3");
+    // And the tab semantics are gone, not merely supplemented.
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
   });
 
   test("choosing a view reports the key, and does not filter locally", () => {

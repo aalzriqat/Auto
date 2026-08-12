@@ -150,9 +150,16 @@ export function DealQueueView({
       {/* A scrolling strip rather than a Select: on a phone the operator's own
           view is usually one tap away, and burying seven short labels behind a
           dropdown costs a tap on every single visit. */}
+      {/* A group of toggle buttons, NOT a tablist.
+          The first version declared `role="tablist"` with `role="tab"` children,
+          which promises the ARIA tabs pattern: arrow-key navigation, a roving
+          tabindex, and a `tabpanel` the tabs control. None of that exists here.
+          A screen-reader user would have been told this was a tab widget and
+          then found the arrow keys dead — a worse outcome than plain buttons.
+          These are filters over one list, so they are pressed, not selected. */}
       <div
         className="-mx-4 flex gap-1.5 overflow-x-auto px-4 pb-1 md:mx-0 md:flex-wrap md:px-0"
-        role="tablist"
+        role="group"
         aria-label={t("DealsQueueTitle")}
       >
         {DEAL_QUEUE_VIEWS.map((entry) => {
@@ -162,8 +169,7 @@ export function DealQueueView({
             <button
               key={entry.key}
               type="button"
-              role="tab"
-              aria-selected={active}
+              aria-pressed={active}
               onClick={() => onViewChange(entry.key)}
               className={`flex shrink-0 items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm transition-colors ${
                 active
