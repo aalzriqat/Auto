@@ -209,11 +209,47 @@ export type DealCockpitData =
 export function DealCockpit({
   orgId,
   applicationId,
-}: Readonly<{ orgId: Id<"organizations">; applicationId: Id<"financeApplications"> }>) {
+  canonicalizeUrl = true,
+}: Readonly<{
+  orgId: Id<"organizations">;
+  applicationId: Id<"financeApplications">;
+  /**
+   * Whether this instance owns the address bar and may correct it.
+   *
+   * A deal gets ONE canonical identity, and once a sale exists that identity is
+   * the SALE — so the application-keyed URL sends the operator to
+   * `/sales/{saleId}/deal` rather than becoming a second permanent home for the
+   * same deal.
+   *
+   * `false` when the sale-keyed route is already showing this deal and has
+   * delegated the financed wiring here. Without that, the two routes would
+   * canonicalize into each other: the sale URL renders this component, which
+   * would redirect to the sale URL, forever. Expressed as ownership rather than
+   * as "don't redirect" because the question is which component is responsible
+   * for the URL, and only one ever is.
+   */
+  canonicalizeUrl?: boolean;
+}>) {
   const deal = useQuery(api.applications.dealCockpit, { orgId, applicationId });
   const recordReceipt = useMutation(api.supplierReceivables.recordReceipt);
   const amendAdvice = useMutation(api.applications.amendSupplierDisbursementAdvice);
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
+  const router = useRouter();
+
+  /**
+   * Once the application has become a sale, the sale owns the deal's identity.
+   *
+   * Read from the server's own `saleId` — `app.finalizedSaleId` — so a deal is
+   * only ever redirected on evidence that the sale exists, never on a guess
+   * about the application's status.
+   */
+  const finalizedSaleId = canonicalizeUrl ? (deal?.saleId ?? null) : null;
+  useEffect(() => {
+    if (finalizedSaleId) {
+      router.replace(`/${orgId}/sales/${finalizedSaleId}/deal`);
+    }
+  }, [finalizedSaleId, orgId, router]);
+
   // Hidden while the membership is still loading rather than shown optimistically:
   // an action that appears and then vanishes reads as a bug, and the server is
   // the authority either way.
@@ -221,6 +257,11 @@ export function DealCockpit({
   // One key per correction attempt, so a retry after a lost response is the same
   // amendment rather than a second audited one.
   const correctionKeyRef = useRef<string | null>(null);
+
+  // Below every hook, deliberately. An early return placed above `useRef` changes
+  // the hook order between renders — eslint's rules-of-hooks caught exactly that
+  // here, and the redirect is a render-time courtesy that can wait three lines.
+  if (finalizedSaleId) return <Skeleton className="h-64 w-full" />;
 
   return (
     <DealCockpitView
@@ -271,11 +312,23 @@ export function DealCockpit({
 }
 
 /**
- * The same screen, for a CASH deal.
+ * THE canonical deal screen, keyed on the sale — cash or financed.
  *
- * A second thin data wrapper, not a second screen: it renders the identical
- * `DealCockpitView` and differs only in which query it calls and which actions
- * exist. There is no settlement-advice correction here because there is no
+ * This is the one address a deal has once it exists. It is not a cash-only
+ * screen: a sale with a finance application is rendered HERE, by delegating the
+ * financed wiring to `DealCockpit` above, so the operator never has to know
+ * which kind of deal they are looking at to find it.
+ *
+ * The delegation is what keeps this honest. The financed deal's money still
+ * comes from `applications.dealCockpit` — the shipped, reviewed query that
+ * understands approved purchase amounts, supplier settlement routes and the
+ * `postable: false` management headline. Teaching `sales.dealCockpit` to
+ * compute financed money would have produced a SECOND source of truth for the
+ * same figures, which is the one thing SCRUM-26 and SCRUM-30 forbade outright.
+ * So: one URL, one view, and each kind's money answered by the query that
+ * already knows it.
+ *
+ * There is no settlement-advice correction on the cash path because there is no
  * finance company to have issued one — the action is ABSENT rather than shown
  * disabled, which is the same rule the rest of this screen follows.
  *
@@ -285,30 +338,33 @@ export function DealCockpit({
  * keyed on the claim rather than on any financing — so the collection workflow
  * the previous release built works here unchanged.
  */
-export function CashDealCockpit({
+export function SaleDealCockpit({
   orgId,
   saleId,
 }: Readonly<{ orgId: Id<"organizations">; saleId: Id<"sales"> }>) {
   const deal = useQuery(api.sales.dealCockpit, { orgId, saleId });
   const recordReceipt = useMutation(api.supplierReceivables.recordReceipt);
-  const router = useRouter();
 
   /**
-   * A financed deal's screen is the application-keyed one, so this route hands
-   * it over rather than rendering a second view of the same deal.
+   * A financed sale is rendered here, not sent elsewhere.
    *
-   * The server has already withheld the money for this case, so the redirect is
-   * the courtesy and the withholding is the guarantee — if this effect never
-   * ran, the screen would still not show a second profit figure.
+   * `sales.dealCockpit` deliberately withholds money for a financed sale — there
+   * is no second profit for this deal to publish at any permission level — so the
+   * financed money must come from `applications.dealCockpit`. Delegating gets
+   * that without duplicating it, and without moving the operator off the URL they
+   * are on. `canonicalizeUrl={false}` because THIS route is already the canonical
+   * one; the delegate must not send it back to itself.
    */
   const financingApplicationId = deal?.financingApplicationId ?? null;
-  useEffect(() => {
-    if (financingApplicationId) {
-      router.replace(`/${orgId}/applications/${financingApplicationId}/deal`);
-    }
-  }, [financingApplicationId, orgId, router]);
-
-  if (financingApplicationId) return <Skeleton className="h-64 w-full" />;
+  if (financingApplicationId) {
+    return (
+      <DealCockpit
+        orgId={orgId}
+        applicationId={financingApplicationId}
+        canonicalizeUrl={false}
+      />
+    );
+  }
 
   return (
     <DealCockpitView

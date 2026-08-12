@@ -167,7 +167,7 @@ describe("who can open a cash deal at all", () => {
 });
 
 describe("the cash headline is an ACCOUNTING result, and says so", () => {
-  test("an owned cash sale reports price less cost, postable, with no estimate qualifier", async () => {
+  test("an owned cash sale reports price less cost, reconciling to the ledger, with no estimate qualifier", async () => {
     const s = await seed("owned");
     const vehicleId = await ownedVehicle(s, "OWNEDCASH0000001");
     const saleId = await insertSale(s, vehicleId);
@@ -180,10 +180,23 @@ describe("the cash headline is an ACCOUNTING result, and says so", () => {
 
     expect(profit.basis).toBe("ACCOUNTING_RESULT");
     // The whole point: this figure HAS a journal behind it.
-    expect(profit.postable).toBe(true);
+    expect(profit.reconcilesToLedger).toBe(true);
     expect(profit.amountMinor).toBe((OWNED_PRICE - OWNED_COST) * SCALE);
     // And it carries no financed-only classification to render as a caveat.
     expect("classification" in profit).toBe(false);
+    /**
+     * And it does NOT claim to be postable.
+     *
+     * "This agrees with the books" and "this is an instruction to post" are
+     * different claims, and only the first is true of a derived read: the journal
+     * was written by `completeSale` long before anyone asked for a headline, and
+     * nothing posts from this object. A field named `postable: true` invites a
+     * future caller to treat it as a posting source, so `postable` lives on the
+     * FINANCED arm only, as a one-way prohibition.
+     *
+     * Asserted as absence rather than by value so re-adding it fails here.
+     */
+    expect("postable" in profit).toBe(false);
   });
 
   test("a consigned cash sale reports the agency margin, not the sale price", async () => {
@@ -204,7 +217,7 @@ describe("the cash headline is an ACCOUNTING result, and says so", () => {
     // 3,000 — what the dealership earned. NOT 20,000, which is the size of the
     // deal it arranged with a car it never owned.
     expect(profit.amountMinor).toBe(MARGIN * SCALE);
-    expect(profit.postable).toBe(true);
+    expect(profit.reconcilesToLedger).toBe(true);
   });
 
   test("a cancelled sale reports no profit rather than the figure its reversed journal once had", async () => {
@@ -320,7 +333,7 @@ describe("an unreadable figure never renders as a zero line", () => {
   /**
    * On an agent sale carrying a recorded margin, the HEADLINE does not depend on
    * `sale.salePrice` at all — `saleEconomics` reads the frozen margin. So a
-   * corrupt `salePrice` leaves a perfectly valid, postable headline sitting
+   * corrupt `salePrice` leaves a perfectly valid, ledger-reconciling headline sitting
    * above a breakdown line claiming the car sold for nothing.
    *
    * Convex accepts `NaN` under a `v.number()` validator, so this arrives from
@@ -408,7 +421,7 @@ describe("a sale financed WITHOUT an application", () => {
     const profit = deal!.money!.profit;
     if (!profit.available) throw new Error("expected a profit for an owned financed sale");
     expect(profit.basis).toBe("ACCOUNTING_RESULT");
-    expect(profit.postable).toBe(true);
+    expect(profit.reconcilesToLedger).toBe(true);
   });
 
   /**
@@ -482,9 +495,9 @@ describe("a sale financed WITHOUT an application", () => {
   });
 });
 
-describe("a draft has no journal, so it has nothing postable", () => {
+describe("a draft has no journal, so it has nothing to reconcile against", () => {
   /**
-   * `postable: true` is a claim that a journal exists. `createDraftSale`
+   * `reconcilesToLedger: true` is a claim that a journal exists. `createDraftSale`
    * performs no accounting side effects, so on a PENDING sale that claim is
    * false — the same class of false statement as dropping the qualifier from
    * the financed figure, in the opposite direction.

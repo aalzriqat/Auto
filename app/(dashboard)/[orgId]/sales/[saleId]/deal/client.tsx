@@ -3,10 +3,10 @@
 import { useParams } from "next/navigation";
 import { useOrg } from "@/components/providers/OrgProvider";
 import type { Id } from "@/convex/_generated/dataModel";
-import { CashDealCockpit } from "@/components/applications/cockpit/DealCockpit";
+import { SaleDealCockpit } from "@/components/applications/cockpit/DealCockpit";
 import { Skeleton } from "@/components/ui/skeleton";
 
-export function CashDealCockpitClient() {
+export function SaleDealCockpitClient() {
   const { activeOrgId } = useOrg();
   const params = useParams<{ saleId: string }>();
   const saleId = params?.saleId;
@@ -19,7 +19,7 @@ export function CashDealCockpitClient() {
   }
 
   return (
-    <CashDealCockpit
+    <SaleDealCockpit
       orgId={activeOrgId as Id<"organizations">}
       saleId={saleId as Id<"sales">}
     />

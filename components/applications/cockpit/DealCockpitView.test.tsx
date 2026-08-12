@@ -238,7 +238,7 @@ function cashDealFixture(overrides: Record<string, unknown> = {}): DealCockpitDa
         basis: "ACCOUNTING_RESULT",
         amountMinor: 3_000 * SCALE,
         currency: "JOD",
-        postable: true,
+        reconcilesToLedger: true,
         lines: [
           { key: "SALE_PRICE", sign: 1, amountMinor: 20_000 * SCALE },
           { key: "SUPPLIER_ENTITLEMENT", sign: -1, amountMinor: 17_000 * SCALE },

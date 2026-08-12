@@ -1,5 +1,5 @@
 import { RoleGuard } from "@/components/auth/RoleGuard";
-import { CashDealCockpitClient } from "./client";
+import { SaleDealCockpitClient } from "./client";
 
 export const metadata = {
   title: "Deal | AutoFlow",
@@ -7,7 +7,11 @@ export const metadata = {
 };
 
 /**
- * The deal screen for a sale — the same screen a financed deal gets.
+ * THE deal screen. Canonical for both cash and financed sales.
+ *
+ * A financed sale is rendered here too, by delegating its money to the
+ * application-keyed query — the application URL redirects here once the sale
+ * exists, so a deal has one address rather than two.
  *
  * `deal` is a STATIC leaf under the dynamic `[saleId]`, matching the sibling
  * `print` route. A dynamic leaf here breaks `pnpm lint` with 71 unrelated
@@ -22,7 +26,7 @@ export const metadata = {
 export default function CashDealPage() {
   return (
     <RoleGuard permissions={["view:sales"]}>
-      <CashDealCockpitClient />
+      <SaleDealCockpitClient />
     </RoleGuard>
   );
 }

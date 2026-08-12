@@ -1110,13 +1110,23 @@ export type AccountingProfitLine =
   | { key: "SUPPLIER_ENTITLEMENT"; sign: -1; amountMinor: number };
 
 /**
- * A CASH deal's profit — an ordinary accounting result, and postable.
+ * A CASH deal's profit — an ordinary accounting result that reconciles.
  *
  * The opposite of `ManagementProfit` in the one way that matters. This figure
  * IS what the ledger recognizes: it is `saleEconomics().dealershipMargin`, the
  * same number `reports.salesReport` totals into `totalProfit` and the same one
  * the P&L is built from. It carries no `تقديري` qualifier because there is
  * nothing estimated about it.
+ *
+ * ⚠️ It carries `reconcilesToLedger`, NOT `postable: true`, and the asymmetry is
+ * deliberate. "This agrees with the books" and "this is an instruction to post"
+ * are different claims, and only the first one is true here: nothing in the
+ * codebase posts from this object — it is a READ assembled for a screen, and the
+ * journal it agrees with was written by `completeSale`, long before anyone asks
+ * for a headline. A field named `postable: true` on a derived figure invites a
+ * future caller to treat it as a posting source, which is precisely the class of
+ * confusion this union exists to prevent. `postable` therefore survives on the
+ * financed side ONLY, as a one-way prohibition.
  *
  * `available: false` with `reason: "UnknownMargin"` is NOT a zero. It is the
  * `dealershipMargin === null` case — a consigned sale whose frozen margin is
@@ -1131,8 +1141,12 @@ export type AccountingProfit =
       amountMinor: number;
       currency: string;
       lines: AccountingProfitLine[];
-      /** It has a journal. That is the whole difference from the financed one. */
-      postable: true;
+      /**
+       * A journal already exists for this sale and this figure agrees with it.
+       * That is the whole difference from the financed one — and it is a
+       * statement about the BOOKS, not a licence to post from this object.
+       */
+      reconcilesToLedger: true;
     }
   | {
       available: false;
@@ -1147,8 +1161,11 @@ export type AccountingProfit =
  * What the deal screen's headline can be.
  *
  * A union rather than one widened type, so the two cannot be built from each
- * other's parts. `basis` is the discriminant; `postable` follows from it and is
- * never independently settable.
+ * other's parts. `basis` is the discriminant, and the two arms carry DIFFERENT
+ * ledger fields rather than the same field with opposite values: financed
+ * carries `postable: false`, cash carries `reconcilesToLedger: true`. Neither is
+ * independently settable, and no caller can read one arm's field off the other —
+ * TypeScript refuses the access outside its branch.
  */
 export type DealProfit = ManagementProfit | AccountingProfit;
 
@@ -1300,7 +1317,8 @@ export function deriveAccountingProfit(args: {
   /**
    * Whether the sale has actually COMPLETED — i.e. whether a journal exists.
    *
-   * ⚠️ `postable: true` is a claim that this figure has a journal behind it.
+   * ⚠️ `reconcilesToLedger: true` is a claim that this figure has a journal
+   * behind it to agree with.
    * On a PENDING draft that claim is false: `createDraftSale` performs no
    * accounting side effects, so there is nothing posted to reconcile against.
    * Publishing an unqualified accounting headline for a draft would assert a
@@ -1415,6 +1433,6 @@ export function deriveAccountingProfit(args: {
     amountMinor: args.dealershipMarginMinor,
     currency: args.currency,
     lines: reconciles ? lines : [],
-    postable: true,
+    reconcilesToLedger: true,
   };
 }
