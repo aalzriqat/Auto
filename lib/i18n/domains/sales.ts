@@ -756,6 +756,8 @@ export const salesEn = {
   /** Recorded, but this caller may not see the amount — never "not recorded". */
   RecordedAmountHidden: "Recorded — you cannot see the amount",
   RecordQuotationAction: "Record quotation",
+  FinanceCompanyLtvMissing:
+    "This finance company has no purchase LTV on record, so the quotation cannot be recorded yet. Add it in Finance Settings.",
   RecordApprovedPurchaseAction: "Record approved amount",
   QuotationNeededFirst: "Record the submitted quotation first.",
   ApprovedPurchaseNeedsApprover:
@@ -1540,6 +1542,8 @@ export const salesAr = {
   NotRecordedYet: "غير مُسجَّل بعد",
   RecordedAmountHidden: "مُسجَّل — لا تملك صلاحية عرض المبلغ",
   RecordQuotationAction: "تسجيل عرض السعر",
+  FinanceCompanyLtvMissing:
+    "لا توجد نسبة شراء مسجَّلة لهذه الشركة، فلا يمكن تسجيل عرض السعر بعد. أضِفها من إعدادات التمويل.",
   RecordApprovedPurchaseAction: "تسجيل المبلغ المعتمد",
   QuotationNeededFirst: "سجِّل عرض السعر المُرسَل أولاً.",
   ApprovedPurchaseNeedsApprover:

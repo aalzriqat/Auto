@@ -41,6 +41,15 @@ export type FinanceDecisionFacts = {
   appliedLtvPercent: number | null;
   /** CLOSED or CANCELLED: both writers refuse, so neither action is offered. */
   closed: boolean;
+  /**
+   * This finance company has no purchase LTV on record.
+   *
+   * Not a nicety: `resolveAppliedLtv` throws without one, so recording the
+   * quotation cannot succeed and the funding split can never be derived. The
+   * card names the missing setting rather than offering an action that is
+   * certain to be refused.
+   */
+  ltvMissing: boolean;
 };
 
 type FinanceCompanyDecisionCardProps = {
@@ -104,7 +113,7 @@ export function FinanceCompanyDecisionCard({
   // to reopen the approval instead. Offering the action anyway would produce a
   // refusal the screen cannot act on, since reopening has no UI yet.
   const quotationActionAvailable =
-    canRecordQuotation && !facts.closed && !facts.approvedPurchaseRecorded;
+    canRecordQuotation && !facts.closed && !facts.approvedPurchaseRecorded && !facts.ltvMissing;
   const approvalActionAvailable =
     canRecordApproval && !isOwnDeal && !facts.closed && quotationRecorded;
 
@@ -170,6 +179,11 @@ export function FinanceCompanyDecisionCard({
             ) : (
               <span className="text-muted-foreground">{t("NotRecordedYet")}</span>
             )
+          }
+          note={
+            facts.submittedQuotationMinor === null && facts.ltvMissing && !facts.closed
+              ? t("FinanceCompanyLtvMissing")
+              : undefined
           }
           action={
             quotationActionAvailable ? (

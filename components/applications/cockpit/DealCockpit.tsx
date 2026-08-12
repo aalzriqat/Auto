@@ -283,9 +283,39 @@ export function DealCockpit({
     economicsApp.status !== "CLOSED" &&
     economicsApp.status !== "CANCELLED" &&
     hasPermission(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+
+  /**
+   * Whether an LTV can be resolved for this deal at all.
+   *
+   * `suggestQuotationForApplication` does not report an unresolvable LTV as an
+   * unavailable calculation — it THROWS, and an uncaught throw from `useQuery`
+   * during render loses the entire deal screen. Rendering this against a real
+   * company created through the settings form did exactly that: the form only
+   * ever asked for the customer-facing `maxFinancingLTV`, so `defaultLtvPercent`
+   * was unset and the cockpit white-screened with a Convex stack trace.
+   *
+   * The settings form now asks for it. This is the belt: the calculator is only
+   * mounted where it can actually run, so no company's rules can cost the
+   * operator the screen.
+   */
+  const ltvKnown =
+    economicsApp !== null &&
+    (economicsApp.appliedLtvPercent !== undefined ||
+      economicsApp.companyRuleSnapshot?.defaultLtvPercent !== undefined);
+  /**
+   * KNOWN to be missing, as opposed to merely unknown here.
+   *
+   * A legacy application carries no rule snapshot at all, and the server falls
+   * back to the live company row for those — so "no snapshot" must not be read
+   * as "no LTV" and block an action that would have worked.
+   */
+  const ltvMissing =
+    economicsApp !== null &&
+    economicsApp.companyRuleSnapshot !== undefined &&
+    !ltvKnown;
   const suggestion = useQuery(
     api.financingEconomics.suggestQuotationForApplication,
-    needsQuotation ? { orgId, applicationId } : "skip"
+    needsQuotation && ltvKnown ? { orgId, applicationId } : "skip"
   );
 
   /**
@@ -353,6 +383,9 @@ export function DealCockpit({
             dealerContributionMinor: economicsApp.dealerContributionMinor ?? null,
             appliedLtvPercent: economicsApp.appliedLtvPercent ?? null,
             closed: economicsApp.status === "CLOSED" || economicsApp.status === "CANCELLED",
+            // Certain to be refused by the server until somebody sets it, so
+            // the card says so instead of offering an action that cannot work.
+            ltvMissing,
           } satisfies FinanceDecisionFacts,
           currency: economicsApp.economicsCurrency ?? null,
           canRecordQuotation: hasPermission(PERMISSIONS.CREATE_FINANCE_APPLICATION),

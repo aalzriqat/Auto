@@ -18,6 +18,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { DealCockpitData, FinanceDecisionWiring } from "./DealCockpit";
+import type { FinanceDecisionFacts } from "./FinanceCompanyDecisionCard";
 
 const language = vi.hoisted(() => ({ locale: "ar" as "ar" | "en" }));
 
@@ -102,7 +103,11 @@ const noopAsync = async () => {};
  * that — and a fixture missing `closed` or `approvedPurchaseRecorded` renders a
  * different card than the one the case means to assert about.
  */
-function wiring(overrides: Partial<FinanceDecisionWiring> = {}): FinanceDecisionWiring {
+type WiringOverrides = Partial<Omit<FinanceDecisionWiring, "facts">> & {
+  facts?: Partial<FinanceDecisionFacts>;
+};
+
+function wiring(overrides: WiringOverrides = {}): FinanceDecisionWiring {
   const { facts, ...rest } = overrides;
   return {
     currency: "JOD",
@@ -123,6 +128,7 @@ function wiring(overrides: Partial<FinanceDecisionWiring> = {}): FinanceDecision
       dealerContributionMinor: null,
       appliedLtvPercent: null,
       closed: false,
+      ltvMissing: false,
       ...(facts ?? {}),
     },
   };
@@ -260,6 +266,18 @@ describe("every unavailable action says why", () => {
 
     expect(screen.getByText("ApprovedPurchaseNeedsApprover")).toBeTruthy();
     expect(cardButton("RecordApprovedPurchaseAction")).toBeUndefined();
+  });
+
+  test("a finance company with no purchase LTV blocks the quotation and names the setting", () => {
+    // Found by RENDERING against a company created through the real settings
+    // form: that form only ever asked for the customer-facing LTV, so
+    // `resolveAppliedLtv` threw, and the throw — from `useQuery`, during
+    // render — took the whole deal screen down with a Convex stack trace.
+    renderCockpit(wiring({ facts: { ltvMissing: true } }));
+
+    expect(screen.getByText("FinanceCompanyLtvMissing")).toBeTruthy();
+    // Offering it would be offering an action the server is certain to refuse.
+    expect(cardButton("RecordQuotationAction")).toBeUndefined();
   });
 
   test("a closed deal offers nothing and says so", () => {
