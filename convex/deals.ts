@@ -779,10 +779,10 @@ export const queue = query({
     /**
      * Applications made actionable by a deposit nobody has resolved.
      *
-     * Resolved deposit-first through `by_vehicle` rather than by scanning dead
-     * applications: `financeApplications` has no `by_quote` index, and a window
+     * Reached deposit-first rather than by scanning dead applications: a window
      * over rejected rows would reintroduce exactly the age bias this section
-     * exists to remove.
+     * exists to remove. See the lookup below for how the deposit finds its
+     * application.
      */
     const liveDeposits = heldDeposits.filter((deposit) => deposit.isDeleted !== true);
     /**
