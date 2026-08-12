@@ -2125,10 +2125,12 @@ export const consignedSalePreview = query({
  *
  * The money here is a DIFFERENT KIND of number from the financed screen's, and
  * that difference is the point. A cash deal's profit is an ordinary accounting
- * result with a journal behind it, so it is `postable: true` and carries no
- * estimate qualifier. The financed headline is a management figure built on a
- * spread that appears on no invoice. `basis` keeps them apart at the type level,
- * so no renderer can show one wearing the other's label.
+ * result with a journal behind it, so it is `reconcilesToLedger: true` and
+ * carries no estimate qualifier — note it does NOT claim to be `postable`, which
+ * would read as a licence to post from a derived figure. The financed headline is
+ * a management figure built on a spread that appears on no invoice, and carries
+ * `postable: false`. `basis` keeps them apart at the type level, so no renderer
+ * can show one wearing the other's label.
  *
  * Returns `null` for a sale that does not exist, is deleted, or belongs to
  * another org — indistinguishable on purpose, so a probe cannot use this screen

@@ -239,11 +239,14 @@ export function DealCockpit({
   /**
    * Once the application has become a sale, the sale owns the deal's identity.
    *
-   * Read from the server's own `saleId` — `app.finalizedSaleId` — so a deal is
-   * only ever redirected on evidence that the sale exists, never on a guess
-   * about the application's status.
+   * `canonicalSaleId`, NOT `saleId`. The server validates that the sale is
+   * actually readable before offering it as a destination: `finalizedSaleId`
+   * survives `sales.softDelete`, and redirecting to a deleted sale would trade a
+   * screen that renders for one that reports the sale does not exist — stranding
+   * the settlement notifications that deep-link to this application URL. The
+   * client cannot see `isDeleted`, so this decision is not the client's to make.
    */
-  const finalizedSaleId = canonicalizeUrl ? (deal?.saleId ?? null) : null;
+  const finalizedSaleId = canonicalizeUrl ? (deal?.canonicalSaleId ?? null) : null;
   useEffect(() => {
     if (finalizedSaleId) {
       router.replace(`/${orgId}/sales/${finalizedSaleId}/deal`);

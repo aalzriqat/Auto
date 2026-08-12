@@ -390,35 +390,43 @@ export function Step4QuoteSuccess({
                  * would make the operator open each one to find out which car it
                  * is; the car's own name is the only label that saves that trip.
                  *
-                 * Full-width so it takes its own row in the wrapping action
-                 * strip instead of squeezing between fixed-width buttons.
+                 * Two nested elements, and the outer one carries NO max-width on
+                 * purpose. `w-full` alone does not win a row in a `flex-wrap`
+                 * strip: `max-w-md` clamps the item's hypothetical size, so the
+                 * sibling buttons still fit beside it and the list ended up
+                 * shoulder-to-shoulder with them — caught by looking at the
+                 * render, not by any test. The outer div is genuinely full-width
+                 * so it takes its own line; the inner one does the measuring.
                  */
-                <div className="w-full max-w-md mx-auto space-y-2 text-start">
-                  <p className="text-sm text-muted-foreground">
-                    {t("DealsCreatedForEachVehicle" as any) ??
-                      "A deal was created for each vehicle"}
-                  </p>
-                  {completedDeals.map((deal) => (
-                    <Button
-                      key={deal.saleId}
-                      asChild
-                      variant="outline"
-                      size="lg"
-                      className="w-full justify-between border-emerald-500/40 text-emerald-700 hover:bg-emerald-500/10 dark:text-emerald-400"
-                    >
-                      <Link
-                        href={activeOrgId ? `/${activeOrgId}/sales/${deal.saleId}/deal` : "#"}
+                <div className="w-full">
+                  <div className="mx-auto w-full max-w-md space-y-2 text-start">
+                    <p className="text-sm text-muted-foreground">
+                      {t("DealsCreatedForEachVehicle" as any) ??
+                        "A deal was created for each vehicle"}
+                    </p>
+                    {completedDeals.map((deal) => (
+                      <Button
+                        key={deal.saleId}
+                        asChild
+                        variant="outline"
+                        size="lg"
+                        className="w-full justify-between border-emerald-500/40 text-emerald-700 hover:bg-emerald-500/10 dark:text-emerald-400"
                       >
-                        {/* Isolated: a "2020 Toyota Camry" beside Arabic UI text
-                            is a mixed run, and bidi reordering will scramble the
-                            year into the neighbouring Arabic without this. */}
-                        <bdi className="truncate">
-                          {deal.label ?? (t("OpenDeal" as any) ?? "Open Deal")}
-                        </bdi>
-                        <BadgeCheck className="w-4 h-4 ms-2 shrink-0" />
-                      </Link>
-                    </Button>
-                  ))}
+                        <Link
+                          href={activeOrgId ? `/${activeOrgId}/sales/${deal.saleId}/deal` : "#"}
+                        >
+                          {/* Isolated: a "2020 Toyota Camry" beside Arabic UI
+                              text is a mixed run, and bidi reordering will
+                              scramble the year into the neighbouring Arabic
+                              without this. */}
+                          <bdi className="truncate">
+                            {deal.label ?? (t("OpenDeal" as any) ?? "Open Deal")}
+                          </bdi>
+                          <BadgeCheck className="w-4 h-4 ms-2 shrink-0" />
+                        </Link>
+                      </Button>
+                    ))}
+                  </div>
                 </div>
               )
             ) : (

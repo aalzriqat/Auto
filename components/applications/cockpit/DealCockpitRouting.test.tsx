@@ -76,6 +76,12 @@ function financedDeal(overrides: Record<string, unknown> = {}): DealCockpitData 
     dealRef: "app_2048",
     applicationId: APP,
     saleId: null,
+    /**
+     * Separate from `saleId` on purpose — the server nulls this when the sale
+     * exists but cannot be read. Defaulted to null so a case that wants a
+     * redirect has to ASK for one.
+     */
+    canonicalSaleId: null,
     status: "APPROVED",
     createdAt: Date.UTC(2026, 6, 28),
     updatedAt: Date.UTC(2026, 7, 9),
@@ -185,7 +191,10 @@ describe("the sale URL is the deal's one address", () => {
     // A finalized application — the exact condition that triggers the redirect
     // on the application route — reached through the SALE route.
     queryResults.set("sales:dealCockpit", cashDeal({ financingApplicationId: APP, money: null }));
-    queryResults.set("applications:dealCockpit", financedDeal({ saleId: SALE }));
+    queryResults.set(
+      "applications:dealCockpit",
+      financedDeal({ saleId: SALE, canonicalSaleId: SALE })
+    );
 
     render(<SaleDealCockpit orgId={ORG} saleId={SALE} />);
 
@@ -195,7 +204,10 @@ describe("the sale URL is the deal's one address", () => {
 
 describe("the application URL hands a finalized deal to the sale", () => {
   test("a finalized application canonicalizes to the sale URL", () => {
-    queryResults.set("applications:dealCockpit", financedDeal({ saleId: SALE }));
+    queryResults.set(
+      "applications:dealCockpit",
+      financedDeal({ saleId: SALE, canonicalSaleId: SALE })
+    );
 
     render(<DealCockpit orgId={ORG} applicationId={APP} />);
 
@@ -208,6 +220,29 @@ describe("the application URL hands a finalized deal to the sale", () => {
    */
   test("an application with no sale yet stays where it is", () => {
     queryResults.set("applications:dealCockpit", financedDeal({ saleId: null }));
+
+    render(<DealCockpit orgId={ORG} applicationId={APP} />);
+
+    expect(replace).not.toHaveBeenCalled();
+    expect(screen.getAllByText("ProfitEstimatedAwaitingSettlement").length).toBeGreaterThan(0);
+  });
+
+  /**
+   * The dead end this nearly shipped, found by Codex.
+   *
+   * `app.finalizedSaleId` outlives the sale: `sales.softDelete` sets `isDeleted`
+   * and nothing clears the application's pointer. `sales.dealCockpit` returns
+   * null for a deleted sale, so canonicalizing on the raw id would replace a
+   * screen that renders with one reporting the sale does not exist — and the
+   * settlement notifications that deep-link to the application URL would land
+   * there. The server withholds `canonicalSaleId` in that case; this pins that
+   * the client obeys it rather than falling back to `saleId`.
+   */
+  test("a finalized application whose sale is unreadable stays put and renders", () => {
+    queryResults.set(
+      "applications:dealCockpit",
+      financedDeal({ saleId: SALE, canonicalSaleId: null })
+    );
 
     render(<DealCockpit orgId={ORG} applicationId={APP} />);
 

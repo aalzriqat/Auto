@@ -1466,13 +1466,36 @@ export const dealCockpit = query({
     const canSeeMoney =
       isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_FINANCE);
 
-    const [customer, vehicle, company, salesperson, quote] = await Promise.all([
+    const [customer, vehicle, company, salesperson, quote, finalizedSale] = await Promise.all([
       ctx.db.get(app.customerId),
       ctx.db.get(app.vehicleId),
       app.companyId ? ctx.db.get(app.companyId) : Promise.resolve(null),
       ctx.db.get(app.salespersonId),
       ctx.db.get(app.quoteId),
+      app.finalizedSaleId ? ctx.db.get(app.finalizedSaleId) : Promise.resolve(null),
     ]);
+
+    /**
+     * The sale this deal should be READ at — or null when there is no sale that
+     * can actually render one.
+     *
+     * Deliberately NOT `app.finalizedSaleId`. That id survives operations which
+     * make the sale unreadable: `sales.softDelete` sets `isDeleted` and nothing
+     * anywhere clears `finalizedSaleId`, so a finalized deal whose sale was
+     * deleted still carries a perfectly plausible-looking id. `sales.dealCockpit`
+     * returns `null` for a deleted sale, so sending a caller there would replace
+     * a screen that renders with one that says the sale does not exist — and the
+     * application cockpit, which still renders fine, would have become
+     * unreachable. Settlement notifications deep-link to the application URL, so
+     * that is a live audit path, not a hypothetical one.
+     *
+     * Validated on the server because the client cannot see `isDeleted` and must
+     * not be the thing deciding whether a redirect target is real.
+     */
+    const canonicalSaleId =
+      finalizedSale && !finalizedSale.isDeleted && finalizedSale.orgId === app.orgId
+        ? finalizedSale._id
+        : null;
 
     // --- documents, which drive both the checklist and the delivery stage ----
     const rules = await ctx.db
@@ -1582,6 +1605,15 @@ export const dealCockpit = query({
       applicationId: app._id,
       /** The sale this became, once it has one. Absent before finalization. */
       saleId: app.finalizedSaleId ?? null,
+      /**
+       * Where this deal's canonical screen lives, or null when it lives here.
+       *
+       * Differs from `saleId` exactly when the sale exists but cannot be read —
+       * see the derivation above. Callers routing on this must use it rather than
+       * `saleId`, or they will send an operator to a screen that reports the sale
+       * does not exist.
+       */
+      canonicalSaleId,
       status: app.status,
       createdAt: app.createdAt,
       updatedAt: app.updatedAt,

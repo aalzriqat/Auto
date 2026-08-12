@@ -5825,3 +5825,80 @@ describe("one recognized-earning rule, asked identically by every surface", () =
     return { s, applicationId };
   }
 });
+
+/**
+ * Where the deal's canonical screen lives, once a sale exists — and the case
+ * where it does NOT live at the sale.
+ *
+ * SCRUM-29 makes `/sales/{saleId}/deal` the one address a deal has, so the
+ * application-keyed route redirects there once the application is finalized.
+ * `app.finalizedSaleId` is the obvious thing to redirect on and it is the WRONG
+ * thing: it outlives the sale. `sales.softDelete` sets `isDeleted` and nothing
+ * anywhere clears the application's pointer, so the id stays plausible while
+ * `sales.dealCockpit` starts returning null for it — and the redirect would
+ * replace a screen that renders with one reporting the sale does not exist.
+ * Settlement notifications deep-link to the application URL, so that strands a
+ * real audit path.
+ *
+ * Hence `canonicalSaleId`, validated on the server. The client cannot see
+ * `isDeleted` and must not be the thing deciding whether a destination is real.
+ */
+describe("the deal cockpit's canonical sale destination", () => {
+  test("a finalized deal offers its sale as the canonical destination", async () => {
+    const s = await seedDealership("canonicalOk");
+    const { applicationId, saleId } = await runDeal(s, {
+      finalize: true,
+      route: "THROUGH_DEALERSHIP",
+    });
+
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+
+    expect(view!.saleId).toBe(saleId);
+    expect(view!.canonicalSaleId).toBe(saleId);
+  });
+
+  test("a deal whose sale was cancelled then deleted offers NO canonical destination", async () => {
+    const s = await seedDealership("canonicalDeleted");
+    const { applicationId, saleId } = await runDeal(s, {
+      finalize: true,
+      route: "THROUGH_DEALERSHIP",
+    });
+
+    // Reached through the two SUPPORTED mutations rather than by planting an
+    // `isDeleted` flag production never sets: `softDelete` refuses a COMPLETED
+    // sale outright ("Cannot delete a completed sale. Cancel it first."), and
+    // `sales.update` explicitly permits COMPLETED -> CANCELLED. Neither clears
+    // `finalizedSaleId`.
+    await s.t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === s.orgId)!;
+      await ctx.db.patch(role._id, {
+        permissions: [...role.permissions, "delete:sales"],
+      });
+    });
+    // A different actor: `sales.update` refuses to let a salesperson approve the
+    // cancellation of their own sale, which is a real separation-of-duties rule
+    // and not something to work around with a direct patch.
+    await s.asApprover.mutation(api.sales.update, {
+      orgId: s.orgId,
+      saleId: saleId!,
+      status: "CANCELLED" as const,
+    });
+    await s.asApprover.mutation(api.sales.softDelete, { orgId: s.orgId, saleId: saleId! });
+
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+
+    // The pointer survives, and is still reported as a fact about the deal...
+    expect(view!.saleId).toBe(saleId);
+    // ...but it is NOT offered as somewhere to send the operator.
+    expect(view!.canonicalSaleId).toBeNull();
+    // And the application's own screen still renders, which is the whole point:
+    // the deal remains reachable rather than becoming a dead link.
+    expect(view!.dealRef).toBe(applicationId);
+  });
+});
