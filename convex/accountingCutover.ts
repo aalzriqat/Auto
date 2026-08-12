@@ -447,10 +447,36 @@ export const listPendingOpeningBalanceDrafts = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    return await ctx.db
+    const drafts = await ctx.db
       .query("openingBalanceDrafts")
       .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING_APPROVAL"))
       .collect();
+
+    // `preparedByName` and `currency` are resolved here rather than in the
+    // client because both are load-bearing for the approval decision and
+    // neither is on the draft row.
+    //
+    // The name is what makes the segregation-of-duties check meaningful to a
+    // human: approveOpeningBalance refuses when approver === preparer, and a
+    // reviewer who cannot see who prepared it is being asked to rubber-stamp.
+    //
+    // The currency drives the minor-unit scale the amounts are rendered at.
+    // Scale is per-currency (3 for JOD/KWD/BHD/OMR, 2 otherwise), so a client
+    // that guessed would display an opening balance off by a factor of ten on
+    // exactly the currencies this product is used in. Mirrors the same
+    // reasoning as openingBalanceStatus.
+    const currency = await getOrgCurrency(ctx, args.orgId);
+
+    return await Promise.all(
+      drafts.map(async (draft) => {
+        const preparer = await ctx.db.get(draft.createdBy);
+        return {
+          ...draft,
+          preparedByName: preparer?.name || preparer?.email || "Unknown",
+          currency,
+        };
+      })
+    );
   },
 });
 

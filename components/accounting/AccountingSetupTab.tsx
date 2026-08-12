@@ -17,6 +17,7 @@ import { ClosePeriodReviewDialog } from "./setup/ClosePeriodReviewDialog";
 import { PendingAccountingEventsTable } from "./setup/PendingAccountingEventsTable";
 import { SetupStatusCards } from "./setup/SetupStatusCards";
 import { OpeningBalanceCard } from "./setup/OpeningBalanceCard";
+import { OpeningBalanceApprovalPanel } from "./setup/OpeningBalanceApprovalPanel";
 import { SystemAccountConflictsPanel } from "./setup/SystemAccountConflictsPanel";
 import {
   dateInputToEndOfDayMs,
@@ -157,6 +158,13 @@ export function AccountingSetupTab() {
       {/* After the chart and periods, because an opening balance needs both:
           accounts to post into, and an open period covering its date. */}
       <OpeningBalanceCard />
+
+      {/* Directly beneath the card, because when a draft is pending the card
+          deliberately hides its own button (it must not create a second draft)
+          — so this panel is the only thing on screen that can move the
+          organization's opening balance forward. It renders nothing when
+          nothing is pending. */}
+      <OpeningBalanceApprovalPanel orgId={activeOrgId} />
 
       {!canManageFinance && (
         <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">

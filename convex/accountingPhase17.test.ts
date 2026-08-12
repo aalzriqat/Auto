@@ -431,6 +431,94 @@ describe("Phase 17 — settling a legacy claim backfilled by the minor-unit migr
   });
 });
 
+describe("SCRUM-52 — the approval UI can actually be built on this query", () => {
+  // listPendingOpeningBalanceDrafts had no caller anywhere in the product, so
+  // nothing ever needed it to be renderable. The approval panel does. Both
+  // fields below are load-bearing for a decision a human makes:
+  //
+  //  - preparedByName: approveOpeningBalance refuses when approver ===
+  //    preparer. A reviewer who cannot see WHO prepared it is rubber-stamping,
+  //    which defeats the two-person control the refusal exists to enforce.
+  //  - currency: minor-unit scale is per-currency (3 for JOD/KWD/BHD/OMR, 2
+  //    otherwise). A client that guessed would render an opening balance off
+  //    by a factor of ten on precisely the currencies this product ships in.
+  test("a pending draft carries the preparer's name and the org currency", async () => {
+    const ctx = await seedCutoverDealer();
+    const cash = account(ctx, "CASH_ON_HAND");
+    const capital = account(ctx, "PARTNER_CAPITAL");
+
+    // Prepared by the REVIEWER identity so the returned name is unambiguously
+    // the preparer's rather than whoever happens to be reading.
+    await ctx.asReviewer.mutation(api.accountingCutover.draftOpeningBalance, {
+      orgId: ctx.orgId,
+      asOfDate: Date.now(),
+      memo: "Cutover",
+      lines: [
+        { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
+        { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+      ],
+    });
+
+    const pending = await ctx.asOwner.query(
+      api.accountingCutover.listPendingOpeningBalanceDrafts,
+      { orgId: ctx.orgId }
+    );
+
+    expect(pending).toHaveLength(1);
+    expect(pending[0].preparedByName).toBe("Reviewer");
+    expect(pending[0].currency).toBe("JOD");
+    // The lines the reviewer is being asked to approve must come back too —
+    // an approval screen with no lines is a rubber stamp with extra steps.
+    expect(pending[0].lines).toHaveLength(2);
+  });
+
+  test("the owner can approve a draft an accountant prepared, which is the dead-end this fixes", async () => {
+    const ctx = await seedCutoverDealer();
+    const cash = account(ctx, "CASH_ON_HAND");
+    const capital = account(ctx, "PARTNER_CAPITAL");
+
+    // The exact production shape: a non-owner MANAGE_FINANCE user prepares,
+    // because canPostDirectly is `isOwner && canManageFinance`.
+    const { draftId } = await ctx.asReviewer.mutation(
+      api.accountingCutover.draftOpeningBalance,
+      {
+        orgId: ctx.orgId,
+        asOfDate: Date.now(),
+        memo: "Prepared by the accountant",
+        lines: [
+          { accountId: cash._id, debitMinor: 4_000_000, creditMinor: 0 },
+          { accountId: capital._id, debitMinor: 0, creditMinor: 4_000_000 },
+        ],
+      }
+    );
+
+    // Before SCRUM-52 nothing in the product could reach this call, so the
+    // draft sat PENDING_APPROVAL forever and the org's GL never started.
+    const result = await ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, {
+      orgId: ctx.orgId,
+      draftId: draftId as Id<"openingBalanceDrafts">,
+    });
+    expect(result.journalId).toBeTruthy();
+
+    expect(
+      await ctx.asOwner.query(api.accountingCutover.hasOpeningBalance, { orgId: ctx.orgId })
+    ).toBe(true);
+    expect(
+      await ctx.asOwner.query(api.accountingCutover.listPendingOpeningBalanceDrafts, {
+        orgId: ctx.orgId,
+      })
+    ).toHaveLength(0);
+
+    // Approved through the two-person route, so it must NOT be marked as the
+    // owner bypass — otherwise the audit trail would misreport that no second
+    // person reviewed it.
+    const drafts = await ctx.t.run((c) => c.db.query("openingBalanceDrafts").collect());
+    expect(drafts[0].status).toBe("POSTED");
+    expect(drafts[0].autoApproved).toBeFalsy();
+    expect(drafts[0].reviewedBy).toBeTruthy();
+  });
+});
+
 describe("Phase 17 — owner-only direct opening balance", () => {
   // The two-person check on approveOpeningBalance assumes a second
   // MANAGE_FINANCE person exists to be the approver. A single-owner dealership
