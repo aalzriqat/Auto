@@ -2364,6 +2364,11 @@ export default defineSchema({
     .index("by_vehicle", ["vehicleId"])
     .index("by_status", ["status"])
     .index("by_org_status", ["orgId", "status"])
+    // A deposit names a quote, and the queue has to reach that quote's
+    // application to know whether the deal behind the held money is dead. Going
+    // through `by_customer` read every application the customer has ever had and
+    // was not org-scoped at the index, so tenancy rested on a post-filter.
+    .index("by_org_quote", ["orgId", "quoteId"])
     .index("by_org_reconciliation", ["orgId", "needsFinancingReconciliation"]),
 
   /**

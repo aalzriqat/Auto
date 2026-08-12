@@ -150,12 +150,20 @@ export interface DealQueueResult {
    * SCANNED population only — when `truncated` is true these are lower bounds,
    * and the screen must say so rather than present them as totals.
    *
-   * ⚠️ A view is ABSENT here when the current scan cannot answer it, and the
-   * chip then shows no number at all. The views that include finished deals
-   * need the history scan, which the actionable views deliberately skip — so
-   * from NEEDS_ATTENTION the "All" chip was quietly counting only actionable
-   * deals and reporting it as the total. A missing number is honest; a
-   * confident wrong one is not, and it is a count of the operator's own work.
+   * ⚠️ ABSENT and LOWER BOUND are two different states, and they must not be
+   * read as one rule:
+   *
+   * • **Absent** — the current scan cannot answer that view at all, so the chip
+   *   shows no number. The views including finished deals need the history
+   *   scan, which the actionable views deliberately skip; from NEEDS_ATTENTION
+   *   the "All" chip was quietly counting only actionable deals and presenting
+   *   it as the total. A missing number is honest; a confident wrong one is not,
+   *   and it is a count of the operator's own work.
+   *
+   * • **Present but a lower bound** — the view was scanned, and that scan hit a
+   *   cap. `DEPOSIT_PENDING` is the live example: its population is bounded by
+   *   `DEPOSIT_SCAN_CAP`. A present number is therefore NOT a promise of
+   *   completeness; `truncated` is what says so, per the note above.
    */
   counts: Partial<Record<DealQueueView, number>>;
   /**
@@ -778,28 +786,36 @@ export const queue = query({
      */
     const liveDeposits = heldDeposits.filter((deposit) => deposit.isDeleted !== true);
     /**
-     * One lookup per CUSTOMER, not per deposit.
+     * One lookup per QUOTE, through an org-scoped index.
      *
-     * Resolved by customer rather than by the deposit's vehicle: a quote can
-     * carry several cars, so the deposit vehicle and the application vehicle are
-     * not the same field on a multi-vehicle deal, and matching on it missed
-     * those deposits entirely.
+     * Resolved by quote rather than by the deposit's vehicle: a quote can carry
+     * several cars, so the deposit vehicle and the application vehicle are not
+     * the same field on a multi-vehicle deal, and matching on it missed those
+     * deposits entirely.
      *
-     * Deduplicated because this scan is bounded independently of the caller's
-     * page size, and a per-deposit lookup would spend that whole allowance on
-     * repeat queries for the same customer — a deposit-heavy customer is the
-     * ordinary case, not the exception. The set is the same either way.
+     * And by ORG + quote rather than by customer: the customer index returned
+     * every application that person has ever had, then narrowed it here — so the
+     * read grew with the customer's history and tenancy rested on a post-filter
+     * rather than on the index. This is exact, and the deduplication keeps a
+     * deposit-heavy quote from re-asking the same question.
      */
-    const depositCustomers = Array.from(new Set(liveDeposits.map((d) => d.customerId)));
-    const applicationsByCustomer = new Map(
+    // `quoteId` is optional on a deposit. One without it cannot be traced to an
+    // application by any route, which was equally true of the previous
+    // customer-scoped lookup — its `app.quoteId === deposit.quoteId` comparison
+    // was simply never true. Made explicit here rather than left to a
+    // coincidence of undefined comparison.
+    const depositQuotes = Array.from(
+      new Set(liveDeposits.map((d) => d.quoteId).filter((id): id is Id<"quotes"> => id !== undefined))
+    );
+    const applicationsByQuote = new Map(
       await Promise.all(
-        depositCustomers.map(
-          async (customerId) =>
+        depositQuotes.map(
+          async (quoteId) =>
             [
-              customerId,
+              quoteId,
               await ctx.db
                 .query("financeApplications")
-                .withIndex("by_customer", (q) => q.eq("customerId", customerId))
+                .withIndex("by_org_quote", (q) => q.eq("orgId", args.orgId).eq("quoteId", quoteId))
                 .collect(),
             ] as const
         )
@@ -807,11 +823,8 @@ export const queue = query({
     );
 
     const depositApps = liveDeposits.flatMap((deposit) =>
-      (applicationsByCustomer.get(deposit.customerId) ?? []).filter(
-        (app) =>
-          app.orgId === args.orgId &&
-          app.quoteId === deposit.quoteId &&
-          (app.status === "REJECTED" || app.status === "CANCELLED")
+      (deposit.quoteId ? (applicationsByQuote.get(deposit.quoteId) ?? []) : []).filter(
+        (app) => app.status === "REJECTED" || app.status === "CANCELLED"
       )
     );
 
