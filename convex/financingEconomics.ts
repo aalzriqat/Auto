@@ -533,12 +533,43 @@ export const suggestQuotationForApplication = query({
       APPLICATION_NOT_FOUND
     );
 
-    const solved = await solveQuotationForApplication(ctx, app, args);
     const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
+
+    /**
+     * The rules may not resolve at all — and that is an ANSWER, not an error.
+     *
+     * This query's whole contract is "here is a figure, or here is why there
+     * isn't one", and it already says so for two other unsolvable cases.
+     * `resolveAppliedLtv` and `resolveRuleSnapshot` instead THROW: no default
+     * LTV on the company, no company on the application, a rate outside the
+     * snapshot's own bounds. Convex surfaces that to `useQuery`, which throws
+     * during render — so a company whose purchase rate nobody has entered cost
+     * the operator the entire deal screen rather than one suggestion.
+     *
+     * Only `ConvexError` is caught, and its own message is returned rather than
+     * a generic one, so nothing is silently swallowed and the operator is told
+     * which setting to fix. Its sibling `suggestQuotation` keeps its throw: that
+     * one is called from the wizard with caller-supplied inputs, not mounted
+     * beside a screen it can take down.
+     */
+    let solved: Awaited<ReturnType<typeof solveQuotationForApplication>>;
+    try {
+      solved = await solveQuotationForApplication(ctx, app, args);
+    } catch (error) {
+      if (!(error instanceof ConvexError)) throw error;
+      return {
+        appliedLtvPercent: undefined,
+        currency,
+        ruleVersion: undefined,
+        available: false as const,
+        reason: typeof error.data === "string" ? error.data : "RULES_UNAVAILABLE",
+      };
+    }
+
     const base = {
-      appliedLtvPercent: solved.appliedLtvPercent,
+      appliedLtvPercent: solved.appliedLtvPercent as number | undefined,
       currency,
-      ruleVersion: solved.snapshot.ruleVersion,
+      ruleVersion: solved.snapshot.ruleVersion as number | undefined,
     };
 
     // No target recorded anywhere is a different state from the solver running
@@ -752,13 +783,27 @@ export const recordSubmittedQuotation = mutation({
     const amountChanged = app.submittedQuotationMinor !== args.submittedQuotationMinor;
     const sourceChanged = app.submittedQuotationSource !== args.source;
     const reasonChanged = (app.submittedQuotationOverrideReason ?? "") !== (reason ?? "");
-    if (quotationPreviouslyRecorded && (amountChanged || sourceChanged || reasonChanged)) {
+    // The RECORDER belongs in this set for the same reason the approver belongs
+    // in `approveDealerPurchaseAmount`'s: the patch below rewrites it
+    // unconditionally, and who sent the finance company its quotation is the
+    // provenance of a real external document. Without it, a colleague
+    // re-entering the same figure from the same paperwork — or a retry after a
+    // dropped response — became the recorder of record, with a new timestamp,
+    // and no row anywhere saying so. That sibling mutation learned this two
+    // rounds ago; this one had no caller outside tests until SCRUM-68 exposed
+    // it, so nobody could reach the case.
+    const recorderChanged = quotationPreviouslyRecorded && app.submittedQuotationBy !== user._id;
+    const materiallyChanged = amountChanged || sourceChanged || reasonChanged || recorderChanged;
+    if (quotationPreviouslyRecorded && materiallyChanged) {
       const describe = (
         amountMinor: number | undefined,
         source: string | undefined,
-        why: string | undefined
+        why: string | undefined,
+        recordedBy: Id<"users"> | undefined
       ): string =>
-        `${amountMinor ?? "unset"} (${source ?? "unknown source"}${why ? `: ${why}` : ""})`;
+        `${amountMinor ?? "unset"} (${source ?? "unknown source"}${why ? `: ${why}` : ""}${
+          recordedBy ? ` by ${recordedBy}` : ""
+        })`;
       await recordOverride(ctx, {
         orgId: args.orgId,
         applicationId: args.applicationId,
@@ -766,14 +811,15 @@ export const recordSubmittedQuotation = mutation({
         previousValue: describe(
           app.submittedQuotationMinor,
           app.submittedQuotationSource,
-          app.submittedQuotationOverrideReason
+          app.submittedQuotationOverrideReason,
+          app.submittedQuotationBy
         ),
-        newValue: describe(args.submittedQuotationMinor, args.source, reason),
+        newValue: describe(args.submittedQuotationMinor, args.source, reason, user._id),
         reason:
           reason ??
           (amountChanged
             ? "Recalculated from updated deal inputs."
-            : "Re-recorded with a different source or reason at the same amount."),
+            : "Re-recorded with a different source, reason or recorder at the same amount."),
         changedBy: user._id,
       });
     }
@@ -832,8 +878,13 @@ export const recordSubmittedQuotation = mutation({
       submittedQuotationMinor: args.submittedQuotationMinor,
       submittedQuotationSource: args.source,
       submittedQuotationOverrideReason: reason,
-      submittedQuotationAt: now,
-      submittedQuotationBy: user._id,
+      // A retry is not a new submission. Advancing these on an identical
+      // re-record made "when did we send this quotation, and who sent it"
+      // answer the retry rather than the send — the same rule
+      // `approveDealerPurchaseAmount` keeps for its own approval stamp.
+      ...(quotationPreviouslyRecorded && !materiallyChanged
+        ? {}
+        : { submittedQuotationAt: now, submittedQuotationBy: user._id }),
       appliedLtvPercent,
       customerFirstPaymentMinor,
       quotationCalculationSnapshot: {
@@ -1209,7 +1260,15 @@ export const approveDealerPurchaseAmount = mutation({
           `That appraisal has been ${appraisal.status.toLowerCase()} and cannot be the basis for an approval. Use the current appraisal.`
         );
       }
-    } else {
+    } else if (args.basis !== "MANUAL") {
+      // Auto-resolution is for the bases that ARE based on an appraisal. MANUAL
+      // exists for a figure the finance company named independently — by phone,
+      // at a third number — so adopting whatever appraisal happened to be on
+      // file wrote a self-contradictory record: basis MANUAL, beside a link to
+      // evidence the amount was explicitly not based on, with that evidence's
+      // own status flipped to APPROVED below. A caller that really does mean to
+      // link one still can, by naming it: the branch above honours it.
+      //
       // APPROVED as well as RECORDED: the first approval flips the chosen
       // appraisal to APPROVED, so matching only RECORDED made every
       // re-approval fail to find one — leaving the explicit appraisalId

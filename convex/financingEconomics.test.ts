@@ -554,6 +554,90 @@ describe("appraisal integrity", () => {
   });
 });
 
+describe("a manually named approval", () => {
+  /**
+   * MANUAL exists for a figure the finance company named independently of any
+   * appraisal — by phone, at a third number. Adopting the appraisal on file
+   * anyway wrote a self-contradictory record: basis MANUAL, and beside it a
+   * link to evidence the amount was explicitly not based on, with that
+   * evidence's own status flipped to APPROVED.
+   *
+   * Unreachable in production until SCRUM-68: `approveDealerPurchaseAmount`
+   * had no caller outside tests, and the tests that exercised this path only
+   * asserted on the override log.
+   */
+  test("does not adopt or approve an appraisal it was not based on", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+
+    // A third figure: not the appraisal, not the quotation.
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(12_200),
+      basis: "MANUAL",
+      notes: "Approved at 12,200 by the branch credit officer, over the phone.",
+    });
+
+    const after = await readApp(seed, applicationId);
+    expect(after.approvedDealerPurchaseAmountMinor).toBe(jod(12_200));
+    expect(after.approvedPurchaseBasis).toBe("MANUAL");
+    // The record must not claim an appraisal basis it does not have.
+    expect(after.approvedPurchaseAppraisalId).toBeUndefined();
+
+    const appraisals = await seed.t.run((ctx) =>
+      ctx.db
+        .query("financeAppraisals")
+        .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+        .collect()
+    );
+    // Nor may it mark the finance company's appraisal as the one approved.
+    expect(appraisals[0]?.status).toBe("RECORDED");
+  });
+
+  test("still honours an appraisal the caller names explicitly", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    const appraisalId = (
+      await seed.t.run((ctx) =>
+        ctx.db
+          .query("financeAppraisals")
+          .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+          .collect()
+      )
+    )[0]._id;
+
+    // The control: not-auto-resolving must not become can-never-link.
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(12_200),
+      basis: "MANUAL",
+      appraisalId,
+      notes: "Approved above their own appraisal, which is on file.",
+    });
+
+    const after = await readApp(seed, applicationId);
+    expect(after.approvedPurchaseAppraisalId).toBe(appraisalId);
+  });
+});
+
 describe("appraisal and approval interaction", () => {
   async function seedApprovedDeal(): Promise<{
     seed: Seed;
@@ -1392,6 +1476,50 @@ describe("LTV configuration", () => {
     ).rejects.toThrow(/No LTV is configured/i);
   });
 
+  test("reports an unconfigured LTV as an unavailable calculation, not as a thrown error", async () => {
+    const seed = await seedDealer();
+    const bareCompanyId = await seed.t.run((ctx) =>
+      ctx.db.insert("financeCompanies", {
+        orgId: seed.orgId,
+        name: "Unconfigured Finance Co",
+        profitRate: 6,
+        maxTermMonths: 48,
+        gracePeriodMonths: 0,
+        maxFinancingLTV: 100,
+        isActive: true,
+      })
+    );
+    const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerId,
+      vehicleId: seed.vehicleId,
+      mode: "CONFIGURED_FINANCE_COMPANY",
+      companyId: bareCompanyId,
+      vehiclePrice: DEAL.targetSelling,
+      downPayment: DEAL.customerFirstPayment,
+      termMonths: 48,
+      totalFinancedAmount: 10_736,
+    });
+    const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
+      orgId: seed.orgId,
+      quoteId,
+    });
+
+    // This query answers "is there a figure to suggest, and if not why" — a
+    // shape it already has for two other unsolvable cases. Throwing instead
+    // put a Convex stack trace where the deal cockpit should be: `useQuery`
+    // throws during render, which loses the WHOLE screen rather than one
+    // suggestion. Its sibling `suggestQuotation` keeps its throw; that one is
+    // called from the wizard with caller-supplied inputs, not mounted beside a
+    // screen it can take down.
+    const suggestion = await seed.asUser.query(
+      api.financingEconomics.suggestQuotationForApplication,
+      { orgId: seed.orgId, applicationId }
+    );
+    expect(suggestion.available).toBe(false);
+    expect(suggestion.reason).toMatch(/LTV/i);
+  });
+
   test("applies the LTV to the appraisal when that is the company's rule", async () => {
     const seed = await seedDealer();
     await seed.asUser.mutation(api.finance.updateCompany, {
@@ -1456,6 +1584,72 @@ describe("overrides and audit", () => {
     // Nothing was back-solved to fill the blanks.
     expect(app.estimatedDealerBorneExpensesMinor).toBeUndefined();
     expect(app.quotationBufferMinor).toBeUndefined();
+  });
+
+  /**
+   * The same two rules `approveDealerPurchaseAmount` already keeps for its own
+   * approver, which this writer did not.
+   *
+   * Both matter now in a way they did not before: until SCRUM-68 this mutation
+   * had no caller outside tests, so no operator could reach either case. The
+   * cockpit's recorder makes both ordinary — a retry after an uncertain
+   * response, and a colleague re-entering the same figure from the same
+   * paperwork.
+   */
+  test("a second person re-recording an identical quotation cannot become its author silently", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+
+    const before = await readApp(seed, applicationId);
+    expect(before.submittedQuotationBy).toBe(seed.userId);
+
+    // Byte-identical, by a different permitted user.
+    await seed.asApprover.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "SYSTEM_CALCULATED",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+    });
+
+    const after = await readApp(seed, applicationId);
+    expect(after.submittedQuotationBy).toBe(seed.approverId);
+
+    // Who sent the finance company its quotation is the provenance of a real
+    // external document. Rewriting it with no row left the original recorder
+    // unrecoverable — this table is the only history.
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides).toHaveLength(1);
+    // A row is not a trace if both sides read the same. Same lesson the
+    // approver audit next door had to learn.
+    expect(economics.overrides[0]?.previousValue).toContain(String(seed.userId));
+    expect(economics.overrides[0]?.newValue).toContain(String(seed.approverId));
+  });
+
+  test("the same person re-recording an identical quotation does not advance its timestamp", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    const first = await readApp(seed, applicationId);
+
+    await recordBaselineQuotation(seed, applicationId);
+
+    // A retry is not a new submission. Advancing the stamp made "when did we
+    // send this quotation" answer the retry instead of the send.
+    const after = await readApp(seed, applicationId);
+    expect(after.submittedQuotationAt).toBe(first.submittedQuotationAt);
+    expect(after.submittedQuotationBy).toBe(first.submittedQuotationBy);
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides).toHaveLength(0);
   });
 
   test("departing from a calculated quotation must record why", async () => {

@@ -264,7 +264,15 @@ export function RecordApprovedPurchaseDialog({
                 // the operator was actually shown, rather than whichever one it
                 // would pick for itself.
                 appraisalId: basis === "MANUAL" ? undefined : (appraisal?.id ?? undefined),
-                notes: notes.trim() || undefined,
+                // Only from the basis that asks for them. The field is hidden
+                // under the other two, so text typed under MANUAL and left
+                // behind by a change of basis would be stored against an
+                // approval the operator never wrote it for.
+                // Only from the basis that asks for them. The field is hidden
+                // under the other two, so text typed under MANUAL and left
+                // behind by a change of basis would be stored against an
+                // approval the operator never wrote it for.
+                notes: notesRequired ? notes.trim() || undefined : undefined,
               })
             }
           >

@@ -29,6 +29,21 @@ import {
  * an override, which then demands its reason; no calculation available at all →
  * manual, which is the honest label for a negotiated number.
  */
+/**
+ * What the calculator has to say — three states, never two.
+ *
+ * Collapsing "still loading" into "no calculation exists" is not a cosmetic
+ * simplification: the dialog labels a figure `MANUAL_ENTRY` when no calculation
+ * stands behind it, so a suggestion that had merely not arrived yet would let an
+ * operator record a solver-divergent amount with no override reason and the
+ * wrong provenance on the audit record.
+ */
+export type QuotationCalculation =
+  | { state: "LOADING" }
+  | { state: "UNAVAILABLE" }
+  /** The solver's figure, in MINOR units. */
+  | { state: "AVAILABLE"; minor: number };
+
 type RecordSubmittedQuotationDialogProps = {
   open: boolean;
   submitting: boolean;
@@ -40,8 +55,8 @@ type RecordSubmittedQuotationDialogProps = {
    * operator is still looking at.
    */
   error: string | null;
-  /** The solver's figure in MINOR units, or null when it could not run. */
-  calculatedMinor: number | null;
+  /** What the calculator has to say — including "not yet arrived". */
+  calculation: QuotationCalculation;
   /** 10^scale for the deal's own pinned currency — never the org's. */
   factor: number;
   money: (minor: number) => string;
@@ -58,7 +73,7 @@ export function RecordSubmittedQuotationDialog({
   open,
   submitting,
   error,
-  calculatedMinor,
+  calculation,
   factor,
   money,
   t,
@@ -87,6 +102,7 @@ export function RecordSubmittedQuotationDialog({
   const amountInvalid = entered && !(parsed > 0);
   const enteredMinor = entered && parsed > 0 ? Math.round(parsed * factor) : null;
 
+  const calculatedMinor = calculation.state === "AVAILABLE" ? calculation.minor : null;
   const hasCalculation = calculatedMinor !== null;
   const matchesCalculation = hasCalculation && enteredMinor === calculatedMinor;
   const source = !hasCalculation
@@ -97,7 +113,12 @@ export function RecordSubmittedQuotationDialog({
   const reasonRequired = source === "CALCULATED_WITH_OVERRIDE";
   const reasonMissing = reasonRequired && reason.trim() === "";
 
-  const canSubmit = enteredMinor !== null && !reasonMissing && !submitting;
+  // Nothing may be submitted while the calculator is still answering. Every
+  // figure entered in that window would be labelled MANUAL_ENTRY — a claim
+  // about provenance, not a description of the wait — and a solver-divergent
+  // amount would go on the record with no override reason behind it.
+  const canSubmit =
+    enteredMinor !== null && !reasonMissing && !submitting && calculation.state !== "LOADING";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -129,7 +150,11 @@ export function RecordSubmittedQuotationDialog({
                 was actually sent always wins — the operator copies the figure in
                 with one press if it matches, and departs from it with a reason
                 if it does not. */}
-            {calculatedMinor !== null ? (
+            {calculation.state === "LOADING" ? (
+              <p className="pt-0.5 text-xs text-muted-foreground">
+                {t("QuotationCalculatorLoading")}
+              </p>
+            ) : calculatedMinor !== null ? (
               <div className="flex flex-wrap items-center gap-2 pt-0.5 text-xs text-muted-foreground">
                 <span>
                   {t("QuotationCalculatedLabel")}:{" "}

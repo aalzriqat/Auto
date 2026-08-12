@@ -95,7 +95,7 @@ function dealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
   } as unknown as DealCockpitData;
 }
 
-const noopAsync = async () => {};
+const noopAsync = async (_values?: unknown) => {};
 
 /**
  * `facts` is merged rather than replaced, so a case that varies one fact does
@@ -114,7 +114,7 @@ function wiring(overrides: WiringOverrides = {}): FinanceDecisionWiring {
     canRecordQuotation: true,
     canRecordApproval: true,
     isOwnDeal: false,
-    calculatedQuotationMinor: null,
+    calculation: { state: "UNAVAILABLE" },
     appraisal: null,
     onRecordQuotation: noopAsync,
     onRecordApproved: noopAsync,
@@ -330,7 +330,7 @@ describe("the derived figures", () => {
 describe("recording the submitted quotation", () => {
   test("a figure equal to the calculation is recorded as calculated, with no reason", async () => {
     const onRecordQuotation = vi.fn(noopAsync);
-    renderCockpit(wiring({ calculatedQuotationMinor: 12_500 * JOD, onRecordQuotation }));
+    renderCockpit(wiring({ calculation: { state: "AVAILABLE", minor: 12_500 * JOD }, onRecordQuotation }));
 
     fireEvent.click(cardButton("RecordQuotationAction")!);
     const dialog = screen.getByRole("dialog");
@@ -349,7 +349,7 @@ describe("recording the submitted quotation", () => {
 
   test("a figure that departs from the calculation cannot be recorded without a reason", async () => {
     const onRecordQuotation = vi.fn(noopAsync);
-    renderCockpit(wiring({ calculatedQuotationMinor: 12_500 * JOD, onRecordQuotation }));
+    renderCockpit(wiring({ calculation: { state: "AVAILABLE", minor: 12_500 * JOD }, onRecordQuotation }));
 
     fireEvent.click(cardButton("RecordQuotationAction")!);
     const dialog = screen.getByRole("dialog");
@@ -379,7 +379,7 @@ describe("recording the submitted quotation", () => {
 
   test("with no calculation available it is recorded as a manual entry", async () => {
     const onRecordQuotation = vi.fn(noopAsync);
-    renderCockpit(wiring({ calculatedQuotationMinor: null, onRecordQuotation }));
+    renderCockpit(wiring({ calculation: { state: "UNAVAILABLE" }, onRecordQuotation }));
 
     fireEvent.click(cardButton("RecordQuotationAction")!);
     const dialog = screen.getByRole("dialog");
@@ -399,6 +399,25 @@ describe("recording the submitted quotation", () => {
         overrideReason: undefined,
       })
     );
+  });
+
+  test("nothing can be submitted while the calculator is still answering", () => {
+    renderCockpit(wiring({ calculation: { state: "LOADING" } }));
+
+    fireEvent.click(cardButton("RecordQuotationAction")!);
+    const dialog = screen.getByRole("dialog");
+
+    // The window between opening the dialog and the suggestion arriving was
+    // indistinguishable from "no calculation exists", so anything entered in it
+    // would have been recorded as a MANUAL_ENTRY — a claim about provenance,
+    // not a description of the wait — and a solver-divergent figure would have
+    // gone on the record with no override reason behind it.
+    expect(within(dialog).getByText("QuotationCalculatorLoading")).toBeTruthy();
+    fireEvent.change(within(dialog).getByLabelText("QuotationAmountLabel"), {
+      target: { value: "13000" },
+    });
+    const submit = within(dialog).getByRole("button", { name: "RecordQuotationAction" });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
   });
 
   test("the server's refusal is shown in the form, and the form stays open", async () => {
@@ -460,6 +479,36 @@ describe("recording what the finance company approved", () => {
         notes: "اعتُمد بمبلغ 12,000",
       })
     );
+  });
+
+  test("notes typed under MANUAL do not follow a change of basis", async () => {
+    const onRecordApproved = vi.fn(noopAsync);
+    renderCockpit(
+      wiring({
+        facts: quotationRecorded,
+        appraisal: { id: "appraisal_9", amountMinor: 11_800 * JOD },
+        onRecordApproved,
+      })
+    );
+
+    fireEvent.click(cardButton("RecordApprovedPurchaseAction")!);
+    const dialog = screen.getByRole("dialog");
+
+    fireEvent.click(within(dialog).getByRole("radio", { name: /BasisManual/ }));
+    fireEvent.change(within(dialog).getByLabelText("BasisManualNotesLabel"), {
+      target: { value: "Approved by phone at 12,200" },
+    });
+    // The notes field is hidden under an appraisal basis, so text left behind
+    // by a change of mind would be stored against an approval nobody wrote it
+    // for.
+    fireEvent.click(within(dialog).getByRole("radio", { name: /BasisAppraisal/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "RecordApprovedPurchaseAction" }));
+
+    await waitFor(() => expect(onRecordApproved).toHaveBeenCalled());
+    expect(onRecordApproved.mock.calls[0][0]).toMatchObject({
+      basis: "APPRAISAL",
+      notes: undefined,
+    });
   });
 
   test("an appraisal-based approval sends the appraisal's own figure and its id", async () => {

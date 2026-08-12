@@ -780,6 +780,7 @@ export const salesEn = {
   QuotationUseCalculated: "Use this figure",
   QuotationCalculatorUnavailable:
     "AutoFlow cannot calculate a figure for this deal, so record the amount that was actually sent.",
+  QuotationCalculatorLoading: "Checking whether AutoFlow can calculate a figure…",
   QuotationMatchesCalculation: "Matches AutoFlow's calculation.",
   QuotationDiffersFromCalculation: "Differs from AutoFlow's calculation.",
   QuotationOverrideReasonLabel: "Why the amount sent differs",
@@ -1566,6 +1567,7 @@ export const salesAr = {
   QuotationUseCalculated: "استخدام هذا الرقم",
   QuotationCalculatorUnavailable:
     "لا يستطيع أوتوفلو احتساب رقم لهذه الصفقة، فسجِّل المبلغ الذي أُرسل فعلياً.",
+  QuotationCalculatorLoading: "جارٍ التحقق من إمكانية احتساب رقم…",
   QuotationMatchesCalculation: "مطابق لاحتساب أوتوفلو.",
   QuotationDiffersFromCalculation: "يختلف عن احتساب أوتوفلو.",
   QuotationOverrideReasonLabel: "سبب اختلاف المبلغ المُرسَل",

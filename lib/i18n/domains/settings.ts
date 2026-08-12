@@ -213,6 +213,8 @@ export const settingsEn = {
   DefaultDealerLtvPlaceholder: "e.g. 90",
   DefaultDealerLtvHint:
     "The share of the vehicle this company normally buys from the dealership. Without it the quotation calculator cannot run and the funding split cannot be worked out.",
+  DefaultDealerLtvCannotClear:
+    "A purchase LTV cannot be removed once it is set — enter the new rate instead.",
   CapitalizesCommissionIntoDebt: "Add execution commission as a flat amount (no profit accrues on it)",
   CapitalizesCommissionIntoDebtHint: "Checked: commission is added as a flat fee, no profit is charged on it. Unchecked: commission is folded into the financed amount and profit is charged on it too.",
   AcceptedCustomerStatuses: "Accepted Customer Statuses",
@@ -883,6 +885,8 @@ export const settingsAr = {
   DefaultDealerLtvPlaceholder: "مثال: 90",
   DefaultDealerLtvHint:
     "نسبة قيمة المركبة التي تشتريها هذه الشركة من المعرض عادةً. بدونها لا يعمل احتساب عرض السعر ولا يمكن استخراج توزيع التمويل.",
+  DefaultDealerLtvCannotClear:
+    "لا يمكن حذف نسبة الشراء بعد تسجيلها — أدخِل النسبة الجديدة بدلاً من تركها فارغة.",
   CapitalizesCommissionIntoDebt: "تُضاف عمولات تنفيذ كمبلغ مقطوع دون احتساب مرابحة عليها",
   CapitalizesCommissionIntoDebtHint: "عند التفعيل: تُضاف العمولة كمبلغ مقطوع دون احتساب مرابحة عليها. عند الإيقاف: تُضاف العمولة إلى مبلغ التمويل وتُحتسب عليها مرابحة أيضاً.",
   AcceptedCustomerStatuses: "حالات العميل المقبولة",

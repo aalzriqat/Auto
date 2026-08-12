@@ -33,7 +33,10 @@ import {
   FinanceCompanyDecisionCard,
   type FinanceDecisionFacts,
 } from "./FinanceCompanyDecisionCard";
-import { RecordSubmittedQuotationDialog } from "./RecordSubmittedQuotationDialog";
+import {
+  RecordSubmittedQuotationDialog,
+  type QuotationCalculation,
+} from "./RecordSubmittedQuotationDialog";
 import {
   RecordApprovedPurchaseDialog,
   type ApprovalBasis,
@@ -273,49 +276,65 @@ export function DealCockpit({
   );
   const economicsApp = economics?.application ?? null;
 
-  // The calculator, mounted only where it can actually be offered: before a
-  // quotation exists, for a caller who may record one. It is a real query with
-  // real reads, and a cockpit that ran it on every view for every role would be
-  // paying for a suggestion nobody was going to be shown.
-  const needsQuotation =
+  /**
+   * The calculator, mounted wherever the quotation action can actually be
+   * offered — which includes RE-recording one that already exists.
+   *
+   * Not narrowed to "no quotation yet". A re-record with the calculator absent
+   * is labelled `MANUAL_ENTRY` whatever the operator types, so skipping the
+   * query on the second visit would quietly downgrade the provenance of a
+   * figure the solver could have confirmed.
+   *
+   * Still skipped for a caller who cannot record and for a deal nobody can
+   * change: it is a real query with real reads, and running it for every role
+   * on every view would be paying for a suggestion nobody was going to see.
+   */
+  /**
+   * Whether the approved amount is on the record — from the STAGE RAIL, which
+   * the server derives from the unredacted row.
+   *
+   * Read here as well as in the card, and for the same reason: the amount field
+   * is blank both when nothing was recorded and when this caller may not see
+   * it, so testing the field would have mounted the calculator for a
+   * salesperson on a deal that is already approved.
+   */
+  const approvedPurchaseRecorded =
+    deal?.stages.find((stage) => stage.key === "APPROVED_PURCHASE")?.state === "COMPLETE";
+
+  const canOfferQuotation =
     economicsApp !== null &&
-    economicsApp.submittedQuotationMinor === undefined &&
     economicsApp.status !== "CLOSED" &&
     economicsApp.status !== "CANCELLED" &&
+    // Once an approval exists the server refuses to move the figure it was
+    // based on, so the action is not offered and the calculator is not needed.
+    !approvedPurchaseRecorded &&
     hasPermission(PERMISSIONS.CREATE_FINANCE_APPLICATION);
 
   /**
-   * Whether an LTV can be resolved for this deal at all.
+   * The company's purchase LTV is KNOWN to be missing — as opposed to merely
+   * unknown here.
    *
-   * `suggestQuotationForApplication` does not report an unresolvable LTV as an
-   * unavailable calculation — it THROWS, and an uncaught throw from `useQuery`
-   * during render loses the entire deal screen. Rendering this against a real
-   * company created through the settings form did exactly that: the form only
-   * ever asked for the customer-facing `maxFinancingLTV`, so `defaultLtvPercent`
-   * was unset and the cockpit white-screened with a Convex stack trace.
-   *
-   * The settings form now asks for it. This is the belt: the calculator is only
-   * mounted where it can actually run, so no company's rules can cost the
-   * operator the screen.
-   */
-  const ltvKnown =
-    economicsApp !== null &&
-    (economicsApp.appliedLtvPercent !== undefined ||
-      economicsApp.companyRuleSnapshot?.defaultLtvPercent !== undefined);
-  /**
-   * KNOWN to be missing, as opposed to merely unknown here.
-   *
-   * A legacy application carries no rule snapshot at all, and the server falls
-   * back to the live company row for those — so "no snapshot" must not be read
+   * `recordSubmittedQuotation` throws without one, so the action is certain to
+   * be refused and the card says which setting to fix instead of offering it.
+   * A legacy application carries no rule snapshot at all and the server falls
+   * back to the live company row for those, so "no snapshot" must not be read
    * as "no LTV" and block an action that would have worked.
+   *
+   * This is about the MUTATION. The query no longer throws for it — see
+   * `suggestQuotationForApplication`, which now reports an unresolvable rule as
+   * an unavailable calculation, because a Convex throw reaching `useQuery`
+   * during render loses the whole screen. That is how this was found: rendering
+   * against a company created through the settings form, which never asked for
+   * the field.
    */
   const ltvMissing =
     economicsApp !== null &&
     economicsApp.companyRuleSnapshot !== undefined &&
-    !ltvKnown;
+    economicsApp.appliedLtvPercent === undefined &&
+    economicsApp.companyRuleSnapshot.defaultLtvPercent === undefined;
   const suggestion = useQuery(
     api.financingEconomics.suggestQuotationForApplication,
-    needsQuotation && ltvKnown ? { orgId, applicationId } : "skip"
+    canOfferQuotation ? { orgId, applicationId } : "skip"
   );
 
   /**
@@ -393,8 +412,17 @@ export function DealCockpit({
           // The server refuses the application's own salesperson outright. Said
           // here so it reads as a rule rather than as a failure.
           isOwnDeal: membership?.userId === economicsApp.salespersonId,
-          calculatedQuotationMinor:
-            suggestion?.available === true ? suggestion.submittedQuotationMinor : null,
+          // Three states, never two. "Still loading" collapsed into "no
+          // calculation exists" would let the dialog label a figure
+          // MANUAL_ENTRY — a claim about provenance — during the window before
+          // the suggestion arrives.
+          calculation: ((): QuotationCalculation => {
+            if (!canOfferQuotation) return { state: "UNAVAILABLE" };
+            if (suggestion === undefined) return { state: "LOADING" };
+            return suggestion.available === true
+              ? { state: "AVAILABLE", minor: suggestion.submittedQuotationMinor }
+              : { state: "UNAVAILABLE" };
+          })(),
           appraisal: usableAppraisal
             ? { id: usableAppraisal._id as string, amountMinor: usableAppraisal.appraisalAmountMinor }
             : null,
@@ -676,8 +704,8 @@ export type FinanceDecisionWiring = {
   canRecordQuotation: boolean;
   canRecordApproval: boolean;
   isOwnDeal: boolean;
-  /** The solver's figure, or null when it could not run for this deal. */
-  calculatedQuotationMinor: number | null;
+  /** What the calculator has to say, including "not yet arrived". */
+  calculation: QuotationCalculation;
   appraisal: { id: string; amountMinor: number } | null;
   onRecordQuotation: (values: {
     submittedQuotationMinor: number;
@@ -751,7 +779,11 @@ export function DealCockpitView({
   const [showCompleted, setShowCompleted] = useState(false);
   const [recordingQuotation, setRecordingQuotation] = useState(false);
   const [recordingApproval, setRecordingApproval] = useState(false);
-  const [decisionSubmitting, setDecisionSubmitting] = useState(false);
+  // One flag per dialog. A single shared one made an in-flight quotation write
+  // render the approval dialog's button as busy too, which reads as the wrong
+  // action having been taken.
+  const [quotationSubmitting, setQuotationSubmitting] = useState(false);
+  const [approvalSubmitting, setApprovalSubmitting] = useState(false);
   // One error per dialog, not one shared: a refusal from the quotation write
   // must not still be sitting in the approval form the next time it opens.
   const [quotationError, setQuotationError] = useState<string | null>(null);
@@ -907,7 +939,7 @@ export function DealCockpitView({
     overrideReason?: string;
   }) => {
     if (!financeDecision) return;
-    setDecisionSubmitting(true);
+    setQuotationSubmitting(true);
     setQuotationError(null);
     try {
       await financeDecision.onRecordQuotation(values);
@@ -918,7 +950,7 @@ export function DealCockpitView({
       setQuotationError(message);
       toast.error(message);
     } finally {
-      setDecisionSubmitting(false);
+      setQuotationSubmitting(false);
     }
   };
 
@@ -929,7 +961,7 @@ export function DealCockpitView({
     notes?: string;
   }) => {
     if (!financeDecision) return;
-    setDecisionSubmitting(true);
+    setApprovalSubmitting(true);
     setApprovalError(null);
     try {
       await financeDecision.onRecordApproved(values);
@@ -940,7 +972,7 @@ export function DealCockpitView({
       setApprovalError(message);
       toast.error(message);
     } finally {
-      setDecisionSubmitting(false);
+      setApprovalSubmitting(false);
     }
   };
 
@@ -1438,9 +1470,9 @@ export function DealCockpitView({
         <>
           <RecordSubmittedQuotationDialog
             open={recordingQuotation}
-            submitting={decisionSubmitting}
+            submitting={quotationSubmitting}
             error={quotationError}
-            calculatedMinor={financeDecision.calculatedQuotationMinor}
+            calculation={financeDecision.calculation}
             factor={decisionFactor}
             money={decisionMoney}
             t={t}
@@ -1449,7 +1481,7 @@ export function DealCockpitView({
           />
           <RecordApprovedPurchaseDialog
             open={recordingApproval}
-            submitting={decisionSubmitting}
+            submitting={approvalSubmitting}
             error={approvalError}
             appraisal={financeDecision.appraisal}
             submittedQuotationMinor={financeDecision.facts.submittedQuotationMinor}

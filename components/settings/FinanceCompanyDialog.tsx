@@ -106,6 +106,10 @@ export function FinanceCompanyDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, company?._id]);
 
+  /** Blanking a stored rate is not a way to delete it — see `onSubmit`. */
+  const clearingExistingLtv =
+    company?.defaultLtvPercent !== undefined && formData.defaultLtvPercent.trim() === "";
+
   const toggleAcceptedStatus = (id: string) => {
     setFormData((prev) => ({
       ...prev,
@@ -123,6 +127,17 @@ export function FinanceCompanyDialog({
     // selection the user was never shown — and for a new company that persists
     // an empty list, which downstream reads as "accepts every customer".
     if (loadedCustomerStatuses === undefined) return;
+
+    // Emptying the field cannot remove a rate that is already stored:
+    // `updateCompany` treats an omitted dealer rule as "leave it alone" — by
+    // design, so that an older client saving a company's name cannot wipe its
+    // terms. Submitting anyway closed the dialog on a success toast while the
+    // previous LTV stayed in force, and every later deal kept being quoted
+    // against a rule the operator believed they had removed.
+    if (clearingExistingLtv) {
+      toast.error(t("DefaultDealerLtvCannotClear" as any));
+      return;
+    }
 
     setIsLoading(true);
     try {
@@ -269,7 +284,13 @@ export function FinanceCompanyDialog({
               value={formData.defaultLtvPercent}
               onChange={(e) => setFormData({ ...formData, defaultLtvPercent: e.target.value })}
             />
-            <p className="text-xs text-muted-foreground">{t("DefaultDealerLtvHint" as any)}</p>
+            {clearingExistingLtv ? (
+              <p role="alert" className="text-xs font-medium text-destructive">
+                {t("DefaultDealerLtvCannotClear" as any)}
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">{t("DefaultDealerLtvHint" as any)}</p>
+            )}
           </div>
           <div className="grid gap-2">
             <Label>{t("ExecutionCommission" as any)}</Label>

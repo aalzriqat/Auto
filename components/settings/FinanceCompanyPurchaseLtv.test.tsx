@@ -76,6 +76,35 @@ describe("the dealer-side purchase LTV", () => {
     expect(mutations.create.mock.calls[0][0]).toMatchObject({ defaultLtvPercent: 90 });
   });
 
+  test("cannot be silently cleared by emptying the field", async () => {
+    render(
+      <FinanceCompanyDialog
+        open
+        onOpenChange={() => {}}
+        company={{
+          _id: "company_1" as never,
+          name: "National Finance",
+          profitRate: 0,
+          maxTermMonths: 72,
+          gracePeriodMonths: 0,
+          defaultLtvPercent: 90,
+          isActive: true,
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("DefaultDealerLtv"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    // `updateCompany` treats an omitted dealer rule as "leave it alone", so a
+    // blank submission closed the dialog on a success toast while the old rate
+    // stayed in force — and every later deal was quoted against a rule the
+    // operator believed they had removed.
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+    expect(mutations.update).not.toHaveBeenCalled();
+    expect(screen.getByText("DefaultDealerLtvCannotClear")).toBeTruthy();
+  });
+
   test("is omitted rather than sent as zero when left blank", async () => {
     renderDialog();
 
