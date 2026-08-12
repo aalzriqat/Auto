@@ -603,6 +603,75 @@ describe("a manually named approval", () => {
     expect(appraisals[0]?.status).toBe("RECORDED");
   });
 
+  /**
+   * The appraisal has TWO roles, and they are not the same role.
+   *
+   * One is EVIDENCE of what the approval was based on — that is the basis, and a
+   * manually named amount has none. The other is the LTV BASE: for a company
+   * whose rule multiplies the appraisal rather than the approved amount, the
+   * funding split cannot be computed without it, whatever the basis says.
+   *
+   * Dropping the appraisal entirely under MANUAL conflated the two and cost the
+   * second: `deriveEconomics` could not resolve an LTV base, so the funding
+   * split was blanked and the deal flagged for reconciliation — and SCRUM-61's
+   * guard refuses handover and finalization when
+   * `financeCompanyFundedPortionMinor` is undefined. A legitimate third,
+   * manually approved figure became unfinishable.
+   */
+  test("keeps the appraisal as the LTV BASE for a company that lends against it", async () => {
+    const seed = await seedDealer();
+    await seed.asUser.mutation(api.finance.updateCompany, {
+      id: seed.companyId,
+      orgId: seed.orgId,
+      name: "Jordan Finance",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      isActive: true,
+      maxFinancingLTV: 85,
+      defaultLtvPercent: 85,
+      customerFirstPaymentOffsetsUnfinancedShare: true,
+      ltvBasis: "INDEPENDENT_APPRAISAL",
+    });
+
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(12_200),
+      basis: "MANUAL",
+      notes: "Approved at 12,200 by the branch credit officer, over the phone.",
+    });
+
+    const after = await readApp(seed, applicationId);
+    // The BASIS is still what the operator said it was...
+    expect(after.approvedPurchaseBasis).toBe("MANUAL");
+    // ...and the funding split is still computable, because the company's rule
+    // needs the appraisal as its base and one is on file.
+    expect(after.financeCompanyFundedPortionMinor).not.toBeUndefined();
+    expect(after.needsFinancingReconciliation).not.toBe(true);
+
+    const appraisals = await seed.t.run((ctx) =>
+      ctx.db
+        .query("financeAppraisals")
+        .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+        .collect()
+    );
+    // Used as a base, NOT endorsed as the approval's evidence. Flipping it to
+    // APPROVED would claim the company approved against it, which is the thing
+    // the MANUAL basis says did not happen.
+    expect(appraisals[0]?.status).toBe("RECORDED");
+  });
+
   test("still honours an appraisal the caller names explicitly", async () => {
     const seed = await seedDealer();
     const applicationId = await createApplication(seed);
@@ -1520,6 +1589,91 @@ describe("LTV configuration", () => {
     expect(suggestion.reason).toMatch(/LTV/i);
   });
 
+  /**
+   * An application snapshots its company's rules at creation and never re-reads
+   * them — deliberately, so editing a company next month cannot rewrite a deal
+   * it already governs. The consequence is that a deal created while the
+   * company had no purchase rate CANNOT be repaired by adding one in settings:
+   * the frozen snapshot still has none, and telling the operator to go to
+   * settings is a recovery instruction that cannot recover this deal.
+   *
+   * The supported repair is per-deal: `recordSubmittedQuotation` accepts an
+   * explicit `ltvPercent`, `resolveAppliedLtv` honours it over the (absent)
+   * default within the snapshot's own bounds, and it is stored on the
+   * application as `appliedLtvPercent` — so the deal moves without anyone
+   * rewriting its immutable rule snapshot.
+   */
+  test("a deal created before its company had a purchase rate is repaired per-deal, not by the settings edit", async () => {
+    const seed = await seedDealer();
+    const bareCompanyId = await seed.t.run((ctx) =>
+      ctx.db.insert("financeCompanies", {
+        orgId: seed.orgId,
+        name: "Unconfigured Finance Co",
+        profitRate: 6,
+        maxTermMonths: 48,
+        gracePeriodMonths: 0,
+        maxFinancingLTV: 100,
+        isActive: true,
+      })
+    );
+    const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerId,
+      vehicleId: seed.vehicleId,
+      mode: "CONFIGURED_FINANCE_COMPANY",
+      companyId: bareCompanyId,
+      vehiclePrice: DEAL.targetSelling,
+      downPayment: DEAL.customerFirstPayment,
+      termMonths: 48,
+      totalFinancedAmount: 10_736,
+    });
+    const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
+      orgId: seed.orgId,
+      quoteId,
+    });
+
+    // The operator does exactly what the old copy told them to.
+    await seed.asUser.mutation(api.finance.updateCompany, {
+      id: bareCompanyId,
+      orgId: seed.orgId,
+      name: "Unconfigured Finance Co",
+      profitRate: 6,
+      maxTermMonths: 48,
+      gracePeriodMonths: 0,
+      isActive: true,
+      maxFinancingLTV: 100,
+      defaultLtvPercent: 90,
+    });
+
+    // ...and this deal is exactly as stuck as before, because its snapshot is
+    // frozen. This half must keep passing: the immutability is the point.
+    const stillFrozen = await readApp(seed, applicationId);
+    expect(stillFrozen.companyRuleSnapshot?.defaultLtvPercent).toBeUndefined();
+    await expect(
+      seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(13_000),
+        source: "MANUAL_ENTRY",
+      })
+    ).rejects.toThrow(/No LTV is configured/i);
+
+    // The supported repair: name the rate that applies to THIS deal.
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(13_000),
+      source: "MANUAL_ENTRY",
+      ltvPercent: 90,
+    });
+
+    const repaired = await readApp(seed, applicationId);
+    expect(repaired.submittedQuotationMinor).toBe(jod(13_000));
+    expect(repaired.appliedLtvPercent).toBe(90);
+    // The snapshot is still untouched — the deal was repaired, not rewritten.
+    expect(repaired.companyRuleSnapshot?.defaultLtvPercent).toBeUndefined();
+  });
+
   test("applies the LTV to the appraisal when that is the company's rule", async () => {
     const seed = await seedDealer();
     await seed.asUser.mutation(api.finance.updateCompany, {
@@ -1650,6 +1804,57 @@ describe("overrides and audit", () => {
       applicationId,
     });
     expect(economics.overrides).toHaveLength(0);
+  });
+
+  test("an identical retry does not restamp the calculation snapshot either", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    const first = await readApp(seed, applicationId);
+
+    await recordBaselineQuotation(seed, applicationId);
+
+    // Holding the top-level stamp while the snapshot's own `recordedAt` crept
+    // forward left two provenance fields answering the same question
+    // differently. A retry rewrites nothing.
+    const after = await readApp(seed, applicationId);
+    expect(after.quotationCalculationSnapshot?.recordedAt).toBe(
+      first.quotationCalculationSnapshot?.recordedAt
+    );
+  });
+
+  test("changing a calculation input at the same amount is a change, and is audited", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(13_000),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(300),
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+    });
+
+    // Same amount, same source, same person — but the expenses behind it moved,
+    // and those feed the derived economics. Comparing only the four headline
+    // fields let that through with no row and no new stamp.
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(13_000),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(900),
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+    });
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides).toHaveLength(1);
+    expect((await readApp(seed, applicationId)).estimatedDealerBorneExpensesMinor).toBe(jod(900));
   });
 
   test("departing from a calculated quotation must record why", async () => {

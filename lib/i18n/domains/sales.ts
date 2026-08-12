@@ -757,7 +757,11 @@ export const salesEn = {
   RecordedAmountHidden: "Recorded — you cannot see the amount",
   RecordQuotationAction: "Record quotation",
   FinanceCompanyLtvMissing:
-    "This finance company has no purchase LTV on record, so the quotation cannot be recorded yet. Add it in Finance Settings.",
+    "This deal was created before its finance company had a purchase LTV, and a deal keeps the rules it was created under. Record the rate that applies to this deal when you record the quotation.",
+  DealPurchaseLtvLabel: "Purchase LTV for this deal (%)",
+  DealPurchaseLtvHint:
+    "The share of the vehicle the finance company buys at, for this deal only. Setting the rate on the company itself applies to future deals, not to this one.",
+  DealPurchaseLtvInvalid: "Enter a rate greater than zero and no more than 100.",
   RecordApprovedPurchaseAction: "Record approved amount",
   QuotationNeededFirst: "Record the submitted quotation first.",
   ApprovedPurchaseNeedsApprover:
@@ -788,6 +792,22 @@ export const salesEn = {
   QuotationOverrideReasonRequired: "Say why the amount sent differs from the calculated figure.",
   QuotationAmountInvalid: "Enter an amount greater than zero.",
   QuotationRecorded: "Quotation recorded",
+
+  TheirAppraisalLabel: "Their appraisal of the vehicle",
+  RecordAppraisalAction: "Record appraisal",
+  AppraisalNeedsReviewer:
+    "A manager records the appraisal. The deal's stage rail waits on it once the quotation has gone out.",
+  RecordAppraisalTitle: "Record the appraisal on this vehicle",
+  RecordAppraisalDesc:
+    "What the vehicle was valued at, and by whom. Sending the quotation puts the appraisal in play, so the deal waits here until it is recorded.",
+  AppraisalAmountLabel: "Appraised value",
+  AppraisalAmountInvalid: "Enter an amount greater than zero.",
+  AppraisalProviderLabel: "Who appraised it",
+  AppraisalByFinanceCompany: "The finance company",
+  AppraisalByIndependent: "An independent appraiser",
+  AppraisalProviderNameLabel: "Appraiser name",
+  AppraisalDateLabel: "Date appraised",
+  AppraisalRecorded: "Appraisal recorded",
 
   RecordApprovedPurchaseTitle: "Record what the finance company approved",
   RecordApprovedPurchaseDesc:
@@ -1544,7 +1564,11 @@ export const salesAr = {
   RecordedAmountHidden: "مُسجَّل — لا تملك صلاحية عرض المبلغ",
   RecordQuotationAction: "تسجيل عرض السعر",
   FinanceCompanyLtvMissing:
-    "لا توجد نسبة شراء مسجَّلة لهذه الشركة، فلا يمكن تسجيل عرض السعر بعد. أضِفها من إعدادات التمويل.",
+    "أُنشئت هذه الصفقة قبل تسجيل نسبة الشراء لشركة التمويل، وتبقى كل صفقة خاضعة للقواعد التي أُنشئت بها. سجِّل النسبة الخاصة بهذه الصفقة عند تسجيل عرض السعر.",
+  DealPurchaseLtvLabel: "نسبة الشراء لهذه الصفقة (%)",
+  DealPurchaseLtvHint:
+    "نسبة قيمة المركبة التي تشتريها شركة التمويل، لهذه الصفقة فقط. أما ضبط النسبة على الشركة نفسها فيسري على الصفقات القادمة لا على هذه.",
+  DealPurchaseLtvInvalid: "أدخل نسبة أكبر من صفر ولا تتجاوز 100.",
   RecordApprovedPurchaseAction: "تسجيل المبلغ المعتمد",
   QuotationNeededFirst: "سجِّل عرض السعر المُرسَل أولاً.",
   ApprovedPurchaseNeedsApprover:
@@ -1575,6 +1599,22 @@ export const salesAr = {
   QuotationOverrideReasonRequired: "وضِّح سبب اختلاف المبلغ المُرسَل عن الرقم المحتسَب.",
   QuotationAmountInvalid: "أدخل مبلغاً أكبر من صفر.",
   QuotationRecorded: "تم تسجيل عرض السعر",
+
+  TheirAppraisalLabel: "تخمين شركة التمويل للمركبة",
+  RecordAppraisalAction: "تسجيل التخمين",
+  AppraisalNeedsReviewer:
+    "يسجّل التخمين المدير. تتوقّف مراحل الصفقة عنده بعد إرسال عرض السعر.",
+  RecordAppraisalTitle: "تسجيل تخمين المركبة",
+  RecordAppraisalDesc:
+    "القيمة التي قُدِّرت بها المركبة، ومن قدّرها. إرسال عرض السعر يُدخِل التخمين في المسار، وتنتظر الصفقة عنده حتى يُسجَّل.",
+  AppraisalAmountLabel: "القيمة المُخمَّنة",
+  AppraisalAmountInvalid: "أدخل مبلغاً أكبر من صفر.",
+  AppraisalProviderLabel: "جهة التخمين",
+  AppraisalByFinanceCompany: "شركة التمويل",
+  AppraisalByIndependent: "مُخمِّن مستقل",
+  AppraisalProviderNameLabel: "اسم المُخمِّن",
+  AppraisalDateLabel: "تاريخ التخمين",
+  AppraisalRecorded: "تم تسجيل التخمين",
 
   RecordApprovedPurchaseTitle: "تسجيل ما اعتمدته شركة التمويل",
   RecordApprovedPurchaseDesc:

@@ -57,6 +57,17 @@ type RecordSubmittedQuotationDialogProps = {
   error: string | null;
   /** What the calculator has to say — including "not yet arrived". */
   calculation: QuotationCalculation;
+  /**
+   * This deal's own rule snapshot carries no purchase LTV, so the operator has
+   * to name the rate that applies to it.
+   *
+   * The snapshot is frozen at application creation and is never re-read, so
+   * adding the rate to the finance company in settings repairs FUTURE deals and
+   * cannot repair this one. `recordSubmittedQuotation` takes an explicit
+   * `ltvPercent` for exactly this: the deal moves without anyone rewriting the
+   * immutable rules it was created under.
+   */
+  requiresLtvPercent: boolean;
   /** 10^scale for the deal's own pinned currency — never the org's. */
   factor: number;
   money: (minor: number) => string;
@@ -66,6 +77,8 @@ type RecordSubmittedQuotationDialogProps = {
     submittedQuotationMinor: number;
     source: "SYSTEM_CALCULATED" | "MANUAL_ENTRY" | "CALCULATED_WITH_OVERRIDE";
     overrideReason?: string;
+    /** The rate for THIS deal, when its own rules carry none. */
+    ltvPercent?: number;
   }) => void;
 };
 
@@ -74,6 +87,7 @@ export function RecordSubmittedQuotationDialog({
   submitting,
   error,
   calculation,
+  requiresLtvPercent,
   factor,
   money,
   t,
@@ -82,6 +96,7 @@ export function RecordSubmittedQuotationDialog({
 }: Readonly<RecordSubmittedQuotationDialogProps>) {
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
+  const [ltvPercent, setLtvPercent] = useState("");
 
   // Reset on the closed -> open TRANSITION only. `calculatedMinor` comes from a
   // live query, so resetting whenever it changed would wipe what the operator
@@ -93,6 +108,7 @@ export function RecordSubmittedQuotationDialog({
     if (!justOpened) return;
     setAmount("");
     setReason("");
+    setLtvPercent("");
   }, [open]);
 
   const parsed = Number(amount);
@@ -117,8 +133,21 @@ export function RecordSubmittedQuotationDialog({
   // figure entered in that window would be labelled MANUAL_ENTRY — a claim
   // about provenance, not a description of the wait — and a solver-divergent
   // amount would go on the record with no override reason behind it.
+  const parsedLtv = Number(ltvPercent);
+  const ltvEntered = ltvPercent.trim() !== "";
+  // The server's own bounds: greater than zero, at most 100, and inside
+  // whatever the snapshot allows. The first two are checked here so the button
+  // does not sit dead; the snapshot bounds stay the server's to enforce.
+  const ltvInvalid = ltvEntered && !(parsedLtv > 0 && parsedLtv <= 100);
+  const ltvMissing = requiresLtvPercent && !ltvEntered;
+
   const canSubmit =
-    enteredMinor !== null && !reasonMissing && !submitting && calculation.state !== "LOADING";
+    enteredMinor !== null &&
+    !reasonMissing &&
+    !submitting &&
+    calculation.state !== "LOADING" &&
+    !ltvMissing &&
+    !ltvInvalid;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -188,6 +217,26 @@ export function RecordSubmittedQuotationDialog({
             )}
           </div>
 
+          {requiresLtvPercent && (
+            <div className="space-y-1.5">
+              <Label htmlFor="submitted-quotation-ltv">{t("DealPurchaseLtvLabel")}</Label>
+              <Input
+                id="submitted-quotation-ltv"
+                inputMode="decimal"
+                value={ltvPercent}
+                aria-invalid={ltvInvalid}
+                onChange={(event) => setLtvPercent(event.target.value)}
+                className="tabular-nums"
+              />
+              {ltvInvalid && (
+                <p role="alert" className="text-xs font-medium text-destructive">
+                  {t("DealPurchaseLtvInvalid")}
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">{t("DealPurchaseLtvHint")}</p>
+            </div>
+          )}
+
           {reasonRequired && (
             <div className="space-y-1.5">
               <Label htmlFor="submitted-quotation-reason">
@@ -227,6 +276,11 @@ export function RecordSubmittedQuotationDialog({
                 submittedQuotationMinor: enteredMinor!,
                 source,
                 overrideReason: reasonRequired ? reason.trim() : undefined,
+                // Only where this deal has no rate of its own. Sending one
+                // otherwise would override the company's rules for a deal that
+                // has them, which is a different decision than the operator
+                // was asked to make.
+                ltvPercent: requiresLtvPercent && ltvEntered ? parsedLtv : undefined,
               })
             }
           >

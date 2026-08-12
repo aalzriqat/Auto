@@ -263,6 +263,18 @@ function quotationExceptionRefusal(
  * than a branch inside a function that also loads the application, resolves the
  * LTV and the appraisal, writes an audit row and patches three times.
  */
+/**
+ * Whether the company's LTV rule is applied to an APPRAISAL amount.
+ *
+ * `resolveLtvBaseMinor` needs the appraisal for these two bases and cannot
+ * compute a funding split without one, whatever basis the approval was recorded
+ * under — which is why the approval keeps the appraisal as its LTV base even
+ * when the decision itself was a manually named figure.
+ */
+function ltvRuleNeedsAppraisal(ltvBasis: FinanceCompanyRuleSnapshot["ltvBasis"]): boolean {
+  return ltvBasis === "INDEPENDENT_APPRAISAL" || ltvBasis === "LOWER_OF_APPRAISAL_AND_QUOTATION";
+}
+
 function assertApprovalBasisValid(args: {
   basis: "APPRAISAL" | "QUOTATION_EXCEPTION" | "MANUAL";
   approvedAmountMinor: number;
@@ -793,7 +805,29 @@ export const recordSubmittedQuotation = mutation({
     // rounds ago; this one had no caller outside tests until SCRUM-68 exposed
     // it, so nobody could reach the case.
     const recorderChanged = quotationPreviouslyRecorded && app.submittedQuotationBy !== user._id;
-    const materiallyChanged = amountChanged || sourceChanged || reasonChanged || recorderChanged;
+    /**
+     * The CALCULATION INPUTS, which the patch below also rewrites.
+     *
+     * Comparing only the four headline fields let a re-record move the target,
+     * the dealer-borne expenses, the buffer, the customer's first payment or the
+     * applied LTV at an identical amount, source, reason and recorder — silently
+     * changing every derived figure the economics engine computes from them,
+     * with no audit row and no new submission stamp. The resolved values are
+     * compared rather than the raw arguments, because an omitted argument means
+     * "keep what the deal already has" and is not a change.
+     */
+    const inputsChanged =
+      quotationPreviouslyRecorded &&
+      ((args.targetSellingAmountMinor !== undefined &&
+        args.targetSellingAmountMinor !== app.targetSellingAmountMinor) ||
+        (args.estimatedDealerBorneExpensesMinor !== undefined &&
+          args.estimatedDealerBorneExpensesMinor !== app.estimatedDealerBorneExpensesMinor) ||
+        (args.quotationBufferMinor !== undefined &&
+          args.quotationBufferMinor !== app.quotationBufferMinor) ||
+        customerFirstPaymentMinor !== app.customerFirstPaymentMinor ||
+        appliedLtvPercent !== app.appliedLtvPercent);
+    const materiallyChanged =
+      amountChanged || sourceChanged || reasonChanged || recorderChanged || inputsChanged;
     if (quotationPreviouslyRecorded && materiallyChanged) {
       const describe = (
         amountMinor: number | undefined,
@@ -887,6 +921,13 @@ export const recordSubmittedQuotation = mutation({
         : { submittedQuotationAt: now, submittedQuotationBy: user._id }),
       appliedLtvPercent,
       customerFirstPaymentMinor,
+      // Rewritten only when something moved, for the same reason as the stamp
+      // above: on an identical retry the snapshot's own `recordedAt` used to
+      // creep forward while the submission stamp stayed frozen, leaving two
+      // provenance fields answering the same question differently.
+      ...(quotationPreviouslyRecorded && !materiallyChanged
+        ? {}
+        : {
       quotationCalculationSnapshot: {
         mode: args.source,
         targetNetProceedsMinor: targetForSolver,
@@ -908,6 +949,7 @@ export const recordSubmittedQuotation = mutation({
         recordedBy: user._id,
         recordedAt: now,
       },
+          }),
       ...(args.targetSellingAmountMinor !== undefined
         ? {
             targetSellingAmountMinor: args.targetSellingAmountMinor,
@@ -1260,14 +1302,26 @@ export const approveDealerPurchaseAmount = mutation({
           `That appraisal has been ${appraisal.status.toLowerCase()} and cannot be the basis for an approval. Use the current appraisal.`
         );
       }
-    } else if (args.basis !== "MANUAL") {
-      // Auto-resolution is for the bases that ARE based on an appraisal. MANUAL
-      // exists for a figure the finance company named independently — by phone,
-      // at a third number — so adopting whatever appraisal happened to be on
-      // file wrote a self-contradictory record: basis MANUAL, beside a link to
-      // evidence the amount was explicitly not based on, with that evidence's
-      // own status flipped to APPROVED below. A caller that really does mean to
-      // link one still can, by naming it: the branch above honours it.
+    } else if (args.basis !== "MANUAL" || ltvRuleNeedsAppraisal(snapshot.ltvBasis)) {
+      // Auto-resolution is for the bases that ARE based on an appraisal — plus
+      // the one case where the appraisal is not the approval's evidence but the
+      // company's LTV BASE.
+      //
+      // Those are two different roles for one row, and conflating them cost a
+      // defect in each direction. Adopting it under MANUAL unconditionally wrote
+      // a self-contradictory record: basis MANUAL, beside a link to evidence the
+      // amount was explicitly not based on, with that evidence flipped to
+      // APPROVED below. Dropping it unconditionally then broke the other role:
+      // for a company whose rule multiplies the APPRAISAL, `deriveEconomics` has
+      // no base without it, so the funding split was blanked, the deal was
+      // flagged for reconciliation — and SCRUM-61's handover guard refuses a
+      // deal whose split could not be computed. A legitimate manually approved
+      // figure became unfinishable.
+      //
+      // So: adopt it where the RULE needs it, never let MANUAL stamp it as
+      // approved (see the status patch below), and keep the basis saying exactly
+      // what the operator said. A caller that really does mean to link one under
+      // any basis still can, by naming it: the branch above honours that.
       //
       // APPROVED as well as RECORDED: the first approval flips the chosen
       // appraisal to APPROVED, so matching only RECORDED made every
@@ -1353,7 +1407,11 @@ export const approveDealerPurchaseAmount = mutation({
       });
     }
 
-    if (appraisal && appraisal.status === "RECORDED") {
+    // APPROVED on the appraisal row means the company approved AGAINST it. A
+    // MANUAL approval is the one basis that says it did not, even where the
+    // appraisal is still in play as the company's LTV base — so the row keeps
+    // whatever status it had.
+    if (appraisal && appraisal.status === "RECORDED" && args.basis !== "MANUAL") {
       await ctx.db.patch(appraisal._id, { status: "APPROVED" });
     }
 

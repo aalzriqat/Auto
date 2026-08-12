@@ -41,6 +41,10 @@ import {
   RecordApprovedPurchaseDialog,
   type ApprovalBasis,
 } from "./RecordApprovedPurchaseDialog";
+import {
+  RecordAppraisalDialog,
+  type AppraisalProviderType,
+} from "./RecordAppraisalDialog";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import type { PaymentMethod } from "@/components/payments/PaymentMethodSelect";
@@ -249,6 +253,7 @@ export function DealCockpit({
   const approveDealerPurchaseAmount = useMutation(
     api.financingEconomics.approveDealerPurchaseAmount
   );
+  const recordAppraisal = useMutation(api.financingEconomics.recordAppraisal);
   const { hasPermission, isLoading: permissionsLoading, membership } = usePermissions();
   const router = useRouter();
 
@@ -402,13 +407,19 @@ export function DealCockpit({
             dealerContributionMinor: economicsApp.dealerContributionMinor ?? null,
             appliedLtvPercent: economicsApp.appliedLtvPercent ?? null,
             closed: economicsApp.status === "CLOSED" || economicsApp.status === "CANCELLED",
-            // Certain to be refused by the server until somebody sets it, so
-            // the card says so instead of offering an action that cannot work.
             ltvMissing,
+            // The same live appraisal the approval bases are offered against,
+            // so the row and those options can never disagree about whether one
+            // exists.
+            appraisalAmountMinor: usableAppraisal?.appraisalAmountMinor ?? null,
           } satisfies FinanceDecisionFacts,
           currency: economicsApp.economicsCurrency ?? null,
           canRecordQuotation: hasPermission(PERMISSIONS.CREATE_FINANCE_APPLICATION),
           canRecordApproval: hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION),
+          // What `recordAppraisal` itself requires for a finance-company or
+          // independent appraisal. The dealer-estimate branch takes a different
+          // permission and is not offered here.
+          canRecordAppraisal: hasPermission(PERMISSIONS.REVIEW_FINANCE_APPLICATION),
           // The server refuses the application's own salesperson outright. Said
           // here so it reads as a rule rather than as a failure.
           isOwnDeal: membership?.userId === economicsApp.salespersonId,
@@ -426,10 +437,19 @@ export function DealCockpit({
           appraisal: usableAppraisal
             ? { id: usableAppraisal._id as string, amountMinor: usableAppraisal.appraisalAmountMinor }
             : null,
+          onRecordAppraisal: async (values: {
+            appraisalAmountMinor: number;
+            providerType: AppraisalProviderType;
+            providerName?: string;
+            appraisedAt: number;
+          }) => {
+            await recordAppraisal({ orgId, applicationId, ...values });
+          },
           onRecordQuotation: async (values: {
             submittedQuotationMinor: number;
             source: "SYSTEM_CALCULATED" | "MANUAL_ENTRY" | "CALCULATED_WITH_OVERRIDE";
             overrideReason?: string;
+            ltvPercent?: number;
           }) => {
             await recordSubmittedQuotation({ orgId, applicationId, ...values });
           },
@@ -703,6 +723,7 @@ export type FinanceDecisionWiring = {
   currency: string | null;
   canRecordQuotation: boolean;
   canRecordApproval: boolean;
+  canRecordAppraisal: boolean;
   isOwnDeal: boolean;
   /** What the calculator has to say, including "not yet arrived". */
   calculation: QuotationCalculation;
@@ -711,12 +732,20 @@ export type FinanceDecisionWiring = {
     submittedQuotationMinor: number;
     source: "SYSTEM_CALCULATED" | "MANUAL_ENTRY" | "CALCULATED_WITH_OVERRIDE";
     overrideReason?: string;
+    /** The rate for THIS deal, when its own frozen rules carry none. */
+    ltvPercent?: number;
   }) => Promise<void>;
   onRecordApproved: (values: {
     approvedAmountMinor: number;
     basis: ApprovalBasis;
     appraisalId?: string;
     notes?: string;
+  }) => Promise<void>;
+  onRecordAppraisal: (values: {
+    appraisalAmountMinor: number;
+    providerType: AppraisalProviderType;
+    providerName?: string;
+    appraisedAt: number;
   }) => Promise<void>;
 };
 
@@ -779,6 +808,9 @@ export function DealCockpitView({
   const [showCompleted, setShowCompleted] = useState(false);
   const [recordingQuotation, setRecordingQuotation] = useState(false);
   const [recordingApproval, setRecordingApproval] = useState(false);
+  const [recordingAppraisal, setRecordingAppraisal] = useState(false);
+  const [appraisalSubmitting, setAppraisalSubmitting] = useState(false);
+  const [appraisalError, setAppraisalError] = useState<string | null>(null);
   // One flag per dialog. A single shared one made an in-flight quotation write
   // render the approval dialog's button as busy too, which reads as the wrong
   // action having been taken.
@@ -937,6 +969,7 @@ export function DealCockpitView({
     submittedQuotationMinor: number;
     source: "SYSTEM_CALCULATED" | "MANUAL_ENTRY" | "CALCULATED_WITH_OVERRIDE";
     overrideReason?: string;
+    ltvPercent?: number;
   }) => {
     if (!financeDecision) return;
     setQuotationSubmitting(true);
@@ -951,6 +984,28 @@ export function DealCockpitView({
       toast.error(message);
     } finally {
       setQuotationSubmitting(false);
+    }
+  };
+
+  const handleRecordAppraisal = async (values: {
+    appraisalAmountMinor: number;
+    providerType: AppraisalProviderType;
+    providerName?: string;
+    appraisedAt: number;
+  }) => {
+    if (!financeDecision) return;
+    setAppraisalSubmitting(true);
+    setAppraisalError(null);
+    try {
+      await financeDecision.onRecordAppraisal(values);
+      toast.success(t("AppraisalRecorded"));
+      setRecordingAppraisal(false);
+    } catch (error) {
+      const message = getErrorMessage(error);
+      setAppraisalError(message);
+      toast.error(message);
+    } finally {
+      setAppraisalSubmitting(false);
     }
   };
 
@@ -1191,12 +1246,17 @@ export function DealCockpitView({
           facts={financeDecision.facts}
           canRecordQuotation={financeDecision.canRecordQuotation}
           canRecordApproval={financeDecision.canRecordApproval}
+          canRecordAppraisal={financeDecision.canRecordAppraisal}
           isOwnDeal={financeDecision.isOwnDeal}
           money={decisionMoney}
           t={t}
           onRecordQuotation={() => {
             setQuotationError(null);
             setRecordingQuotation(true);
+          }}
+          onRecordAppraisal={() => {
+            setAppraisalError(null);
+            setRecordingAppraisal(true);
           }}
           onRecordApproved={() => {
             setApprovalError(null);
@@ -1473,11 +1533,21 @@ export function DealCockpitView({
             submitting={quotationSubmitting}
             error={quotationError}
             calculation={financeDecision.calculation}
+            requiresLtvPercent={financeDecision.facts.ltvMissing}
             factor={decisionFactor}
             money={decisionMoney}
             t={t}
             onOpenChange={setRecordingQuotation}
             onSubmit={handleRecordQuotation}
+          />
+          <RecordAppraisalDialog
+            open={recordingAppraisal}
+            submitting={appraisalSubmitting}
+            error={appraisalError}
+            factor={decisionFactor}
+            t={t}
+            onOpenChange={setRecordingAppraisal}
+            onSubmit={handleRecordAppraisal}
           />
           <RecordApprovedPurchaseDialog
             open={recordingApproval}

@@ -42,14 +42,31 @@ export type FinanceDecisionFacts = {
   /** CLOSED or CANCELLED: both writers refuse, so neither action is offered. */
   closed: boolean;
   /**
-   * This finance company has no purchase LTV on record.
+   * THIS DEAL's frozen rule snapshot carries no purchase LTV.
    *
-   * Not a nicety: `resolveAppliedLtv` throws without one, so recording the
-   * quotation cannot succeed and the funding split can never be derived. The
-   * card names the missing setting rather than offering an action that is
-   * certain to be refused.
+   * Not a nicety: `resolveAppliedLtv` throws without one, so the quotation
+   * cannot be recorded and the funding split can never be derived. And it
+   * cannot be repaired in settings — the snapshot is taken at application
+   * creation and never re-read, deliberately, so that editing a company next
+   * month cannot rewrite the deals it already governs. Adding the rate to the
+   * company therefore fixes FUTURE deals and leaves this one exactly as stuck.
+   *
+   * So the action stays available and the DIALOG asks for the rate that applies
+   * to this deal, which `recordSubmittedQuotation` accepts as an explicit
+   * `ltvPercent`. Naming the missing setting and stopping there would have been
+   * a recovery instruction that cannot recover the deal it is shown on.
    */
   ltvMissing: boolean;
+  /**
+   * The appraisal on file, when there is one.
+   *
+   * Sending the quotation moves the appraisal dimension to PENDING, so the stage
+   * rail's live blocker becomes `AwaitingAppraisal` immediately after step one —
+   * and until this action existed nothing in the product could clear it. A rail
+   * that says the deal waits on an appraisal, beside a workflow that carries on
+   * regardless, is two authorities on one screen.
+   */
+  appraisalAmountMinor: number | null;
 };
 
 type FinanceCompanyDecisionCardProps = {
@@ -58,6 +75,8 @@ type FinanceCompanyDecisionCardProps = {
   canRecordQuotation: boolean;
   /** `approve:finance_application` — the approval writer's own permission. */
   canRecordApproval: boolean;
+  /** `review:finance_application` — what `recordAppraisal` itself requires. */
+  canRecordAppraisal: boolean;
   /**
    * Whether the viewer is the salesperson on this application.
    *
@@ -69,6 +88,7 @@ type FinanceCompanyDecisionCardProps = {
   money: (minor: number) => string;
   t: (key: string) => string;
   onRecordQuotation: () => void;
+  onRecordAppraisal: () => void;
   onRecordApproved: () => void;
 };
 
@@ -100,10 +120,12 @@ export function FinanceCompanyDecisionCard({
   facts,
   canRecordQuotation,
   canRecordApproval,
+  canRecordAppraisal,
   isOwnDeal,
   money,
   t,
   onRecordQuotation,
+  onRecordAppraisal,
   onRecordApproved,
 }: Readonly<FinanceCompanyDecisionCardProps>) {
   const quotationRecorded = facts.submittedQuotationMinor !== null;
@@ -113,9 +135,15 @@ export function FinanceCompanyDecisionCard({
   // to reopen the approval instead. Offering the action anyway would produce a
   // refusal the screen cannot act on, since reopening has no UI yet.
   const quotationActionAvailable =
-    canRecordQuotation && !facts.closed && !facts.approvedPurchaseRecorded && !facts.ltvMissing;
+    canRecordQuotation && !facts.closed && !facts.approvedPurchaseRecorded;
   const approvalActionAvailable =
     canRecordApproval && !isOwnDeal && !facts.closed && quotationRecorded;
+  // "Not in play until the quotation has gone out" is owned by the ROW's own
+  // render condition below, not repeated here — a second copy of the rule read
+  // as defence in depth but was untestable through this gate (the row hides the
+  // button either way), so it was a condition no test could ever fail on.
+  const appraisalActionAvailable =
+    canRecordAppraisal && !facts.closed && !facts.approvedPurchaseRecorded;
 
   const derived: Array<{ key: string; label: string; value: string }> = [];
   if (facts.financeCompanyFundedPortionMinor !== null) {
@@ -193,6 +221,35 @@ export function FinanceCompanyDecisionCard({
             ) : undefined
           }
         />
+
+        {/* Between the two, because that is the order the deal moves in: we
+            send a quotation, they value the car, they answer with an amount.
+            Absent before the quotation, because until then the appraisal is not
+            in play and an empty row would be a question nobody asked. */}
+        {(quotationRecorded || facts.appraisalAmountMinor !== null) && (
+          <DecisionRow
+            label={t("TheirAppraisalLabel")}
+            value={
+              facts.appraisalAmountMinor !== null ? (
+                <bdi className="tabular-nums">{money(facts.appraisalAmountMinor)}</bdi>
+              ) : (
+                <span className="text-muted-foreground">{t("NotRecordedYet")}</span>
+              )
+            }
+            note={
+              facts.appraisalAmountMinor === null && !canRecordAppraisal && !facts.closed
+                ? t("AppraisalNeedsReviewer")
+                : undefined
+            }
+            action={
+              appraisalActionAvailable && facts.appraisalAmountMinor === null ? (
+                <Button size="sm" variant="outline" onClick={onRecordAppraisal}>
+                  {t("RecordAppraisalAction")}
+                </Button>
+              ) : undefined
+            }
+          />
+        )}
 
         <DecisionRow
           label={t("ApprovedPurchaseLabel")}

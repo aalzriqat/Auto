@@ -118,6 +118,8 @@ function wiring(overrides: WiringOverrides = {}): FinanceDecisionWiring {
     appraisal: null,
     onRecordQuotation: noopAsync,
     onRecordApproved: noopAsync,
+    onRecordAppraisal: noopAsync,
+    canRecordAppraisal: true,
     ...rest,
     facts: {
       approvedPurchaseRecorded: false,
@@ -129,6 +131,7 @@ function wiring(overrides: WiringOverrides = {}): FinanceDecisionWiring {
       appliedLtvPercent: null,
       closed: false,
       ltvMissing: false,
+      appraisalAmountMinor: null,
       ...(facts ?? {}),
     },
   };
@@ -205,8 +208,12 @@ describe("a recorded amount this caller cannot see", () => {
     );
 
     expect(screen.getByText("RecordedAmountHidden")).toBeTruthy();
-    // The row must not claim the opposite of what the rail says...
-    expect(screen.queryByText("NotRecordedYet")).toBeNull();
+    // The APPROVED row must not claim the opposite of what the rail says.
+    // Scoped to that row: the appraisal row above it legitimately reads "not
+    // recorded yet" on this fixture, and a global query would pass on the wrong
+    // element — the exact vacuity this suite has been bitten by before.
+    const approvedRow = screen.getByText("ApprovedPurchaseLabel").closest("div")!;
+    expect(within(approvedRow).queryByText("NotRecordedYet")).toBeNull();
     // ...nor invite the operator to record an amount that already exists.
     expect(cardButton("RecordApprovedPurchaseAction")).toBeUndefined();
   });
@@ -268,16 +275,61 @@ describe("every unavailable action says why", () => {
     expect(cardButton("RecordApprovedPurchaseAction")).toBeUndefined();
   });
 
-  test("a finance company with no purchase LTV blocks the quotation and names the setting", () => {
+  test("a deal whose frozen rules carry no purchase LTV asks for the rate instead of sending the operator to settings", async () => {
     // Found by RENDERING against a company created through the real settings
     // form: that form only ever asked for the customer-facing LTV, so
     // `resolveAppliedLtv` threw, and the throw — from `useQuery`, during
     // render — took the whole deal screen down with a Convex stack trace.
-    renderCockpit(wiring({ facts: { ltvMissing: true } }));
+    //
+    // The first fix hid the action and told the operator to add the rate in
+    // Finance Settings. That instruction cannot repair the deal it appears on:
+    // an application snapshots its company's rules at creation and never
+    // re-reads them, so the edit governs future deals only. The action stays,
+    // and the dialog asks for the rate that applies to THIS deal.
+    const onRecordQuotation = vi.fn(noopAsync);
+    renderCockpit(wiring({ facts: { ltvMissing: true }, onRecordQuotation }));
 
     expect(screen.getByText("FinanceCompanyLtvMissing")).toBeTruthy();
-    // Offering it would be offering an action the server is certain to refuse.
-    expect(cardButton("RecordQuotationAction")).toBeUndefined();
+    fireEvent.click(cardButton("RecordQuotationAction")!);
+    const dialog = screen.getByRole("dialog");
+
+    fireEvent.change(within(dialog).getByLabelText("QuotationAmountLabel"), {
+      target: { value: "13000" },
+    });
+    // Without the rate there is nothing to submit — the server would refuse.
+    expect(
+      (
+        within(dialog).getByRole("button", {
+          name: "RecordQuotationAction",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+
+    fireEvent.change(within(dialog).getByLabelText("DealPurchaseLtvLabel"), {
+      target: { value: "90" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "RecordQuotationAction" }));
+
+    await waitFor(() =>
+      expect(onRecordQuotation).toHaveBeenCalledWith({
+        submittedQuotationMinor: 13_000 * JOD,
+        source: "MANUAL_ENTRY",
+        overrideReason: undefined,
+        // Per-deal, and only here: the deal moves without anyone rewriting the
+        // immutable rules it was created under.
+        ltvPercent: 90,
+      })
+    );
+  });
+
+  test("a deal whose rules DO carry a rate is never asked for one", () => {
+    renderCockpit(wiring());
+
+    fireEvent.click(cardButton("RecordQuotationAction")!);
+    const dialog = screen.getByRole("dialog");
+    // Sending a per-deal rate where the company's rules already answer would
+    // override them for a deal that never asked.
+    expect(within(dialog).queryByLabelText("DealPurchaseLtvLabel")).toBeNull();
   });
 
   test("a closed deal offers nothing and says so", () => {
@@ -441,6 +493,58 @@ describe("recording the submitted quotation", () => {
     // Still open: a refusal the operator can act on is worthless behind a
     // closed dialog and a faded toast.
     expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+});
+
+describe("recording their appraisal", () => {
+  /**
+   * The stage the rail blocks on, which had no writer anywhere in the product.
+   *
+   * Sending the quotation moves the appraisal dimension to PENDING, so
+   * `APPRAISAL / AwaitingAppraisal` becomes the live blocker immediately after
+   * step one. Without this action the rail said the deal was waiting on an
+   * appraisal while the economics workflow carried on around it — two
+   * authorities on one screen, and no way to make the first one true.
+   */
+  test("is offered once the quotation has gone out, and records what the operator entered", async () => {
+    const onRecordAppraisal = vi.fn(noopAsync);
+    renderCockpit(
+      wiring({ facts: { submittedQuotationMinor: 12_500 * JOD }, onRecordAppraisal })
+    );
+
+    fireEvent.click(cardButton("RecordAppraisalAction")!);
+    const dialog = screen.getByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("AppraisalAmountLabel"), {
+      target: { value: "11800" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "RecordAppraisalAction" }));
+
+    await waitFor(() => expect(onRecordAppraisal).toHaveBeenCalled());
+    expect(onRecordAppraisal.mock.calls[0][0]).toMatchObject({
+      appraisalAmountMinor: 11_800 * JOD,
+      // Their valuation is the default; a dealer's own estimate is not offered
+      // at all, because the server refuses it as an approval basis.
+      providerType: "FINANCE_COMPANY",
+    });
+  });
+
+  test("the whole row is absent before the quotation, because nothing has put it in play", () => {
+    renderCockpit(wiring());
+
+    // Asserting only on the BUTTON here was vacuous: the row that contains it
+    // is not rendered either, so the assertion passed with the gate removed.
+    // The row's own visibility is the rule, so that is what is pinned.
+    expect(screen.queryByText("TheirAppraisalLabel")).toBeNull();
+    expect(cardButton("RecordAppraisalAction")).toBeUndefined();
+  });
+
+  test("tells a caller who cannot record one who does", () => {
+    renderCockpit(
+      wiring({ canRecordAppraisal: false, facts: { submittedQuotationMinor: 12_500 * JOD } })
+    );
+
+    expect(screen.getByText("AppraisalNeedsReviewer")).toBeTruthy();
+    expect(cardButton("RecordAppraisalAction")).toBeUndefined();
   });
 });
 
