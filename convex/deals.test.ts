@@ -329,13 +329,13 @@ describe("deals.queue — tenancy", () => {
 describe("deals.queue — the state that only lived on the old list", () => {
   test("a rejected application holding a deposit surfaces as depositPending", async () => {
     const env = await setup();
-    const { applicationId, quoteId } = await preSaleApplication(env);
+    const { applicationId, quoteId, vehicleId: depositVehicleId } = await preSaleApplication(env);
 
     await env.t.run((ctx) =>
       ctx.db.insert("deposits", {
         orgId: env.orgId,
         quoteId,
-        vehicleId: env.vehicleId,
+        vehicleId: depositVehicleId,
         customerId: env.customerId,
         amount: 500,
         method: "CASH",
@@ -444,5 +444,199 @@ describe("deals.queue — ordering and limits", () => {
       expect(result.limit).toBeGreaterThan(0);
       expect(result.limit).toBeLessThanOrEqual(100);
     }
+  });
+});
+
+describe("deals.queue — findings from the SCRUM-63 adversarial review", () => {
+  test("an old actionable deal is reachable even behind a page of newer dead ones", async () => {
+    const env = await setup();
+
+    // The OLDEST application is the actionable one; two newer ones are dead.
+    const old = await preSaleApplication(env);
+    await env.asUser.mutation(api.applications.updateStatus, {
+      orgId: env.orgId,
+      applicationId: old.applicationId,
+      status: "UNDER_REVIEW",
+    });
+    for (const vin of ["1HGCM82633A111111", "1HGCM82633A222222"]) {
+      const v = await env.t.run((ctx) =>
+        ctx.db.insert("vehicles", {
+          orgId: env.orgId,
+          vin,
+          make: "Ford",
+          model: "Focus",
+          year: 2020,
+          color: "Red",
+          fuelType: "Gasoline",
+          transmission: "Automatic",
+          mileage: 100,
+          sellingPrice: 8000,
+          status: "AVAILABLE",
+        })
+      );
+      const q = await env.asUser.mutation(api.quotes.saveQuote, {
+        orgId: env.orgId,
+        customerId: env.customerId,
+        vehicleId: v,
+        vehiclePrice: 8000,
+        downPayment: 1000,
+        termMonths: 24,
+      });
+      const a = await env.asUser.mutation(api.applications.createFromQuote, {
+        orgId: env.orgId,
+        quoteId: q,
+      });
+      await env.asUser.mutation(api.applications.updateStatus, {
+        orgId: env.orgId,
+        applicationId: a,
+        status: "UNDER_REVIEW",
+      });
+      await env.asUser.mutation(api.applications.updateStatus, {
+        orgId: env.orgId,
+        applicationId: a,
+        status: "REJECTED",
+      });
+    }
+
+    // Scanning the two NEWEST rows and only then sorting oldest-first cannot
+    // ever reach the old one — so the screen that promises "the longest-stuck
+    // work is at the top" would show an empty needs-attention queue while a
+    // real deal sat waiting. The candidate set has to be the ACTIONABLE
+    // population, not the recent population.
+    const result = await env.asUser.query(api.deals.queue, {
+      orgId: env.orgId,
+      view: "NEEDS_ATTENTION",
+      limit: 2,
+    });
+
+    expect(result.rows.map((r) => r.href)).toContain(
+      `/${env.orgId}/applications/${old.applicationId}/deal`
+    );
+  });
+
+  test("a finalized deal whose sale falls outside the sales window does not vanish", async () => {
+    const env = await setup();
+    const { applicationId, saleId } = await finalizedFinancedDeal(env);
+
+    // A second, NEWER sale pushes the finalized sale out of a 1-row window,
+    // while the application is still the newest application. Suppressing the
+    // application row because its sale "exists" then removes the only
+    // representation the deal had.
+    await env.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: env.orgId,
+        vehicleId: env.vehicleId,
+        customerId: env.customerId,
+        salespersonId: env.userId,
+        salePrice: 5000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+      })
+    );
+
+    const result = await env.asUser.query(api.deals.queue, {
+      orgId: env.orgId,
+      view: "ALL",
+      limit: 1,
+    });
+
+    const hrefs = result.rows.map((r) => r.href);
+    const present =
+      hrefs.includes(`/${env.orgId}/sales/${saleId}/deal`) ||
+      hrefs.includes(`/${env.orgId}/applications/${applicationId}/deal`);
+    expect(present).toBe(true);
+  });
+
+  test("a supplier obligation in an unreadable currency never reads as settled", async () => {
+    const env = await setup();
+
+    // A consigned CASH sale whose payable is denominated differently from the
+    // sale's frozen currency. `sales.dealCockpit` returns UNKNOWN for this and
+    // keeps the settlement stage open; the queue must agree, or a deal the Deal
+    // screen still considers unresolved silently drops out of the worklist.
+    const consignedVehicleId = await env.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: env.orgId,
+        vin: "1HGCM82633A999999",
+        make: "Honda",
+        model: "Civic",
+        year: 2020,
+        color: "Black",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 100,
+        sellingPrice: 12000,
+        status: "SOLD",
+        sourcedFromName: "Waleed",
+        sourceType: "SOURCED",
+      })
+    );
+    const saleId = await env.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: env.orgId,
+        vehicleId: consignedVehicleId,
+        customerId: env.customerId,
+        salespersonId: env.userId,
+        salePrice: 12000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        consignedMarginCurrency: "JOD",
+        supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      })
+    );
+    await env.t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierPayables", {
+        orgId: env.orgId,
+        saleId,
+        vehicleId: consignedVehicleId,
+        amountDue: 11000,
+        amountPaid: 11000,
+        currency: "USD",
+        status: "PAID",
+        sourcedFromName: "Waleed",
+        createdAt: Date.now(),
+        createdBy: env.userId,
+        updatedAt: Date.now(),
+      })
+    );
+
+    const result = await env.asUser.query(api.deals.queue, { orgId: env.orgId, view: "ALL" });
+    const row = result.rows.find((r) => r.href.includes(saleId));
+    expect(row).toBeDefined();
+    expect(row!.needsAttention).toBe(true);
+  });
+
+  test("a hydrated record belonging to another org is never rendered", async () => {
+    const env = await setup();
+
+    const foreignCustomerId = await env.t.run(async (ctx) => {
+      const otherOrgId = await ctx.db.insert("organizations", {
+        name: "Foreign Dealer",
+        createdAt: Date.now(),
+      });
+      return ctx.db.insert("customers", {
+        orgId: otherOrgId,
+        firstName: "Foreign",
+        lastName: "Person",
+      });
+    });
+
+    // Reachable through the super-admin raw-record editor, which can write any
+    // field on any row. Convex ids carry a TABLE, not an organization, so
+    // following one out of an in-org document proves nothing about tenancy.
+    await env.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: env.orgId,
+        vehicleId: env.vehicleId,
+        customerId: foreignCustomerId,
+        salespersonId: env.userId,
+        salePrice: 1000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+      })
+    );
+
+    const result = await env.asUser.query(api.deals.queue, { orgId: env.orgId, view: "ALL" });
+    expect(result.rows.map((r) => r.customerName)).not.toContain("Foreign Person");
   });
 });

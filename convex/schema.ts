@@ -1436,6 +1436,12 @@ export default defineSchema({
     // created rather than the sale date the UI sorts and displays — a draft
     // created early but completed later would land in the wrong page.
     .index("by_org_salesperson_saleDate", ["orgId", "salespersonId", "saleDate"])
+    // SCRUM-63: the deal queue needs OPEN sales (status PENDING) reachable
+    // independently of how recent they are. Scanning `by_org` newest-first and
+    // filtering afterwards means an old unfinished sale can never enter the
+    // candidate set once newer rows fill the window — precisely the row a
+    // worklist exists to surface.
+    .index("by_org_status", ["orgId", "status"])
     .index("by_org_saleDate", ["orgId", "saleDate"])
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_quote", ["quoteId"])

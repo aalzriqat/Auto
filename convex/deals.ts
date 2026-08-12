@@ -19,6 +19,7 @@ import {
   type DealStage,
   type ObligationState,
 } from "./utils/financingEconomics";
+import { getOrgCurrency } from "./accounting/workflowHooks";
 
 /**
  * THE UNIFIED DEAL QUEUE — a read projection, never a stored entity.
@@ -247,6 +248,19 @@ async function cashSettlementComplete(
 ): Promise<boolean> {
   if (sale.status === "CANCELLED") return true;
 
+  /**
+   * The currency the deal is READ in — the sale frozen it, or the org current one.
+   *
+   * Passing the row own currency for both sides of `obligationFromRow` (which
+   * an earlier revision did) makes its mismatch guard trivially true, so a
+   * payable denominated in a currency the deal does not use resolved as CLOSED
+   * on the strength of its stored status alone. `sales.dealCockpit` returns
+   * UNKNOWN for exactly that row and keeps the settlement stage open, so the
+   * queue reported a deal finished while the screen it opens said it was not —
+   * the one disagreement this projection exists to make impossible.
+   */
+  const currency = sale.consignedMarginCurrency ?? (await getOrgCurrency(ctx, sale.orgId));
+
   const route = consignedSettlementRoute({ supplierSettlementRoute: sale.supplierSettlementRoute });
   const collectsGross = dealershipCollectsGross(route);
   const consigned = saleIsAgentSale({
@@ -270,7 +284,7 @@ async function cashSettlementComplete(
           due: payable.amountDue,
           settled: payable.amountPaid ?? 0,
           rowCurrency: payable.currency,
-          queryCurrency: payable.currency,
+          queryCurrency: currency,
           storedPaid: payable.status === "PAID",
         })
       : "UNKNOWN";
@@ -285,7 +299,7 @@ async function cashSettlementComplete(
           due: claim.amountDue,
           settled: claim.amountReceived ?? 0,
           rowCurrency: claim.currency,
-          queryCurrency: claim.currency,
+          queryCurrency: currency,
           storedPaid: claim.status === "PAID",
         })
       : "UNKNOWN";
@@ -339,6 +353,133 @@ function matchesView(row: DealQueueRow, view: DealQueueView): boolean {
   }
 }
 
+/**
+ * Hydrate one candidate into a row, or drop it.
+ *
+ * One function for both anchors rather than two near-identical loops: the
+ * previous shape duplicated the stage derivation, the provider labels and the
+ * deposit lookup, and the two copies had already begun to differ.
+ */
+async function buildRow(
+  ctx: QueryCtx,
+  args: {
+    orgId: Id<"organizations">;
+    key: string;
+    sale: Doc<"sales"> | null;
+    application: Doc<"financeApplications"> | null;
+    rules: Array<Doc<"companyDocumentRules">>;
+  }
+): Promise<DealQueueRow | null> {
+  const { sale, application, rules, orgId } = args;
+  if (!sale && !application) return null;
+
+  /**
+   * Hydration fails CLOSED on tenancy.
+   *
+   * These ids are followed out of documents already proven to be in this org,
+   * so this is not the caller-supplied-id case `requireOwnedRow` exists for —
+   * one reviewer verified as much, and the shipped `sales.dealCockpit` and
+   * `applications.dealCockpit` follow the same ids without re-checking. But a
+   * Convex id carries a TABLE, not an organization, and the super-admin raw
+   * record editor can write any field on any row. Re-checking costs one
+   * comparison and turns "another tenant's customer name renders here" from a
+   * data-integrity assumption into an impossibility.
+   */
+  const inOrg = <T extends { orgId?: Id<"organizations"> }>(doc: T | null): T | null =>
+    doc && doc.orgId === orgId ? doc : null;
+
+  const vehicleId = sale?.vehicleId ?? application!.vehicleId;
+  const customerId = sale?.customerId ?? application!.customerId;
+  const salespersonId = sale?.salespersonId ?? application!.salespersonId;
+
+  const [vehicleDoc, customerDoc, salesperson] = await Promise.all([
+    ctx.db.get(vehicleId),
+    ctx.db.get(customerId),
+    ctx.db.get(salespersonId),
+  ]);
+  const vehicle = inOrg(vehicleDoc);
+  const customer = inOrg(customerDoc);
+
+  let stages: DealStage[];
+  let statusKey: string;
+  let providerName: string | null = null;
+  let providerLabelKey: string | null = null;
+  let depositPending = false;
+  let dealKind: "CASH" | "FINANCED";
+
+  if (application) {
+    const [companyDoc, quoteDoc] = await Promise.all([
+      application.companyId ? ctx.db.get(application.companyId) : Promise.resolve(null),
+      ctx.db.get(application.quoteId),
+    ]);
+    const company = inOrg(companyDoc);
+    const quote = inOrg(quoteDoc);
+    const docsComplete = await requiredDocumentsComplete(ctx, application, rules, quote?.companyId);
+
+    stages = deriveDealStages({
+      settlementComplete: undefined,
+      dealCancelled: sale?.status === "CANCELLED",
+      status: application.status,
+      vehicleHandoverAt: application.vehicleHandoverAt,
+      finalizedSaleId: application.finalizedSaleId,
+      disbursedAt: application.disbursedAt,
+      creditDecision: application.creditDecision,
+      appraisalStatus: application.appraisalStatus,
+      gapResolution: application.gapResolution,
+      settlementStatus: application.settlementStatus,
+      handoverStatus: application.handoverStatus,
+      rawAppraisalGapMinor: application.rawAppraisalGapMinor,
+      approvedDealerPurchaseAmountMinor: application.approvedDealerPurchaseAmountMinor,
+      requiredDocumentsComplete: docsComplete,
+    });
+    statusKey = application.status;
+    ({ providerName, providerLabelKey } = providerLabels(application, company, quote?.mode));
+    depositPending = await hasPendingDepositResolution(ctx, application);
+    dealKind = "FINANCED";
+  } else {
+    const cashSale = sale!;
+    stages = deriveCashDealStages({
+      saleStatus: cashSale.status,
+      settlementComplete: await cashSettlementComplete(ctx, cashSale, vehicle),
+    });
+    statusKey = cashSale.status;
+    // FINANCED is a property of the SALE, not of whether an application row
+    // exists: `sales.create` accepts a financing type and has no `applicationId`
+    // field, so an applicationless financed sale is ordinary. Deriving the kind
+    // from the application alone labelled those CASH.
+    dealKind =
+      cashSale.financingType === "FINANCED" || cashSale.financingType === "LEASE"
+        ? "FINANCED"
+        : "CASH";
+  }
+
+  const live = liveStage(stages);
+  const anchoredOnSale = sale !== null;
+
+  return {
+    key: args.key,
+    href: anchoredOnSale
+      ? `/${orgId}/sales/${sale!._id}/deal`
+      : `/${orgId}/applications/${application!._id}/deal`,
+    dealKind,
+    anchor: anchoredOnSale ? "SALE" : "APPLICATION",
+    customerName: customer ? `${customer.firstName} ${customer.lastName}`.trim() : "",
+    vehicleLabel: vehicle ? `${vehicle.make} ${vehicle.model} ${vehicle.year}`.trim() : "",
+    providerName,
+    providerLabelKey,
+    ownerName: salesperson?.name ?? salesperson?.email ?? "",
+    statusKey,
+    stageKey: live?.key ?? null,
+    blockerKey: live?.blocker ?? null,
+    needsAttention: needsAttention(stages, depositPending),
+    depositPending,
+    // Sales record no update time, so a sale-anchored row without an
+    // application falls back to its creation.
+    lastActivityAt:
+      application?.updatedAt ?? application?.createdAt ?? sale?._creationTime ?? 0,
+  };
+}
+
 export const queue = query({
   args: {
     orgId: v.id("organizations"),
@@ -359,205 +500,204 @@ export const queue = query({
         ? Math.min(Math.floor(requested), MAX_LIMIT)
         : DEFAULT_LIMIT;
 
-    // One extra row per source, purely to answer "is there more?" without a
-    // second query. Never rendered.
-    const scan = limit + 1;
+    /**
+     * CANDIDATES ARE OPEN WORK, NOT RECENT ROWS.
+     *
+     * This is the correction two independent adversarial reviews demanded, and
+     * both reproduced the defect it fixes: the first version scanned the newest
+     * `limit` rows of each table and only then sorted oldest-first, so a deal
+     * old enough to be pushed past that window by newer activity vanished from
+     * every view. On the one screen whose stated purpose is to surface the
+     * longest-stuck work, the longest-stuck work was the first thing dropped —
+     * and `truncated: true` said "there is more", never "and the oldest is
+     * missing". That is the steady state for any dealership after a few weeks,
+     * not an edge case.
+     *
+     * So actionable candidates are reached through STATUS indexes and are
+     * age-independent: an application sitting with the finance company for
+     * three months is found because of what it IS, not when it was created.
+     * History is a different question with a different shape, and only the
+     * history views carry a bounded window.
+     */
+    const ACTIONABLE_APP_STATUSES = [
+      "DRAFT",
+      "PENDING_DOCS",
+      "UNDER_REVIEW",
+      "APPROVED",
+    ] as const;
 
-    const [saleDocs, appDocs, rules] = await Promise.all([
-      ctx.db
-        .query("sales")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .filter((q) => q.neq(q.field("isDeleted"), true))
-        .order("desc")
-        .take(scan),
-      ctx.db
-        .query("financeApplications")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .order("desc")
-        .take(scan),
-      ctx.db
-        .query("companyDocumentRules")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect(),
-    ]);
+    /** Views that ask about finished work as well as open work. */
+    const wantsHistory = view === "ALL" || view === "CASH" || view === "FINANCED";
+    const cap = limit + 1;
 
-    const truncated = saleDocs.length > limit || appDocs.length > limit;
-    const sales = saleDocs.slice(0, limit);
-    const apps = appDocs.slice(0, limit);
-
-    const rows: DealQueueRow[] = [];
+    const [actionableApps, openSales, heldDeposits, rules, historySales, historyApps] =
+      await Promise.all([
+        Promise.all(
+          ACTIONABLE_APP_STATUSES.map((status) =>
+            ctx.db
+              .query("financeApplications")
+              .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", status))
+              .take(cap)
+          )
+        ).then((pages) => pages.flat()),
+        ctx.db
+          .query("sales")
+          .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
+          .filter((q) => q.neq(q.field("isDeleted"), true))
+          .take(cap),
+        // A held deposit is the ONLY thing that makes a rejected or cancelled
+        // deal actionable, and it is indexed directly — so that population is
+        // reached by what it is rather than through a window over dead rows.
+        ctx.db
+          .query("deposits")
+          .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "HELD"))
+          .take(cap),
+        ctx.db
+          .query("companyDocumentRules")
+          .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+          .collect(),
+        wantsHistory
+          ? ctx.db
+              .query("sales")
+              .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+              .filter((q) => q.neq(q.field("isDeleted"), true))
+              .order("desc")
+              .take(cap)
+          : Promise.resolve([] as Array<Doc<"sales">>),
+        wantsHistory
+          ? ctx.db
+              .query("financeApplications")
+              .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+              .order("desc")
+              .take(cap)
+          : Promise.resolve([] as Array<Doc<"financeApplications">>),
+      ]);
 
     /**
-     * Which applications are already represented by a sale row.
+     * Applications made actionable by a deposit nobody has resolved.
      *
-     * This is the dedup, and it uses the same rule as the Deal screen's
-     * `canonicalSaleId`: an application yields to its sale only when that sale
-     * is READABLE — present, in this org, not soft-deleted. `finalizedSaleId`
-     * survives `sales.softDelete` and nothing clears it, so trusting the
-     * pointer alone would drop the application row while the sale row it
-     * deferred to no longer exists, and the deal would vanish from the queue
-     * entirely.
+     * Resolved deposit-first through `by_vehicle` rather than by scanning dead
+     * applications: `financeApplications` has no `by_quote` index, and a window
+     * over rejected rows would reintroduce exactly the age bias this section
+     * exists to remove.
      */
-    const representedByASale = new Set<string>();
+    const depositApps = (
+      await Promise.all(
+        heldDeposits
+          .filter((deposit) => deposit.isDeleted !== true)
+          .map(async (deposit) => {
+            // Resolved by CUSTOMER, not by the deposit vehicle. A quote can
+            // carry several cars, so the deposit vehicle and the application
+            // vehicle are not the same field on a multi-vehicle deal and
+            // matching on it silently missed those deposits entirely. A
+            // customer own applications are few, and the index is exact.
+            const linked = await ctx.db
+              .query("financeApplications")
+              .withIndex("by_customer", (q) => q.eq("customerId", deposit.customerId))
+              .collect();
+            return linked.filter(
+              (app) =>
+                app.orgId === args.orgId &&
+                app.quoteId === deposit.quoteId &&
+                (app.status === "REJECTED" || app.status === "CANCELLED")
+            );
+          })
+      )
+    ).flat();
 
-    // --- sale-anchored rows: every cash deal, and every finalized financed one -
-    for (const sale of sales) {
-      const [vehicle, customer, salesperson] = await Promise.all([
-        ctx.db.get(sale.vehicleId),
-        ctx.db.get(sale.customerId),
-        ctx.db.get(sale.salespersonId),
-      ]);
-
-      const app = sale.applicationId ? await ctx.db.get(sale.applicationId) : null;
-      const application = app && app.orgId === args.orgId ? app : null;
-      if (application) representedByASale.add(application._id);
-
-      /**
-       * FINANCED is a property of the SALE, not of whether an application row
-       * exists — `sales.create` accepts a financing type and has no
-       * `applicationId` field, so an applicationless financed sale is ordinary.
-       * Deriving the kind from the application alone labelled those CASH.
-       * Same rule `sales.dealCockpit` applies.
-       */
-      const externallyFinanced =
-        sale.financingType === "FINANCED" || sale.financingType === "LEASE";
-      const dealKind: "CASH" | "FINANCED" =
-        application || externallyFinanced ? "FINANCED" : "CASH";
-
-      let stages: DealStage[];
-      let statusKey: string;
-      let providerName: string | null = null;
-      let providerLabelKey: string | null = null;
-      let depositPending = false;
-
-      if (application) {
-        // The financed rail, from the application — the same delegation
-        // `SaleDealCockpit` performs when it renders a financed sale.
-        const [company, quote] = await Promise.all([
-          application.companyId ? ctx.db.get(application.companyId) : Promise.resolve(null),
-          ctx.db.get(application.quoteId),
-        ]);
-        const docsComplete = await requiredDocumentsComplete(
-          ctx,
-          application,
-          rules,
-          quote?.companyId
-        );
-        stages = deriveDealStages({
-          settlementComplete: undefined,
-          dealCancelled: sale.status === "CANCELLED",
-          status: application.status,
-          vehicleHandoverAt: application.vehicleHandoverAt,
-          finalizedSaleId: application.finalizedSaleId,
-          disbursedAt: application.disbursedAt,
-          creditDecision: application.creditDecision,
-          appraisalStatus: application.appraisalStatus,
-          gapResolution: application.gapResolution,
-          settlementStatus: application.settlementStatus,
-          handoverStatus: application.handoverStatus,
-          rawAppraisalGapMinor: application.rawAppraisalGapMinor,
-          approvedDealerPurchaseAmountMinor: application.approvedDealerPurchaseAmountMinor,
-          requiredDocumentsComplete: docsComplete,
-        });
-        statusKey = application.status;
-        ({ providerName, providerLabelKey } = providerLabels(application, company, quote?.mode));
-        depositPending = await hasPendingDepositResolution(ctx, application);
-      } else {
-        stages = deriveCashDealStages({
-          saleStatus: sale.status,
-          settlementComplete: await cashSettlementComplete(ctx, sale, vehicle),
-        });
-        statusKey = sale.status;
-      }
-
-      const live = liveStage(stages);
-      rows.push({
-        key: `sale:${sale._id}`,
-        href: `/${args.orgId}/sales/${sale._id}/deal`,
-        dealKind,
-        anchor: "SALE",
-        customerName: customer ? `${customer.firstName} ${customer.lastName}`.trim() : "",
-        vehicleLabel: vehicle ? `${vehicle.make} ${vehicle.model} ${vehicle.year}`.trim() : "",
-        providerName,
-        providerLabelKey,
-        ownerName: salesperson?.name ?? salesperson?.email ?? "",
-        statusKey,
-        stageKey: live?.key ?? null,
-        blockerKey: live?.blocker ?? null,
-        needsAttention: needsAttention(stages, depositPending),
-        depositPending,
-        lastActivityAt: sale._creationTime,
-      });
-    }
-
-    // --- application-anchored rows: financing not yet finalized into a sale ---
-    for (const application of apps) {
-      if (representedByASale.has(application._id)) continue;
-
-      /**
-       * An application naming a sale this scan did not reach is still
-       * represented by that sale — the queue simply has not paged to it. Left
-       * in, it would render a second row for the same deal at a different URL
-       * the moment the sale fell past the limit, which is the duplicate the
-       * projection exists to prevent. Validated the same way as the dedup
-       * above: only a readable sale suppresses the application row.
-       */
-      if (application.finalizedSaleId) {
-        const finalized = await ctx.db.get(application.finalizedSaleId);
-        if (finalized && !finalized.isDeleted && finalized.orgId === args.orgId) continue;
-      }
-
-      const [customer, vehicle, salesperson, company, quote] = await Promise.all([
-        ctx.db.get(application.customerId),
-        ctx.db.get(application.vehicleId),
-        ctx.db.get(application.salespersonId),
-        application.companyId ? ctx.db.get(application.companyId) : Promise.resolve(null),
-        ctx.db.get(application.quoteId),
-      ]);
-
-      const docsComplete = await requiredDocumentsComplete(
-        ctx,
-        application,
-        rules,
-        quote?.companyId
+    /**
+     * Truncation is now a statement about HISTORY.
+     *
+     * The actionable population is reached by status, so a needs-attention
+     * queue is never silently short. If one actionable status alone overflows
+     * the cap the org genuinely has more open work than a page, and that is
+     * said too rather than hidden.
+     */
+    const actionableOverflow =
+      openSales.length > limit ||
+      heldDeposits.length > limit ||
+      ACTIONABLE_APP_STATUSES.some(
+        (status) => actionableApps.filter((app) => app.status === status).length > limit
       );
-      const stages = deriveDealStages({
-        settlementComplete: undefined,
-        status: application.status,
-        vehicleHandoverAt: application.vehicleHandoverAt,
-        finalizedSaleId: application.finalizedSaleId,
-        disbursedAt: application.disbursedAt,
-        creditDecision: application.creditDecision,
-        appraisalStatus: application.appraisalStatus,
-        gapResolution: application.gapResolution,
-        settlementStatus: application.settlementStatus,
-        handoverStatus: application.handoverStatus,
-        rawAppraisalGapMinor: application.rawAppraisalGapMinor,
-        approvedDealerPurchaseAmountMinor: application.approvedDealerPurchaseAmountMinor,
-        requiredDocumentsComplete: docsComplete,
-      });
+    const truncated =
+      actionableOverflow || historySales.length > limit || historyApps.length > limit;
 
-      const live = liveStage(stages);
-      const { providerName, providerLabelKey } = providerLabels(application, company, quote?.mode);
-      const depositPending = await hasPendingDepositResolution(ctx, application);
-      rows.push({
-        key: `application:${application._id}`,
-        href: `/${args.orgId}/applications/${application._id}/deal`,
-        dealKind: "FINANCED",
-        anchor: "APPLICATION",
-        customerName: customer ? `${customer.firstName} ${customer.lastName}`.trim() : "",
-        vehicleLabel: vehicle ? `${vehicle.make} ${vehicle.model} ${vehicle.year}`.trim() : "",
-        providerName,
-        providerLabelKey,
-        ownerName: salesperson?.name ?? "",
-        statusKey: application.status,
-        stageKey: live?.key ?? null,
-        blockerKey: live?.blocker ?? null,
-        needsAttention: needsAttention(stages, depositPending),
-        depositPending,
-        lastActivityAt: application.updatedAt ?? application.createdAt,
-      });
+    /**
+     * One entry per DEAL, keyed on the identity its row will use.
+     *
+     * Identity is resolved BEFORE hydration and independently of any window.
+     * The previous version suppressed an application row whenever its finalized
+     * sale existed, trusting the sale row to represent the deal — true only if
+     * that sale also happened to be inside its own window. When it was not,
+     * both representations disappeared and the deal was absent from the queue
+     * entirely. Resolving the anchor from the sale document fetched by id
+     * removes the dependency on windows altogether.
+     */
+    type Candidate = {
+      sale: Doc<"sales"> | null;
+      application: Doc<"financeApplications"> | null;
+    };
+    const candidates = new Map<string, Candidate>();
+
+    const addApplication = async (application: Doc<"financeApplications">) => {
+      const finalized = application.finalizedSaleId
+        ? await ctx.db.get(application.finalizedSaleId)
+        : null;
+      const readableSale =
+        finalized && !finalized.isDeleted && finalized.orgId === args.orgId ? finalized : null;
+      const key = readableSale ? `sale:${readableSale._id}` : `application:${application._id}`;
+      const existing = candidates.get(key);
+      candidates.set(key, { sale: readableSale ?? existing?.sale ?? null, application });
+    };
+
+    const addSale = async (sale: Doc<"sales">) => {
+      const linked = sale.applicationId ? await ctx.db.get(sale.applicationId) : null;
+      const application = linked && linked.orgId === args.orgId ? linked : null;
+      const key = `sale:${sale._id}`;
+      const existing = candidates.get(key);
+      candidates.set(key, { sale, application: application ?? existing?.application ?? null });
+    };
+
+    /**
+     * Sales first, then applications — the order is the dedup.
+     *
+     * A candidate sale claims its linked application, so the application loop
+     * must be able to see that claim; running both together let a COMPLETED
+     * sale and its still-open application each mint their own key and the deal
+     * rendered twice. Sequencing the two phases is what makes the sale the
+     * canonical anchor whenever one exists, in BOTH pointer directions.
+     */
+    await Promise.all([...openSales, ...historySales].map(addSale));
+    const claimedByASale = new Set<string>();
+    for (const candidate of candidates.values()) {
+      if (candidate.application) claimedByASale.add(candidate.application._id);
     }
+    await Promise.all(
+      [...actionableApps, ...depositApps, ...historyApps]
+        .filter((application) => !claimedByASale.has(application._id))
+        .map(addApplication)
+    );
+
+    /**
+     * Hydration, batched across rows.
+     *
+     * Sequential per-row awaits made total latency the SUM of every row's
+     * round-trips rather than the maximum, on a live subscription that
+     * re-executes on any related write.
+     */
+    const rows = (
+      await Promise.all(
+        Array.from(candidates.entries()).map(([key, candidate]) =>
+          buildRow(ctx, {
+            orgId: args.orgId,
+            key,
+            sale: candidate.sale,
+            application: candidate.application,
+            rules,
+          })
+        )
+      )
+    ).filter((row): row is DealQueueRow => row !== null);
 
     /**
      * Attention first, then longest-waiting first.
