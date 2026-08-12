@@ -24,7 +24,7 @@ export type PendingOpeningBalanceDraft = {
   asOfDate: number;
   memo?: string;
   createdBy: string;
-  preparedByName: string;
+  preparedByName: string | null;
   currency: string;
   /**
    * Whether the draft recorded the currency its amounts were entered in.
@@ -56,7 +56,19 @@ function safeDateLabel(ms: number): string | null {
   return isValid(date) ? format(date, "d MMM yyyy") : null;
 }
 
-function formatMinor(amountMinor: number, currency: string): string {
+/**
+ * Formats an amount ONLY when the draft's denomination is known.
+ *
+ * `listPendingOpeningBalanceDrafts` falls back to the org's current currency
+ * for a draft that never recorded one. Formatting at that fallback would render
+ * a historic JOD amount at USD scale — the same minor units shown 10x wrong —
+ * directly beside a line saying the denomination is unknown. Approval is
+ * already fail-closed, so this cannot corrupt the ledger; it can absolutely
+ * mislead the human deciding whether to reject. So the raw stored minor units
+ * are shown instead, explicitly labelled.
+ */
+function formatMinor(amountMinor: number, currency: string, denominationKnown: boolean): string {
+  if (!denominationKnown) return String(amountMinor);
   const scale = scaleForCurrency(currency);
   return (amountMinor / Math.pow(10, scale)).toLocaleString(undefined, {
     minimumFractionDigits: scale,
@@ -192,7 +204,9 @@ export function OpeningBalanceApprovalView({
                 who prepared it is the whole control. */}
             <p className="text-sm text-amber-900">
               {t("OpeningBalancePreparedBy")}{" "}
-              <bdi className="font-medium">{draft.preparedByName}</bdi>
+              <bdi className="font-medium">
+                {draft.preparedByName ?? t("OpeningBalancePreparerUnknown")}
+              </bdi>
               {asOf ? (
                 <>
                   {" · "}
@@ -212,24 +226,24 @@ export function OpeningBalanceApprovalView({
 
       <table className="w-full text-sm">
         <tbody>
-          {draft.lines.map((line) => (
-            <tr key={`${line.accountId}-${line.debitMinor}-${line.creditMinor}`} className="border-t border-amber-200/70">
+          {draft.lines.map((line, index) => (
+            <tr key={`${index}-${line.accountId}`} className="border-t border-amber-200/70">
               <td className="py-1.5 text-slate-800">{line.accountName}</td>
               <td className="py-1.5 text-end tabular-nums text-slate-800">
-                {line.debitMinor > 0 ? formatMinor(line.debitMinor, draft.currency) : ""}
+                {line.debitMinor > 0 ? formatMinor(line.debitMinor, draft.currency, draft.denominationKnown) : ""}
               </td>
               <td className="py-1.5 text-end tabular-nums text-slate-800">
-                {line.creditMinor > 0 ? formatMinor(line.creditMinor, draft.currency) : ""}
+                {line.creditMinor > 0 ? formatMinor(line.creditMinor, draft.currency, draft.denominationKnown) : ""}
               </td>
             </tr>
           ))}
           <tr className="border-t-2 border-amber-300 font-semibold">
             <td className="py-1.5 text-slate-900">{t("Total")}</td>
             <td className="py-1.5 text-end tabular-nums text-slate-900">
-              {formatMinor(totalDebitMinor, draft.currency)}
+              {formatMinor(totalDebitMinor, draft.currency, draft.denominationKnown)}
             </td>
             <td className="py-1.5 text-end tabular-nums text-slate-900">
-              {formatMinor(totalCreditMinor, draft.currency)}
+              {formatMinor(totalCreditMinor, draft.currency, draft.denominationKnown)}
             </td>
           </tr>
         </tbody>
@@ -242,6 +256,10 @@ export function OpeningBalanceApprovalView({
           {t(fact.key)}
         </p>
       ))}
+
+      {!draft.denominationKnown && (
+        <p className="text-xs text-slate-600">{t("OpeningBalanceRawMinorUnitsNote")}</p>
+      )}
 
       {gate.recoveryKey && (
         <p data-testid="opening-balance-recovery" className="text-sm text-amber-800">

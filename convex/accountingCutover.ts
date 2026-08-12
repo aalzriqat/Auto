@@ -515,8 +515,12 @@ export const listPendingOpeningBalanceDrafts = query({
         const preparer = draft.preparedByName ? null : await ctx.db.get(draft.createdBy);
         return {
           ...draft,
+          // `null`, never an English literal. The client renders this inside a
+          // <bdi> on a screen this PR hardened for Arabic bidi — shipping
+          // "Unknown" there would put untranslated English in the RTL run.
+          // Translation is the client's job; the server reports absence.
           preparedByName:
-            draft.preparedByName || preparer?.name || preparer?.email || "Unknown",
+            draft.preparedByName || preparer?.name || preparer?.email || null,
           currency: draft.currency ?? orgCurrency,
           // Deliberately `Boolean(...)`, not `!== undefined`: this must be the
           // SAME predicate `approveOpeningBalance` refuses on (`!draft.currency`).

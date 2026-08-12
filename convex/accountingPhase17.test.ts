@@ -53,8 +53,28 @@ async function seedCutoverDealer() {
     })
   );
 
+  // A genuinely NON-OWNER finance user. CodeRabbit caught that `asReviewer`
+  // shares the owner's role (isSystemOwnerRole: true), so tests claiming to
+  // exercise "an accountant prepares, the owner approves" were not exercising
+  // that at all — segregation of duties compares user ids, so they passed for
+  // the wrong reason. A regression gating `draftOpeningBalance` on
+  // isSystemOwnerRole would have gone undetected. This role is what SCRUM-52 is
+  // actually about: MANAGE_FINANCE without ownership is exactly the population
+  // that gets routed to draftOpeningBalance by `canPostDirectly`.
+  const accountantRoleId = await t.run((ctx) =>
+    ctx.db.insert("roles", {
+      orgId, name: "Accountant",
+      permissions: ["view:finance", "manage:finance"],
+    })
+  );
+  const accountantId = await t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: "p17_accountant", email: "p17accountant@example.com", name: "Accountant" })
+  );
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: accountantId, roleId: accountantRoleId }));
+
   const asOwner = t.withIdentity({ subject: "p17_owner", clerkId: "p17_owner" });
   const asReviewer = t.withIdentity({ subject: "p17_reviewer", clerkId: "p17_reviewer" });
+  const asAccountant = t.withIdentity({ subject: "p17_accountant", clerkId: "p17_accountant" });
 
   await asOwner.mutation(api.chartOfAccounts.initialize, { orgId });
   const fiscalYear = new Date().getUTCFullYear();
@@ -68,7 +88,7 @@ async function seedCutoverDealer() {
   await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
 
   const accounts = await asOwner.query(api.chartOfAccounts.list, { orgId, activeOnly: true });
-  return { t, orgId, userId, reviewerId, asOwner, asReviewer, accounts };
+  return { t, orgId, userId, reviewerId, accountantId, asOwner, asReviewer, asAccountant, accounts };
 }
 
 type Ctx = Awaited<ReturnType<typeof seedCutoverDealer>>;
@@ -565,9 +585,10 @@ describe("SCRUM-52 — the approval UI can actually be built on this query", () 
     const cash = account(ctx, "CASH_ON_HAND");
     const capital = account(ctx, "PARTNER_CAPITAL");
 
-    // Prepared by the REVIEWER identity so the returned name is unambiguously
-    // the preparer's rather than whoever happens to be reading.
-    await ctx.asReviewer.mutation(api.accountingCutover.draftOpeningBalance, {
+    // Prepared by the ACCOUNTANT so the returned name is unambiguously the
+    // preparer's rather than whoever happens to be reading — and so the
+    // fixture matches the role that actually hits this path in production.
+    await ctx.asAccountant.mutation(api.accountingCutover.draftOpeningBalance, {
       orgId: ctx.orgId,
       asOfDate: Date.now(),
       memo: "Cutover",
@@ -583,11 +604,86 @@ describe("SCRUM-52 — the approval UI can actually be built on this query", () 
     );
 
     expect(pending).toHaveLength(1);
-    expect(pending[0].preparedByName).toBe("Reviewer");
+    expect(pending[0].preparedByName).toBe("Accountant");
     expect(pending[0].currency).toBe("JOD");
+    expect(pending[0].denominationKnown).toBe(true);
     // The lines the reviewer is being asked to approve must come back too —
     // an approval screen with no lines is a rubber stamp with extra steps.
     expect(pending[0].lines).toHaveLength(2);
+  });
+
+  test("denominationKnown uses the SAME predicate the server refuses on, including the empty string", async () => {
+    // The comment on listPendingOpeningBalanceDrafts states this must stay
+    // identical to approveOpeningBalance's `!draft.currency`, and names "" as
+    // the representable value that diverges under `!== undefined`. Nothing
+    // asserted it, so a revert to `!== undefined` would have kept every test
+    // green and re-introduced the enabled-then-refused Approve button.
+    const ctx = await seedCutoverDealer();
+    const cash = account(ctx, "CASH_ON_HAND");
+    const capital = account(ctx, "PARTNER_CAPITAL");
+
+    const { draftId } = await ctx.asAccountant.mutation(
+      api.accountingCutover.draftOpeningBalance,
+      {
+        orgId: ctx.orgId,
+        asOfDate: Date.now(),
+        lines: [
+          { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
+          { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+        ],
+      }
+    );
+
+    // The schema types currency as an optional arbitrary string, so "" is
+    // representable even though no live path writes it.
+    await ctx.t.run((c) => c.db.patch(draftId as Id<"openingBalanceDrafts">, { currency: "" }));
+
+    const pending = await ctx.asOwner.query(
+      api.accountingCutover.listPendingOpeningBalanceDrafts,
+      { orgId: ctx.orgId }
+    );
+    expect(pending[0].denominationKnown).toBe(false);
+
+    // And the server refuses it, so UI and backend agree rather than the UI
+    // enabling an action the backend then rejects.
+    await expect(
+      ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, {
+        orgId: ctx.orgId,
+        draftId: draftId as Id<"openingBalanceDrafts">,
+      })
+    ).rejects.toThrow(/drafted before its currency was recorded/i);
+  });
+
+  test("an unresolvable preparer is reported as null, never an English display literal", async () => {
+    const ctx = await seedCutoverDealer();
+    const cash = account(ctx, "CASH_ON_HAND");
+    const capital = account(ctx, "PARTNER_CAPITAL");
+
+    const { draftId } = await ctx.asAccountant.mutation(
+      api.accountingCutover.draftOpeningBalance,
+      {
+        orgId: ctx.orgId,
+        asOfDate: Date.now(),
+        lines: [
+          { accountId: cash._id, debitMinor: 1_000, creditMinor: 0 },
+          { accountId: capital._id, debitMinor: 0, creditMinor: 1_000 },
+        ],
+      }
+    );
+    // Strip the snapshot and delete the user, reproducing an offboarded
+    // preparer on a pre-snapshot draft.
+    await ctx.t.run(async (c) => {
+      await c.db.patch(draftId as Id<"openingBalanceDrafts">, { preparedByName: undefined });
+      await c.db.delete(ctx.accountantId);
+    });
+
+    const pending = await ctx.asOwner.query(
+      api.accountingCutover.listPendingOpeningBalanceDrafts,
+      { orgId: ctx.orgId }
+    );
+    // null, not "Unknown" — the client renders this inside a <bdi> in an RTL
+    // run, so an English literal here would ship untranslated text.
+    expect(pending[0].preparedByName).toBeNull();
   });
 
   test("the owner can approve a draft an accountant prepared, which is the dead-end this fixes", async () => {
@@ -595,9 +691,11 @@ describe("SCRUM-52 — the approval UI can actually be built on this query", () 
     const cash = account(ctx, "CASH_ON_HAND");
     const capital = account(ctx, "PARTNER_CAPITAL");
 
-    // The exact production shape: a non-owner MANAGE_FINANCE user prepares,
-    // because canPostDirectly is `isOwner && canManageFinance`.
-    const { draftId } = await ctx.asReviewer.mutation(
+    // The exact production shape, now genuinely exercised: a NON-OWNER
+    // MANAGE_FINANCE user prepares, because canPostDirectly is
+    // `isOwner && canManageFinance`. Previously this used asReviewer, who
+    // shares the owner role — the test passed without proving the premise.
+    const { draftId } = await ctx.asAccountant.mutation(
       api.accountingCutover.draftOpeningBalance,
       {
         orgId: ctx.orgId,
@@ -693,27 +791,10 @@ describe("Phase 17 — owner-only direct opening balance", () => {
     const cash = account(ctx, "CASH_ON_HAND");
     const capital = account(ctx, "PARTNER_CAPITAL");
 
-    const accountantRoleId = await ctx.t.run((c) =>
-      c.db.insert("roles", {
-        orgId: ctx.orgId,
-        name: "ACCOUNTANT",
-        permissions: ["view:finance", "manage:finance"],
-      })
-    );
-    const accountantId = await ctx.t.run((c) =>
-      c.db.insert("users", {
-        clerkId: "p17_accountant",
-        email: "p17accountant@example.com",
-        name: "Accountant",
-      })
-    );
-    await ctx.t.run((c) =>
-      c.db.insert("memberships", { orgId: ctx.orgId, userId: accountantId, roleId: accountantRoleId })
-    );
-    const asAccountant = ctx.t.withIdentity({
-      subject: "p17_accountant",
-      clerkId: "p17_accountant",
-    });
+    // Uses the seed's accountant rather than building a second one here: that
+    // local copy shared this one's clerkId, so once the seed grew a genuine
+    // non-owner finance user the two collided on requireAuth's unique() lookup.
+    const asAccountant = ctx.asAccountant;
 
     await expect(
       asAccountant.mutation(api.accountingCutover.postOpeningBalanceDirect, {

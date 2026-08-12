@@ -176,3 +176,54 @@ describe("cockpit label maps resolve through the dictionaries", () => {
     expect(missing).toEqual([]);
   });
 });
+
+/**
+ * Keys that reach `t()` through a variable, not a literal.
+ *
+ * `computeApprovalGate` returns key STRINGS which the panel passes to `t()`, so
+ * the call sites contain no literal key and static scanning cannot see them. A
+ * rename in one dictionary would ship an untranslated string to exactly the
+ * screen that unblocks an organization's general ledger. CodeRabbit caught this
+ * as a direct consequence of the round-4 gate redesign.
+ */
+describe("dynamically-referenced i18n keys", () => {
+  const gateKeys = [
+    "OpeningBalanceUnbalanced",
+    "OpeningBalanceCurrencyUnknown",
+    "OpeningBalanceRejectAndResubmit",
+    "OpeningBalanceOwnDraftNeedsAnotherReviewer",
+    "OpeningBalanceSegregationOfDutiesNotice",
+    "OpeningBalancePreparerUnknown",
+    "OpeningBalanceRawMinorUnitsNote",
+  ] as const;
+
+  test("every key computeApprovalGate can return exists in both dictionaries", () => {
+    for (const key of gateKeys) {
+      expect(dictionaries.en[key as keyof typeof dictionaries.en], `missing EN: ${key}`).toBeTruthy();
+      expect(dictionaries.ar[key as keyof typeof dictionaries.ar], `missing AR: ${key}`).toBeTruthy();
+    }
+  });
+
+  test("the list above matches what the gate can actually return", async () => {
+    // Guards the guard: if a future branch returns a new key and nobody adds it
+    // above, this fails rather than silently narrowing the coverage.
+    const { computeApprovalGate } = await import(
+      "@/components/accounting/setup/OpeningBalanceApprovalPanel"
+    );
+    const produced = new Set<string>();
+    for (const isOwnDraft of [true, false]) {
+      for (const busy of [true, false]) {
+        for (const balanced of [true, false]) {
+          for (const denominationKnown of [true, false]) {
+            const gate = computeApprovalGate({ isOwnDraft, busy, balanced, denominationKnown });
+            if (gate.recoveryKey) produced.add(gate.recoveryKey);
+            gate.blockingFacts.forEach((f) => produced.add(f.key));
+          }
+        }
+      }
+    }
+    for (const key of produced) {
+      expect(gateKeys as readonly string[], `gate returns unlisted key: ${key}`).toContain(key);
+    }
+  });
+});

@@ -188,6 +188,58 @@ describe("opening-balance approval panel", () => {
     expect(screen.getByTestId("opening-balance-reject").hasAttribute("disabled")).toBe(false);
   });
 
+  test("amounts render at the DRAFT's scale, which is the SCRUM-62 defect in miniature", () => {
+    // The scaleForCurrency mock is currency-aware on purpose, but until now no
+    // assertion depended on it — so a regression to a fixed scale, or to the
+    // org's currency instead of the draft's, would have passed. CodeRabbit
+    // caught that the guard was inert.
+    const lines = [
+      { accountId: "a1", accountName: "Bank", debitMinor: 1_000_000, creditMinor: 0 },
+      { accountId: "a2", accountName: "Capital", debitMinor: 0, creditMinor: 1_000_000 },
+    ];
+
+    const { unmount } = render(
+      <OpeningBalanceApprovalView
+        draft={draftFixture({ currency: "JOD", lines })}
+        isOwnDraft={false} busy={false} onApprove={vi.fn()} onReject={vi.fn()}
+      />
+    );
+    // Scale 3. The identical minor units at scale 2 would read 10,000.00 —
+    // exactly the 10x misstatement SCRUM-62 was about.
+    expect(screen.getAllByText("1,000.000").length).toBeGreaterThan(0);
+    unmount();
+
+    render(
+      <OpeningBalanceApprovalView
+        draft={draftFixture({ currency: "USD", lines })}
+        isOwnDraft={false} busy={false} onApprove={vi.fn()} onReject={vi.fn()}
+      />
+    );
+    expect(screen.getAllByText("10,000.00").length).toBeGreaterThan(0);
+  });
+
+  test("an undenominated draft shows RAW minor units, not a fallback-currency amount", () => {
+    // ChatGPT round-4 LOW: the query falls back to the org currency for a draft
+    // that never recorded one, so formatting would render a historic JOD amount
+    // at USD scale beside a line saying the denomination is unknown. Approval is
+    // already fail-closed, so this misleads the human rather than the ledger.
+    render(
+      <OpeningBalanceApprovalView
+        draft={draftFixture({
+          currency: "USD",
+          denominationKnown: false,
+          lines: [
+            { accountId: "a1", accountName: "Bank", debitMinor: 1_000_000, creditMinor: 0 },
+            { accountId: "a2", accountName: "Capital", debitMinor: 0, creditMinor: 1_000_000 },
+          ],
+        })}
+        isOwnDraft={false} busy={false} onApprove={vi.fn()} onReject={vi.fn()}
+      />
+    );
+    expect(screen.getAllByText("1000000").length).toBeGreaterThan(0);
+    expect(screen.queryByText("10,000.00")).toBeNull();
+  });
+
   test("an unbalanced draft is shown as unbalanced rather than silently approvable", () => {
     render(
       <OpeningBalanceApprovalView

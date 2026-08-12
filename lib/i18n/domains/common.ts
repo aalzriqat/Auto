@@ -342,6 +342,9 @@ export const commonEn = {
   OpeningBalanceCurrencyUnknown:
     "This draft was created before its currency was recorded, so its amounts cannot be posted safely.",
   OpeningBalanceRejectAndResubmit: "Reject it and submit it again.",
+  OpeningBalancePreparerUnknown: "an unknown user",
+  OpeningBalanceRawMinorUnitsNote:
+    "Amounts are shown as raw stored units because this draft's currency is unknown.",
   OpeningBalanceOwnDraftNeedsAnotherReviewer:
     "You submitted this, so another finance user or the owner must reject it before it can be submitted again.",
   OpeningBalanceApprovedToast: "Opening balance approved and posted.",
@@ -1226,6 +1229,9 @@ export const commonAr = {
   OpeningBalanceCurrencyUnknown:
     "أُنشئت هذه المسودة قبل تسجيل عملتها، لذا لا يمكن ترحيل مبالغها بأمان.",
   OpeningBalanceRejectAndResubmit: "ارفضها وأعد إرسالها.",
+  OpeningBalancePreparerUnknown: "مستخدم غير معروف",
+  OpeningBalanceRawMinorUnitsNote:
+    "تُعرض المبالغ كوحدات مخزّنة خام لأن عملة هذه المسودة غير معروفة.",
   OpeningBalanceOwnDraftNeedsAnotherReviewer:
     "أنت من أرسل هذه المسودة، لذا يجب أن يرفضها مستخدم مالية آخر أو المالك قبل إعادة إرسالها.",
   OpeningBalanceApprovedToast: "تمت الموافقة على الرصيد الافتتاحي وترحيله.",

@@ -13,7 +13,7 @@
  * pre-fix implementation.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { Id } from "../../../convex/_generated/dataModel";
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
@@ -40,6 +40,13 @@ const stubs = vi.hoisted(() => ({
    * the entire Setup tab to the dashboard error boundary.
    */
   throwOnRealArgs: new Set<string>(),
+  /**
+   * Stable per-function mutation spies. `useMutation: () => vi.fn()` returned a
+   * FRESH spy on every render, so no test could inspect a call — a wrong
+   * draftId or a dropped rejectionReason would have passed every test here and
+   * failed only in production. CodeRabbit caught this.
+   */
+  mutations: new Map<string, ReturnType<typeof vi.fn>>(),
 }));
 
 vi.mock("convex/react", async () => {
@@ -54,11 +61,19 @@ vi.mock("convex/react", async () => {
       if (args === "skip") return undefined;
       return stubs.queryResults.get(name);
     },
-    useMutation: () => vi.fn(),
+    useMutation: (reference: never) => {
+      const name = getFunctionName(reference);
+      let spy = stubs.mutations.get(name);
+      if (!spy) {
+        spy = vi.fn().mockResolvedValue({ journalId: "je_1" });
+        stubs.mutations.set(name, spy);
+      }
+      return spy;
+    },
   };
 });
 
-const { queryResults, queryArgs, throwOnRealArgs } = stubs;
+const { queryResults, queryArgs, throwOnRealArgs, mutations } = stubs;
 
 import { OpeningBalanceApprovalPanel } from "./OpeningBalanceApprovalPanel";
 
@@ -91,6 +106,7 @@ afterEach(() => {
   queryResults.clear();
   queryArgs.clear();
   throwOnRealArgs.clear();
+  mutations.clear();
 });
 
 describe("opening-balance approval container", () => {
@@ -167,6 +183,50 @@ describe("opening-balance approval container", () => {
 
     expect(screen.getByTestId("opening-balance-unknown-currency")).toBeTruthy();
     expect(screen.getByTestId("opening-balance-approve").hasAttribute("disabled")).toBe(true);
+  });
+
+  function readyPanel() {
+    queryResults.set(DRAFTS, pendingDraft());
+    queryResults.set(ACCOUNTS, [{ _id: "a1", name: "Bank" }, { _id: "a2", name: "Capital" }]);
+    queryResults.set(ME, { _id: "user_owner" });
+    render(<OpeningBalanceApprovalPanel orgId={ORG} canManageFinance />);
+  }
+
+  test("approve reaches the server with the right identifiers", () => {
+    readyPanel();
+    fireEvent.click(screen.getByTestId("opening-balance-approve"));
+    // A wrong draftId would have passed every previous test in this file,
+    // because the old stub returned a fresh spy on each render.
+    expect(mutations.get("accountingCutover:approveOpeningBalance")).toHaveBeenCalledWith({
+      orgId: ORG,
+      draftId: "obd_1",
+    });
+  });
+
+  test("reject reaches the server with a trimmed, non-empty reason", () => {
+    readyPanel();
+    // Two-step by design: reveal the field, then confirm.
+    fireEvent.click(screen.getByTestId("opening-balance-reject"));
+    fireEvent.change(screen.getByTestId("opening-balance-reject-reason"), {
+      target: { value: "  wrong figures  " },
+    });
+    fireEvent.click(screen.getByTestId("opening-balance-reject"));
+    expect(mutations.get("accountingCutover:rejectOpeningBalanceDraft")).toHaveBeenCalledWith({
+      orgId: ORG,
+      draftId: "obd_1",
+      rejectionReason: "wrong figures",
+    });
+  });
+
+  test("an empty rejection reason never reaches the server", () => {
+    readyPanel();
+    fireEvent.click(screen.getByTestId("opening-balance-reject"));
+    fireEvent.click(screen.getByTestId("opening-balance-reject"));
+
+    expect(screen.getByTestId("opening-balance-reason-missing")).toBeTruthy();
+    // The spy EXISTS (useMutation ran during render); what must not happen is a
+    // call. Asserting undefined would have been asserting the wrong thing.
+    expect(mutations.get("accountingCutover:rejectOpeningBalanceDraft")).not.toHaveBeenCalled();
   });
 
   test("once both resolve, a reviewer can act", () => {
