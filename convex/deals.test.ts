@@ -640,3 +640,66 @@ describe("deals.queue — findings from the SCRUM-63 adversarial review", () => 
     expect(result.rows.map((r) => r.customerName)).not.toContain("Foreign Person");
   });
 });
+
+describe("deals.queue — a finished deal that still owes its supplier", () => {
+  test("an unpaid supplier keeps a COMPLETED sale actionable regardless of age", async () => {
+    const env = await setup();
+
+    // Scoping the actionable population to OPEN statuses closed one hole and
+    // opened another: a COMPLETED sale is not an open status, but it is still
+    // actionable while the supplier has not been paid. That is money, on a deal
+    // everyone has already filed as finished — so it is reached through the
+    // subledger's own status index rather than by hoping the sale is recent.
+    const consignedVehicleId = await env.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: env.orgId,
+        vin: "1HGCM82633A424242",
+        make: "Honda",
+        model: "Accord",
+        year: 2019,
+        color: "Silver",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 900,
+        sellingPrice: 14000,
+        status: "SOLD",
+        sourcedFromName: "Waleed",
+        sourceType: "SOURCED",
+      })
+    );
+    const saleId = await env.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: env.orgId,
+        vehicleId: consignedVehicleId,
+        customerId: env.customerId,
+        salespersonId: env.userId,
+        salePrice: 14000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        consignedMarginCurrency: "JOD",
+        supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      })
+    );
+    await env.t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierPayables", {
+        orgId: env.orgId,
+        saleId,
+        vehicleId: consignedVehicleId,
+        amountDue: 13000,
+        amountPaid: 0,
+        currency: "JOD",
+        status: "PENDING",
+        sourcedFromName: "Waleed",
+        createdAt: Date.now(),
+        createdBy: env.userId,
+        updatedAt: Date.now(),
+      })
+    );
+
+    const attention = await env.asUser.query(api.deals.queue, {
+      orgId: env.orgId,
+      view: "NEEDS_ATTENTION",
+    });
+    expect(attention.rows.map((r) => r.href)).toContain(`/${env.orgId}/sales/${saleId}/deal`);
+  });
+});

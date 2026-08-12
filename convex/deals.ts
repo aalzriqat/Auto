@@ -574,6 +574,58 @@ export const queue = query({
       ]);
 
     /**
+     * Deals whose supplier is still owed, however old the deal is.
+     *
+     * Closing the last hole the status-driven scan left open. A CLOSED
+     * application or a COMPLETED sale is not an "open status", but it is still
+     * actionable while the supplier has not been paid or has not paid back the
+     * dealership's margin — and that is money, on a deal everyone has already
+     * mentally filed as finished. Reached through the subledger's own
+     *  index, so it is found by being unsettled rather than by
+     * being recent.
+     */
+    const OPEN_PAYABLE_STATUSES = [
+      "PENDING",
+      "NOT_YET_DUE",
+      "DUE_ON_SALE",
+      "PARTIALLY_PAID",
+      "DISPUTED",
+    ] as const;
+    const OPEN_RECEIVABLE_STATUSES = ["OPEN", "PARTIALLY_PAID", "DISPUTED"] as const;
+
+    const [openPayables, openReceivables] = await Promise.all([
+      Promise.all(
+        OPEN_PAYABLE_STATUSES.map((status) =>
+          ctx.db
+            .query("vehicleSupplierPayables")
+            .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", status))
+            .take(cap)
+        )
+      ).then((pages) => pages.flat()),
+      Promise.all(
+        OPEN_RECEIVABLE_STATUSES.map((status) =>
+          ctx.db
+            .query("vehicleSupplierReceivables")
+            .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", status))
+            .take(cap)
+        )
+      ).then((pages) => pages.flat()),
+    ]);
+
+    const unsettledSaleIds = new Set<string>();
+    for (const row of [...openPayables, ...openReceivables]) {
+      if (row.saleId) unsettledSaleIds.add(row.saleId);
+    }
+    const unsettledSales = (
+      await Promise.all(
+        Array.from(unsettledSaleIds).map((id) => ctx.db.get(id as Id<"sales">))
+      )
+    ).filter(
+      (sale): sale is Doc<"sales"> =>
+        sale !== null && sale.orgId === args.orgId && sale.isDeleted !== true
+    );
+
+    /**
      * Applications made actionable by a deposit nobody has resolved.
      *
      * Resolved deposit-first through `by_vehicle` rather than by scanning dead
@@ -667,7 +719,7 @@ export const queue = query({
      * rendered twice. Sequencing the two phases is what makes the sale the
      * canonical anchor whenever one exists, in BOTH pointer directions.
      */
-    await Promise.all([...openSales, ...historySales].map(addSale));
+    await Promise.all([...openSales, ...unsettledSales, ...historySales].map(addSale));
     const claimedByASale = new Set<string>();
     for (const candidate of candidates.values()) {
       if (candidate.application) claimedByASale.add(candidate.application._id);
