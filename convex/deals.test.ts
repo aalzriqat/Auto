@@ -1208,6 +1208,77 @@ describe("deals.queue — a finished deal that still owes its supplier", () => {
     expect(attention.rows.map((r) => r.key)).not.toContain(`sale:${saleId}`);
   });
 
+  test("a FINANCED deal fails closed instead of guessing at the cockpit's verdict", async () => {
+    const env = await setup();
+
+    /**
+     * The deliberate asymmetry, pinned so it cannot be quietly "tidied up".
+     *
+     * The cash test above proves a float-residue row does NOT keep a cash deal
+     * actionable, because there the queue uses provably the same currency
+     * authority as `sales.dealCockpit`. A financed deal is different: the
+     * cockpit resolves in `app.economicsCurrency` and refuses outright when the
+     * sale's currency disagrees, so any verdict computed out here is a guess —
+     * and the guess that reads CLOSED hides supplier money.
+     *
+     * So the identical residue that releases a cash deal must NOT release a
+     * financed one. Someone who later "makes these consistent" without the
+     * shared resolver (SCRUM-67) will fail this test, which is the point.
+     */
+    const vehicleId = await env.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: env.orgId,
+        vin: "1HGCM82633A141414",
+        make: "Mazda",
+        model: "3",
+        year: 2020,
+        color: "White",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 600,
+        sellingPrice: 5,
+        status: "SOLD",
+        sourcedFromName: "Waleed",
+        sourceType: "SOURCED",
+      })
+    );
+    const saleId = await env.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: env.orgId,
+        vehicleId,
+        customerId: env.customerId,
+        salespersonId: env.userId,
+        salePrice: 5,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        financingType: "FINANCED",
+        consignedMarginCurrency: "JOD",
+        supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      })
+    );
+    await env.t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierPayables", {
+        orgId: env.orgId,
+        saleId,
+        vehicleId,
+        amountDue: 4.44,
+        amountPaid: 1.48 + 1.48 + 1.48,
+        currency: "JOD",
+        status: "PARTIALLY_PAID",
+        sourcedFromName: "Waleed",
+        createdAt: Date.now(),
+        createdBy: env.userId,
+        updatedAt: Date.now(),
+      })
+    );
+
+    const attention = await env.asUser.query(api.deals.queue, {
+      orgId: env.orgId,
+      view: "NEEDS_ATTENTION",
+    });
+    expect(attention.rows.map((r) => r.key)).toContain(`sale:${saleId}`);
+  });
+
   test("a second unpaid row keeps the deal open even when the first is settled", async () => {
     const env = await setup();
 

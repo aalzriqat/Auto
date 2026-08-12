@@ -681,27 +681,49 @@ export const queue = query({
     );
 
     /**
-     * An OPEN STATUS IS NOT AN OPEN OBLIGATION. Ask the same question the
-     * cockpit asks, with the same helper.
+     * WHAT THIS MAY AND MAY NOT DECIDE — the result of a deliberate halt.
      *
-     * `obligationFromRow` converts both sides to MINOR UNITS and reads CLOSED
-     * whenever nothing remains — which is how it absorbs the float residue this
-     * codebase has already shipped once: a 4.440 obligation paid in three
-     * 1.480 instalments records 4.4399999999999995 and stays PARTIALLY_PAID
-     * forever. The cockpit reads that row as settled.
+     * Three successive attempts to answer "is the supplier still owed?" from
+     * inside this projection each produced a defect that an independent review
+     * caught, and each fix produced the next one:
      *
-     * Deriving "still owed" from the status alone would have pinned exactly
-     * those deals in NEEDS_ATTENTION permanently while the screen they open
-     * called them finished — the same queue/cockpit disagreement this
-     * projection exists to prevent, merely pointing the other way. An
-     * independent review caught it.
+     *   1. Reading nothing but the application's `settlementStatus` let a
+     *      FULLY_SETTLED stamp hide an unpaid supplier.
+     *   2. Reading the subledger STATUS alone pinned float-residue rows open
+     *      forever — 4.440 paid as three 1.480 instalments records
+     *      4.4399999999999995 and never leaves PARTIALLY_PAID.
+     *   3. Reading the AMOUNTS fixed that, but in the sale's currency, while
+     *      the financed cockpit resolves in `app.economicsCurrency` and
+     *      REFUSES outright when the two disagree (`applications.ts:676`).
+     *      That let this queue reach CLOSED where the cockpit reaches UNKNOWN,
+     *      and a deal the cockpit blocks would vanish from the default view.
      *
-     * UNKNOWN counts as unsettled, deliberately: a row in a currency the deal
-     * cannot read is missing evidence, and missing evidence keeps the stage
-     * open on every other surface too.
+     * A subsystem that injures itself twice under repair is reporting a design
+     * fault, not a bad patch. The fault is the approximation itself: the
+     * canonical resolver lives in `applications.ts` (`resolveSettlement`), it is
+     * route- and currency-aware, it returns money, and it belongs to another
+     * change in flight. Reproducing its judgement out here is what keeps
+     * failing.
      *
-     * The sale stays a CANDIDATE either way. Only the settlement verdict is
-     * affected, so a deal the sweep found never disappears because of this.
+     * So the projection stops claiming to know:
+     *
+     * • CASH rows are evaluated with `obligationFromRow` in the sale's own
+     *   frozen currency, which is PROVABLY the authority `sales.dealCockpit`
+     *   uses for the same row (`sales.ts:2167`). Same input, same helper, same
+     *   answer — this is not an approximation.
+     *
+     * • FINANCED rows FAIL CLOSED. Any swept row in an open status keeps the
+     *   deal actionable, with no arithmetic and no currency claim, because this
+     *   query cannot match the cockpit's authority without the shared resolver.
+     *   The cost is that a financed deal whose residue is genuinely settled may
+     *   sit in the queue until someone looks. The alternative cost was hiding
+     *   supplier money, and those two are not comparable.
+     *
+     * Unifying them behind one shared resolver is SCRUM-67, and until it lands
+     * this asymmetry is the honest position rather than a fourth guess.
+     *
+     * The sale stays a CANDIDATE in every branch, so a deal the sweep found can
+     * never disappear because of anything decided here.
      */
     const orgCurrency = await getOrgCurrency(ctx, args.orgId);
     const saleById = new Map(unsettledSales.map((sale) => [sale._id as string, sale]));
@@ -716,10 +738,24 @@ export const queue = query({
       if (!saleId) return;
       const sale = saleById.get(saleId);
       if (!sale) return;
+
+      // Financed: no arithmetic, no currency claim. The row's open status is
+      // enough to keep a human looking, and this query cannot reach the
+      // cockpit's verdict without the resolver that owns it.
+      const financed =
+        sale.applicationId !== undefined ||
+        sale.financingType === "FINANCED" ||
+        sale.financingType === "LEASE";
+      if (financed) {
+        unsettledSaleIds.add(saleId);
+        return;
+      }
+
       const state = obligationFromRow({
         due,
         settled,
         rowCurrency,
+        // Cash: identical to `sales.dealCockpit`'s authority for this row.
         queryCurrency: sale.consignedMarginCurrency ?? orgCurrency,
         storedPaid,
       });
