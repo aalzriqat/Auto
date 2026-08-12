@@ -164,7 +164,7 @@ export function AccountingSetupTab() {
           — so this panel is the only thing on screen that can move the
           organization's opening balance forward. It renders nothing when
           nothing is pending. */}
-      <OpeningBalanceApprovalPanel orgId={activeOrgId} />
+      <OpeningBalanceApprovalPanel orgId={activeOrgId} canManageFinance={canManageFinance} />
 
       {!canManageFinance && (
         <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">

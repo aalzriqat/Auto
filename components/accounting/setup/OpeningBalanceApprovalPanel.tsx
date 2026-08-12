@@ -74,6 +74,7 @@ export function OpeningBalanceApprovalView({
   const { t } = useLanguage();
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
+  const [reasonMissing, setReasonMissing] = useState(false);
 
   // Nothing pending is the overwhelmingly common case, and Setup is the tab
   // every accounting user lands on. An empty-state box here would be permanent
@@ -163,13 +164,23 @@ export function OpeningBalanceApprovalView({
       )}
 
       {rejecting && (
-        <Textarea
-          value={reason}
-          onChange={(event) => setReason(event.target.value)}
-          placeholder={t("OpeningBalanceRejectionReasonPlaceholder")}
-          className="bg-white"
-          data-testid="opening-balance-reject-reason"
-        />
+        <div className="space-y-1">
+          <Textarea
+            value={reason}
+            onChange={(event) => {
+              setReason(event.target.value);
+              if (reasonMissing) setReasonMissing(false);
+            }}
+            placeholder={t("OpeningBalanceRejectionReasonPlaceholder")}
+            className="bg-white"
+            data-testid="opening-balance-reject-reason"
+          />
+          {reasonMissing && (
+            <p data-testid="opening-balance-reason-missing" className="text-sm font-medium text-red-700">
+              {t("OpeningBalanceRejectionReasonRequired")}
+            </p>
+          )}
+        </div>
       )}
 
       <div className="flex flex-wrap gap-2">
@@ -192,7 +203,15 @@ export function OpeningBalanceApprovalView({
               setRejecting(true);
               return;
             }
-            onReject(reason);
+            // The backend requires a non-empty trimmed reason. Checking here
+            // too means an empty submission shows the field's own validation
+            // rather than bouncing a raw ConvexError back through a toast —
+            // the same thing ManualJournalTab does for its reject flow.
+            if (!reason.trim()) {
+              setReasonMissing(true);
+              return;
+            }
+            onReject(reason.trim());
           }}
         >
           <XCircle className="me-2 h-4 w-4" />
@@ -205,6 +224,19 @@ export function OpeningBalanceApprovalView({
 
 type OpeningBalanceApprovalPanelProps = {
   orgId: Id<"organizations">;
+  /**
+   * Passed down rather than derived here, and used to SKIP the query entirely.
+   *
+   * `listPendingOpeningBalanceDrafts` requires MANAGE_FINANCE, but the whole
+   * Accounting route is gated only on `view:finance`
+   * (app/(dashboard)/[orgId]/accounting/page.tsx) and roles are customizable
+   * per-org — so a read-only bookkeeper role is a supported configuration.
+   * Convex `useQuery` re-throws a server error during render, which would take
+   * the entire Setup tab down to the dashboard error boundary for that user,
+   * every visit. Every sibling on this tab either scopes its query to
+   * VIEW_FINANCE or self-gates; this one skips.
+   */
+  canManageFinance: boolean;
 };
 
 /**
@@ -213,17 +245,30 @@ type OpeningBalanceApprovalPanelProps = {
  * product — leaving an organization whose accountant (rather than owner)
  * entered the opening balance permanently unable to start its GL.
  */
-export function OpeningBalanceApprovalPanel({ orgId }: Readonly<OpeningBalanceApprovalPanelProps>) {
+export function OpeningBalanceApprovalPanel({
+  orgId,
+  canManageFinance,
+}: Readonly<OpeningBalanceApprovalPanelProps>) {
   const { t } = useLanguage();
-  const drafts = useQuery(api.accountingCutover.listPendingOpeningBalanceDrafts, { orgId });
-  const me = useQuery(api.users.getMe, {});
-  const accounts = useQuery(api.chartOfAccounts.list, { orgId });
+  const drafts = useQuery(
+    api.accountingCutover.listPendingOpeningBalanceDrafts,
+    canManageFinance ? { orgId } : "skip"
+  );
+  const me = useQuery(api.users.getMe, canManageFinance ? {} : "skip");
+  const accounts = useQuery(api.chartOfAccounts.list, canManageFinance ? { orgId } : "skip");
   const approve = useMutation(api.accountingCutover.approveOpeningBalance);
   const reject = useMutation(api.accountingCutover.rejectOpeningBalanceDraft);
   const [busy, setBusy] = useState(false);
 
   const raw = drafts?.[0];
   if (!raw) return null;
+
+  // Both must resolve before any decision is offered. While `accounts` is
+  // undefined every line renders its raw account id, and approving ids the
+  // reviewer cannot read is exactly the rubber-stamp this panel exists to
+  // prevent. While `me` is undefined `isOwnDraft` computes false, briefly
+  // offering the preparer an action the backend will refuse.
+  const reviewDataLoaded = accounts !== undefined && me !== undefined;
 
   const accountNameById = new Map((accounts ?? []).map((account) => [account._id as string, account.name]));
 
@@ -260,7 +305,7 @@ export function OpeningBalanceApprovalPanel({ orgId }: Readonly<OpeningBalanceAp
     <OpeningBalanceApprovalView
       draft={draft}
       isOwnDraft={me?._id === raw.createdBy}
-      busy={busy}
+      busy={busy || !reviewDataLoaded}
       onApprove={() =>
         void run(
           () => approve({ orgId, draftId: raw._id as Id<"openingBalanceDrafts"> }),

@@ -149,6 +149,14 @@ export const draftOpeningBalance = mutation({
       memo: args.memo,
       createdBy: user._id,
       createdAt: now,
+      // Snapshot the denomination and the preparer's identity at draft time.
+      // Neither can be re-derived at approval: orgSettings only locks the org
+      // currency once a row exists in one of six financial tables and a draft
+      // is not one of them, and the preparer's user row is hard-deleted on
+      // offboarding. Written on the direct-post path too so both routes leave
+      // an identically-shaped record.
+      currency: await getOrgCurrency(ctx, args.orgId),
+      preparedByName: user.name || user.email || undefined,
     });
 
     await auditLog(ctx, {
@@ -192,6 +200,17 @@ export const approveOpeningBalance = mutation({
     // exception is visible in the API surface rather than hidden behind a flag.
     if (draft.createdBy === user._id) {
       throw new ConvexError("Opening balance approver cannot be the same as the preparer.");
+    }
+
+    // A draft written before the currency snapshot existed cannot have its
+    // denomination proven, and posting the org's entire starting position on a
+    // guess is not a recoverable mistake. Refuse rather than assume: rejecting
+    // and re-submitting takes a minute, and `rejectOpeningBalanceDraft` stays
+    // available so this is never a dead end.
+    if (!draft.currency) {
+      throw new ConvexError(
+        "This opening balance was drafted before its currency was recorded, so the amounts cannot be safely posted. Reject it and submit it again."
+      );
     }
 
     const journalId = await postOpeningBalanceDraft(ctx, {
@@ -244,7 +263,18 @@ async function postOpeningBalanceDraft(
     throw new ConvexError("No open accounting period covers the opening-balance date. Create and open a period first.");
   }
 
-  const currency = await getOrgCurrency(ctx, orgId);
+  // The denomination the lines were ENTERED in, never the org's current one.
+  // The two can differ: orgSettings locks the org currency only once a row
+  // exists in one of six financial tables, and openingBalanceDrafts is not among
+  // them — so a fresh org can draft in JOD, switch to USD, then approve. Since
+  // minor-unit scale is per-currency (3 for JOD/KWD/BHD/OMR, 2 otherwise),
+  // posting at the current currency would silently turn 1,000.000 JOD into
+  // 10,000.00 USD across the org's entire starting position.
+  //
+  // Falls back to the org currency only for drafts written before the snapshot
+  // existed. That is the pre-existing behaviour, not an improvement on it —
+  // approveOpeningBalance refuses such a draft outright rather than guessing.
+  const currency = draft.currency ?? (await getOrgCurrency(ctx, orgId));
   const now = Date.now();
 
   const journalId = await ctx.db.insert("journalEntries", {
@@ -379,6 +409,14 @@ export const postOpeningBalanceDirect = mutation({
       memo: args.memo,
       createdBy: user._id,
       createdAt: now,
+      // Snapshot the denomination and the preparer's identity at draft time.
+      // Neither can be re-derived at approval: orgSettings only locks the org
+      // currency once a row exists in one of six financial tables and a draft
+      // is not one of them, and the preparer's user row is hard-deleted on
+      // offboarding. Written on the direct-post path too so both routes leave
+      // an identically-shaped record.
+      currency: await getOrgCurrency(ctx, args.orgId),
+      preparedByName: user.name || user.email || undefined,
     });
 
     const draft = await ctx.db.get(draftId);
@@ -465,15 +503,24 @@ export const listPendingOpeningBalanceDrafts = query({
     // that guessed would display an opening balance off by a factor of ten on
     // exactly the currencies this product is used in. Mirrors the same
     // reasoning as openingBalanceStatus.
-    const currency = await getOrgCurrency(ctx, args.orgId);
+    const orgCurrency = await getOrgCurrency(ctx, args.orgId);
 
     return await Promise.all(
       drafts.map(async (draft) => {
-        const preparer = await ctx.db.get(draft.createdBy);
+        // Snapshot first, live lookup only as a fallback for drafts written
+        // before the snapshot existed. The live row is the unreliable one:
+        // offboarding hard-deletes users (memberships.ts), which would render
+        // the preparer as "Unknown" on the very screen where identifying them
+        // is the control.
+        const preparer = draft.preparedByName ? null : await ctx.db.get(draft.createdBy);
         return {
           ...draft,
-          preparedByName: preparer?.name || preparer?.email || "Unknown",
-          currency,
+          preparedByName:
+            draft.preparedByName || preparer?.name || preparer?.email || "Unknown",
+          currency: draft.currency ?? orgCurrency,
+          // Drives the UI's refusal to offer Approve on a draft whose
+          // denomination cannot be proven — mirrors approveOpeningBalance.
+          denominationKnown: draft.currency !== undefined,
         };
       })
     );
