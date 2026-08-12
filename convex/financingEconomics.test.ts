@@ -670,6 +670,12 @@ describe("a manually named approval", () => {
     // APPROVED would claim the company approved against it, which is the thing
     // the MANUAL basis says did not happen.
     expect(appraisals[0]?.status).toBe("RECORDED");
+    // ...and the APPLICATION's own dimension must not say otherwise. Adopting
+    // the appraisal as an LTV base made this claim FINALIZED, so the row said
+    // "never approved against" while the application said "concluded" about the
+    // same event — two records disagreeing, which is the class of defect this
+    // whole area keeps producing when one field is asked to mean three things.
+    expect(after.appraisalStatus).not.toBe("FINALIZED");
   });
 
   test("still honours an appraisal the caller names explicitly", async () => {
@@ -704,6 +710,17 @@ describe("a manually named approval", () => {
 
     const after = await readApp(seed, applicationId);
     expect(after.approvedPurchaseAppraisalId).toBe(appraisalId);
+    // The named path shares the status guard with the auto-resolved one, and
+    // only the other test covered it — so a future edit that special-cased the
+    // two could reopen this one silently.
+    const appraisals = await seed.t.run((ctx) =>
+      ctx.db
+        .query("financeAppraisals")
+        .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+        .collect()
+    );
+    expect(appraisals[0]?.status).toBe("RECORDED");
+    expect(after.appraisalStatus).not.toBe("FINALIZED");
   });
 });
 
@@ -1854,6 +1871,14 @@ describe("overrides and audit", () => {
       applicationId,
     });
     expect(economics.overrides).toHaveLength(1);
+    // A ROW IS NOT A TRACE. Asserting only the count passed on a row whose two
+    // value fields read identically and whose reason claimed a source/recorder
+    // change that never happened — while the patch overwrote the old inputs, so
+    // the cause of every moved derived figure was unrecoverable.
+    expect(economics.overrides[0]?.previousValue).toContain(String(jod(300)));
+    expect(economics.overrides[0]?.newValue).toContain(String(jod(900)));
+    expect(economics.overrides[0]?.reason).toMatch(/expenses/i);
+    expect(economics.overrides[0]?.reason).not.toMatch(/source|recorder/i);
     expect((await readApp(seed, applicationId)).estimatedDealerBorneExpensesMinor).toBe(jod(900));
   });
 

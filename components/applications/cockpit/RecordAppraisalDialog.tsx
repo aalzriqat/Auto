@@ -38,8 +38,21 @@ type RecordAppraisalDialogProps = {
   submitting: boolean;
   /** The server's refusal, rendered in the form — see the quotation dialog. */
   error: string | null;
+  /**
+   * The appraisal already on file, when there is one.
+   *
+   * A second live appraisal is a REAPPRAISAL: the server requires a reason for
+   * it, and — if the company has already approved a purchase amount — clears
+   * that approval, because it was based on evidence that has just been
+   * replaced. Both facts are surfaced before the operator commits rather than
+   * discovered afterwards.
+   */
+  existingAppraisalMinor: number | null;
+  /** Whether an approval exists that a reappraisal would reopen. */
+  approvalWouldBeReopened: boolean;
   /** 10^scale for the deal's own pinned currency — never the org's. */
   factor: number;
+  money: (minor: number) => string;
   t: (key: string) => string;
   onOpenChange: (open: boolean) => void;
   onSubmit: (values: {
@@ -48,6 +61,7 @@ type RecordAppraisalDialogProps = {
     providerName?: string;
     appraisedAt: number;
     notes?: string;
+    reappraisalReason?: string;
   }) => void;
 };
 
@@ -55,7 +69,10 @@ export function RecordAppraisalDialog({
   open,
   submitting,
   error,
+  existingAppraisalMinor,
+  approvalWouldBeReopened,
   factor,
+  money,
   t,
   onOpenChange,
   onSubmit,
@@ -64,6 +81,7 @@ export function RecordAppraisalDialog({
   const [providerType, setProviderType] = useState<AppraisalProviderType>("FINANCE_COMPANY");
   const [providerName, setProviderName] = useState("");
   const [appraisedOn, setAppraisedOn] = useState(todayDateInput());
+  const [reappraisalReason, setReappraisalReason] = useState("");
 
   // Reset on the closed -> open TRANSITION only, as in the sibling dialogs.
   const wasOpenRef = useRef(false);
@@ -75,13 +93,17 @@ export function RecordAppraisalDialog({
     setProviderType("FINANCE_COMPANY");
     setProviderName("");
     setAppraisedOn(todayDateInput());
+    setReappraisalReason("");
   }, [open]);
 
   const parsed = Number(amount);
   const entered = amount.trim() !== "";
   const amountInvalid = entered && !(parsed > 0);
   const enteredMinor = entered && parsed > 0 ? Math.round(parsed * factor) : null;
-  const canSubmit = enteredMinor !== null && appraisedOn !== "" && !submitting;
+  const isReappraisal = existingAppraisalMinor !== null;
+  const reasonMissing = isReappraisal && reappraisalReason.trim() === "";
+  const canSubmit =
+    enteredMinor !== null && appraisedOn !== "" && !submitting && !reasonMissing;
 
   const providers: Array<{ value: AppraisalProviderType; label: string }> = [
     { value: "FINANCE_COMPANY", label: t("AppraisalByFinanceCompany") },
@@ -170,6 +192,31 @@ export function RecordAppraisalDialog({
             </div>
           </div>
 
+          {isReappraisal && (
+            <div className="space-y-1.5">
+              <Label htmlFor="reappraisal-reason">{t("ReappraisalReasonLabel")}</Label>
+              <Input
+                id="reappraisal-reason"
+                value={reappraisalReason}
+                placeholder={t("ReappraisalReasonPlaceholder")}
+                aria-invalid={reasonMissing}
+                onChange={(event) => setReappraisalReason(event.target.value)}
+              />
+              {reasonMissing && (
+                <p role="alert" className="text-xs font-medium text-destructive">
+                  {t("ReappraisalReasonRequired")}
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                {t("ReappraisalSupersedes").replace(
+                  "{amount}",
+                  money(existingAppraisalMinor)
+                )}
+                {approvalWouldBeReopened ? ` ${t("ReappraisalReopensApproval")}` : ""}
+              </p>
+            </div>
+          )}
+
           {error && (
             <p role="alert" className="text-sm font-medium text-destructive">
               {error}
@@ -194,6 +241,7 @@ export function RecordAppraisalDialog({
                 // the morning. A backdated day arrives exactly as entered.
                 appraisedAt:
                   appraisedOn === todayDateInput() ? Date.now() : dateInputToUtcMs(appraisedOn),
+                reappraisalReason: isReappraisal ? reappraisalReason.trim() : undefined,
               })
             }
           >

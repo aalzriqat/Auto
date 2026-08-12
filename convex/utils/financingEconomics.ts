@@ -759,6 +759,17 @@ export interface DealStageFacts extends LifecycleFacts {
   handoverStatus?: HandoverStatus;
   rawAppraisalGapMinor?: number;
   approvedDealerPurchaseAmountMinor?: number;
+  /**
+   * What the approved amount was based on.
+   *
+   * Load-bearing for the APPRAISAL stage: `approveDealerPurchaseAmount` permits
+   * `MANUAL` with no appraisal — a figure the company named directly — and
+   * deliberately does not mark the appraisal dimension finalized there, because
+   * that would assert a valuation that never happened. Without this fact the
+   * rail went on demanding an appraisal nobody would ever record, on a deal
+   * that was already approved.
+   */
+  approvedPurchaseBasis?: "APPRAISAL" | "QUOTATION_EXCEPTION" | "MANUAL";
   /** Every required document uploaded, verified or waived. */
   requiredDocumentsComplete: boolean;
   /**
@@ -819,7 +830,17 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
     APPRAISAL:
       appraisal === "COMPLETED" ||
       appraisal === "FINALIZED" ||
-      (appraisal === undefined && credit === "APPROVED"),
+      (appraisal === undefined && credit === "APPROVED") ||
+      // A manually named approval is a decision taken WITHOUT an appraisal, and
+      // the writer that records it says so by refusing to finalize the
+      // dimension. So the question is moot rather than outstanding — the rail
+      // follows the writer that owns the decision instead of demanding evidence
+      // that will never arrive. Narrow on purpose: APPRAISAL and
+      // QUOTATION_EXCEPTION both rest on real appraisal evidence and are
+      // unaffected, and an approval with no recorded basis is not evidence of a
+      // manual decision.
+      (facts.approvedPurchaseBasis === "MANUAL" &&
+        facts.approvedDealerPurchaseAmountMinor !== undefined),
     GAP_RESOLUTION:
       gap === "NOT_REQUIRED" ||
       gap === "CUSTOMER_ABSORBS" ||

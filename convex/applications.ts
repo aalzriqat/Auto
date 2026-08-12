@@ -1552,6 +1552,10 @@ export const dealCockpit = query({
       handoverStatus: app.handoverStatus,
       rawAppraisalGapMinor: app.rawAppraisalGapMinor,
       approvedDealerPurchaseAmountMinor: app.approvedDealerPurchaseAmountMinor,
+      // Without the BASIS the rail cannot tell an approval that rests on
+      // appraisal evidence from one the company named directly — and went on
+      // demanding an appraisal that would never be recorded for the second.
+      approvedPurchaseBasis: app.approvedPurchaseBasis,
       requiredDocumentsComplete,
     });
 

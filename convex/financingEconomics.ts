@@ -829,15 +829,51 @@ export const recordSubmittedQuotation = mutation({
     const materiallyChanged =
       amountChanged || sourceChanged || reasonChanged || recorderChanged || inputsChanged;
     if (quotationPreviouslyRecorded && materiallyChanged) {
+      /**
+       * Every input that MOVED, on both sides — not just the headline four.
+       *
+       * A row whose two value fields read identically is not a trace. That was
+       * the lesson the approver audit next door had to learn, and this writer
+       * repeated it one level down: when only a calculation input changed, the
+       * described values were byte-identical and the fallback reason claimed a
+       * source/reason/recorder change that had not happened — while the patch
+       * below overwrote the previous inputs and the whole snapshot, leaving the
+       * cause of every moved derived figure unrecoverable.
+       */
+      const movedInputs: Array<[string, unknown, unknown]> = [];
+      const noteMove = (label: string, before: unknown, after: unknown) => {
+        if (before !== after) movedInputs.push([label, before, after]);
+      };
+      noteMove("target", app.targetSellingAmountMinor, targetForSolver);
+      noteMove("expenses", app.estimatedDealerBorneExpensesMinor, expensesForSolver);
+      noteMove("buffer", app.quotationBufferMinor, bufferForSolver);
+      noteMove("first payment", app.customerFirstPaymentMinor, customerFirstPaymentMinor);
+      noteMove("LTV", app.appliedLtvPercent, appliedLtvPercent);
+
       const describe = (
         amountMinor: number | undefined,
         source: string | undefined,
         why: string | undefined,
-        recordedBy: Id<"users"> | undefined
-      ): string =>
-        `${amountMinor ?? "unset"} (${source ?? "unknown source"}${why ? `: ${why}` : ""}${
+        recordedBy: Id<"users"> | undefined,
+        side: 0 | 1
+      ): string => {
+        const inputs = movedInputs
+          .map(([label, before, after]) => `${label} ${(side === 0 ? before : after) ?? "unset"}`)
+          .join(", ");
+        return `${amountMinor ?? "unset"} (${source ?? "unknown source"}${why ? `: ${why}` : ""}${
           recordedBy ? ` by ${recordedBy}` : ""
-        })`;
+        }${inputs ? `; ${inputs}` : ""})`;
+      };
+
+      // Names what actually moved, so the row does not assert a change that did
+      // not happen. Only reached when the caller gave no reason of their own.
+      const changedFields = [
+        ...(amountChanged ? ["the amount"] : []),
+        ...(sourceChanged ? ["the source"] : []),
+        ...(reasonChanged ? ["the reason"] : []),
+        ...(recorderChanged ? ["the recorder"] : []),
+        ...movedInputs.map(([label]) => label),
+      ];
       await recordOverride(ctx, {
         orgId: args.orgId,
         applicationId: args.applicationId,
@@ -846,14 +882,11 @@ export const recordSubmittedQuotation = mutation({
           app.submittedQuotationMinor,
           app.submittedQuotationSource,
           app.submittedQuotationOverrideReason,
-          app.submittedQuotationBy
+          app.submittedQuotationBy,
+          0
         ),
-        newValue: describe(args.submittedQuotationMinor, args.source, reason, user._id),
-        reason:
-          reason ??
-          (amountChanged
-            ? "Recalculated from updated deal inputs."
-            : "Re-recorded with a different source, reason or recorder at the same amount."),
+        newValue: describe(args.submittedQuotationMinor, args.source, reason, user._id, 1),
+        reason: reason ?? `Re-recorded; changed: ${changedFields.join(", ")}.`,
         changedBy: user._id,
       });
     }
@@ -1436,10 +1469,21 @@ export const approveDealerPurchaseAmount = mutation({
         : {}),
       approvedPurchaseNotes: args.notes?.trim(),
       appliedLtvPercent,
-      // Only claim a finalized appraisal when one exists. A MANUAL approval
-      // needs no appraisal, and writing FINALIZED there asserted a fact that
-      // never happened — in a dimension PR 2 and PR 3 gate handover on.
-      ...(appraisal ? { appraisalStatus: "FINALIZED" as const } : {}),
+      // Only claim a finalized appraisal when one exists AND the company
+      // approved against it. A MANUAL approval needs no appraisal, and writing
+      // FINALIZED there asserted a fact that never happened — in a dimension
+      // PR 2 and PR 3 gate handover on.
+      //
+      // The basis condition is not redundant with `appraisal` being present.
+      // Under MANUAL an appraisal can now be adopted as the company's LTV BASE,
+      // which is a different fact from the company having approved against it —
+      // and without this the row would say RECORDED while the application said
+      // FINALIZED about the same event. Three facts, three conditions: the LTV
+      // base is resolved above, the row's own status flips only for an
+      // appraisal-based approval, and this dimension follows the same rule.
+      ...(appraisal && args.basis !== "MANUAL"
+        ? { appraisalStatus: "FINALIZED" as const }
+        : {}),
       updatedAt: now,
     });
 

@@ -538,6 +538,52 @@ describe("recording their appraisal", () => {
     expect(cardButton("RecordAppraisalAction")).toBeUndefined();
   });
 
+  test("can still be corrected after an approval, with a reason and a warning", async () => {
+    const onRecordAppraisal = vi.fn(noopAsync);
+    renderCockpit(
+      wiring({
+        facts: {
+          submittedQuotationMinor: 12_500 * JOD,
+          appraisalAmountMinor: 11_500 * JOD,
+          approvedPurchaseRecorded: true,
+          approvedPurchaseAmountMinor: 11_500 * JOD,
+        },
+        onRecordAppraisal,
+      })
+    );
+
+    // A recorded appraisal is a figure somebody typed, and a typo in it drives
+    // the funding split. Withdrawing the only screen that can record one the
+    // moment an approval exists left no way to correct it.
+    fireEvent.click(cardButton("ReplaceAppraisalAction")!);
+    const dialog = screen.getByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("AppraisalAmountLabel"), {
+      target: { value: "11900" },
+    });
+
+    // The server refuses a reappraisal with no reason, and clears the approval
+    // it invalidates — both said before the operator commits.
+    expect(
+      (
+        within(dialog).getByRole("button", {
+          name: "RecordAppraisalAction",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+    expect(within(dialog).getByText(/ReappraisalReopensApproval/)).toBeTruthy();
+
+    fireEvent.change(within(dialog).getByLabelText("ReappraisalReasonLabel"), {
+      target: { value: "أُدخل الرقم الأول خطأً" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "RecordAppraisalAction" }));
+
+    await waitFor(() => expect(onRecordAppraisal).toHaveBeenCalled());
+    expect(onRecordAppraisal.mock.calls[0][0]).toMatchObject({
+      appraisalAmountMinor: 11_900 * JOD,
+      reappraisalReason: "أُدخل الرقم الأول خطأً",
+    });
+  });
+
   test("tells a caller who cannot record one who does", () => {
     renderCockpit(
       wiring({ canRecordAppraisal: false, facts: { submittedQuotationMinor: 12_500 * JOD } })

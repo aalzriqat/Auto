@@ -442,6 +442,7 @@ export function DealCockpit({
             providerType: AppraisalProviderType;
             providerName?: string;
             appraisedAt: number;
+            reappraisalReason?: string;
           }) => {
             await recordAppraisal({ orgId, applicationId, ...values });
           },
@@ -746,6 +747,7 @@ export type FinanceDecisionWiring = {
     providerType: AppraisalProviderType;
     providerName?: string;
     appraisedAt: number;
+    reappraisalReason?: string;
   }) => Promise<void>;
 };
 
@@ -992,6 +994,7 @@ export function DealCockpitView({
     providerType: AppraisalProviderType;
     providerName?: string;
     appraisedAt: number;
+    reappraisalReason?: string;
   }) => {
     if (!financeDecision) return;
     setAppraisalSubmitting(true);
@@ -1544,7 +1547,10 @@ export function DealCockpitView({
             open={recordingAppraisal}
             submitting={appraisalSubmitting}
             error={appraisalError}
+            existingAppraisalMinor={financeDecision.facts.appraisalAmountMinor}
+            approvalWouldBeReopened={financeDecision.facts.approvedPurchaseRecorded}
             factor={decisionFactor}
+            money={decisionMoney}
             t={t}
             onOpenChange={setRecordingAppraisal}
             onSubmit={handleRecordAppraisal}

@@ -808,6 +808,13 @@ export const salesEn = {
   AppraisalProviderNameLabel: "Appraiser name",
   AppraisalDateLabel: "Date appraised",
   AppraisalRecorded: "Appraisal recorded",
+  ReplaceAppraisalAction: "Replace appraisal",
+  ReappraisalReasonLabel: "Why the vehicle was appraised again",
+  ReappraisalReasonPlaceholder: "e.g. the first figure was entered wrongly",
+  ReappraisalReasonRequired: "Say why a second appraisal was requested.",
+  ReappraisalSupersedes: "This replaces the appraisal of {amount} currently on file.",
+  ReappraisalReopensApproval:
+    "The approved purchase amount was based on it, so recording this withdraws that approval and it will have to be recorded again.",
 
   RecordApprovedPurchaseTitle: "Record what the finance company approved",
   RecordApprovedPurchaseDesc:
@@ -1615,6 +1622,13 @@ export const salesAr = {
   AppraisalProviderNameLabel: "اسم المُخمِّن",
   AppraisalDateLabel: "تاريخ التخمين",
   AppraisalRecorded: "تم تسجيل التخمين",
+  ReplaceAppraisalAction: "استبدال التخمين",
+  ReappraisalReasonLabel: "سبب إعادة تخمين المركبة",
+  ReappraisalReasonPlaceholder: "مثال: أُدخل الرقم الأول بشكل خاطئ",
+  ReappraisalReasonRequired: "وضِّح سبب طلب تخمين ثانٍ.",
+  ReappraisalSupersedes: "يحل هذا محل التخمين المسجَّل حالياً بمبلغ {amount}.",
+  ReappraisalReopensApproval:
+    "المبلغ المعتمد كان مبنياً عليه، لذا يؤدي تسجيل هذا إلى سحب ذلك الاعتماد وسيلزم تسجيله من جديد.",
 
   RecordApprovedPurchaseTitle: "تسجيل ما اعتمدته شركة التمويل",
   RecordApprovedPurchaseDesc:

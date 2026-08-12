@@ -142,8 +142,13 @@ export function FinanceCompanyDecisionCard({
   // render condition below, not repeated here — a second copy of the rule read
   // as defence in depth but was untestable through this gate (the row hides the
   // button either way), so it was a condition no test could ever fail on.
-  const appraisalActionAvailable =
-    canRecordAppraisal && !facts.closed && !facts.approvedPurchaseRecorded;
+  //
+  // Deliberately NOT withdrawn once an approval exists. A recorded appraisal is
+  // a figure somebody typed, and a typo in it drives the funding split — so the
+  // one screen that can record one must also be able to correct it. The server
+  // already handles the consequence: a replacement appraisal supersedes its
+  // predecessor and clears the approval that was based on it, on the record.
+  const appraisalActionAvailable = canRecordAppraisal && !facts.closed;
 
   const derived: Array<{ key: string; label: string; value: string }> = [];
   if (facts.financeCompanyFundedPortionMinor !== null) {
@@ -242,9 +247,13 @@ export function FinanceCompanyDecisionCard({
                 : undefined
             }
             action={
-              appraisalActionAvailable && facts.appraisalAmountMinor === null ? (
+              appraisalActionAvailable ? (
                 <Button size="sm" variant="outline" onClick={onRecordAppraisal}>
-                  {t("RecordAppraisalAction")}
+                  {t(
+                    facts.appraisalAmountMinor === null
+                      ? "RecordAppraisalAction"
+                      : "ReplaceAppraisalAction"
+                  )}
                 </Button>
               ) : undefined
             }
