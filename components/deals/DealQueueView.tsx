@@ -71,7 +71,8 @@ export interface DealQueueRowData {
 
 export interface DealQueueData {
   rows: DealQueueRowData[];
-  counts: Record<string, number>;
+  /** A view the current scan cannot answer carries NO number, not a wrong one. */
+  counts: Record<string, number | undefined>;
   truncated: boolean;
   limit: number;
 }

@@ -147,10 +147,17 @@ export interface DealQueueResult {
    *
    * Free: the projection builds every row before filtering, so this is a count
    * over work already done rather than seven more scans. But it counts the
-   * SCANNED window only — when `truncated` is true these are lower bounds, and
-   * the screen must say so rather than present them as totals.
+   * SCANNED population only — when `truncated` is true these are lower bounds,
+   * and the screen must say so rather than present them as totals.
+   *
+   * ⚠️ A view is ABSENT here when the current scan cannot answer it, and the
+   * chip then shows no number at all. The views that include finished deals
+   * need the history scan, which the actionable views deliberately skip — so
+   * from NEEDS_ATTENTION the "All" chip was quietly counting only actionable
+   * deals and reporting it as the total. A missing number is honest; a
+   * confident wrong one is not, and it is a count of the operator's own work.
    */
-  counts: Record<DealQueueView, number>;
+  counts: Partial<Record<DealQueueView, number>>;
   /**
    * True when a source had more rows than the scan limit, so the queue is not
    * showing everything.
@@ -844,9 +851,22 @@ export const queue = query({
       "CASH",
       "FINANCED",
     ];
-    const counts = Object.fromEntries(
-      ALL_VIEWS.map((key) => [key, rows.filter((row) => matchesView(row, key)).length])
-    ) as Record<DealQueueView, number>;
+    /**
+     * Only the views this scan can actually answer get a number.
+     *
+     * The actionable population is reached by status and is complete, so those
+     * counts are sound whatever view was requested. The views that also include
+     * finished deals depend on the history scan, and the actionable views skip
+     * it — so counting them from an actionable-only scan produced a confident
+     * total that was simply too low.
+     */
+    const HISTORY_DEPENDENT: DealQueueView[] = ["ALL", "CASH", "FINANCED"];
+    const counts: Partial<Record<DealQueueView, number>> = Object.fromEntries(
+      ALL_VIEWS.filter((key) => wantsHistory || !HISTORY_DEPENDENT.includes(key)).map((key) => [
+        key,
+        rows.filter((row) => matchesView(row, key)).length,
+      ])
+    );
 
     const filtered = rows.filter((row) => matchesView(row, view));
     filtered.sort((a, b) => {

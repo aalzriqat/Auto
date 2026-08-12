@@ -520,6 +520,29 @@ describe("deals.queue — ordering and limits", () => {
     expect(result.rows.map((r) => r.href)).toContain(`/${env.orgId}/sales/${saleId}/deal`);
   });
 
+  test("a chip shows no number rather than a wrong one", async () => {
+    const env = await setup();
+    // One finished deal and one open application. From NEEDS_ATTENTION the
+    // history scan is skipped, so only the open one is in the scanned set.
+    await finalizedFinancedDeal(env);
+    await preSaleApplication(env);
+
+    const attention = await env.asUser.query(api.deals.queue, {
+      orgId: env.orgId,
+      view: "NEEDS_ATTENTION",
+    });
+    // The actionable population is reached by status and is complete, so its
+    // own counts are sound.
+    expect(attention.counts.NEEDS_ATTENTION).toBe(1);
+    // But "All" cannot be answered without the history scan. It used to report
+    // 1 — a confident total, off by the finished deal, sitting next to a view
+    // that shows 2 the moment it is clicked.
+    expect(attention.counts.ALL).toBeUndefined();
+
+    const all = await env.asUser.query(api.deals.queue, { orgId: env.orgId, view: "ALL" });
+    expect(all.counts.ALL).toBe(2);
+  });
+
   test("a limit smaller than the data reports itself as truncated", async () => {
     const env = await setup();
     await finalizedFinancedDeal(env);
