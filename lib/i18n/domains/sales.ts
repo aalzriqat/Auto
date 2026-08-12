@@ -671,6 +671,34 @@ export const salesEn = {
   // celebratory tick inside a status timeline.
   SaleStatusPending: "Pending",
   SaleStatusCompleted: "Completed",
+
+  // --- The unified deal queue (SCRUM-63) --------------------------------
+  Deals: "Deals",
+  DealsQueueTitle: "Deals",
+  DealsQueueSubtitle:
+    "Every cash and financed deal on the floor, with whatever is holding it up. The longest-stuck work is at the top.",
+  DealViewNeedsAttention: "Needs attention",
+  DealViewAll: "All",
+  // Named for who is being waited ON, not for what the dealership should do —
+  // there is nothing to do on these, and that is the point of the view.
+  DealViewWaitingOnFinance: "With the finance company",
+  DealViewReadyForHandover: "Ready for handover",
+  DealViewDepositPending: "Deposit to resolve",
+  DealViewCash: "Cash",
+  DealViewFinanced: "Financed",
+  DealKindCash: "Cash",
+  DealKindFinanced: "Financed",
+  DealNoOpenStep: "Nothing outstanding",
+  DealDepositAwaitingResolution: "The customer's deposit still has to be refunded or forfeited",
+  UnknownCustomer: "Customer not recorded",
+  WaitingToday: "today",
+  DayWaiting: "day waiting",
+  DealsQueueEmptyTitle: "Nothing here",
+  DealsQueueEmptyNeedsAttention: "Every deal on the floor is waiting on someone else, or finished.",
+  DealsQueueEmptyView: "No deals match this view yet.",
+  DealsQueueTruncated:
+    "Showing the {limit} most recent deals from each source, so this list and the counts above are not complete. Narrow the view to see the rest.",
+
   LineSalePrice: "Sale price",
   LineVehicleCost: "Vehicle cost",
   LineSupplierEntitlement: "Supplier's entitlement",
@@ -1402,6 +1430,33 @@ export const salesAr = {
   StageSaleAgreed: "اتفاق البيع",
   SaleStatusPending: "قيد الإنجاز",
   SaleStatusCompleted: "مكتملة",
+
+  // --- شاشة الصفقات الموحّدة (SCRUM-63) ---------------------------------
+  Deals: "الصفقات",
+  DealsQueueTitle: "الصفقات",
+  DealsQueueSubtitle:
+    "كل صفقات المعرض، نقدية وتمويلية، مع ما يعيق كل واحدة منها. الأطول توقّفاً في الأعلى.",
+  DealViewNeedsAttention: "تحتاج إجراءً",
+  DealViewAll: "الكل",
+  // مُسمّاة بمن ننتظره، لا بما على المعرض فعله — فلا إجراء هنا، وهذا هو مغزى العرض.
+  DealViewWaitingOnFinance: "لدى شركة التمويل",
+  DealViewReadyForHandover: "جاهزة للتسليم",
+  DealViewDepositPending: "دفعة بانتظار التسوية",
+  DealViewCash: "نقدية",
+  DealViewFinanced: "تمويلية",
+  DealKindCash: "نقدية",
+  DealKindFinanced: "تمويلية",
+  DealNoOpenStep: "لا يوجد ما ينتظر",
+  DealDepositAwaitingResolution: "دفعة العميل المقدَّمة لم تُرَدّ ولم تُصادَر بعد",
+  UnknownCustomer: "العميل غير مُسجَّل",
+  WaitingToday: "اليوم",
+  DayWaiting: "يوم انتظار",
+  DealsQueueEmptyTitle: "لا يوجد شيء هنا",
+  DealsQueueEmptyNeedsAttention: "كل صفقات المعرض إمّا بانتظار طرف آخر أو منتهية.",
+  DealsQueueEmptyView: "لا توجد صفقات مطابقة لهذا العرض.",
+  DealsQueueTruncated:
+    "معروض أحدث {limit} صفقة من كل مصدر، لذا هذه القائمة والأعداد أعلاه غير مكتملة. ضيّق العرض لرؤية البقية.",
+
   LineSalePrice: "سعر البيع",
   LineVehicleCost: "تكلفة المركبة",
   LineSupplierEntitlement: "مستحق المورد",
