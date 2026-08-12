@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -184,7 +185,10 @@ export function DealQueueView({
       </div>
 
       {/* --- the queue ---------------------------------------------------- */}
-      {data === undefined ? (
+      {/* Three sibling conditions rather than a ternary chain: loading, empty
+          and populated are three distinct answers to "what is on the floor",
+          and one of them must never be reachable by falling through another. */}
+      {data === undefined && (
         <div className="space-y-px overflow-hidden rounded-lg border" data-testid="deal-queue-loading">
           {[0, 1, 2, 3].map((row) => (
             <div key={row} className="space-y-2 p-4">
@@ -193,7 +197,9 @@ export function DealQueueView({
             </div>
           ))}
         </div>
-      ) : data.rows.length === 0 ? (
+      )}
+
+      {data !== undefined && data.rows.length === 0 && (
         <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-16 text-center">
           <Inbox className="h-6 w-6 text-muted-foreground" aria-hidden />
           <p className="font-medium">{t("DealsQueueEmptyTitle")}</p>
@@ -203,7 +209,9 @@ export function DealQueueView({
               : t("DealsQueueEmptyView")}
           </p>
         </div>
-      ) : (
+      )}
+
+      {data !== undefined && data.rows.length > 0 && (
         <div className="divide-y overflow-hidden rounded-lg border">
           {data.rows.map((row) => {
             const level = stallLevel({
@@ -213,6 +221,31 @@ export function DealQueueView({
             });
             const days = now === null ? null : daysSinceLastActivity(row.lastActivityAt, now);
             const primary = primaryLine(row);
+
+            /**
+             * How long the deal has been SILENT.
+             *
+             * Deliberately not "waiting": `lastActivityAt` is the last time
+             * anything on the deal moved, not when the current step began, and
+             * no such timestamp exists in the model. A row reading "6 days
+             * waiting" put a precise claim on a number that does not carry it.
+             * "Nobody has touched this in 6 days" is both true and the thing an
+             * operator triaging a floor actually needs.
+             *
+             * Nothing at all until the clock is known — a duration guessed
+             * during server render disagrees with the client by however long the
+             * request took, and React reports that as a hydration error.
+             */
+            let silence: ReactNode = "";
+            if (days === 0) {
+              silence = t("DealActivityToday");
+            } else if (days !== null) {
+              silence = (
+                <>
+                  <bdi>{days}</bdi> {t(days === 1 ? "DealDayNoActivity" : "DealDaysNoActivity")}
+                </>
+              );
+            }
 
             return (
               <Link
@@ -302,29 +335,10 @@ export function DealQueueView({
                   </p>
                 </div>
 
-                {/* How long the deal has been SILENT, and the chevron that says
-                    the row opens.
-
-                    Deliberately not "waiting", which the first version said.
-                    `lastActivityAt` is the last time anything on the deal moved
-                    — it is not when the current step began, and no such
-                    timestamp exists in the model — so a row that read "6 days
-                    waiting" put a precise claim on a number that does not carry
-                    it. What the data does support is "nobody has touched this in
-                    6 days", which is also the thing an operator triaging a floor
-                    actually needs. */}
+                {/* Silence, and the chevron that says the row opens. */}
                 <div className="flex shrink-0 items-center gap-2 pt-0.5">
                   <span className={`max-w-24 text-end text-xs tabular-nums ${STALL_TEXT[level]}`}>
-                    {days === null ? (
-                      ""
-                    ) : days === 0 ? (
-                      t("DealActivityToday")
-                    ) : (
-                      <>
-                        <bdi>{days}</bdi>{" "}
-                        {t(days === 1 ? "DealDayNoActivity" : "DealDaysNoActivity")}
-                      </>
-                    )}
+                    {silence}
                   </span>
                   <Chevron
                     className="h-4 w-4 text-muted-foreground/50 transition-colors group-hover:text-foreground"
@@ -341,13 +355,14 @@ export function DealQueueView({
       {/* A worklist that silently stops at its scan limit reads as "you are
           done", which is the most expensive lie this screen could tell. */}
       {data?.truncated && (
-        <div
-          role="status"
-          className="flex items-start gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-300"
-        >
+        // `<output>` rather than `role="status"`: it carries the live-region
+        // role natively, and screen readers reach it on devices where the bare
+        // ARIA attribute is unreliable. This is the one message on the screen an
+        // operator must not miss, so it announces itself.
+        <output className="flex items-start gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-300">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
           <span>{t("DealsQueueTruncated").replace("{limit}", String(data.limit))}</span>
-        </div>
+        </output>
       )}
     </div>
   );

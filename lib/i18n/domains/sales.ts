@@ -700,7 +700,7 @@ export const salesEn = {
   DealsQueueEmptyNeedsAttention: "Every deal on the floor is waiting on someone else, or finished.",
   DealsQueueEmptyView: "No deals match this view yet.",
   DealsQueueTruncated:
-    "Showing the {limit} most recent deals from each source, so this list and the counts above are not complete. Narrow the view to see the rest.",
+    "One of the searches behind this screen reached its limit of {limit}, so this list and the counts above are not complete. Narrow the view to see the rest.",
 
   LineSalePrice: "Sale price",
   LineVehicleCost: "Vehicle cost",
@@ -1459,7 +1459,7 @@ export const salesAr = {
   DealsQueueEmptyNeedsAttention: "كل صفقات المعرض إمّا بانتظار طرف آخر أو منتهية.",
   DealsQueueEmptyView: "لا توجد صفقات مطابقة لهذا العرض.",
   DealsQueueTruncated:
-    "معروض أحدث {limit} صفقة من كل مصدر، لذا هذه القائمة والأعداد أعلاه غير مكتملة. ضيّق العرض لرؤية البقية.",
+    "بلغ أحد البحوث خلف هذه الشاشة حدّه البالغ {limit}، لذا هذه القائمة والأعداد أعلاه غير مكتملة. ضيّق العرض لرؤية البقية.",
 
   LineSalePrice: "سعر البيع",
   LineVehicleCost: "تكلفة المركبة",
