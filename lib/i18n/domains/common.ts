@@ -340,7 +340,10 @@ export const commonEn = {
   OpeningBalanceRejectionReasonPlaceholder: "Why is this being rejected?",
   OpeningBalanceRejectionReasonRequired: "A reason is required to reject.",
   OpeningBalanceCurrencyUnknown:
-    "This draft was created before its currency was recorded, so its amounts cannot be posted safely. Reject it and submit it again.",
+    "This draft was created before its currency was recorded, so its amounts cannot be posted safely.",
+  OpeningBalanceRejectAndResubmit: "Reject it and submit it again.",
+  OpeningBalanceOwnDraftNeedsAnotherReviewer:
+    "You submitted this, so another finance user or the owner must reject it before it can be submitted again.",
   OpeningBalanceApprovedToast: "Opening balance approved and posted.",
   OpeningBalanceRejectedToast: "Opening balance rejected.",
   OpeningBalancePostedToast: "Opening balance posted.",
@@ -1221,7 +1224,10 @@ export const commonAr = {
   OpeningBalanceRejectionReasonPlaceholder: "ما سبب الرفض؟",
   OpeningBalanceRejectionReasonRequired: "يجب إدخال سبب للرفض.",
   OpeningBalanceCurrencyUnknown:
-    "أُنشئت هذه المسودة قبل تسجيل عملتها، لذا لا يمكن ترحيل مبالغها بأمان. ارفضها وأعد إرسالها.",
+    "أُنشئت هذه المسودة قبل تسجيل عملتها، لذا لا يمكن ترحيل مبالغها بأمان.",
+  OpeningBalanceRejectAndResubmit: "ارفضها وأعد إرسالها.",
+  OpeningBalanceOwnDraftNeedsAnotherReviewer:
+    "أنت من أرسل هذه المسودة، لذا يجب أن يرفضها مستخدم مالية آخر أو المالك قبل إعادة إرسالها.",
   OpeningBalanceApprovedToast: "تمت الموافقة على الرصيد الافتتاحي وترحيله.",
   OpeningBalanceRejectedToast: "تم رفض الرصيد الافتتاحي.",
   OpeningBalancePostedToast: "تم ترحيل الرصيد الافتتاحي.",

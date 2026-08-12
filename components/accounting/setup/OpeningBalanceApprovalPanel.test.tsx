@@ -43,6 +43,7 @@ vi.mock("@/components/accounting/AccountingTabShared", () => ({
 
 import {
   OpeningBalanceApprovalView,
+  computeApprovalGate,
   type PendingOpeningBalanceDraft,
 } from "./OpeningBalanceApprovalPanel";
 
@@ -207,5 +208,79 @@ describe("opening-balance approval panel", () => {
     // a red toast wastes the one decision this screen exists for.
     expect(screen.getByTestId("opening-balance-unbalanced")).toBeTruthy();
     expect(screen.getByTestId("opening-balance-approve").hasAttribute("disabled")).toBe(true);
+  });
+});
+
+/**
+ * The gate itself, exercised as a truth table.
+ *
+ * Round 3 stopped iterative patching here. Four independent booleans had been
+ * bolted onto one button, each rendering its own advisory line, and the
+ * combination nobody tested — the preparer viewing their own undenominated
+ * draft — rendered "reject it and submit it again" directly above "you cannot
+ * reject it yourself", with Reject disabled.
+ *
+ * These cases assert the COMBINATIONS, which is what one-flag-at-a-time tests
+ * structurally could not.
+ */
+describe("computeApprovalGate", () => {
+  const clean = { isOwnDraft: false, busy: false, balanced: true, denominationKnown: true };
+
+  test("a clean draft for an eligible reviewer offers both actions and says nothing", () => {
+    const gate = computeApprovalGate(clean);
+    expect(gate.canApprove).toBe(true);
+    expect(gate.canReject).toBe(true);
+    expect(gate.blockingFacts).toHaveLength(0);
+    // Silence is the correct output — a panel that always lectures is noise.
+    expect(gate.recoveryKey).toBeNull();
+  });
+
+  test("THE ROUND-3 DEFECT: the preparer's own undenominated draft never tells them to reject it", () => {
+    const gate = computeApprovalGate({ ...clean, isOwnDraft: true, denominationKnown: false });
+
+    expect(gate.canApprove).toBe(false);
+    // Segregation of duties gates BOTH actions server-side, so the UI must not
+    // imply the preparer can reject.
+    expect(gate.canReject).toBe(false);
+    expect(gate.recoveryKey).toBe("OpeningBalanceOwnDraftNeedsAnotherReviewer");
+    // The instruction they cannot follow must be absent, not merely outranked.
+    expect(gate.recoveryKey).not.toBe("OpeningBalanceRejectAndResubmit");
+    // The fact still shows — they should know WHY, just not be told to do the
+    // impossible about it.
+    expect(gate.blockingFacts.map((f) => f.key)).toContain("OpeningBalanceCurrencyUnknown");
+  });
+
+  test("the same draft seen by an eligible reviewer gets the actionable instruction", () => {
+    const gate = computeApprovalGate({ ...clean, denominationKnown: false });
+    expect(gate.canApprove).toBe(false);
+    expect(gate.canReject).toBe(true);
+    expect(gate.recoveryKey).toBe("OpeningBalanceRejectAndResubmit");
+  });
+
+  test("multiple blocking facts are all reported, with one instruction", () => {
+    const gate = computeApprovalGate({ ...clean, balanced: false, denominationKnown: false });
+    expect(gate.blockingFacts.map((f) => f.key)).toEqual([
+      "OpeningBalanceUnbalanced",
+      "OpeningBalanceCurrencyUnknown",
+    ]);
+    // Exactly one instruction regardless of how many facts apply — that is the
+    // property that makes contradictory guidance unrepresentable.
+    expect(gate.recoveryKey).toBe("OpeningBalanceRejectAndResubmit");
+  });
+
+  test("the preparer of an otherwise-clean draft still gets the segregation notice", () => {
+    const gate = computeApprovalGate({ ...clean, isOwnDraft: true });
+    expect(gate.recoveryKey).toBe("OpeningBalanceSegregationOfDutiesNotice");
+    expect(gate.blockingFacts).toHaveLength(0);
+  });
+
+  test("busy blocks both actions without inventing a blocking fact", () => {
+    const gate = computeApprovalGate({ ...clean, busy: true });
+    expect(gate.canApprove).toBe(false);
+    expect(gate.canReject).toBe(false);
+    // In-flight is not a defect in the draft; claiming otherwise would show a
+    // red line every time someone clicks.
+    expect(gate.blockingFacts).toHaveLength(0);
+    expect(gate.recoveryKey).toBeNull();
   });
 });

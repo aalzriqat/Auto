@@ -518,9 +518,14 @@ export const listPendingOpeningBalanceDrafts = query({
           preparedByName:
             draft.preparedByName || preparer?.name || preparer?.email || "Unknown",
           currency: draft.currency ?? orgCurrency,
-          // Drives the UI's refusal to offer Approve on a draft whose
-          // denomination cannot be proven — mirrors approveOpeningBalance.
-          denominationKnown: draft.currency !== undefined,
+          // Deliberately `Boolean(...)`, not `!== undefined`: this must be the
+          // SAME predicate `approveOpeningBalance` refuses on (`!draft.currency`).
+          // The schema types the field as an optional arbitrary string, so ""
+          // is representable; under `!== undefined` such a row would enable
+          // Approve in the UI and then be refused by the server — recreating
+          // the raw-error-toast behaviour this flag exists to remove. One rule,
+          // both sides.
+          denominationKnown: Boolean(draft.currency),
         };
       })
     );

@@ -64,6 +64,72 @@ function formatMinor(amountMinor: number, currency: string): string {
   });
 }
 
+/**
+ * What this viewer may do with this draft, and why not.
+ *
+ * Round 3 halted iterative patching on this component. The view had grown four
+ * independent boolean disable-reasons, each rendering its own advisory line,
+ * with no model of WHICH viewer was blocked or what they should do instead —
+ * and the combination nobody checked (the preparer looking at their own
+ * undenominated draft) produced a screen that said "reject it and submit it
+ * again" directly above "you cannot reject it yourself", with Reject disabled.
+ *
+ * The fix is structural rather than another condition: blocking FACTS about
+ * the draft and the RECOVERY INSTRUCTION for this viewer are computed
+ * separately and composed. Facts are properties of the draft and do not vary
+ * by viewer; the instruction depends only on whether this viewer may reject.
+ * Contradictory guidance stops being something to remember not to write and
+ * becomes unrepresentable.
+ */
+export type ApprovalGate = {
+  canApprove: boolean;
+  canReject: boolean;
+  /** Why approval is blocked — properties of the draft, viewer-independent. */
+  blockingFacts: Array<{ key: string; testId: string }>;
+  /** What THIS viewer should do about it, or null when nothing blocks. */
+  recoveryKey: string | null;
+};
+
+export function computeApprovalGate(args: {
+  isOwnDraft: boolean;
+  busy: boolean;
+  balanced: boolean;
+  denominationKnown: boolean;
+}): ApprovalGate {
+  const { isOwnDraft, busy, balanced, denominationKnown } = args;
+
+  const blockingFacts: ApprovalGate["blockingFacts"] = [];
+  if (!balanced) {
+    blockingFacts.push({ key: "OpeningBalanceUnbalanced", testId: "opening-balance-unbalanced" });
+  }
+  if (!denominationKnown) {
+    blockingFacts.push({
+      key: "OpeningBalanceCurrencyUnknown",
+      testId: "opening-balance-unknown-currency",
+    });
+  }
+
+  // Segregation of duties is the server's rule (approveOpeningBalance and
+  // rejectOpeningBalanceDraft both refuse preparer === approver), so it gates
+  // BOTH actions — which is precisely why the recovery instruction has to
+  // change for the preparer instead of telling them to do something they
+  // cannot.
+  const canReject = !isOwnDraft && !busy;
+  const canApprove = canReject && balanced && denominationKnown;
+
+  let recoveryKey: string | null = null;
+  if (isOwnDraft) {
+    recoveryKey =
+      blockingFacts.length > 0
+        ? "OpeningBalanceOwnDraftNeedsAnotherReviewer"
+        : "OpeningBalanceSegregationOfDutiesNotice";
+  } else if (blockingFacts.length > 0) {
+    recoveryKey = "OpeningBalanceRejectAndResubmit";
+  }
+
+  return { canApprove, canReject, blockingFacts, recoveryKey };
+}
+
 type OpeningBalanceApprovalViewProps = {
   draft: PendingOpeningBalanceDraft | null;
   isOwnDraft: boolean;
@@ -99,10 +165,12 @@ export function OpeningBalanceApprovalView({
   const totalCreditMinor = draft.lines.reduce((sum, line) => sum + line.creditMinor, 0);
   const balanced = totalDebitMinor === totalCreditMinor;
   const asOf = safeDateLabel(draft.asOfDate);
-  // An unbalanced draft is refused by validateManualJournalLines at approval
-  // time. Disabling here turns a red toast after the fact into information
-  // before the decision.
-  const approveDisabled = isOwnDraft || busy || !balanced || !draft.denominationKnown;
+  const gate = computeApprovalGate({
+    isOwnDraft,
+    busy,
+    balanced,
+    denominationKnown: draft.denominationKnown,
+  });
 
   return (
     <section
@@ -167,20 +235,18 @@ export function OpeningBalanceApprovalView({
         </tbody>
       </table>
 
-      {!balanced && (
-        <p data-testid="opening-balance-unbalanced" className="text-sm font-medium text-red-700">
-          {t("OpeningBalanceUnbalanced")}
+      {/* Facts first, then the one instruction for this viewer. Never both a
+          "reject it" and a "you cannot reject it" line — see computeApprovalGate. */}
+      {gate.blockingFacts.map((fact) => (
+        <p key={fact.key} data-testid={fact.testId} className="text-sm font-medium text-red-700">
+          {t(fact.key)}
         </p>
-      )}
+      ))}
 
-      {!draft.denominationKnown && (
-        <p data-testid="opening-balance-unknown-currency" className="text-sm font-medium text-red-700">
-          {t("OpeningBalanceCurrencyUnknown")}
+      {gate.recoveryKey && (
+        <p data-testid="opening-balance-recovery" className="text-sm text-amber-800">
+          {t(gate.recoveryKey)}
         </p>
-      )}
-
-      {isOwnDraft && (
-        <p className="text-sm text-amber-800">{t("OpeningBalanceSegregationOfDutiesNotice")}</p>
       )}
 
       {rejecting && (
@@ -206,7 +272,7 @@ export function OpeningBalanceApprovalView({
       <div className="flex flex-wrap gap-2">
         <Button
           data-testid="opening-balance-approve"
-          disabled={approveDisabled}
+          disabled={!gate.canApprove}
           onClick={onApprove}
           className="bg-emerald-600 text-white hover:bg-emerald-700"
         >
@@ -216,7 +282,7 @@ export function OpeningBalanceApprovalView({
         <Button
           data-testid="opening-balance-reject"
           variant="outline"
-          disabled={isOwnDraft || busy}
+          disabled={!gate.canReject}
           className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
           onClick={() => {
             if (!rejecting) {
