@@ -1051,6 +1051,81 @@ describe("deals.queue — a finished deal that still owes its supplier", () => {
     expect(row?.stageKey).toBe("SETTLEMENT");
   });
 
+  test("float residue on a fully paid obligation does not pin a deal open forever", async () => {
+    const env = await setup();
+
+    /**
+     * The mirror image of the test above, and the reason "open status" is not
+     * the same question as "still owed".
+     *
+     * A 4.440 obligation paid in three 1.480 instalments records
+     * 4.4399999999999995 and stays PARTIALLY_PAID — a residue this codebase has
+     * already shipped once, with no migration for the historical rows. In minor
+     * units nothing remains, so `obligationFromRow` reads CLOSED and the cockpit
+     * calls the deal settled.
+     *
+     * Deriving the queue's answer from the status alone would park that deal in
+     * NEEDS_ATTENTION permanently, with no payment left to make, while the
+     * screen it links to says it is finished. Fixing one direction of a
+     * queue/cockpit disagreement by opening the other is not a fix.
+     */
+    const vehicleId = await env.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: env.orgId,
+        vin: "1HGCM82633A999999",
+        make: "Nissan",
+        model: "Sunny",
+        year: 2020,
+        color: "Silver",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 700,
+        sellingPrice: 5,
+        status: "SOLD",
+        sourcedFromName: "Waleed",
+        sourceType: "SOURCED",
+      })
+    );
+    const saleId = await env.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: env.orgId,
+        vehicleId,
+        customerId: env.customerId,
+        salespersonId: env.userId,
+        salePrice: 5,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        consignedMarginCurrency: "JOD",
+        supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      })
+    );
+    await env.t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierPayables", {
+        orgId: env.orgId,
+        saleId,
+        vehicleId,
+        amountDue: 4.44,
+        // 1.48 * 3 — the exact residue, not a rounded stand-in for it.
+        amountPaid: 1.48 + 1.48 + 1.48,
+        currency: "JOD",
+        status: "PARTIALLY_PAID",
+        sourcedFromName: "Waleed",
+        createdAt: Date.now(),
+        createdBy: env.userId,
+        updatedAt: Date.now(),
+      })
+    );
+
+    // The residue is real: this is what makes the status say otherwise.
+    expect(1.48 + 1.48 + 1.48).not.toBe(4.44);
+
+    const attention = await env.asUser.query(api.deals.queue, {
+      orgId: env.orgId,
+      view: "NEEDS_ATTENTION",
+    });
+    expect(attention.rows.map((r) => r.key)).not.toContain(`sale:${saleId}`);
+  });
+
   test("an overflowing receivable bucket is reported too", async () => {
     const env = await setup();
 

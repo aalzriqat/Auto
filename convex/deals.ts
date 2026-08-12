@@ -669,18 +669,68 @@ export const queue = query({
       ),
     ]);
 
-    const unsettledSaleIds = new Set<string>();
+    const sweptSaleIds = new Set<string>();
     for (const row of [...payablePages.flat(), ...receivablePages.flat()]) {
-      if (row.saleId) unsettledSaleIds.add(row.saleId);
+      if (row.saleId) sweptSaleIds.add(row.saleId);
     }
     const unsettledSales = (
-      await Promise.all(
-        Array.from(unsettledSaleIds).map((id) => ctx.db.get(id as Id<"sales">))
-      )
+      await Promise.all(Array.from(sweptSaleIds).map((id) => ctx.db.get(id as Id<"sales">)))
     ).filter(
       (sale): sale is Doc<"sales"> =>
         sale !== null && sale.orgId === args.orgId && sale.isDeleted !== true
     );
+
+    /**
+     * An OPEN STATUS IS NOT AN OPEN OBLIGATION. Ask the same question the
+     * cockpit asks, with the same helper.
+     *
+     * `obligationFromRow` converts both sides to MINOR UNITS and reads CLOSED
+     * whenever nothing remains — which is how it absorbs the float residue this
+     * codebase has already shipped once: a 4.440 obligation paid in three
+     * 1.480 instalments records 4.4399999999999995 and stays PARTIALLY_PAID
+     * forever. The cockpit reads that row as settled.
+     *
+     * Deriving "still owed" from the status alone would have pinned exactly
+     * those deals in NEEDS_ATTENTION permanently while the screen they open
+     * called them finished — the same queue/cockpit disagreement this
+     * projection exists to prevent, merely pointing the other way. An
+     * independent review caught it.
+     *
+     * UNKNOWN counts as unsettled, deliberately: a row in a currency the deal
+     * cannot read is missing evidence, and missing evidence keeps the stage
+     * open on every other surface too.
+     *
+     * The sale stays a CANDIDATE either way. Only the settlement verdict is
+     * affected, so a deal the sweep found never disappears because of this.
+     */
+    const orgCurrency = await getOrgCurrency(ctx, args.orgId);
+    const saleById = new Map(unsettledSales.map((sale) => [sale._id as string, sale]));
+    const unsettledSaleIds = new Set<string>();
+    const noteIfOpen = (
+      saleId: string | undefined,
+      due: number,
+      settled: number,
+      rowCurrency: string,
+      storedPaid: boolean
+    ) => {
+      if (!saleId) return;
+      const sale = saleById.get(saleId);
+      if (!sale) return;
+      const state = obligationFromRow({
+        due,
+        settled,
+        rowCurrency,
+        queryCurrency: sale.consignedMarginCurrency ?? orgCurrency,
+        storedPaid,
+      });
+      if (state !== "CLOSED") unsettledSaleIds.add(saleId);
+    };
+    for (const row of payablePages.flat()) {
+      noteIfOpen(row.saleId, row.amountDue, row.amountPaid ?? 0, row.currency, false);
+    }
+    for (const row of receivablePages.flat()) {
+      noteIfOpen(row.saleId, row.amountDue, row.amountReceived ?? 0, row.currency, false);
+    }
 
     /**
      * Applications made actionable by a deposit nobody has resolved.
@@ -690,29 +740,44 @@ export const queue = query({
      * over rejected rows would reintroduce exactly the age bias this section
      * exists to remove.
      */
-    const depositApps = (
+    const liveDeposits = heldDeposits.filter((deposit) => deposit.isDeleted !== true);
+    /**
+     * One lookup per CUSTOMER, not per deposit.
+     *
+     * Resolved by customer rather than by the deposit's vehicle: a quote can
+     * carry several cars, so the deposit vehicle and the application vehicle are
+     * not the same field on a multi-vehicle deal, and matching on it missed
+     * those deposits entirely.
+     *
+     * Deduplicated because this scan is bounded independently of the caller's
+     * page size, and a per-deposit lookup would spend that whole allowance on
+     * repeat queries for the same customer — a deposit-heavy customer is the
+     * ordinary case, not the exception. The set is the same either way.
+     */
+    const depositCustomers = Array.from(new Set(liveDeposits.map((d) => d.customerId)));
+    const applicationsByCustomer = new Map(
       await Promise.all(
-        heldDeposits
-          .filter((deposit) => deposit.isDeleted !== true)
-          .map(async (deposit) => {
-            // Resolved by CUSTOMER, not by the deposit vehicle. A quote can
-            // carry several cars, so the deposit vehicle and the application
-            // vehicle are not the same field on a multi-vehicle deal and
-            // matching on it silently missed those deposits entirely. A
-            // customer own applications are few, and the index is exact.
-            const linked = await ctx.db
-              .query("financeApplications")
-              .withIndex("by_customer", (q) => q.eq("customerId", deposit.customerId))
-              .collect();
-            return linked.filter(
-              (app) =>
-                app.orgId === args.orgId &&
-                app.quoteId === deposit.quoteId &&
-                (app.status === "REJECTED" || app.status === "CANCELLED")
-            );
-          })
+        depositCustomers.map(
+          async (customerId) =>
+            [
+              customerId,
+              await ctx.db
+                .query("financeApplications")
+                .withIndex("by_customer", (q) => q.eq("customerId", customerId))
+                .collect(),
+            ] as const
+        )
       )
-    ).flat();
+    );
+
+    const depositApps = liveDeposits.flatMap((deposit) =>
+      (applicationsByCustomer.get(deposit.customerId) ?? []).filter(
+        (app) =>
+          app.orgId === args.orgId &&
+          app.quoteId === deposit.quoteId &&
+          (app.status === "REJECTED" || app.status === "CANCELLED")
+      )
+    );
 
     /**
      * EVERY capped scan reports its own overflow. No exceptions.
