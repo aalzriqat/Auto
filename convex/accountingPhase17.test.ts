@@ -431,6 +431,124 @@ describe("Phase 17 — settling a legacy claim backfilled by the minor-unit migr
   });
 });
 
+describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () => {
+  // orgSettings locks the org currency once a row exists in one of six
+  // financial tables, and openingBalanceDrafts was not among them. That lock is
+  // deliberately open for fresh orgs during onboarding — exactly when an
+  // opening balance is drafted. So an org could draft 1,000.000 JOD (1,000,000
+  // minor units at scale 3), switch to USD, approve, and post 10,000.00 USD
+  // across its entire starting position.
+
+  test("the org currency cannot be changed while a draft is pending", async () => {
+    const ctx = await seedCutoverDealer();
+    const cash = account(ctx, "CASH_ON_HAND");
+    const capital = account(ctx, "PARTNER_CAPITAL");
+
+    await ctx.asReviewer.mutation(api.accountingCutover.draftOpeningBalance, {
+      orgId: ctx.orgId,
+      asOfDate: Date.now(),
+      memo: "Cutover",
+      lines: [
+        { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
+        { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+      ],
+    });
+
+    await expect(
+      ctx.asOwner.mutation(api.orgSettings.upsert, { orgId: ctx.orgId, currency: "USD" })
+    ).rejects.toThrow(/currency cannot be changed/i);
+  });
+
+  test("approval posts in the currency the lines were ENTERED in, not the org's current one", async () => {
+    const ctx = await seedCutoverDealer();
+    const cash = account(ctx, "CASH_ON_HAND");
+    const capital = account(ctx, "PARTNER_CAPITAL");
+
+    const { draftId } = await ctx.asReviewer.mutation(
+      api.accountingCutover.draftOpeningBalance,
+      {
+        orgId: ctx.orgId,
+        asOfDate: Date.now(),
+        memo: "Drafted in JOD",
+        lines: [
+          { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
+          { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+        ],
+      }
+    );
+
+    // Drift the org currency directly, BEHIND the mutation guard. The guard
+    // above is the primary defence; this asserts the second one, so posting
+    // stays correct for any drift path the guard does not cover — a legacy
+    // draft written before the snapshot, a support edit, a future caller.
+    await ctx.t.run(async (c) => {
+      const settings = await c.db
+        .query("orgSettings")
+        .withIndex("by_org", (q) => q.eq("orgId", ctx.orgId))
+        .unique();
+      if (settings) await c.db.patch(settings._id, { currency: "USD" });
+    });
+
+    await ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, {
+      orgId: ctx.orgId,
+      draftId: draftId as Id<"openingBalanceDrafts">,
+    });
+
+    const entry = await ctx.t.run((c) =>
+      c.db.query("journalEntries").filter((q) => q.eq(q.field("category"), "OPENING_BALANCE")).first()
+    );
+    // The whole defect in one assertion: the same 1,000,000 minor units read at
+    // scale 2 instead of 3 is 10,000.00 USD instead of 1,000.000 JOD.
+    expect(entry?.currency).toBe("JOD");
+
+    const lines = await ctx.t.run((c) => c.db.query("journalLines").collect());
+    expect(lines.every((l) => l.currency === "JOD")).toBe(true);
+  });
+
+  test("a draft with no recorded currency is refused rather than posted on a guess", async () => {
+    const ctx = await seedCutoverDealer();
+    const cash = account(ctx, "CASH_ON_HAND");
+    const capital = account(ctx, "PARTNER_CAPITAL");
+
+    const { draftId } = await ctx.asReviewer.mutation(
+      api.accountingCutover.draftOpeningBalance,
+      {
+        orgId: ctx.orgId,
+        asOfDate: Date.now(),
+        lines: [
+          { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
+          { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+        ],
+      }
+    );
+
+    // Reproduce a row drafted before the snapshot field existed.
+    await ctx.t.run(async (c) => {
+      await c.db.patch(draftId as Id<"openingBalanceDrafts">, { currency: undefined });
+    });
+
+    await expect(
+      ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, {
+        orgId: ctx.orgId,
+        draftId: draftId as Id<"openingBalanceDrafts">,
+      })
+    ).rejects.toThrow(/drafted before its currency was recorded/i);
+
+    // Refusing must not strand it: rejection stays available, so the org can
+    // always recover by re-submitting.
+    await ctx.asOwner.mutation(api.accountingCutover.rejectOpeningBalanceDraft, {
+      orgId: ctx.orgId,
+      draftId: draftId as Id<"openingBalanceDrafts">,
+      rejectionReason: "Re-submitting with a recorded currency",
+    });
+    expect(
+      await ctx.asOwner.query(api.accountingCutover.listPendingOpeningBalanceDrafts, {
+        orgId: ctx.orgId,
+      })
+    ).toHaveLength(0);
+  });
+});
+
 describe("SCRUM-52 — the approval UI can actually be built on this query", () => {
   // listPendingOpeningBalanceDrafts had no caller anywhere in the product, so
   // nothing ever needed it to be renderable. The approval panel does. Both
