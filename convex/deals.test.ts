@@ -391,6 +391,88 @@ describe("deals.queue — the state that only lived on the old list", () => {
     expect(view.rows[0].href).toContain(applicationId);
   });
 
+  test("one customer holding two unresolved deposits surfaces both deals", async () => {
+    const env = await setup();
+
+    /**
+     * The deposit lookup is deduplicated to one query per CUSTOMER, so a
+     * customer with several deposits is the case that would break if the cache
+     * were keyed or filtered wrongly — and it was the stated reason for the
+     * change while nothing exercised it.
+     */
+    const first = await preSaleApplication(env);
+    const secondVehicleId = await env.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: env.orgId,
+        vin: "1HGCM82633A131313",
+        make: "Honda",
+        model: "CR-V",
+        year: 2021,
+        color: "Green",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 400,
+        sellingPrice: 17000,
+        status: "AVAILABLE",
+      })
+    );
+    const secondQuoteId = await env.asUser.mutation(api.quotes.saveQuote, {
+      orgId: env.orgId,
+      customerId: env.customerId,
+      vehicleId: secondVehicleId,
+      vehiclePrice: 17000,
+      downPayment: 2500,
+      termMonths: 36,
+    });
+    const secondApplicationId = await env.asUser.mutation(api.applications.createFromQuote, {
+      orgId: env.orgId,
+      quoteId: secondQuoteId,
+    });
+
+    for (const [quoteId, vehicleId] of [
+      [first.quoteId, first.vehicleId],
+      [secondQuoteId, secondVehicleId],
+    ] as const) {
+      await env.t.run((ctx) =>
+        ctx.db.insert("deposits", {
+          orgId: env.orgId,
+          quoteId,
+          vehicleId,
+          customerId: env.customerId,
+          amount: 400,
+          method: "CASH",
+          status: "HELD",
+          holdActive: true,
+          createdAt: Date.now(),
+          createdBy: env.userId,
+        })
+      );
+    }
+
+    for (const applicationId of [first.applicationId, secondApplicationId]) {
+      await env.asUser.mutation(api.applications.updateStatus, {
+        orgId: env.orgId,
+        applicationId,
+        status: "UNDER_REVIEW",
+      });
+      await env.asUser.mutation(api.applications.updateStatus, {
+        orgId: env.orgId,
+        applicationId,
+        status: "REJECTED",
+      });
+    }
+
+    const view = await env.asUser.query(api.deals.queue, {
+      orgId: env.orgId,
+      view: "DEPOSIT_PENDING",
+    });
+    const hrefs = view.rows.map((r) => r.href);
+    expect(hrefs).toContain(`/${env.orgId}/applications/${first.applicationId}/deal`);
+    expect(hrefs).toContain(`/${env.orgId}/applications/${secondApplicationId}/deal`);
+    // And neither deal is counted twice by the shared per-customer lookup.
+    expect(new Set(hrefs).size).toBe(hrefs.length);
+  });
+
   test("deposits on live deals cannot crowd out the one that needs resolving", async () => {
     const env = await setup();
     const { applicationId, quoteId, vehicleId: depositVehicleId } = await preSaleApplication(env);
@@ -1124,6 +1206,94 @@ describe("deals.queue — a finished deal that still owes its supplier", () => {
       view: "NEEDS_ATTENTION",
     });
     expect(attention.rows.map((r) => r.key)).not.toContain(`sale:${saleId}`);
+  });
+
+  test("a second unpaid row keeps the deal open even when the first is settled", async () => {
+    const env = await setup();
+
+    /**
+     * The reason the sweep unions per ROW rather than per sale.
+     *
+     * `cashSettlementComplete` inspects only the FIRST non-cancelled obligation
+     * on a sale (`.find()`), so a deal whose first payable is fully paid and
+     * whose second still owes money reads as settled through that path alone.
+     * The sweep sees every open row and marks the sale unsettled, which is what
+     * keeps the money visible.
+     *
+     * Untested until an independent review pointed out that the loop's own
+     * design comment described behaviour nothing verified — an early `return`
+     * added later would silently break it.
+     */
+    const vehicleId = await env.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: env.orgId,
+        vin: "1HGCM82633A121212",
+        make: "Ford",
+        model: "Escape",
+        year: 2021,
+        color: "Black",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 300,
+        sellingPrice: 20000,
+        status: "SOLD",
+        sourcedFromName: "Waleed",
+        sourceType: "SOURCED",
+      })
+    );
+    const saleId = await env.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: env.orgId,
+        vehicleId,
+        customerId: env.customerId,
+        salespersonId: env.userId,
+        salePrice: 20000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        consignedMarginCurrency: "JOD",
+        supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      })
+    );
+    // First row: financially closed, and the one `.find()` would land on.
+    await env.t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierPayables", {
+        orgId: env.orgId,
+        saleId,
+        vehicleId,
+        amountDue: 5000,
+        amountPaid: 5000,
+        currency: "JOD",
+        status: "PARTIALLY_PAID",
+        sourcedFromName: "Waleed",
+        createdAt: Date.now(),
+        createdBy: env.userId,
+        updatedAt: Date.now(),
+      })
+    );
+    // Second row: real money still owed.
+    await env.t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierPayables", {
+        orgId: env.orgId,
+        saleId,
+        vehicleId,
+        amountDue: 9000,
+        amountPaid: 1000,
+        currency: "JOD",
+        status: "PARTIALLY_PAID",
+        sourcedFromName: "Waleed",
+        createdAt: Date.now(),
+        createdBy: env.userId,
+        updatedAt: Date.now(),
+      })
+    );
+
+    const attention = await env.asUser.query(api.deals.queue, {
+      orgId: env.orgId,
+      view: "NEEDS_ATTENTION",
+    });
+    const row = attention.rows.find((r) => r.key === `sale:${saleId}`);
+    expect(row).toBeDefined();
+    expect(row?.needsAttention).toBe(true);
   });
 
   test("an overflowing receivable bucket is reported too", async () => {
