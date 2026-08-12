@@ -29,6 +29,15 @@ import {
 } from "lucide-react";
 import { SupplierSettlementDialog } from "./SupplierSettlementDialog";
 import { SettlementAdviceCorrectionDialog } from "./SettlementAdviceCorrectionDialog";
+import {
+  FinanceCompanyDecisionCard,
+  type FinanceDecisionFacts,
+} from "./FinanceCompanyDecisionCard";
+import { RecordSubmittedQuotationDialog } from "./RecordSubmittedQuotationDialog";
+import {
+  RecordApprovedPurchaseDialog,
+  type ApprovalBasis,
+} from "./RecordApprovedPurchaseDialog";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import type { PaymentMethod } from "@/components/payments/PaymentMethodSelect";
@@ -233,8 +242,51 @@ export function DealCockpit({
   const deal = useQuery(api.applications.dealCockpit, { orgId, applicationId });
   const recordReceipt = useMutation(api.supplierReceivables.recordReceipt);
   const amendAdvice = useMutation(api.applications.amendSupplierDisbursementAdvice);
-  const { hasPermission, isLoading: permissionsLoading } = usePermissions();
+  const recordSubmittedQuotation = useMutation(api.financingEconomics.recordSubmittedQuotation);
+  const approveDealerPurchaseAmount = useMutation(
+    api.financingEconomics.approveDealerPurchaseAmount
+  );
+  const { hasPermission, isLoading: permissionsLoading, membership } = usePermissions();
   const router = useRouter();
+
+  /**
+   * The economics read, and why it is a SEPARATE query from the cockpit's.
+   *
+   * `applications.dealCockpit` gates its whole money block behind `view:finance`,
+   * which the default MANAGER template does not hold — and MANAGER is precisely
+   * the role holding `approve:finance_application`. Reading these figures out of
+   * the money block would therefore have hidden the recorder from the only role
+   * allowed to use it. `getEconomics` authorizes on `view:finance_applications`,
+   * applies its own redaction, and is the query that already owns these fields,
+   * so nothing here becomes a second source of truth for them.
+   *
+   * Skipped rather than called-and-caught when the caller lacks that permission
+   * or the deal is not readable: `getEconomics` THROWS for an application it
+   * will not serve, and an uncaught throw from `useQuery` during render loses
+   * the whole screen — a caller with `view:sales` on a custom role would have
+   * white-screened the cockpit instead of merely not seeing this card.
+   */
+  const canViewApplications = !permissionsLoading && hasPermission(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+  const economics = useQuery(
+    api.financingEconomics.getEconomics,
+    canViewApplications && deal ? { orgId, applicationId } : "skip"
+  );
+  const economicsApp = economics?.application ?? null;
+
+  // The calculator, mounted only where it can actually be offered: before a
+  // quotation exists, for a caller who may record one. It is a real query with
+  // real reads, and a cockpit that ran it on every view for every role would be
+  // paying for a suggestion nobody was going to be shown.
+  const needsQuotation =
+    economicsApp !== null &&
+    economicsApp.submittedQuotationMinor === undefined &&
+    economicsApp.status !== "CLOSED" &&
+    economicsApp.status !== "CANCELLED" &&
+    hasPermission(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+  const suggestion = useQuery(
+    api.financingEconomics.suggestQuotationForApplication,
+    needsQuotation ? { orgId, applicationId } : "skip"
+  );
 
   /**
    * Once the application has become a sale, the sale owns the deal's identity.
@@ -266,9 +318,82 @@ export function DealCockpit({
   // here, and the redirect is a render-time courtesy that can wait three lines.
   if (finalizedSaleId) return <Skeleton className="h-64 w-full" />;
 
+  /**
+   * The appraisal an approval may actually be based on.
+   *
+   * The same filter `approveDealerPurchaseAmount` applies when no appraisal is
+   * named explicitly: a SUPERSEDED or REJECTED one has been replaced by the
+   * finance company and a DEALER_ESTIMATE is the dealership's own opinion, so
+   * offering either would put an option on the screen the server exists to
+   * refuse.
+   */
+  const usableAppraisal =
+    economics?.appraisals
+      .filter(
+        (row) =>
+          (row.status === "RECORDED" || row.status === "APPROVED") &&
+          row.providerType !== "DEALER_ESTIMATE"
+      )
+      .sort((a, b) => b.appraisedAt - a.appraisedAt)[0] ?? null;
+
+  const financeDecision =
+    deal && economicsApp
+      ? {
+          facts: {
+            // From the STAGE RAIL, which the server derives from the unredacted
+            // row — not from the amount below, which is also absent when it was
+            // redacted. See `FinanceDecisionFacts`.
+            approvedPurchaseRecorded:
+              deal.stages.find((stage) => stage.key === "APPROVED_PURCHASE")?.state === "COMPLETE",
+            submittedQuotationMinor: economicsApp.submittedQuotationMinor ?? null,
+            approvedPurchaseAmountMinor: economicsApp.approvedDealerPurchaseAmountMinor ?? null,
+            financeCompanyFundedPortionMinor:
+              economicsApp.financeCompanyFundedPortionMinor ?? null,
+            unfinancedPortionMinor: economicsApp.unfinancedPortionMinor ?? null,
+            dealerContributionMinor: economicsApp.dealerContributionMinor ?? null,
+            appliedLtvPercent: economicsApp.appliedLtvPercent ?? null,
+            closed: economicsApp.status === "CLOSED" || economicsApp.status === "CANCELLED",
+          } satisfies FinanceDecisionFacts,
+          currency: economicsApp.economicsCurrency ?? null,
+          canRecordQuotation: hasPermission(PERMISSIONS.CREATE_FINANCE_APPLICATION),
+          canRecordApproval: hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION),
+          // The server refuses the application's own salesperson outright. Said
+          // here so it reads as a rule rather than as a failure.
+          isOwnDeal: membership?.userId === economicsApp.salespersonId,
+          calculatedQuotationMinor:
+            suggestion?.available === true ? suggestion.submittedQuotationMinor : null,
+          appraisal: usableAppraisal
+            ? { id: usableAppraisal._id as string, amountMinor: usableAppraisal.appraisalAmountMinor }
+            : null,
+          onRecordQuotation: async (values: {
+            submittedQuotationMinor: number;
+            source: "SYSTEM_CALCULATED" | "MANUAL_ENTRY" | "CALCULATED_WITH_OVERRIDE";
+            overrideReason?: string;
+          }) => {
+            await recordSubmittedQuotation({ orgId, applicationId, ...values });
+          },
+          onRecordApproved: async (values: {
+            approvedAmountMinor: number;
+            basis: ApprovalBasis;
+            appraisalId?: string;
+            notes?: string;
+          }) => {
+            await approveDealerPurchaseAmount({
+              orgId,
+              applicationId,
+              approvedAmountMinor: values.approvedAmountMinor,
+              basis: values.basis,
+              appraisalId: values.appraisalId as Id<"financeAppraisals"> | undefined,
+              notes: values.notes,
+            });
+          },
+        }
+      : undefined;
+
   return (
     <DealCockpitView
       deal={deal}
+      financeDecision={financeDecision}
       canCorrectAdvice={canCorrectAdvice}
       onCorrectSettlementAdvice={async (correction) => {
         correctionKeyRef.current ??= `amend-supplier-advice:${crypto.randomUUID()}`;
@@ -502,14 +627,52 @@ function MoneyPanel({
   );
 }
 
+/**
+ * Everything the decision card and its two dialogs need, assembled by the
+ * container.
+ *
+ * Passed in rather than queried here for the same reason the deal is: this view
+ * has to render against server-shaped fixtures, and the permission and evidence
+ * combinations — no appraisal, own deal, redacted amount, closed application —
+ * are exactly what the tests have to vary.
+ */
+export type FinanceDecisionWiring = {
+  facts: FinanceDecisionFacts;
+  /** The application's OWN pinned currency, which need not be the org's. */
+  currency: string | null;
+  canRecordQuotation: boolean;
+  canRecordApproval: boolean;
+  isOwnDeal: boolean;
+  /** The solver's figure, or null when it could not run for this deal. */
+  calculatedQuotationMinor: number | null;
+  appraisal: { id: string; amountMinor: number } | null;
+  onRecordQuotation: (values: {
+    submittedQuotationMinor: number;
+    source: "SYSTEM_CALCULATED" | "MANUAL_ENTRY" | "CALCULATED_WITH_OVERRIDE";
+    overrideReason?: string;
+  }) => Promise<void>;
+  onRecordApproved: (values: {
+    approvedAmountMinor: number;
+    basis: ApprovalBasis;
+    appraisalId?: string;
+    notes?: string;
+  }) => Promise<void>;
+};
+
 export function DealCockpitView({
   deal,
+  financeDecision,
   canCorrectAdvice = false,
   onCorrectSettlementAdvice,
   onRecordSupplierReceipt,
 }: Readonly<{
   /** `undefined` while loading, `null` when the deal is not readable. */
   deal: DealCockpitData | null | undefined;
+  /**
+   * Absent on a cash deal, and while the economics query is still loading or
+   * was skipped for want of `view:finance_applications`.
+   */
+  financeDecision?: FinanceDecisionWiring;
   /**
    * Whether this caller may amend a recorded settlement advice (MANAGE_FINANCE).
    *
@@ -553,6 +716,13 @@ export function DealCockpitView({
   // reuses it, and cleared only once the server has confirmed.
   const receiptKeyRef = useRef<string | null>(null);
   const [showCompleted, setShowCompleted] = useState(false);
+  const [recordingQuotation, setRecordingQuotation] = useState(false);
+  const [recordingApproval, setRecordingApproval] = useState(false);
+  const [decisionSubmitting, setDecisionSubmitting] = useState(false);
+  // One error per dialog, not one shared: a refusal from the quotation write
+  // must not still be sitting in the approval form the next time it opens.
+  const [quotationError, setQuotationError] = useState<string | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
 
   // Never a hardcoded ÷1000. JOD, KWD, BHD and OMR are three-decimal; most
   // currencies are two. Baking one scale in would be a 100x error everywhere
@@ -599,6 +769,21 @@ export function DealCockpitView({
     locale === "ar" && discrepancyCurrency === currency.code ? currency.symbol : discrepancyCurrency;
   const discrepancyMoney = (minor: number) =>
     `${(minor / discrepancyFactor).toLocaleString()} ${discrepancyMarker}`;
+
+  // The economics block is denominated in the APPLICATION's pinned currency,
+  // which the money block need not even be present to establish — a MANAGER
+  // recording an approval has no money block at all, so falling back to the
+  // deal's and then the org's mirrors what the server does rather than
+  // rescaling a JOD figure at a USD scale.
+  const decisionCurrency = financeDecision?.currency ?? dealCurrency;
+  const decisionFactor = useMemo(
+    () => Math.pow(10, scaleForCurrency(decisionCurrency)),
+    [decisionCurrency]
+  );
+  const decisionMarker =
+    locale === "ar" && decisionCurrency === currency.code ? currency.symbol : decisionCurrency;
+  const decisionMoney = (minor: number) =>
+    `${(minor / decisionFactor).toLocaleString()} ${decisionMarker}`;
   const adviceRecordedLabel =
     discrepancy?.recordedMinor != null ? discrepancyMoney(discrepancy.recordedMinor) : t("Unknown");
   const adviceApprovedLabel =
@@ -670,6 +855,59 @@ export function DealCockpitView({
       toast.error(getErrorMessage(error));
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  /**
+   * Both recorders share one shape: submit, and on refusal keep the dialog open
+   * with the server's own words in it.
+   *
+   * The refusals here are the whole point — "record the quotation before
+   * recording what it approved", "you cannot approve your own application", "the
+   * calculator produced 12,500, not 13,000". Replacing them with a generic
+   * message would leave an operator holding a document they cannot enter, which
+   * is the dead end this screen was built to end.
+   */
+  const handleRecordQuotation = async (values: {
+    submittedQuotationMinor: number;
+    source: "SYSTEM_CALCULATED" | "MANUAL_ENTRY" | "CALCULATED_WITH_OVERRIDE";
+    overrideReason?: string;
+  }) => {
+    if (!financeDecision) return;
+    setDecisionSubmitting(true);
+    setQuotationError(null);
+    try {
+      await financeDecision.onRecordQuotation(values);
+      toast.success(t("QuotationRecorded"));
+      setRecordingQuotation(false);
+    } catch (error) {
+      const message = getErrorMessage(error);
+      setQuotationError(message);
+      toast.error(message);
+    } finally {
+      setDecisionSubmitting(false);
+    }
+  };
+
+  const handleRecordApproved = async (values: {
+    approvedAmountMinor: number;
+    basis: ApprovalBasis;
+    appraisalId?: string;
+    notes?: string;
+  }) => {
+    if (!financeDecision) return;
+    setDecisionSubmitting(true);
+    setApprovalError(null);
+    try {
+      await financeDecision.onRecordApproved(values);
+      toast.success(t("ApprovedPurchaseRecorded"));
+      setRecordingApproval(false);
+    } catch (error) {
+      const message = getErrorMessage(error);
+      setApprovalError(message);
+      toast.error(message);
+    } finally {
+      setDecisionSubmitting(false);
     }
   };
 
@@ -877,6 +1115,29 @@ export function DealCockpitView({
             )}
           </CardContent>
         </Card>
+      )}
+
+      {/* --- what the finance company told us ----------------------------- */}
+      {/* Under the next step, not inside the money column: this is the ACTION
+          on the stage the rail reports as blocked, and the money column is
+          withheld entirely from the role that performs it. */}
+      {financeDecision && (
+        <FinanceCompanyDecisionCard
+          facts={financeDecision.facts}
+          canRecordQuotation={financeDecision.canRecordQuotation}
+          canRecordApproval={financeDecision.canRecordApproval}
+          isOwnDeal={financeDecision.isOwnDeal}
+          money={decisionMoney}
+          t={t}
+          onRecordQuotation={() => {
+            setQuotationError(null);
+            setRecordingQuotation(true);
+          }}
+          onRecordApproved={() => {
+            setApprovalError(null);
+            setRecordingApproval(true);
+          }}
+        />
       )}
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -1138,6 +1399,34 @@ export function DealCockpitView({
           onOpenChange={setSettlingSupplier}
           onConfirm={handleSupplierReceipt}
         />
+      )}
+
+      {financeDecision && (
+        <>
+          <RecordSubmittedQuotationDialog
+            open={recordingQuotation}
+            submitting={decisionSubmitting}
+            error={quotationError}
+            calculatedMinor={financeDecision.calculatedQuotationMinor}
+            factor={decisionFactor}
+            money={decisionMoney}
+            t={t}
+            onOpenChange={setRecordingQuotation}
+            onSubmit={handleRecordQuotation}
+          />
+          <RecordApprovedPurchaseDialog
+            open={recordingApproval}
+            submitting={decisionSubmitting}
+            error={approvalError}
+            appraisal={financeDecision.appraisal}
+            submittedQuotationMinor={financeDecision.facts.submittedQuotationMinor}
+            factor={decisionFactor}
+            money={decisionMoney}
+            t={t}
+            onOpenChange={setRecordingApproval}
+            onSubmit={handleRecordApproved}
+          />
+        </>
       )}
 
       {discrepancy && canCorrectAdvice && (
