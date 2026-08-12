@@ -114,8 +114,15 @@ export function RecordAppraisalDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>{t("RecordAppraisalTitle")}</DialogTitle>
-          <DialogDescription>{t("RecordAppraisalDesc")}</DialogDescription>
+          {/* The dialog names the action it is actually performing. Opening a
+              "Replace appraisal" button onto a "Record the appraisal" heading
+              read as if the first one were still being asked for. */}
+          <DialogTitle>
+            {t(isReappraisal ? "ReplaceAppraisalTitle" : "RecordAppraisalTitle")}
+          </DialogTitle>
+          <DialogDescription>
+            {t(isReappraisal ? "ReplaceAppraisalDesc" : "RecordAppraisalDesc")}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3">

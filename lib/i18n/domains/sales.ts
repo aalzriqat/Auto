@@ -809,6 +809,9 @@ export const salesEn = {
   AppraisalDateLabel: "Date appraised",
   AppraisalRecorded: "Appraisal recorded",
   ReplaceAppraisalAction: "Replace appraisal",
+  ReplaceAppraisalTitle: "Replace the appraisal on this vehicle",
+  ReplaceAppraisalDesc:
+    "A second valuation supersedes the one on file. Record what it was valued at, by whom, and why it was appraised again.",
   ReappraisalReasonLabel: "Why the vehicle was appraised again",
   ReappraisalReasonPlaceholder: "e.g. the first figure was entered wrongly",
   ReappraisalReasonRequired: "Say why a second appraisal was requested.",
@@ -1623,6 +1626,9 @@ export const salesAr = {
   AppraisalDateLabel: "تاريخ التخمين",
   AppraisalRecorded: "تم تسجيل التخمين",
   ReplaceAppraisalAction: "استبدال التخمين",
+  ReplaceAppraisalTitle: "استبدال تخمين المركبة",
+  ReplaceAppraisalDesc:
+    "التخمين الثاني يحل محل المسجَّل حالياً. سجِّل القيمة الجديدة ومن قدّرها وسبب إعادة التخمين.",
   ReappraisalReasonLabel: "سبب إعادة تخمين المركبة",
   ReappraisalReasonPlaceholder: "مثال: أُدخل الرقم الأول بشكل خاطئ",
   ReappraisalReasonRequired: "وضِّح سبب طلب تخمين ثانٍ.",
