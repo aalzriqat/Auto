@@ -131,6 +131,12 @@ async function seedDealership(tag: string, opts: { sourceType?: "STOCK" | "SOURC
     ctx.db.insert("financeCompanies", {
       orgId, name: "Jordan Auto Finance", profitRate: 5, maxTermMonths: 60,
       gracePeriodMonths: 0, isActive: true,
+      // The quotation solver refuses a company with no lending ratio, which is
+      // correct: a configured provider without one is not configured. Seeded
+      // here so every configured deal in this file can record its economics
+      // through the real writers; tests that care about a specific ratio still
+      // patch their own.
+      defaultLtvPercent: 85,
     })
   );
 
@@ -180,6 +186,14 @@ async function runDeal(
      * one. Rows written before the field existed look exactly like this.
      */
     omitMode?: boolean;
+    /**
+     * The caller records the economics itself through the real writers.
+     *
+     * Only meaningful for a CONFIGURED deal that stops short of handover —
+     * `assertDealerEconomicsRecorded` refuses one at handover without them, so a
+     * caller cannot supply them afterwards any more.
+     */
+    callerDrivesEconomics?: boolean;
     depositResolution?: {
       treatment: "APPLY_TO_DEALER_AMOUNT" | "APPLY_TO_TRANSACTION_SETTLEMENT" | "REFUND_TO_CUSTOMER" | "FORFEITED" | "OTHER";
       reason?: string;
@@ -233,6 +247,44 @@ async function runDeal(
       orgId: s.orgId,
       quoteId,
       amount: opts.depositAfterRoute,
+    });
+  }
+
+  /**
+   * A CONFIGURED deal's economics, recorded through the REAL writers before
+   * handover.
+   *
+   * SCRUM-61 moved the requirement earlier: `assertDealerEconomicsRecorded` now
+   * refuses a CONFIGURED deal at HANDOVER, not just at finalization, and once a
+   * quotation exists it also requires the approved amount and the funding
+   * split. So a configured deal can no longer reach handover with its economics
+   * supplied afterwards — which is the point of the fix, and it is why this is
+   * seeded here rather than by each caller.
+   *
+   * Approved AT the vehicle price by default, which is what every expectation
+   * in this file was written against: with `approved === salePrice` the
+   * dealership's claim is `salePrice − entitlement`, exactly as before. This
+   * records facts that used to be implicit; it does not change any deal's
+   * economics. Callers that need them to DIFFER pass `approvedAmount`.
+   *
+   * Modes other than CONFIGURED are left alone deliberately — the guard does not
+   * apply to them, and manufacturing a quotation for a LEASE or a manual deal
+   * would invent the very business rule the product ruling refused.
+   */
+  const configured = !opts.omitMode && mode === "CONFIGURED_FINANCE_COMPANY";
+  if (configured && !opts.callerDrivesEconomics) {
+    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId,
+      applicationId,
+      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+      source: "MANUAL_ENTRY",
+    });
+    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: s.orgId,
+      applicationId,
+      approvedAmountMinor: (opts.approvedAmount ?? VEHICLE_PRICE) * SCALE,
+      basis: "MANUAL",
+      notes: "Approved at the submitted quotation.",
     });
   }
 
