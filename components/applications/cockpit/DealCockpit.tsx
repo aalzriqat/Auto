@@ -469,6 +469,7 @@ export function DealCockpit({
             basis: ApprovalBasis;
             appraisalId?: string;
             notes?: string;
+            outlierAcknowledged?: boolean;
           }) => {
             await approveDealerPurchaseAmount({
               orgId,
@@ -477,6 +478,7 @@ export function DealCockpit({
               basis: values.basis,
               appraisalId: values.appraisalId as Id<"financeAppraisals"> | undefined,
               notes: values.notes,
+              outlierAcknowledged: values.outlierAcknowledged,
             });
           },
           onReopenApproved: async (values: { reason: string }) => {
@@ -754,6 +756,8 @@ export type FinanceDecisionWiring = {
     basis: ApprovalBasis;
     appraisalId?: string;
     notes?: string;
+    /** The operator answered the departure question — see the dialog. */
+    outlierAcknowledged?: boolean;
   }) => Promise<void>;
   /**
    * Takes the recorded amount back off the record so a correct one can replace
@@ -1039,6 +1043,7 @@ export function DealCockpitView({
     basis: ApprovalBasis;
     appraisalId?: string;
     notes?: string;
+    outlierAcknowledged?: boolean;
   }) => {
     if (!financeDecision) return;
     setApprovalSubmitting(true);

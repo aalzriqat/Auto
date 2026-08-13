@@ -7,7 +7,10 @@ import { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireOwnedRow, requireTenantAuth, redactSettlementEvidence } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { getOrgCurrency } from "./accounting/workflowHooks";
-import { computeSubmittedQuotation } from "../lib/financingEconomics";
+import {
+  computeSubmittedQuotation,
+  isApprovalFarFromEvidence,
+} from "../lib/financingEconomics";
 import {
   consignedSettlementRoute,
   dealershipCollectsGross,
@@ -1349,6 +1352,21 @@ export const approveDealerPurchaseAmount = mutation({
     appraisalId: v.optional(v.id("financeAppraisals")),
     appliedLtvPercent: v.optional(v.number()),
     notes: v.optional(v.string()),
+    /**
+     * The operator was shown how far this amount sits from the deal's own
+     * figures, and stood by it.
+     *
+     * Required only for an amount unlike EVERY figure on file. The dialog sets
+     * it when the person answers the question; without it the mutation refuses
+     * and names the figures, so the challenge cannot be skipped by a stale tab
+     * or any caller that is not this dialog. That is the whole point — a check
+     * that exists only in a React component is not a check on the data.
+     *
+     * It gates, it does not cap: an acknowledged outlier is recorded exactly as
+     * typed. AutoFlow is not entitled to decide the finance company's number is
+     * impossible, only to make sure a person meant to type it.
+     */
+    outlierAcknowledged: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [
@@ -1496,6 +1514,56 @@ export const approveDealerPurchaseAmount = mutation({
       snapshot,
       notes: args.notes,
     });
+
+    // The only numeric check between a keystroke and this deal's economics.
+    //
+    // Nothing else looks at whether the figure is plausible: the MANUAL basis
+    // asks only for a non-empty note, and `computeAppraisalGap` measures a
+    // SHORTFALL, so an approval that overshoots reports zero. That is how
+    // 150,000 landed on a deal quoted at 17,000 and appraised at 16,000, and
+    // how a 150,000 expected dealer remittance followed from it.
+    //
+    // A refusal the caller can answer, not a rule about what a finance company
+    // may decide — the acknowledgement is the answer, and an acknowledged
+    // amount is stored exactly as given.
+    //
+    // Compared against the deal's OWN current appraisal, not `appraisal` above.
+    // That one is the approval's BASIS, and under MANUAL it is deliberately not
+    // adopted unless the company's LTV rule needs it — so reusing it would have
+    // left the server comparing against the quotation alone on exactly the
+    // deals the dialog compares against both. The screen would then ask a
+    // question the server did not, or stay silent where the server refused.
+    const comparisonAppraisal = appraisals
+      .filter(
+        (row) =>
+          (row.status === "RECORDED" || row.status === "APPROVED") &&
+          row.providerType !== "DEALER_ESTIMATE"
+      )
+      .sort((a, b) => b.appraisedAt - a.appraisedAt)[0];
+    if (
+      !args.outlierAcknowledged &&
+      isApprovalFarFromEvidence({
+        approvedAmountMinor: args.approvedAmountMinor,
+        submittedQuotationMinor: app.submittedQuotationMinor,
+        appraisalAmountMinor: comparisonAppraisal?.appraisalAmountMinor,
+      })
+    ) {
+      // Names the figures it was compared against. "Confirm this amount" with
+      // no numbers is a challenge the operator cannot check.
+      const compared = [
+        app.submittedQuotationMinor === undefined
+          ? undefined
+          : `quotation ${app.submittedQuotationMinor}`,
+        comparisonAppraisal === undefined
+          ? undefined
+          : `appraisal ${comparisonAppraisal.appraisalAmountMinor}`,
+      ]
+        .filter((part): part is string => part !== undefined)
+        .join(" and ");
+      throw new ConvexError(
+        `${args.approvedAmountMinor} is far from this deal's ${compared}. Confirm it is the amount the finance company communicated.`
+      );
+    }
 
     const now = Date.now();
     const previousRawGapMinor = app.rawAppraisalGapMinor ?? 0;
@@ -1724,6 +1792,19 @@ export const reopenApproval = mutation({
     if (app.vehicleHandoverAt) {
       throw new ConvexError(
         "The vehicle has already been handed over on this deal. Cancel the application to reverse it instead."
+      );
+    }
+    // The SAME separation of duties `approveDealerPurchaseAmount` applies, and
+    // for a stronger reason: clearing the approved amount IS controlling it.
+    // Without this, a salesperson who also holds the approval permission — an
+    // owner or manager who personally sells, which this card is built for —
+    // could wipe their own deal's economics and then be refused by the writer
+    // that puts the figure back, stranding it for anyone but a second approver.
+    // Enforced here rather than only in the card, because a guard that lives in
+    // the UI is not enforcement: this mutation is reachable directly.
+    if (user._id === app.salespersonId) {
+      throw new ConvexError(
+        "You cannot reopen the approved amount on your own application. A manager or the dealership owner reopens it."
       );
     }
 

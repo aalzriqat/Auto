@@ -3456,3 +3456,145 @@ describe("migration", () => {
     expect(after.financingReconciliationReason).toMatch(/ahead of/i);
   });
 });
+
+/**
+ * The two guards that must live on the server — SCRUM-77.
+ *
+ * Both were raised independently by two adversarial reviewers against the
+ * first cut of the correction workflow, which enforced them in the React card
+ * alone. A mutation is reachable without the screen that fronts it, so a rule
+ * that exists only in a component is not a rule about the data.
+ */
+describe("the correction workflow's guards are enforced by the server", () => {
+  test("a salesperson who can approve still cannot reopen their OWN deal", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_800),
+      basis: "MANUAL",
+      notes: "Negotiated directly.",
+    });
+    // The realistic shape: an owner or manager who personally sells. They hold
+    // `approve:finance_application` AND are the application's salesperson.
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { salespersonId: seed.approverId }));
+
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+        orgId: seed.orgId,
+        applicationId,
+        reason: "I want to change my own deal's number.",
+      })
+    ).rejects.toThrow(/your own application/i);
+
+    // And the amount and its derived cluster are untouched — the refusal lands
+    // before any write, so a blocked reopen cannot leave the deal half-cleared.
+    // (Handover state is deliberately NOT asserted here: a MANUAL approval on a
+    // deal with no appraisal already sits BLOCKED for SCRUM-61's reasons, so it
+    // says nothing about whether this reopen was stopped.)
+    const after = await readApp(seed, applicationId);
+    expect(after.approvedDealerPurchaseAmountMinor).toBe(jod(11_800));
+    expect(after.approvedPurchaseBasis).toBe("MANUAL");
+    expect(after.financeCompanyFundedPortionMinor).toBeDefined();
+  });
+
+  test("an amount unlike every figure on file is refused until it is acknowledged", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+
+    // The production failure, to scale: 10x the quotation, with a note that
+    // satisfies the MANUAL basis's only rule.
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: seed.orgId,
+        applicationId,
+        approvedAmountMinor: jod(125_000),
+        basis: "MANUAL",
+        notes: "Done",
+      })
+    ).rejects.toThrow(/far from this deal's/i);
+
+    // Nothing was written: no amount, and therefore no funding split derived
+    // from one. This is the half that matters — the refusal has to land before
+    // recomputeAndPatchEconomics, not after.
+    const refused = await readApp(seed, applicationId);
+    expect(refused.approvedDealerPurchaseAmountMinor).toBeUndefined();
+    expect(refused.expectedDealerRemittanceMinor).toBeUndefined();
+  });
+
+  test("an acknowledged outlier is recorded exactly as given", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+
+    // A warning, never a cap. A finance company may approve an amount unlike
+    // anything the dealership showed it, and the acknowledgement is the
+    // operator saying so — after which the figure is stored untouched.
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(125_000),
+      basis: "MANUAL",
+      notes: "Confirmed by the company in writing.",
+      outlierAcknowledged: true,
+    });
+
+    expect((await readApp(seed, applicationId)).approvedDealerPurchaseAmountMinor).toBe(
+      jod(125_000)
+    );
+  });
+
+  test("an ordinary figure is never challenged, right up to the boundary", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+
+    // Exactly half again the 12,500 quotation. Inclusive on purpose: an
+    // operator must not meet a challenge at a boundary they cannot see, and
+    // every ordinary negotiated figure sits well inside it. Nagging here is how
+    // people learn to click through the challenge that matters.
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(18_750),
+      basis: "MANUAL",
+      notes: "Negotiated up; no appraisal on this deal.",
+    });
+
+    expect((await readApp(seed, applicationId)).approvedDealerPurchaseAmountMinor).toBe(
+      jod(18_750)
+    );
+  });
+
+  test("agreeing with the appraisal clears the question even when the quotation is far away", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(40_000),
+      providerType: "FINANCE_COMPANY",
+      providerName: "Company assessor",
+      appraisedAt: Date.now(),
+    });
+
+    // 40,000 is far from the 12,500 quotation but IS the appraisal. An
+    // appraisal-based decision is the ordinary case, not an anomaly, so no
+    // acknowledgement is required.
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(40_000),
+      basis: "MANUAL",
+      notes: "Matched their own appraisal.",
+    });
+
+    expect((await readApp(seed, applicationId)).approvedDealerPurchaseAmountMinor).toBe(
+      jod(40_000)
+    );
+  });
+});

@@ -561,6 +561,60 @@ export interface AppraisalGap {
 }
 
 /**
+ * How far an approved amount may sit from the deal's own figures unchallenged.
+ *
+ * Half again, or half, of every figure on file. Chosen to catch the decimal
+ * slip — the failure that put 150,000 JOD on a deal quoted at 17,000 and
+ * appraised at 16,000 — while leaving ordinary negotiation alone: a company
+ * answering 14,000 to a 16,000 appraisal is a normal commercial move and must
+ * not be nagged. A 10x typo is 780% out and cannot fall inside this band.
+ */
+export const APPROVAL_DEPARTURE_TOLERANCE = 0.5;
+
+/**
+ * Whether an approved amount is unlike EVERY figure the deal has on file.
+ *
+ * Lives here, beside the arithmetic it guards, because it is enforced in two
+ * places — the dialog asks the operator, and `approveDealerPurchaseAmount`
+ * refuses an unacknowledged outlier — and a threshold maintained separately in
+ * a React component and a Convex mutation is a threshold that will eventually
+ * disagree with itself. Then the screen would warn about a figure the server
+ * accepts silently, or refuse one the screen never questioned.
+ *
+ * Cleared by agreeing with any SINGLE reference: an approval equal to the
+ * appraisal but far from the quotation is exactly what an appraisal-based
+ * decision looks like, and challenging it would train the operator to click
+ * through the challenge that matters.
+ *
+ * This is a prompt to confirm, never a rule about what a finance company may
+ * decide. Nothing here caps or corrects the amount — an acknowledged outlier is
+ * recorded exactly as typed, because the number belongs to the finance company
+ * and the dealership is only reporting it.
+ */
+export function isApprovalFarFromEvidence(input: {
+  approvedAmountMinor: number;
+  submittedQuotationMinor?: number | null;
+  appraisalAmountMinor?: number | null;
+}): boolean {
+  if (!(input.approvedAmountMinor > 0)) return false;
+
+  const references = [input.submittedQuotationMinor, input.appraisalAmountMinor].filter(
+    (reference): reference is number =>
+      reference !== null && reference !== undefined && reference > 0
+  );
+  // Nothing to compare against is not a departure. A deal with no quotation and
+  // no appraisal has no evidence to be unlike, and inventing a challenge there
+  // would be a question with no figures behind it.
+  if (references.length === 0) return false;
+
+  return !references.some(
+    (reference) =>
+      Math.abs(input.approvedAmountMinor - reference) <=
+      reference * APPROVAL_DEPARTURE_TOLERANCE
+  );
+}
+
+/**
  * The gap the dealership and customer must resolve.
  *
  * Measured against the **approved dealer purchase amount**, not the raw
@@ -568,6 +622,11 @@ export interface AppraisalGap {
  * rule has approved at the quotation, and there is then nothing to negotiate
  * even though the appraisal came in lower. Floored at zero — an approval *above*
  * the quotation is not a negative gap the dealership owes anyone.
+ *
+ * NOTE it is one-directional, and deliberately: it measures a SHORTFALL the
+ * dealership or customer must cover. An approval that overshoots reports zero,
+ * which is why it never caught the 150,000 typo and why
+ * `isApprovalFarFromEvidence` above exists as a separate question.
  */
 export function computeAppraisalGap(input: AppraisalGapInput): AppraisalGap {
   assertNonNegativeMinor(input.submittedQuotationMinor, "Submitted quotation");

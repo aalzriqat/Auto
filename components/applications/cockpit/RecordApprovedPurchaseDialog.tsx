@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioCardGroup } from "./RadioCardGroup";
+import { isApprovalFarFromEvidence } from "@/lib/financingEconomics";
 import {
   Dialog,
   DialogContent,
@@ -18,18 +19,6 @@ import {
 
 export type ApprovalBasis = "APPRAISAL" | "QUOTATION_EXCEPTION" | "MANUAL";
 
-/**
- * How far a manually typed amount may sit from the evidence before the dialog
- * stops and asks.
- *
- * Half again, or half, of every figure on file. Chosen to catch the decimal
- * slip — the failure that put 150,000 JOD on a deal quoted at 17,000 and
- * appraised at 16,000 — while leaving ordinary negotiation alone: a company
- * answering 14,000 to a 16,000 appraisal is a normal commercial move and must
- * not be nagged. A 10x typo is 780% out and cannot fall inside this band.
- */
-const DEPARTURE_TOLERANCE = 0.5;
-
 export type ApprovalDeparture = {
   enteredMinor: number;
   quotationMinor: number | null;
@@ -37,36 +26,27 @@ export type ApprovalDeparture = {
 };
 
 /**
- * The amount is unlike ANY figure the deal has on file — or null when it is not.
+ * The figures to put in front of the operator — or null when nothing is odd.
  *
- * Measured against every reference rather than one, and cleared by agreeing
- * with any single one of them: an approval equal to the appraisal but far from
- * the quotation is exactly what an appraisal-based decision looks like, and
- * challenging it would train the operator to click through the warning that
- * matters.
- *
- * Nothing here refuses anything. AutoFlow does not get to decide the finance
- * company's number is impossible — it only gets to make sure a human meant to
- * type it. When the deal has no figures to compare against, there is no
- * question worth asking and this returns null.
+ * The RULE itself lives in `packages/shared`, beside the arithmetic it guards,
+ * because `approveDealerPurchaseAmount` enforces the same question and refuses
+ * an unacknowledged outlier. A threshold maintained separately here and in the
+ * mutation would eventually disagree with itself, and then the screen would
+ * warn about a figure the server takes silently, or stay quiet about one the
+ * server rejects. This function only decides what to SHOW.
  */
 export function approvalDeparture(input: {
   enteredMinor: number | null;
   quotationMinor: number | null;
   appraisalMinor: number | null;
 }): ApprovalDeparture | null {
-  if (input.enteredMinor === null || input.enteredMinor <= 0) return null;
-
-  const references = [input.quotationMinor, input.appraisalMinor].filter(
-    (reference): reference is number => reference !== null && reference > 0
-  );
-  if (references.length === 0) return null;
-
-  const nearAny = references.some(
-    (reference) =>
-      Math.abs(input.enteredMinor! - reference) <= reference * DEPARTURE_TOLERANCE
-  );
-  if (nearAny) return null;
+  if (input.enteredMinor === null) return null;
+  const far = isApprovalFarFromEvidence({
+    approvedAmountMinor: input.enteredMinor,
+    submittedQuotationMinor: input.quotationMinor,
+    appraisalAmountMinor: input.appraisalMinor,
+  });
+  if (!far) return null;
 
   return {
     enteredMinor: input.enteredMinor,
@@ -121,6 +101,13 @@ type RecordApprovedPurchaseDialogProps = {
     basis: ApprovalBasis;
     appraisalId?: string;
     notes?: string;
+    /**
+     * Set only when the operator answered the departure question.
+     *
+     * The mutation refuses an outlier without it, so this is the answer being
+     * carried to the server rather than a note about what the screen displayed.
+     */
+    outlierAcknowledged?: boolean;
   }) => void;
 };
 
@@ -203,6 +190,10 @@ export function RecordApprovedPurchaseDialog({
       // basis would be stored against an approval the operator never wrote it
       // for.
       notes: notesRequired ? notes.trim() || undefined : undefined,
+      // Sent only when there was a question to answer. Passing it
+      // unconditionally would acknowledge a departure nobody was shown, which
+      // is the same as not having the guard.
+      outlierAcknowledged: departure !== null ? true : undefined,
     });
 
   const options: Array<{ value: ApprovalBasis; label: string; hint: string; amountMinor: number | null }> =
@@ -253,7 +244,13 @@ export function RecordApprovedPurchaseDialog({
               ariaLabel={t("ApprovalBasisLabel")}
               value={basis}
               idPrefix="approval-basis"
-              onChange={setBasis}
+              // Changing the basis retires the question: only MANUAL can
+              // depart from anything, so leaving `confirming` set left the
+              // footer offering to confirm an amount nothing was asked about.
+              onChange={(next) => {
+                setConfirming(false);
+                setBasis(next);
+              }}
               options={options.map((option) => ({
                 value: option.value,
                 label: (
