@@ -86,6 +86,10 @@ describe("an approval the finance company named without an appraisal", () => {
       appraisalStatus: "PENDING",
       approvedDealerPurchaseAmountMinor: 11_500_000,
       approvedPurchaseBasis: "APPRAISAL",
+      // Set, so the BASIS is the only thing keeping this blocked. Omitted, the
+      // MANUAL disjunct could never be true whatever the basis said, and the
+      // test would stay green with the basis check deleted from the writer.
+      fundingSplitComputed: true,
     });
     // An APPRAISAL-basis approval cannot exist without one, so a PENDING
     // dimension here means the evidence has not been finalized — a real
@@ -97,6 +101,9 @@ describe("an approval the finance company named without an appraisal", () => {
     const noBasisRecorded = stages({
       appraisalStatus: "PENDING",
       approvedDealerPurchaseAmountMinor: 12_200_000,
+      // As above: the ABSENCE of a basis has to be what blocks this, not a
+      // second unmet condition standing in for it.
+      fundingSplitComputed: true,
     });
     // No basis on the row is not evidence of a manual decision.
     expect(noBasisRecorded.state("APPRAISAL")).toBe("BLOCKED");

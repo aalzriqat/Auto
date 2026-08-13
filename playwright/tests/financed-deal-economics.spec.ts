@@ -364,7 +364,14 @@ test.describe("recording a financed deal's economics through the interface", () 
       const closing = await openReviewDialog(managerPage, lastName);
       await closing.getByRole("button", { name: "Register Vehicle Handover" }).click();
       await managerPage.getByRole("button", { name: "Confirm Handover" }).click();
-      await expect(managerPage.getByText("Vehicle Handover Registered")).toBeVisible();
+      // The BADGE, which is durable state, not the success toast that says
+      // "Vehicle handover registered." and then fades. Asserting the toast
+      // races it: the handover can have succeeded and the assertion still fail.
+      // `exact`, because the toast reads "Vehicle handover registered." and a
+      // substring match resolves to both it and the badge.
+      await expect(
+        managerPage.getByText("Handover registered", { exact: true }),
+      ).toBeVisible();
 
       // The product's own precondition for finalizing, so the spec meets it
       // the way an operator does rather than routing around it.

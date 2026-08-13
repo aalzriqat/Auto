@@ -54,6 +54,7 @@ vi.mock("@/components/ui/sonner", () => ({
 }));
 
 import { DealCockpitView } from "./DealCockpit";
+import { RecordSubmittedQuotationDialog } from "./RecordSubmittedQuotationDialog";
 
 const JOD = 1_000;
 
@@ -502,16 +503,51 @@ describe("recording the submitted quotation", () => {
    * `recordSubmittedQuotation` refuses an `ltvPercent` from a caller without
    * `approve:finance_application`, because that number scales the finance
    * company's funded portion and therefore the dealership's own contribution.
-   * The dialog must not offer a field whose contents the server is bound to
-   * reject — and must say who unblocks the deal instead, since a disabled button
-   * with no named owner is a dead end.
+   * Without a rate there is nothing to record at all — so for that caller on
+   * that deal the action is withdrawn rather than opening a dialog that cannot
+   * be submitted, exactly as the approval action already is. The row says who
+   * unblocks it, because a withdrawn action with no named owner is a dead end.
    */
-  test("a caller who cannot approve is told who sets the rate, and is not given the field", () => {
+  test("the action is withdrawn from a caller who cannot set the deal's missing rate", () => {
     renderCockpit(wiring({ canRecordApproval: false, facts: { ltvMissing: true } }));
 
-    fireEvent.click(cardButton("RecordQuotationAction")!);
-    const dialog = screen.getByRole("dialog");
+    expect(cardButton("RecordQuotationAction")).toBeUndefined();
+    expect(screen.getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
+  });
 
+  test("and is offered once the rate is not the thing standing in the way", () => {
+    renderCockpit(wiring({ canRecordApproval: false, facts: { ltvMissing: false } }));
+
+    // The withdrawal above is about the missing RATE, not about the permission:
+    // recording what was sent is ordinary sales work on a configured deal.
+    expect(cardButton("RecordQuotationAction")).toBeTruthy();
+  });
+
+  /**
+   * The dialog's own guard, tested directly.
+   *
+   * The card no longer opens it in this state, so this is defence in depth
+   * rather than a path an operator walks — and that is exactly why it needs a
+   * test of its own: nothing else would notice if it stopped holding.
+   */
+  test("the dialog refuses the rate to a caller who cannot set it, whoever opens it", () => {
+    render(
+      <RecordSubmittedQuotationDialog
+        open
+        submitting={false}
+        error={null}
+        calculation={{ state: "UNAVAILABLE" }}
+        requiresLtvPercent
+        canSetLtvPercent={false}
+        factor={JOD}
+        money={(minor) => String(minor)}
+        t={(key) => key}
+        onOpenChange={() => {}}
+        onSubmit={() => {}}
+      />
+    );
+
+    const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
     expect(within(dialog).queryByLabelText("DealPurchaseLtvLabel")).toBeNull();
 
@@ -812,8 +848,18 @@ describe("recording what the finance company approved", () => {
     expect(radios[1].getAttribute("aria-checked")).toBe("true");
     expect(radios[0].getAttribute("aria-checked")).toBe("false");
 
-    // ...and it wraps rather than dead-ending at the last option.
     fireEvent.keyDown(radios[1], { key: "ArrowUp" });
+    expect(radios[0].getAttribute("aria-checked")).toBe("true");
+
+    // ...and the ENDS wrap rather than dead-ending, which is the half the
+    // previous version of this test claimed in a comment and never exercised:
+    // both assertions above stay inside the group, so a component that simply
+    // clamped at the ends would have passed them.
+    const last = radios.length - 1;
+    fireEvent.keyDown(radios[0], { key: "ArrowUp" });
+    expect(radios[last].getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.keyDown(radios[last], { key: "ArrowDown" });
     expect(radios[0].getAttribute("aria-checked")).toBe("true");
   });
 

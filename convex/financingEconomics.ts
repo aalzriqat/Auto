@@ -887,7 +887,13 @@ export const recordSubmittedQuotation = mutation({
       const noteMove = (label: string, before: unknown, after: unknown) => {
         if (before !== after) movedInputs.push([label, before, after]);
       };
-      noteMove("target", app.targetSellingAmountMinor, targetForSolver);
+      // Against `targetNetProceedsMinor`, which is what `targetForSolver` falls
+      // back to when the argument is omitted — NOT `targetSellingAmountMinor`.
+      // The patch writes both fields from the same argument, so they normally
+      // agree; on a row where they have diverged, comparing the other one made
+      // an omitted argument report a target move that never happened, in the
+      // audit trail this block exists to keep honest.
+      noteMove("target", app.targetNetProceedsMinor, targetForSolver);
       noteMove("expenses", app.estimatedDealerBorneExpensesMinor, expensesForSolver);
       noteMove("buffer", app.quotationBufferMinor, bufferForSolver);
       noteMove("first payment", app.customerFirstPaymentMinor, customerFirstPaymentMinor);

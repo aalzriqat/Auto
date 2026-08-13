@@ -1570,32 +1570,7 @@ describe("LTV configuration", () => {
 
   test("reports an unconfigured LTV as an unavailable calculation, not as a thrown error", async () => {
     const seed = await seedDealer();
-    const bareCompanyId = await seed.t.run((ctx) =>
-      ctx.db.insert("financeCompanies", {
-        orgId: seed.orgId,
-        name: "Unconfigured Finance Co",
-        profitRate: 6,
-        maxTermMonths: 48,
-        gracePeriodMonths: 0,
-        maxFinancingLTV: 100,
-        isActive: true,
-      })
-    );
-    const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
-      orgId: seed.orgId,
-      customerId: seed.customerId,
-      vehicleId: seed.vehicleId,
-      mode: "CONFIGURED_FINANCE_COMPANY",
-      companyId: bareCompanyId,
-      vehiclePrice: DEAL.targetSelling,
-      downPayment: DEAL.customerFirstPayment,
-      termMonths: 48,
-      totalFinancedAmount: 10_736,
-    });
-    const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
-      orgId: seed.orgId,
-      quoteId,
-    });
+    const { applicationId } = await createUnconfiguredLtvApplication(seed);
 
     // This query answers "is there a figure to suggest, and if not why" — a
     // shape it already has for two other unsolvable cases. Throwing instead
@@ -1628,32 +1603,7 @@ describe("LTV configuration", () => {
    */
   test("a deal created before its company had a purchase rate is repaired per-deal, not by the settings edit", async () => {
     const seed = await seedDealer();
-    const bareCompanyId = await seed.t.run((ctx) =>
-      ctx.db.insert("financeCompanies", {
-        orgId: seed.orgId,
-        name: "Unconfigured Finance Co",
-        profitRate: 6,
-        maxTermMonths: 48,
-        gracePeriodMonths: 0,
-        maxFinancingLTV: 100,
-        isActive: true,
-      })
-    );
-    const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
-      orgId: seed.orgId,
-      customerId: seed.customerId,
-      vehicleId: seed.vehicleId,
-      mode: "CONFIGURED_FINANCE_COMPANY",
-      companyId: bareCompanyId,
-      vehiclePrice: DEAL.targetSelling,
-      downPayment: DEAL.customerFirstPayment,
-      termMonths: 48,
-      totalFinancedAmount: 10_736,
-    });
-    const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
-      orgId: seed.orgId,
-      quoteId,
-    });
+    const { bareCompanyId, applicationId } = await createUnconfiguredLtvApplication(seed);
 
     // The operator does exactly what the old copy told them to.
     await seed.asUser.mutation(api.finance.updateCompany, {
@@ -1701,9 +1651,10 @@ describe("LTV configuration", () => {
    * A deal frozen under a company that carried no purchase rate. The setup the
    * two authority cases below both need.
    */
-  async function createUnconfiguredLtvApplication(
-    seed: Seed
-  ): Promise<Id<"financeApplications">> {
+  async function createUnconfiguredLtvApplication(seed: Seed): Promise<{
+    bareCompanyId: Id<"financeCompanies">;
+    applicationId: Id<"financeApplications">;
+  }> {
     const bareCompanyId = await seed.t.run((ctx) =>
       ctx.db.insert("financeCompanies", {
         orgId: seed.orgId,
@@ -1726,10 +1677,11 @@ describe("LTV configuration", () => {
       termMonths: 48,
       totalFinancedAmount: 10_736,
     });
-    return seed.asUser.mutation(api.applications.createFromQuote, {
+    const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
       orgId: seed.orgId,
       quoteId,
     });
+    return { bareCompanyId, applicationId };
   }
 
   /**
@@ -1747,7 +1699,7 @@ describe("LTV configuration", () => {
    */
   test("SALES cannot establish the missing per-deal LTV; an approver can, and then SALES may quote at it", async () => {
     const seed = await seedDealer();
-    const applicationId = await createUnconfiguredLtvApplication(seed);
+    const { applicationId } = await createUnconfiguredLtvApplication(seed);
     const asSales = await addSalesUser(seed);
 
     await expect(
@@ -1758,7 +1710,11 @@ describe("LTV configuration", () => {
         source: "MANUAL_ENTRY",
         ltvPercent: 90,
       })
-    ).rejects.toThrow(/approve/i);
+    // The guard's OWN wording. `/approve/i` also matches the generic tenant-auth
+    // refusal "Missing required permissions: approve:finance_application", so a
+    // later change that moved this mutation behind a different permission would
+    // leave the test green while it proved a different rule.
+    ).rejects.toThrow(/may set the LTV this deal is financed at/i);
 
     // Refused BEFORE anything was written — not refused after recording the
     // quotation and leaving the rate behind, which would be the worse failure.
@@ -1806,7 +1762,11 @@ describe("LTV configuration", () => {
         source: "MANUAL_ENTRY",
         ltvPercent: 70,
       })
-    ).rejects.toThrow(/approve/i);
+    // The guard's OWN wording. `/approve/i` also matches the generic tenant-auth
+    // refusal "Missing required permissions: approve:finance_application", so a
+    // later change that moved this mutation behind a different permission would
+    // leave the test green while it proved a different rule.
+    ).rejects.toThrow(/may set the LTV this deal is financed at/i);
 
     // The ordinary path is untouched: no rate argument, the snapshot's own rate
     // applies, and the salesperson records what was sent.

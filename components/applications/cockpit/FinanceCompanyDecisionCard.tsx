@@ -142,8 +142,18 @@ export function FinanceCompanyDecisionCard({
   // refuses to move the figure an approval was based on, and directs the caller
   // to reopen the approval instead. Offering the action anyway would produce a
   // refusal the screen cannot act on, since reopening has no UI yet.
+  //
+  // Withdrawn too where the deal's rate is missing and this caller may not set
+  // it. `recordSubmittedQuotation` refuses an `ltvPercent` without
+  // `approve:finance_application`, and without a rate there is nothing to
+  // record — so for that one caller on that one deal the action could only ever
+  // open a dialog it cannot submit. The row's note names who unblocks it, which
+  // is the same treatment the approval action already gets from this card.
   const quotationActionAvailable =
-    canRecordQuotation && !facts.closed && !facts.approvedPurchaseRecorded;
+    canRecordQuotation &&
+    !facts.closed &&
+    !facts.approvedPurchaseRecorded &&
+    (!facts.ltvMissing || canRecordApproval);
   const approvalActionAvailable =
     canRecordApproval && !isOwnDeal && !facts.closed && quotationRecorded;
   // "Not in play until the quotation has gone out" is owned by the ROW's own

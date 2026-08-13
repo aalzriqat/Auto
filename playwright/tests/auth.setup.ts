@@ -231,9 +231,15 @@ async function signIn(
   if (options.mayCreateDealership) {
     await completeOnboardingIfNeeded(page);
   } else if (!isOrgRoute(new URL(page.url()))) {
+    // A bounded WAIT, not `isVisible()` — which does not wait. The identity can
+    // land on /dashboard while the wizard is still mounting, and in that window
+    // the actionable message below never runs: the failure arrives thirty
+    // seconds later as a generic URL timeout naming neither the identity nor
+    // the missing membership.
     const stranded = await page
       .getByRole("textbox", { name: "Dealership Name" })
-      .isVisible()
+      .waitFor({ state: "visible", timeout: 15_000 })
+      .then(() => true)
       .catch(() => false);
     if (stranded) {
       throw new Error(
