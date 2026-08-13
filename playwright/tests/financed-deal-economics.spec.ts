@@ -1,5 +1,4 @@
 import { test, expect, type Page } from "@playwright/test";
-import { existsSync } from "node:fs";
 import {
   APPROVER_AUTH_FILE,
   createCustomer,
@@ -246,8 +245,23 @@ async function openReviewDialog(page: Page, customer: string) {
 }
 
 test.describe("recording a financed deal's economics through the interface", () => {
+  /**
+   * Gated on the CREDENTIALS, not on the session file they produce.
+   *
+   * `test.skip()` at describe level runs during suite DISCOVERY — before the
+   * setup project has run, and therefore before `playwright/.auth/approver.json`
+   * exists. That directory is gitignored, so on any clean runner the file is
+   * absent at discovery and this suite would skip *permanently*: green CI, and
+   * the one path the issue exists to prove never executed. It passed locally
+   * only because earlier runs had left the file behind.
+   *
+   * The environment variables are present at discovery (playwright.config.ts
+   * loads `.env.local` at config time), and they are the same condition the
+   * approver's setup skips on — so the two can no longer disagree about whether
+   * this identity exists.
+   */
   test.skip(
-    !existsSync(APPROVER_AUTH_FILE),
+    !process.env.E2E_APPROVER_USER || !process.env.E2E_APPROVER_PASSWORD,
     "No approver identity is provisioned (E2E_APPROVER_USER / E2E_APPROVER_PASSWORD), and AutoFlow refuses to let one person both create and approve a deal — so this path cannot be driven. Provision the second identity rather than weakening what this proves.",
   );
 
