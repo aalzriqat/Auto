@@ -1136,3 +1136,80 @@ describe("handover outranks the permission when explaining the appraisal", () =>
     expect(screen.queryByText("AppraisalNeedsReviewer")).toBeNull();
   });
 });
+
+/**
+ * The answer reaches the server, and a retired question stops being asked.
+ *
+ * Both were fixes to review findings and neither was pinned by anything but the
+ * type checker, which cannot tell whether a flag is passed on the right branch
+ * or a footer still offers to confirm something nobody was asked about.
+ */
+describe("the departure question is carried to the server, and retired when it stops applying", () => {
+  const withAppraisal = {
+    facts: { submittedQuotationMinor: 17_000 * JOD },
+    appraisal: { id: "appraisal_1", amountMinor: 16_000 * JOD },
+  };
+
+  function openManual(dialogAmount: number) {
+    fireEvent.click(cardButton("RecordApprovedPurchaseAction")!);
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("radio", { name: /BasisManual/ }));
+    fireEvent.change(within(dialog).getByLabelText("ApprovedAmountLabel"), {
+      target: { value: String(dialogAmount) },
+    });
+    fireEvent.change(within(dialog).getByLabelText("BasisManualNotesLabel"), {
+      target: { value: "what the company said" },
+    });
+    return dialog;
+  }
+
+  test("an acknowledged outlier carries the acknowledgement, and an ordinary amount does not", async () => {
+    const onRecordApproved = vi.fn(noopAsync);
+    const { unmount } = renderCockpit(wiring({ ...withAppraisal, onRecordApproved }));
+
+    const dialog = openManual(150_000);
+    fireEvent.click(within(dialog).getByRole("button", { name: "RecordApprovedPurchaseAction" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "ApprovedAmountConfirmAction" }));
+
+    // The server refuses an outlier without this, so the flag IS the answer
+    // being carried across — not a note about what the screen displayed.
+    await waitFor(() =>
+      expect(onRecordApproved).toHaveBeenCalledWith(
+        expect.objectContaining({ outlierAcknowledged: true })
+      )
+    );
+
+    unmount();
+    const onOrdinary = vi.fn(noopAsync);
+    renderCockpit(wiring({ ...withAppraisal, onRecordApproved: onOrdinary }));
+    const ordinary = openManual(14_000);
+    fireEvent.click(within(ordinary).getByRole("button", { name: "RecordApprovedPurchaseAction" }));
+
+    // Acknowledging a departure nobody was shown is the same as having no
+    // guard: the flag must only ever answer a question that was asked.
+    await waitFor(() =>
+      expect(onOrdinary).toHaveBeenCalledWith(
+        expect.objectContaining({ outlierAcknowledged: undefined })
+      )
+    );
+  });
+
+  test("changing the basis retires the question instead of leaving it on screen", () => {
+    renderCockpit(wiring(withAppraisal));
+
+    const dialog = openManual(150_000);
+    fireEvent.click(within(dialog).getByRole("button", { name: "RecordApprovedPurchaseAction" }));
+    expect(within(dialog).getByText("ApprovedAmountFarFromEvidence")).toBeTruthy();
+
+    // Only MANUAL can depart from anything — under APPRAISAL the amount IS one
+    // of the reference figures. Leaving the confirmation pending offered to
+    // confirm an amount nothing had been asked about.
+    fireEvent.click(within(dialog).getByRole("radio", { name: /BasisAppraisal/ }));
+
+    expect(within(dialog).queryByText("ApprovedAmountFarFromEvidence")).toBeNull();
+    expect(
+      within(dialog).queryByRole("button", { name: "ApprovedAmountConfirmAction" })
+    ).toBeNull();
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeTruthy();
+  });
+});

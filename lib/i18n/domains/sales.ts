@@ -779,8 +779,13 @@ export const salesEn = {
    * amount unlike anything the dealership put in front of it, and AutoFlow does
    * not get to overrule that. It only makes sure a person meant to type it.
    */
+  // Deliberately does not name the quotation and the appraisal, though the
+  // ruling's example did: the rule fires on whichever figures the deal actually
+  // has, and a deal with no appraisal was being told its amount differed from
+  // an appraisal that does not exist — caught in the browser, not in a test.
+  // The rows below name exactly what it was compared against.
   ApprovedAmountFarFromEvidence:
-    "This amount is significantly different from the quotation and the appraisal.",
+    "This amount is significantly different from the figures recorded on this deal.",
   ApprovedAmountYouEntered: "You entered",
   ApprovedAmountConfirmPrompt:
     "Please confirm this is the amount the finance company communicated.",
@@ -1635,7 +1640,8 @@ export const salesAr = {
   ApprovedPurchaseLtvDrivesSplit:
     "هذه النسبة هي التي تقسّم المبلغ المعتمد إلى جزء مموَّل وآخر غير مموَّل.",
   RecordApprovedPurchaseAction: "تسجيل المبلغ المعتمد",
-  ApprovedAmountFarFromEvidence: "هذا المبلغ يختلف اختلافاً كبيراً عن عرض السعر والتخمين.",
+  ApprovedAmountFarFromEvidence:
+    "هذا المبلغ يختلف اختلافاً كبيراً عن الأرقام المسجَّلة على هذه الصفقة.",
   ApprovedAmountYouEntered: "المبلغ الذي أدخلته",
   ApprovedAmountConfirmPrompt: "يرجى تأكيد أن هذا هو المبلغ الذي أبلغتك به شركة التمويل.",
   ApprovedAmountConfirmAction: "نعم، سجِّل هذا المبلغ",
