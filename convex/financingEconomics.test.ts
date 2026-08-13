@@ -3689,3 +3689,78 @@ describe("the correction history follows the amount it describes", () => {
     expect(forSales.application.submittedQuotationMinor).toBe(jod(DEAL.quotation));
   });
 });
+
+/**
+ * The history projection fails CLOSED on anything it does not understand.
+ *
+ * Raised in review: a `*Minor` row holding something non-numeric, unsafe or
+ * out of range must not be formatted into plausible-looking money, and a future
+ * override field must not acquire denomination semantics merely because its
+ * stored prose happens to begin with digits. Showing nothing is always
+ * recoverable; showing a confident wrong number is not.
+ */
+describe("the correction history refuses to invent money", () => {
+  async function withStoredOverride(value: string, field = "approvedDealerPurchaseAmountMinor") {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run((ctx) =>
+      ctx.db.insert("financeApplicationOverrides", {
+        orgId: seed.orgId,
+        applicationId,
+        field,
+        previousValue: value,
+        newValue: value,
+        reason: "crafted row",
+        changedBy: seed.approverId,
+        changedAt: Date.now(),
+      })
+    );
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    return economics.overrides[0];
+  }
+
+  test("a truncated decimal is not shown as whole minor units", async () => {
+    // `^(\d+)` alone reads this as 12 and renders twelve minor units — a
+    // confident figure invented by dropping the fraction.
+    const row = await withStoredOverride("12.5");
+    expect(row?.previousAmountMinor).toBeUndefined();
+    expect(row?.newAmountMinor).toBeUndefined();
+    // The line still carries what a person wrote.
+    expect(row?.reason).toBe("crafted row");
+  });
+
+  test("non-numeric, signed and empty values are omitted rather than guessed at", async () => {
+    for (const value of ["", "   ", "unknown", "-5000", "+5000", "NaN", "Infinity", "1e6"]) {
+      const row = await withStoredOverride(value);
+      expect(row?.previousAmountMinor).toBeUndefined();
+      expect(row?.newAmountMinor).toBeUndefined();
+    }
+  });
+
+  test("a magnitude past exact integer arithmetic is omitted, not rounded", async () => {
+    const row = await withStoredOverride("9007199254740993");
+    expect(row?.previousAmountMinor).toBeUndefined();
+  });
+
+  test("an unknown future field never acquires money semantics from its digits", async () => {
+    // The field name is the contract. A non-`Minor` field whose prose starts
+    // with a number must stay prose, and prose is not rendered at all.
+    const row = await withStoredOverride("150000000 (whatever this becomes)", "someFutureField");
+    expect(row?.previousAmountMinor).toBeUndefined();
+    expect(row?.newAmountMinor).toBeUndefined();
+    expect(row?.newIsReopened).toBe(false);
+  });
+
+  test("the real stored shape still reads as money, so this is not vacuous", async () => {
+    // The whole point of the guards above is that the GENUINE format keeps
+    // working. Without this, every assertion here would pass on a projection
+    // that presented nothing at all.
+    const row = await withStoredOverride("150000000 (MANUAL @ 85% LTV, approved by u_1)");
+    expect(row?.previousAmountMinor).toBe(150_000_000);
+    const bare = await withStoredOverride("15000000");
+    expect(bare?.previousAmountMinor).toBe(15_000_000);
+  });
+});

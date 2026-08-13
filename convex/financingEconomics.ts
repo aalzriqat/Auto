@@ -257,10 +257,22 @@ function presentOverrideValues(row: Doc<"financeApplicationOverrides">): {
   const isAmountField = row.field.endsWith("Minor");
   const leadingAmount = (value: string | undefined): number | undefined => {
     if (!isAmountField || value === undefined) return undefined;
-    const match = /^(\d+)/.exec(value.trim());
+    // DELIMITED, not merely leading. `^(\d+)` alone reads "12.5" as 12 and
+    // renders it as twelve minor units — a plausible-looking figure produced by
+    // silently truncating a decimal, which is worse than showing nothing. The
+    // real rows are either the bare integer or the integer followed by a space
+    // and the parenthesised decision, so anything else is a value this function
+    // does not understand and must not present.
+    const match = /^(\d+)(?=$|[\s(])/.exec(value.trim());
     if (!match) return undefined;
     const parsed = Number(match[1]);
-    return Number.isSafeInteger(parsed) ? parsed : undefined;
+    // Fails closed on anything outside the range money can be counted in.
+    // `Number.isSafeInteger` covers NaN, ±Infinity, fractions and magnitudes
+    // past 2^53 — beyond which the arithmetic that would follow is not exact
+    // anyway. A figure that cannot be trusted is omitted, never rounded into
+    // something that looks trustworthy.
+    if (!Number.isSafeInteger(parsed) || parsed < 0) return undefined;
+    return parsed;
   };
 
   return {
