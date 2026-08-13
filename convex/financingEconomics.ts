@@ -859,12 +859,57 @@ export const recordSubmittedQuotation = mutation({
      * compared rather than the raw arguments, because an omitted argument means
      * "keep what the deal already has" and is not a change.
      */
+    /**
+     * The two arguments the patch FANS OUT into more than one stored field.
+     *
+     * `targetSellingAmountMinor` writes both `targetSellingAmountMinor` and
+     * `targetNetProceedsMinor`; `estimatedDealerBorneExpensesMinor` writes both
+     * `estimatedDealerBorneExpensesMinor` and `estimatedClosingExpensesMinor`.
+     * They normally hold the same value, because the patch always writes them
+     * from one argument — but on a row where they have drifted apart, one
+     * argument moves one field and not the other.
+     *
+     * Stated once, as a table, and read by BOTH the gate below and the audit
+     * description further down. Three review rounds found three defects in the
+     * hand-written version of this rule — a move reported that never happened,
+     * a move missed that did, and then a field mutated with no audit row at all
+     * because the gate never opened — each in a different clause, each fixed
+     * separately, each fix leaving the next one wrong. Two fields, two readers
+     * and one hand-maintained rule is what kept producing them; the arithmetic
+     * was never the hard part.
+     */
+    const fannedOutInputs = [
+      {
+        supplied: args.targetSellingAmountMinor,
+        fields: [
+          ["target", app.targetSellingAmountMinor],
+          ["target net proceeds", app.targetNetProceedsMinor],
+        ],
+      },
+      {
+        supplied: args.estimatedDealerBorneExpensesMinor,
+        fields: [
+          ["expenses", app.estimatedDealerBorneExpensesMinor],
+          ["closing expenses", app.estimatedClosingExpensesMinor],
+        ],
+      },
+    ] as const satisfies ReadonlyArray<{
+      supplied: number | undefined;
+      fields: ReadonlyArray<readonly [string, number | undefined]>;
+    }>;
+
+    /** Every stored field a supplied argument would actually move. */
+    const fannedOutMoves = fannedOutInputs.flatMap(({ supplied, fields }) =>
+      supplied === undefined
+        ? []
+        : fields
+            .filter(([, before]) => before !== supplied)
+            .map(([label, before]) => [label, before, supplied] as const)
+    );
+
     const inputsChanged =
       quotationPreviouslyRecorded &&
-      ((args.targetSellingAmountMinor !== undefined &&
-        args.targetSellingAmountMinor !== app.targetSellingAmountMinor) ||
-        (args.estimatedDealerBorneExpensesMinor !== undefined &&
-          args.estimatedDealerBorneExpensesMinor !== app.estimatedDealerBorneExpensesMinor) ||
+      (fannedOutMoves.length > 0 ||
         (args.quotationBufferMinor !== undefined &&
           args.quotationBufferMinor !== app.quotationBufferMinor) ||
         customerFirstPaymentMinor !== app.customerFirstPaymentMinor ||
@@ -887,37 +932,12 @@ export const recordSubmittedQuotation = mutation({
       const noteMove = (label: string, before: unknown, after: unknown) => {
         if (before !== after) movedInputs.push([label, before, after]);
       };
-      /**
-       * Each target field against ITS OWN previous value.
-       *
-       * The patch writes `targetSellingAmountMinor` and `targetNetProceedsMinor`
-       * together from one argument, so they agree on every row this code can
-       * create — and a single comparison was wrong in both directions on a row
-       * where they had drifted apart, which is the only shape legacy data could
-       * have arrived in. Comparing the selling field against a value that falls
-       * back to the net one reported a move that never happened when the
-       * argument was omitted; comparing the net field reported NO move when an
-       * explicit argument moved the selling field to the net field's value —
-       * and the patch then overwrote the figure, with no other history of it
-       * anywhere. Two reviewers found those, one round apart, in opposite
-       * directions. Per-field is right in both cases and needs no third guess.
-       *
-       * Nothing is noted when the argument is omitted, because then neither
-       * field is patched.
-       */
-      if (args.targetSellingAmountMinor !== undefined) {
-        noteMove("target", app.targetSellingAmountMinor, args.targetSellingAmountMinor);
-        // A second, genuinely different move — only on a row where the two had
-        // drifted, since otherwise this is the move already noted above.
-        if (app.targetNetProceedsMinor !== app.targetSellingAmountMinor) {
-          noteMove(
-            "target net proceeds",
-            app.targetNetProceedsMinor,
-            args.targetSellingAmountMinor
-          );
-        }
+      // The same table the gate above read, so what opened the gate is exactly
+      // what the row describes. Nothing appears for an omitted argument,
+      // because then nothing was patched.
+      for (const [label, before, after] of fannedOutMoves) {
+        noteMove(label, before, after);
       }
-      noteMove("expenses", app.estimatedDealerBorneExpensesMinor, expensesForSolver);
       noteMove("buffer", app.quotationBufferMinor, bufferForSolver);
       noteMove("first payment", app.customerFirstPaymentMinor, customerFirstPaymentMinor);
       noteMove("LTV", app.appliedLtvPercent, appliedLtvPercent);

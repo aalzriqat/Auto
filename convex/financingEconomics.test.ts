@@ -2440,6 +2440,56 @@ describe("overrides and audit", () => {
     expect(override?.reason).toMatch(/target/i);
   });
 
+  /**
+   * The same drifted row, moving the OTHER field — which the gate above the
+   * audit has to notice, not just the description below it.
+   *
+   * Supplying a target equal to the selling figure moves nothing on that field
+   * and everything on the net-proceeds one, because the patch writes both. The
+   * gate compared the argument against the selling field alone, so it saw no
+   * change, wrote no override row, and the per-field description was never
+   * reached: a persisted financial figure moved with no trace at all. Found by
+   * Codex on the round that fixed the description, and pre-existing rather than
+   * caused by it — the gate has always compared one of the two fields it writes.
+   *
+   * Everything else is held identical on purpose: same amount, same source,
+   * same recorder, no reason. If any of those moved, `materiallyChanged` would
+   * be true for a different reason and this would pass without proving anything.
+   */
+  test("audits a target that moves only the net-proceeds figure on a drifted row", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+
+    const driftedNetProceeds = jod(11_000);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { targetNetProceedsMinor: driftedNetProceeds })
+    );
+
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "SYSTEM_CALCULATED",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+    });
+
+    // The net-proceeds figure has been overwritten from 11,000 back to 10,500.
+    expect((await readApp(seed, applicationId)).targetNetProceedsMinor).toBe(
+      jod(DEAL.targetSelling)
+    );
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides).toHaveLength(1);
+    expect(economics.overrides[0]?.previousValue).toContain(String(driftedNetProceeds));
+    expect(economics.overrides[0]?.reason).toMatch(/net proceeds/i);
+  });
+
   test("audits a recalculated quotation even when no reason is given", async () => {
     const seed = await seedDealer();
     const applicationId = await createApplication(seed);
