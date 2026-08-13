@@ -98,6 +98,8 @@ type FinanceCompanyDecisionCardProps = {
   onRecordQuotation: () => void;
   onRecordAppraisal: () => void;
   onRecordApproved: () => void;
+  /** Reopens a recorded amount for correction — see `correctionAvailable`. */
+  onCorrectApproved: () => void;
 };
 
 /** One recorded-or-not row, with whatever action belongs to it. */
@@ -135,6 +137,7 @@ export function FinanceCompanyDecisionCard({
   onRecordQuotation,
   onRecordAppraisal,
   onRecordApproved,
+  onCorrectApproved,
 }: Readonly<FinanceCompanyDecisionCardProps>) {
   const quotationRecorded = facts.submittedQuotationMinor !== null;
 
@@ -211,6 +214,42 @@ export function FinanceCompanyDecisionCard({
   else if (!quotationRecorded) approvalNote = t("QuotationNeededFirst");
   else if (!canRecordApproval) approvalNote = t("ApprovedPurchaseNeedsApprover");
   else if (isOwnDeal) approvalNote = t("ApprovedPurchaseNotOwnDeal");
+
+  /**
+   * Correcting an amount already on the record.
+   *
+   * Both of the approval writer's conditions, not just the reopener's.
+   * `reopenApproval` asks only for `approve:finance_application`, but
+   * `approveDealerPurchaseAmount` also refuses the deal's own salesperson — so
+   * an action gated on the reopen permission alone would let that one person
+   * clear the deal's economics and then be refused when putting the corrected
+   * figure back. That trades a deal with a wrong number for a deal with no
+   * number and no way to restore one, which is worse than what it fixed.
+   *
+   * Withdrawn after handover because the server refuses there outright: once the
+   * vehicle has gone out, reversing the deal is a cancellation, not an edit.
+   */
+  const correctionAvailable =
+    facts.approvedPurchaseRecorded &&
+    canRecordApproval &&
+    !isOwnDeal &&
+    !facts.closed &&
+    !facts.handedOver;
+
+  /**
+   * Why the correction is not offered to someone who would otherwise do it.
+   *
+   * Scoped to callers holding the approval permission on purpose. Nothing on
+   * this screen ASKS for a correction — a recorded amount is the normal, healthy
+   * state — so a note for every viewer would be permanent noise on deals where
+   * nothing is wrong. It is shown to the one person who would go looking for the
+   * action and find it missing.
+   */
+  let correctionNote: string | undefined;
+  if (facts.approvedPurchaseRecorded && !facts.closed && canRecordApproval) {
+    if (facts.handedOver) correctionNote = t("ApprovedPurchaseSealedByHandover");
+    else if (isOwnDeal) correctionNote = t("ApprovedPurchaseNotOwnDeal");
+  }
 
   return (
     <Card>
@@ -308,14 +347,29 @@ export function FinanceCompanyDecisionCard({
             }
             return <span className="text-muted-foreground">{t("NotRecordedYet")}</span>;
           })()}
-          note={facts.approvedPurchaseRecorded ? undefined : approvalNote}
-          action={
-            approvalActionAvailable && !facts.approvedPurchaseRecorded ? (
-              <Button size="sm" onClick={onRecordApproved}>
-                {t("RecordApprovedPurchaseAction")}
-              </Button>
-            ) : undefined
-          }
+          note={facts.approvedPurchaseRecorded ? correctionNote : approvalNote}
+          action={(() => {
+            if (approvalActionAvailable && !facts.approvedPurchaseRecorded) {
+              return (
+                <Button size="sm" onClick={onRecordApproved}>
+                  {t("RecordApprovedPurchaseAction")}
+                </Button>
+              );
+            }
+            // A DIFFERENT action, not the first-time one shown again. Wording
+            // and weight both say so: correcting a recorded external decision
+            // is an exceptional act that has to be justified on the record,
+            // and offering it as the same primary button would read as though
+            // nothing had been recorded at all.
+            if (correctionAvailable) {
+              return (
+                <Button size="sm" variant="outline" onClick={onCorrectApproved}>
+                  {t("CorrectApprovedPurchaseAction")}
+                </Button>
+              );
+            }
+            return undefined;
+          })()}
         />
 
         {derived.length > 0 && (

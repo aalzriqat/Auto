@@ -19,6 +19,63 @@ import {
 export type ApprovalBasis = "APPRAISAL" | "QUOTATION_EXCEPTION" | "MANUAL";
 
 /**
+ * How far a manually typed amount may sit from the evidence before the dialog
+ * stops and asks.
+ *
+ * Half again, or half, of every figure on file. Chosen to catch the decimal
+ * slip — the failure that put 150,000 JOD on a deal quoted at 17,000 and
+ * appraised at 16,000 — while leaving ordinary negotiation alone: a company
+ * answering 14,000 to a 16,000 appraisal is a normal commercial move and must
+ * not be nagged. A 10x typo is 780% out and cannot fall inside this band.
+ */
+const DEPARTURE_TOLERANCE = 0.5;
+
+export type ApprovalDeparture = {
+  enteredMinor: number;
+  quotationMinor: number | null;
+  appraisalMinor: number | null;
+};
+
+/**
+ * The amount is unlike ANY figure the deal has on file — or null when it is not.
+ *
+ * Measured against every reference rather than one, and cleared by agreeing
+ * with any single one of them: an approval equal to the appraisal but far from
+ * the quotation is exactly what an appraisal-based decision looks like, and
+ * challenging it would train the operator to click through the warning that
+ * matters.
+ *
+ * Nothing here refuses anything. AutoFlow does not get to decide the finance
+ * company's number is impossible — it only gets to make sure a human meant to
+ * type it. When the deal has no figures to compare against, there is no
+ * question worth asking and this returns null.
+ */
+export function approvalDeparture(input: {
+  enteredMinor: number | null;
+  quotationMinor: number | null;
+  appraisalMinor: number | null;
+}): ApprovalDeparture | null {
+  if (input.enteredMinor === null || input.enteredMinor <= 0) return null;
+
+  const references = [input.quotationMinor, input.appraisalMinor].filter(
+    (reference): reference is number => reference !== null && reference > 0
+  );
+  if (references.length === 0) return null;
+
+  const nearAny = references.some(
+    (reference) =>
+      Math.abs(input.enteredMinor! - reference) <= reference * DEPARTURE_TOLERANCE
+  );
+  if (nearAny) return null;
+
+  return {
+    enteredMinor: input.enteredMinor,
+    quotationMinor: input.quotationMinor,
+    appraisalMinor: input.appraisalMinor,
+  };
+}
+
+/**
  * Records the amount the finance company said it will buy the vehicle at.
  *
  * The BASIS is a fact about their decision, not a formula: equal to their
@@ -84,6 +141,8 @@ export function RecordApprovedPurchaseDialog({
   const [basis, setBasis] = useState<ApprovalBasis>(appraisal ? "APPRAISAL" : "MANUAL");
   const [amount, setAmount] = useState("");
   const [notes, setNotes] = useState("");
+  /** The departure has been put to the operator and they stood by the figure. */
+  const [confirming, setConfirming] = useState(false);
 
   // Reset on the closed -> open TRANSITION only, for the same reason as the
   // quotation dialog: the evidence behind these options arrives from a live
@@ -96,6 +155,7 @@ export function RecordApprovedPurchaseDialog({
     setBasis(appraisal ? "APPRAISAL" : "MANUAL");
     setAmount("");
     setNotes("");
+    setConfirming(false);
   }, [open, appraisal]);
 
   // The amount each basis IMPLIES, from evidence the server will check against.
@@ -117,6 +177,33 @@ export function RecordApprovedPurchaseDialog({
   const notesMissing = notesRequired && notes.trim() === "";
 
   const canSubmit = approvedMinor !== null && approvedMinor > 0 && !notesMissing && !submitting;
+
+  // Only the typed basis can depart from anything. Under APPRAISAL and
+  // QUOTATION_EXCEPTION the amount IS one of the reference figures, so the
+  // comparison would be against itself.
+  const departure =
+    basis === "MANUAL"
+      ? approvalDeparture({
+          enteredMinor: approvedMinor,
+          quotationMinor: submittedQuotationMinor,
+          appraisalMinor: appraisal?.amountMinor ?? null,
+        })
+      : null;
+
+  const submitValues = () =>
+    onSubmit({
+      approvedAmountMinor: approvedMinor!,
+      basis,
+      // Named explicitly so the server approves against the appraisal the
+      // operator was actually shown, rather than whichever one it would pick
+      // for itself.
+      appraisalId: basis === "MANUAL" ? undefined : (appraisal?.id ?? undefined),
+      // Only from the basis that asks for them. The field is hidden under the
+      // other two, so text typed under MANUAL and left behind by a change of
+      // basis would be stored against an approval the operator never wrote it
+      // for.
+      notes: notesRequired ? notes.trim() || undefined : undefined,
+    });
 
   const options: Array<{ value: ApprovalBasis; label: string; hint: string; amountMinor: number | null }> =
     [
@@ -240,6 +327,46 @@ export function RecordApprovedPurchaseDialog({
             </div>
           )}
 
+          {/* Put to the operator BEFORE the write, never after. It states the
+              figures side by side and asks a question — it does not judge the
+              amount, because the number belongs to the finance company and
+              AutoFlow is not entitled to refuse it. */}
+          {confirming && departure && (
+            <div
+              role="alert"
+              className="space-y-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3"
+            >
+              <p className="text-sm font-medium">{t("ApprovedAmountFarFromEvidence")}</p>
+              <dl className="space-y-1 text-sm">
+                {departure.quotationMinor !== null && (
+                  <div className="flex items-center justify-between gap-4">
+                    <dt className="text-muted-foreground">{t("QuotationSubmittedLabel")}</dt>
+                    <dd>
+                      <bdi className="tabular-nums">{money(departure.quotationMinor)}</bdi>
+                    </dd>
+                  </div>
+                )}
+                {departure.appraisalMinor !== null && (
+                  <div className="flex items-center justify-between gap-4">
+                    <dt className="text-muted-foreground">{t("TheirAppraisalLabel")}</dt>
+                    <dd>
+                      <bdi className="tabular-nums">{money(departure.appraisalMinor)}</bdi>
+                    </dd>
+                  </div>
+                )}
+                <div className="flex items-center justify-between gap-4 font-semibold">
+                  <dt>{t("ApprovedAmountYouEntered")}</dt>
+                  <dd>
+                    <bdi className="tabular-nums">{money(departure.enteredMinor)}</bdi>
+                  </dd>
+                </div>
+              </dl>
+              <p className="text-xs text-muted-foreground">
+                {t("ApprovedAmountConfirmPrompt")}
+              </p>
+            </div>
+          )}
+
           {error && (
             <p role="alert" className="text-sm font-medium text-destructive">
               {error}
@@ -248,33 +375,31 @@ export function RecordApprovedPurchaseDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            {t("Cancel")}
+          <Button
+            variant="outline"
+            onClick={() => (confirming ? setConfirming(false) : onOpenChange(false))}
+          >
+            {confirming ? t("GoBack") : t("Cancel")}
           </Button>
           <Button
             disabled={!canSubmit}
-            onClick={() =>
-              onSubmit({
-                approvedAmountMinor: approvedMinor!,
-                basis,
-                // Named explicitly so the server approves against the appraisal
-                // the operator was actually shown, rather than whichever one it
-                // would pick for itself.
-                appraisalId: basis === "MANUAL" ? undefined : (appraisal?.id ?? undefined),
-                // Only from the basis that asks for them. The field is hidden
-                // under the other two, so text typed under MANUAL and left
-                // behind by a change of basis would be stored against an
-                // approval the operator never wrote it for.
-                notes: notesRequired ? notes.trim() || undefined : undefined,
-              })
-            }
+            onClick={() => {
+              // One stop, not a loop: an unremarkable amount submits on the
+              // first click exactly as before, and a departure costs one extra
+              // deliberate press.
+              if (departure && !confirming) {
+                setConfirming(true);
+                return;
+              }
+              submitValues();
+            }}
           >
             {submitting ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
               <Stamp className="h-4 w-4 me-2" />
             )}
-            {t("RecordApprovedPurchaseAction")}
+            {confirming ? t("ApprovedAmountConfirmAction") : t("RecordApprovedPurchaseAction")}
           </Button>
         </DialogFooter>
       </DialogContent>

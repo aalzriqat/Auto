@@ -38,6 +38,9 @@ import {
   type QuotationCalculation,
 } from "./RecordSubmittedQuotationDialog";
 import {
+  ReopenApprovedPurchaseDialog,
+} from "./ReopenApprovedPurchaseDialog";
+import {
   RecordApprovedPurchaseDialog,
   type ApprovalBasis,
 } from "./RecordApprovedPurchaseDialog";
@@ -250,6 +253,7 @@ export function DealCockpit({
   const recordReceipt = useMutation(api.supplierReceivables.recordReceipt);
   const amendAdvice = useMutation(api.applications.amendSupplierDisbursementAdvice);
   const recordSubmittedQuotation = useMutation(api.financingEconomics.recordSubmittedQuotation);
+  const reopenApproval = useMutation(api.financingEconomics.reopenApproval);
   const approveDealerPurchaseAmount = useMutation(
     api.financingEconomics.approveDealerPurchaseAmount
   );
@@ -474,6 +478,9 @@ export function DealCockpit({
               appraisalId: values.appraisalId as Id<"financeAppraisals"> | undefined,
               notes: values.notes,
             });
+          },
+          onReopenApproved: async (values: { reason: string }) => {
+            await reopenApproval({ orgId, applicationId, reason: values.reason });
           },
         }
       : undefined;
@@ -748,6 +755,12 @@ export type FinanceDecisionWiring = {
     appraisalId?: string;
     notes?: string;
   }) => Promise<void>;
+  /**
+   * Takes the recorded amount back off the record so a correct one can replace
+   * it. The reason is mandatory server-side and is the only surviving record of
+   * the figure being replaced.
+   */
+  onReopenApproved: (values: { reason: string }) => Promise<void>;
   onRecordAppraisal: (values: {
     appraisalAmountMinor: number;
     providerType: AppraisalProviderType;
@@ -816,6 +829,7 @@ export function DealCockpitView({
   const [showCompleted, setShowCompleted] = useState(false);
   const [recordingQuotation, setRecordingQuotation] = useState(false);
   const [recordingApproval, setRecordingApproval] = useState(false);
+  const [reopeningApproval, setReopeningApproval] = useState(false);
   const [recordingAppraisal, setRecordingAppraisal] = useState(false);
   const [appraisalSubmitting, setAppraisalSubmitting] = useState(false);
   const [appraisalError, setAppraisalError] = useState<string | null>(null);
@@ -828,6 +842,8 @@ export function DealCockpitView({
   // must not still be sitting in the approval form the next time it opens.
   const [quotationError, setQuotationError] = useState<string | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [reopenSubmitting, setReopenSubmitting] = useState(false);
+  const [reopenError, setReopenError] = useState<string | null>(null);
 
   // Never a hardcoded ÷1000. JOD, KWD, BHD and OMR are three-decimal; most
   // currencies are two. Baking one scale in would be a 100x error everywhere
@@ -1037,6 +1053,29 @@ export function DealCockpitView({
       toast.error(message);
     } finally {
       setApprovalSubmitting(false);
+    }
+  };
+
+  const handleReopenApproved = async (values: { reason: string }) => {
+    if (!financeDecision) return;
+    setReopenSubmitting(true);
+    setReopenError(null);
+    try {
+      await financeDecision.onReopenApproved(values);
+      toast.success(t("ApprovedPurchaseReopened"));
+      setReopeningApproval(false);
+      // Straight into recording the correct figure. Reopening leaves the deal
+      // with no approved amount and handover blocked — a state nobody wants to
+      // stop in — so the correction reads as one action even though it is two
+      // writes. The operator can still close this dialog and come back: the
+      // card offers the record action again, because the amount is now gone.
+      setRecordingApproval(true);
+    } catch (error) {
+      const message = getErrorMessage(error);
+      setReopenError(message);
+      toast.error(message);
+    } finally {
+      setReopenSubmitting(false);
     }
   };
 
@@ -1270,6 +1309,10 @@ export function DealCockpitView({
           onRecordApproved={() => {
             setApprovalError(null);
             setRecordingApproval(true);
+          }}
+          onCorrectApproved={() => {
+            setReopenError(null);
+            setReopeningApproval(true);
           }}
         />
       )}
@@ -1576,6 +1619,16 @@ export function DealCockpitView({
             t={t}
             onOpenChange={setRecordingApproval}
             onSubmit={handleRecordApproved}
+          />
+          <ReopenApprovedPurchaseDialog
+            open={reopeningApproval}
+            submitting={reopenSubmitting}
+            error={reopenError}
+            currentAmountMinor={financeDecision.facts.approvedPurchaseAmountMinor}
+            money={decisionMoney}
+            t={t}
+            onOpenChange={setReopeningApproval}
+            onSubmit={handleReopenApproved}
           />
         </>
       )}
