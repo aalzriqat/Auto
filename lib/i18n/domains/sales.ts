@@ -740,6 +740,114 @@ export const salesEn = {
   ReceiptAmountInvalid: "Enter an amount greater than zero.",
   ReceiptExceedsClaim: "That is more than the supplier still owes.",
   SupplierSettledInFull: "This claim is settled in full.",
+
+  // --- Recording the finance company's own figures ----------------------
+  // Every string here says the dealership RECORDS what the finance company
+  // decided. None of them may read as AutoFlow approving anything: the
+  // approval happens at the company, on paper, before anyone opens this
+  // screen, and copy that blurs the two would make the system look like the
+  // decision-maker for a decision it only ever mirrors.
+  FinanceDecisionHeading: "What the finance company told us",
+  FinanceDecisionIntro:
+    "AutoFlow records the finance company's own figures. It does not approve financing.",
+  QuotationSubmittedLabel: "Quotation we submitted",
+  ApprovedPurchaseLabel: "Amount the finance company approved",
+  NotRecordedYet: "Not recorded yet",
+  /** Recorded, but this caller may not see the amount — never "not recorded". */
+  RecordedAmountHidden: "Recorded — you cannot see the amount",
+  RecordQuotationAction: "Record quotation",
+  FinanceCompanyLtvMissing:
+    "This deal was created before its finance company had a purchase LTV, and a deal keeps the rules it was created under. Record the rate that applies to this deal when you record the quotation.",
+  DealPurchaseLtvLabel: "Purchase LTV for this deal (%)",
+  DealPurchaseLtvHint:
+    "The share of the vehicle the finance company buys at, for this deal only. Setting the rate on the company itself applies to future deals, not to this one.",
+  DealPurchaseLtvInvalid: "Enter a rate greater than zero and no more than 100.",
+  /**
+   * Shown instead of the field, to a caller who may record the quotation but not
+   * set the rate it is financed at. Says who unblocks it, because a disabled
+   * control with no named owner is a dead end.
+   */
+  DealPurchaseLtvNeedsApprover:
+    "This deal was created before its finance company had a purchase LTV, and a deal keeps the rules it was created under. A manager must record the rate the finance company confirmed for this deal before the quotation can be recorded.",
+  ApprovedPurchaseLtvDrivesSplit:
+    "This rate divides the approved amount into the financed and unfinanced portions.",
+  RecordApprovedPurchaseAction: "Record approved amount",
+  QuotationNeededFirst: "Record the submitted quotation first.",
+  ApprovedPurchaseNeedsApprover:
+    "A manager records this. You do not have permission to record what the finance company approved.",
+  ApprovedPurchaseNotOwnDeal:
+    "You cannot record the approved amount on your own deal. A manager or the dealership owner records it.",
+  FinanceDecisionClosed: "This deal is closed. Its recorded figures can no longer be changed.",
+  DerivedEconomicsHeading: "What that leaves",
+  DerivedEconomicsNote: "Worked out by AutoFlow from the two figures above. Not editable.",
+  DerivedFundedPortion: "Funded by the finance company",
+  DerivedUnfinancedPortion: "Not financed",
+  DerivedDealerContribution: "Dealership contribution",
+  DerivedAppliedLtv: "Applied LTV",
+
+  RecordQuotationTitle: "Record the quotation we submitted",
+  RecordQuotationDesc:
+    "The amount the dealership sent the finance company. Recorded as it was sent — not as anyone hopes it will come back.",
+  QuotationAmountLabel: "Quotation amount",
+  QuotationCalculatedLabel: "AutoFlow calculates",
+  QuotationUseCalculated: "Use this figure",
+  QuotationCalculatorUnavailable:
+    "AutoFlow cannot calculate a figure for this deal, so record the amount that was actually sent.",
+  QuotationCalculatorLoading: "Checking whether AutoFlow can calculate a figure…",
+  QuotationMatchesCalculation: "Matches AutoFlow's calculation.",
+  QuotationDiffersFromCalculation: "Differs from AutoFlow's calculation.",
+  QuotationOverrideReasonLabel: "Why the amount sent differs",
+  QuotationOverrideReasonPlaceholder: "e.g. agreed by phone with the branch manager",
+  QuotationOverrideReasonRequired: "Say why the amount sent differs from the calculated figure.",
+  QuotationAmountInvalid: "Enter an amount greater than zero.",
+  QuotationRecorded: "Quotation recorded",
+
+  TheirAppraisalLabel: "Their appraisal of the vehicle",
+  RecordAppraisalAction: "Record appraisal",
+  AppraisalNeedsReviewer:
+    "A manager records the appraisal. The deal's stage rail waits on it once the quotation has gone out.",
+  RecordAppraisalTitle: "Record the appraisal on this vehicle",
+  RecordAppraisalDesc:
+    "What the vehicle was valued at, and by whom. Sending the quotation puts the appraisal in play, so the deal waits here until it is recorded.",
+  AppraisalAmountLabel: "Appraised value",
+  AppraisalAmountInvalid: "Enter an amount greater than zero.",
+  AppraisalProviderLabel: "Who appraised it",
+  AppraisalByFinanceCompany: "The finance company",
+  AppraisalByIndependent: "An independent appraiser",
+  AppraisalProviderNameLabel: "Appraiser name",
+  AppraisalDateLabel: "Date appraised",
+  AppraisalRecorded: "Appraisal recorded",
+  ReplaceAppraisalAction: "Replace appraisal",
+  ReplaceAppraisalTitle: "Replace the appraisal on this vehicle",
+  ReplaceAppraisalDesc:
+    "A second valuation supersedes the one on file. Record what it was valued at, by whom, and why it was appraised again.",
+  ReappraisalReasonLabel: "Why the vehicle was appraised again",
+  ReappraisalReasonPlaceholder: "e.g. the first figure was entered wrongly",
+  ReappraisalReasonRequired: "Say why a second appraisal was requested.",
+  ReappraisalSupersedes: "This replaces the appraisal of {amount} currently on file.",
+  ReappraisalReopensApproval:
+    "The approved purchase amount was based on it, so recording this withdraws that approval and it will have to be recorded again.",
+  AppraisalWithdrawsApproval:
+    "This deal already has an approved purchase amount recorded without an appraisal. Recording one now withdraws that approval, and the finance company's amount will have to be recorded again.",
+
+  RecordApprovedPurchaseTitle: "Record what the finance company approved",
+  RecordApprovedPurchaseDesc:
+    "The amount the finance company said it will buy the vehicle at. Recording it here puts their decision on the record; it does not make one.",
+  ApprovedAmountLabel: "Approved amount",
+  ApprovalBasisLabel: "What they based it on",
+  BasisAppraisal: "Their appraisal",
+  BasisAppraisalHint: "Equal to the appraisal on file.",
+  BasisQuotationException: "Our quotation, as an exception",
+  BasisQuotationExceptionHint:
+    "They approved at the amount we submitted even though their appraisal is lower. Their own tolerance rule decides whether this is allowed.",
+  BasisManual: "Another amount they named",
+  BasisManualNotesLabel: "What they told us",
+  BasisManualNotesPlaceholder: "e.g. approved at 18,900 by the branch's credit officer",
+  BasisManualNotesRequired: "Record what the finance company said. It is kept on the audit record.",
+  NoAppraisalOnFile:
+    "No appraisal from the finance company is recorded on this deal, so only an amount they named directly can be recorded.",
+  ApprovedAmountInvalid: "Enter an amount greater than zero.",
+  ApprovedPurchaseRecorded: "Approved amount recorded",
 };
 
 export const salesAr = {
@@ -1466,4 +1574,101 @@ export const salesAr = {
   ReceiptAmountInvalid: "أدخل مبلغاً أكبر من صفر.",
   ReceiptExceedsClaim: "المبلغ أكبر من المتبقي على المورد.",
   SupplierSettledInFull: "تمت تسوية هذه المطالبة بالكامل.",
+
+  // --- تسجيل أرقام شركة التمويل ------------------------------------------
+  FinanceDecisionHeading: "ما أبلغتنا به شركة التمويل",
+  FinanceDecisionIntro:
+    "يسجّل أوتوفلو أرقام شركة التمويل كما وردت منها. أوتوفلو لا يمنح موافقة على التمويل.",
+  QuotationSubmittedLabel: "عرض السعر المُرسَل",
+  ApprovedPurchaseLabel: "المبلغ المعتمد من شركة التمويل",
+  NotRecordedYet: "غير مُسجَّل بعد",
+  RecordedAmountHidden: "مُسجَّل — لا تملك صلاحية عرض المبلغ",
+  RecordQuotationAction: "تسجيل عرض السعر",
+  FinanceCompanyLtvMissing:
+    "أُنشئت هذه الصفقة قبل تسجيل نسبة الشراء لشركة التمويل، وتبقى كل صفقة خاضعة للقواعد التي أُنشئت بها. سجِّل النسبة الخاصة بهذه الصفقة عند تسجيل عرض السعر.",
+  DealPurchaseLtvLabel: "نسبة الشراء لهذه الصفقة (%)",
+  DealPurchaseLtvHint:
+    "نسبة قيمة المركبة التي تشتريها شركة التمويل، لهذه الصفقة فقط. أما ضبط النسبة على الشركة نفسها فيسري على الصفقات القادمة لا على هذه.",
+  DealPurchaseLtvInvalid: "أدخل نسبة أكبر من صفر ولا تتجاوز 100.",
+  DealPurchaseLtvNeedsApprover:
+    "أُنشئت هذه الصفقة قبل تسجيل نسبة الشراء لشركة التمويل، وتبقى كل صفقة خاضعة للقواعد التي أُنشئت بها. يجب أن يسجّل المدير النسبة التي أقرّتها شركة التمويل لهذه الصفقة قبل تسجيل عرض السعر.",
+  ApprovedPurchaseLtvDrivesSplit:
+    "هذه النسبة هي التي تقسّم المبلغ المعتمد إلى جزء مموَّل وآخر غير مموَّل.",
+  RecordApprovedPurchaseAction: "تسجيل المبلغ المعتمد",
+  QuotationNeededFirst: "سجِّل عرض السعر المُرسَل أولاً.",
+  ApprovedPurchaseNeedsApprover:
+    "يسجّله المدير. لا تملك صلاحية تسجيل ما اعتمدته شركة التمويل.",
+  ApprovedPurchaseNotOwnDeal:
+    "لا يمكنك تسجيل المبلغ المعتمد على صفقتك أنت. يسجّله المدير أو مالك المعرض.",
+  FinanceDecisionClosed: "هذه الصفقة مغلقة، ولم يعد بالإمكان تعديل أرقامها المسجّلة.",
+  DerivedEconomicsHeading: "ما ينتج عن ذلك",
+  DerivedEconomicsNote: "يحتسبه أوتوفلو من الرقمين أعلاه، وغير قابل للتعديل.",
+  DerivedFundedPortion: "الجزء المموَّل من شركة التمويل",
+  DerivedUnfinancedPortion: "الجزء غير المموَّل",
+  DerivedDealerContribution: "مساهمة المعرض",
+  DerivedAppliedLtv: "نسبة التمويل المطبَّقة",
+
+  RecordQuotationTitle: "تسجيل عرض السعر المُرسَل",
+  RecordQuotationDesc:
+    "المبلغ الذي أرسله المعرض إلى شركة التمويل. يُسجَّل كما أُرسل، لا كما هو متوقَّع أن يعود.",
+  QuotationAmountLabel: "مبلغ عرض السعر",
+  QuotationCalculatedLabel: "احتساب أوتوفلو",
+  QuotationUseCalculated: "استخدام هذا الرقم",
+  QuotationCalculatorUnavailable:
+    "لا يستطيع أوتوفلو احتساب رقم لهذه الصفقة، فسجِّل المبلغ الذي أُرسل فعلياً.",
+  QuotationCalculatorLoading: "جارٍ التحقق من إمكانية احتساب رقم…",
+  QuotationMatchesCalculation: "مطابق لاحتساب أوتوفلو.",
+  QuotationDiffersFromCalculation: "يختلف عن احتساب أوتوفلو.",
+  QuotationOverrideReasonLabel: "سبب اختلاف المبلغ المُرسَل",
+  QuotationOverrideReasonPlaceholder: "مثال: اتُّفق عليه هاتفياً مع مدير الفرع",
+  QuotationOverrideReasonRequired: "وضِّح سبب اختلاف المبلغ المُرسَل عن الرقم المحتسَب.",
+  QuotationAmountInvalid: "أدخل مبلغاً أكبر من صفر.",
+  QuotationRecorded: "تم تسجيل عرض السعر",
+
+  TheirAppraisalLabel: "تخمين شركة التمويل للمركبة",
+  RecordAppraisalAction: "تسجيل التخمين",
+  AppraisalNeedsReviewer:
+    "يسجّل التخمين المدير. تتوقّف مراحل الصفقة عنده بعد إرسال عرض السعر.",
+  RecordAppraisalTitle: "تسجيل تخمين المركبة",
+  RecordAppraisalDesc:
+    "القيمة التي قُدِّرت بها المركبة، ومن قدّرها. إرسال عرض السعر يُدخِل التخمين في المسار، وتنتظر الصفقة عنده حتى يُسجَّل.",
+  AppraisalAmountLabel: "القيمة المُخمَّنة",
+  AppraisalAmountInvalid: "أدخل مبلغاً أكبر من صفر.",
+  AppraisalProviderLabel: "جهة التخمين",
+  AppraisalByFinanceCompany: "شركة التمويل",
+  AppraisalByIndependent: "مُخمِّن مستقل",
+  AppraisalProviderNameLabel: "اسم المُخمِّن",
+  AppraisalDateLabel: "تاريخ التخمين",
+  AppraisalRecorded: "تم تسجيل التخمين",
+  ReplaceAppraisalAction: "استبدال التخمين",
+  ReplaceAppraisalTitle: "استبدال تخمين المركبة",
+  ReplaceAppraisalDesc:
+    "التخمين الثاني يحل محل المسجَّل حالياً. سجِّل القيمة الجديدة ومن قدّرها وسبب إعادة التخمين.",
+  ReappraisalReasonLabel: "سبب إعادة تخمين المركبة",
+  ReappraisalReasonPlaceholder: "مثال: أُدخل الرقم الأول بشكل خاطئ",
+  ReappraisalReasonRequired: "وضِّح سبب طلب تخمين ثانٍ.",
+  ReappraisalSupersedes: "يحل هذا محل التخمين المسجَّل حالياً بمبلغ {amount}.",
+  ReappraisalReopensApproval:
+    "المبلغ المعتمد كان مبنياً عليه، لذا يؤدي تسجيل هذا إلى سحب ذلك الاعتماد وسيلزم تسجيله من جديد.",
+  AppraisalWithdrawsApproval:
+    "لهذه الصفقة مبلغ معتمد مسجَّل بدون تخمين. تسجيل تخمين الآن يسحب ذلك الاعتماد، وسيلزم تسجيل مبلغ شركة التمويل من جديد.",
+
+  RecordApprovedPurchaseTitle: "تسجيل ما اعتمدته شركة التمويل",
+  RecordApprovedPurchaseDesc:
+    "المبلغ الذي أبلغت شركة التمويل أنها ستشتري به المركبة. تسجيله هنا يوثّق قرارها، ولا يصنع قراراً.",
+  ApprovedAmountLabel: "المبلغ المعتمد",
+  ApprovalBasisLabel: "أساس الاعتماد",
+  BasisAppraisal: "تخمينها",
+  BasisAppraisalHint: "مساوٍ للتخمين المسجَّل على الصفقة.",
+  BasisQuotationException: "عرض السعر المُرسَل، استثناءً",
+  BasisQuotationExceptionHint:
+    "اعتمدت المبلغ الذي أرسلناه رغم أن تخمينها أقل. قاعدة التفاوت لديها هي التي تحدّد ما إذا كان ذلك مسموحاً.",
+  BasisManual: "مبلغ آخر حدّدته",
+  BasisManualNotesLabel: "ما أبلغتنا به",
+  BasisManualNotesPlaceholder: "مثال: اعتُمد بمبلغ 18,900 من ضابط الائتمان في الفرع",
+  BasisManualNotesRequired: "سجِّل ما أبلغت به شركة التمويل. يُحفظ في سجل التدقيق.",
+  NoAppraisalOnFile:
+    "لا يوجد تخمين من شركة التمويل مسجَّل على هذه الصفقة، لذلك يمكن تسجيل المبلغ الذي حدّدته مباشرة فقط.",
+  ApprovedAmountInvalid: "أدخل مبلغاً أكبر من صفر.",
+  ApprovedPurchaseRecorded: "تم تسجيل المبلغ المعتمد",
 };

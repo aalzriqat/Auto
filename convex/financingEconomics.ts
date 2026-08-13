@@ -263,6 +263,18 @@ function quotationExceptionRefusal(
  * than a branch inside a function that also loads the application, resolves the
  * LTV and the appraisal, writes an audit row and patches three times.
  */
+/**
+ * Whether the company's LTV rule is applied to an APPRAISAL amount.
+ *
+ * `resolveLtvBaseMinor` needs the appraisal for these two bases and cannot
+ * compute a funding split without one, whatever basis the approval was recorded
+ * under — which is why the approval keeps the appraisal as its LTV base even
+ * when the decision itself was a manually named figure.
+ */
+function ltvRuleNeedsAppraisal(ltvBasis: FinanceCompanyRuleSnapshot["ltvBasis"]): boolean {
+  return ltvBasis === "INDEPENDENT_APPRAISAL" || ltvBasis === "LOWER_OF_APPRAISAL_AND_QUOTATION";
+}
+
 function assertApprovalBasisValid(args: {
   basis: "APPRAISAL" | "QUOTATION_EXCEPTION" | "MANUAL";
   approvedAmountMinor: number;
@@ -533,12 +545,43 @@ export const suggestQuotationForApplication = query({
       APPLICATION_NOT_FOUND
     );
 
-    const solved = await solveQuotationForApplication(ctx, app, args);
     const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
+
+    /**
+     * The rules may not resolve at all — and that is an ANSWER, not an error.
+     *
+     * This query's whole contract is "here is a figure, or here is why there
+     * isn't one", and it already says so for two other unsolvable cases.
+     * `resolveAppliedLtv` and `resolveRuleSnapshot` instead THROW: no default
+     * LTV on the company, no company on the application, a rate outside the
+     * snapshot's own bounds. Convex surfaces that to `useQuery`, which throws
+     * during render — so a company whose purchase rate nobody has entered cost
+     * the operator the entire deal screen rather than one suggestion.
+     *
+     * Only `ConvexError` is caught, and its own message is returned rather than
+     * a generic one, so nothing is silently swallowed and the operator is told
+     * which setting to fix. Its sibling `suggestQuotation` keeps its throw: that
+     * one is called from the wizard with caller-supplied inputs, not mounted
+     * beside a screen it can take down.
+     */
+    let solved: Awaited<ReturnType<typeof solveQuotationForApplication>>;
+    try {
+      solved = await solveQuotationForApplication(ctx, app, args);
+    } catch (error) {
+      if (!(error instanceof ConvexError)) throw error;
+      return {
+        appliedLtvPercent: undefined,
+        currency,
+        ruleVersion: undefined,
+        available: false as const,
+        reason: typeof error.data === "string" ? error.data : "RULES_UNAVAILABLE",
+      };
+    }
+
     const base = {
-      appliedLtvPercent: solved.appliedLtvPercent,
+      appliedLtvPercent: solved.appliedLtvPercent as number | undefined,
       currency,
-      ruleVersion: solved.snapshot.ruleVersion,
+      ruleVersion: solved.snapshot.ruleVersion as number | undefined,
     };
 
     // No target recorded anywhere is a different state from the solver running
@@ -667,7 +710,7 @@ export const recordSubmittedQuotation = mutation({
     ltvPercent: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [
       PERMISSIONS.CREATE_FINANCE_APPLICATION,
     ]);
     assertMinorAmount(args.submittedQuotationMinor, "Submitted quotation");
@@ -718,6 +761,49 @@ export const recordSubmittedQuotation = mutation({
       );
     }
 
+    /**
+     * Naming the rate this deal is financed at is an APPROVER's decision.
+     *
+     * Recording the quotation is a transcription — "this is the figure we sent"
+     * — and the SALES template may do it. `ltvPercent` is a different act. It is
+     * stored as `appliedLtvPercent` and scales the finance company's funded
+     * portion, which fixes the unfinanced portion and therefore the dealership's
+     * own contribution: a salesperson able to set it could move the dealer's
+     * money by typing a different number into the field beside the amount. The
+     * sibling `approveDealerPurchaseAmount` already takes this same rate behind
+     * `APPROVE_FINANCE_APPLICATION`; this door did not, so the weaker role
+     * reached the same figure by the earlier step.
+     *
+     * The guard fires only where the argument is LOAD-BEARING — where it
+     * establishes or moves the rate the deal already stands on:
+     *
+     *  - snapshot carries no default and none has been recorded → any rate is
+     *    the exceptional per-deal recovery, and needs an approver;
+     *  - the deal already has a rate and the caller re-sends the SAME one →
+     *    nothing moves, and re-recording a quotation stays ordinary sales work;
+     *  - the snapshot's own configured rate, sent explicitly → likewise a
+     *    no-op, so the normal configured path is untouched;
+     *  - a rate DIFFERENT from either → an override of the company's rules,
+     *    which moves exactly the money the recovery case does and gets exactly
+     *    the same authority.
+     *
+     * Checked before the solver runs and before anything is patched, so a
+     * refusal never leaves a recorded quotation standing on a rate the recorder
+     * was not entitled to set.
+     */
+    if (args.ltvPercent !== undefined) {
+      const snapshot = await resolveRuleSnapshot(ctx, app);
+      const establishedLtvPercent = app.appliedLtvPercent ?? snapshot.defaultLtvPercent;
+      const mayApprove =
+        isSystemOwnerRole(role) ||
+        role.permissions.includes(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+      if (args.ltvPercent !== establishedLtvPercent && !mayApprove) {
+        throw new ConvexError(
+          "Only a user who can approve finance applications may set the LTV this deal is financed at. Ask a manager to record the rate the financing company confirmed."
+        );
+      }
+    }
+
     // The same resolution `suggestQuotationForApplication` runs, so the figure
     // the user was shown is the figure the guard below accepts. Two copies of
     // this would drift the moment either gained an input.
@@ -752,13 +838,150 @@ export const recordSubmittedQuotation = mutation({
     const amountChanged = app.submittedQuotationMinor !== args.submittedQuotationMinor;
     const sourceChanged = app.submittedQuotationSource !== args.source;
     const reasonChanged = (app.submittedQuotationOverrideReason ?? "") !== (reason ?? "");
-    if (quotationPreviouslyRecorded && (amountChanged || sourceChanged || reasonChanged)) {
+    // The RECORDER belongs in this set for the same reason the approver belongs
+    // in `approveDealerPurchaseAmount`'s: the patch below rewrites it
+    // unconditionally, and who sent the finance company its quotation is the
+    // provenance of a real external document. Without it, a colleague
+    // re-entering the same figure from the same paperwork — or a retry after a
+    // dropped response — became the recorder of record, with a new timestamp,
+    // and no row anywhere saying so. That sibling mutation learned this two
+    // rounds ago; this one had no caller outside tests until SCRUM-68 exposed
+    // it, so nobody could reach the case.
+    const recorderChanged = quotationPreviouslyRecorded && app.submittedQuotationBy !== user._id;
+    /**
+     * The CALCULATION INPUTS, which the patch below also rewrites.
+     *
+     * Comparing only the four headline fields let a re-record move the target,
+     * the dealer-borne expenses, the buffer, the customer's first payment or the
+     * applied LTV at an identical amount, source, reason and recorder — silently
+     * changing every derived figure the economics engine computes from them,
+     * with no audit row and no new submission stamp. The resolved values are
+     * compared rather than the raw arguments, because an omitted argument means
+     * "keep what the deal already has" and is not a change.
+     */
+    /**
+     * The two arguments the patch FANS OUT into more than one stored field.
+     *
+     * `targetSellingAmountMinor` writes both `targetSellingAmountMinor` and
+     * `targetNetProceedsMinor`; `estimatedDealerBorneExpensesMinor` writes both
+     * `estimatedDealerBorneExpensesMinor` and `estimatedClosingExpensesMinor`.
+     * They normally hold the same value, because the patch always writes them
+     * from one argument — but on a row where they have drifted apart, one
+     * argument moves one field and not the other.
+     *
+     * Stated once, as a table, and read by BOTH the gate below and the audit
+     * description further down. Three review rounds found three defects in the
+     * hand-written version of this rule — a move reported that never happened,
+     * a move missed that did, and then a field mutated with no audit row at all
+     * because the gate never opened — each in a different clause, each fixed
+     * separately, each fix leaving the next one wrong. Two fields, two readers
+     * and one hand-maintained rule is what kept producing them; the arithmetic
+     * was never the hard part.
+     */
+    const fannedOutInputs = [
+      {
+        supplied: args.targetSellingAmountMinor,
+        fields: [
+          ["target", app.targetSellingAmountMinor],
+          ["target net proceeds", app.targetNetProceedsMinor],
+        ],
+      },
+      {
+        supplied: args.estimatedDealerBorneExpensesMinor,
+        fields: [
+          ["expenses", app.estimatedDealerBorneExpensesMinor],
+          ["closing expenses", app.estimatedClosingExpensesMinor],
+        ],
+      },
+    ] as const satisfies ReadonlyArray<{
+      supplied: number | undefined;
+      fields: ReadonlyArray<readonly [string, number | undefined]>;
+    }>;
+
+    /**
+     * Every stored field a supplied argument would actually move — counted
+     * once per DISTINCT starting value.
+     *
+     * Fields of a pair that held the same value move identically, and naming
+     * both is one move described twice: an ordinary expenses change would have
+     * read "expenses 300000, closing expenses 300000". Only a field that stood
+     * somewhere else is a second, genuinely different move, which is exactly
+     * the drifted row this table exists for. So an ordinary re-record produces
+     * one entry per argument, as it always has, and a drifted row produces one
+     * per figure that was really there.
+     */
+    const fannedOutMoves = fannedOutInputs.flatMap(({ supplied, fields }) => {
+      if (supplied === undefined) return [];
+      const distinctStartingValues = new Set<number | undefined>();
+      return fields
+        .filter(([, before]) => before !== supplied)
+        .filter(([, before]) => {
+          if (distinctStartingValues.has(before)) return false;
+          distinctStartingValues.add(before);
+          return true;
+        })
+        .map(([label, before]) => [label, before, supplied] as const);
+    });
+
+    const inputsChanged =
+      quotationPreviouslyRecorded &&
+      (fannedOutMoves.length > 0 ||
+        (args.quotationBufferMinor !== undefined &&
+          args.quotationBufferMinor !== app.quotationBufferMinor) ||
+        customerFirstPaymentMinor !== app.customerFirstPaymentMinor ||
+        appliedLtvPercent !== app.appliedLtvPercent);
+    const materiallyChanged =
+      amountChanged || sourceChanged || reasonChanged || recorderChanged || inputsChanged;
+    if (quotationPreviouslyRecorded && materiallyChanged) {
+      /**
+       * Every input that MOVED, on both sides — not just the headline four.
+       *
+       * A row whose two value fields read identically is not a trace. That was
+       * the lesson the approver audit next door had to learn, and this writer
+       * repeated it one level down: when only a calculation input changed, the
+       * described values were byte-identical and the fallback reason claimed a
+       * source/reason/recorder change that had not happened — while the patch
+       * below overwrote the previous inputs and the whole snapshot, leaving the
+       * cause of every moved derived figure unrecoverable.
+       */
+      const movedInputs: Array<[string, unknown, unknown]> = [];
+      const noteMove = (label: string, before: unknown, after: unknown) => {
+        if (before !== after) movedInputs.push([label, before, after]);
+      };
+      // The same table the gate above read, so what opened the gate is exactly
+      // what the row describes. Nothing appears for an omitted argument,
+      // because then nothing was patched.
+      for (const [label, before, after] of fannedOutMoves) {
+        noteMove(label, before, after);
+      }
+      noteMove("buffer", app.quotationBufferMinor, bufferForSolver);
+      noteMove("first payment", app.customerFirstPaymentMinor, customerFirstPaymentMinor);
+      noteMove("LTV", app.appliedLtvPercent, appliedLtvPercent);
+
       const describe = (
         amountMinor: number | undefined,
         source: string | undefined,
-        why: string | undefined
-      ): string =>
-        `${amountMinor ?? "unset"} (${source ?? "unknown source"}${why ? `: ${why}` : ""})`;
+        why: string | undefined,
+        recordedBy: Id<"users"> | undefined,
+        side: 0 | 1
+      ): string => {
+        const inputs = movedInputs
+          .map(([label, before, after]) => `${label} ${(side === 0 ? before : after) ?? "unset"}`)
+          .join(", ");
+        return `${amountMinor ?? "unset"} (${source ?? "unknown source"}${why ? `: ${why}` : ""}${
+          recordedBy ? ` by ${recordedBy}` : ""
+        }${inputs ? `; ${inputs}` : ""})`;
+      };
+
+      // Names what actually moved, so the row does not assert a change that did
+      // not happen. Only reached when the caller gave no reason of their own.
+      const changedFields = [
+        ...(amountChanged ? ["the amount"] : []),
+        ...(sourceChanged ? ["the source"] : []),
+        ...(reasonChanged ? ["the reason"] : []),
+        ...(recorderChanged ? ["the recorder"] : []),
+        ...movedInputs.map(([label]) => label),
+      ];
       await recordOverride(ctx, {
         orgId: args.orgId,
         applicationId: args.applicationId,
@@ -766,14 +989,12 @@ export const recordSubmittedQuotation = mutation({
         previousValue: describe(
           app.submittedQuotationMinor,
           app.submittedQuotationSource,
-          app.submittedQuotationOverrideReason
+          app.submittedQuotationOverrideReason,
+          app.submittedQuotationBy,
+          0
         ),
-        newValue: describe(args.submittedQuotationMinor, args.source, reason),
-        reason:
-          reason ??
-          (amountChanged
-            ? "Recalculated from updated deal inputs."
-            : "Re-recorded with a different source or reason at the same amount."),
+        newValue: describe(args.submittedQuotationMinor, args.source, reason, user._id, 1),
+        reason: reason ?? `Re-recorded; changed: ${changedFields.join(", ")}.`,
         changedBy: user._id,
       });
     }
@@ -832,10 +1053,22 @@ export const recordSubmittedQuotation = mutation({
       submittedQuotationMinor: args.submittedQuotationMinor,
       submittedQuotationSource: args.source,
       submittedQuotationOverrideReason: reason,
-      submittedQuotationAt: now,
-      submittedQuotationBy: user._id,
+      // A retry is not a new submission. Advancing these on an identical
+      // re-record made "when did we send this quotation, and who sent it"
+      // answer the retry rather than the send — the same rule
+      // `approveDealerPurchaseAmount` keeps for its own approval stamp.
+      ...(quotationPreviouslyRecorded && !materiallyChanged
+        ? {}
+        : { submittedQuotationAt: now, submittedQuotationBy: user._id }),
       appliedLtvPercent,
       customerFirstPaymentMinor,
+      // Rewritten only when something moved, for the same reason as the stamp
+      // above: on an identical retry the snapshot's own `recordedAt` used to
+      // creep forward while the submission stamp stayed frozen, leaving two
+      // provenance fields answering the same question differently.
+      ...(quotationPreviouslyRecorded && !materiallyChanged
+        ? {}
+        : {
       quotationCalculationSnapshot: {
         mode: args.source,
         targetNetProceedsMinor: targetForSolver,
@@ -857,6 +1090,7 @@ export const recordSubmittedQuotation = mutation({
         recordedBy: user._id,
         recordedAt: now,
       },
+          }),
       ...(args.targetSellingAmountMinor !== undefined
         ? {
             targetSellingAmountMinor: args.targetSellingAmountMinor,
@@ -1209,7 +1443,27 @@ export const approveDealerPurchaseAmount = mutation({
           `That appraisal has been ${appraisal.status.toLowerCase()} and cannot be the basis for an approval. Use the current appraisal.`
         );
       }
-    } else {
+    } else if (args.basis !== "MANUAL" || ltvRuleNeedsAppraisal(snapshot.ltvBasis)) {
+      // Auto-resolution is for the bases that ARE based on an appraisal — plus
+      // the one case where the appraisal is not the approval's evidence but the
+      // company's LTV BASE.
+      //
+      // Those are two different roles for one row, and conflating them cost a
+      // defect in each direction. Adopting it under MANUAL unconditionally wrote
+      // a self-contradictory record: basis MANUAL, beside a link to evidence the
+      // amount was explicitly not based on, with that evidence flipped to
+      // APPROVED below. Dropping it unconditionally then broke the other role:
+      // for a company whose rule multiplies the APPRAISAL, `deriveEconomics` has
+      // no base without it, so the funding split was blanked, the deal was
+      // flagged for reconciliation — and SCRUM-61's handover guard refuses a
+      // deal whose split could not be computed. A legitimate manually approved
+      // figure became unfinishable.
+      //
+      // So: adopt it where the RULE needs it, never let MANUAL stamp it as
+      // approved (see the status patch below), and keep the basis saying exactly
+      // what the operator said. A caller that really does mean to link one under
+      // any basis still can, by naming it: the branch above honours that.
+      //
       // APPROVED as well as RECORDED: the first approval flips the chosen
       // appraisal to APPROVED, so matching only RECORDED made every
       // re-approval fail to find one — leaving the explicit appraisalId
@@ -1294,7 +1548,11 @@ export const approveDealerPurchaseAmount = mutation({
       });
     }
 
-    if (appraisal && appraisal.status === "RECORDED") {
+    // APPROVED on the appraisal row means the company approved AGAINST it. A
+    // MANUAL approval is the one basis that says it did not, even where the
+    // appraisal is still in play as the company's LTV base — so the row keeps
+    // whatever status it had.
+    if (appraisal && appraisal.status === "RECORDED" && args.basis !== "MANUAL") {
       await ctx.db.patch(appraisal._id, { status: "APPROVED" });
     }
 
@@ -1319,10 +1577,21 @@ export const approveDealerPurchaseAmount = mutation({
         : {}),
       approvedPurchaseNotes: args.notes?.trim(),
       appliedLtvPercent,
-      // Only claim a finalized appraisal when one exists. A MANUAL approval
-      // needs no appraisal, and writing FINALIZED there asserted a fact that
-      // never happened — in a dimension PR 2 and PR 3 gate handover on.
-      ...(appraisal ? { appraisalStatus: "FINALIZED" as const } : {}),
+      // Only claim a finalized appraisal when one exists AND the company
+      // approved against it. A MANUAL approval needs no appraisal, and writing
+      // FINALIZED there asserted a fact that never happened — in a dimension
+      // PR 2 and PR 3 gate handover on.
+      //
+      // The basis condition is not redundant with `appraisal` being present.
+      // Under MANUAL an appraisal can now be adopted as the company's LTV BASE,
+      // which is a different fact from the company having approved against it —
+      // and without this the row would say RECORDED while the application said
+      // FINALIZED about the same event. Three facts, three conditions: the LTV
+      // base is resolved above, the row's own status flips only for an
+      // appraisal-based approval, and this dimension follows the same rule.
+      ...(appraisal && args.basis !== "MANUAL"
+        ? { appraisalStatus: "FINALIZED" as const }
+        : {}),
       updatedAt: now,
     });
 

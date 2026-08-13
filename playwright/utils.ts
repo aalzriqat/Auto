@@ -5,6 +5,15 @@ import { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 
+/**
+ * Where `auth.setup.ts` saves the SECOND identity's session.
+ *
+ * Lives here rather than in the setup file so a spec can read it without
+ * importing that module — importing a file that calls `setup()` at module scope
+ * would register the setup tests into the importing spec as well.
+ */
+export const APPROVER_AUTH_FILE = "playwright/.auth/approver.json";
+
 const TURNSTILE_DUMMY_TOKEN = "XXXX.DUMMY.TOKEN.XXXX";
 const CLERK_CONVEX_TOKEN_TIMEOUT_MS = 30_000;
 

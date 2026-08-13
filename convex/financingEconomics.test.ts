@@ -195,6 +195,30 @@ async function recordBaselineQuotation(
   });
 }
 
+/**
+ * A baseline recorded as MANUAL_ENTRY, for cases that go on to move an input
+ * the solver reads.
+ *
+ * `recordBaselineQuotation` records SYSTEM_CALCULATED, which the server refuses
+ * to accept once the figure no longer equals what the calculator produces — so
+ * a case that changes the expenses cannot re-record under that label without
+ * also changing the amount, and would then be proving something else.
+ */
+async function recordManualBaseline(
+  seed: Seed,
+  applicationId: Id<"financeApplications">
+): Promise<void> {
+  await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+    orgId: seed.orgId,
+    applicationId,
+    submittedQuotationMinor: jod(DEAL.quotation),
+    source: "MANUAL_ENTRY",
+    targetSellingAmountMinor: jod(DEAL.targetSelling),
+    estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+    customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+  });
+}
+
 async function readApp(seed: Seed, applicationId: Id<"financeApplications">) {
   const app = await seed.t.run((ctx) => ctx.db.get(applicationId));
   if (!app) throw new Error("application vanished");
@@ -551,6 +575,176 @@ describe("appraisal integrity", () => {
     expect(first.appraisals[0]?.appraisalAmountMinor).toBe(jod(11_500));
     expect(second.appraisals).toHaveLength(1);
     expect(second.appraisals[0]?.appraisalAmountMinor).toBe(jod(12_300));
+  });
+});
+
+describe("a manually named approval", () => {
+  /**
+   * MANUAL exists for a figure the finance company named independently of any
+   * appraisal — by phone, at a third number. Adopting the appraisal on file
+   * anyway wrote a self-contradictory record: basis MANUAL, and beside it a
+   * link to evidence the amount was explicitly not based on, with that
+   * evidence's own status flipped to APPROVED.
+   *
+   * Unreachable in production until SCRUM-68: `approveDealerPurchaseAmount`
+   * had no caller outside tests, and the tests that exercised this path only
+   * asserted on the override log.
+   */
+  test("does not adopt or approve an appraisal it was not based on", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+
+    // A third figure: not the appraisal, not the quotation.
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(12_200),
+      basis: "MANUAL",
+      notes: "Approved at 12,200 by the branch credit officer, over the phone.",
+    });
+
+    const after = await readApp(seed, applicationId);
+    expect(after.approvedDealerPurchaseAmountMinor).toBe(jod(12_200));
+    expect(after.approvedPurchaseBasis).toBe("MANUAL");
+    // The record must not claim an appraisal basis it does not have.
+    expect(after.approvedPurchaseAppraisalId).toBeUndefined();
+
+    const appraisals = await seed.t.run((ctx) =>
+      ctx.db
+        .query("financeAppraisals")
+        .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+        .collect()
+    );
+    // Nor may it mark the finance company's appraisal as the one approved.
+    expect(appraisals[0]?.status).toBe("RECORDED");
+  });
+
+  /**
+   * The appraisal has TWO roles, and they are not the same role.
+   *
+   * One is EVIDENCE of what the approval was based on — that is the basis, and a
+   * manually named amount has none. The other is the LTV BASE: for a company
+   * whose rule multiplies the appraisal rather than the approved amount, the
+   * funding split cannot be computed without it, whatever the basis says.
+   *
+   * Dropping the appraisal entirely under MANUAL conflated the two and cost the
+   * second: `deriveEconomics` could not resolve an LTV base, so the funding
+   * split was blanked and the deal flagged for reconciliation — and SCRUM-61's
+   * guard refuses handover and finalization when
+   * `financeCompanyFundedPortionMinor` is undefined. A legitimate third,
+   * manually approved figure became unfinishable.
+   */
+  test("keeps the appraisal as the LTV BASE for a company that lends against it", async () => {
+    const seed = await seedDealer();
+    await seed.asUser.mutation(api.finance.updateCompany, {
+      id: seed.companyId,
+      orgId: seed.orgId,
+      name: "Jordan Finance",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      isActive: true,
+      maxFinancingLTV: 85,
+      defaultLtvPercent: 85,
+      customerFirstPaymentOffsetsUnfinancedShare: true,
+      ltvBasis: "INDEPENDENT_APPRAISAL",
+    });
+
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(12_200),
+      basis: "MANUAL",
+      notes: "Approved at 12,200 by the branch credit officer, over the phone.",
+    });
+
+    const after = await readApp(seed, applicationId);
+    // The BASIS is still what the operator said it was...
+    expect(after.approvedPurchaseBasis).toBe("MANUAL");
+    // ...and the funding split is still computable, because the company's rule
+    // needs the appraisal as its base and one is on file.
+    expect(after.financeCompanyFundedPortionMinor).not.toBeUndefined();
+    expect(after.needsFinancingReconciliation).not.toBe(true);
+
+    const appraisals = await seed.t.run((ctx) =>
+      ctx.db
+        .query("financeAppraisals")
+        .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+        .collect()
+    );
+    // Used as a base, NOT endorsed as the approval's evidence. Flipping it to
+    // APPROVED would claim the company approved against it, which is the thing
+    // the MANUAL basis says did not happen.
+    expect(appraisals[0]?.status).toBe("RECORDED");
+    // ...and the APPLICATION's own dimension must not say otherwise. Adopting
+    // the appraisal as an LTV base made this claim FINALIZED, so the row said
+    // "never approved against" while the application said "concluded" about the
+    // same event — two records disagreeing, which is the class of defect this
+    // whole area keeps producing when one field is asked to mean three things.
+    expect(after.appraisalStatus).not.toBe("FINALIZED");
+  });
+
+  test("still honours an appraisal the caller names explicitly", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    const appraisalId = (
+      await seed.t.run((ctx) =>
+        ctx.db
+          .query("financeAppraisals")
+          .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+          .collect()
+      )
+    )[0]._id;
+
+    // The control: not-auto-resolving must not become can-never-link.
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(12_200),
+      basis: "MANUAL",
+      appraisalId,
+      notes: "Approved above their own appraisal, which is on file.",
+    });
+
+    const after = await readApp(seed, applicationId);
+    expect(after.approvedPurchaseAppraisalId).toBe(appraisalId);
+    // The named path shares the status guard with the auto-resolved one, and
+    // only the other test covered it — so a future edit that special-cased the
+    // two could reopen this one silently.
+    const appraisals = await seed.t.run((ctx) =>
+      ctx.db
+        .query("financeAppraisals")
+        .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+        .collect()
+    );
+    expect(appraisals[0]?.status).toBe("RECORDED");
+    expect(after.appraisalStatus).not.toBe("FINALIZED");
   });
 });
 
@@ -1300,20 +1494,26 @@ describe("reconciliation queue", () => {
   });
 });
 
-describe("permissions", () => {
-  async function addSalesUser(seed: Seed): Promise<AuthenticatedTestConvex> {
-    const template = DEFAULT_ROLE_TEMPLATES.find((role) => role.name === "SALES");
-    if (!template) throw new Error("no SALES template");
-    const userId = await seed.t.run((ctx) =>
-      ctx.db.insert("users", { clerkId: "econ_sales", email: "sales@example.com", name: "Sales" })
-    );
-    const roleId = await seed.t.run((ctx) =>
-      ctx.db.insert("roles", { orgId: seed.orgId, name: "SALES", permissions: [...template.permissions] })
-    );
-    await seed.t.run((ctx) => ctx.db.insert("memberships", { orgId: seed.orgId, userId, roleId }));
-    return seed.t.withIdentity({ subject: "econ_sales" });
-  }
+/**
+ * A real salesperson: the default SALES template, not the owner role the seed
+ * hands out. Module-scoped because two describes need it — the permission cases
+ * below, and the LTV-authority cases, where the whole question is what a role
+ * that is NOT an approver may establish about a deal's economics.
+ */
+async function addSalesUser(seed: Seed): Promise<AuthenticatedTestConvex> {
+  const template = DEFAULT_ROLE_TEMPLATES.find((role) => role.name === "SALES");
+  if (!template) throw new Error("no SALES template");
+  const userId = await seed.t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: "econ_sales", email: "sales@example.com", name: "Sales" })
+  );
+  const roleId = await seed.t.run((ctx) =>
+    ctx.db.insert("roles", { orgId: seed.orgId, name: "SALES", permissions: [...template.permissions] })
+  );
+  await seed.t.run((ctx) => ctx.db.insert("memberships", { orgId: seed.orgId, userId, roleId }));
+  return seed.t.withIdentity({ subject: "econ_sales" });
+}
 
+describe("permissions", () => {
   test("SALES cannot record a finance company's appraisal, only a dealer estimate", async () => {
     const seed = await seedDealer();
     const applicationId = await createApplication(seed);
@@ -1392,6 +1592,219 @@ describe("LTV configuration", () => {
     ).rejects.toThrow(/No LTV is configured/i);
   });
 
+  test("reports an unconfigured LTV as an unavailable calculation, not as a thrown error", async () => {
+    const seed = await seedDealer();
+    const { applicationId } = await createUnconfiguredLtvApplication(seed);
+
+    // This query answers "is there a figure to suggest, and if not why" — a
+    // shape it already has for two other unsolvable cases. Throwing instead
+    // put a Convex stack trace where the deal cockpit should be: `useQuery`
+    // throws during render, which loses the WHOLE screen rather than one
+    // suggestion. Its sibling `suggestQuotation` keeps its throw; that one is
+    // called from the wizard with caller-supplied inputs, not mounted beside a
+    // screen it can take down.
+    const suggestion = await seed.asUser.query(
+      api.financingEconomics.suggestQuotationForApplication,
+      { orgId: seed.orgId, applicationId }
+    );
+    expect(suggestion.available).toBe(false);
+    expect(suggestion.reason).toMatch(/LTV/i);
+  });
+
+  /**
+   * An application snapshots its company's rules at creation and never re-reads
+   * them — deliberately, so editing a company next month cannot rewrite a deal
+   * it already governs. The consequence is that a deal created while the
+   * company had no purchase rate CANNOT be repaired by adding one in settings:
+   * the frozen snapshot still has none, and telling the operator to go to
+   * settings is a recovery instruction that cannot recover this deal.
+   *
+   * The supported repair is per-deal: `recordSubmittedQuotation` accepts an
+   * explicit `ltvPercent`, `resolveAppliedLtv` honours it over the (absent)
+   * default within the snapshot's own bounds, and it is stored on the
+   * application as `appliedLtvPercent` — so the deal moves without anyone
+   * rewriting its immutable rule snapshot.
+   */
+  test("a deal created before its company had a purchase rate is repaired per-deal, not by the settings edit", async () => {
+    const seed = await seedDealer();
+    const { bareCompanyId, applicationId } = await createUnconfiguredLtvApplication(seed);
+
+    // The operator does exactly what the old copy told them to.
+    await seed.asUser.mutation(api.finance.updateCompany, {
+      id: bareCompanyId,
+      orgId: seed.orgId,
+      name: "Unconfigured Finance Co",
+      profitRate: 6,
+      maxTermMonths: 48,
+      gracePeriodMonths: 0,
+      isActive: true,
+      maxFinancingLTV: 100,
+      defaultLtvPercent: 90,
+    });
+
+    // ...and this deal is exactly as stuck as before, because its snapshot is
+    // frozen. This half must keep passing: the immutability is the point.
+    const stillFrozen = await readApp(seed, applicationId);
+    expect(stillFrozen.companyRuleSnapshot?.defaultLtvPercent).toBeUndefined();
+    await expect(
+      seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(13_000),
+        source: "MANUAL_ENTRY",
+      })
+    ).rejects.toThrow(/No LTV is configured/i);
+
+    // The supported repair: name the rate that applies to THIS deal.
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(13_000),
+      source: "MANUAL_ENTRY",
+      ltvPercent: 90,
+    });
+
+    const repaired = await readApp(seed, applicationId);
+    expect(repaired.submittedQuotationMinor).toBe(jod(13_000));
+    expect(repaired.appliedLtvPercent).toBe(90);
+    // The snapshot is still untouched — the deal was repaired, not rewritten.
+    expect(repaired.companyRuleSnapshot?.defaultLtvPercent).toBeUndefined();
+  });
+
+  /**
+   * A deal frozen under a company that carried no purchase rate. The setup the
+   * two authority cases below both need.
+   */
+  async function createUnconfiguredLtvApplication(seed: Seed): Promise<{
+    bareCompanyId: Id<"financeCompanies">;
+    applicationId: Id<"financeApplications">;
+  }> {
+    const bareCompanyId = await seed.t.run((ctx) =>
+      ctx.db.insert("financeCompanies", {
+        orgId: seed.orgId,
+        name: "Unconfigured Finance Co",
+        profitRate: 6,
+        maxTermMonths: 48,
+        gracePeriodMonths: 0,
+        maxFinancingLTV: 100,
+        isActive: true,
+      })
+    );
+    const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerId,
+      vehicleId: seed.vehicleId,
+      mode: "CONFIGURED_FINANCE_COMPANY",
+      companyId: bareCompanyId,
+      vehiclePrice: DEAL.targetSelling,
+      downPayment: DEAL.customerFirstPayment,
+      termMonths: 48,
+      totalFinancedAmount: 10_736,
+    });
+    const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
+      orgId: seed.orgId,
+      quoteId,
+    });
+    return { bareCompanyId, applicationId };
+  }
+
+  /**
+   * Recording the quotation is a transcription — "this is the figure we sent" —
+   * and the SALES template may do it. Naming the rate the deal is financed at is
+   * NOT: `appliedLtvPercent` drives the finance company's funded portion, the
+   * unfinanced portion and therefore the dealership's own contribution, so a
+   * salesperson who could set it could move the dealer's money by typing a
+   * different number into a field beside the amount.
+   *
+   * The owner's ruling, recorded on SCRUM-68: the exceptional per-deal rate
+   * requires `approve:finance_application`. The ordinary path — a company whose
+   * rate is configured, a salesperson recording what was sent — is untouched,
+   * and the case below proves that too.
+   */
+  test("SALES cannot establish the missing per-deal LTV; an approver can, and then SALES may quote at it", async () => {
+    const seed = await seedDealer();
+    const { applicationId } = await createUnconfiguredLtvApplication(seed);
+    const asSales = await addSalesUser(seed);
+
+    await expect(
+      asSales.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(13_000),
+        source: "MANUAL_ENTRY",
+        ltvPercent: 90,
+      })
+    // The guard's OWN wording. `/approve/i` also matches the generic tenant-auth
+    // refusal "Missing required permissions: approve:finance_application", so a
+    // later change that moved this mutation behind a different permission would
+    // leave the test green while it proved a different rule.
+    ).rejects.toThrow(/may set the LTV this deal is financed at/i);
+
+    // Refused BEFORE anything was written — not refused after recording the
+    // quotation and leaving the rate behind, which would be the worse failure.
+    const untouched = await readApp(seed, applicationId);
+    expect(untouched.appliedLtvPercent).toBeUndefined();
+    expect(untouched.submittedQuotationMinor).toBeUndefined();
+
+    // The manager names the rate the financing was arranged at.
+    await seed.asApprover.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(13_000),
+      source: "MANUAL_ENTRY",
+      ltvPercent: 90,
+    });
+    expect((await readApp(seed, applicationId)).appliedLtvPercent).toBe(90);
+
+    // Once it is established, the deal is an ordinary one again: the
+    // salesperson re-records the quotation at the SAME rate without needing an
+    // approver, because that rate is no longer their decision to make.
+    await asSales.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(13_400),
+      source: "MANUAL_ENTRY",
+      ltvPercent: 90,
+    });
+    const requoted = await readApp(seed, applicationId);
+    expect(requoted.submittedQuotationMinor).toBe(jod(13_400));
+    expect(requoted.appliedLtvPercent).toBe(90);
+  });
+
+  test("SALES may record a quotation under a configured rate, but not at a different one", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    const asSales = await addSalesUser(seed);
+
+    // Departing from the company's configured rate moves exactly the same
+    // money as filling in an absent one, so it needs the same authority.
+    await expect(
+      asSales.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(DEAL.quotation),
+        source: "MANUAL_ENTRY",
+        ltvPercent: 70,
+      })
+    // The guard's OWN wording. `/approve/i` also matches the generic tenant-auth
+    // refusal "Missing required permissions: approve:finance_application", so a
+    // later change that moved this mutation behind a different permission would
+    // leave the test green while it proved a different rule.
+    ).rejects.toThrow(/may set the LTV this deal is financed at/i);
+
+    // The ordinary path is untouched: no rate argument, the snapshot's own rate
+    // applies, and the salesperson records what was sent.
+    await asSales.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "MANUAL_ENTRY",
+    });
+    const recorded = await readApp(seed, applicationId);
+    expect(recorded.submittedQuotationMinor).toBe(jod(DEAL.quotation));
+    expect(recorded.appliedLtvPercent).toBe(DEAL.ltvPercent);
+  });
+
   test("applies the LTV to the appraisal when that is the company's rule", async () => {
     const seed = await seedDealer();
     await seed.asUser.mutation(api.finance.updateCompany, {
@@ -1456,6 +1869,131 @@ describe("overrides and audit", () => {
     // Nothing was back-solved to fill the blanks.
     expect(app.estimatedDealerBorneExpensesMinor).toBeUndefined();
     expect(app.quotationBufferMinor).toBeUndefined();
+  });
+
+  /**
+   * The same two rules `approveDealerPurchaseAmount` already keeps for its own
+   * approver, which this writer did not.
+   *
+   * Both matter now in a way they did not before: until SCRUM-68 this mutation
+   * had no caller outside tests, so no operator could reach either case. The
+   * cockpit's recorder makes both ordinary — a retry after an uncertain
+   * response, and a colleague re-entering the same figure from the same
+   * paperwork.
+   */
+  test("a second person re-recording an identical quotation cannot become its author silently", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+
+    const before = await readApp(seed, applicationId);
+    expect(before.submittedQuotationBy).toBe(seed.userId);
+
+    // Byte-identical, by a different permitted user.
+    await seed.asApprover.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "SYSTEM_CALCULATED",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+    });
+
+    const after = await readApp(seed, applicationId);
+    expect(after.submittedQuotationBy).toBe(seed.approverId);
+
+    // Who sent the finance company its quotation is the provenance of a real
+    // external document. Rewriting it with no row left the original recorder
+    // unrecoverable — this table is the only history.
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides).toHaveLength(1);
+    // A row is not a trace if both sides read the same. Same lesson the
+    // approver audit next door had to learn.
+    expect(economics.overrides[0]?.previousValue).toContain(String(seed.userId));
+    expect(economics.overrides[0]?.newValue).toContain(String(seed.approverId));
+  });
+
+  test("the same person re-recording an identical quotation does not advance its timestamp", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    const first = await readApp(seed, applicationId);
+
+    await recordBaselineQuotation(seed, applicationId);
+
+    // A retry is not a new submission. Advancing the stamp made "when did we
+    // send this quotation" answer the retry instead of the send.
+    const after = await readApp(seed, applicationId);
+    expect(after.submittedQuotationAt).toBe(first.submittedQuotationAt);
+    expect(after.submittedQuotationBy).toBe(first.submittedQuotationBy);
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides).toHaveLength(0);
+  });
+
+  test("an identical retry does not restamp the calculation snapshot either", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    const first = await readApp(seed, applicationId);
+
+    await recordBaselineQuotation(seed, applicationId);
+
+    // Holding the top-level stamp while the snapshot's own `recordedAt` crept
+    // forward left two provenance fields answering the same question
+    // differently. A retry rewrites nothing.
+    const after = await readApp(seed, applicationId);
+    expect(after.quotationCalculationSnapshot?.recordedAt).toBe(
+      first.quotationCalculationSnapshot?.recordedAt
+    );
+  });
+
+  test("changing a calculation input at the same amount is a change, and is audited", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(13_000),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(300),
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+    });
+
+    // Same amount, same source, same person — but the expenses behind it moved,
+    // and those feed the derived economics. Comparing only the four headline
+    // fields let that through with no row and no new stamp.
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(13_000),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(900),
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+    });
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides).toHaveLength(1);
+    // A ROW IS NOT A TRACE. Asserting only the count passed on a row whose two
+    // value fields read identically and whose reason claimed a source/recorder
+    // change that never happened — while the patch overwrote the old inputs, so
+    // the cause of every moved derived figure was unrecoverable.
+    expect(economics.overrides[0]?.previousValue).toContain(String(jod(300)));
+    expect(economics.overrides[0]?.newValue).toContain(String(jod(900)));
+    expect(economics.overrides[0]?.reason).toMatch(/expenses/i);
+    expect(economics.overrides[0]?.reason).not.toMatch(/source|recorder/i);
+    expect((await readApp(seed, applicationId)).estimatedDealerBorneExpensesMinor).toBe(jod(900));
   });
 
   test("departing from a calculated quotation must record why", async () => {
@@ -1868,6 +2406,263 @@ describe("overrides and audit", () => {
     expect(economics.overrides[0]?.previousValue).toContain("CALCULATED_WITH_OVERRIDE");
     expect(economics.overrides[0]?.previousValue).toContain("cover its own fee");
     expect(economics.overrides[0]?.newValue).toContain("MANUAL_ENTRY");
+  });
+
+  /**
+   * A row whose two target fields have drifted apart, which the audit must
+   * describe honestly in BOTH directions.
+   *
+   * The mutation writes `targetSellingAmountMinor` and `targetNetProceedsMinor`
+   * together from one argument, so they agree on every row this code can create
+   * — the divergence below is seeded directly, because that is the only shape
+   * legacy data could have arrived in and the whole purpose of an audit trail is
+   * the rows nobody can produce any more.
+   *
+   * Both reviewers found a defect here, in opposite directions, one round apart:
+   * comparing the SELLING field against a value that falls back to the NET one
+   * reported a move that never happened when the argument was omitted; comparing
+   * the NET field reported no move when an explicit argument moved the selling
+   * field to the net field's value. Each field is now compared against its own
+   * previous value, which is right in both cases and needs no third guess.
+   */
+  test("records the target move on a row whose selling and net-proceeds figures had drifted apart", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+
+    const recorded = await readApp(seed, applicationId);
+    expect(recorded.targetSellingAmountMinor).toBe(jod(DEAL.targetSelling));
+    expect(recorded.targetNetProceedsMinor).toBe(jod(DEAL.targetSelling));
+
+    // Legacy shape: the two fields no longer agree.
+    const driftedNetProceeds = jod(11_000);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { targetNetProceedsMinor: driftedNetProceeds })
+    );
+
+    // The same quotation, same source, same recorder — and an explicit target
+    // equal to the DRIFTED net figure. The only thing that moves is the selling
+    // amount, from 10,500 to 11,000, and the patch below overwrites it.
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: driftedNetProceeds,
+    });
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides).toHaveLength(1);
+    const override = economics.overrides[0];
+    // The figure it moved FROM has to survive, because the patch has just
+    // overwritten it and there is no other history of that field anywhere.
+    expect(override?.previousValue).toContain(String(jod(DEAL.targetSelling)));
+    expect(override?.newValue).toContain(String(driftedNetProceeds));
+    expect(override?.reason).toMatch(/target/i);
+  });
+
+  /**
+   * The same drifted row, moving the OTHER field — which the gate above the
+   * audit has to notice, not just the description below it.
+   *
+   * Supplying a target equal to the selling figure moves nothing on that field
+   * and everything on the net-proceeds one, because the patch writes both. The
+   * gate compared the argument against the selling field alone, so it saw no
+   * change, wrote no override row, and the per-field description was never
+   * reached: a persisted financial figure moved with no trace at all. Found by
+   * Codex on the round that fixed the description, and pre-existing rather than
+   * caused by it — the gate has always compared one of the two fields it writes.
+   *
+   * Everything else is held identical on purpose: same amount, same source,
+   * same recorder, no reason. If any of those moved, `materiallyChanged` would
+   * be true for a different reason and this would pass without proving anything.
+   */
+  test("audits a target that moves only the net-proceeds figure on a drifted row", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+
+    const driftedNetProceeds = jod(11_000);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { targetNetProceedsMinor: driftedNetProceeds })
+    );
+
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "SYSTEM_CALCULATED",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+    });
+
+    // The net-proceeds figure has been overwritten from 11,000 back to 10,500.
+    expect((await readApp(seed, applicationId)).targetNetProceedsMinor).toBe(
+      jod(DEAL.targetSelling)
+    );
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides).toHaveLength(1);
+    expect(economics.overrides[0]?.previousValue).toContain(String(driftedNetProceeds));
+    expect(economics.overrides[0]?.reason).toMatch(/net proceeds/i);
+  });
+
+  /**
+   * The same two cases for the OTHER fanned-out pair.
+   *
+   * `estimatedDealerBorneExpensesMinor` writes both itself and
+   * `estimatedClosingExpensesMinor`, and carried the identical gate hole. It was
+   * fixed by the shared table rather than by its own clause — which is worth
+   * nothing unless the table is proved for this pair too. The round that
+   * introduced the table exists because a rule maintained in two places drifted
+   * three times; shipping the second pair on the strength of "same code path"
+   * would be the same bet that lost those three times.
+   */
+  test("audits both expenses figures on a row where they had drifted apart", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    // MANUAL_ENTRY on both records: changing the expenses moves the solver's
+    // own figure, and a SYSTEM_CALCULATED label is refused when it no longer
+    // equals what the calculator produces. The provenance is not what this
+    // case is about, and holding it identical keeps the expenses the only
+    // thing that moved.
+    await recordManualBaseline(seed, applicationId);
+
+    const driftedClosing = jod(400);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { estimatedClosingExpensesMinor: driftedClosing })
+    );
+
+    // Moves the dealer-borne figure, and the closing figure from somewhere else
+    // entirely. Everything else is held identical.
+    const newExpenses = jod(900);
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: newExpenses,
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+    });
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides).toHaveLength(1);
+    // Both starting figures survive, because the patch has overwritten both.
+    expect(economics.overrides[0]?.previousValue).toContain(
+      String(jod(DEAL.exampleDealerBorneExpenses))
+    );
+    expect(economics.overrides[0]?.previousValue).toContain(String(driftedClosing));
+    expect(economics.overrides[0]?.reason).toMatch(/closing expenses/i);
+  });
+
+  test("audits an expenses change that moves only the closing figure", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+
+    const driftedClosing = jod(400);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { estimatedClosingExpensesMinor: driftedClosing })
+    );
+
+    // Equal to the dealer-borne figure already on the row, so ONLY the closing
+    // figure moves. The gate has to notice that, or a persisted number changes
+    // with no audit row at all.
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "SYSTEM_CALCULATED",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+    });
+
+    expect((await readApp(seed, applicationId)).estimatedClosingExpensesMinor).toBe(
+      jod(DEAL.exampleDealerBorneExpenses)
+    );
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides).toHaveLength(1);
+    expect(economics.overrides[0]?.previousValue).toContain(String(driftedClosing));
+    expect(economics.overrides[0]?.reason).toMatch(/closing expenses/i);
+  });
+
+  /**
+   * The everyday case, pinned exactly rather than by `toContain`.
+   *
+   * Folding the expenses pair into the shared table made an ordinary expenses
+   * change name both fields with the same figure — "expenses 300000, closing
+   * expenses 300000" — where it had named one. That is one move described
+   * twice, and no existing assertion noticed because they all match substrings.
+   */
+  test("names an ordinary expenses change once, not once per field it writes", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordManualBaseline(seed, applicationId);
+
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(900),
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+    });
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides[0]?.reason).toBe("Re-recorded; changed: expenses.");
+  });
+
+  /**
+   * The same everyday case for the target pair.
+   *
+   * The dedupe is shared, so both pairs would double-name an ordinary change if
+   * it were ever removed — but only the expenses side had a test that noticed.
+   * Removing the dedupe left 94 of 95 green, and the one failure was the
+   * expenses case: a later edit that reintroduced double-naming on the target
+   * side alone would have shipped with CI green. Found by Sonnet, which is
+   * exactly the asymmetry this subsystem has now been bitten by three times —
+   * except this time it was the tests that were asymmetric, not the rule.
+   */
+  test("names an ordinary target change once, not once per field it writes", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordManualBaseline(seed, applicationId);
+
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: jod(11_200),
+      estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+    });
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides[0]?.reason).toBe("Re-recorded; changed: target.");
   });
 
   test("audits a recalculated quotation even when no reason is given", async () => {

@@ -759,6 +759,29 @@ export interface DealStageFacts extends LifecycleFacts {
   handoverStatus?: HandoverStatus;
   rawAppraisalGapMinor?: number;
   approvedDealerPurchaseAmountMinor?: number;
+  /**
+   * What the approved amount was based on.
+   *
+   * Load-bearing for the APPRAISAL stage: `approveDealerPurchaseAmount` permits
+   * `MANUAL` with no appraisal — a figure the company named directly — and
+   * deliberately does not mark the appraisal dimension finalized there, because
+   * that would assert a valuation that never happened. Without this fact the
+   * rail went on demanding an appraisal nobody would ever record, on a deal
+   * that was already approved.
+   */
+  approvedPurchaseBasis?: "APPRAISAL" | "QUOTATION_EXCEPTION" | "MANUAL";
+  /**
+   * Whether the funding split actually came out.
+   *
+   * The companion to the basis above, and it is what stops the rail lying in
+   * the other direction. `approveDealerPurchaseAmount` permits MANUAL with no
+   * appraisal even for a company whose LTV rule multiplies the APPRAISAL — and
+   * there the split cannot be computed at all, so an appraisal IS still needed
+   * whatever the basis says. Reporting the stage complete then hid a real
+   * prerequisite until the operator hit a handover refusal with nothing on the
+   * rail to explain it.
+   */
+  fundingSplitComputed?: boolean;
   /** Every required document uploaded, verified or waived. */
   requiredDocumentsComplete: boolean;
   /**
@@ -819,7 +842,18 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
     APPRAISAL:
       appraisal === "COMPLETED" ||
       appraisal === "FINALIZED" ||
-      (appraisal === undefined && credit === "APPROVED"),
+      (appraisal === undefined && credit === "APPROVED") ||
+      // A manually named approval is a decision taken WITHOUT an appraisal, and
+      // the writer that records it says so by refusing to finalize the
+      // dimension. So the question is moot rather than outstanding — the rail
+      // follows the writer that owns the decision instead of demanding evidence
+      // that will never arrive. Narrow on purpose: APPRAISAL and
+      // QUOTATION_EXCEPTION both rest on real appraisal evidence and are
+      // unaffected, and an approval with no recorded basis is not evidence of a
+      // manual decision.
+      (facts.approvedPurchaseBasis === "MANUAL" &&
+        facts.approvedDealerPurchaseAmountMinor !== undefined &&
+        facts.fundingSplitComputed === true),
     GAP_RESOLUTION:
       gap === "NOT_REQUIRED" ||
       gap === "CUSTOMER_ABSORBS" ||

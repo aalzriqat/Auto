@@ -1552,6 +1552,13 @@ export const dealCockpit = query({
       handoverStatus: app.handoverStatus,
       rawAppraisalGapMinor: app.rawAppraisalGapMinor,
       approvedDealerPurchaseAmountMinor: app.approvedDealerPurchaseAmountMinor,
+      // Without the BASIS the rail cannot tell an approval that rests on
+      // appraisal evidence from one the company named directly — and went on
+      // demanding an appraisal that would never be recorded for the second.
+      approvedPurchaseBasis: app.approvedPurchaseBasis,
+      // Whether the split actually came out. A MANUAL approval only makes the
+      // appraisal moot when the economics could be computed without one.
+      fundingSplitComputed: app.financeCompanyFundedPortionMinor !== undefined,
       requiredDocumentsComplete,
     });
 

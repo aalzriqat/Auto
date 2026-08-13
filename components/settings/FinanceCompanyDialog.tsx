@@ -45,6 +45,8 @@ export function FinanceCompanyDialog({
     commission?: number;
     includesCommissionInDebt?: boolean;
     maxFinancingLTV?: number;
+    /** The DEALER-side purchase rate — see the field below. */
+    defaultLtvPercent?: number;
     isActive: boolean;
     acceptedStatuses?: string[];
   };
@@ -74,6 +76,12 @@ export function FinanceCompanyDialog({
     commission: company?.commission || 0,
     includesCommissionInDebt: company?.includesCommissionInDebt || false,
     maxFinancingLTV: company?.maxFinancingLTV || 100,
+    // Held as a STRING, and empty rather than zero when unset. Zero is not a
+    // rate the engine accepts — `resolveAppliedLtv` refuses anything at or
+    // below it — so defaulting this to 0 like the fields above would replace
+    // "nobody has told us" with a value that is always invalid.
+    defaultLtvPercent:
+      company?.defaultLtvPercent !== undefined ? String(company.defaultLtvPercent) : "",
     isActive: company?.isActive ?? true,
     acceptedStatuses: company?.acceptedStatuses || [],
   });
@@ -90,11 +98,17 @@ export function FinanceCompanyDialog({
       commission: company?.commission || 0,
       includesCommissionInDebt: company?.includesCommissionInDebt || false,
       maxFinancingLTV: company?.maxFinancingLTV || 100,
+      defaultLtvPercent:
+        company?.defaultLtvPercent !== undefined ? String(company.defaultLtvPercent) : "",
       isActive: company?.isActive ?? true,
       acceptedStatuses: company?.acceptedStatuses || [],
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, company?._id]);
+
+  /** Blanking a stored rate is not a way to delete it — see `onSubmit`. */
+  const clearingExistingLtv =
+    company?.defaultLtvPercent !== undefined && formData.defaultLtvPercent.trim() === "";
 
   const toggleAcceptedStatus = (id: string) => {
     setFormData((prev) => ({
@@ -114,6 +128,17 @@ export function FinanceCompanyDialog({
     // an empty list, which downstream reads as "accepts every customer".
     if (loadedCustomerStatuses === undefined) return;
 
+    // Emptying the field cannot remove a rate that is already stored:
+    // `updateCompany` treats an omitted dealer rule as "leave it alone" — by
+    // design, so that an older client saving a company's name cannot wipe its
+    // terms. Submitting anyway closed the dialog on a success toast while the
+    // previous LTV stayed in force, and every later deal kept being quoted
+    // against a rule the operator believed they had removed.
+    if (clearingExistingLtv) {
+      toast.error(t("DefaultDealerLtvCannotClear" as any));
+      return;
+    }
+
     setIsLoading(true);
     try {
       // Only send statuses that still exist. A company keeps the ids it was
@@ -126,9 +151,18 @@ export function FinanceCompanyDialog({
         liveStatusIds.has(id as Id<"orgCustomerStatuses">)
       ) as Id<"orgCustomerStatuses">[];
 
+      const { defaultLtvPercent: defaultLtvInput, ...rest } = formData;
+      const parsedDefaultLtv = Number(defaultLtvInput);
       const payload = {
-        ...formData,
+        ...rest,
         acceptedStatuses,
+        // Omitted entirely when blank. Sending 0 would be a rate the dealer
+        // rules reject; sending nothing keeps the field unset, which is what
+        // "this company has not told us its purchase rate" means.
+        defaultLtvPercent:
+          defaultLtvInput.trim() !== "" && Number.isFinite(parsedDefaultLtv)
+            ? parsedDefaultLtv
+            : undefined,
       };
       if (company) {
         await updateCompany({
@@ -228,6 +262,35 @@ export function FinanceCompanyDialog({
                 onChange={(e) => setFormData({ ...formData, maxFinancingLTV: parseFloat(e.target.value) || 0 })}
               />
             </div>
+          </div>
+          {/* The DEALER-side purchase rate, and a different number from the
+              customer LTV above — that one describes the loan the company sells
+              the customer, this one the share of the vehicle it buys from the
+              dealership at.
+
+              It has a schema field and `finance.createCompany` has always
+              accepted it; this form simply never asked. So every company created
+              here had none, and the whole dealer-economics engine refuses to run
+              without one: the quotation calculator throws, and the funding split
+              and dealership contribution can never be derived. */}
+          <div className="grid gap-2">
+            <Label htmlFor="default-ltv-percent">{t("DefaultDealerLtv" as any)}</Label>
+            <Input
+              id="default-ltv-percent"
+              type="number"
+              step="0.01"
+              inputMode="decimal"
+              placeholder={t("DefaultDealerLtvPlaceholder" as any)}
+              value={formData.defaultLtvPercent}
+              onChange={(e) => setFormData({ ...formData, defaultLtvPercent: e.target.value })}
+            />
+            {clearingExistingLtv ? (
+              <p role="alert" className="text-xs font-medium text-destructive">
+                {t("DefaultDealerLtvCannotClear" as any)}
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">{t("DefaultDealerLtvHint" as any)}</p>
+            )}
           </div>
           <div className="grid gap-2">
             <Label>{t("ExecutionCommission" as any)}</Label>

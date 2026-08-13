@@ -113,6 +113,12 @@ jobs:
           E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
           E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
           E2E_LOGIN_VERIFICATION_CODE: ${{ secrets.E2E_LOGIN_VERIFICATION_CODE }}
+          # The SECOND identity. AutoFlow refuses to let one person both create
+          # and approve a deal, so the financed workflow cannot be driven end to
+          # end by one login — without these the two-identity spec skips, and a
+          # skip reads exactly like a pass.
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+          E2E_APPROVER_PASSWORD: ${{ secrets.E2E_APPROVER_PASSWORD }}
           CI: true
 
       - name: Upload Playwright report

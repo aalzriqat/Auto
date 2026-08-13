@@ -30,6 +30,86 @@ function stages(overrides: Partial<DealStageFacts> = {}) {
   };
 }
 
+describe("an approval the finance company named without an appraisal", () => {
+  /**
+   * The rail and the approval writer disagreed, and the rail was the one out of
+   * step.
+   *
+   * `recordSubmittedQuotation` moves the appraisal dimension to PENDING —
+   * sending a quotation is what puts an appraisal in play. But
+   * `approveDealerPurchaseAmount` explicitly permits `basis: "MANUAL"` with no
+   * appraisal, and deliberately refuses to mark the dimension FINALIZED there,
+   * because "writing FINALIZED asserted a fact that never happened". So for a
+   * figure the company named by phone, the rail said `AwaitingAppraisal`
+   * forever while the deal was approved, handed over and finalized around it —
+   * and nothing anywhere would ever clear it.
+   *
+   * The lifecycle now follows the writer that owns the decision: once a
+   * manually named approval exists, the appraisal question is moot rather than
+   * outstanding. It is NOT skipped for any other basis — APPRAISAL and
+   * QUOTATION_EXCEPTION both require real appraisal evidence, and this changes
+   * nothing about them.
+   */
+  test("stops the rail demanding an appraisal that will never come", () => {
+    const withoutApproval = stages({ appraisalStatus: "PENDING" });
+    expect(withoutApproval.state("APPRAISAL")).toBe("BLOCKED");
+    expect(withoutApproval.blocker("APPRAISAL")).toBe("AwaitingAppraisal");
+
+    const manuallyApproved = stages({
+      appraisalStatus: "PENDING",
+      approvedDealerPurchaseAmountMinor: 12_200_000,
+      approvedPurchaseBasis: "MANUAL",
+      fundingSplitComputed: true,
+    });
+    expect(manuallyApproved.state("APPRAISAL")).toBe("COMPLETE");
+  });
+
+  test("but not when the company's own rule still needs an appraisal to compute the funding", () => {
+    // `approveDealerPurchaseAmount` permits MANUAL with no appraisal even for a
+    // company whose LTV rule multiplies the APPRAISAL. There the funding split
+    // cannot be computed at all — and SCRUM-61's guard refuses handover for
+    // exactly that. Reporting the stage complete would hide the real
+    // prerequisite until the operator hit the later refusal with nothing on the
+    // rail explaining it.
+    const ruleStillNeedsOne = stages({
+      appraisalStatus: "PENDING",
+      approvedDealerPurchaseAmountMinor: 12_200_000,
+      approvedPurchaseBasis: "MANUAL",
+      fundingSplitComputed: false,
+    });
+    expect(ruleStillNeedsOne.state("APPRAISAL")).toBe("BLOCKED");
+    expect(ruleStillNeedsOne.blocker("APPRAISAL")).toBe("AwaitingAppraisal");
+  });
+
+  test("and still demands one for a basis that rests on appraisal evidence", () => {
+    const appraisalBasis = stages({
+      appraisalStatus: "PENDING",
+      approvedDealerPurchaseAmountMinor: 11_500_000,
+      approvedPurchaseBasis: "APPRAISAL",
+      // Set, so the BASIS is the only thing keeping this blocked. Omitted, the
+      // MANUAL disjunct could never be true whatever the basis said, and the
+      // test would stay green with the basis check deleted from the writer.
+      fundingSplitComputed: true,
+    });
+    // An APPRAISAL-basis approval cannot exist without one, so a PENDING
+    // dimension here means the evidence has not been finalized — a real
+    // outstanding step, not a moot question.
+    expect(appraisalBasis.state("APPRAISAL")).toBe("BLOCKED");
+  });
+
+  test("and does not skip it merely because some amount was approved", () => {
+    const noBasisRecorded = stages({
+      appraisalStatus: "PENDING",
+      approvedDealerPurchaseAmountMinor: 12_200_000,
+      // As above: the ABSENCE of a basis has to be what blocks this, not a
+      // second unmet condition standing in for it.
+      fundingSplitComputed: true,
+    });
+    // No basis on the row is not evidence of a manual decision.
+    expect(noBasisRecorded.state("APPRAISAL")).toBe("BLOCKED");
+  });
+});
+
 describe("the stage rail", () => {
   test("covers every stage exactly once, in order", () => {
     expect(stages().rail.map((s) => s.key)).toEqual(DEAL_STAGE_ORDER);
