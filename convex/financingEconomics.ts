@@ -225,6 +225,53 @@ function appendReconciliationReason(existing: string | undefined, addition: stri
   return `${existing} ${addition}`;
 }
 
+/**
+ * Turns a stored override row into something a screen may show.
+ *
+ * The rows are written for an AUDIT TABLE, not for a person. `recordOverride`
+ * stringifies whatever changed, and the approval site builds that string with
+ * the whole decision in it:
+ *
+ *   "150000000 (MANUAL @ 85% LTV, approved by pd78fs58de9dnyrek2hvw0k63s88wmc4)"
+ *
+ * Rendering that verbatim would put a raw minor-unit integer and an internal
+ * user id in front of an operator — a money figure a thousand times too large,
+ * beside an identifier that means nothing to anyone. So the amount is extracted
+ * as a NUMBER for the client to format in the deal's own currency, and every
+ * other part of the string is dropped rather than displayed.
+ *
+ * Values that cannot be presented safely are omitted entirely. A history line
+ * that shows only the reason, the person and the time is worth having; one that
+ * shows a raw internal string is not, and "show it anyway" is how the id would
+ * reach the screen through some field nobody thought about.
+ */
+function presentOverrideValues(row: Doc<"financeApplicationOverrides">): {
+  previousAmountMinor?: number;
+  newAmountMinor?: number;
+  newIsReopened: boolean;
+} {
+  // Only money fields carry a leading minor-unit integer, and only they should
+  // ever be rendered as a figure. Keyed off the field NAME rather than off
+  // whether the string happens to start with digits, so a future non-money
+  // override whose value begins with a number is not silently shown as money.
+  const isAmountField = row.field.endsWith("Minor");
+  const leadingAmount = (value: string | undefined): number | undefined => {
+    if (!isAmountField || value === undefined) return undefined;
+    const match = /^(\d+)/.exec(value.trim());
+    if (!match) return undefined;
+    const parsed = Number(match[1]);
+    return Number.isSafeInteger(parsed) ? parsed : undefined;
+  };
+
+  return {
+    previousAmountMinor: leadingAmount(row.previousValue),
+    // The sentinel the reopen path writes. It is a state, not a figure, so it
+    // is reported as one and the client says it in the operator's language.
+    newIsReopened: row.newValue === "reopened",
+    newAmountMinor: row.newValue === "reopened" ? undefined : leadingAmount(row.newValue),
+  };
+}
+
 async function recordOverride(
   ctx: MutationCtx,
   args: {
@@ -701,11 +748,15 @@ export const getEconomics = query({
             overrides
               .sort((a, b) => b.changedAt - a.changedAt)
               .map(async (row) => ({
-                ...row,
+                _id: row._id,
+                field: row.field,
+                reason: row.reason,
+                changedAt: row.changedAt,
                 // Resolved here rather than in the browser: the id alone tells
                 // an operator nothing, and a history that cannot say who made a
                 // correction is not an audit trail.
                 changedByName: (await ctx.db.get(row.changedBy))?.name,
+                ...presentOverrideValues(row),
               }))
           )
         : [],

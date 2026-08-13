@@ -300,8 +300,11 @@ export function DealCockpit({
   const corrections = (economics?.overrides ?? []).map((row) => ({
     id: row._id as string,
     field: row.field,
-    previousValue: row.previousValue,
-    newValue: row.newValue,
+    // Numbers, formatted below in the DEAL's currency. The server already
+    // dropped the audit prose these were embedded in — see presentOverrideValues.
+    previousAmountMinor: row.previousAmountMinor,
+    newAmountMinor: row.newAmountMinor,
+    newIsReopened: row.newIsReopened,
     reason: row.reason,
     changedByName: row.changedByName,
     // Guarded, never formatted raw: a corrupt timestamp reaches the client
@@ -1361,7 +1364,7 @@ export function DealCockpitView({
       {/* Directly beneath the figures it explains. A correction is only
           meaningful next to the number it produced — read on its own, further
           down the page, "150,000 → reopened" is a fact about nothing. */}
-      <CorrectionHistoryCard entries={corrections} t={t} />
+      <CorrectionHistoryCard entries={corrections} money={decisionMoney} t={t} />
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">

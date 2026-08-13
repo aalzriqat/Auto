@@ -225,6 +225,27 @@ async function readApp(seed: Seed, applicationId: Id<"financeApplications">) {
   return app;
 }
 
+/**
+ * The override rows AS STORED, newest first.
+ *
+ * Read from the table rather than off `getEconomics`, because these assertions
+ * are about the AUDIT RECORD — that a change left a trace, and what that trace
+ * says. The query returns a presentation projection instead: the stored strings
+ * embed the whole decision (`"150000000 (MANUAL @ 85% LTV, approved by pd78…)"`)
+ * and shipping that to a screen showed a raw minor-unit integer and an internal
+ * user id, so the query now extracts the figure and drops the prose. The prose
+ * is still the audit trail, and this is where it is checked.
+ */
+async function readOverrides(seed: Seed, applicationId: Id<"financeApplications">) {
+  const rows = await seed.t.run((ctx) =>
+    ctx.db
+      .query("financeApplicationOverrides")
+      .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+      .collect()
+  );
+  return rows.sort((a, b) => b.changedAt - a.changedAt);
+}
+
 // ---------------------------------------------------------------------------
 
 describe("suggested quotation", () => {
@@ -1276,7 +1297,7 @@ describe("reopening an approval", () => {
       applicationId,
     });
     expect(economics.overrides).toHaveLength(1);
-    expect(economics.overrides[0]?.newValue).toContain("MANUAL");
+    expect((await readOverrides(seed, applicationId))[0]?.newValue).toContain("MANUAL");
   });
 
   test("records an approval that changes only its LTV", async () => {
@@ -1308,8 +1329,8 @@ describe("reopening an approval", () => {
     });
     expect(economics.overrides).toHaveLength(1);
     // The row has to say which input moved. "11500 → 11500" reads as a no-op.
-    expect(economics.overrides[0]?.previousValue).toContain("85% LTV");
-    expect(economics.overrides[0]?.newValue).toContain("80% LTV");
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain("85% LTV");
+    expect((await readOverrides(seed, applicationId))[0]?.newValue).toContain("80% LTV");
   });
 
   test("a second approver re-submitting an identical approval leaves a trace", async () => {
@@ -1359,8 +1380,8 @@ describe("reopening an approval", () => {
     // A row is not a trace. Asserting only its existence passed on a row whose
     // previousValue and newValue were the identical string, leaving the prior
     // approver as unrecoverable as before — this table is the only history.
-    expect(economics.overrides[0]?.previousValue).toContain(String(seed.approverId));
-    expect(economics.overrides[0]?.newValue).toContain(String(secondApproverId));
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain(String(seed.approverId));
+    expect((await readOverrides(seed, applicationId))[0]?.newValue).toContain(String(secondApproverId));
   });
 
   test("the same approver re-submitting does not advance the approval timestamp", async () => {
@@ -1913,8 +1934,8 @@ describe("overrides and audit", () => {
     expect(economics.overrides).toHaveLength(1);
     // A row is not a trace if both sides read the same. Same lesson the
     // approver audit next door had to learn.
-    expect(economics.overrides[0]?.previousValue).toContain(String(seed.userId));
-    expect(economics.overrides[0]?.newValue).toContain(String(seed.approverId));
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain(String(seed.userId));
+    expect((await readOverrides(seed, applicationId))[0]?.newValue).toContain(String(seed.approverId));
   });
 
   test("the same person re-recording an identical quotation does not advance its timestamp", async () => {
@@ -1989,8 +2010,8 @@ describe("overrides and audit", () => {
     // value fields read identically and whose reason claimed a source/recorder
     // change that never happened — while the patch overwrote the old inputs, so
     // the cause of every moved derived figure was unrecoverable.
-    expect(economics.overrides[0]?.previousValue).toContain(String(jod(300)));
-    expect(economics.overrides[0]?.newValue).toContain(String(jod(900)));
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain(String(jod(300)));
+    expect((await readOverrides(seed, applicationId))[0]?.newValue).toContain(String(jod(900)));
     expect(economics.overrides[0]?.reason).toMatch(/expenses/i);
     expect(economics.overrides[0]?.reason).not.toMatch(/source|recorder/i);
     expect((await readApp(seed, applicationId)).estimatedDealerBorneExpensesMinor).toBe(jod(900));
@@ -2355,14 +2376,18 @@ describe("overrides and audit", () => {
       applicationId,
     });
     expect(economics.overrides).toHaveLength(1);
-    expect(economics.overrides[0]).toMatchObject({
+    // Read from the TABLE: `changedBy` is an internal id and no longer leaves
+    // the server — the projection carries the person's NAME instead, because an
+    // id on screen tells an operator nothing. The actor is still audited, and
+    // this is where that is checked.
+    expect((await readOverrides(seed, applicationId))[0]).toMatchObject({
       field: "submittedQuotationMinor",
       changedBy: seed.userId,
     });
     // The row names the mode alongside the figure, because the mode is rewritten
     // by the same patch and has no history of its own.
-    expect(economics.overrides[0]?.previousValue).toContain(String(jod(12_500)));
-    expect(economics.overrides[0]?.newValue).toContain(String(jod(13_000)));
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain(String(jod(12_500)));
+    expect((await readOverrides(seed, applicationId))[0]?.newValue).toContain(String(jod(13_000)));
     expect(economics.overrides[0]?.reason).toMatch(/revised quotation/);
   });
 
@@ -2403,9 +2428,9 @@ describe("overrides and audit", () => {
       applicationId,
     });
     expect(economics.overrides).toHaveLength(1);
-    expect(economics.overrides[0]?.previousValue).toContain("CALCULATED_WITH_OVERRIDE");
-    expect(economics.overrides[0]?.previousValue).toContain("cover its own fee");
-    expect(economics.overrides[0]?.newValue).toContain("MANUAL_ENTRY");
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain("CALCULATED_WITH_OVERRIDE");
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain("cover its own fee");
+    expect((await readOverrides(seed, applicationId))[0]?.newValue).toContain("MANUAL_ENTRY");
   });
 
   /**
@@ -2456,7 +2481,7 @@ describe("overrides and audit", () => {
       applicationId,
     });
     expect(economics.overrides).toHaveLength(1);
-    const override = economics.overrides[0];
+    const override = (await readOverrides(seed, applicationId))[0];
     // The figure it moved FROM has to survive, because the patch has just
     // overwritten it and there is no other history of that field anywhere.
     expect(override?.previousValue).toContain(String(jod(DEAL.targetSelling)));
@@ -2510,7 +2535,7 @@ describe("overrides and audit", () => {
       applicationId,
     });
     expect(economics.overrides).toHaveLength(1);
-    expect(economics.overrides[0]?.previousValue).toContain(String(driftedNetProceeds));
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain(String(driftedNetProceeds));
     expect(economics.overrides[0]?.reason).toMatch(/net proceeds/i);
   });
 
@@ -2559,10 +2584,10 @@ describe("overrides and audit", () => {
     });
     expect(economics.overrides).toHaveLength(1);
     // Both starting figures survive, because the patch has overwritten both.
-    expect(economics.overrides[0]?.previousValue).toContain(
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain(
       String(jod(DEAL.exampleDealerBorneExpenses))
     );
-    expect(economics.overrides[0]?.previousValue).toContain(String(driftedClosing));
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain(String(driftedClosing));
     expect(economics.overrides[0]?.reason).toMatch(/closing expenses/i);
   });
 
@@ -2598,7 +2623,7 @@ describe("overrides and audit", () => {
       applicationId,
     });
     expect(economics.overrides).toHaveLength(1);
-    expect(economics.overrides[0]?.previousValue).toContain(String(driftedClosing));
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain(String(driftedClosing));
     expect(economics.overrides[0]?.reason).toMatch(/closing expenses/i);
   });
 
@@ -2688,8 +2713,8 @@ describe("overrides and audit", () => {
     });
     expect(economics.overrides).toHaveLength(1);
     expect(economics.overrides[0]?.field).toBe("submittedQuotationMinor");
-    expect(economics.overrides[0]?.previousValue).toContain(String(jod(12_500)));
-    expect(economics.overrides[0]?.newValue).toContain(String(jod(9_000)));
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain(String(jod(12_500)));
+    expect((await readOverrides(seed, applicationId))[0]?.newValue).toContain(String(jod(9_000)));
   });
 
   test("the quotation cannot be changed after the company has approved an amount", async () => {
@@ -3642,7 +3667,7 @@ describe("the correction history follows the amount it describes", () => {
     // not an audit trail.
     expect(economics.overrides[0]?.changedByName).toBeDefined();
     // And the replaced figure survives — this row is the only place it does.
-    expect(economics.overrides[0]?.previousValue).toContain(String(jod(11_800)));
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain(String(jod(11_800)));
   });
 
   test("a sales caller gets NO history, because the rows carry the amount withheld from them", async () => {

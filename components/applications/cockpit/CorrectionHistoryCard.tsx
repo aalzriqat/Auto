@@ -25,8 +25,22 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 export type CorrectionEntry = {
   id: string;
   field: string;
-  previousValue?: string;
-  newValue: string;
+  /**
+   * The figures, as NUMBERS in the deal's own minor units.
+   *
+   * Never the stored strings. Those are written for an audit table and carry
+   * the whole decision — `"150000000 (MANUAL @ 85% LTV, approved by pd78…)"` —
+   * so rendering one would show a money figure a thousand times too large
+   * beside an internal user id. `getEconomics` extracts the amount and drops
+   * the rest; this component formats it in the deal's currency.
+   *
+   * Absent where the server could not present the value safely, in which case
+   * the line still carries the reason, the person and the time.
+   */
+  previousAmountMinor?: number;
+  newAmountMinor?: number;
+  /** The reopen path writes a state, not a figure. Said in words, not shown raw. */
+  newIsReopened: boolean;
   reason: string;
   changedByName?: string;
   /**
@@ -42,26 +56,14 @@ export type CorrectionEntry = {
 
 type CorrectionHistoryCardProps = {
   entries: ReadonlyArray<CorrectionEntry>;
+  /** The DEAL's own currency formatter — never the organisation's. */
+  money: (minor: number) => string;
   t: (key: string) => string;
 };
 
-/**
- * The stored strings are written for an audit trail, not for a screen.
- *
- * `recordOverride` stringifies whatever changed —
- * `"150000000 (MANUAL @ 85% LTV, approved by pd78…)"` — and the reopen path
- * writes the sentinel `"reopened"`. Rendering them verbatim would put a raw
- * minor-unit integer and a user id in front of an operator, so the value is
- * shown only where it reads as a figure and the sentinel becomes a phrase.
- */
-function readableValue(value: string | undefined, t: (key: string) => string): string | null {
-  if (value === undefined) return null;
-  if (value === "reopened") return t("CorrectionValueReopened");
-  return value;
-}
-
 export function CorrectionHistoryCard({
   entries,
+  money,
   t,
 }: Readonly<CorrectionHistoryCardProps>) {
   if (entries.length === 0) return null;
@@ -74,8 +76,13 @@ export function CorrectionHistoryCard({
       </CardHeader>
       <CardContent className="space-y-4">
         {entries.map((entry) => {
-          const before = readableValue(entry.previousValue, t);
-          const after = readableValue(entry.newValue, t);
+          const before =
+            entry.previousAmountMinor === undefined ? null : money(entry.previousAmountMinor);
+          const after = entry.newIsReopened
+            ? t("CorrectionValueReopened")
+            : entry.newAmountMinor === undefined
+              ? null
+              : money(entry.newAmountMinor);
           return (
             <div key={entry.id} className="space-y-1 border-s-2 ps-3">
               {/* The reason FIRST, because it is the only part written by a

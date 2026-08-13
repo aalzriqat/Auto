@@ -1222,15 +1222,23 @@ describe("the departure question is carried to the server, and retired when it s
  * 15,000 showed 15,000 and looked exactly like a deal that was always right.
  */
 describe("corrections are visible on the deal, not just recorded", () => {
-  const correction = {
+  /**
+   * The real production sequence: 150,000 recorded, taken off the record, then
+   * 15,000 put back. Newest first, as the server returns them.
+   */
+  const reopened = {
     id: "ov_1",
     field: "approvedDealerPurchaseAmountMinor",
-    previousValue: "150000000 (MANUAL @ 85% LTV)",
-    newValue: "reopened",
-    reason: "entered as 150,000 by mistake; the company approved 15,000",
+    previousAmountMinor: 150_000 * JOD,
+    newIsReopened: true,
+    // Deliberately carries no digits. A reason that repeats the figure makes
+    // every "is the amount legible" assertion match the prose instead, which is
+    // how a money assertion passes while showing nothing of the sort.
+    reason: "entered from the wrong advice note",
     changedByName: "Layla Mansour",
     changedAtLabel: "13 Aug 2026 18:20",
   };
+  const correction = reopened;
 
   test("the reason, the movement, and who made it are all on screen", () => {
     render(
@@ -1249,8 +1257,89 @@ describe("corrections are visible on the deal, not just recorded", () => {
     expect(screen.getByText("Layla Mansour")).toBeTruthy();
     expect(screen.getByText("13 Aug 2026 18:20")).toBeTruthy();
     // The sentinel `reopened` is written for an audit table, not for a screen.
-    expect(screen.getByText("CorrectionValueReopened")).toBeTruthy();
-    expect(screen.queryByText("reopened")).toBeNull();
+    expect(screen.getByText(/CorrectionValueReopened/)).toBeTruthy();
+    expect(screen.queryByText(/\breopened\b/)).toBeNull();
+  });
+
+  test("the figure is money in the deal's currency, never the stored audit string", () => {
+    // `recordOverride` stores "150000000 (MANUAL @ 85% LTV, approved by pd78…)".
+    // Rendering that put a figure a THOUSAND TIMES too large on screen beside an
+    // internal user id — a materially false money UI, and the reason the value
+    // now arrives as a number the deal's own formatter renders.
+    render(
+      <DealCockpitView
+        deal={dealFixture()}
+        financeDecision={wiring()}
+        corrections={[reopened]}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    // 150,000 in the deal's currency — NOT 150000000, and not "MANUAL @ 85% LTV".
+    const entry = screen.getByText(reopened.reason).closest("div")!;
+    expect(within(entry).getByText(/150,000|150000/)).toBeTruthy();
+    expect(within(entry).queryByText(/150000000/)).toBeNull();
+    expect(within(entry).queryByText(/MANUAL/)).toBeNull();
+    expect(within(entry).queryByText(/approved by/)).toBeNull();
+    // No internal identifier anywhere in the entry.
+    expect(within(entry).queryByText(/pd7|ps7|jx7/)).toBeNull();
+  });
+
+  test("the full corrected sequence reads 150,000 -> off the record -> 15,000", () => {
+    render(
+      <DealCockpitView
+        deal={dealFixture()}
+        financeDecision={wiring()}
+        corrections={[
+          {
+            id: "ov_2",
+            field: "approvedDealerPurchaseAmountMinor",
+            newAmountMinor: 15_000 * JOD,
+            newIsReopened: false,
+            reason: "recorded the amount the company actually approved",
+            changedByName: "Layla Mansour",
+            changedAtLabel: "13 Aug 2026 18:25",
+          },
+          reopened,
+        ]}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    // Both ends of the correction are legible as money, which is the whole
+    // point: an operator has to be able to see that 150,000 became 15,000.
+    // Each figure asserted INSIDE its own entry, not globally: a loose match
+    // across the page would pass on any element that happened to contain the
+    // digits, which proves nothing about the correction being legible.
+    const wrong = screen.getByText(reopened.reason).closest("div")!;
+    const right = screen
+      .getByText("recorded the amount the company actually approved")
+      .closest("div")!;
+
+    expect(within(wrong).getByText(/150,000|150000/)).toBeTruthy();
+    expect(within(wrong).getByText(/CorrectionValueReopened/)).toBeTruthy();
+    expect(within(right).getByText(/15,000|15000/)).toBeTruthy();
+    // Neither entry shows raw minor units.
+    expect(within(wrong).queryByText(/150000000/)).toBeNull();
+    expect(within(right).queryByText(/15000000\b/)).toBeNull();
+  });
+
+  test("renders the same way in Arabic, with the figures still legible", () => {
+    language.locale = "ar";
+    render(
+      <DealCockpitView
+        deal={dealFixture()}
+        financeDecision={wiring()}
+        corrections={[reopened]}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    const entry = screen.getByText(reopened.reason).closest("div")!;
+    expect(within(entry).getByText(/150,000|150000/)).toBeTruthy();
+    expect(within(entry).queryByText(/150000000/)).toBeNull();
+    // RTL must not turn the audit prose back on through a different door.
+    expect(within(entry).queryByText(/approved by|MANUAL/)).toBeNull();
   });
 
   test("a deal that was never corrected shows no history at all", () => {
