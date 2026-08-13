@@ -1,6 +1,25 @@
 import { test as setup, expect, type Page } from "@playwright/test";
+import { APPROVER_AUTH_FILE } from "../utils";
 
+/**
+ * The dealership's own salesperson. Creates the deals every other spec drives.
+ */
 const authFile = "playwright/.auth/user.json";
+/**
+ * A SECOND person at the same dealership, holding approval authority.
+ *
+ * Not a convenience. AutoFlow's financed workflow enforces separation of duties
+ * — `approveDealerPurchaseAmount` and `updateStatus` both refuse the
+ * application's own salesperson — so the full operator path simply cannot be
+ * driven end to end by one identity. A suite with one login can prove the deal
+ * up to the approval and no further, which is precisely the part where the
+ * dealership's money is decided. Owner ruling on SCRUM-68: provision the second
+ * identity rather than weaken the requirement.
+ *
+ * Reusable infrastructure, not a SCRUM-68 fixture: every approval and
+ * separation-of-duties workflow after this one needs the same two seats.
+ */
+const approverAuthFile = APPROVER_AUTH_FILE;
 const orgRoutePattern = /^\/[^/]+\/(dashboard|sales|leads|accounting)(\?.*)?$/;
 const e2eLocalStorage = {
   "autoflow-locale": "en",
@@ -71,13 +90,32 @@ async function completeVerificationIfNeeded(
   page: Page,
   verificationCode?: string,
 ): Promise<void> {
-  const reachedFactorStep = await page
-    .waitForURL((url) => url.pathname.startsWith("/sign-in/factor"), {
-      timeout: 5_000,
-    })
-    .then(() => true)
-    .catch(() => false);
-  if (!reachedFactorStep) return;
+  /**
+   * Detected by the CODE FIELD, not by the URL.
+   *
+   * This used to wait for a `/sign-in/factor…` path and return when it did not
+   * arrive. Clerk raises the same challenge without changing the path — "You're
+   * signing in from a new device", on `/sign-in` itself — and on that render
+   * the setup skipped straight past the boxes, left them empty, and failed
+   * thirty seconds later on a navigation that was never going to happen. The
+   * screenshot said "Enter code."; the error said "waiting for navigation",
+   * which named neither the challenge nor the field.
+   *
+   * Either signal now counts, whichever arrives first: the code field, or a
+   * URL that has already left sign-in because no challenge was raised.
+   */
+  const codeField = page
+    .locator(
+      'input[autocomplete="one-time-code"]:visible, input[inputmode="numeric"]:visible, input[name*="code"]:visible',
+    )
+    .first();
+  const challenged = await Promise.race([
+    codeField.waitFor({ state: "visible", timeout: 15_000 }).then(() => true),
+    page
+      .waitForURL((url) => !isSignInRoute(url), { timeout: 15_000 })
+      .then(() => false),
+  ]).catch(() => false);
+  if (!challenged) return;
 
   if (!verificationCode) {
     throw new Error(
@@ -134,21 +172,30 @@ async function completeOnboardingIfNeeded(page: Page): Promise<void> {
 }
 
 /**
- * Signs in against Clerk's hosted <SignIn/> using the QA fixture and the
- * field ids Clerk renders: #identifier-field, #password-field, then a
- * "Continue" button. Forces English locale before
- * the app boots — LanguageProvider defaults to Arabic/RTL on an empty
- * localStorage, and that default persists into the saved storageState for
- * every dependent test otherwise.
+ * Signs one identity in against Clerk's hosted <SignIn/>, using the field ids
+ * Clerk renders: #identifier-field, #password-field, then a "Continue" button.
+ * Forces English locale before the app boots — LanguageProvider defaults to
+ * Arabic/RTL on an empty localStorage, and that default would persist into the
+ * saved storageState for every dependent test.
  */
-setup("authenticate", async ({ page }) => {
-  const user = process.env.E2E_LOGIN_USER;
-  const password = process.env.E2E_LOGIN_PASSWORD;
-  if (!user || !password) {
-    throw new Error(
-      "E2E_LOGIN_USER and E2E_LOGIN_PASSWORD must be set to run the E2E suite.",
-    );
-  }
+async function signIn(
+  page: Page,
+  options: {
+    user: string;
+    password: string;
+    storagePath: string;
+    /**
+     * Whether landing on the dealership wizard is a legitimate first run.
+     *
+     * True for the primary fixture, which owns the QA dealership and creates it
+     * on a brand-new instance. FALSE for every additional identity: they are
+     * meant to JOIN that dealership, so a wizard means the invitation was never
+     * accepted, and completing it would silently create a second, empty
+     * dealership and produce a suite that passes against the wrong org.
+     */
+    mayCreateDealership: boolean;
+  },
+): Promise<void> {
   const verificationCode = verificationCodeFor();
 
   await page.addInitScript(seedE2ELocalStorage, e2eLocalStorageEntries);
@@ -157,7 +204,7 @@ setup("authenticate", async ({ page }) => {
 
   const identifierField = page.locator("#identifier-field");
   await identifierField.waitFor({ state: "visible", timeout: 15_000 });
-  await identifierField.fill(user);
+  await identifierField.fill(options.user);
 
   // Clerk shows the password field on the same screen for some identifiers
   // (combined form) but only after clicking "Continue" for others (two-step
@@ -171,7 +218,7 @@ setup("authenticate", async ({ page }) => {
     await continueButton.click();
   }
   await passwordField.waitFor({ state: "visible", timeout: 15_000 });
-  await passwordField.fill(password);
+  await passwordField.fill(options.password);
 
   await continueButton.click();
 
@@ -181,11 +228,62 @@ setup("authenticate", async ({ page }) => {
   // Existing fixtures land on a role-dependent /{orgId}/... route. Brand-new
   // fixtures first land on /dashboard with the dealership onboarding wizard;
   // complete it once so future runs can use the saved authenticated state.
-  await completeOnboardingIfNeeded(page);
+  if (options.mayCreateDealership) {
+    await completeOnboardingIfNeeded(page);
+  } else if (!isOrgRoute(new URL(page.url()))) {
+    const stranded = await page
+      .getByRole("textbox", { name: "Dealership Name" })
+      .isVisible()
+      .catch(() => false);
+    if (stranded) {
+      throw new Error(
+        `${options.user} signed in but belongs to no dealership. Add this identity to the QA organization with a role holding approve:finance_application — do NOT let it create a dealership of its own, or the suite will run against an empty org.`,
+      );
+    }
+  }
   await page.waitForURL(isOrgRoute, { timeout: 30_000 });
 
   await expect(page.getByRole("banner")).toBeVisible();
 
   await page.evaluate(seedE2ELocalStorage, e2eLocalStorageEntries);
-  await page.context().storageState({ path: authFile });
+  await page.context().storageState({ path: options.storagePath });
+}
+
+/** The dealership's salesperson — the identity every existing spec runs as. */
+setup("authenticate", async ({ page }) => {
+  const user = process.env.E2E_LOGIN_USER;
+  const password = process.env.E2E_LOGIN_PASSWORD;
+  if (!user || !password) {
+    throw new Error(
+      "E2E_LOGIN_USER and E2E_LOGIN_PASSWORD must be set to run the E2E suite.",
+    );
+  }
+
+  await signIn(page, {
+    user,
+    password,
+    storagePath: authFile,
+    mayCreateDealership: true,
+  });
+});
+
+/**
+ * The approving colleague. Skipped, loudly, where the identity is not
+ * provisioned: the specs that need it skip in turn and say so, which is a
+ * different and honest outcome from a suite that quietly proves less.
+ */
+setup("authenticate the approver", async ({ page }) => {
+  const user = process.env.E2E_APPROVER_USER;
+  const password = process.env.E2E_APPROVER_PASSWORD;
+  setup.skip(
+    !user || !password,
+    "E2E_APPROVER_USER / E2E_APPROVER_PASSWORD are not set, so no approval-workflow spec can run.",
+  );
+
+  await signIn(page, {
+    user: user!,
+    password: password!,
+    storagePath: approverAuthFile,
+    mayCreateDealership: false,
+  });
 });
