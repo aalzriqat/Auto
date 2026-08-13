@@ -898,14 +898,30 @@ export const recordSubmittedQuotation = mutation({
       fields: ReadonlyArray<readonly [string, number | undefined]>;
     }>;
 
-    /** Every stored field a supplied argument would actually move. */
-    const fannedOutMoves = fannedOutInputs.flatMap(({ supplied, fields }) =>
-      supplied === undefined
-        ? []
-        : fields
-            .filter(([, before]) => before !== supplied)
-            .map(([label, before]) => [label, before, supplied] as const)
-    );
+    /**
+     * Every stored field a supplied argument would actually move — counted
+     * once per DISTINCT starting value.
+     *
+     * Fields of a pair that held the same value move identically, and naming
+     * both is one move described twice: an ordinary expenses change would have
+     * read "expenses 300000, closing expenses 300000". Only a field that stood
+     * somewhere else is a second, genuinely different move, which is exactly
+     * the drifted row this table exists for. So an ordinary re-record produces
+     * one entry per argument, as it always has, and a drifted row produces one
+     * per figure that was really there.
+     */
+    const fannedOutMoves = fannedOutInputs.flatMap(({ supplied, fields }) => {
+      if (supplied === undefined) return [];
+      const distinctStartingValues = new Set<number | undefined>();
+      return fields
+        .filter(([, before]) => before !== supplied)
+        .filter(([, before]) => {
+          if (distinctStartingValues.has(before)) return false;
+          distinctStartingValues.add(before);
+          return true;
+        })
+        .map(([label, before]) => [label, before, supplied] as const);
+    });
 
     const inputsChanged =
       quotationPreviouslyRecorded &&

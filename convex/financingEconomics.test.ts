@@ -195,6 +195,30 @@ async function recordBaselineQuotation(
   });
 }
 
+/**
+ * A baseline recorded as MANUAL_ENTRY, for cases that go on to move an input
+ * the solver reads.
+ *
+ * `recordBaselineQuotation` records SYSTEM_CALCULATED, which the server refuses
+ * to accept once the figure no longer equals what the calculator produces — so
+ * a case that changes the expenses cannot re-record under that label without
+ * also changing the amount, and would then be proving something else.
+ */
+async function recordManualBaseline(
+  seed: Seed,
+  applicationId: Id<"financeApplications">
+): Promise<void> {
+  await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+    orgId: seed.orgId,
+    applicationId,
+    submittedQuotationMinor: jod(DEAL.quotation),
+    source: "MANUAL_ENTRY",
+    targetSellingAmountMinor: jod(DEAL.targetSelling),
+    estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+    customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+  });
+}
+
 async function readApp(seed: Seed, applicationId: Id<"financeApplications">) {
   const app = await seed.t.run((ctx) => ctx.db.get(applicationId));
   if (!app) throw new Error("application vanished");
@@ -2488,6 +2512,124 @@ describe("overrides and audit", () => {
     expect(economics.overrides).toHaveLength(1);
     expect(economics.overrides[0]?.previousValue).toContain(String(driftedNetProceeds));
     expect(economics.overrides[0]?.reason).toMatch(/net proceeds/i);
+  });
+
+  /**
+   * The same two cases for the OTHER fanned-out pair.
+   *
+   * `estimatedDealerBorneExpensesMinor` writes both itself and
+   * `estimatedClosingExpensesMinor`, and carried the identical gate hole. It was
+   * fixed by the shared table rather than by its own clause — which is worth
+   * nothing unless the table is proved for this pair too. The round that
+   * introduced the table exists because a rule maintained in two places drifted
+   * three times; shipping the second pair on the strength of "same code path"
+   * would be the same bet that lost those three times.
+   */
+  test("audits both expenses figures on a row where they had drifted apart", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    // MANUAL_ENTRY on both records: changing the expenses moves the solver's
+    // own figure, and a SYSTEM_CALCULATED label is refused when it no longer
+    // equals what the calculator produces. The provenance is not what this
+    // case is about, and holding it identical keeps the expenses the only
+    // thing that moved.
+    await recordManualBaseline(seed, applicationId);
+
+    const driftedClosing = jod(400);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { estimatedClosingExpensesMinor: driftedClosing })
+    );
+
+    // Moves the dealer-borne figure, and the closing figure from somewhere else
+    // entirely. Everything else is held identical.
+    const newExpenses = jod(900);
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: newExpenses,
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+    });
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides).toHaveLength(1);
+    // Both starting figures survive, because the patch has overwritten both.
+    expect(economics.overrides[0]?.previousValue).toContain(
+      String(jod(DEAL.exampleDealerBorneExpenses))
+    );
+    expect(economics.overrides[0]?.previousValue).toContain(String(driftedClosing));
+    expect(economics.overrides[0]?.reason).toMatch(/closing expenses/i);
+  });
+
+  test("audits an expenses change that moves only the closing figure", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+
+    const driftedClosing = jod(400);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { estimatedClosingExpensesMinor: driftedClosing })
+    );
+
+    // Equal to the dealer-borne figure already on the row, so ONLY the closing
+    // figure moves. The gate has to notice that, or a persisted number changes
+    // with no audit row at all.
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "SYSTEM_CALCULATED",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+    });
+
+    expect((await readApp(seed, applicationId)).estimatedClosingExpensesMinor).toBe(
+      jod(DEAL.exampleDealerBorneExpenses)
+    );
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides).toHaveLength(1);
+    expect(economics.overrides[0]?.previousValue).toContain(String(driftedClosing));
+    expect(economics.overrides[0]?.reason).toMatch(/closing expenses/i);
+  });
+
+  /**
+   * The everyday case, pinned exactly rather than by `toContain`.
+   *
+   * Folding the expenses pair into the shared table made an ordinary expenses
+   * change name both fields with the same figure — "expenses 300000, closing
+   * expenses 300000" — where it had named one. That is one move described
+   * twice, and no existing assertion noticed because they all match substrings.
+   */
+  test("names an ordinary expenses change once, not once per field it writes", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordManualBaseline(seed, applicationId);
+
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(900),
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+    });
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides[0]?.reason).toBe("Re-recorded; changed: expenses.");
   });
 
   test("audits a recalculated quotation even when no reason is given", async () => {
