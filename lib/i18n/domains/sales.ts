@@ -806,6 +806,15 @@ export const salesEn = {
   RecordAppraisalAction: "Record appraisal",
   AppraisalNeedsReviewer:
     "A manager records the appraisal. The deal's stage rail waits on it once the quotation has gone out.",
+  /**
+   * Shown once the vehicle has gone out with no appraisal on file.
+   *
+   * `recordAppraisal` refuses after handover, so the action is withdrawn — and
+   * the stage rail still asks for the appraisal, which reads as a dead end
+   * unless the screen says where the deal actually goes from here.
+   */
+  AppraisalClosedByHandover:
+    "The vehicle has already been handed over, so an appraisal can no longer be recorded against this deal. A manager records the amount the finance company approved instead, choosing \"another amount they named\" and saying what they told the dealership.",
   RecordAppraisalTitle: "Record the appraisal on this vehicle",
   RecordAppraisalDesc:
     "What the vehicle was valued at, and by whom. Sending the quotation puts the appraisal in play, so the deal waits here until it is recorded.",
@@ -1629,6 +1638,8 @@ export const salesAr = {
   RecordAppraisalAction: "تسجيل التخمين",
   AppraisalNeedsReviewer:
     "يسجّل التخمين المدير. تتوقّف مراحل الصفقة عنده بعد إرسال عرض السعر.",
+  AppraisalClosedByHandover:
+    "سُلِّمت المركبة فعلاً، ولم يعد بالإمكان تسجيل تخمين على هذه الصفقة. يسجّل المدير بدلاً من ذلك المبلغ الذي اعتمدته شركة التمويل، باختيار «مبلغ آخر حدّدته» مع ذكر ما أبلغت به المعرض.",
   RecordAppraisalTitle: "تسجيل تخمين المركبة",
   RecordAppraisalDesc:
     "القيمة التي قُدِّرت بها المركبة، ومن قدّرها. إرسال عرض السعر يُدخِل التخمين في المسار، وتنتظر الصفقة عنده حتى يُسجَّل.",
