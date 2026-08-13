@@ -887,13 +887,36 @@ export const recordSubmittedQuotation = mutation({
       const noteMove = (label: string, before: unknown, after: unknown) => {
         if (before !== after) movedInputs.push([label, before, after]);
       };
-      // Against `targetNetProceedsMinor`, which is what `targetForSolver` falls
-      // back to when the argument is omitted — NOT `targetSellingAmountMinor`.
-      // The patch writes both fields from the same argument, so they normally
-      // agree; on a row where they have diverged, comparing the other one made
-      // an omitted argument report a target move that never happened, in the
-      // audit trail this block exists to keep honest.
-      noteMove("target", app.targetNetProceedsMinor, targetForSolver);
+      /**
+       * Each target field against ITS OWN previous value.
+       *
+       * The patch writes `targetSellingAmountMinor` and `targetNetProceedsMinor`
+       * together from one argument, so they agree on every row this code can
+       * create — and a single comparison was wrong in both directions on a row
+       * where they had drifted apart, which is the only shape legacy data could
+       * have arrived in. Comparing the selling field against a value that falls
+       * back to the net one reported a move that never happened when the
+       * argument was omitted; comparing the net field reported NO move when an
+       * explicit argument moved the selling field to the net field's value —
+       * and the patch then overwrote the figure, with no other history of it
+       * anywhere. Two reviewers found those, one round apart, in opposite
+       * directions. Per-field is right in both cases and needs no third guess.
+       *
+       * Nothing is noted when the argument is omitted, because then neither
+       * field is patched.
+       */
+      if (args.targetSellingAmountMinor !== undefined) {
+        noteMove("target", app.targetSellingAmountMinor, args.targetSellingAmountMinor);
+        // A second, genuinely different move — only on a row where the two had
+        // drifted, since otherwise this is the move already noted above.
+        if (app.targetNetProceedsMinor !== app.targetSellingAmountMinor) {
+          noteMove(
+            "target net proceeds",
+            app.targetNetProceedsMinor,
+            args.targetSellingAmountMinor
+          );
+        }
+      }
       noteMove("expenses", app.estimatedDealerBorneExpensesMinor, expensesForSolver);
       noteMove("buffer", app.quotationBufferMinor, bufferForSolver);
       noteMove("first payment", app.customerFirstPaymentMinor, customerFirstPaymentMinor);

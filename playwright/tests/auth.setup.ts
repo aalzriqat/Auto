@@ -231,19 +231,29 @@ async function signIn(
   if (options.mayCreateDealership) {
     await completeOnboardingIfNeeded(page);
   } else if (!isOrgRoute(new URL(page.url()))) {
-    // A bounded WAIT, not `isVisible()` — which does not wait. The identity can
-    // land on /dashboard while the wizard is still mounting, and in that window
-    // the actionable message below never runs: the failure arrives thirty
-    // seconds later as a generic URL timeout naming neither the identity nor
-    // the missing membership.
-    const stranded = await page
-      .getByRole("textbox", { name: "Dealership Name" })
-      .waitFor({ state: "visible", timeout: 15_000 })
-      .then(() => true)
-      .catch(() => false);
-    if (stranded) {
+    /**
+     * Detected by the CHOICE screen an orgless identity actually lands on.
+     *
+     * Not by the "Dealership Name" field: that only mounts after clicking "I
+     * run a dealership", which this branch exists to prevent. Waiting for it
+     * therefore always timed out, `stranded` stayed false, and the run failed
+     * thirty seconds later on the same generic URL timeout the check was added
+     * to replace — while costing every correctly-provisioned identity that
+     * briefly passes through /dashboard the full wait first.
+     *
+     * Raced against arrival at an org route, so a membership that resolves a
+     * moment later wins and nothing is delayed by the loser.
+     */
+    const strandedOnChoice = await Promise.race([
+      page
+        .getByText("I run a dealership", { exact: true })
+        .waitFor({ state: "visible", timeout: 20_000 })
+        .then(() => true),
+      page.waitForURL(isOrgRoute, { timeout: 20_000 }).then(() => false),
+    ]).catch(() => false);
+    if (strandedOnChoice) {
       throw new Error(
-        `${options.user} signed in but belongs to no dealership. Add this identity to the QA organization with a role holding approve:finance_application — do NOT let it create a dealership of its own, or the suite will run against an empty org.`,
+        `${options.user} signed in and was offered the "how will you use AutoFlow" choice, which means it belongs to no dealership. Add this identity to the QA organization with a role holding approve:finance_application — do NOT let it create a dealership of its own, or the suite will run against an empty org.`,
       );
     }
   }

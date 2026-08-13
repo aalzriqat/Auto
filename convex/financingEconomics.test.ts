@@ -2384,6 +2384,62 @@ describe("overrides and audit", () => {
     expect(economics.overrides[0]?.newValue).toContain("MANUAL_ENTRY");
   });
 
+  /**
+   * A row whose two target fields have drifted apart, which the audit must
+   * describe honestly in BOTH directions.
+   *
+   * The mutation writes `targetSellingAmountMinor` and `targetNetProceedsMinor`
+   * together from one argument, so they agree on every row this code can create
+   * — the divergence below is seeded directly, because that is the only shape
+   * legacy data could have arrived in and the whole purpose of an audit trail is
+   * the rows nobody can produce any more.
+   *
+   * Both reviewers found a defect here, in opposite directions, one round apart:
+   * comparing the SELLING field against a value that falls back to the NET one
+   * reported a move that never happened when the argument was omitted; comparing
+   * the NET field reported no move when an explicit argument moved the selling
+   * field to the net field's value. Each field is now compared against its own
+   * previous value, which is right in both cases and needs no third guess.
+   */
+  test("records the target move on a row whose selling and net-proceeds figures had drifted apart", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+
+    const recorded = await readApp(seed, applicationId);
+    expect(recorded.targetSellingAmountMinor).toBe(jod(DEAL.targetSelling));
+    expect(recorded.targetNetProceedsMinor).toBe(jod(DEAL.targetSelling));
+
+    // Legacy shape: the two fields no longer agree.
+    const driftedNetProceeds = jod(11_000);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { targetNetProceedsMinor: driftedNetProceeds })
+    );
+
+    // The same quotation, same source, same recorder — and an explicit target
+    // equal to the DRIFTED net figure. The only thing that moves is the selling
+    // amount, from 10,500 to 11,000, and the patch below overwrites it.
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: driftedNetProceeds,
+    });
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides).toHaveLength(1);
+    const override = economics.overrides[0];
+    // The figure it moved FROM has to survive, because the patch has just
+    // overwritten it and there is no other history of that field anywhere.
+    expect(override?.previousValue).toContain(String(jod(DEAL.targetSelling)));
+    expect(override?.newValue).toContain(String(driftedNetProceeds));
+    expect(override?.reason).toMatch(/target/i);
+  });
+
   test("audits a recalculated quotation even when no reason is given", async () => {
     const seed = await seedDealer();
     const applicationId = await createApplication(seed);
