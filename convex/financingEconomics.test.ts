@@ -2632,6 +2632,39 @@ describe("overrides and audit", () => {
     expect(economics.overrides[0]?.reason).toBe("Re-recorded; changed: expenses.");
   });
 
+  /**
+   * The same everyday case for the target pair.
+   *
+   * The dedupe is shared, so both pairs would double-name an ordinary change if
+   * it were ever removed — but only the expenses side had a test that noticed.
+   * Removing the dedupe left 94 of 95 green, and the one failure was the
+   * expenses case: a later edit that reintroduced double-naming on the target
+   * side alone would have shipped with CI green. Found by Sonnet, which is
+   * exactly the asymmetry this subsystem has now been bitten by three times —
+   * except this time it was the tests that were asymmetric, not the rule.
+   */
+  test("names an ordinary target change once, not once per field it writes", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordManualBaseline(seed, applicationId);
+
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: jod(11_200),
+      estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+    });
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides[0]?.reason).toBe("Re-recorded; changed: target.");
+  });
+
   test("audits a recalculated quotation even when no reason is given", async () => {
     const seed = await seedDealer();
     const applicationId = await createApplication(seed);
