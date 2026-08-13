@@ -440,6 +440,24 @@ export async function requireOwnedRow<T extends OrgScopedTable>(
  * every caller — Convex drops undefined values from the wire, so nothing leaks,
  * while consumers keep one type instead of a union they must narrow.
  */
+/**
+ * Whether this role is shown the approved dealer purchase amount.
+ *
+ * Exported so that anything ELSE returning a figure derived from it applies the
+ * same test rather than restating it. The correction history is the first such
+ * caller: `recordOverride` stringifies the amount into its rows, so a history
+ * gated on a hand-copied predicate would eventually disagree with the redaction
+ * and print the withheld number beside the row that withholds it.
+ *
+ * ⚠️ Same caveat as the field it guards: a DISPLAY gate, not a confidentiality
+ * boundary. See `redactSettlementEvidence` for the routes that remain open.
+ */
+export function canSeeApprovedPurchaseAmount(role: Doc<"roles">): boolean {
+  const has = (permission: Permission) =>
+    isSystemOwnerRole(role) || role.permissions.includes(permission);
+  return has(PERMISSIONS.VIEW_FINANCE) || has(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+}
+
 export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
   app: T,
   role: Doc<"roles">
@@ -447,7 +465,7 @@ export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
   const has = (permission: Permission) =>
     isSystemOwnerRole(role) || role.permissions.includes(permission);
   const canSeeFinance = has(PERMISSIONS.VIEW_FINANCE);
-  const canWorkDisbursement = canSeeFinance || has(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+  const canWorkDisbursement = canSeeApprovedPurchaseAmount(role);
 
   return {
     ...app,

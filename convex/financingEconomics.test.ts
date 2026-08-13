@@ -3598,3 +3598,69 @@ describe("the correction workflow's guards are enforced by the server", () => {
     );
   });
 });
+
+/**
+ * The correction history is only as private as the figure inside it.
+ *
+ * `recordOverride` stringifies the approved amount into `previousValue` and
+ * `newValue`. `redactSettlementEvidence` names this query's `overrides[]` as
+ * one of three routes by which a `view:sales` caller recovers a number the row
+ * itself withholds — harmless while nothing rendered them, and a leak in front
+ * of the exact role it is withheld from the moment a screen does.
+ */
+describe("the correction history follows the amount it describes", () => {
+  async function seedCorrectedDeal() {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_800),
+      basis: "MANUAL",
+      notes: "Negotiated directly.",
+    });
+    await seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "Entered from the wrong advice.",
+    });
+    return { seed, applicationId };
+  }
+
+  test("a caller who may see the amount gets the history, with the person named", async () => {
+    const { seed, applicationId } = await seedCorrectedDeal();
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+
+    expect(economics.overrides).toHaveLength(1);
+    expect(economics.overrides[0]?.reason).toBe("Entered from the wrong advice.");
+    // The id alone tells an operator nothing; a history that cannot say who is
+    // not an audit trail.
+    expect(economics.overrides[0]?.changedByName).toBeDefined();
+    // And the replaced figure survives — this row is the only place it does.
+    expect(economics.overrides[0]?.previousValue).toContain(String(jod(11_800)));
+  });
+
+  test("a sales caller gets NO history, because the rows carry the amount withheld from them", async () => {
+    const { seed, applicationId } = await seedCorrectedDeal();
+    const asSales = await addSalesUser(seed);
+
+    const forSales = await asSales.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+
+    // The amount is withheld from this caller...
+    expect(forSales.application.approvedDealerPurchaseAmountMinor).toBeUndefined();
+    // ...so the rows that spell it out in prose must be withheld too. Returning
+    // them would hand back, in a string, the number the line above removed.
+    expect(forSales.overrides).toEqual([]);
+    // The rest of the deal still serves — withholding the history must not
+    // withhold the deal.
+    expect(forSales.application.submittedQuotationMinor).toBe(jod(DEAL.quotation));
+  });
+});

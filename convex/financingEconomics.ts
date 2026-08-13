@@ -4,7 +4,12 @@ import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
-import { requireOwnedRow, requireTenantAuth, redactSettlementEvidence } from "./utils/tenancy";
+import {
+  requireOwnedRow,
+  requireTenantAuth,
+  redactSettlementEvidence,
+  canSeeApprovedPurchaseAmount,
+} from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import {
@@ -654,6 +659,10 @@ export const getEconomics = query({
     // Blanked rather than omitted so the returned shape stays the same for
     // every caller — a union of "has the key" and "does not" would make every
     // consumer narrow before reading anything.
+    // The SAME predicate `redactSettlementEvidence` applies to the amount
+    // itself — imported, not restated, so the history and the figure it
+    // describes can never disagree about who may see them.
+    const canWorkDisbursement = canSeeApprovedPurchaseAmount(auth.role);
     const canSeeCost =
       isSystemOwnerRole(auth.role) ||
       auth.role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
@@ -669,7 +678,37 @@ export const getEconomics = query({
         vehiclePurchaseCostMinor: canSeeCost ? app.vehiclePurchaseCostMinor : undefined,
       },
       appraisals: appraisals.sort((a, b) => b.appraisedAt - a.appraisedAt),
-      overrides: overrides.sort((a, b) => b.changedAt - a.changedAt),
+      /**
+       * The corrections on this deal, newest first — with the person named.
+       *
+       * WITHHELD from a caller who may not see the approved amount, because
+       * `recordOverride` stringifies that amount into `previousValue` and
+       * `newValue`. `redactSettlementEvidence` names this query's `overrides[]`
+       * as one of three routes by which a `view:sales` caller recovers a figure
+       * the row itself withholds, and until now nothing rendered them so the
+       * exposure was API-only. Putting them on screen without this gate would
+       * have printed the withheld number in front of exactly the role it is
+       * withheld from.
+       *
+       * This closes ONE of the three named routes. It does not create the
+       * boundary — the other two (deriving it from the funded portion and the
+       * LTV, and reading it out of the free-text approval notes) are untouched,
+       * and that rework is tracked separately. Claiming otherwise here would be
+       * the "false assurance behind a longer comment" that helper warns about.
+       */
+      overrides: canWorkDisbursement
+        ? await Promise.all(
+            overrides
+              .sort((a, b) => b.changedAt - a.changedAt)
+              .map(async (row) => ({
+                ...row,
+                // Resolved here rather than in the browser: the id alone tells
+                // an operator nothing, and a history that cannot say who made a
+                // correction is not an audit trail.
+                changedByName: (await ctx.db.get(row.changedBy))?.name,
+              }))
+          )
+        : [],
     };
   },
 });

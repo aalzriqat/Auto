@@ -813,6 +813,11 @@ export const salesEn = {
   ReopenApprovalWhatHappensNext:
     "The amount comes off the record along with the funding split worked out from it, and handover is blocked again until the correct amount is recorded.",
   ReopenApprovedPurchaseAction: "Reopen for correction",
+  CorrectionHistoryHeading: "Corrections on this deal",
+  CorrectionHistoryIntro:
+    "What was changed, by whom, and why. A corrected figure would otherwise be indistinguishable from one that was always right.",
+  CorrectionValueReopened: "taken off the record",
+  CorrectionByUnknownUser: "A user who no longer exists",
   DerivedEconomicsHeading: "What that leaves",
   DerivedEconomicsNote: "Worked out by AutoFlow from the two figures above. Not editable.",
   DerivedFundedPortion: "Funded by the finance company",
@@ -1664,6 +1669,11 @@ export const salesAr = {
   ReopenApprovalWhatHappensNext:
     "يُرفع المبلغ عن السجل مع تقسيم التمويل المحسوب منه، ويُمنع التسليم من جديد إلى أن يُسجَّل المبلغ الصحيح.",
   ReopenApprovedPurchaseAction: "إعادة الفتح للتصحيح",
+  CorrectionHistoryHeading: "التصحيحات على هذه الصفقة",
+  CorrectionHistoryIntro:
+    "ما الذي تغيّر، ومن غيّره، ولماذا. بدون ذلك لا يمكن تمييز رقم مصحَّح عن رقم كان صحيحاً منذ البداية.",
+  CorrectionValueReopened: "رُفع عن السجل",
+  CorrectionByUnknownUser: "مستخدم لم يعد موجوداً",
   DerivedEconomicsHeading: "ما ينتج عن ذلك",
   DerivedEconomicsNote: "يحتسبه أوتوفلو من الرقمين أعلاه، وغير قابل للتعديل.",
   DerivedFundedPortion: "الجزء المموَّل من شركة التمويل",

@@ -1213,3 +1213,95 @@ describe("the departure question is carried to the server, and retired when it s
     expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeTruthy();
   });
 });
+
+/**
+ * The correction history — the audit trail that existed and was invisible.
+ *
+ * `reopenApproval` and `approveDealerPurchaseAmount` have always written
+ * override rows and nothing ever read one, so a deal corrected from 150,000 to
+ * 15,000 showed 15,000 and looked exactly like a deal that was always right.
+ */
+describe("corrections are visible on the deal, not just recorded", () => {
+  const correction = {
+    id: "ov_1",
+    field: "approvedDealerPurchaseAmountMinor",
+    previousValue: "150000000 (MANUAL @ 85% LTV)",
+    newValue: "reopened",
+    reason: "entered as 150,000 by mistake; the company approved 15,000",
+    changedByName: "Layla Mansour",
+    changedAtLabel: "13 Aug 2026 18:20",
+  };
+
+  test("the reason, the movement, and who made it are all on screen", () => {
+    render(
+      <DealCockpitView
+        deal={dealFixture()}
+        financeDecision={wiring()}
+        corrections={[correction]}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    expect(screen.getByText("CorrectionHistoryHeading")).toBeTruthy();
+    // The reason is the only part a person wrote, and the only part that
+    // answers "why is this different from what I remember".
+    expect(screen.getByText(correction.reason)).toBeTruthy();
+    expect(screen.getByText("Layla Mansour")).toBeTruthy();
+    expect(screen.getByText("13 Aug 2026 18:20")).toBeTruthy();
+    // The sentinel `reopened` is written for an audit table, not for a screen.
+    expect(screen.getByText("CorrectionValueReopened")).toBeTruthy();
+    expect(screen.queryByText("reopened")).toBeNull();
+  });
+
+  test("a deal that was never corrected shows no history at all", () => {
+    render(
+      <DealCockpitView
+        deal={dealFixture()}
+        financeDecision={wiring()}
+        corrections={[]}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    // Absent rather than an empty panel: a permanent "no corrections" heading
+    // on every healthy deal is noise, and it reads as something missing.
+    expect(screen.queryByText("CorrectionHistoryHeading")).toBeNull();
+  });
+
+  test("withheld history renders nothing, and the screen does not re-decide the permission", () => {
+    // The server sends an empty list to a caller who may not see the approved
+    // amount, because the stored strings carry that amount. Both that case and
+    // "never corrected" correctly render nothing.
+    render(
+      <DealCockpitView
+        deal={dealFixture()}
+        financeDecision={wiring({ facts: { approvedPurchaseRecorded: true } })}
+        corrections={[]}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    expect(screen.queryByText("CorrectionHistoryHeading")).toBeNull();
+    // ...and the deal itself still renders. A withheld history must not take
+    // the screen with it.
+    expect(screen.getByText("FinanceDecisionHeading")).toBeTruthy();
+  });
+
+  test("an unrenderable timestamp costs the line, never the screen", () => {
+    // Convex stores NaN and ±Infinity verbatim through `v.number()`, and
+    // date-fns `format()` THROWS on them. Formatting one inline would take the
+    // whole cockpit down to render a single history row.
+    render(
+      <DealCockpitView
+        deal={dealFixture()}
+        financeDecision={wiring()}
+        corrections={[{ ...correction, changedAtLabel: undefined }]}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    expect(screen.getByText(correction.reason)).toBeTruthy();
+    expect(screen.getByText("Layla Mansour")).toBeTruthy();
+    expect(screen.getByText("FinanceDecisionHeading")).toBeTruthy();
+  });
+});

@@ -41,6 +41,10 @@ import {
   ReopenApprovedPurchaseDialog,
 } from "./ReopenApprovedPurchaseDialog";
 import {
+  CorrectionHistoryCard,
+  type CorrectionEntry,
+} from "./CorrectionHistoryCard";
+import {
   RecordApprovedPurchaseDialog,
   type ApprovalBasis,
 } from "./RecordApprovedPurchaseDialog";
@@ -286,6 +290,29 @@ export function DealCockpit({
   const economicsApp = economics?.application ?? null;
 
   /**
+   * The deal's corrections, ready to render.
+   *
+   * The server withholds these entirely from a caller who may not see the
+   * approved amount, so an empty list here is either "nothing was corrected" or
+   * "not yours to see" — and both correctly render nothing. The screen does not
+   * re-decide the permission; `getEconomics` owns it.
+   */
+  const corrections = (economics?.overrides ?? []).map((row) => ({
+    id: row._id as string,
+    field: row.field,
+    previousValue: row.previousValue,
+    newValue: row.newValue,
+    reason: row.reason,
+    changedByName: row.changedByName,
+    // Guarded, never formatted raw: a corrupt timestamp reaches the client
+    // intact and `format()` throws on it, which would cost the whole screen to
+    // render one line of history.
+    changedAtLabel: isRenderableMoment(row.changedAt)
+      ? format(row.changedAt, "d MMM yyyy HH:mm")
+      : undefined,
+  }));
+
+  /**
    * The calculator, mounted wherever the quotation action can actually be
    * offered — which includes RE-recording one that already exists.
    *
@@ -491,6 +518,7 @@ export function DealCockpit({
     <DealCockpitView
       deal={deal}
       financeDecision={financeDecision}
+      corrections={corrections}
       canCorrectAdvice={canCorrectAdvice}
       onCorrectSettlementAdvice={async (correction) => {
         correctionKeyRef.current ??= `amend-supplier-advice:${crypto.randomUUID()}`;
@@ -777,6 +805,7 @@ export type FinanceDecisionWiring = {
 export function DealCockpitView({
   deal,
   financeDecision,
+  corrections = [],
   canCorrectAdvice = false,
   onCorrectSettlementAdvice,
   onRecordSupplierReceipt,
@@ -788,6 +817,13 @@ export function DealCockpitView({
    * was skipped for want of `view:finance_applications`.
    */
   financeDecision?: FinanceDecisionWiring;
+  /**
+   * Corrections made to this deal's recorded figures, newest first.
+   *
+   * Defaults to none so a caller that forgets it renders no history rather than
+   * claiming a clean record it never checked.
+   */
+  corrections?: ReadonlyArray<CorrectionEntry>;
   /**
    * Whether this caller may amend a recorded settlement advice (MANAGE_FINANCE).
    *
@@ -1321,6 +1357,11 @@ export function DealCockpitView({
           }}
         />
       )}
+
+      {/* Directly beneath the figures it explains. A correction is only
+          meaningful next to the number it produced — read on its own, further
+          down the page, "150,000 → reopened" is a fact about nothing. */}
+      <CorrectionHistoryCard entries={corrections} t={t} />
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
