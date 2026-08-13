@@ -710,7 +710,7 @@ export const recordSubmittedQuotation = mutation({
     ltvPercent: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [
       PERMISSIONS.CREATE_FINANCE_APPLICATION,
     ]);
     assertMinorAmount(args.submittedQuotationMinor, "Submitted quotation");
@@ -759,6 +759,49 @@ export const recordSubmittedQuotation = mutation({
       throw new ConvexError(
         "The finance company has already approved a purchase amount on this application. Reopen the approval before changing the quotation it was based on."
       );
+    }
+
+    /**
+     * Naming the rate this deal is financed at is an APPROVER's decision.
+     *
+     * Recording the quotation is a transcription — "this is the figure we sent"
+     * — and the SALES template may do it. `ltvPercent` is a different act. It is
+     * stored as `appliedLtvPercent` and scales the finance company's funded
+     * portion, which fixes the unfinanced portion and therefore the dealership's
+     * own contribution: a salesperson able to set it could move the dealer's
+     * money by typing a different number into the field beside the amount. The
+     * sibling `approveDealerPurchaseAmount` already takes this same rate behind
+     * `APPROVE_FINANCE_APPLICATION`; this door did not, so the weaker role
+     * reached the same figure by the earlier step.
+     *
+     * The guard fires only where the argument is LOAD-BEARING — where it
+     * establishes or moves the rate the deal already stands on:
+     *
+     *  - snapshot carries no default and none has been recorded → any rate is
+     *    the exceptional per-deal recovery, and needs an approver;
+     *  - the deal already has a rate and the caller re-sends the SAME one →
+     *    nothing moves, and re-recording a quotation stays ordinary sales work;
+     *  - the snapshot's own configured rate, sent explicitly → likewise a
+     *    no-op, so the normal configured path is untouched;
+     *  - a rate DIFFERENT from either → an override of the company's rules,
+     *    which moves exactly the money the recovery case does and gets exactly
+     *    the same authority.
+     *
+     * Checked before the solver runs and before anything is patched, so a
+     * refusal never leaves a recorded quotation standing on a rate the recorder
+     * was not entitled to set.
+     */
+    if (args.ltvPercent !== undefined) {
+      const snapshot = await resolveRuleSnapshot(ctx, app);
+      const establishedLtvPercent = app.appliedLtvPercent ?? snapshot.defaultLtvPercent;
+      const mayApprove =
+        isSystemOwnerRole(role) ||
+        role.permissions.includes(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+      if (args.ltvPercent !== establishedLtvPercent && !mayApprove) {
+        throw new ConvexError(
+          "Only a user who can approve finance applications may set the LTV this deal is financed at. Ask a manager to record the rate the financing company confirmed."
+        );
+      }
     }
 
     // The same resolution `suggestQuotationForApplication` runs, so the figure

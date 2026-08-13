@@ -1470,20 +1470,26 @@ describe("reconciliation queue", () => {
   });
 });
 
-describe("permissions", () => {
-  async function addSalesUser(seed: Seed): Promise<AuthenticatedTestConvex> {
-    const template = DEFAULT_ROLE_TEMPLATES.find((role) => role.name === "SALES");
-    if (!template) throw new Error("no SALES template");
-    const userId = await seed.t.run((ctx) =>
-      ctx.db.insert("users", { clerkId: "econ_sales", email: "sales@example.com", name: "Sales" })
-    );
-    const roleId = await seed.t.run((ctx) =>
-      ctx.db.insert("roles", { orgId: seed.orgId, name: "SALES", permissions: [...template.permissions] })
-    );
-    await seed.t.run((ctx) => ctx.db.insert("memberships", { orgId: seed.orgId, userId, roleId }));
-    return seed.t.withIdentity({ subject: "econ_sales" });
-  }
+/**
+ * A real salesperson: the default SALES template, not the owner role the seed
+ * hands out. Module-scoped because two describes need it — the permission cases
+ * below, and the LTV-authority cases, where the whole question is what a role
+ * that is NOT an approver may establish about a deal's economics.
+ */
+async function addSalesUser(seed: Seed): Promise<AuthenticatedTestConvex> {
+  const template = DEFAULT_ROLE_TEMPLATES.find((role) => role.name === "SALES");
+  if (!template) throw new Error("no SALES template");
+  const userId = await seed.t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: "econ_sales", email: "sales@example.com", name: "Sales" })
+  );
+  const roleId = await seed.t.run((ctx) =>
+    ctx.db.insert("roles", { orgId: seed.orgId, name: "SALES", permissions: [...template.permissions] })
+  );
+  await seed.t.run((ctx) => ctx.db.insert("memberships", { orgId: seed.orgId, userId, roleId }));
+  return seed.t.withIdentity({ subject: "econ_sales" });
+}
 
+describe("permissions", () => {
   test("SALES cannot record a finance company's appraisal, only a dealer estimate", async () => {
     const seed = await seedDealer();
     const applicationId = await createApplication(seed);
@@ -1689,6 +1695,130 @@ describe("LTV configuration", () => {
     expect(repaired.appliedLtvPercent).toBe(90);
     // The snapshot is still untouched — the deal was repaired, not rewritten.
     expect(repaired.companyRuleSnapshot?.defaultLtvPercent).toBeUndefined();
+  });
+
+  /**
+   * A deal frozen under a company that carried no purchase rate. The setup the
+   * two authority cases below both need.
+   */
+  async function createUnconfiguredLtvApplication(
+    seed: Seed
+  ): Promise<Id<"financeApplications">> {
+    const bareCompanyId = await seed.t.run((ctx) =>
+      ctx.db.insert("financeCompanies", {
+        orgId: seed.orgId,
+        name: "Unconfigured Finance Co",
+        profitRate: 6,
+        maxTermMonths: 48,
+        gracePeriodMonths: 0,
+        maxFinancingLTV: 100,
+        isActive: true,
+      })
+    );
+    const quoteId = await seed.asUser.mutation(api.quotes.saveQuote, {
+      orgId: seed.orgId,
+      customerId: seed.customerId,
+      vehicleId: seed.vehicleId,
+      mode: "CONFIGURED_FINANCE_COMPANY",
+      companyId: bareCompanyId,
+      vehiclePrice: DEAL.targetSelling,
+      downPayment: DEAL.customerFirstPayment,
+      termMonths: 48,
+      totalFinancedAmount: 10_736,
+    });
+    return seed.asUser.mutation(api.applications.createFromQuote, {
+      orgId: seed.orgId,
+      quoteId,
+    });
+  }
+
+  /**
+   * Recording the quotation is a transcription — "this is the figure we sent" —
+   * and the SALES template may do it. Naming the rate the deal is financed at is
+   * NOT: `appliedLtvPercent` drives the finance company's funded portion, the
+   * unfinanced portion and therefore the dealership's own contribution, so a
+   * salesperson who could set it could move the dealer's money by typing a
+   * different number into a field beside the amount.
+   *
+   * The owner's ruling, recorded on SCRUM-68: the exceptional per-deal rate
+   * requires `approve:finance_application`. The ordinary path — a company whose
+   * rate is configured, a salesperson recording what was sent — is untouched,
+   * and the case below proves that too.
+   */
+  test("SALES cannot establish the missing per-deal LTV; an approver can, and then SALES may quote at it", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createUnconfiguredLtvApplication(seed);
+    const asSales = await addSalesUser(seed);
+
+    await expect(
+      asSales.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(13_000),
+        source: "MANUAL_ENTRY",
+        ltvPercent: 90,
+      })
+    ).rejects.toThrow(/approve/i);
+
+    // Refused BEFORE anything was written — not refused after recording the
+    // quotation and leaving the rate behind, which would be the worse failure.
+    const untouched = await readApp(seed, applicationId);
+    expect(untouched.appliedLtvPercent).toBeUndefined();
+    expect(untouched.submittedQuotationMinor).toBeUndefined();
+
+    // The manager names the rate the financing was arranged at.
+    await seed.asApprover.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(13_000),
+      source: "MANUAL_ENTRY",
+      ltvPercent: 90,
+    });
+    expect((await readApp(seed, applicationId)).appliedLtvPercent).toBe(90);
+
+    // Once it is established, the deal is an ordinary one again: the
+    // salesperson re-records the quotation at the SAME rate without needing an
+    // approver, because that rate is no longer their decision to make.
+    await asSales.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(13_400),
+      source: "MANUAL_ENTRY",
+      ltvPercent: 90,
+    });
+    const requoted = await readApp(seed, applicationId);
+    expect(requoted.submittedQuotationMinor).toBe(jod(13_400));
+    expect(requoted.appliedLtvPercent).toBe(90);
+  });
+
+  test("SALES may record a quotation under a configured rate, but not at a different one", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    const asSales = await addSalesUser(seed);
+
+    // Departing from the company's configured rate moves exactly the same
+    // money as filling in an absent one, so it needs the same authority.
+    await expect(
+      asSales.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(DEAL.quotation),
+        source: "MANUAL_ENTRY",
+        ltvPercent: 70,
+      })
+    ).rejects.toThrow(/approve/i);
+
+    // The ordinary path is untouched: no rate argument, the snapshot's own rate
+    // applies, and the salesperson records what was sent.
+    await asSales.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "MANUAL_ENTRY",
+    });
+    const recorded = await readApp(seed, applicationId);
+    expect(recorded.submittedQuotationMinor).toBe(jod(DEAL.quotation));
+    expect(recorded.appliedLtvPercent).toBe(DEAL.ltvPercent);
   });
 
   test("applies the LTV to the appraisal when that is the company's rule", async () => {

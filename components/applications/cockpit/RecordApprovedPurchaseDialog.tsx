@@ -42,6 +42,18 @@ type RecordApprovedPurchaseDialogProps = {
   appraisal: { id: string; amountMinor: number } | null;
   /** Recorded before this dialog can be reached, so never null in practice. */
   submittedQuotationMinor: number | null;
+  /**
+   * The rate the deal is financed at, shown because it is what turns the amount
+   * being recorded here into a funding split.
+   *
+   * The approver is committing the money decision, and the derived split that
+   * follows is not a property of the amount alone — the same approved figure
+   * under 90% and under 70% leaves the dealership a different contribution. On
+   * the exceptional per-deal path this rate was set by a manager rather than
+   * configured on the company, so stating it here is the last point at which it
+   * can be recognised as wrong before the split is computed from it.
+   */
+  appliedLtvPercent: number | null;
   /** 10^scale for the deal's own pinned currency — never the org's. */
   factor: number;
   money: (minor: number) => string;
@@ -61,6 +73,7 @@ export function RecordApprovedPurchaseDialog({
   error,
   appraisal,
   submittedQuotationMinor,
+  appliedLtvPercent,
   factor,
   money,
   t,
@@ -174,6 +187,18 @@ export function RecordApprovedPurchaseDialog({
             />
           </div>
 
+          {/* Which rate the split below will be computed at — stated before the
+              money decision is committed, not discovered in the result. */}
+          {appliedLtvPercent !== null && (
+            <div className="space-y-0.5 text-xs text-muted-foreground">
+              <p>
+                {t("DerivedAppliedLtv")}:{" "}
+                <bdi className="tabular-nums font-medium">{appliedLtvPercent}%</bdi>
+              </p>
+              <p>{t("ApprovedPurchaseLtvDrivesSplit")}</p>
+            </div>
+          )}
+
           {/* Typed only under MANUAL. Under the other two the amount IS the
               evidence, and an editable copy of it would be an invitation to
               enter something the server is bound to reject. */}
@@ -236,10 +261,6 @@ export function RecordApprovedPurchaseDialog({
                 // the operator was actually shown, rather than whichever one it
                 // would pick for itself.
                 appraisalId: basis === "MANUAL" ? undefined : (appraisal?.id ?? undefined),
-                // Only from the basis that asks for them. The field is hidden
-                // under the other two, so text typed under MANUAL and left
-                // behind by a change of basis would be stored against an
-                // approval the operator never wrote it for.
                 // Only from the basis that asks for them. The field is hidden
                 // under the other two, so text typed under MANUAL and left
                 // behind by a change of basis would be stored against an

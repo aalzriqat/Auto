@@ -223,7 +223,13 @@ export function FinanceCompanyDecisionCard({
           }
           note={
             facts.submittedQuotationMinor === null && facts.ltvMissing && !facts.closed
-              ? t("FinanceCompanyLtvMissing")
+              ? // Same fact, two audiences. Whoever can set the rate is told to
+                // record it with the quotation; whoever cannot is told who
+                // unblocks the deal, rather than being sent to a field that is
+                // not there and a server that would refuse them.
+                canRecordApproval
+                ? t("FinanceCompanyLtvMissing")
+                : t("DealPurchaseLtvNeedsApprover")
               : undefined
           }
           action={

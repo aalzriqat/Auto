@@ -1543,6 +1543,9 @@ export function DealCockpitView({
             error={quotationError}
             calculation={financeDecision.calculation}
             requiresLtvPercent={financeDecision.facts.ltvMissing}
+            // The permission the SERVER checks for the rate — deliberately not
+            // `canRecordQuotation`, which the SALES template also holds.
+            canSetLtvPercent={financeDecision.canRecordApproval}
             factor={decisionFactor}
             money={decisionMoney}
             t={t}
@@ -1567,6 +1570,7 @@ export function DealCockpitView({
             error={approvalError}
             appraisal={financeDecision.appraisal}
             submittedQuotationMinor={financeDecision.facts.submittedQuotationMinor}
+            appliedLtvPercent={financeDecision.facts.appliedLtvPercent}
             factor={decisionFactor}
             money={decisionMoney}
             t={t}

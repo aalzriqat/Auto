@@ -495,6 +495,62 @@ describe("recording the submitted quotation", () => {
     // closed dialog and a faded toast.
     expect(screen.getByRole("dialog")).toBeTruthy();
   });
+
+  /**
+   * The exceptional per-deal rate, and who may name it.
+   *
+   * `recordSubmittedQuotation` refuses an `ltvPercent` from a caller without
+   * `approve:finance_application`, because that number scales the finance
+   * company's funded portion and therefore the dealership's own contribution.
+   * The dialog must not offer a field whose contents the server is bound to
+   * reject — and must say who unblocks the deal instead, since a disabled button
+   * with no named owner is a dead end.
+   */
+  test("a caller who cannot approve is told who sets the rate, and is not given the field", () => {
+    renderCockpit(wiring({ canRecordApproval: false, facts: { ltvMissing: true } }));
+
+    fireEvent.click(cardButton("RecordQuotationAction")!);
+    const dialog = screen.getByRole("dialog");
+
+    expect(within(dialog).getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
+    expect(within(dialog).queryByLabelText("DealPurchaseLtvLabel")).toBeNull();
+
+    // And the quotation cannot be recorded around it: the rate is not optional,
+    // it is simply not this caller's to supply.
+    fireEvent.change(within(dialog).getByLabelText("QuotationAmountLabel"), {
+      target: { value: "13000" },
+    });
+    const submit = within(dialog).getByRole("button", { name: "RecordQuotationAction" });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  test("an approver gets the field, and the rate travels with the quotation", async () => {
+    const onRecordQuotation = vi.fn(noopAsync);
+    renderCockpit(
+      wiring({ canRecordApproval: true, onRecordQuotation, facts: { ltvMissing: true } })
+    );
+
+    fireEvent.click(cardButton("RecordQuotationAction")!);
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).queryByText("DealPurchaseLtvNeedsApprover")).toBeNull();
+
+    fireEvent.change(within(dialog).getByLabelText("QuotationAmountLabel"), {
+      target: { value: "13000" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("DealPurchaseLtvLabel"), {
+      target: { value: "90" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "RecordQuotationAction" }));
+
+    await waitFor(() =>
+      expect(onRecordQuotation).toHaveBeenCalledWith({
+        submittedQuotationMinor: 13_000 * JOD,
+        source: "MANUAL_ENTRY",
+        overrideReason: undefined,
+        ltvPercent: 90,
+      })
+    );
+  });
 });
 
 describe("recording their appraisal", () => {
@@ -639,6 +695,36 @@ describe("recording their appraisal", () => {
 
 describe("recording what the finance company approved", () => {
   const quotationRecorded = { submittedQuotationMinor: 12_500 * JOD };
+
+  /**
+   * The same approved amount under 90% and under 70% leaves the dealership a
+   * different contribution, so the rate driving that split is stated at the
+   * point the money decision is committed — and on the exceptional per-deal path
+   * it was typed by a manager rather than configured on the company, which makes
+   * this the last place it can be recognised as wrong.
+   */
+  test("names the rate the funding split will be computed at", () => {
+    renderCockpit(
+      wiring({ facts: { ...quotationRecorded, appliedLtvPercent: 90 }, appraisal: null })
+    );
+
+    fireEvent.click(cardButton("RecordApprovedPurchaseAction")!);
+    const dialog = screen.getByRole("dialog");
+
+    expect(within(dialog).getByText("90%")).toBeTruthy();
+    expect(within(dialog).getByText("ApprovedPurchaseLtvDrivesSplit")).toBeTruthy();
+  });
+
+  test("says nothing about a rate the deal does not have yet", () => {
+    renderCockpit(
+      wiring({ facts: { ...quotationRecorded, appliedLtvPercent: null }, appraisal: null })
+    );
+
+    fireEvent.click(cardButton("RecordApprovedPurchaseAction")!);
+    const dialog = screen.getByRole("dialog");
+
+    expect(within(dialog).queryByText("ApprovedPurchaseLtvDrivesSplit")).toBeNull();
+  });
 
   test("with no appraisal on file, only the amount they named is offered — and it needs a note", async () => {
     const onRecordApproved = vi.fn(noopAsync);

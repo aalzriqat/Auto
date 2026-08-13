@@ -68,6 +68,18 @@ type RecordSubmittedQuotationDialogProps = {
    * immutable rules it was created under.
    */
   requiresLtvPercent: boolean;
+  /**
+   * Whether this caller may SET that rate — `approve:finance_application`.
+   *
+   * Separate from `requiresLtvPercent` because they answer different questions:
+   * one is about the deal, the other about the person. Recording the quotation
+   * is a transcription and the SALES template may do it; naming the rate the
+   * deal is financed at moves the dealership's own contribution, so the server
+   * refuses it from anyone who cannot approve. Rendering the field to a caller
+   * whose entry will be refused is the shape this dialog exists to avoid — the
+   * field is replaced by who to ask instead.
+   */
+  canSetLtvPercent: boolean;
   /** 10^scale for the deal's own pinned currency — never the org's. */
   factor: number;
   money: (minor: number) => string;
@@ -88,6 +100,7 @@ export function RecordSubmittedQuotationDialog({
   error,
   calculation,
   requiresLtvPercent,
+  canSetLtvPercent,
   factor,
   money,
   t,
@@ -143,6 +156,9 @@ export function RecordSubmittedQuotationDialog({
   // whatever the snapshot allows. The first two are checked here so the button
   // does not sit dead; the snapshot bounds stay the server's to enforce.
   const ltvInvalid = ltvEntered && !(parsedLtv > 0 && parsedLtv <= 100);
+  // A caller who may not set the rate can never satisfy this, which is the
+  // point: the deal is blocked on someone else, and the button says so by
+  // staying disabled under a note naming who.
   const ltvMissing = requiresLtvPercent && !ltvEntered;
 
   const canSubmit =
@@ -221,7 +237,13 @@ export function RecordSubmittedQuotationDialog({
             )}
           </div>
 
-          {requiresLtvPercent && (
+          {requiresLtvPercent && !canSetLtvPercent && (
+            <p className="rounded-md border border-dashed p-2.5 text-xs text-muted-foreground">
+              {t("DealPurchaseLtvNeedsApprover")}
+            </p>
+          )}
+
+          {requiresLtvPercent && canSetLtvPercent && (
             <div className="space-y-1.5">
               <Label htmlFor="submitted-quotation-ltv">{t("DealPurchaseLtvLabel")}</Label>
               <Input

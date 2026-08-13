@@ -206,7 +206,7 @@ describe("the economics read", () => {
 });
 
 describe("the facts the card is given", () => {
-  test("name the missing purchase LTV when the deal's own snapshot has none", () => {
+  test("name the missing purchase LTV, and who may set it, when the deal's own snapshot has none", () => {
     permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
     queryResults.set(COCKPIT_QUERY, cockpit(false));
@@ -217,7 +217,27 @@ describe("the facts the card is given", () => {
 
     renderCockpit();
 
+    // A salesperson holds CREATE but not APPROVE, and the server refuses the
+    // rate from them. Telling them to "record the rate with the quotation"
+    // would be an instruction they cannot carry out, so they are told who can.
+    expect(screen.getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
+    expect(screen.queryByText("FinanceCompanyLtvMissing")).toBeNull();
+  });
+
+  test("tell an approver to record the rate rather than to go and find one", () => {
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+    queryResults.set(COCKPIT_QUERY, cockpit(false));
+    queryResults.set(
+      ECONOMICS_QUERY,
+      economics({ companyRuleSnapshot: { ruleVersion: 1 }, appliedLtvPercent: undefined })
+    );
+
+    renderCockpit();
+
     expect(screen.getByText("FinanceCompanyLtvMissing")).toBeTruthy();
+    expect(screen.queryByText("DealPurchaseLtvNeedsApprover")).toBeNull();
   });
 
   test("do not claim a missing LTV for a legacy deal with no snapshot at all", () => {

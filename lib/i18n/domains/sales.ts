@@ -762,6 +762,15 @@ export const salesEn = {
   DealPurchaseLtvHint:
     "The share of the vehicle the finance company buys at, for this deal only. Setting the rate on the company itself applies to future deals, not to this one.",
   DealPurchaseLtvInvalid: "Enter a rate greater than zero and no more than 100.",
+  /**
+   * Shown instead of the field, to a caller who may record the quotation but not
+   * set the rate it is financed at. Says who unblocks it, because a disabled
+   * control with no named owner is a dead end.
+   */
+  DealPurchaseLtvNeedsApprover:
+    "This deal was created before its finance company had a purchase LTV, and a deal keeps the rules it was created under. A manager must record the rate the finance company confirmed for this deal before the quotation can be recorded.",
+  ApprovedPurchaseLtvDrivesSplit:
+    "This rate divides the approved amount into the financed and unfinanced portions.",
   RecordApprovedPurchaseAction: "Record approved amount",
   QuotationNeededFirst: "Record the submitted quotation first.",
   ApprovedPurchaseNeedsApprover:
@@ -1581,6 +1590,10 @@ export const salesAr = {
   DealPurchaseLtvHint:
     "نسبة قيمة المركبة التي تشتريها شركة التمويل، لهذه الصفقة فقط. أما ضبط النسبة على الشركة نفسها فيسري على الصفقات القادمة لا على هذه.",
   DealPurchaseLtvInvalid: "أدخل نسبة أكبر من صفر ولا تتجاوز 100.",
+  DealPurchaseLtvNeedsApprover:
+    "أُنشئت هذه الصفقة قبل تسجيل نسبة الشراء لشركة التمويل، وتبقى كل صفقة خاضعة للقواعد التي أُنشئت بها. يجب أن يسجّل المدير النسبة التي أقرّتها شركة التمويل لهذه الصفقة قبل تسجيل عرض السعر.",
+  ApprovedPurchaseLtvDrivesSplit:
+    "هذه النسبة هي التي تقسّم المبلغ المعتمد إلى جزء مموَّل وآخر غير مموَّل.",
   RecordApprovedPurchaseAction: "تسجيل المبلغ المعتمد",
   QuotationNeededFirst: "سجِّل عرض السعر المُرسَل أولاً.",
   ApprovedPurchaseNeedsApprover:
