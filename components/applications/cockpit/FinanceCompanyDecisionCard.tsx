@@ -266,9 +266,20 @@ export function FinanceCompanyDecisionCard({
               )
             }
             note={
-              facts.appraisalAmountMinor === null && !canRecordAppraisal && !facts.closed
-                ? t("AppraisalNeedsReviewer")
-                : undefined
+              facts.appraisalAmountMinor !== null || facts.closed
+                ? undefined
+                : // Withdrawn by the HANDOVER, not by the permission — and this
+                  // was the one withdrawal on this card that named no reason.
+                  // `recordAppraisal` refuses once the vehicle has gone out, so
+                  // the action is correctly gone, but the rail goes on asking
+                  // for the appraisal: on screen that reads as a deal stuck on a
+                  // step with no button, whoever you are. It says where the deal
+                  // actually goes from here instead.
+                  facts.handedOver
+                  ? t("AppraisalClosedByHandover")
+                  : !canRecordAppraisal
+                    ? t("AppraisalNeedsReviewer")
+                    : undefined
             }
             action={
               appraisalActionAvailable ? (

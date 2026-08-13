@@ -727,6 +727,46 @@ describe("recording their appraisal", () => {
     expect(screen.getByText("AppraisalNeedsReviewer")).toBeTruthy();
     expect(cardButton("RecordAppraisalAction")).toBeUndefined();
   });
+
+  /**
+   * The state a real deal reached in production on the day this shipped.
+   *
+   * The vehicle had gone out with no appraisal on file. `recordAppraisal`
+   * refuses after handover, so the action is correctly withdrawn — but the
+   * stage rail goes on naming the appraisal as the next step, and the row said
+   * nothing at all, because the only note here fired on the PERMISSION. To the
+   * dealership's owner, who holds every permission, that is a deal stopped on a
+   * step with no button and no explanation.
+   *
+   * The recovery exists and is what the note now names: the approved amount can
+   * still be recorded on the MANUAL basis, which needs no appraisal.
+   */
+  test("says why the appraisal is closed once the vehicle has gone out", () => {
+    renderCockpit(
+      wiring({
+        canRecordAppraisal: true,
+        facts: { submittedQuotationMinor: 12_500 * JOD, handedOver: true },
+      })
+    );
+
+    expect(cardButton("RecordAppraisalAction")).toBeUndefined();
+    expect(screen.getByText("AppraisalClosedByHandover")).toBeTruthy();
+    // Not the permission note: this caller has the permission. Saying a manager
+    // must do it would send the owner to look for someone who does not exist.
+    expect(screen.queryByText("AppraisalNeedsReviewer")).toBeNull();
+  });
+
+  test("still blames the permission when that is what is missing", () => {
+    renderCockpit(
+      wiring({
+        canRecordAppraisal: false,
+        facts: { submittedQuotationMinor: 12_500 * JOD, handedOver: false },
+      })
+    );
+
+    expect(screen.getByText("AppraisalNeedsReviewer")).toBeTruthy();
+    expect(screen.queryByText("AppraisalClosedByHandover")).toBeNull();
+  });
 });
 
 describe("recording what the finance company approved", () => {
