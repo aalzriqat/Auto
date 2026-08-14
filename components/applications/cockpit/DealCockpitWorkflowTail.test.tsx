@@ -168,10 +168,7 @@ function renderCockpit() {
  * the block that is supposed to carry the action says nothing.
  */
 function nextStepBlock(): HTMLElement {
-  const heading = screen.getByText("NextStepHeading");
-  const card = heading.closest("div.rounded-xl");
-  if (!card) throw new Error("next-step card not found");
-  return card as HTMLElement;
+  return screen.getByTestId("deal-next-step");
 }
 
 /** The whole tail, so a case can subtract exactly the one it is testing. */
@@ -265,7 +262,7 @@ describe("three permissions, not one", () => {
 
     expect(screen.queryByRole("button", { name: "RegisterExpectedPaymentAction" })).toBeNull();
     // Silence here is the dead end this issue exists to remove.
-    expect(screen.getByText("ExpectedPaymentNeedsPermission")).toBeTruthy();
+    expect(within(nextStepBlock()).getByText("ExpectedPaymentNeedsPermission")).toBeTruthy();
   });
 
   test("a caller who may register the payment but not close is told why closing is missing", () => {
@@ -278,7 +275,7 @@ describe("three permissions, not one", () => {
     renderCockpit();
 
     expect(screen.queryByRole("button", { name: "FinalizeDealAction" })).toBeNull();
-    expect(screen.getByText("FinalizeNeedsPermission")).toBeTruthy();
+    expect(within(nextStepBlock()).getByText("FinalizeNeedsPermission")).toBeTruthy();
   });
 });
 

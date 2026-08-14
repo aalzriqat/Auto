@@ -360,34 +360,57 @@ test.describe("recording a financed deal's economics through the interface", () 
       await expect(managerPage.getByText(/10,800/).first()).toBeVisible();
       await expect(managerPage.getByText(/1,200/).first()).toBeVisible();
 
-      // --- handover, expected payment, and finalize ------------------------
-      const closing = await openReviewDialog(managerPage, lastName);
-      await closing.getByRole("button", { name: "Register Vehicle Handover" }).click();
-      await managerPage.getByRole("button", { name: "Confirm Handover" }).click();
-      // The BADGE, which is durable state, not the success toast that says
-      // "Vehicle handover registered." and then fades. Asserting the toast
-      // races it: the handover can have succeeded and the assertion still fail.
-      // `exact`, because the toast reads "Vehicle handover registered." and a
-      // substring match resolves to both it and the badge.
-      await expect(
-        managerPage.getByText("Handover registered", { exact: true }),
-      ).toBeVisible();
+      // --- handover, expected payment, and close — FROM THE COCKPIT ---------
+      // SCRUM-78. This tail used to be driven through
+      // `Finance Applications → row → Review`, which is exactly why the suite
+      // stayed green while the cockpit could not perform a single one of these
+      // steps: the spec was exercising a screen the operator was never sent to.
+      // The rail names each step here, so the spec takes each step here.
+      //
+      // `managerPage` is already on the cockpit from the approval above — no
+      // navigation, because an operator who has just recorded the approval does
+      // not go anywhere either. That is the whole claim under test.
+      const nextStep = managerPage.getByTestId("deal-next-step");
+      await expect(nextStep).toContainText("Vehicle handover");
 
-      // The product's own precondition for finalizing, so the spec meets it
-      // the way an operator does rather than routing around it.
-      await closing.getByRole("button", { name: "Register Expected Payment" }).click();
+      await nextStep.getByRole("button", { name: "Register vehicle handover" }).click();
+      const handoverDialog = managerPage.getByRole("dialog");
+      // The one-way door, stated before it closes. `reopenApproval` refuses once
+      // the vehicle has gone out, so this warning is the last correction
+      // checkpoint — and the figure it asks the operator to verify has to be in
+      // front of them, not remembered.
+      await expect(handoverDialog).toContainText(
+        "can no longer be corrected through the normal correction flow",
+      );
+      await expect(handoverDialog.getByText(/12,000/).first()).toBeVisible();
+      await handoverDialog.getByRole("button", { name: "Confirm handover" }).click();
+      await expect(handoverDialog).not.toBeVisible();
+
+      // Durable state, not the toast that fades: the rail has moved on, and the
+      // block now names the step AFTER handover and offers it.
+      const expectedPayment = nextStep.getByRole("button", {
+        name: "Register the expected payment",
+      });
+      await expect(expectedPayment).toBeVisible();
+      await expectedPayment.click();
       // Confirmed as it opens: the form already carries a method and today's
       // date. Picking a different one would be this spec asserting something
       // about payment methods, which is a different subject.
       await managerPage
         .getByRole("dialog")
-        .last()
         .getByRole("button", { name: "Confirm", exact: true })
         .click();
 
-      const finalize = closing.getByRole("button", { name: "Finalize Deal (Close)" });
-      await expect(finalize).toBeEnabled();
-      await finalize.click();
+      // And now — and only now — closing is the step the rail names. Asserted
+      // as an ORDERING rather than as three independent buttons: the server
+      // refuses a close with no expected payment, so a screen that offered both
+      // at once would be offering a guaranteed refusal.
+      const close = nextStep.getByRole("button", { name: "Close the deal" });
+      await expect(close).toBeVisible();
+      await close.click();
+      const finalizeDialog = managerPage.getByRole("dialog");
+      await expect(finalizeDialog).toContainText("It cannot be undone");
+      await finalizeDialog.getByRole("button", { name: "Confirm closing" }).click();
 
       // The deal is closed, and the operator lands on it rather than on a list.
       await expect(managerPage.getByText("Closed").first()).toBeVisible();

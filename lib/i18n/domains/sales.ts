@@ -862,7 +862,14 @@ export const salesEn = {
    */
   FinalizeCreatesTheSale:
     "Closing records the sale and posts it to the books. It cannot be undone; correcting it afterwards means cancelling the sale.",
-  ConfirmFinalizeAction: "Close the deal",
+  /**
+   * Deliberately NOT the same words as `FinalizeDealAction`.
+   *
+   * The opener and the confirmation would otherwise carry the same accessible
+   * name, which makes "close the deal" ambiguous to anything selecting by role
+   * and name — a screen reader announcing the dialog, and the E2E driving it.
+   */
+  ConfirmFinalizeAction: "Confirm closing",
   DerivedEconomicsHeading: "What that leaves",
   DerivedEconomicsNote: "Worked out by AutoFlow from the two figures above. Not editable.",
   DerivedFundedPortion: "Funded by the finance company",
@@ -1738,7 +1745,7 @@ export const salesAr = {
   ConfirmFinalizeDesc: "التسليم والدفعة المتوقعة مسجَّلان، ويمكن إغلاق الصفقة.",
   FinalizeCreatesTheSale:
     "الإغلاق يسجّل البيع ويقيّده في الدفاتر، ولا يمكن التراجع عنه؛ وتصحيحه بعد ذلك يعني إلغاء البيع.",
-  ConfirmFinalizeAction: "إغلاق الصفقة",
+  ConfirmFinalizeAction: "تأكيد الإغلاق",
   DerivedEconomicsHeading: "ما ينتج عن ذلك",
   DerivedEconomicsNote: "يحتسبه أوتوفلو من الرقمين أعلاه، وغير قابل للتعديل.",
   DerivedFundedPortion: "الجزء المموَّل من شركة التمويل",

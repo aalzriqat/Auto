@@ -1527,9 +1527,14 @@ export function DealCockpitView({
         </CardContent>
       </Card>
 
-      {/* --- next step ---------------------------------------------------- */}
+      {/* --- next step ----------------------------------------------------
+          The test id anchors the E2E to the BLOCK rather than to a button
+          name. Every stage name appears twice on this screen — once on the
+          rail, once here — so a spec selecting globally can pass against the
+          rail while the block that is supposed to carry the action says
+          nothing, which is the exact defect this issue is about. */}
       {live && (
-        <Card className="border-primary/40 bg-primary/[0.03]">
+        <Card className="border-primary/40 bg-primary/[0.03]" data-testid="deal-next-step">
           <CardHeader className="pb-3">
             <CardTitle className="text-base">{t("NextStepHeading")}</CardTitle>
           </CardHeader>
