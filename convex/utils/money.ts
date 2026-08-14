@@ -36,6 +36,52 @@ export function supportedCurrencyScale(currency: string): CurrencyScale | null {
   return scale === undefined ? null : scale;
 }
 
+/**
+ * The deal's denomination, or null when AutoFlow cannot vouch for it.
+ *
+ * ABSENT is unknowable: `orgSettings` does not lock currency for
+ * `financeApplications`, so an org can record economics in JOD and later switch
+ * to USD — the current org currency is a known-wrong fallback, not a
+ * conservative one. UNSUPPORTED is unknowable too: the field is a free string,
+ * so a legacy row or a raw edit can carry "JD", and `scaleForCurrency` answers
+ * 2 for it rather than admitting it does not know.
+ */
+export function denominationOf(
+  currency: string | undefined
+): { code: string; scale: CurrencyScale } | null {
+  if (!currency) return null;
+  const code = currency.toUpperCase();
+  const scale = supportedCurrencyScale(code);
+  return scale === null ? null : { code, scale };
+}
+
+/**
+ * Refuses a write that would carry an UNSUPPORTED denomination forward.
+ *
+ * Absent is deliberately allowed: every economics writer fills it from the
+ * organization's currency, which `orgSettings.upsert` validates. A present but
+ * unrecognised code is the dangerous one, because each writer preserves it
+ * (`app.economicsCurrency ?? getOrgCurrency(...)`) rather than replacing it —
+ * so one bad value survives every subsequent write and ends up scaled by a
+ * guess when a sale is created.
+ *
+ * Applied at EVERY writer that can put money on a deal, not only at the one
+ * that happens to run first. A guard scoped to "economics already exist" was
+ * bypassable by ordering: hand over a legacy row with no economics, then record
+ * them afterwards, and the deal reached sale creation with an unverifiable
+ * currency and no mutation left that would refuse it.
+ */
+export function assertSupportedDenomination(
+  currency: string | undefined,
+  action: string
+): void {
+  if (currency && supportedCurrencyScale(currency) === null) {
+    throw new ConvexError(
+      `This deal's economics are recorded in "${currency}", which AutoFlow does not recognise, so ${action} would scale the amount by a guess. Restate the deal in a supported currency first.`
+    );
+  }
+}
+
 export function scaleForCurrency(currency: string): CurrencyScale {
   const scale = CURRENCY_SCALES[currency.toUpperCase()];
   if (scale === undefined) return 2;

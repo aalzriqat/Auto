@@ -28,7 +28,8 @@ import {
   assertValidMinorAmount,
   toMinorSameCurrencyOrUndefined,
   outstandingMinorFromMajor,
-  supportedCurrencyScale,
+  denominationOf,
+  assertSupportedDenomination,
 } from "./utils/money";
 import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
 import {
@@ -1522,25 +1523,6 @@ function economicsStamp(app: Doc<"financeApplications">): string {
  * refuses the confirmation rather than spelling a number in a currency nobody
  * verified.
  */
-/**
- * The deal's denomination, or null when AutoFlow cannot vouch for it.
- *
- * Two ways it can be unknowable and both fail closed. ABSENT: the row predates
- * `economicsCurrency`, and the organization's current currency is not a
- * fallback because `orgSettings` does not lock currency for
- * `financeApplications` — the org may have switched since. UNSUPPORTED: the
- * field is a free string, so "JD" or a raw-edited code reaches here, and
- * `scaleForCurrency` would answer 2 for it rather than admit it does not know.
- * A wrong scale is an order-of-magnitude error on an irreversible screen.
- */
-function denominationOf(
-  currency: string | undefined
-): { code: string; scale: number } | null {
-  if (!currency) return null;
-  const scale = supportedCurrencyScale(currency);
-  return scale === null ? null : { code: currency, scale };
-}
-
 async function handoverEvidenceFor(
   ctx: QueryCtx,
   app: Doc<"financeApplications">,
@@ -2593,6 +2575,14 @@ export const registerVehicleHandover = mutation({
      * would build a new dead end for exactly the historical deals that need the
      * recovery path (SCRUM-61) most.
      */
+    // An unrecognised code blocks regardless of whether economics exist yet:
+    // once the vehicle is gone the deal cannot be restated, and every later
+    // writer would preserve the bad value rather than replace it.
+    assertSupportedDenomination(app.economicsCurrency, "handing the vehicle over");
+    // And an ABSENT denomination blocks only when there is money to seal — with
+    // no approved amount there is nothing to denominate, and refusing would
+    // close the SCRUM-61 recovery path for exactly the historical deals it
+    // exists for.
     if (
       app.approvedDealerPurchaseAmountMinor !== undefined &&
       denominationOf(app.economicsCurrency) === null
@@ -2902,6 +2892,11 @@ export const finalizeDeal = mutation({
         // reappraisal leaves status APPROVED, so this is the only thing
         // stopping a sale being completed on economics nothing supports.
         assertDealerEconomicsRecorded(app, "finalizing");
+        // The last step in the ordering Codex traced, and the one that creates
+        // a SALE. A deal whose denomination cannot be established must not be
+        // turned into money here either — otherwise every guard upstream is
+        // just a longer road to the same wrong figure.
+        assertSupportedDenomination(app.economicsCurrency, "finalizing this deal");
 
         // On a consigned car financed by an external company, the route decides
         // opposite balance sheets from the same sale — a payable to the supplier

@@ -18,7 +18,7 @@ import {
   isConsignedAgentSale,
 } from "./utils/vehicleOwnership";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
-import { toMinorUnits } from "./utils/money";
+import { toMinorUnits, assertSupportedDenomination } from "./utils/money";
 import {
   assertMinorAmount,
   buildRuleSnapshot,
@@ -605,6 +605,10 @@ export const suggestQuotationForApplication = query({
       APPLICATION_NOT_FOUND
     );
 
+    // Refuses to carry an unrecognised code forward. `??` PRESERVES a bad
+    // value rather than replacing it, so one legacy row would otherwise
+    // scale every later figure by a guess.
+    assertSupportedDenomination(app.economicsCurrency, "recording these economics");
     const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
 
     /**
@@ -1134,6 +1138,10 @@ export const recordSubmittedQuotation = mutation({
       }
     }
 
+    // Same reason as the other writers: `??` preserves an unrecognised code
+    // rather than replacing it, so recording a quotation would carry it into
+    // every figure derived from this deal afterwards.
+    assertSupportedDenomination(app.economicsCurrency, "recording this quotation");
     await ctx.db.patch(args.applicationId, {
       economicsCurrency: app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId)),
       submittedQuotationMinor: args.submittedQuotationMinor,
@@ -1326,6 +1334,10 @@ export const recordAppraisal = mutation({
     }
 
     const now = Date.now();
+    // Refuses to carry an unrecognised code forward. `??` PRESERVES a bad
+    // value rather than replacing it, so one legacy row would otherwise
+    // scale every later figure by a guess.
+    assertSupportedDenomination(app.economicsCurrency, "recording these economics");
     const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
     const appraisalId = await ctx.db.insert("financeAppraisals", {
       orgId: args.orgId,
@@ -1543,7 +1555,11 @@ export const approveDealerPurchaseAmount = mutation({
         // A vehicle with no recorded cost is not evidence that nothing is owed;
         // `completeSale` refuses that sale outright. Nothing is asserted here.
         if (costAmount > 0) {
-          const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
+          // Refuses to carry an unrecognised code forward. `??` PRESERVES a bad
+    // value rather than replacing it, so one legacy row would otherwise
+    // scale every later figure by a guess.
+    assertSupportedDenomination(app.economicsCurrency, "recording these economics");
+    const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
           const refusal = directSettlementBelowEntitlementRefusal({
             approvedAmountMinor: args.approvedAmountMinor,
             supplierEntitlementMinor: toMinorUnits(costAmount, currency),

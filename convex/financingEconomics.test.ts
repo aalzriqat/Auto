@@ -4000,6 +4000,62 @@ describe("handover seals the approved amount, and the amount that was verified",
     expect(app?.vehicleHandoverAt).toBeTypeOf("number");
   });
 
+  test("an unsupported currency cannot be laundered through the recovery path", async () => {
+    // Codex's ordering bypass, and the reason a guard scoped to "economics
+    // already exist" was not enough. A legacy row carries an unsupported code
+    // and NO economics, so the handover guard has nothing to check and lets it
+    // through — and every writer preserves `economicsCurrency` rather than
+    // replacing it (`app.economicsCurrency ?? getOrgCurrency(...)`), so the bad
+    // value survives the approval recorded afterwards. `finalizeDeal` then had
+    // no denomination check at all, and created a SALE from a figure scaled by
+    // a guessed 2 instead of JOD's 3.
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { status: "APPROVED", economicsCurrency: "JD" })
+    );
+
+    // The door closes at the first step now: an unsupported denomination that
+    // is PRESENT blocks, even with nothing yet to seal, because the deal cannot
+    // be restated once the vehicle is gone.
+    await expect(
+      seed.asUser.mutation(api.applications.registerVehicleHandover, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await stampFrom(seed, applicationId),
+      })
+    ).rejects.toThrow(/currency/i);
+
+    // And the writers that would have carried it forward refuse too, so the
+    // bad value cannot become money by any order of operations.
+    await expect(
+      seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(12_000),
+        source: "MANUAL_ENTRY",
+      })
+    ).rejects.toThrow(/currency/i);
+
+    // The approval is refused too, though by the EARLIER requirement — with the
+    // quotation blocked above there is nothing to approve against. Asserted as
+    // a plain rejection rather than a currency message, because claiming the
+    // currency guard fired here would be describing a refusal that did not
+    // happen. What matters is that no ordering reaches money.
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: seed.orgId,
+        applicationId,
+        approvedAmountMinor: jod(12_000),
+        basis: "MANUAL",
+      })
+    ).rejects.toThrow();
+
+    const app = await readApp(seed, applicationId);
+    expect(app?.vehicleHandoverAt).toBeUndefined();
+    expect(app?.approvedDealerPurchaseAmountMinor).toBeUndefined();
+  });
+
   test("the denomination is carried with its scale, not re-derived", async () => {
     const { seed, applicationId } = await approvedDeal();
     const deal = await seed.asUser.query(api.applications.dealCockpit, {
