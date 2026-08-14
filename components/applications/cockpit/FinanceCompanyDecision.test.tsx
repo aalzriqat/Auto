@@ -1387,3 +1387,79 @@ describe("handover states the door it closes, with the figures to check", () => 
     );
   });
 });
+
+/**
+ * The handover door consumes SCRUM-77's anomaly verdict; it never forms one.
+ *
+ * Required in review: the confirmation must not present a materially unusual
+ * amount with ordinary visual weight, and must not introduce a second formula
+ * for "unusual". `getEconomics` derives it with the same rule and the same
+ * comparison appraisal that `approveDealerPurchaseAmount` refuses on, and the
+ * dialog only renders that verdict.
+ */
+describe("a flagged amount does not look ordinary at the one-way door", () => {
+  function openHandover(flagged: boolean, amountMinor: number | null = 150_000 * JOD) {
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          stages: [
+            { key: "APPLICATION", state: "COMPLETE" },
+            { key: "HANDOVER", state: "CURRENT" },
+          ],
+        })}
+        financeDecision={wiring({
+          approvedAmountIsFarFromEvidence: flagged,
+          facts: {
+            approvedPurchaseRecorded: true,
+            approvedPurchaseAmountMinor: amountMinor,
+            financeCompanyFundedPortionMinor: 127_500 * JOD,
+            dealerContributionMinor: 22_500 * JOD,
+          },
+        })}
+        workflowAction={{
+          stageKey: "HANDOVER",
+          actionKey: "RegisterHandoverAction",
+          onStart: vi.fn(),
+        }}
+        handover={{
+          confirming: true,
+          submitting: false,
+          error: null,
+          onOpenChange: vi.fn(),
+          onSubmit: vi.fn(noopAsync),
+        }}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    return screen.getByRole("dialog");
+  }
+
+  test("says in words that the amount was flagged, not by colour alone", () => {
+    const dialog = openHandover(true);
+    // Colour is not a message on its own, and is not available to every reader.
+    expect(within(dialog).getByText("HandoverAmountLooksUnusual")).toBeTruthy();
+  });
+
+  test("an ordinary amount is not dressed up as a problem", () => {
+    const dialog = openHandover(false);
+    expect(within(dialog).queryByText("HandoverAmountLooksUnusual")).toBeNull();
+    // ...and the door is still stated, because it still closes.
+    expect(within(dialog).getByText("HandoverSealsApprovedAmount")).toBeTruthy();
+  });
+
+  test("a flagged amount never blocks the handover", () => {
+    // The verdict changes emphasis only. An unusual amount can be exactly what
+    // the finance company approved, and AutoFlow does not get to refuse it.
+    const dialog = openHandover(true);
+    const confirm = within(dialog).getByRole("button", { name: "ConfirmHandoverAction" });
+    expect(confirm).toHaveProperty("disabled", false);
+  });
+
+  test("no verdict is shown where the amount itself is withheld", () => {
+    // The server withholds the judgement with the figure: on its own it would
+    // tell a caller something about a number the row deliberately hides.
+    const dialog = openHandover(false, null);
+    expect(within(dialog).queryByText("HandoverAmountLooksUnusual")).toBeNull();
+    expect(within(dialog).getByText("HandoverSealsApprovedAmount")).toBeTruthy();
+  });
+});

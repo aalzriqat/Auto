@@ -46,6 +46,20 @@ type ConfirmHandoverDialogProps = {
   approvedAmountMinor: number | null;
   financeCompanyFundedPortionMinor: number | null;
   dealerContributionMinor: number | null;
+  /**
+   * The SERVER's verdict that this amount is unlike every figure on file.
+   *
+   * Consumed, never re-derived. `getEconomics` computes it with the same rule
+   * and against the same appraisal that `approveDealerPurchaseAmount` uses to
+   * refuse an unacknowledged outlier, so this dialog cannot form a second
+   * opinion about what counts as unusual. A screen that disagreed with the
+   * mutation about the same deal would be worse than one that said nothing.
+   *
+   * It changes emphasis only. The mutation stays authoritative regardless of
+   * what is rendered here, and handover is never refused on this basis — an
+   * unusual amount can be perfectly correct.
+   */
+  approvedAmountIsFarFromEvidence: boolean;
   money: (minor: number) => string;
   t: (key: string) => string;
   onOpenChange: (open: boolean) => void;
@@ -59,6 +73,7 @@ export function ConfirmHandoverDialog({
   approvedAmountMinor,
   financeCompanyFundedPortionMinor,
   dealerContributionMinor,
+  approvedAmountIsFarFromEvidence,
   money,
   t,
   onOpenChange,
@@ -75,9 +90,17 @@ export function ConfirmHandoverDialog({
     setNotes("");
   }, [open]);
 
-  const figures: Array<{ key: string; label: string; minor: number }> = [];
+  const figures: Array<{ key: string; label: string; minor: number; flagged?: boolean }> = [];
   if (approvedAmountMinor !== null) {
-    figures.push({ key: "approved", label: t("ApprovedPurchaseLabel"), minor: approvedAmountMinor });
+    figures.push({
+      key: "approved",
+      label: t("ApprovedPurchaseLabel"),
+      minor: approvedAmountMinor,
+      // The figure this dialog exists to have a last look at, and the one the
+      // server has already judged unusual. Presenting it with the same weight
+      // as the rest is how an order-of-magnitude mistake reads as ordinary.
+      flagged: approvedAmountIsFarFromEvidence,
+    });
   }
   if (financeCompanyFundedPortionMinor !== null) {
     figures.push({
@@ -114,12 +137,27 @@ export function ConfirmHandoverDialog({
                 {figures.map((figure) => (
                   <div key={figure.key} className="flex items-center justify-between gap-4">
                     <dt className="text-muted-foreground">{figure.label}</dt>
-                    <dd>
-                      <bdi className="tabular-nums font-medium">{money(figure.minor)}</bdi>
+                    <dd className={figure.flagged ? "text-destructive" : undefined}>
+                      <bdi
+                        className={
+                          figure.flagged
+                            ? "tabular-nums font-bold text-base"
+                            : "tabular-nums font-medium"
+                        }
+                      >
+                        {money(figure.minor)}
+                      </bdi>
                     </dd>
                   </div>
                 ))}
               </dl>
+            )}
+            {/* Named, not merely coloured: colour alone is not a message, and
+                it is not available to every reader. */}
+            {approvedAmountIsFarFromEvidence && (
+              <p className="text-sm font-medium text-destructive">
+                {t("HandoverAmountLooksUnusual")}
+              </p>
             )}
             <p className="text-xs text-muted-foreground">{t("HandoverVerifyBeforeContinuing")}</p>
           </div>

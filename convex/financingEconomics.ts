@@ -220,6 +220,28 @@ function appendReconciliationReason(existing: string | undefined, addition: stri
   return `${existing} ${addition}`;
 }
 
+/**
+ * The appraisal an approved amount is JUDGED against — newest real one on file.
+ *
+ * Not the approval's basis appraisal, which under MANUAL is deliberately not
+ * adopted unless the company's LTV rule needs it. Shared by the mutation that
+ * refuses an unacknowledged outlier and by the query that tells the screen an
+ * amount is unusual, so the two cannot reach different conclusions about the
+ * same deal. That drift is not hypothetical: the first cut of this check reused
+ * the basis appraisal and ended up comparing against the quotation alone.
+ */
+function resolveComparisonAppraisal(
+  appraisals: Array<Doc<"financeAppraisals">>
+): Doc<"financeAppraisals"> | undefined {
+  return appraisals
+    .filter(
+      (row) =>
+        (row.status === "RECORDED" || row.status === "APPROVED") &&
+        row.providerType !== "DEALER_ESTIMATE"
+    )
+    .sort((a, b) => b.appraisedAt - a.appraisedAt)[0];
+}
+
 async function recordOverride(
   ctx: MutationCtx,
   args: {
@@ -658,6 +680,13 @@ export const getEconomics = query({
       isSystemOwnerRole(auth.role) ||
       auth.role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
 
+    // The redaction's OWN decision about the approved amount, reused rather
+    // than restated. Whether this caller may see the figure is a rule that
+    // lives in one place; asking the redacted row is how the anomaly verdict
+    // below inherits it instead of maintaining a second copy that could drift.
+    const visibleApp = redactSettlementEvidence(app, auth.role);
+    const approvedAmountVisible = visibleApp.approvedDealerPurchaseAmountMinor !== undefined;
+
     return {
       application: {
         // Through the SAME helper `applications.get` uses. This query authorizes
@@ -665,11 +694,34 @@ export const getEconomics = query({
         // and spread the whole document while redacting exactly one field — so
         // gating the other two doors left the settlement evidence readable here
         // by a weaker role than the one that had just been closed.
-        ...redactSettlementEvidence(app, auth.role),
+        ...visibleApp,
         vehiclePurchaseCostMinor: canSeeCost ? app.vehiclePurchaseCostMinor : undefined,
       },
       appraisals: appraisals.sort((a, b) => b.appraisedAt - a.appraisedAt),
       overrides: overrides.sort((a, b) => b.changedAt - a.changedAt),
+      /**
+       * Whether the recorded approved amount is unlike every figure on file.
+       *
+       * Derived HERE, by the same rule and against the same appraisal the
+       * mutation uses to refuse an unacknowledged outlier, so a screen can flag
+       * an anomalous figure without owning a second opinion about what counts
+       * as anomalous. Any screen that needs this asks the server; none of them
+       * re-derives it.
+       *
+       * Withheld with the amount itself: it is a judgement ABOUT a figure this
+       * caller may not see, and on its own it would tell them something about a
+       * number the row deliberately withholds. Emphasis is meaningless where
+       * there is nothing to emphasise.
+       */
+      approvedAmountIsFarFromEvidence:
+        approvedAmountVisible && app.approvedDealerPurchaseAmountMinor !== undefined
+          ? isApprovalFarFromEvidence({
+              approvedAmountMinor: app.approvedDealerPurchaseAmountMinor,
+              submittedQuotationMinor: app.submittedQuotationMinor,
+              appraisalAmountMinor:
+                resolveComparisonAppraisal(appraisals)?.appraisalAmountMinor,
+            })
+          : false,
     };
   },
 });
@@ -1533,13 +1585,7 @@ export const approveDealerPurchaseAmount = mutation({
     // left the server comparing against the quotation alone on exactly the
     // deals the dialog compares against both. The screen would then ask a
     // question the server did not, or stay silent where the server refused.
-    const comparisonAppraisal = appraisals
-      .filter(
-        (row) =>
-          (row.status === "RECORDED" || row.status === "APPROVED") &&
-          row.providerType !== "DEALER_ESTIMATE"
-      )
-      .sort((a, b) => b.appraisedAt - a.appraisedAt)[0];
+    const comparisonAppraisal = resolveComparisonAppraisal(appraisals);
     if (
       !args.outlierAcknowledged &&
       isApprovalFarFromEvidence({

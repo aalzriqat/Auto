@@ -465,6 +465,7 @@ export function DealCockpit({
           currency: economicsApp.economicsCurrency ?? null,
           canRecordQuotation: hasPermission(PERMISSIONS.CREATE_FINANCE_APPLICATION),
           canRecordApproval: hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION),
+          approvedAmountIsFarFromEvidence: economics?.approvedAmountIsFarFromEvidence ?? false,
           // What `recordAppraisal` itself requires for a finance-company or
           // independent appraisal. The dealer-estimate branch takes a different
           // permission and is not offered here.
@@ -805,6 +806,12 @@ export type FinanceDecisionWiring = {
   canRecordApproval: boolean;
   canRecordAppraisal: boolean;
   isOwnDeal: boolean;
+  /**
+   * The server's judgement that the recorded amount is unlike every figure on
+   * file — the same rule `approveDealerPurchaseAmount` refuses on. Consumed by
+   * the handover confirmation; never recomputed on this side.
+   */
+  approvedAmountIsFarFromEvidence?: boolean;
   /** What the calculator has to say, including "not yet arrived". */
   calculation: QuotationCalculation;
   appraisal: { id: string; amountMinor: number } | null;
@@ -1767,6 +1774,10 @@ export function DealCockpitView({
             financeDecision?.facts.financeCompanyFundedPortionMinor ?? null
           }
           dealerContributionMinor={financeDecision?.facts.dealerContributionMinor ?? null}
+          // The SERVER's verdict, threaded straight through. The dialog does
+          // not re-derive it, and nothing on this screen owns a second opinion
+          // about what counts as an unusual amount.
+          approvedAmountIsFarFromEvidence={financeDecision?.approvedAmountIsFarFromEvidence ?? false}
           money={decisionMoney}
           t={t}
           onOpenChange={handover.onOpenChange}

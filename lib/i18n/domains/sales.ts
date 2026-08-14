@@ -829,6 +829,14 @@ export const salesEn = {
    */
   HandoverSealsApprovedAmount:
     "After the vehicle is handed over, the recorded approved amount can no longer be corrected through the normal correction flow.",
+  /**
+   * The anomaly the SERVER already judged, restated at the one-way door.
+   *
+   * Named rather than only coloured: colour is not a message on its own, and
+   * an operator about to seal a figure permanently should be told in words.
+   */
+  HandoverAmountLooksUnusual:
+    "This approved amount is unlike the quotation and appraisal on this deal. AutoFlow flagged it when it was recorded.",
   HandoverVerifyBeforeContinuing:
     "Check the approved amount and the funding split above before continuing.",
   HandoverNotesLabel: "Notes (optional)",
@@ -1693,6 +1701,8 @@ export const salesAr = {
   ConfirmHandoverDesc: "تخرج المركبة إلى العميل. يُسجَّل ذلك كواقعة، ويُغلق أرقام الصفقة.",
   HandoverSealsApprovedAmount:
     "بعد تسليم المركبة لا يعود بالإمكان تصحيح المبلغ المعتمد المسجَّل عبر مسار التصحيح المعتاد.",
+  HandoverAmountLooksUnusual:
+    "هذا المبلغ المعتمد يختلف عن عرض السعر والتخمين المسجَّلين على هذه الصفقة، وقد نبّه أوتوفلو إليه عند تسجيله.",
   HandoverVerifyBeforeContinuing: "تحقّق من المبلغ المعتمد وتقسيم التمويل أعلاه قبل المتابعة.",
   HandoverNotesLabel: "ملاحظات (اختياري)",
   HandoverNotesPlaceholder: "مثال: استلمها شقيق العميل، وتم التحقق من الهوية",
