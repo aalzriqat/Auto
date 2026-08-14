@@ -102,3 +102,32 @@ export function convexTestWithComponents<
 
   return t as TestConvex<Schema> & { runUnwrapped: TestConvex<Schema>["run"] };
 }
+
+/**
+ * `registerVehicleHandover`, driven the way a screen drives it.
+ *
+ * The mutation demands the economics stamp the caller's own deal payload
+ * carried, so that a deal whose figures moved while the operator was reading
+ * them cannot be sealed. Tests obtain it the same way — by querying — rather
+ * than by rebuilding it from the row: a test that recomputed the stamp would
+ * keep passing no matter what `dealCockpit` actually projected, which is
+ * exactly how the previous guard's tests passed while it was bypassable.
+ */
+export async function registerHandover(
+  as: {
+    query: (ref: any, args: any) => Promise<any>;
+    mutation: (ref: any, args: any) => Promise<any>;
+  },
+  api: any,
+  orgId: unknown,
+  applicationId: unknown,
+  extra: Record<string, unknown> = {}
+): Promise<number> {
+  const deal = await as.query(api.applications.dealCockpit, { orgId, applicationId });
+  return as.mutation(api.applications.registerVehicleHandover, {
+    orgId,
+    applicationId,
+    economicsStamp: deal?.economicsStamp,
+    ...extra,
+  });
+}

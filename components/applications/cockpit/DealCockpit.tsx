@@ -726,13 +726,10 @@ export function DealCockpit({
               orgId,
               applicationId,
               notes: values.notes,
-              // Threaded through so the server seals the figure this operator
-              // actually read. Omitted entirely when they were shown none —
-              // `null` here means the money block was withheld from them, not
-              // that the deal has no approved amount.
-              ...(values.verifiedApprovedAmountMinor !== null
-                ? { verifiedApprovedAmountMinor: values.verifiedApprovedAmountMinor }
-                : {}),
+              // The stamp the dialog was OPENED against, passed straight
+              // through. Not re-read from `deal` here — that would undo the
+              // snapshot the dialog took and restore the race it closes.
+              economicsStamp: values.economicsStamp,
             });
             toast.success(t("HandoverRegistered"));
             setConfirmingHandover(false);
@@ -1148,7 +1145,7 @@ export function DealCockpitView({
     onOpenChange: (open: boolean) => void;
     onSubmit: (values: {
       notes?: string;
-      verifiedApprovedAmountMinor: number | null;
+      economicsStamp: string | undefined;
     }) => void | Promise<void>;
   };
   /** The expected-payment form's own state. */
@@ -2063,6 +2060,17 @@ export function DealCockpitView({
           // not re-derive it, and nothing on this screen owns a second opinion
           // about what counts as an unusual amount.
           approvedAmountIsFarFromEvidence={financeDecision?.approvedAmountIsFarFromEvidence ?? false}
+          // From the cockpit query, NOT from `financeDecision`. The figures
+          // above come from `getEconomics`, which a caller without
+          // `view:finance_applications` never mounts — keying the stamp to that
+          // query would leave exactly those callers unable to hand over at all,
+          // which is the dead end this redesign removes.
+          // `deal` is a union — the cash variant comes from `sales.dealCockpit`
+          // and carries no stamp, because nothing on that path seals financing
+          // economics. Narrowed by presence rather than by `dealKind` so a
+          // future payload that stops issuing one fails here, at the point that
+          // needs it, instead of silently sending `undefined` to the mutation.
+          economicsStamp={deal && "economicsStamp" in deal ? deal.economicsStamp : undefined}
           money={decisionMoney}
           t={t}
           onOpenChange={handover.onOpenChange}

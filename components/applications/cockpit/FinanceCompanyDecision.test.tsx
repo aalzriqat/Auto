@@ -59,9 +59,17 @@ import { RecordSubmittedQuotationDialog } from "./RecordSubmittedQuotationDialog
 const JOD = 1_000;
 
 /** A financed deal whose approved-purchase stage is the live blocker. */
+/**
+ * The server's stamp of the deal's economics, as `dealCockpit` issues it. The
+ * dialog sends this back rather than an amount, so the mutation can refuse a
+ * deal whose figures moved while the operator was reading them.
+ */
+const STAMP = "v1|150000000|135000000|15000000";
+
 function dealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
   return {
     dealKind: "FINANCED",
+    economicsStamp: STAMP,
     dealRef: "app_2048",
     applicationId: "app_2048",
     saleId: null,
@@ -1382,14 +1390,15 @@ describe("handover states the door it closes, with the figures to check", () => 
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "ConfirmHandoverAction" }));
 
-    // The payload carries the figure the dialog DISPLAYED alongside the notes.
-    // Not decoration: the server refuses to seal a different one, so a dialog
-    // that dropped this would be back to sealing whatever happens to be on the
-    // deal at write time rather than what the operator verified.
+    // The payload carries the stamp the dialog was OPENED against, alongside
+    // the notes. Not decoration: the server refuses a stamp that no longer
+    // matches the deal, so a dialog that dropped this would be back to sealing
+    // whatever happens to be on the deal at write time rather than what the
+    // operator actually read.
     await waitFor(() =>
       expect(onSubmit).toHaveBeenCalledWith({
         notes: "collected by the customer",
-        verifiedApprovedAmountMinor: 150_000 * JOD,
+        economicsStamp: STAMP,
       })
     );
   });

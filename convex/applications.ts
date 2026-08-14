@@ -6,7 +6,6 @@ import { paginationOptsValidator } from "convex/server";
 import {
   requireTenantAuth,
   redactSettlementEvidence,
-  canSeeApprovedPurchaseAmount,
 } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
@@ -1417,6 +1416,10 @@ export const get = query({
 
     return {
       ...visibleApp,
+      // Issued from the UNREDACTED row, deliberately. The stamp is a comparison
+      // token, not evidence: a caller whose amounts were withheld above still
+      // has to prove the deal did not move under them.
+      economicsStamp: economicsStamp(app),
       customer,
       vehicle,
       company,
@@ -1452,6 +1455,36 @@ export const get = query({
  * Returns `null` for an application that does not exist or belongs to another
  * org — the same shape `get` uses, so the screen has one not-found path.
  */
+/**
+ * A stamp of the economics a handover confirmation is about, issued to every
+ * caller who can load the deal and demanded back by `registerVehicleHandover`.
+ *
+ * Deliberately NOT redacted and NOT permission-shaped. It carries no figure a
+ * caller could not otherwise obtain — it is a comparison token, and a caller
+ * who cannot see the amounts still needs one, because the deal must not be
+ * sealed against figures that moved regardless of who is looking. Keying this
+ * to visibility is what left default SALES unguarded and dead-ended
+ * `confirm:finance_disbursement` roles at the same time.
+ *
+ * Covers exactly the three figures the confirmation dialogs display. A change
+ * to any of them invalidates a confirmation in flight, which is the point;
+ * adding unrelated fields would refuse handovers for edits the operator was
+ * never asked to verify.
+ *
+ * Plain text rather than a hash so a refusal can be diagnosed from a log line
+ * without recomputing anything. Versioned so the shape can change without a
+ * stale client's stamp silently comparing equal to a new one.
+ */
+function economicsStamp(app: Doc<"financeApplications">): string {
+  const figure = (value: number | undefined) => (value === undefined ? "-" : String(value));
+  return [
+    "v1",
+    figure(app.approvedDealerPurchaseAmountMinor),
+    figure(app.financeCompanyFundedPortionMinor),
+    figure(app.dealerContributionMinor),
+  ].join("|");
+}
+
 export const dealCockpit = query({
   args: {
     orgId: v.id("organizations"),
@@ -1709,6 +1742,16 @@ export const dealCockpit = query({
        * gate like the other two.
        */
       supplierSettlementRouteRequired: settlementRouteRequired,
+      /**
+       * The stamp the handover confirmation must send back, on `base` so it
+       * survives the money gate below.
+       *
+       * A caller who cannot see the figures still needs it: the deal must not
+       * be sealed against economics that moved, whoever is looking. Putting it
+       * inside `money` would have recreated the defect this replaces — an
+       * obligation only the permitted could discharge.
+       */
+      economicsStamp: economicsStamp(app),
       /**
        * The FIGURES behind that flag, and they are gated.
        *
@@ -2349,31 +2392,49 @@ export const registerVehicleHandover = mutation({
     applicationId: v.id("financeApplications"),
     notes: v.optional(v.string()),
     /**
-     * The approved amount the operator was actually shown when they confirmed.
+     * The economics the operator's screen was built from, as the server stamped
+     * them — `economicsStamp` from the same `dealCockpit` / `get` payload the
+     * confirmation was rendered against.
      *
-     * Handover is the moment that figure becomes permanent, and SCRUM-78's
-     * confirmation asks the operator to verify it before crossing. Between the
-     * dialog rendering a number and the operator pressing confirm, another
-     * approver can legitimately record a different one — the vehicle has not
-     * gone out yet, so nothing refuses them. Sealing on the strength of a
-     * verification performed against a figure that is no longer on the deal is
-     * exactly the confidence this dialog was built to create, pointed at the
-     * wrong number.
+     * WHY A STAMP AND NOT THE AMOUNT. Handover is the moment those figures
+     * become permanent. Between a dialog rendering them and the operator
+     * pressing confirm, another approver can legitimately record different ones
+     * — the vehicle has not gone out yet, so nothing refuses them — and sealing
+     * against a figure that has since moved is the exact confidence this
+     * confirmation was built to create, pointed at the wrong number.
+     *
+     * The first attempt asked for the approved amount back and demanded it only
+     * from callers who could SEE it. That was wrong in both directions, and the
+     * regression tests for both directions live in `financingEconomics.test.ts`:
+     *
+     *   • TOO NARROW — default SALES holds neither `view:finance` nor
+     *     `confirm:finance_disbursement`, so the obligation was never raised for
+     *     the role most likely to hand a vehicle over. It sealed silently.
+     *   • TOO BROAD — a role holding `confirm:finance_disbursement` without
+     *     `view:finance_applications` was required to confirm a figure the
+     *     cockpit could not display to it, dead-ending handover entirely.
+     *
+     * Visibility was never the right basis. Whether a caller may READ the
+     * amount and whether the deal may be SEALED against figures that moved are
+     * different questions, and `approvedDealerPurchaseAmountMinor` is in any
+     * case a display gate rather than a confidentiality boundary — see the note
+     * in `redactSettlementEvidence`. So the stamp is issued to every caller who
+     * can load the deal, redacted or not, and demanded from all of them. There
+     * is no predicate left to keep exhaustive across four queries.
      *
      * Compared inside the mutation's own transaction, so there is no window
      * between the check and the write.
      *
-     * OPTIONAL because a caller who was shown nothing cannot have verified
-     * anything: `redactSettlementEvidence` withholds the amount from callers
-     * without the finance permission, and their dialog states the consequence
-     * without being able to display the figure. Demanding a verification they
-     * were never given the means to make would block handover for them
-     * entirely, which is a worse failure than the one this prevents.
+     * Optional in the VALIDATOR only so a client running a bundle from before
+     * this change gets the readable refusal below instead of a raw validator
+     * dump. The handler demands it unconditionally: absent is refused, exactly
+     * like stale. Fail closed — a brief loud refusal during a deploy, never a
+     * silent seal.
      */
-    verifiedApprovedAmountMinor: v.optional(v.number()),
+    economicsStamp: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REGISTER_VEHICLE_HANDOVER]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REGISTER_VEHICLE_HANDOVER]);
     const app = await ctx.db.get(args.applicationId);
     if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
     if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before registering handover.");
@@ -2383,36 +2444,17 @@ export const registerVehicleHandover = mutation({
     // the missing funding split is the more useful one to reach the operator.
     assertDealerEconomicsRecorded(app, "handing over the vehicle");
     /**
-     * Who must confirm what they saw — decided HERE, not by the caller.
-     *
-     * Leaving the argument merely optional made the check opt-in: any client
-     * could skip it by not sending the field, which is the bypass this closes.
-     * The server asks the canonical question instead — can this role see the
-     * approved amount — and demands the confirmation from everyone who can.
-     *
-     * `canSeeApprovedPurchaseAmount` rather than a local `VIEW_FINANCE` test,
-     * because `confirm:finance_disbursement` is shown the figure too. Gating on
-     * the narrower permission would have let exactly that caller omit the value
-     * and seal a stale amount — the same predicate, asked twice, is how the two
-     * would have drifted apart.
-     *
-     * A caller who is shown nothing is not asked to have verified anything, and
-     * neither is anyone on a deal with no approved amount recorded: there is no
-     * figure on their screen either way.
+     * The concurrency check — asked of everyone, keyed to nothing about the
+     * caller. See the argument's note for why visibility was the wrong basis.
      */
-    const mustConfirmAmount =
-      app.approvedDealerPurchaseAmountMinor !== undefined && canSeeApprovedPurchaseAmount(role);
-    if (mustConfirmAmount && args.verifiedApprovedAmountMinor === undefined) {
+    if (args.economicsStamp === undefined) {
       throw new ConvexError(
-        "Confirm the approved purchase amount shown on the deal before registering the handover."
+        "Confirm the handover from the deal screen so the figures you acted on can be checked. If you were already on it, reload the page and try again."
       );
     }
-    if (
-      args.verifiedApprovedAmountMinor !== undefined &&
-      args.verifiedApprovedAmountMinor !== app.approvedDealerPurchaseAmountMinor
-    ) {
+    if (args.economicsStamp !== economicsStamp(app)) {
       throw new ConvexError(
-        "The approved purchase amount changed while you were confirming the handover. Re-check the figures on the deal before handing the vehicle over."
+        "The deal's approved figures changed while you were confirming the handover. Re-check them on the deal before handing the vehicle over."
       );
     }
 

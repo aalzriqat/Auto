@@ -1,5 +1,6 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -109,7 +110,7 @@ async function finalizeQuote(
   const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
   await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
   await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
-  await asUser.mutation(api.applications.registerVehicleHandover, { orgId, applicationId });
+  await registerHandover(asUser, api, orgId, applicationId);
   await asUser.mutation(api.applications.registerExpectedPayment, {
     orgId,
     applicationId,
@@ -223,7 +224,7 @@ describe("Finance lifecycle phase 1 quote mode", () => {
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
     await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
     await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
-    await asUser.mutation(api.applications.registerVehicleHandover, { orgId, applicationId });
+    await registerHandover(asUser, api, orgId, applicationId);
     await asUser.mutation(api.applications.registerExpectedPayment, {
       orgId,
       applicationId,

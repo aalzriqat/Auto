@@ -39,6 +39,7 @@ function renderHandover(submitting: boolean, onOpenChange = vi.fn()) {
       financeCompanyFundedPortionMinor={135_000_000}
       dealerContributionMinor={15_000_000}
       approvedAmountIsFarFromEvidence={false}
+      economicsStamp="v1|150000000|135000000|15000000"
       money={(minor) => `JD ${minor / 1000}`}
       t={t}
       onOpenChange={onOpenChange}
@@ -47,6 +48,95 @@ function renderHandover(submitting: boolean, onOpenChange = vi.fn()) {
   );
   return onOpenChange;
 }
+
+describe("the handover confirmation is about the figures the operator read", () => {
+  /**
+   * The props are a live Convex subscription. A second approver committing a
+   * new amount re-renders this dialog underneath the operator, and the version
+   * this replaces rendered and submitted the live values — so display and
+   * payload moved together, the server's comparison passed, and the deal sealed
+   * against economics nobody had looked at. The machine race was closed; the
+   * human one was not.
+   */
+  test("a refetch while it is open changes neither the figures nor the stamp", () => {
+    const onSubmit = vi.fn();
+    const props = {
+      open: true as const,
+      submitting: false,
+      error: null,
+      approvedAmountMinor: 11_500_000,
+      financeCompanyFundedPortionMinor: 10_000_000,
+      dealerContributionMinor: 1_500_000,
+      approvedAmountIsFarFromEvidence: false,
+      economicsStamp: "v1|11500000|10000000|1500000",
+      money: (minor: number) => `JD ${minor / 1000}`,
+      t,
+      onOpenChange: vi.fn(),
+      onSubmit,
+    };
+    const { rerender } = render(<ConfirmHandoverDialog {...props} />);
+    expect(screen.getByText("JD 11500")).toBeTruthy();
+
+    // The deal moves while the operator is still reading it.
+    rerender(
+      <ConfirmHandoverDialog
+        {...props}
+        approvedAmountMinor={12_750_000}
+        financeCompanyFundedPortionMinor={11_000_000}
+        economicsStamp="v1|12750000|11000000|1500000"
+      />
+    );
+
+    // What they were asked to confirm is still on the screen — the dialog does
+    // not quietly restate itself around a number they never saw.
+    expect(screen.getByText("JD 11500")).toBeTruthy();
+    expect(screen.queryByText("JD 12750")).toBeNull();
+
+    fireEvent.click(screen.getByText("ConfirmHandoverAction"));
+    // And the stamp is the one it opened against, so the server refuses rather
+    // than sealing the deal that moved.
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ economicsStamp: "v1|11500000|10000000|1500000" })
+    );
+  });
+
+  test("re-opening takes a fresh snapshot", () => {
+    const onSubmit = vi.fn();
+    const props = {
+      submitting: false,
+      error: null,
+      approvedAmountMinor: 11_500_000,
+      financeCompanyFundedPortionMinor: 10_000_000,
+      dealerContributionMinor: 1_500_000,
+      approvedAmountIsFarFromEvidence: false,
+      economicsStamp: "v1|11500000|10000000|1500000",
+      money: (minor: number) => `JD ${minor / 1000}`,
+      t,
+      onOpenChange: vi.fn(),
+      onSubmit,
+    };
+    const { rerender } = render(<ConfirmHandoverDialog {...props} open />);
+    // Closed, the deal moves, and the operator opens it again to look properly.
+    rerender(<ConfirmHandoverDialog {...props} open={false} />);
+    rerender(
+      <ConfirmHandoverDialog
+        {...props}
+        open
+        approvedAmountMinor={12_750_000}
+        financeCompanyFundedPortionMinor={11_000_000}
+        economicsStamp="v1|12750000|11000000|1500000"
+      />
+    );
+
+    // Otherwise the snapshot would be a trap: the figures on file would be
+    // permanently unconfirmable and handover could never complete.
+    expect(screen.getByText("JD 12750")).toBeTruthy();
+    fireEvent.click(screen.getByText("ConfirmHandoverAction"));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ economicsStamp: "v1|12750000|11000000|1500000" })
+    );
+  });
+});
 
 function renderFinalize(submitting: boolean, onOpenChange = vi.fn()) {
   render(

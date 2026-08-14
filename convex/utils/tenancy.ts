@@ -445,16 +445,24 @@ export async function requireOwnedRow<T extends OrgScopedTable>(
  *
  * Exported because a second caller now needs the SAME answer, and asking it a
  * second way is how the two drift. `registerVehicleHandover` requires an
- * operator who can see the figure to confirm which figure they saw — and
- * deciding that with a hand-rolled `VIEW_FINANCE` test would have let a
- * `confirm:finance_disbursement` caller, who IS shown the amount, skip the
- * confirmation entirely and keep the bypass open.
- *
  * `VIEW_FINANCE` or `CONFIRM_FINANCE_DISBURSEMENT`, matching the tier-2 gate
- * below exactly — one predicate, used twice, rather than two predicates that
- * agree today.
+ * below exactly.
+ *
+ * ⚠️ NOT EXPORTED, DELIBERATELY. This is one display gate among several — it
+ * answers what `redactSettlementEvidence` withholds, and nothing more. It is
+ * NOT an authority on who can see the approved amount: `listNeedingReconciliation`
+ * serves that same figure raw under `VIEW_FINANCE_APPLICATIONS`, which this
+ * predicate does not mention.
+ *
+ * `registerVehicleHandover` was briefly built on it, to decide who had to
+ * confirm the figure they were shown. That was wrong in both directions —
+ * default SALES holds neither permission and so was never asked, while a
+ * `confirm:finance_disbursement` role without `view:finance_applications` was
+ * asked for a figure its screen could not display. Handover now compares a
+ * stamp issued to every caller, and asks nothing about who is looking. Do not
+ * reach for this to gate a WRITE.
  */
-export function canSeeApprovedPurchaseAmount(role: Doc<"roles">): boolean {
+function canSeeApprovedPurchaseAmount(role: Doc<"roles">): boolean {
   return (
     isSystemOwnerRole(role) ||
     role.permissions.includes(PERMISSIONS.VIEW_FINANCE) ||

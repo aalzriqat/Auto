@@ -1,4 +1,5 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { registerHandover } from "../test-utils/convexTest";
 import { expect, test, describe } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -99,7 +100,7 @@ describe("applications.finalizeDeal", () => {
       status: "APPROVED",
     });
 
-    await asUser.mutation(api.applications.registerVehicleHandover, { orgId, applicationId });
+    await registerHandover(asUser, api, orgId, applicationId);
     await asUser.mutation(api.applications.registerExpectedPayment, {
       orgId,
       applicationId,
@@ -998,7 +999,7 @@ async function setupFinalizedFinancedDeal() {
     applicationId,
     status: "APPROVED",
   });
-  await asUser.mutation(api.applications.registerVehicleHandover, { orgId, applicationId });
+  await registerHandover(asUser, api, orgId, applicationId);
   await asUser.mutation(api.applications.registerExpectedPayment, {
     orgId,
     applicationId,
@@ -1190,7 +1191,7 @@ describe("applications logs, expected payment, and finalization guards", () => {
       asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })
     ).rejects.toThrow(/register the vehicle handover/i);
 
-    await asUser.mutation(api.applications.registerVehicleHandover, { orgId, applicationId });
+    await registerHandover(asUser, api, orgId, applicationId);
     await expect(
       asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })
     ).rejects.toThrow(/register how and when the payment is expected/i);
@@ -1237,10 +1238,7 @@ describe("applications logs, expected payment, and finalization guards", () => {
       applicationId: applicationIdToMismatch,
       status: "APPROVED",
     });
-    await mismatched.asUser.mutation(api.applications.registerVehicleHandover, {
-      orgId: mismatched.orgId,
-      applicationId: applicationIdToMismatch,
-    });
+    await registerHandover(mismatched.asUser, api, mismatched.orgId, applicationIdToMismatch);
     await mismatched.asUser.mutation(api.applications.registerExpectedPayment, {
       orgId: mismatched.orgId,
       applicationId: applicationIdToMismatch,
@@ -1299,7 +1297,7 @@ describe("applications logs, expected payment, and finalization guards", () => {
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
     await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
     await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
-    await asUser.mutation(api.applications.registerVehicleHandover, { orgId, applicationId });
+    await registerHandover(asUser, api, orgId, applicationId);
     await asUser.mutation(api.applications.registerExpectedPayment, {
       orgId,
       applicationId,
@@ -1345,7 +1343,7 @@ async function setupFinalizedFinancedDealWithCheque() {
   const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
   await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
   await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
-  await asUser.mutation(api.applications.registerVehicleHandover, { orgId, applicationId });
+  await registerHandover(asUser, api, orgId, applicationId);
   await asUser.mutation(api.applications.registerExpectedPayment, {
     orgId,
     applicationId,

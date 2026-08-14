@@ -11,6 +11,7 @@
  * Every case here drives the raw Convex mutations, never the UI.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { registerHandover } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -285,10 +286,7 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
       applicationId,
       status: "APPROVED",
     });
-    await ids.asOwner.mutation(api.applications.registerVehicleHandover, {
-      orgId: ids.orgId,
-      applicationId,
-    });
+    await registerHandover(ids.asOwner, api, ids.orgId, applicationId);
     await ids.asOwner.mutation(api.applications.registerExpectedPayment, {
       orgId: ids.orgId,
       applicationId,

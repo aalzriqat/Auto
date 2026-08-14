@@ -3752,14 +3752,30 @@ describe("handover seals the approved amount, and the amount that was verified",
     return { seed, applicationId };
   }
 
+  /**
+   * The stamp as a real caller obtains it — from the deal payload their screen
+   * was rendered against, never recomputed here. A test that rebuilt the stamp
+   * from the row would pass no matter what the query projected.
+   */
+  async function stampFrom(
+    seed: Seed,
+    applicationId: Id<"financeApplications">,
+    as: AuthenticatedTestConvex = seed.asUser
+  ): Promise<string> {
+    const deal = await as.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    if (!deal?.economicsStamp) throw new Error("dealCockpit issued no economics stamp.");
+    return deal.economicsStamp;
+  }
+
   async function approvedAndHandedOver() {
     const { seed, applicationId } = await approvedDeal();
     await seed.asUser.mutation(api.applications.registerVehicleHandover, {
       orgId: seed.orgId,
       applicationId,
-      // This caller can see the figure, so the server requires them to say
-      // which one they saw — the same demand the screens now satisfy.
-      verifiedApprovedAmountMinor: jod(11_500),
+      economicsStamp: await stampFrom(seed, applicationId),
     });
     return { seed, applicationId };
   }
@@ -3786,11 +3802,14 @@ describe("handover seals the approved amount, and the amount that was verified",
     expect(app?.approvedDealerPurchaseAmountMinor).toBe(jod(11_500));
   });
 
-  test("handover refuses when the amount moved after the operator read it", async () => {
+  test("handover refuses when the economics moved after the operator read them", async () => {
     const { seed, applicationId } = await approvedDeal();
 
-    // The operator's screen rendered 11,500 and they are about to confirm. A
-    // second approver commits 12,750 in the meantime — legal, because the
+    // The operator's screen rendered 11,500 and they are about to confirm, so
+    // the stamp is taken NOW — the whole point is that it predates the change.
+    const asRendered = await stampFrom(seed, applicationId);
+
+    // A second approver commits 12,750 in the meantime — legal, because the
     // vehicle has not gone out yet, so the ordering guard above does not apply.
     await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
       orgId: seed.orgId,
@@ -3806,22 +3825,42 @@ describe("handover seals the approved amount, and the amount that was verified",
       seed.asUser.mutation(api.applications.registerVehicleHandover, {
         orgId: seed.orgId,
         applicationId,
-        verifiedApprovedAmountMinor: jod(11_500),
+        economicsStamp: asRendered,
       })
     ).rejects.toThrow(/changed/i);
 
     // Nothing was sealed by the refusal: the door is still open, and the
-    // operator can re-read the deal and confirm the amount that is really on it.
+    // operator can re-read the deal and confirm the figures really on it.
     const stillOpen = await readApp(seed, applicationId);
     expect(stillOpen?.vehicleHandoverAt).toBeUndefined();
 
     await seed.asUser.mutation(api.applications.registerVehicleHandover, {
       orgId: seed.orgId,
       applicationId,
-      verifiedApprovedAmountMinor: jod(12_750),
+      economicsStamp: await stampFrom(seed, applicationId),
     });
     const sealed = await readApp(seed, applicationId);
     expect(sealed?.vehicleHandoverAt).toBeTypeOf("number");
+  });
+
+  test("the funding split moving invalidates a confirmation in flight too", async () => {
+    const { seed, applicationId } = await approvedDeal();
+    const asRendered = await stampFrom(seed, applicationId);
+
+    // Not the approved amount — the split beneath it. The old check compared
+    // one number and would have sealed this happily, while the dialog had
+    // shown the operator a funded portion that no longer exists.
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { financeCompanyFundedPortionMinor: jod(9_000) })
+    );
+
+    await expect(
+      seed.asUser.mutation(api.applications.registerVehicleHandover, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: asRendered,
+      })
+    ).rejects.toThrow(/changed/i);
   });
 
 
@@ -3850,68 +3889,122 @@ describe("handover seals the approved amount, and the amount that was verified",
     return seed.t.withIdentity({ subject: `handover_${tag}` });
   }
 
-  test("a caller who CAN see the amount must say which amount they saw", async () => {
-    const { seed, applicationId } = await approvedDeal();
-    const asFinance = await callerWith(seed, "finance", [
-      "view:sales",
-      "view:finance",
-      "register:vehicle_handover",
-    ]);
+  /**
+   * The bypass CX-9 named — asked of the DEFAULT role rather than a convenient
+   * custom one, and asked by QUERYING the surface the operator really uses.
+   *
+   * The previous version of this suite proved the obligation against roles I
+   * chose, and every one of them happened to hold `view:finance` or
+   * `confirm:finance_disbursement`. It therefore asserted the predicate's SHAPE
+   * and passed while the bypass stood open for default SALES, which holds
+   * neither — and which is the role most likely to actually hand a vehicle
+   * over. Reading the figure back from a real query is the difference.
+   */
+  /** The default role that actually hands vehicles over. */
+  async function defaultSalesCaller(seed: Seed): Promise<AuthenticatedTestConvex> {
+    const salesTemplate = DEFAULT_ROLE_TEMPLATES.find((template) => template.name === "SALES");
+    if (!salesTemplate) throw new Error("The SALES default template no longer exists.");
+    return callerWith(seed, "salesdefault", [...salesTemplate.permissions]);
+  }
 
-    // Optional-in-the-validator made the whole check opt-in: a client could
-    // skip it by simply not sending the field. The server decides now.
+  test("default SALES cannot hand over without confirming the figures it acted on", async () => {
+    const { seed, applicationId } = await approvedDeal();
+    const asSales = await defaultSalesCaller(seed);
+
+    // Before the redesign this SUCCEEDED. The obligation was keyed to whether
+    // the caller could SEE the amount, and SALES holds neither `view:finance`
+    // nor `confirm:finance_disbursement` — so the staleness guarantee simply
+    // did not exist for the one role most likely to perform the handover.
+    // Whether SALES can see the figure is a separate question from whether the
+    // deal may be sealed against figures that moved; conflating the two is what
+    // left this open.
     await expect(
-      asFinance.mutation(api.applications.registerVehicleHandover, {
+      asSales.mutation(api.applications.registerVehicleHandover, {
         orgId: seed.orgId,
         applicationId,
       })
-    ).rejects.toThrow(/confirm the approved purchase amount/i);
+    ).rejects.toThrow(/confirm/i);
   });
 
-  test("confirm:finance_disbursement is shown the amount, so it is asked too", async () => {
+  test("the reconciliation queue shows SALES the approved amount unredacted", async () => {
     const { seed, applicationId } = await approvedDeal();
-    // The bypass a hand-rolled VIEW_FINANCE test would have left open. This
-    // role holds no `view:finance` at all, and `redactSettlementEvidence` still
-    // shows it the approved amount — so it can verify, and must.
-    const asDisbursement = await callerWith(seed, "disbursement", [
-      "view:sales",
-      "confirm:finance_disbursement",
-      "register:vehicle_handover",
-    ]);
+    const asSales = await defaultSalesCaller(seed);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { needsFinancingReconciliation: true })
+    );
 
-    await expect(
-      asDisbursement.mutation(api.applications.registerVehicleHandover, {
+    // Why a visibility predicate could never have been the basis, proven by
+    // QUERYING the surface rather than reasoning about permissions.
+    //
+    // `getEconomics` and `applications.get` both redact this field, so the
+    // predicate looked exhaustive from those two doors. `listNeedingReconciliation`
+    // authorizes on `view:finance_applications` alone and projects the raw row,
+    // so the same figure reaches a caller the predicate says cannot see it.
+    // Codex named `getEconomics` as well; that half does not reproduce — this
+    // is the surface that does.
+    const queue = await asSales.query(api.financingEconomics.listNeedingReconciliation, {
+      orgId: seed.orgId,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+    const row = queue.page.find((entry) => entry._id === applicationId);
+    expect(row?.approvedDealerPurchaseAmountMinor).toBe(jod(11_500));
+  });
+
+  /**
+   * The permission matrix, asked as ONE question of every shape of caller:
+   * can this role obtain a stamp, and is it refused without one?
+   *
+   * Deliberately a matrix rather than three hand-picked roles. The suite this
+   * replaces proved the obligation against roles I chose, all of which happened
+   * to satisfy the predicate, and it passed while default SALES walked through.
+   */
+  const HANDOVER_ROLES = [
+    { tag: "finance", permissions: ["view:sales", "view:finance", "register:vehicle_handover"] },
+    {
+      tag: "disbursement",
+      permissions: ["view:sales", "confirm:finance_disbursement", "register:vehicle_handover"],
+    },
+    // The figure is redacted from this one. It must still be able to hand over,
+    // and must still be held to the stamp — the two are no longer connected.
+    { tag: "salesonly", permissions: ["view:sales", "register:vehicle_handover"] },
+  ] as const;
+
+  for (const shape of HANDOVER_ROLES) {
+    test(`${shape.tag}: refused without a stamp, and can always obtain one`, async () => {
+      const { seed, applicationId } = await approvedDeal();
+      const as = await callerWith(seed, shape.tag, [...shape.permissions]);
+
+      await expect(
+        as.mutation(api.applications.registerVehicleHandover, {
+          orgId: seed.orgId,
+          applicationId,
+        })
+      ).rejects.toThrow(/confirm the handover from the deal screen/i);
+
+      // No role is asked for something it cannot get: the stamp comes off the
+      // caller's OWN payload, so a redacted caller is neither exempt nor stuck.
+      // This is the direction that dead-ended `confirm:finance_disbursement`.
+      await as.mutation(api.applications.registerVehicleHandover, {
         orgId: seed.orgId,
         applicationId,
-      })
-    ).rejects.toThrow(/confirm the approved purchase amount/i);
-
-    // And it can proceed by confirming what it was actually shown.
-    await asDisbursement.mutation(api.applications.registerVehicleHandover, {
-      orgId: seed.orgId,
-      applicationId,
-      verifiedApprovedAmountMinor: jod(11_500),
+        economicsStamp: await stampFrom(seed, applicationId, as),
+      });
+      const app = await readApp(seed, applicationId);
+      expect(app?.vehicleHandoverAt).toBeTypeOf("number");
     });
-    const app = await readApp(seed, applicationId);
-    expect(app?.vehicleHandoverAt).toBeTypeOf("number");
-  });
+  }
 
-  test("a caller the figure is withheld from is not asked to confirm it", async () => {
+  test("every role is issued the SAME stamp, redacted or not", async () => {
     const { seed, applicationId } = await approvedDeal();
-    // Neither `view:finance` nor `confirm:finance_disbursement`, so
-    // `redactSettlementEvidence` blanks the amount for them. Demanding a
-    // confirmation they were never given the means to make would block handover
-    // for this role entirely — a worse failure than the one being prevented.
-    const asSales = await callerWith(seed, "salesonly", [
-      "view:sales",
-      "register:vehicle_handover",
-    ]);
 
-    await asSales.mutation(api.applications.registerVehicleHandover, {
-      orgId: seed.orgId,
-      applicationId,
-    });
-    const app = await readApp(seed, applicationId);
-    expect(app?.vehicleHandoverAt).toBeTypeOf("number");
+    // Otherwise the token would be a second, quieter permission surface: a
+    // caller's stamp has to be comparable to the deal, not to their view of it.
+    const stamps = await Promise.all(
+      HANDOVER_ROLES.map(async (shape) => {
+        const as = await callerWith(seed, `same_${shape.tag}`, [...shape.permissions]);
+        return stampFrom(seed, applicationId, as);
+      })
+    );
+    expect(new Set(stamps).size).toBe(1);
   });
 });

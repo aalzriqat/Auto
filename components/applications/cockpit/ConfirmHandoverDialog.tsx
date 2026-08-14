@@ -64,11 +64,20 @@ type ConfirmHandoverDialogProps = {
   t: (key: string) => string;
   onOpenChange: (open: boolean) => void;
   /**
-   * Carries back the amount this dialog actually DISPLAYED, so the server can
-   * refuse to seal a different one. Null where the caller was shown nothing —
-   * they cannot have verified a figure they were never given.
+   * The server's stamp of the economics this dialog was opened against.
+   *
+   * Sent back on confirm so the mutation can refuse a deal whose figures moved
+   * while the operator was reading them. Issued to every caller, including one
+   * whose amounts are redacted above — they cannot see what changed, but they
+   * equally must not seal a deal that did.
    */
-  onSubmit: (values: { notes?: string; verifiedApprovedAmountMinor: number | null }) => void;
+  economicsStamp: string | undefined;
+  /**
+   * Carries back the stamp this dialog was actually opened against — not the
+   * current one. That distinction is the entire guarantee: see the snapshot
+   * note in the body.
+   */
+  onSubmit: (values: { notes?: string; economicsStamp: string | undefined }) => void;
 };
 
 export function ConfirmHandoverDialog({
@@ -79,6 +88,7 @@ export function ConfirmHandoverDialog({
   financeCompanyFundedPortionMinor,
   dealerContributionMinor,
   approvedAmountIsFarFromEvidence,
+  economicsStamp,
   money,
   t,
   onOpenChange,
@@ -86,39 +96,70 @@ export function ConfirmHandoverDialog({
 }: Readonly<ConfirmHandoverDialogProps>) {
   const [notes, setNotes] = useState("");
 
-  // Reset on the closed -> open transition only, as the sibling dialogs do.
-  const wasOpenRef = useRef(false);
-  useEffect(() => {
-    const justOpened = open && !wasOpenRef.current;
-    wasOpenRef.current = open;
-    if (!justOpened) return;
-    setNotes("");
-  }, [open]);
+  /**
+   * Everything this dialog shows and sends, frozen at the moment it opened.
+   *
+   * The props are live: they come from a Convex subscription, so a second
+   * approver committing a new amount re-renders this dialog underneath the
+   * operator. Rendering and submitting the live values moved display and
+   * payload together — the figure silently became a different one, the server's
+   * comparison passed, and the deal sealed against economics nobody had read.
+   * The machine race was closed; the human one was not.
+   *
+   * So the snapshot is taken on the closed -> open transition and never
+   * refreshed. If the deal moves while the dialog is open, the stamp below no
+   * longer matches and the mutation refuses — which is the outcome the whole
+   * confirmation exists to produce.
+   *
+   * Set during render rather than in an effect so the first paint already shows
+   * the frozen figures; an effect would flash the live ones for a frame.
+   */
+  const [wasOpen, setWasOpen] = useState(false);
+  const [confirmed, setConfirmed] = useState<{
+    approvedAmountMinor: number | null;
+    financeCompanyFundedPortionMinor: number | null;
+    dealerContributionMinor: number | null;
+    approvedAmountIsFarFromEvidence: boolean;
+    economicsStamp: string | undefined;
+  } | null>(null);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setNotes("");
+      setConfirmed({
+        approvedAmountMinor,
+        financeCompanyFundedPortionMinor,
+        dealerContributionMinor,
+        approvedAmountIsFarFromEvidence,
+        economicsStamp,
+      });
+    }
+  }
 
   const figures: Array<{ key: string; label: string; minor: number; flagged?: boolean }> = [];
-  if (approvedAmountMinor !== null) {
+  if (confirmed?.approvedAmountMinor != null) {
     figures.push({
       key: "approved",
       label: t("ApprovedPurchaseLabel"),
-      minor: approvedAmountMinor,
+      minor: confirmed.approvedAmountMinor,
       // The figure this dialog exists to have a last look at, and the one the
       // server has already judged unusual. Presenting it with the same weight
       // as the rest is how an order-of-magnitude mistake reads as ordinary.
-      flagged: approvedAmountIsFarFromEvidence,
+      flagged: confirmed.approvedAmountIsFarFromEvidence,
     });
   }
-  if (financeCompanyFundedPortionMinor !== null) {
+  if (confirmed?.financeCompanyFundedPortionMinor != null) {
     figures.push({
       key: "funded",
       label: t("DerivedFundedPortion"),
-      minor: financeCompanyFundedPortionMinor,
+      minor: confirmed.financeCompanyFundedPortionMinor,
     });
   }
-  if (dealerContributionMinor !== null) {
+  if (confirmed?.dealerContributionMinor != null) {
     figures.push({
       key: "contribution",
       label: t("DerivedDealerContribution"),
-      minor: dealerContributionMinor,
+      minor: confirmed.dealerContributionMinor,
     });
   }
 
@@ -205,10 +246,10 @@ export function ConfirmHandoverDialog({
             onClick={() =>
               onSubmit({
                 notes: notes.trim() || undefined,
-                // The figure rendered above, not a fresh read. The point is to
-                // seal what this operator verified, so it has to be the value
-                // they were looking at when they pressed the button.
-                verifiedApprovedAmountMinor: approvedAmountMinor,
+                // The stamp from the snapshot, never the live prop. Reading it
+                // fresh here would compare the deal to itself and pass however
+                // much had changed since the operator started reading.
+                economicsStamp: confirmed?.economicsStamp,
               })
             }
           >
