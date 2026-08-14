@@ -44,6 +44,7 @@ import {
   CorrectionHistoryCard,
   type CorrectionEntry,
 } from "./CorrectionHistoryCard";
+import { isRenderableMoment, toCorrectionEntries } from "./corrections";
 import {
   RecordApprovedPurchaseDialog,
   type ApprovalBasis,
@@ -71,30 +72,6 @@ import type { PaymentMethod } from "@/components/payments/PaymentMethodSelect";
  * Arabic/Latin run — VIN, currency, references, timestamps — is isolated in its
  * own `<bdi>` so bidi reordering cannot scramble one into its neighbour.
  */
-
-/**
- * Whether a stored moment can actually be formatted.
- *
- * `Number.isFinite` is NOT sufficient, which cost two review rounds to learn.
- * JavaScript's `Date` domain is ±8,640,000,000,000,000 ms, so `8640000000000001`,
- * `1e300` and `Number.MAX_VALUE` are all finite yet outside it — and date-fns
- * `format` throws `RangeError: Invalid time value` on every one of them. An
- * uncaught throw during render loses the WHOLE screen, not one row, which is the
- * defect class this cockpit has already been repaired for twice.
- *
- * Those values are reachable rather than theoretical: `z.number()` accepts any
- * finite number and Convex's `v.number()` stores it verbatim, so a corrupt row
- * arrives intact. SCRUM-45 tracks the same class in the posting path, where the
- * consequence is an aborted accounting drain rather than a lost screen.
- *
- * `isValid(new Date(v))` subsumes `undefined`, `NaN`, `±Infinity` and the
- * out-of-range case in one test. The `typeof` narrowing is load-bearing, not
- * decorative: neither `isValid` nor `Number.isFinite` is a type predicate, so
- * without it `format(entry.changedAt)` is a compile error on `number | undefined`.
- */
-function isRenderableMoment(value: number | undefined): value is number {
-  return typeof value === "number" && isValid(new Date(value));
-}
 
 type StageState = "COMPLETE" | "CURRENT" | "BLOCKED" | "PENDING" | "STOPPED";
 
@@ -292,29 +269,19 @@ export function DealCockpit({
   /**
    * The deal's corrections, ready to render.
    *
-   * The server withholds these entirely from a caller who may not see the
-   * approved amount, so an empty list here is either "nothing was corrected" or
-   * "not yours to see" — and both correctly render nothing. The screen does not
-   * re-decide the permission; `getEconomics` owns it.
+   * The server withholds each entry by SUBJECT from a caller who may not see the
+   * figure it is about, so a shorter list here is either "nothing else was
+   * corrected" or "not yours to see" — and both correctly render nothing. The
+   * screen does not re-decide the permission; `getEconomics` owns it.
    */
-  const corrections = (economics?.overrides ?? []).map((row) => ({
-    id: row._id as string,
-    field: row.field,
-    // Numbers, formatted below in the DEAL's currency. The server already
-    // dropped the audit prose these were embedded in — see presentOverrideValues.
-    previousAmountMinor: row.previousAmountMinor,
-    newAmountMinor: row.newAmountMinor,
-    newIsReopened: row.newIsReopened,
-    newIsCleared: row.newIsCleared,
-    reason: row.reason,
-    changedByName: row.changedByName,
-    // Guarded, never formatted raw: a corrupt timestamp reaches the client
-    // intact and `format()` throws on it, which would cost the whole screen to
-    // render one line of history.
-    changedAtLabel: isRenderableMoment(row.changedAt)
-      ? format(row.changedAt, "d MMM yyyy HH:mm")
-      : undefined,
-  }));
+  // Through the SAME adapter the history tests drive with real `getEconomics`
+  // output. The subject, the event and the figures are all named by the server;
+  // nothing here infers any of them from a field name or from stored prose. The
+  // timestamp is guarded rather than formatted raw — a corrupt one arrives
+  // intact and `format()` throws, costing the whole screen to render one line.
+  const corrections = toCorrectionEntries(economics?.overrides ?? [], (value) =>
+    format(value, "d MMM yyyy HH:mm")
+  );
 
   /**
    * The calculator, mounted wherever the quotation action can actually be

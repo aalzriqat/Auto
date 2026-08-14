@@ -5,51 +5,62 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 /**
  * The corrections made to this deal's recorded figures, newest first.
  *
- * Without this the audit trail existed and was invisible. `reopenApproval` and
- * `approveDealerPurchaseAmount` have always written override rows — who changed
- * what, from what, to what, and why — and nothing in the product ever read one.
- * So after a wrong 150,000 was corrected to 15,000 the screen simply showed
- * 15,000, and an operator had no way to tell a corrected deal from one that was
- * always right. A record nobody can see does not answer the question the record
- * exists to answer.
+ * Without this the audit trail existed and was invisible. The economics writers
+ * have always recorded who changed what, from what, to what and why, and nothing
+ * in the product ever read one. So after a wrong 150,000 was corrected to 15,000
+ * the screen simply showed 15,000, and an operator had no way to tell a corrected
+ * deal from one that was always right. A record nobody can see does not answer
+ * the question the record exists to answer.
  *
  * Absent, not empty, on a deal that has never been corrected: a permanent
  * "no corrections" heading on every healthy deal is noise, and it invites the
  * reading that something is missing.
  *
- * The rows carry money figures, so the server withholds them entirely from a
- * caller who may not see the approved amount — see `getEconomics`. This card
- * therefore renders whatever it is given and makes no permission decision of
- * its own; a second, hand-copied rule here is how the two would drift apart.
+ * Every figure the rows carry is gated at the server, per subject — see
+ * `getEconomics`. This card renders whatever it is given and makes no permission
+ * decision of its own; a second, hand-copied rule here is how the two would
+ * drift apart.
  */
+
+/** WHICH figure the entry is about. Never inferred here — the server names it. */
+export type CorrectionSubject =
+  | "APPROVED_PURCHASE_AMOUNT"
+  | "SUBMITTED_QUOTATION"
+  | "RECONCILIATION_FLAG";
+
+/** WHAT HAPPENED to it. */
+export type CorrectionEvent = "CORRECTED" | "WITHDRAWN" | "SUPERSEDED" | "RESOLVED";
+
 export type CorrectionEntry = {
   id: string;
-  field: string;
   /**
-   * The figures, as NUMBERS in the deal's own minor units.
+   * The subject exists so an entry can never be read as being about the wrong
+   * figure.
    *
-   * Never the stored strings. Those are written for an audit table and carry
-   * the whole decision — `"150000000 (MANUAL @ 85% LTV, approved by pd78…)"` —
-   * so rendering one would show a money figure a thousand times too large
-   * beside an internal user id. `getEconomics` extracts the amount and drops
-   * the rest; this component formats it in the deal's currency.
+   * The projection this replaced described every money-suffixed audit field
+   * through one unlabelled shape, so a corrected quotation and a corrected
+   * approved purchase amount arrived on screen indistinguishable — and a
+   * correction to the EXPENSES behind a quotation arrived as an unlabelled
+   * movement from 12,500 to 12,500, because that writer stores the quotation
+   * amount unchanged on both sides of the row.
+   */
+  subject: CorrectionSubject;
+  event: CorrectionEvent;
+  /**
+   * The figures, as NUMBERS in the deal's own minor units, and only where the
+   * server could name them unambiguously.
    *
-   * Absent where the server could not present the value safely, in which case
-   * the line still carries the reason, the person and the time.
+   * Never the stored strings. Those are written for an audit table and carry the
+   * whole decision — `"150000000 (MANUAL @ 85% LTV, approved by pd78…)"` — so
+   * rendering one would show a money figure a thousand times too large beside an
+   * internal user id.
+   *
+   * Absent is ordinary, not an error, and never a zero: the entry then carries
+   * the subject, what happened, the reason, the person and the time, which still
+   * explains the deal.
    */
   previousAmountMinor?: number;
   newAmountMinor?: number;
-  /** The reopen path writes a state, not a figure. Said in words, not shown raw. */
-  newIsReopened: boolean;
-  /**
-   * A superseding appraisal withdrew the approval — also a state, not a figure.
-   *
-   * Distinct from a reopen because the cause is different and the operator's
-   * next step differs with it: a reopen is somebody correcting a figure, this
-   * is new evidence invalidating one. A history that conflated them would
-   * answer "what changed" and not "why".
-   */
-  newIsCleared: boolean;
   reason: string;
   changedByName?: string;
   /**
@@ -70,6 +81,19 @@ type CorrectionHistoryCardProps = {
   t: (key: string) => string;
 };
 
+const SUBJECT_LABEL: Record<CorrectionSubject, string> = {
+  APPROVED_PURCHASE_AMOUNT: "CorrectionSubjectApprovedAmount",
+  SUBMITTED_QUOTATION: "CorrectionSubjectQuotation",
+  RECONCILIATION_FLAG: "CorrectionSubjectReconciliation",
+};
+
+/** The events that are a STATE rather than a figure, said in words. */
+const EVENT_LABEL: Partial<Record<CorrectionEvent, string>> = {
+  WITHDRAWN: "CorrectionValueReopened",
+  SUPERSEDED: "CorrectionValueCleared",
+  RESOLVED: "CorrectionValueResolved",
+};
+
 export function CorrectionHistoryCard({
   entries,
   money,
@@ -85,26 +109,39 @@ export function CorrectionHistoryCard({
       </CardHeader>
       <CardContent className="space-y-4">
         {entries.map((entry) => {
-          const before =
-            entry.previousAmountMinor === undefined ? null : money(entry.previousAmountMinor);
-          const after = entry.newIsReopened
-            ? t("CorrectionValueReopened")
-            : entry.newIsCleared
-              ? t("CorrectionValueCleared")
-              : entry.newAmountMinor === undefined
-                ? null
-                : money(entry.newAmountMinor);
+          const eventLabel = EVENT_LABEL[entry.event];
           return (
             <div key={entry.id} className="space-y-1 border-s-2 ps-3">
-              {/* The reason FIRST, because it is the only part written by a
-                  person and the only part that answers "why is this different
-                  from what I remember". */}
+              {/* WHICH figure, before anything else. An entry that does not name
+                  its subject is read as being about the figure above it. */}
+              <p className="text-[0.65rem] font-medium uppercase tracking-wide text-muted-foreground">
+                {t(SUBJECT_LABEL[entry.subject])}
+              </p>
+              {/* The reason — the only part a person wrote, and the only part
+                  that answers "why is this different from what I remember". */}
               <p className="text-sm font-medium">{entry.reason}</p>
-              {(before !== null || after !== null) && (
-                <p className="text-xs text-muted-foreground">
-                  {before !== null && <bdi className="tabular-nums">{before}</bdi>}
-                  {before !== null && after !== null && <span aria-hidden="true"> → </span>}
-                  {after !== null && <bdi className="tabular-nums">{after}</bdi>}
+              {/* Labelled rather than joined by an arrow. A directional glyph
+                  between two figures has to be flipped for Arabic and reads
+                  backwards the day it is not; "from" and "to" carry the same
+                  meaning in either direction, and each figure is isolated in its
+                  own `bdi` so a bidi run cannot reorder the digits around it. */}
+              {(entry.previousAmountMinor !== undefined ||
+                entry.newAmountMinor !== undefined ||
+                eventLabel !== undefined) && (
+                <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                  {entry.previousAmountMinor !== undefined && (
+                    <span>
+                      {t("CorrectionFrom")}{" "}
+                      <bdi className="tabular-nums">{money(entry.previousAmountMinor)}</bdi>
+                    </span>
+                  )}
+                  {entry.newAmountMinor !== undefined && (
+                    <span>
+                      {t("CorrectionTo")}{" "}
+                      <bdi className="tabular-nums">{money(entry.newAmountMinor)}</bdi>
+                    </span>
+                  )}
+                  {eventLabel !== undefined && <span>{t(eventLabel)}</span>}
                 </p>
               )}
               <p className="text-xs text-muted-foreground">

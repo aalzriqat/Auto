@@ -819,7 +819,21 @@ export const salesEn = {
   CorrectionValueReopened: "taken off the record",
   /** A new appraisal replaced the evidence, rather than a person correcting it. */
   CorrectionValueCleared: "withdrawn by a new appraisal",
+  CorrectionValueResolved: "reviewed and cleared",
   CorrectionByUnknownUser: "A user who no longer exists",
+  /**
+   * WHICH figure each entry is about.
+   *
+   * Without these every entry looked alike, so a corrected quotation read as a
+   * corrected approved purchase amount — on the one panel whose job is telling
+   * an operator what changed.
+   */
+  CorrectionSubjectApprovedAmount: "Approved purchase amount",
+  CorrectionSubjectQuotation: "Quotation sent to the finance company",
+  CorrectionSubjectReconciliation: "Financing reconciliation",
+  /** Labels, not an arrow: a directional glyph reads backwards in Arabic. */
+  CorrectionFrom: "From",
+  CorrectionTo: "To",
   DerivedEconomicsHeading: "What that leaves",
   DerivedEconomicsNote: "Worked out by AutoFlow from the two figures above. Not editable.",
   DerivedFundedPortion: "Funded by the finance company",
@@ -1676,7 +1690,13 @@ export const salesAr = {
     "ما الذي تغيّر، ومن غيّره، ولماذا. بدون ذلك لا يمكن تمييز رقم مصحَّح عن رقم كان صحيحاً منذ البداية.",
   CorrectionValueReopened: "رُفع عن السجل",
   CorrectionValueCleared: "أُلغي بتخمين جديد",
+  CorrectionValueResolved: "تمت مراجعته وإغلاقه",
   CorrectionByUnknownUser: "مستخدم لم يعد موجوداً",
+  CorrectionSubjectApprovedAmount: "مبلغ الشراء المعتمد",
+  CorrectionSubjectQuotation: "العرض المُرسل إلى شركة التمويل",
+  CorrectionSubjectReconciliation: "تسوية التمويل",
+  CorrectionFrom: "من",
+  CorrectionTo: "إلى",
   DerivedEconomicsHeading: "ما ينتج عن ذلك",
   DerivedEconomicsNote: "يحتسبه أوتوفلو من الرقمين أعلاه، وغير قابل للتعديل.",
   DerivedFundedPortion: "الجزء المموَّل من شركة التمويل",

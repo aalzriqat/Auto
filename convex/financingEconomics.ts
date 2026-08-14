@@ -241,75 +241,127 @@ const APPROVAL_WITHDRAWN = "reopened";
 const APPROVAL_SUPERSEDED = "cleared";
 
 /**
- * Turns a stored override row into something a screen may show.
+ * WHAT a correction was about — one entry per audit field this product knows how
+ * to describe.
  *
- * The rows are written for an AUDIT TABLE, not for a person. `recordOverride`
- * stringifies whatever changed, and the approval site builds that string with
- * the whole decision in it:
+ * The previous projection asked `field.endsWith("Minor")` instead, and that
+ * question is not the one that matters. It answers "does this string probably
+ * start with a number", not "what did this row change" — so every money-suffixed
+ * field was rendered through one shape with no indication of WHICH figure moved,
+ * and a quotation correction was indistinguishable on screen from a correction
+ * to the approved purchase amount. A registry says only what it has been taught.
  *
- *   "150000000 (MANUAL @ 85% LTV, approved by pd78fs58de9dnyrek2hvw0k63s88wmc4)"
- *
- * Rendering that verbatim would put a raw minor-unit integer and an internal
- * user id in front of an operator — a money figure a thousand times too large,
- * beside an identifier that means nothing to anyone. So the amount is extracted
- * as a NUMBER for the client to format in the deal's own currency, and every
- * other part of the string is dropped rather than displayed.
- *
- * Values that cannot be presented safely are omitted entirely. A history line
- * that shows only the reason, the person and the time is worth having; one that
- * shows a raw internal string is not, and "show it anyway" is how the id would
- * reach the screen through some field nobody thought about.
+ * A row whose field is absent here is DROPPED. It is a change this product
+ * cannot name, and an unnamed change rendered beside named ones reads as if it
+ * were about the figure above it.
  */
-function presentOverrideValues(row: Doc<"financeApplicationOverrides">): {
+const AUDIT_SUBJECTS = {
+  [APPROVED_AMOUNT_FIELD]: "APPROVED_PURCHASE_AMOUNT",
+  submittedQuotationMinor: "SUBMITTED_QUOTATION",
+  needsFinancingReconciliation: "RECONCILIATION_FLAG",
+} as const;
+
+type AuditSubject = (typeof AUDIT_SUBJECTS)[keyof typeof AUDIT_SUBJECTS];
+
+/**
+ * WHAT HAPPENED to it. Four events, named rather than inferred from prose.
+ *
+ * `WITHDRAWN` and `SUPERSEDED` are deliberately separate. Both leave the deal
+ * with no approved amount, but a person choosing to take a figure off the record
+ * and new evidence invalidating one are different facts with different next
+ * steps, and a history that conflated them would answer "what changed" and never
+ * "why".
+ */
+type CorrectionEventKind = "CORRECTED" | "WITHDRAWN" | "SUPERSEDED" | "RESOLVED";
+
+type CorrectionProjection = {
+  subject: AuditSubject;
+  event: CorrectionEventKind;
+  /**
+   * Present only where the subject's stored form names a figure UNAMBIGUOUSLY.
+   *
+   * Absent is not an error and never a zero: the entry then carries the subject,
+   * the event, the reason, the person and the time, which still explains the
+   * deal. Rendering a figure this function is not sure of is the failure mode
+   * that matters — a money screen that is confidently wrong.
+   */
   previousAmountMinor?: number;
   newAmountMinor?: number;
-  newIsReopened: boolean;
-  /** A superseding appraisal withdrew the approval this row describes. */
-  newIsCleared: boolean;
-} {
-  // Only money fields carry a leading minor-unit integer, and only they should
-  // ever be rendered as a figure. Keyed off the field NAME rather than off
-  // whether the string happens to start with digits, so a future non-money
-  // override whose value begins with a number is not silently shown as money.
-  const isAmountField = row.field.endsWith("Minor");
-  const leadingAmount = (value: string | undefined): number | undefined => {
-    if (!isAmountField || value === undefined) return undefined;
-    // DELIMITED, not merely leading. `^(\d+)` alone reads "12.5" as 12 and
-    // renders it as twelve minor units — a plausible-looking figure produced by
-    // silently truncating a decimal, which is worse than showing nothing. The
-    // real rows are either the bare integer or the integer followed by a space
-    // and the parenthesised decision, so anything else is a value this function
-    // does not understand and must not present.
-    const match = /^(\d+)(?=$|[\s(])/.exec(value.trim());
-    if (!match) return undefined;
-    const parsed = Number(match[1]);
-    // Fails closed on anything outside the range money can be counted in.
-    // `Number.isSafeInteger` covers NaN, ±Infinity, fractions and magnitudes
-    // past 2^53 — beyond which the arithmetic that would follow is not exact
-    // anyway. A figure that cannot be trusted is omitted, never rounded into
-    // something that looks trustworthy.
-    if (!Number.isSafeInteger(parsed) || parsed < 0) return undefined;
-    return parsed;
-  };
+};
 
-  // The sentinels. Both are STATES, not figures, so each is reported as one and
-  // the client says it in the operator's language.
-  //
-  // `cleared` is the one this projection originally missed. `recordAppraisal`
-  // writes it when a new appraisal supersedes the evidence an approval rested
-  // on, and it renders through exactly the same panel — so without it the row
-  // showed a bare previous amount with no arrow and nothing saying the figure
-  // had been withdrawn. On the one screen whose entire job is explaining why a
-  // number changed, that reads as "unchanged".
-  const sentinel =
-    row.newValue === APPROVAL_WITHDRAWN || row.newValue === APPROVAL_SUPERSEDED;
+/**
+ * Reads the amount out of the approved-purchase writer's own serialization.
+ *
+ * Scoped to ONE subject on purpose. This is decoding a format this module
+ * writes — `"150000000 (MANUAL @ 85% LTV, approved by pd78…)"`, or the bare
+ * integer the withdrawal sites store — not guessing at prose. The quotation
+ * subject deliberately does NOT come through here: its writer stringifies the
+ * amount together with every other input that moved, so the leading integer is
+ * unchanged when only the expenses were corrected, and reading it would render
+ * an expense correction as an unchanged 12,500 → 12,500.
+ */
+function decodeApprovedAmount(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  // DELIMITED, not merely leading. `^(\d+)` alone reads "12.5" as 12 and renders
+  // it as twelve minor units — a plausible-looking figure produced by silently
+  // truncating a decimal, which is worse than showing nothing.
+  const match = /^(\d+)(?=$|[\s(])/.exec(value.trim());
+  if (!match) return undefined;
+  const parsed = Number(match[1]);
+  // Fails closed on anything outside the range money can be counted in.
+  // `Number.isSafeInteger` covers NaN, ±Infinity, fractions and magnitudes past
+  // 2^53 — beyond which the arithmetic that would follow is not exact anyway.
+  if (!Number.isSafeInteger(parsed) || parsed < 0) return undefined;
+  return parsed;
+}
 
-  return {
-    previousAmountMinor: leadingAmount(row.previousValue),
-    newIsReopened: row.newValue === APPROVAL_WITHDRAWN,
-    newIsCleared: row.newValue === APPROVAL_SUPERSEDED,
-    newAmountMinor: sentinel ? undefined : leadingAmount(row.newValue),
-  };
+/**
+ * Turns a stored override row into a typed fact a screen may show, or nothing.
+ *
+ * The rows are written for an AUDIT TABLE, not for a person: `recordOverride`
+ * stringifies whatever changed, and the approval site builds that string with
+ * the whole decision inside it. Rendering one verbatim put a raw minor-unit
+ * integer and an internal user id in front of an operator — a money figure a
+ * thousand times too large beside an identifier that means nothing to anyone.
+ *
+ * So nothing stored reaches the client. The subject and the event are named from
+ * the registry above, the figures are decoded only where the stored form is
+ * unambiguous, and the prose is dropped rather than displayed.
+ */
+function presentCorrection(
+  row: Doc<"financeApplicationOverrides">
+): CorrectionProjection | undefined {
+  const subject: AuditSubject | undefined =
+    AUDIT_SUBJECTS[row.field as keyof typeof AUDIT_SUBJECTS];
+  if (subject === undefined) return undefined;
+
+  if (subject === "APPROVED_PURCHASE_AMOUNT") {
+    if (row.newValue === APPROVAL_WITHDRAWN || row.newValue === APPROVAL_SUPERSEDED) {
+      return {
+        subject,
+        event: row.newValue === APPROVAL_WITHDRAWN ? "WITHDRAWN" : "SUPERSEDED",
+        previousAmountMinor: decodeApprovedAmount(row.previousValue),
+      };
+    }
+    return {
+      subject,
+      event: "CORRECTED",
+      previousAmountMinor: decodeApprovedAmount(row.previousValue),
+      newAmountMinor: decodeApprovedAmount(row.newValue),
+    };
+  }
+
+  if (subject === "RECONCILIATION_FLAG") {
+    // Never money. `previousValue` here is the free-text reason the deal was
+    // flagged and `newValue` is a state word — a subject the old projection
+    // happened to leave alone only because its field name lacked the suffix it
+    // was keying on.
+    return { subject, event: "RESOLVED" };
+  }
+
+  // SUBMITTED_QUOTATION — a correction whose subject is nameable and whose
+  // movement is not. Reported without figures rather than with wrong ones.
+  return { subject, event: "CORRECTED" };
 }
 
 /**
@@ -804,38 +856,61 @@ export const getEconomics = query({
       /**
        * The corrections on this deal, newest first — with the person named.
        *
-       * WITHHELD from a caller who may not see the approved amount, because
-       * `recordOverride` stringifies that amount into `previousValue` and
-       * `newValue`. `redactSettlementEvidence` names this query's `overrides[]`
-       * as one of three routes by which a `view:sales` caller recovers a figure
-       * the row itself withholds, and until now nothing rendered them so the
-       * exposure was API-only. Putting them on screen without this gate would
-       * have printed the withheld number in front of exactly the role it is
-       * withheld from.
+       * Gated PER SUBJECT, not per array. The approved purchase amount is the
+       * figure `redactSettlementEvidence` withholds, and `recordOverride`
+       * stringifies it into `previousValue`/`newValue` — that helper names this
+       * query's `overrides[]` as one of three routes by which a `view:sales`
+       * caller recovers it. So rows about that subject follow the same predicate
+       * as the figure itself, imported rather than restated so the history and
+       * the number it describes can never disagree about who may see them.
+       *
+       * Withholding the WHOLE array on that predicate — which is what shipped —
+       * was both too much and too little. Too much, because a corrected
+       * quotation is not the withheld figure and vanished for every caller who
+       * could see the quotation perfectly well on the same screen. Too little,
+       * because it made the gate a property of the response rather than of the
+       * subject, so the next audit field added to this table would inherit
+       * whichever answer happened to be convenient.
        *
        * This closes ONE of the three named routes. It does not create the
-       * boundary — the other two (deriving it from the funded portion and the
-       * LTV, and reading it out of the free-text approval notes) are untouched,
-       * and that rework is tracked separately. Claiming otherwise here would be
-       * the "false assurance behind a longer comment" that helper warns about.
+       * boundary — the other two (deriving the amount from the funded portion
+       * and the LTV, and reading it out of the free-text approval notes) are
+       * untouched, and that rework is tracked separately. Claiming otherwise
+       * here would be the "false assurance behind a longer comment" that helper
+       * warns about.
        */
-      overrides: canWorkDisbursement
-        ? await Promise.all(
-            overrides
-              .sort((a, b) => b.changedAt - a.changedAt)
-              .map(async (row) => ({
+      overrides: (
+        await Promise.all(
+          overrides
+            // `changedAt` is `Date.now()` at the writing mutation, so two
+            // corrections a moment apart can carry the SAME millisecond — a
+            // reopen and the re-approval that follows it being the exact pair
+            // this panel exists to show. Sorting on it alone left their order to
+            // whatever the read returned, and a history that can print the
+            // replacement above the withdrawal is not telling the sequence.
+            // `_creationTime` is assigned per insert and breaks the tie in the
+            // order the rows were actually written.
+            .sort((a, b) => b.changedAt - a.changedAt || b._creationTime - a._creationTime)
+            .map(async (row) => {
+              const projected = presentCorrection(row);
+              // A field this product cannot name, so it cannot say what changed.
+              if (!projected) return undefined;
+              if (projected.subject === "APPROVED_PURCHASE_AMOUNT" && !canWorkDisbursement) {
+                return undefined;
+              }
+              return {
                 _id: row._id,
-                field: row.field,
                 reason: row.reason,
                 changedAt: row.changedAt,
                 // Resolved here rather than in the browser: the id alone tells
                 // an operator nothing, and a history that cannot say who made a
                 // correction is not an audit trail.
                 changedByName: (await ctx.db.get(row.changedBy))?.name,
-                ...presentOverrideValues(row),
-              }))
-          )
-        : [],
+                ...projected,
+              };
+            })
+        )
+      ).filter((entry): entry is NonNullable<typeof entry> => entry !== undefined),
     };
   },
 });
