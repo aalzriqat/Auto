@@ -18,7 +18,7 @@ import {
   isConsignedAgentSale,
 } from "./utils/vehicleOwnership";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
-import { toMinorUnits, assertSupportedDenomination } from "./utils/money";
+import { toMinorUnits, assertSupportedDenomination, denominationOf } from "./utils/money";
 import {
   assertMinorAmount,
   buildRuleSnapshot,
@@ -90,6 +90,11 @@ async function recomputeAndPatchEconomics(
   ctx: MutationCtx,
   app: Doc<"financeApplications">
 ): Promise<void> {
+  // Defense in depth. Every caller is guarded at its own handler top, but this
+  // is the shared writer of the derived split — if a future mutation reaches it
+  // without its own check, the bad denomination stops here rather than being
+  // persisted and scaled by a guess further downstream.
+  assertSupportedDenomination(app.economicsCurrency, "recomputing these economics");
   const snapshot = await resolveRuleSnapshot(ctx, app);
   const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, app.orgId));
 
@@ -605,11 +610,31 @@ export const suggestQuotationForApplication = query({
       APPLICATION_NOT_FOUND
     );
 
-    // Refuses to carry an unrecognised code forward. `??` PRESERVES a bad
-    // value rather than replacing it, so one legacy row would otherwise
-    // scale every later figure by a guess.
-    assertSupportedDenomination(app.economicsCurrency, "recording these economics");
     const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
+
+    /**
+     * A denomination nobody can vouch for is an ANSWER here, never a refusal.
+     *
+     * Guards belong on the writers; this is a read. A ConvexError from a query
+     * reaches `useQuery` during render and takes the whole deal screen down —
+     * see the note immediately below, written after exactly that failure.
+     * Throwing here hid the legacy rows this rule protects behind a blank page,
+     * leaving no screen to restate the currency from: the guard defeated its
+     * own purpose. It arrived by pattern-matching a line instead of reading
+     * what enclosed it.
+     *
+     * Reported rather than silently suggested, because a figure scaled by a
+     * guessed fallback is worse than no suggestion at all.
+     */
+    if (app.economicsCurrency !== undefined && denominationOf(app.economicsCurrency) === null) {
+      return {
+        appliedLtvPercent: undefined,
+        currency,
+        ruleVersion: undefined,
+        available: false as const,
+        reason: "UNSUPPORTED_CURRENCY",
+      };
+    }
 
     /**
      * The rules may not resolve at all — and that is an ANSWER, not an error.
@@ -1489,6 +1514,17 @@ export const approveDealerPurchaseAmount = mutation({
       throw new ConvexError("This application is closed. Its approval can no longer be changed.");
     }
     /**
+     * At the TOP of the handler, so every approval route runs it.
+     *
+     * It previously sat three conditions deep inside consigned
+     * direct-settlement handling, so dealer-owned stock, through-dealership
+     * routes and zero-cost rows all skipped it. That is not a theoretical gap:
+     * a legacy deal with a quotation already on file could record an approval
+     * that `finalizeDeal` then refuses forever, while the handover lock blocks
+     * correcting it — a deal stranded short of a sale with no in-app way back.
+     */
+    assertSupportedDenomination(app.economicsCurrency, "recording this approval");
+    /**
      * The THIRD writer of this number, and the one that had no door on it.
      *
      * `reopenApproval` refuses after handover, and `recordAppraisal`'s
@@ -1558,7 +1594,6 @@ export const approveDealerPurchaseAmount = mutation({
           // Refuses to carry an unrecognised code forward. `??` PRESERVES a bad
     // value rather than replacing it, so one legacy row would otherwise
     // scale every later figure by a guess.
-    assertSupportedDenomination(app.economicsCurrency, "recording these economics");
     const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
           const refusal = directSettlementBelowEntitlementRefusal({
             approvedAmountMinor: args.approvedAmountMinor,

@@ -4056,6 +4056,70 @@ describe("handover seals the approved amount, and the amount that was verified",
     expect(app?.approvedDealerPurchaseAmountMinor).toBeUndefined();
   });
 
+  test("an EMPTY denomination is not an absent one", async () => {
+    // `??` only replaces null/undefined, so an empty string is PRESERVED by
+    // every writer — and a truthiness check treats it as absent and waves it
+    // through. Present-but-meaningless is the most dangerous of the three
+    // states: it looks recorded and scales by the guessed fallback.
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { status: "APPROVED", economicsCurrency: "" })
+    );
+
+    await expect(
+      seed.asUser.mutation(api.applications.registerVehicleHandover, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await stampFrom(seed, applicationId),
+      })
+    ).rejects.toThrow(/currency|recognise/i);
+
+    const app = await readApp(seed, applicationId);
+    expect(app?.vehicleHandoverAt).toBeUndefined();
+  });
+
+  test("an approval on an ordinary route is guarded too, not just a consigned one", async () => {
+    // The guard sat three conditions deep inside consigned direct-settlement
+    // handling, so dealer-owned stock and through-dealership routes skipped it.
+    // A quotation already on file is what makes this reachable: the approval
+    // then passes its prerequisite and records a figure that `finalizeDeal`
+    // will refuse forever, while the handover lock blocks correcting it.
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { economicsCurrency: "JD" }));
+
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: seed.orgId,
+        applicationId,
+        approvedAmountMinor: jod(11_500),
+        basis: "MANUAL",
+      })
+    ).rejects.toThrow(/currency|recognise/i);
+
+    const app = await readApp(seed, applicationId);
+    expect(app?.approvedDealerPurchaseAmountMinor).toBeUndefined();
+  });
+
+  test("the suggestion query REPORTS an unusable denomination instead of throwing", async () => {
+    // A read-only query must not refuse. The cockpit mounts this one whenever
+    // quotation work is available, and a Convex throw reaching `useQuery`
+    // during render loses the whole screen — so a guard here would take the
+    // deal page down for exactly the legacy rows it is meant to protect,
+    // leaving no screen from which to restate the currency.
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { economicsCurrency: "JD" }));
+
+    const suggestion = await seed.asUser.query(
+      api.financingEconomics.suggestQuotationForApplication,
+      { orgId: seed.orgId, applicationId }
+    );
+    expect(suggestion.available).toBe(false);
+  });
+
   test("the denomination is carried with its scale, not re-derived", async () => {
     const { seed, applicationId } = await approvedDeal();
     const deal = await seed.asUser.query(api.applications.dealCockpit, {

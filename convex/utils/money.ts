@@ -75,7 +75,12 @@ export function assertSupportedDenomination(
   currency: string | undefined,
   action: string
 ): void {
-  if (currency && supportedCurrencyScale(currency) === null) {
+  // `undefined` is the ONLY absent state. An empty string is PRESENT and
+  // meaningless, and it is the dangerous one: `??` does not replace it, so
+  // every writer preserves it, while a truthiness check waves it through as if
+  // nothing were recorded. It then scales by the guessed fallback like any
+  // other unrecognised code.
+  if (currency !== undefined && supportedCurrencyScale(currency) === null) {
     throw new ConvexError(
       `This deal's economics are recorded in "${currency}", which AutoFlow does not recognise, so ${action} would scale the amount by a guess. Restate the deal in a supported currency first.`
     );
