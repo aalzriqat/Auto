@@ -3843,19 +3843,20 @@ describe("the correction history follows the amount it describes", () => {
     expect(forSales.application.submittedQuotationMinor).toBe(jod(DEAL.quotation));
   });
 
-  test("a correction to a figure sales CAN see is not withheld with the one they cannot", async () => {
+  test("a correction to another figure still cannot carry the amount in its prose", async () => {
     const { seed, applicationId } = await seedCorrectedDeal();
     const asSales = await addSalesUser(seed);
 
     // The approval on this deal has been withdrawn, so the quotation is
-    // writable again — and correcting it is not a correction to the withheld
-    // amount.
+    // writable again. Its SUBJECT is the quotation, which this caller may see —
+    // and its reason is whatever a manager typed, which here is the figure they
+    // may not. `overrideReason` is `v.optional(v.string())`: unrestricted.
     await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
       orgId: seed.orgId,
       applicationId,
       submittedQuotationMinor: jod(11_900),
       source: "MANUAL_ENTRY",
-      overrideReason: "Resubmitted lower after the company came back.",
+      overrideReason: "Matched approved amount 18,902.",
     });
 
     const forSales = await asSales.query(api.financingEconomics.getEconomics, {
@@ -3863,25 +3864,21 @@ describe("the correction history follows the amount it describes", () => {
       applicationId,
     });
 
-    // Gating the WHOLE array on the approved amount was too much as well as too
-    // little: this caller reads the quotation off the same screen, and its
-    // correction vanished with rows that had nothing to do with it.
-    expect(forSales.overrides.map((row) => row.subject)).toEqual(["SUBMITTED_QUOTATION"]);
-    // And the withheld subject is still withheld, which is the half that must
-    // not regress while fixing the other.
-    expect(
-      forSales.overrides.some((row) => row.subject === "APPROVED_PURCHASE_AMOUNT")
-    ).toBe(false);
+    // Raised in adversarial review, against a version of this query that gated
+    // per subject and returned this row. Withholding the figure while returning
+    // the sentence hands over the figure in prose — the exact route
+    // `redactSettlementEvidence` documents for `approvedPurchaseNotes`.
+    expect(JSON.stringify(forSales.overrides)).not.toContain("18,902");
+    expect(forSales.overrides).toEqual([]);
 
-    // An approver sees both, so the quotation row above is not visible merely
-    // because the history is empty for everyone.
-    const forApprover = await seed.asUser.query(api.financingEconomics.getEconomics, {
+    // A finance caller reads all of it, so the assertion above is about the
+    // GATE and not about a history that is empty for everyone.
+    const forFinance = await seed.asUser.query(api.financingEconomics.getEconomics, {
       orgId: seed.orgId,
       applicationId,
     });
-    expect(forApprover.overrides.map((row) => row.subject)).toContain(
-      "APPROVED_PURCHASE_AMOUNT"
-    );
+    expect(forFinance.overrides.map((row) => row.subject)).toContain("SUBMITTED_QUOTATION");
+    expect(JSON.stringify(forFinance.overrides)).toContain("18,902");
   });
 
   test("a reconciliation note is withheld from sales for its REASON, not its figures", async () => {
@@ -4116,6 +4113,24 @@ describe("the correction history refuses to invent money", () => {
   test("a magnitude past exact integer arithmetic is omitted, not rounded", async () => {
     const row = await withStoredOverride("9007199254740993");
     expect(row?.previousAmountMinor).toBeUndefined();
+  });
+
+  test("a value with trailing junk is not read as the figure it starts with", async () => {
+    // Raised in adversarial review. Matching a delimited PREFIX accepted every
+    // one of these and rendered a confident 150,000 — and this column is a plain
+    // string, so a repair script or a bad import can put anything in it. The
+    // whole value has to be a form this module's writers actually produce.
+    for (const value of [
+      "150000000 garbage",
+      "150000000 (truncated",
+      "150000000 (MANUAL @ 85% LTV, approved by u_1) and then some",
+      "150000000\t(MANUAL)",
+      "150000000  (MANUAL)",
+    ]) {
+      const row = await withStoredOverride(value);
+      expect(row?.previousAmountMinor).toBeUndefined();
+      expect(row?.newAmountMinor).toBeUndefined();
+    }
   });
 
   test("an audit field this product cannot name is not shown at all", async () => {

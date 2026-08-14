@@ -275,37 +275,31 @@ const AUDIT_SUBJECTS = {
 type AuditSubject = (typeof AUDIT_SUBJECTS)[keyof typeof AUDIT_SUBJECTS];
 
 /**
- * The subjects only a finance caller may read, and WHY each one is here.
+ * The whole correction history is finance-only, because EVERY entry carries a
+ * free-text reason and free text cannot be classified.
  *
- * `APPROVED_PURCHASE_AMOUNT` because the figure itself is withheld by
- * `redactSettlementEvidence`, and its rows spell that figure out.
+ * The gate started as the approved-amount predicate applied to the whole array,
+ * became per-subject when that looked too coarse, and came back here when an
+ * adversarial reviewer pointed at the one field the subject cannot speak for.
+ * `recordSubmittedQuotation` takes an unrestricted `overrideReason`, and a
+ * manager correcting a quotation writes what actually happened — "adjusted after
+ * the company approved 18,902". The subject of that row is the quotation, which
+ * a sales caller may see; the sentence is the approved amount, which they may
+ * not. Returning the entry and withholding the figure would have handed over the
+ * figure in prose, which is precisely the failure `redactSettlementEvidence`
+ * documents for `approvedPurchaseNotes`.
  *
- * `RECONCILIATION_FLAG` because of its REASON. `clearReconciliation` stores the
- * note a finance user wrote about what they checked, and those notes quote deal
- * figures as a matter of course ("agrees with the approved 18,902") — the same
- * free-text route `redactSettlementEvidence` already documents for
- * `approvedPurchaseNotes`. The old all-or-nothing gate hid these rows from the
- * sales floor as a side effect; moving to per-subject gating would have opened
- * them, so the reason they were closed is now written down instead of accidental.
- * Reconciliation is a finance task in any case, and the sales floor has no use
- * for its working notes.
+ * So the rule is the one that can actually be enforced: a caller who may not see
+ * the approved purchase amount does not read this deal's corrections at all. It
+ * costs a salesperson the knowledge that their own quotation was corrected —
+ * genuinely useful, and worth returning as a reason-less entry once there is a
+ * shape for one. That is a feature to design, not a redaction to improvise into
+ * a money screen during review.
  *
- * `SUBMITTED_QUOTATION` is deliberately NOT here. The quotation is visible to
- * every caller of this query, its corrections are usually made BY the sales user
- * reading them, and its reason is written about a figure they can already see.
+ * The registry above still earns its place: it is what names each entry for the
+ * people who CAN see it, and what stops a row being rendered as the wrong figure.
+ * This decides only who reads them.
  */
-const FINANCE_ONLY_SUBJECTS: ReadonlySet<AuditSubject> = new Set([
-  "APPROVED_PURCHASE_AMOUNT",
-  "RECONCILIATION_FLAG",
-  // The four accounting subjects, for the same reason and then some: their
-  // reasons are written by finance people about costs, write-offs and invoices,
-  // and cost figures are gated by VIEW_COST_PRICE everywhere else in this
-  // codebase. Opening them here would be a new door into the same room.
-  "ACCOUNTING_CLASSIFICATION",
-  "CUSTODY_SETTLEMENT",
-  "DEAL_COST",
-  "LEGAL_INVOICE",
-]);
 
 /**
  * WHAT HAPPENED to it. Four events, named rather than inferred from prose.
@@ -346,10 +340,19 @@ type CorrectionProjection = {
  */
 function decodeApprovedAmount(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
-  // DELIMITED, not merely leading. `^(\d+)` alone reads "12.5" as 12 and renders
-  // it as twelve minor units — a plausible-looking figure produced by silently
-  // truncating a decimal, which is worse than showing nothing.
-  const match = /^(\d+)(?=$|[\s(])/.exec(value.trim());
+  // ANCHORED over the WHOLE value, against the only two forms this module's
+  // writers produce: the bare integer, or the integer followed by the
+  // parenthesised decision.
+  //
+  // Matching a delimited prefix was not enough. `^(\d+)(?=$|[\s(])` accepts
+  // "150000000 garbage" and "150000000 (truncated" and renders both as a
+  // confident 150,000 — and the schema types this column as a plain string, so a
+  // repair script or a bad import can put anything in it. A value this function
+  // does not fully recognise is a value it does not understand, and the contract
+  // is that it shows nothing rather than something believable. Raised in
+  // adversarial review; the earlier form only fixed the decimal case ("12.5"
+  // read as twelve minor units).
+  const match = /^(\d+)(?: \(.*\))?$/.exec(value.trim());
   if (!match) return undefined;
   const parsed = Number(match[1]);
   // Fails closed on anything outside the range money can be counted in.
@@ -441,23 +444,35 @@ function presentCorrection(
  * event this exists to record — reintroducing the defect for exactly the deals
  * that have already hit it. Reading the rows needs no backfill to be right.
  *
- * The read is bounded by the corrections on ONE application — a handful of rows
- * on a deal that has been corrected, none on one that has not — and `getEconomics`
- * already collects the same set for the same application.
+ * Two indexed lookups of at most one row each, never a scan. Collecting the
+ * deal's corrections and filtering in memory read fine on any deal anyone has
+ * seen, and that is exactly what makes it the wrong shape here: this runs on the
+ * path that sets the figure the entire funding split derives from, quotation
+ * corrections carry uncapped free text, and enough of them would push this
+ * mutation past Convex's transaction read limit — turning "somebody wrote a lot
+ * of notes" into "this deal can no longer be approved". Raised in adversarial
+ * review; `getEconomics` having the same shape is not a bound on a mutation.
  */
 async function approvalWasWithdrawn(
   ctx: MutationCtx,
   applicationId: Id<"financeApplications">
 ): Promise<boolean> {
-  const rows = await ctx.db
-    .query("financeApplicationOverrides")
-    .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
-    .collect();
-  return rows.some(
-    (row) =>
-      row.field === APPROVED_AMOUNT_FIELD &&
-      (row.newValue === APPROVAL_WITHDRAWN || row.newValue === APPROVAL_SUPERSEDED)
-  );
+  const sentinel = async (newValue: string) =>
+    await ctx.db
+      .query("financeApplicationOverrides")
+      .withIndex("by_application_field_value", (q) =>
+        q
+          .eq("applicationId", applicationId)
+          .eq("field", APPROVED_AMOUNT_FIELD)
+          .eq("newValue", newValue)
+      )
+      .first();
+
+  // Both, because either one means the amount left the record. Checked in
+  // sequence rather than in parallel only because the first is by far the more
+  // common and short-circuits.
+  if (await sentinel(APPROVAL_WITHDRAWN)) return true;
+  return (await sentinel(APPROVAL_SUPERSEDED)) !== null;
 }
 
 async function recordOverride(
@@ -916,28 +931,27 @@ export const getEconomics = query({
       /**
        * The corrections on this deal, newest first — with the person named.
        *
-       * Gated PER SUBJECT, not per array — see `FINANCE_ONLY_SUBJECTS` for
-       * which subjects are withheld and why. The predicate is the same one
-       * `redactSettlementEvidence` applies to the approved amount itself,
+       * WITHHELD ENTIRELY from a caller who may not see the approved purchase
+       * amount. Every entry carries a free-text `reason`, and free text cannot be
+       * classified: `recordSubmittedQuotation` takes an unrestricted
+       * `overrideReason`, so a correction whose SUBJECT is the quotation can have
+       * the approved amount written into its sentence. Returning such an entry
+       * and withholding the figure hands over the figure in prose — the exact
+       * route `redactSettlementEvidence` documents for `approvedPurchaseNotes`.
+       *
+       * The predicate is the one that helper applies to the amount itself,
        * imported rather than restated so the history and the number it describes
        * can never disagree about who may see them.
        *
-       * Withholding the WHOLE array on that predicate — which is what shipped —
-       * was both too much and too little. Too much, because a corrected
-       * quotation is not the withheld figure and vanished for every caller who
-       * could see the quotation perfectly well on the same screen. Too little,
-       * because it made the gate a property of the response rather than of the
-       * subject, so the next audit field added to this table would inherit
-       * whichever answer happened to be convenient.
-       *
-       * This closes ONE of the three named routes. It does not create the
-       * boundary — the other two (deriving the amount from the funded portion
+       * This closes ONE of the three routes that helper names. It does not create
+       * the boundary — the other two (deriving the amount from the funded portion
        * and the LTV, and reading it out of the free-text approval notes) are
-       * untouched, and that rework is tracked separately. Claiming otherwise
-       * here would be the "false assurance behind a longer comment" that helper
-       * warns about.
+       * untouched, and that rework is tracked separately. Claiming otherwise here
+       * would be the "false assurance behind a longer comment" it warns about.
        */
-      overrides: (
+      overrides: !canWorkDisbursement
+        ? []
+        : (
         await Promise.all(
           overrides
             // `changedAt` is `Date.now()` at the writing mutation, so two
@@ -953,9 +967,6 @@ export const getEconomics = query({
               const projected = presentCorrection(row);
               // A field this product cannot name, so it cannot say what changed.
               if (!projected) return undefined;
-              if (FINANCE_ONLY_SUBJECTS.has(projected.subject) && !canWorkDisbursement) {
-                return undefined;
-              }
               return {
                 _id: row._id,
                 reason: row.reason,
