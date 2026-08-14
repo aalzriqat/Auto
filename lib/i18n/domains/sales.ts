@@ -879,6 +879,17 @@ export const salesEn = {
    */
   FinalizeNeedsRouteAndPermission:
     "This deal is waiting on who the finance company pays, and that is recorded by the same person who closes the deal. Someone with permission to close it completes both.",
+  /**
+   * The stage with no exit, said out loud.
+   *
+   * Nothing in AutoFlow writes a gap resolution yet, so this stage can never
+   * complete — and the rail is sequential, so it hides every step after it. The
+   * server does not consult the gap at all, so the deal really can be finished;
+   * this points at the screen where those steps still work rather than leaving
+   * the operator on a page that names a step nobody can take. SCRUM-83.
+   */
+  GapResolutionUnavailable:
+    "The finance company approved less than the quotation, and recording who covers the difference is not available in AutoFlow yet — so this step cannot be completed here. The rest of the deal can still be handled from Finance Applications → Review.",
   ConfirmFinalizeTitle: "Close the deal",
   ConfirmFinalizeDesc:
     "The handover and the expected payment are on file, so the deal can be closed.",
@@ -1774,6 +1785,8 @@ export const salesAr = {
     "هذه المركبة تعود للمورد والصفقة ممولة، لذا يجب تسجيل الجهة التي تدفع لها شركة التمويل قبل إغلاق الصفقة. يُختار ذلك من طلبات التمويل ← مراجعة.",
   FinalizeNeedsRouteAndPermission:
     "هذه الصفقة بانتظار تحديد الجهة التي تدفع لها شركة التمويل، ويُسجّل ذلك من يملك صلاحية إغلاق الصفقة نفسها. يُكمل الخطوتين من يملك تلك الصلاحية.",
+  GapResolutionUnavailable:
+    "اعتمدت شركة التمويل مبلغاً أقل من عرض السعر، وتسجيل الجهة التي تتحمّل الفرق غير متاح في أوتوفلو بعد، لذا لا يمكن إتمام هذه الخطوة هنا. يمكن متابعة بقية الصفقة من طلبات التمويل ← مراجعة.",
   ConfirmFinalizeTitle: "إغلاق الصفقة",
   ConfirmFinalizeDesc: "التسليم والدفعة المتوقعة مسجَّلان، ويمكن إغلاق الصفقة.",
   FinalizeCreatesTheSale:

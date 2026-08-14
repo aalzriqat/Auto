@@ -296,6 +296,70 @@ describe("a step the server would refuse is not offered as a step", () => {
   });
 });
 
+describe("the stage that nothing can clear", () => {
+  /**
+   * SCRUM-83, found by this issue's own E2E once it stopped driving the review
+   * dialog. A finance company approving BELOW the quotation — the ordinary case,
+   * and the whole reason an appraisal gap exists — leaves `gapResolution` at
+   * PENDING_NEGOTIATION, and nothing in the product writes the values that would
+   * resolve it. The rail is strictly sequential, so that stage hides handover,
+   * settlement and every action after it.
+   *
+   * The deal is genuinely completable: no server mutation consults
+   * `gapResolution`. Pinned here so the state is characterised rather than
+   * discovered again, and so nobody later "fixes" it by quietly treating
+   * PENDING_NEGOTIATION as resolved.
+   */
+  test("says why it cannot be cleared here, and offers no action", () => {
+    grantTheWholeTail();
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        stages: [
+          { key: "APPRAISAL", state: "COMPLETE" },
+          { key: "GAP_RESOLUTION", state: "BLOCKED", blocker: "GapUnresolved" },
+          { key: "HANDOVER", state: "PENDING" },
+          { key: "SETTLEMENT", state: "PENDING" },
+        ],
+      })
+    );
+
+    renderCockpit();
+
+    const block = nextStepBlock();
+    // The blocker itself still says the gap is unresolved. This must not be
+    // softened — it is true, and the money question behind it is unanswered.
+    expect(within(block).getByText("BlockerGapUnresolved")).toBeTruthy();
+    // And now it also says why the step cannot be taken here, which is the
+    // difference between a blocked stage and a dead end.
+    expect(within(block).getByText("GapResolutionUnavailable")).toBeTruthy();
+    // No action, because there is none — not even a disabled one pretending
+    // the workflow exists.
+    expect(within(block).queryByRole("button")).toBeNull();
+  });
+
+  test("does not offer handover from behind the blocked gap", () => {
+    grantTheWholeTail();
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        stages: [
+          { key: "GAP_RESOLUTION", state: "BLOCKED", blocker: "GapUnresolved" },
+          { key: "HANDOVER", state: "PENDING" },
+          { key: "SETTLEMENT", state: "PENDING" },
+        ],
+      })
+    );
+
+    renderCockpit();
+
+    // The rail names the gap, so the gap is what the block answers for. Jumping
+    // the queue would be this screen overruling the rail about the deal's
+    // shape, which is the drift the whole cockpit exists to prevent.
+    expect(screen.queryByRole("button", { name: "RegisterHandoverAction" })).toBeNull();
+  });
+});
+
 describe("three permissions, not one", () => {
   test("a caller who may hand over but not register the payment is told, at each step", () => {
     // Exactly one of the three. Gating the tail on a single flag would either

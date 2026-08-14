@@ -40,7 +40,30 @@ const PURCHASE_LTV = "90";
 const VEHICLE_PRICE = "15000";
 const DOWN_PAYMENT = "3000";
 const QUOTATION = "13000";
-const APPROVED_PURCHASE = "12000";
+/**
+ * Approved AT the quotation, and the reason is not cosmetic.
+ *
+ * This was 12,000 — a 1,000 shortfall — and when the tail moved from the review
+ * dialog onto the real stage rail the spec stopped at
+ * _"الخطوة التالية: فجوة التخمين — لم تُحل فجوة التخمين"_. That is not a flake
+ * and it is not the rail being wrong: an approval below the quotation writes
+ * `gapResolution: PENDING_NEGOTIATION`, `deriveDealStages` does not count that
+ * as resolved, and **nothing in AutoFlow writes the values that would resolve
+ * it** — the recording workflow does not exist. The stage has no exit, and
+ * because the rail is sequential it hides every step after it. **SCRUM-83.**
+ *
+ * The old spec never saw this because it drove `Finance Applications → Review`,
+ * which ignores the rail entirely. That is the whole point of moving it.
+ *
+ * So the fixture approves in full, which is an ordinary outcome and leaves this
+ * spec testing what it is for — the workflow tail — instead of a stage nobody
+ * can clear. The blocked-gap state is NOT swept away with it: it is pinned in
+ * `DealCockpitWorkflowTail.test.tsx`, which asserts the rail still says the gap
+ * is unresolved and that the screen now explains why the step cannot be taken
+ * there. Raise this figure back above the quotation once SCRUM-83 ships a
+ * resolution step, and drive that step here.
+ */
+const APPROVED_PURCHASE = "13000";
 
 // A full deal: two sign-ins, a wizard, a credit decision, three recorded
 // figures, a handover and a finalize — each a real navigation against a real
@@ -353,12 +376,12 @@ test.describe("recording a financed deal's economics through the interface", () 
       await expect(approvalDialog).not.toBeVisible();
 
       // --- the derived economics, worked out by the server -----------------
-      // 12,000 at 90% = 10,800 funded, leaving 1,200 unfinanced. Asserted as
+      // 13,000 at 90% = 11,700 funded, leaving 1,300 unfinanced. Asserted as
       // figures rather than as "a panel appeared": a split that renders but
       // does not add up is the failure this is here to catch.
       await expect(managerPage.getByText("What that leaves")).toBeVisible();
-      await expect(managerPage.getByText(/10,800/).first()).toBeVisible();
-      await expect(managerPage.getByText(/1,200/).first()).toBeVisible();
+      await expect(managerPage.getByText(/11,700/).first()).toBeVisible();
+      await expect(managerPage.getByText(/1,300/).first()).toBeVisible();
 
       // --- handover, expected payment, and close — FROM THE COCKPIT ---------
       // SCRUM-78. This tail used to be driven through
@@ -382,7 +405,7 @@ test.describe("recording a financed deal's economics through the interface", () 
       await expect(handoverDialog).toContainText(
         "can no longer be corrected through the normal correction flow",
       );
-      await expect(handoverDialog.getByText(/12,000/).first()).toBeVisible();
+      await expect(handoverDialog.getByText(/13,000/).first()).toBeVisible();
       await handoverDialog.getByRole("button", { name: "Confirm handover" }).click();
       await expect(handoverDialog).not.toBeVisible();
 

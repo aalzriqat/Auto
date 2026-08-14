@@ -457,8 +457,53 @@ export function DealCockpit({
       ? deal.supplierSettlementRouteRequired
       : false;
 
+  /**
+   * The stage the rail is actually naming — the same one the view calls `live`.
+   *
+   * Read here rather than left implicit, because one branch below has to answer
+   * for a stage that has no action at all, and "return the handover entry and
+   * let the view filter it out" cannot express that.
+   */
+  const liveStage = deal?.stages.find(
+    (stage) => stage.state === "CURRENT" || stage.state === "BLOCKED"
+  );
+
   function buildWorkflowAction() {
     if (permissionsLoading || !deal) return undefined;
+
+    /**
+     * The stage nothing can clear — and the reason this screen must not simply
+     * go quiet on it.
+     *
+     * A finance company approving BELOW the submitted quotation is the ordinary
+     * case; it is the whole reason an appraisal gap exists.
+     * `approveDealerPurchaseAmount` then writes `PENDING_NEGOTIATION`, which
+     * `deriveDealStages` does not count as resolved — and **no code anywhere
+     * writes the values that would resolve it**. `convex/utils/financingEconomics.ts`
+     * says so itself: the recording workflow does not exist yet. So this stage
+     * has no exit, and because the rail is strictly sequential it hides handover,
+     * settlement and every action after it.
+     *
+     * No server mutation consults `gapResolution` — handover, expected payment
+     * and finalize all ignore it — so the deal is completable and the rail is
+     * merely refusing to name the step. Until SCRUM-78 that was survivable
+     * because the tail lived in the review dialog, which ignores the rail.
+     * Moving the tail here is what turns it into a dead end, so this change owes
+     * it an explanation rather than silence.
+     *
+     * Deliberately NOT an action, and deliberately not a relaxation of the
+     * blocked state. Who absorbs the shortfall — customer, dealership, or split
+     * — is a money decision that feeds the profit derivation, and inventing a
+     * way past it here would be answering that question by omission. SCRUM-83.
+     */
+    if (liveStage?.blocker === "GapUnresolved") {
+      return {
+        stageKey: liveStage.key,
+        actionKey: "",
+        onStart: () => {},
+        unavailableReasonKey: "GapResolutionUnavailable",
+      };
+    }
 
     // Handover first: the step the rail names on a deal whose economics are
     // recorded, and the one the product could not perform at all.
