@@ -722,7 +722,18 @@ export function DealCockpit({
           setHandoverSubmitting(true);
           setHandoverError(null);
           try {
-            await registerVehicleHandover({ orgId, applicationId, notes: values.notes });
+            await registerVehicleHandover({
+              orgId,
+              applicationId,
+              notes: values.notes,
+              // Threaded through so the server seals the figure this operator
+              // actually read. Omitted entirely when they were shown none —
+              // `null` here means the money block was withheld from them, not
+              // that the deal has no approved amount.
+              ...(values.verifiedApprovedAmountMinor !== null
+                ? { verifiedApprovedAmountMinor: values.verifiedApprovedAmountMinor }
+                : {}),
+            });
             toast.success(t("HandoverRegistered"));
             setConfirmingHandover(false);
           } catch (error) {
@@ -1135,7 +1146,10 @@ export function DealCockpitView({
     submitting: boolean;
     error: string | null;
     onOpenChange: (open: boolean) => void;
-    onSubmit: (values: { notes?: string }) => void | Promise<void>;
+    onSubmit: (values: {
+      notes?: string;
+      verifiedApprovedAmountMinor: number | null;
+    }) => void | Promise<void>;
   };
   /** The expected-payment form's own state. */
   expectedPayment?: {

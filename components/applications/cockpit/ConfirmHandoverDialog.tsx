@@ -63,7 +63,12 @@ type ConfirmHandoverDialogProps = {
   money: (minor: number) => string;
   t: (key: string) => string;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (values: { notes?: string }) => void;
+  /**
+   * Carries back the amount this dialog actually DISPLAYED, so the server can
+   * refuse to seal a different one. Null where the caller was shown nothing —
+   * they cannot have verified a figure they were never given.
+   */
+  onSubmit: (values: { notes?: string; verifiedApprovedAmountMinor: number | null }) => void;
 };
 
 export function ConfirmHandoverDialog({
@@ -197,7 +202,15 @@ export function ConfirmHandoverDialog({
           </Button>
           <Button
             disabled={submitting}
-            onClick={() => onSubmit({ notes: notes.trim() || undefined })}
+            onClick={() =>
+              onSubmit({
+                notes: notes.trim() || undefined,
+                // The figure rendered above, not a fresh read. The point is to
+                // seal what this operator verified, so it has to be the value
+                // they were looking at when they pressed the button.
+                verifiedApprovedAmountMinor: approvedAmountMinor,
+              })
+            }
           >
             {submitting ? (
               <Loader2 className="h-4 w-4 animate-spin" />

@@ -184,6 +184,8 @@ async function runDeal(
       treatment: "APPLY_TO_DEALER_AMOUNT" | "APPLY_TO_TRANSACTION_SETTLEMENT" | "REFUND_TO_CUSTOMER" | "FORFEITED" | "OTHER";
       reason?: string;
     };
+    /** Runs after the route is chosen and before the vehicle goes out. */
+    beforeHandover?: (applicationId: Id<"financeApplications">) => Promise<void>;
   } = {}
 ) {
   const downPayment = opts.downPayment ?? 0;
@@ -235,6 +237,15 @@ async function runDeal(
       amount: opts.depositAfterRoute,
     });
   }
+
+  // Anything that must be on the record BEFORE the vehicle goes out.
+  //
+  // Handover seals the approved amount: `approveDealerPurchaseAmount` now
+  // refuses to change a recorded one afterwards, as `reopenApproval` and
+  // `recordAppraisal` already did. A case that needs a CORRECTION on the record
+  // — an override history, say — has to make it while the door is still open,
+  // which is also the only order an operator could achieve.
+  await opts.beforeHandover?.(applicationId);
 
   await s.asUser.mutation(api.applications.registerVehicleHandover, { orgId: s.orgId, applicationId });
   await s.asUser.mutation(api.applications.registerExpectedPayment, {
@@ -4660,22 +4671,32 @@ describe("a settlement advice that contradicts the approval", () => {
     await s.t.run(async (ctx) => {
       await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
     });
-    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: false });
-    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
-      orgId: s.orgId,
-      applicationId,
-      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
-      source: "MANUAL_ENTRY",
+    // Recorded BEFORE the handover, which is the only order the product allows
+    // now that the vehicle going out seals the approved amount — and the order
+    // an operator would have had to follow anyway. The two approvals are here
+    // to populate an override history, not to assert that a post-handover
+    // correction is legal; that one is refused, and proved refused elsewhere.
+    const { applicationId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      finalize: false,
+      beforeHandover: async (id) => {
+        await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+          orgId: s.orgId,
+          applicationId: id,
+          submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+          source: "MANUAL_ENTRY",
+        });
+        for (const amount of [FIRST_APPROVED, SECOND_APPROVED]) {
+          await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+            orgId: s.orgId,
+            applicationId: id,
+            approvedAmountMinor: amount * SCALE,
+            basis: "MANUAL",
+            notes: `Approved at ${amount}.`,
+          });
+        }
+      },
     });
-    for (const amount of [FIRST_APPROVED, SECOND_APPROVED]) {
-      await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-        orgId: s.orgId,
-        applicationId,
-        approvedAmountMinor: amount * SCALE,
-        basis: "MANUAL",
-        notes: `Approved at ${amount}.`,
-      });
-    }
     await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
     await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
       orgId: s.orgId,

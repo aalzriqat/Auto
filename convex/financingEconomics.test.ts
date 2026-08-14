@@ -3701,3 +3701,138 @@ describe("the appraisal the anomaly verdict is judged against", () => {
     expect(economics.approvedAmountIsFarFromEvidence).toBe(true);
   });
 });
+
+/**
+ * The one-way door, tested as a door rather than as a sentence.
+ *
+ * SCRUM-78 put a confirmation in front of the handover that tells the operator,
+ * in both languages, that *after the vehicle is handed over the recorded
+ * approved amount can no longer be corrected through the normal correction
+ * flow* — and shows them the figure so the verification it asks for can
+ * actually be done.
+ *
+ * Codex asked the obvious question nobody had: is that true? `reopenApproval`
+ * refuses after `vehicleHandoverAt`, and `recordAppraisal`'s superseding branch
+ * refuses too — but `approveDealerPurchaseAmount` is a THIRD writer of the same
+ * number, and it had no such guard. Re-approving is a supported path, not an
+ * exotic one: the mutation records an override for a materially changed
+ * approval, so it fully expects to be called again.
+ *
+ * That made the dialog's central claim false. A screen that tells an operator a
+ * figure is now permanent, while a sibling writer quietly rewrites it, is worse
+ * than a screen that says nothing — it converts an unnoticed risk into a
+ * verified one.
+ *
+ * Two failures, two guards. The first is ordering: no approval may land after
+ * the vehicle has gone out. The second is the stale confirmation the first does
+ * not cover — an approval that commits between the dialog rendering a figure
+ * and the operator confirming it, so the handover seals an amount nobody
+ * verified.
+ */
+describe("handover seals the approved amount, and the amount that was verified", () => {
+  /** A deal with a quotation, an appraisal and an approval on the record. */
+  async function approvedDeal() {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+    });
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { status: "APPROVED" }));
+    return { seed, applicationId };
+  }
+
+  async function approvedAndHandedOver() {
+    const { seed, applicationId } = await approvedDeal();
+    await seed.asUser.mutation(api.applications.registerVehicleHandover, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    return { seed, applicationId };
+  }
+
+  test("no approval can be recorded once the vehicle has gone out", async () => {
+    const { seed, applicationId } = await approvedAndHandedOver();
+
+    // The gap Codex found. `reopenApproval` and `recordAppraisal` both refuse
+    // here; this writer did not, so the correction the dialog promised was
+    // impossible could be made by simply recording the approval again.
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: seed.orgId,
+        applicationId,
+        approvedAmountMinor: jod(14_000),
+        basis: "MANUAL",
+        notes: "Company revised it upward after delivery.",
+      })
+    ).rejects.toThrow(/handed over/i);
+
+    // And the figure on the record is untouched — the refusal is a refusal, not
+    // a partial write that leaves the deal describing two different amounts.
+    const app = await readApp(seed, applicationId);
+    expect(app?.approvedDealerPurchaseAmountMinor).toBe(jod(11_500));
+  });
+
+  test("handover refuses when the amount moved after the operator read it", async () => {
+    const { seed, applicationId } = await approvedDeal();
+
+    // The operator's screen rendered 11,500 and they are about to confirm. A
+    // second approver commits 12,750 in the meantime — legal, because the
+    // vehicle has not gone out yet, so the ordering guard above does not apply.
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(12_750),
+      basis: "MANUAL",
+      notes: "Revised before delivery.",
+    });
+
+    // Confirming now would seal a figure the operator never saw, under a dialog
+    // that had just asked them to verify a different one.
+    await expect(
+      seed.asUser.mutation(api.applications.registerVehicleHandover, {
+        orgId: seed.orgId,
+        applicationId,
+        verifiedApprovedAmountMinor: jod(11_500),
+      })
+    ).rejects.toThrow(/changed/i);
+
+    // Nothing was sealed by the refusal: the door is still open, and the
+    // operator can re-read the deal and confirm the amount that is really on it.
+    const stillOpen = await readApp(seed, applicationId);
+    expect(stillOpen?.vehicleHandoverAt).toBeUndefined();
+
+    await seed.asUser.mutation(api.applications.registerVehicleHandover, {
+      orgId: seed.orgId,
+      applicationId,
+      verifiedApprovedAmountMinor: jod(12_750),
+    });
+    const sealed = await readApp(seed, applicationId);
+    expect(sealed?.vehicleHandoverAt).toBeTypeOf("number");
+  });
+
+  test("a caller who was shown no figure is not asked to have verified one", async () => {
+    const { seed, applicationId } = await approvedDeal();
+
+    // `redactSettlementEvidence` withholds the amount from callers without the
+    // finance permission, so their dialog states the consequence without being
+    // able to show the figure. Demanding a verification they were never given
+    // the means to make would block handover for them entirely.
+    await seed.asUser.mutation(api.applications.registerVehicleHandover, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    const app = await readApp(seed, applicationId);
+    expect(app?.vehicleHandoverAt).toBeTypeOf("number");
+  });
+});

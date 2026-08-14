@@ -1442,6 +1442,41 @@ export const approveDealerPurchaseAmount = mutation({
     if (app.status === "CLOSED" || app.status === "CANCELLED") {
       throw new ConvexError("This application is closed. Its approval can no longer be changed.");
     }
+    /**
+     * The THIRD writer of this number, and the one that had no door on it.
+     *
+     * `reopenApproval` refuses after handover, and `recordAppraisal`'s
+     * superseding branch refuses too — so the product's rule is already that
+     * the vehicle going out seals the approved amount. This mutation is the
+     * other way to change it, and re-approving is a supported path rather than
+     * an exotic one: the override recorded below exists precisely because a
+     * second call with a different figure is expected.
+     *
+     * Without this guard the handover confirmation SCRUM-78 put in front of the
+     * operator — "after the vehicle is handed over the recorded approved amount
+     * can no longer be corrected through the normal correction flow" — was
+     * simply untrue, and a screen that tells someone a figure is now permanent
+     * while a sibling writer rewrites it is worse than one that says nothing.
+     *
+     * Scoped to a CORRECTION, not to every write — and the test suite is what
+     * insisted on the distinction. A first guard on `vehicleHandoverAt` alone
+     * failed 63 existing cases, all of them recording economics on a deal that
+     * was handed over with none: `assertDealerEconomicsRecorded` lets a deal
+     * with no quotation through, so that order is genuinely reachable, and
+     * SCRUM-61 exists precisely to let such a deal record the approval it never
+     * had. Blocking that would have created the dead end one step earlier than
+     * the one that issue is about.
+     *
+     * The claim the dialog makes is about a figure the operator READ, and it
+     * only shows one when there is one. Where no amount was ever recorded there
+     * is nothing to correct and nothing was verified, so the door does not
+     * apply.
+     */
+    if (app.vehicleHandoverAt && app.approvedDealerPurchaseAmountMinor !== undefined) {
+      throw new ConvexError(
+        "The vehicle has already been handed over on this deal, so the approved purchase amount can no longer be changed. Cancel the application to reverse it instead."
+      );
+    }
     if (app.submittedQuotationMinor === undefined) {
       throw new ConvexError(
         "Record the quotation sent to the finance company before recording what it approved."

@@ -2344,6 +2344,29 @@ export const registerVehicleHandover = mutation({
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),
     notes: v.optional(v.string()),
+    /**
+     * The approved amount the operator was actually shown when they confirmed.
+     *
+     * Handover is the moment that figure becomes permanent, and SCRUM-78's
+     * confirmation asks the operator to verify it before crossing. Between the
+     * dialog rendering a number and the operator pressing confirm, another
+     * approver can legitimately record a different one — the vehicle has not
+     * gone out yet, so nothing refuses them. Sealing on the strength of a
+     * verification performed against a figure that is no longer on the deal is
+     * exactly the confidence this dialog was built to create, pointed at the
+     * wrong number.
+     *
+     * Compared inside the mutation's own transaction, so there is no window
+     * between the check and the write.
+     *
+     * OPTIONAL because a caller who was shown nothing cannot have verified
+     * anything: `redactSettlementEvidence` withholds the amount from callers
+     * without the finance permission, and their dialog states the consequence
+     * without being able to display the figure. Demanding a verification they
+     * were never given the means to make would block handover for them
+     * entirely, which is a worse failure than the one this prevents.
+     */
+    verifiedApprovedAmountMinor: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REGISTER_VEHICLE_HANDOVER]);
@@ -2351,6 +2374,14 @@ export const registerVehicleHandover = mutation({
     if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
     if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before registering handover.");
     if (app.vehicleHandoverAt) throw new ConvexError("Vehicle handover has already been registered.");
+    if (
+      args.verifiedApprovedAmountMinor !== undefined &&
+      args.verifiedApprovedAmountMinor !== app.approvedDealerPurchaseAmountMinor
+    ) {
+      throw new ConvexError(
+        "The approved purchase amount changed while you were confirming the handover. Re-check the figures on the deal before handing the vehicle over."
+      );
+    }
     assertDealerEconomicsRecorded(app, "handing over the vehicle");
 
     const now = Date.now();

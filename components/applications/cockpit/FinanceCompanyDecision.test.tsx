@@ -1382,8 +1382,15 @@ describe("handover states the door it closes, with the figures to check", () => 
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "ConfirmHandoverAction" }));
 
+    // The payload carries the figure the dialog DISPLAYED alongside the notes.
+    // Not decoration: the server refuses to seal a different one, so a dialog
+    // that dropped this would be back to sealing whatever happens to be on the
+    // deal at write time rather than what the operator verified.
     await waitFor(() =>
-      expect(onSubmit).toHaveBeenCalledWith({ notes: "collected by the customer" })
+      expect(onSubmit).toHaveBeenCalledWith({
+        notes: "collected by the customer",
+        verifiedApprovedAmountMinor: 150_000 * JOD,
+      })
     );
   });
 });
