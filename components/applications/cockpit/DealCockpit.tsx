@@ -305,6 +305,7 @@ export function DealCockpit({
     previousAmountMinor: row.previousAmountMinor,
     newAmountMinor: row.newAmountMinor,
     newIsReopened: row.newIsReopened,
+    newIsCleared: row.newIsCleared,
     reason: row.reason,
     changedByName: row.changedByName,
     // Guarded, never formatted raw: a corrupt timestamp reaches the client

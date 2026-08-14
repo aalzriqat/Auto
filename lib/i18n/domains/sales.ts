@@ -817,6 +817,8 @@ export const salesEn = {
   CorrectionHistoryIntro:
     "What was changed, by whom, and why. A corrected figure would otherwise be indistinguishable from one that was always right.",
   CorrectionValueReopened: "taken off the record",
+  /** A new appraisal replaced the evidence, rather than a person correcting it. */
+  CorrectionValueCleared: "withdrawn by a new appraisal",
   CorrectionByUnknownUser: "A user who no longer exists",
   DerivedEconomicsHeading: "What that leaves",
   DerivedEconomicsNote: "Worked out by AutoFlow from the two figures above. Not editable.",
@@ -1673,6 +1675,7 @@ export const salesAr = {
   CorrectionHistoryIntro:
     "ما الذي تغيّر، ومن غيّره، ولماذا. بدون ذلك لا يمكن تمييز رقم مصحَّح عن رقم كان صحيحاً منذ البداية.",
   CorrectionValueReopened: "رُفع عن السجل",
+  CorrectionValueCleared: "أُلغي بتخمين جديد",
   CorrectionByUnknownUser: "مستخدم لم يعد موجوداً",
   DerivedEconomicsHeading: "ما ينتج عن ذلك",
   DerivedEconomicsNote: "يحتسبه أوتوفلو من الرقمين أعلاه، وغير قابل للتعديل.",

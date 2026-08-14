@@ -3764,3 +3764,94 @@ describe("the correction history refuses to invent money", () => {
     expect(bare?.previousAmountMinor).toBe(15_000_000);
   });
 });
+
+/**
+ * A withdrawn approval says it was withdrawn.
+ *
+ * Found in adversarial review of PR #233. `recordAppraisal` writes the sentinel
+ * `"cleared"` when new evidence supersedes the approval that rested on it
+ * (`convex/financingEconomics.ts:1339`), and the first cut of the projection
+ * knew only `"reopened"`. So the row came back with no amount and no state, and
+ * the panel rendered a bare previous figure with no arrow and nothing saying it
+ * had been withdrawn — on the one screen whose entire job is explaining why a
+ * number changed, that reads as "unchanged".
+ *
+ * Distinct from a reopen on purpose: a reopen is a person correcting a figure,
+ * this is new evidence invalidating one. Conflating them would answer "what
+ * changed" and never "why".
+ */
+describe("an approval withdrawn by new evidence is reported as withdrawn", () => {
+  test("the projection reports the cleared state, not a silent blank", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_800),
+      providerType: "FINANCE_COMPANY",
+      providerName: "First assessor",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_800),
+      basis: "APPRAISAL",
+    });
+
+    // New evidence arrives and invalidates the approval that rested on it.
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(10_500),
+      providerType: "FINANCE_COMPANY",
+      providerName: "Second assessor",
+      appraisedAt: Date.now(),
+      reappraisalReason: "Company re-inspected the vehicle.",
+    });
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    const cleared = economics.overrides.find(
+      (row) => row.field === "approvedDealerPurchaseAmountMinor"
+    );
+
+    expect(cleared).toBeDefined();
+    // The figure it moved FROM survives...
+    expect(cleared?.previousAmountMinor).toBe(jod(11_800));
+    // ...and the row says what happened rather than going blank.
+    expect(cleared?.newIsCleared).toBe(true);
+    expect(cleared?.newIsReopened).toBe(false);
+    // The sentinel is a STATE, never presented as money.
+    expect(cleared?.newAmountMinor).toBeUndefined();
+  });
+
+  test("a reopen and a clearance are not conflated", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_800),
+      basis: "MANUAL",
+      notes: "Negotiated directly.",
+    });
+    await seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "Entered from the wrong advice.",
+    });
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    // A person correcting a figure — the other cause entirely.
+    expect(economics.overrides[0]?.newIsReopened).toBe(true);
+    expect(economics.overrides[0]?.newIsCleared).toBe(false);
+  });
+});

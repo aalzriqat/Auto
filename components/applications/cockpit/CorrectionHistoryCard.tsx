@@ -41,6 +41,15 @@ export type CorrectionEntry = {
   newAmountMinor?: number;
   /** The reopen path writes a state, not a figure. Said in words, not shown raw. */
   newIsReopened: boolean;
+  /**
+   * A superseding appraisal withdrew the approval — also a state, not a figure.
+   *
+   * Distinct from a reopen because the cause is different and the operator's
+   * next step differs with it: a reopen is somebody correcting a figure, this
+   * is new evidence invalidating one. A history that conflated them would
+   * answer "what changed" and not "why".
+   */
+  newIsCleared: boolean;
   reason: string;
   changedByName?: string;
   /**
@@ -80,9 +89,11 @@ export function CorrectionHistoryCard({
             entry.previousAmountMinor === undefined ? null : money(entry.previousAmountMinor);
           const after = entry.newIsReopened
             ? t("CorrectionValueReopened")
-            : entry.newAmountMinor === undefined
-              ? null
-              : money(entry.newAmountMinor);
+            : entry.newIsCleared
+              ? t("CorrectionValueCleared")
+              : entry.newAmountMinor === undefined
+                ? null
+                : money(entry.newAmountMinor);
           return (
             <div key={entry.id} className="space-y-1 border-s-2 ps-3">
               {/* The reason FIRST, because it is the only part written by a

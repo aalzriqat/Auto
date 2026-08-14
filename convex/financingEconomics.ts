@@ -249,6 +249,8 @@ function presentOverrideValues(row: Doc<"financeApplicationOverrides">): {
   previousAmountMinor?: number;
   newAmountMinor?: number;
   newIsReopened: boolean;
+  /** A superseding appraisal withdrew the approval this row describes. */
+  newIsCleared: boolean;
 } {
   // Only money fields carry a leading minor-unit integer, and only they should
   // ever be rendered as a figure. Keyed off the field NAME rather than off
@@ -275,12 +277,22 @@ function presentOverrideValues(row: Doc<"financeApplicationOverrides">): {
     return parsed;
   };
 
+  // The sentinels. Both are STATES, not figures, so each is reported as one and
+  // the client says it in the operator's language.
+  //
+  // `cleared` is the one this projection originally missed. `recordAppraisal`
+  // writes it when a new appraisal supersedes the evidence an approval rested
+  // on, and it renders through exactly the same panel — so without it the row
+  // showed a bare previous amount with no arrow and nothing saying the figure
+  // had been withdrawn. On the one screen whose entire job is explaining why a
+  // number changed, that reads as "unchanged".
+  const sentinel = row.newValue === "reopened" || row.newValue === "cleared";
+
   return {
     previousAmountMinor: leadingAmount(row.previousValue),
-    // The sentinel the reopen path writes. It is a state, not a figure, so it
-    // is reported as one and the client says it in the operator's language.
     newIsReopened: row.newValue === "reopened",
-    newAmountMinor: row.newValue === "reopened" ? undefined : leadingAmount(row.newValue),
+    newIsCleared: row.newValue === "cleared",
+    newAmountMinor: sentinel ? undefined : leadingAmount(row.newValue),
   };
 }
 

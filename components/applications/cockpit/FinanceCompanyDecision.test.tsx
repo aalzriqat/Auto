@@ -1231,6 +1231,7 @@ describe("corrections are visible on the deal, not just recorded", () => {
     field: "approvedDealerPurchaseAmountMinor",
     previousAmountMinor: 150_000 * JOD,
     newIsReopened: true,
+    newIsCleared: false,
     // Deliberately carries no digits. A reason that repeats the figure makes
     // every "is the amount legible" assertion match the prose instead, which is
     // how a money assertion passes while showing nothing of the sort.
@@ -1296,6 +1297,7 @@ describe("corrections are visible on the deal, not just recorded", () => {
             field: "approvedDealerPurchaseAmountMinor",
             newAmountMinor: 15_000 * JOD,
             newIsReopened: false,
+    newIsCleared: false,
             reason: "recorded the amount the company actually approved",
             changedByName: "Layla Mansour",
             changedAtLabel: "13 Aug 2026 18:25",
