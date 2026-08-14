@@ -123,11 +123,20 @@ export async function registerHandover(
   applicationId: unknown,
   extra: Record<string, unknown> = {}
 ): Promise<number> {
-  const deal = await as.query(api.applications.dealCockpit, { orgId, applicationId });
+  // `applications.handoverStamp`, not `dealCockpit` — the stamp query is
+  // authorized on the permission to hand over, so this works for any caller
+  // the mutation itself would accept. Reading it from `dealCockpit` made the
+  // helper demand `view:sales` too, and a test proving `finalizeDeal` refuses
+  // an under-permissioned caller then failed in the harness rather than at its
+  // assertion.
+  const economicsStamp = await as.query(api.applications.handoverStamp, {
+    orgId,
+    applicationId,
+  });
   return as.mutation(api.applications.registerVehicleHandover, {
     orgId,
     applicationId,
-    economicsStamp: deal?.economicsStamp,
+    economicsStamp,
     ...extra,
   });
 }

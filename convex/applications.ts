@@ -44,6 +44,9 @@ import {
   type ObligationState,
   type SettlementObligations,
 } from "./utils/financingEconomics";
+// The anomaly verdict, from the module that owns it. Both handover
+// confirmations must warn about the same deals; see the helper's own note.
+import { approvedAmountIsFarFromEvidenceFor } from "./financingEconomics";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
@@ -1420,6 +1423,24 @@ export const get = query({
       // token, not evidence: a caller whose amounts were withheld above still
       // has to prove the deal did not move under them.
       economicsStamp: economicsStamp(app),
+      /**
+       * The server's anomaly verdict, so this screen's handover confirmation
+       * warns about the same deals the cockpit's does.
+       *
+       * Both entry points open the SAME one-way door. Passing `false` here — as
+       * this screen briefly did — meant the cockpit could say an amount is
+       * unlike the quotation and every appraisal on file while the other
+       * confirmation presented it as ordinary. Read from the shared derivation
+       * rather than recomputed, so the two cannot form separate opinions.
+       */
+      approvedAmountIsFarFromEvidence: approvedAmountIsFarFromEvidenceFor(
+        app,
+        await ctx.db
+          .query("financeAppraisals")
+          .withIndex("by_application", (q) => q.eq("applicationId", args.applicationId))
+          .collect(),
+        visibleApp.approvedDealerPurchaseAmountMinor !== undefined
+      ),
       customer,
       vehicle,
       company,
@@ -1459,31 +1480,49 @@ export const get = query({
  * A stamp of the economics a handover confirmation is about, issued to every
  * caller who can load the deal and demanded back by `registerVehicleHandover`.
  *
- * Deliberately NOT redacted and NOT permission-shaped. It carries no figure a
- * caller could not otherwise obtain — it is a comparison token, and a caller
- * who cannot see the amounts still needs one, because the deal must not be
- * sealed against figures that moved regardless of who is looking. Keying this
- * to visibility is what left default SALES unguarded and dead-ended
- * `confirm:finance_disbursement` roles at the same time.
+ * Deliberately NOT permission-shaped: a caller whose amounts are redacted still
+ * needs one, because the deal must not be sealed against figures that moved
+ * regardless of who is looking. Keying this to visibility is what left default
+ * SALES unguarded and dead-ended `confirm:finance_disbursement` roles at once.
  *
- * Covers exactly the three figures the confirmation dialogs display. A change
- * to any of them invalidates a confirmation in flight, which is the point;
- * adding unrelated fields would refuse handovers for edits the operator was
- * never asked to verify.
- *
- * Plain text rather than a hash so a refusal can be diagnosed from a log line
- * without recomputing anything. Versioned so the shape can change without a
- * stale client's stamp silently comparing equal to a new one.
+ * And deliberately CARRYING NO MONEY. The first version of this encoded the
+ * approved amount and its split directly — `v1|<approved>|<funded>|<contribution>`
+ * — and then projected it to every caller, handing the exact figures
+ * `redactSettlementEvidence` withholds to the callers it withholds them from,
+ * legible at a glance. A digest would not have saved it: the format is known
+ * and at 100% LTV the search collapses to a single figure. So the token is a
+ * revision counter and says nothing about the deal but that it changed.
  */
 function economicsStamp(app: Doc<"financeApplications">): string {
-  const figure = (value: number | undefined) => (value === undefined ? "-" : String(value));
-  return [
-    "v1",
-    figure(app.approvedDealerPurchaseAmountMinor),
-    figure(app.financeCompanyFundedPortionMinor),
-    figure(app.dealerContributionMinor),
-  ].join("|");
+  return `v2|${app.economicsRevision ?? 0}`;
 }
+
+/**
+ * The handover stamp on its own, for a caller who may perform the handover.
+ *
+ * `dealCockpit` and `applications.get` both authorize on `view:sales`, and a
+ * role can hold `register:vehicle_handover` without it. Requiring a stamp those
+ * callers had no query to obtain would have dead-ended them exactly as keying
+ * the old obligation to `view:finance` dead-ended `confirm:finance_disbursement`
+ * — the same defect, one layer down, which is why this exists rather than a
+ * note telling operators to open a different screen.
+ *
+ * Authorized on the permission to ACT, so the ability to obtain the token
+ * follows from the ability to use it. It returns the token and nothing else:
+ * no figures, no identity, no status.
+ */
+export const handoverStamp = query({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REGISTER_VEHICLE_HANDOVER]);
+    const app = await ctx.db.get(args.applicationId);
+    if (!app || app.orgId !== args.orgId) return null;
+    return economicsStamp(app);
+  },
+});
 
 export const dealCockpit = query({
   args: {

@@ -60,11 +60,12 @@ const JOD = 1_000;
 
 /** A financed deal whose approved-purchase stage is the live blocker. */
 /**
- * The server's stamp of the deal's economics, as `dealCockpit` issues it. The
- * dialog sends this back rather than an amount, so the mutation can refuse a
- * deal whose figures moved while the operator was reading them.
+ * The server's stamp of the deal's economics, as `dealCockpit` issues it — a
+ * revision counter, carrying no figure. The dialog sends this back rather than
+ * an amount, so the mutation can refuse a deal whose economics moved while the
+ * operator was reading them, without the token itself disclosing them.
  */
-const STAMP = "v1|150000000|135000000|15000000";
+const STAMP = "v2|7";
 
 function dealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
   return {

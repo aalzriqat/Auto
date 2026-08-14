@@ -3762,12 +3762,12 @@ describe("handover seals the approved amount, and the amount that was verified",
     applicationId: Id<"financeApplications">,
     as: AuthenticatedTestConvex = seed.asUser
   ): Promise<string> {
-    const deal = await as.query(api.applications.dealCockpit, {
+    const stamp = await as.query(api.applications.handoverStamp, {
       orgId: seed.orgId,
       applicationId,
     });
-    if (!deal?.economicsStamp) throw new Error("dealCockpit issued no economics stamp.");
-    return deal.economicsStamp;
+    if (!stamp) throw new Error("handoverStamp issued no economics stamp.");
+    return stamp;
   }
 
   async function approvedAndHandedOver() {
@@ -3843,24 +3843,17 @@ describe("handover seals the approved amount, and the amount that was verified",
     expect(sealed?.vehicleHandoverAt).toBeTypeOf("number");
   });
 
-  test("the funding split moving invalidates a confirmation in flight too", async () => {
+  test("the stamp says nothing about the money it protects", async () => {
     const { seed, applicationId } = await approvedDeal();
-    const asRendered = await stampFrom(seed, applicationId);
+    const stamp = await stampFrom(seed, applicationId);
 
-    // Not the approved amount — the split beneath it. The old check compared
-    // one number and would have sealed this happily, while the dialog had
-    // shown the operator a funded portion that no longer exists.
-    await seed.t.run((ctx) =>
-      ctx.db.patch(applicationId, { financeCompanyFundedPortionMinor: jod(9_000) })
-    );
-
-    await expect(
-      seed.asUser.mutation(api.applications.registerVehicleHandover, {
-        orgId: seed.orgId,
-        applicationId,
-        economicsStamp: asRendered,
-      })
-    ).rejects.toThrow(/changed/i);
+    // The first version of this token was `v1|<approved>|<funded>|<split>`,
+    // issued to every caller who could load the deal — so it handed the exact
+    // figures `redactSettlementEvidence` withholds to the callers it withholds
+    // them from, readable at a glance. Hashing would not have fixed it: the
+    // format is known and at 100% LTV the search collapses to one figure.
+    expect(stamp).not.toContain(String(jod(11_500)));
+    expect(stamp).toMatch(/^v2\|\d+$/);
   });
 
 

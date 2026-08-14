@@ -152,6 +152,22 @@ test.describe("the deal cockpit's reading measure", () => {
             .poll(() => page.evaluate(() => document.documentElement.dir))
             .toBe(locale === "ar" ? "rtl" : "ltr");
 
+          // The economics rows arrive on their OWN query, not the one that
+          // renders the next-step card, so `deal-next-step` being visible says
+          // nothing about whether there is anything to measure yet. CI caught
+          // this: one Arabic attempt measured 0 pairs and only passed on retry
+          // — a gate that depends on a retry is not a gate, and the same race
+          // could equally have measured a half-laid-out row and passed it.
+          //
+          // Polled rather than slept: the wait ends when the rows are actually
+          // there, and the anti-vacuity assertion below still fails honestly if
+          // they never arrive.
+          await expect
+            .poll(async () => (await measureLabelToFigureGaps(page)).measured, {
+              message: "the deal's economics rows never laid out",
+            })
+            .toBeGreaterThan(0);
+
           const { widest, measured } = await measureLabelToFigureGaps(page);
           await page.screenshot({
             path: `playwright/.gate/deal-cockpit-${locale}-${viewport.name}.png`,

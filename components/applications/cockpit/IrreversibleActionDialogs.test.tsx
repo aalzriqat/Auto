@@ -39,7 +39,7 @@ function renderHandover(submitting: boolean, onOpenChange = vi.fn()) {
       financeCompanyFundedPortionMinor={135_000_000}
       dealerContributionMinor={15_000_000}
       approvedAmountIsFarFromEvidence={false}
-      economicsStamp="v1|150000000|135000000|15000000"
+      economicsStamp="v2|7"
       money={(minor) => `JD ${minor / 1000}`}
       t={t}
       onOpenChange={onOpenChange}
@@ -68,7 +68,7 @@ describe("the handover confirmation is about the figures the operator read", () 
       financeCompanyFundedPortionMinor: 10_000_000,
       dealerContributionMinor: 1_500_000,
       approvedAmountIsFarFromEvidence: false,
-      economicsStamp: "v1|11500000|10000000|1500000",
+      economicsStamp: "v2|7",
       money: (minor: number) => `JD ${minor / 1000}`,
       t,
       onOpenChange: vi.fn(),
@@ -83,7 +83,7 @@ describe("the handover confirmation is about the figures the operator read", () 
         {...props}
         approvedAmountMinor={12_750_000}
         financeCompanyFundedPortionMinor={11_000_000}
-        economicsStamp="v1|12750000|11000000|1500000"
+        economicsStamp="v2|8"
       />
     );
 
@@ -96,7 +96,7 @@ describe("the handover confirmation is about the figures the operator read", () 
     // And the stamp is the one it opened against, so the server refuses rather
     // than sealing the deal that moved.
     expect(onSubmit).toHaveBeenCalledWith(
-      expect.objectContaining({ economicsStamp: "v1|11500000|10000000|1500000" })
+      expect.objectContaining({ economicsStamp: "v2|7" })
     );
   });
 
@@ -109,7 +109,7 @@ describe("the handover confirmation is about the figures the operator read", () 
       financeCompanyFundedPortionMinor: 10_000_000,
       dealerContributionMinor: 1_500_000,
       approvedAmountIsFarFromEvidence: false,
-      economicsStamp: "v1|11500000|10000000|1500000",
+      economicsStamp: "v2|7",
       money: (minor: number) => `JD ${minor / 1000}`,
       t,
       onOpenChange: vi.fn(),
@@ -124,7 +124,7 @@ describe("the handover confirmation is about the figures the operator read", () 
         open
         approvedAmountMinor={12_750_000}
         financeCompanyFundedPortionMinor={11_000_000}
-        economicsStamp="v1|12750000|11000000|1500000"
+        economicsStamp="v2|8"
       />
     );
 
@@ -133,7 +133,7 @@ describe("the handover confirmation is about the figures the operator read", () 
     expect(screen.getByText("JD 12750")).toBeTruthy();
     fireEvent.click(screen.getByText("ConfirmHandoverAction"));
     expect(onSubmit).toHaveBeenCalledWith(
-      expect.objectContaining({ economicsStamp: "v1|12750000|11000000|1500000" })
+      expect.objectContaining({ economicsStamp: "v2|8" })
     );
   });
 });

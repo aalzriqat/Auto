@@ -155,6 +155,9 @@ async function recomputeAndPatchEconomics(
   if (!derived) {
     await ctx.db.patch(app._id, {
       economicsCurrency: currency,
+      // Clearing the split moves it just as much as recomputing it: a
+      // confirmation rendered against the old figures must stop matching.
+      economicsRevision: (app.economicsRevision ?? 0) + 1,
       financeCompanyFundedPortionMinor: undefined,
       unfinancedPortionMinor: undefined,
       dealerContributionMinor: undefined,
@@ -182,6 +185,11 @@ async function recomputeAndPatchEconomics(
 
   await ctx.db.patch(app._id, {
     economicsCurrency: currency,
+    // The shared recompute — the writer the first pass at this missed, and the
+    // reason the guard test exists rather than three careful edits. It moves
+    // the funding split without touching the approved amount, so a handover
+    // confirmation showing the old split would otherwise still have sealed.
+    economicsRevision: (app.economicsRevision ?? 0) + 1,
     financeCompanyFundedPortionMinor: derived.composition.financeCompanyFundedPortionMinor,
     unfinancedPortionMinor: derived.composition.unfinancedPortionMinor,
     dealerContributionMinor: derived.composition.dealerContributionMinor,
@@ -230,6 +238,33 @@ function appendReconciliationReason(existing: string | undefined, addition: stri
  * same deal. That drift is not hypothetical: the first cut of this check reused
  * the basis appraisal and ended up comparing against the quotation alone.
  */
+/**
+ * Whether the recorded approved amount is unlike every figure on file.
+ *
+ * ONE derivation, consumed by `getEconomics` and by `applications.get`. The
+ * cockpit reads the first and the legacy Review screen reads the second, and
+ * for a while the legacy screen simply passed `false` — so the same deal could
+ * be flagged as anomalous on one entry point to the one-way door and presented
+ * as ordinary on the other. Re-deriving it there would have been worse: two
+ * opinions about what counts as unusual, free to disagree with each other and
+ * with the mutation that refuses an unacknowledged outlier.
+ *
+ * `visible` gates it, because this is a judgement ABOUT a figure the caller may
+ * not be shown, and emphasis is meaningless where there is nothing to emphasise.
+ */
+export function approvedAmountIsFarFromEvidenceFor(
+  app: Doc<"financeApplications">,
+  appraisals: Array<Doc<"financeAppraisals">>,
+  visible: boolean
+): boolean {
+  if (!visible || app.approvedDealerPurchaseAmountMinor === undefined) return false;
+  return isApprovalFarFromEvidence({
+    approvedAmountMinor: app.approvedDealerPurchaseAmountMinor,
+    submittedQuotationMinor: app.submittedQuotationMinor,
+    appraisalAmountMinor: resolveComparisonAppraisal(appraisals)?.appraisalAmountMinor,
+  });
+}
+
 function resolveComparisonAppraisal(
   appraisals: Array<Doc<"financeAppraisals">>
 ): Doc<"financeAppraisals"> | undefined {
@@ -713,15 +748,11 @@ export const getEconomics = query({
        * number the row deliberately withholds. Emphasis is meaningless where
        * there is nothing to emphasise.
        */
-      approvedAmountIsFarFromEvidence:
-        approvedAmountVisible && app.approvedDealerPurchaseAmountMinor !== undefined
-          ? isApprovalFarFromEvidence({
-              approvedAmountMinor: app.approvedDealerPurchaseAmountMinor,
-              submittedQuotationMinor: app.submittedQuotationMinor,
-              appraisalAmountMinor:
-                resolveComparisonAppraisal(appraisals)?.appraisalAmountMinor,
-            })
-          : false,
+      approvedAmountIsFarFromEvidence: approvedAmountIsFarFromEvidenceFor(
+        app,
+        appraisals,
+        approvedAmountVisible
+      ),
     };
   },
 });
@@ -1341,6 +1372,9 @@ export const recordAppraisal = mutation({
       updatedAt: now,
       ...(supersedesApproval
         ? {
+            // The approval is being withdrawn, so a confirmation taken against
+            // it must stop matching. See `economicsRevision` in the schema.
+            economicsRevision: (app.economicsRevision ?? 0) + 1,
             approvedDealerPurchaseAmountMinor: undefined,
             approvedPurchaseBasis: undefined,
             approvedPurchaseAppraisalId: undefined,
@@ -1711,6 +1745,9 @@ export const approveDealerPurchaseAmount = mutation({
     // after an exception kept `approvedPurchaseExceptionRuleVersion` pointing
     // at a rule version that no longer had anything to do with the approval.
     await ctx.db.patch(args.applicationId, {
+      // Any confirmation an operator was holding is now against figures that
+      // have moved. See `economicsRevision` in the schema.
+      economicsRevision: (app.economicsRevision ?? 0) + 1,
       approvedDealerPurchaseAmountMinor: args.approvedAmountMinor,
       approvedPurchaseBasis: args.basis,
       approvedPurchaseAppraisalId: appraisal?._id,
@@ -1900,6 +1937,8 @@ export const reopenApproval = mutation({
     });
 
     await ctx.db.patch(args.applicationId, {
+      // See `economicsRevision` in the schema.
+      economicsRevision: (app.economicsRevision ?? 0) + 1,
       approvedDealerPurchaseAmountMinor: undefined,
       approvedPurchaseBasis: undefined,
       approvedPurchaseAppraisalId: undefined,

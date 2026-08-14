@@ -251,15 +251,7 @@ async function runDeal(
   // deal payload the way a real screen gets it. Read rather than assumed:
   // `beforeHandover` may have recorded an approval, and most callers here have
   // not, so the stamp differs between cases.
-  const dealAtHandover = await s.asUser.query(api.applications.dealCockpit, {
-    orgId: s.orgId,
-    applicationId,
-  });
-  await s.asUser.mutation(api.applications.registerVehicleHandover, {
-    orgId: s.orgId,
-    applicationId,
-    economicsStamp: dealAtHandover?.economicsStamp,
-  });
+  await registerHandover(s.asUser, api, s.orgId, applicationId);
   await s.asUser.mutation(api.applications.registerExpectedPayment, {
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
   });
@@ -4726,7 +4718,12 @@ describe("a settlement advice that contradicts the approval", () => {
       } as never);
       const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === s.orgId)!;
       await ctx.db.patch(role._id, {
-        permissions: ["view:sales", "view:finance_applications"],
+        // `register:vehicle_handover` is in here because the DEFAULT SALES
+        // template holds it — this fixture is meant to be a salesperson, and a
+        // salesperson hands vehicles over. It also keeps `handoverStamp`
+        // reachable, so the scan below covers the token rather than skipping
+        // the one door whose first version leaked the approved amount outright.
+        permissions: ["view:sales", "view:finance_applications", "register:vehicle_handover"],
         isSystemOwnerRole: false,
       });
     });
@@ -4739,6 +4736,10 @@ describe("a settlement advice that contradicts the approval", () => {
     const detail = await s.asUser.query(api.applications.get, { orgId: s.orgId, applicationId });
     const cockpitView = await cockpit(s, applicationId);
     const log = await s.asUser.query(api.applications.getLog, { orgId: s.orgId, applicationId });
+    const handoverToken = await s.asUser.query(api.applications.handoverStamp, {
+      orgId: s.orgId,
+      applicationId,
+    });
     const economics = (await s.asUser.query(api.financingEconomics.getEconomics, {
       orgId: s.orgId,
       applicationId,
@@ -4787,6 +4788,12 @@ describe("a settlement advice that contradicts the approval", () => {
       ["applications.get", detail],
       ["applications.dealCockpit", cockpitView],
       ["applications.getLog", log],
+      // The handover stamp. It is issued from the UNREDACTED row and served to
+      // any caller who may hand over, so it is exactly the kind of door this
+      // scan exists for — and the first version of it did leak: the token
+      // spelled out the approved amount and its split. It is a revision
+      // counter now, and this asserts that rather than trusting the comment.
+      ["applications.handoverStamp", handoverToken],
       ["financingEconomics.getEconomics", economics],
       ["financingEconomics.listNeedingReconciliation", queue],
       ["financingEconomics.suggestQuotationForApplication", quotation],

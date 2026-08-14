@@ -787,12 +787,15 @@ export function ApplicationDetailsDialog({
                               app.financeCompanyFundedPortionMinor ?? null
                             }
                             dealerContributionMinor={app.dealerContributionMinor ?? null}
-                            // `getEconomics` computes this verdict and this
-                            // screen does not read it. Left false rather than
-                            // re-derived here: the dialog treats it as emphasis
-                            // only, and a second opinion about what counts as
-                            // unusual is exactly what it must not hold.
-                            approvedAmountIsFarFromEvidence={false}
+                            // The SERVER's verdict, now projected onto this
+                            // screen's own payload. It was hardcoded false,
+                            // which meant the cockpit could warn that an amount
+                            // is unlike every figure on file while this
+                            // confirmation — the same one-way door — presented
+                            // the same deal as ordinary.
+                            approvedAmountIsFarFromEvidence={
+                              app.approvedAmountIsFarFromEvidence ?? false
+                            }
                             economicsStamp={app.economicsStamp}
                             money={formatEconomics}
                             t={(key) => t(key as any)}
