@@ -202,6 +202,29 @@ const STAGE_ICON: Record<StageState, React.ReactNode> = {
   PENDING: <Minus className="h-4 w-4 text-muted-foreground/60" />,
 };
 
+/**
+ * Why the close cannot be taken — and it takes BOTH conditions, because the
+ * two interact rather than merely coexisting.
+ *
+ * `setSupplierSettlementRoute` requires `finalize:financed_deal`, the same
+ * permission as the close itself, and the review dialog hides its selector
+ * without it. So telling a caller who lacks that permission to "record the
+ * route in Review" sends them to a screen with nothing on it — the dead end
+ * this issue exists to remove, rebuilt out of two correct sentences.
+ *
+ * Extracted rather than left as a nested ternary so the four combinations are
+ * enumerable, and testable, one line each.
+ */
+function finalizeUnavailableReasonKey(
+  routeRequired: boolean,
+  canFinalize: boolean
+): string | undefined {
+  if (routeRequired && !canFinalize) return "FinalizeNeedsRouteAndPermission";
+  if (routeRequired) return "FinalizeNeedsSettlementRoute";
+  if (!canFinalize) return "FinalizeNeedsPermission";
+  return undefined;
+}
+
 /** A money run is Latin digits inside Arabic prose; `<bdi>` keeps it whole. */
 function Money({ children }: Readonly<{ children: React.ReactNode }>) {
   return <bdi className="tabular-nums">{children}</bdi>;
@@ -508,11 +531,10 @@ export function DealCockpit({
        * is not a dead end — and bringing that control across is filed separately
        * rather than folded into this change.
        */
-      unavailableReasonKey: settlementRouteRequired
-        ? "FinalizeNeedsSettlementRoute"
-        : hasPermission(PERMISSIONS.FINALIZE_FINANCED_DEAL)
-          ? undefined
-          : "FinalizeNeedsPermission",
+      unavailableReasonKey: finalizeUnavailableReasonKey(
+        settlementRouteRequired,
+        hasPermission(PERMISSIONS.FINALIZE_FINANCED_DEAL)
+      ),
     };
   }
 

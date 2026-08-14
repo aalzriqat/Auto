@@ -52,9 +52,12 @@ async function openADealCockpit(page: Page) {
  * figure on the left, so a signed distance would report RTL as fine while it was
  * just as far apart.
  */
-async function widestLabelToFigureGap(page: Page): Promise<number> {
+async function measureLabelToFigureGaps(
+  page: Page
+): Promise<{ widest: number; measured: number }> {
   return page.evaluate(() => {
     let widest = 0;
+    let measured = 0;
     for (const dt of Array.from(document.querySelectorAll("dt"))) {
       const dd = dt.parentElement?.querySelector("dd");
       if (!dd) continue;
@@ -63,10 +66,11 @@ async function widestLabelToFigureGap(page: Page): Promise<number> {
       if (a.width === 0 || b.width === 0) continue;
       // Same visual row only; a stacked pair is not a reading-distance problem.
       if (Math.abs(a.top - b.top) > 24) continue;
+      measured += 1;
       const gap = Math.max(b.left - a.right, a.left - b.right);
       if (gap > widest) widest = gap;
     }
-    return widest;
+    return { widest, measured };
   });
 }
 
@@ -104,12 +108,21 @@ test.describe("the deal cockpit's reading measure", () => {
       const dir = await page.evaluate(() => document.documentElement.dir);
       expect(dir).toBe(locale === "ar" ? "rtl" : "ltr");
 
-      const gap = await widestLabelToFigureGap(page);
+      const { widest, measured } = await measureLabelToFigureGaps(page);
       await page.screenshot({
         path: `playwright/.gate/deal-cockpit-${locale}-${viewport.name}.png`,
         fullPage: true,
       });
-      expect(gap).toBeLessThan(MAX_LABEL_TO_FIGURE_PX);
+
+      // Asserted BEFORE the distance, because a widest-gap of zero is what a
+      // deal with no economics rows on it produces — and "nothing to measure"
+      // would otherwise read as "everything measured well". The gate has to
+      // fail when it is pointed at a deal that cannot exercise it.
+      expect(
+        measured,
+        "no label/figure pairs were laid out on this deal — point the gate at one carrying recorded economics",
+      ).toBeGreaterThan(0);
+      expect(widest).toBeLessThan(MAX_LABEL_TO_FIGURE_PX);
 
       // Nothing may push the page sideways at 390px — a horizontal scrollbar on
       // a phone is how a figure ends up off screen entirely.

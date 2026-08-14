@@ -835,8 +835,17 @@ export const salesEn = {
    * Named rather than only coloured: colour is not a message on its own, and
    * an operator about to seal a figure permanently should be told in words.
    */
+  /**
+   * Names no particular document, because the rule does not require one.
+   *
+   * `isApprovalFarFromEvidence` compares the approved amount against whichever
+   * of the quotation and the appraisal are actually on file, and returns true
+   * from the quotation alone. The earlier wording said "the quotation and
+   * appraisal on this deal", which asserts an appraisal exists — to an operator
+   * standing at the one-way door, on a deal that may only have a quotation.
+   */
   HandoverAmountLooksUnusual:
-    "This approved amount is unlike the quotation and appraisal on this deal. AutoFlow flagged it when it was recorded.",
+    "This approved amount is unlike the other figures recorded on this deal. AutoFlow flagged it when it was recorded.",
   HandoverVerifyBeforeContinuing:
     "Check the approved amount and the funding split above before continuing.",
   HandoverNotesLabel: "Notes (optional)",
@@ -860,6 +869,16 @@ export const salesEn = {
    */
   FinalizeNeedsSettlementRoute:
     "This car belongs to the supplier and the deal is financed, so who the finance company pays has to be recorded before the deal can be closed. It is chosen in Finance Applications → Review.",
+  /**
+   * Both blockers at once, and the pointer withheld on purpose.
+   *
+   * `setSupplierSettlementRoute` takes the SAME permission as the close, so a
+   * caller who cannot close cannot record the route either — and the review
+   * dialog hides the selector from them. Sending them there would be sending
+   * them to an empty screen.
+   */
+  FinalizeNeedsRouteAndPermission:
+    "This deal is waiting on who the finance company pays, and that is recorded by the same person who closes the deal. Someone with permission to close it completes both.",
   ConfirmFinalizeTitle: "Close the deal",
   ConfirmFinalizeDesc:
     "The handover and the expected payment are on file, so the deal can be closed.",
@@ -1739,7 +1758,7 @@ export const salesAr = {
   HandoverSealsApprovedAmount:
     "بعد تسليم المركبة لا يعود بالإمكان تصحيح المبلغ المعتمد المسجَّل عبر مسار التصحيح المعتاد.",
   HandoverAmountLooksUnusual:
-    "هذا المبلغ المعتمد يختلف عن عرض السعر والتخمين المسجَّلين على هذه الصفقة، وقد نبّه أوتوفلو إليه عند تسجيله.",
+    "هذا المبلغ المعتمد يختلف عن باقي الأرقام المسجَّلة على هذه الصفقة، وقد نبّه أوتوفلو إليه عند تسجيله.",
   HandoverVerifyBeforeContinuing: "تحقّق من المبلغ المعتمد وتقسيم التمويل أعلاه قبل المتابعة.",
   HandoverNotesLabel: "ملاحظات (اختياري)",
   HandoverNotesPlaceholder: "مثال: استلمها شقيق العميل، وتم التحقق من الهوية",
@@ -1753,6 +1772,8 @@ export const salesAr = {
   FinalizeNeedsPermission: "لا تملك صلاحية إغلاق الصفقة. يُكمل هذه الخطوة من يملكها.",
   FinalizeNeedsSettlementRoute:
     "هذه المركبة تعود للمورد والصفقة ممولة، لذا يجب تسجيل الجهة التي تدفع لها شركة التمويل قبل إغلاق الصفقة. يُختار ذلك من طلبات التمويل ← مراجعة.",
+  FinalizeNeedsRouteAndPermission:
+    "هذه الصفقة بانتظار تحديد الجهة التي تدفع لها شركة التمويل، ويُسجّل ذلك من يملك صلاحية إغلاق الصفقة نفسها. يُكمل الخطوتين من يملك تلك الصلاحية.",
   ConfirmFinalizeTitle: "إغلاق الصفقة",
   ConfirmFinalizeDesc: "التسليم والدفعة المتوقعة مسجَّلان، ويمكن إغلاق الصفقة.",
   FinalizeCreatesTheSale:

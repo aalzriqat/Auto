@@ -270,10 +270,13 @@ describe("a step the server would refuse is not offered as a step", () => {
     expect(within(block).queryByText("FinalizeNeedsPermission")).toBeNull();
   });
 
-  test("the route prerequisite outranks the permission gap, because neither can close it", () => {
-    // No FINALIZE_FINANCED_DEAL, and the route is missing too. The deal is not
-    // closeable by anyone yet, so the reason given is the one that is about the
-    // deal rather than about the caller.
+  test("a caller who can neither record the route nor close is not sent to look for it", () => {
+    // No FINALIZE_FINANCED_DEAL, and the route is missing too.
+    //
+    // `setSupplierSettlementRoute` takes the SAME permission as the close, and
+    // the review dialog hides its selector without it — so "record the route in
+    // Review" would send this caller to a screen with nothing on it. Two
+    // individually correct sentences rebuilding the dead end between them.
     permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
     queryResults.set(
       COCKPIT_QUERY,
@@ -286,7 +289,10 @@ describe("a step the server would refuse is not offered as a step", () => {
 
     renderCockpit();
 
-    expect(within(nextStepBlock()).getByText("FinalizeNeedsSettlementRoute")).toBeTruthy();
+    const block = nextStepBlock();
+    expect(within(block).getByText("FinalizeNeedsRouteAndPermission")).toBeTruthy();
+    expect(within(block).queryByText("FinalizeNeedsSettlementRoute")).toBeNull();
+    expect(within(block).queryByText("FinalizeNeedsPermission")).toBeNull();
   });
 });
 
