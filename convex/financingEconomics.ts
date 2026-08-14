@@ -264,6 +264,31 @@ const AUDIT_SUBJECTS = {
 type AuditSubject = (typeof AUDIT_SUBJECTS)[keyof typeof AUDIT_SUBJECTS];
 
 /**
+ * The subjects only a finance caller may read, and WHY each one is here.
+ *
+ * `APPROVED_PURCHASE_AMOUNT` because the figure itself is withheld by
+ * `redactSettlementEvidence`, and its rows spell that figure out.
+ *
+ * `RECONCILIATION_FLAG` because of its REASON. `clearReconciliation` stores the
+ * note a finance user wrote about what they checked, and those notes quote deal
+ * figures as a matter of course ("agrees with the approved 18,902") — the same
+ * free-text route `redactSettlementEvidence` already documents for
+ * `approvedPurchaseNotes`. The old all-or-nothing gate hid these rows from the
+ * sales floor as a side effect; moving to per-subject gating would have opened
+ * them, so the reason they were closed is now written down instead of accidental.
+ * Reconciliation is a finance task in any case, and the sales floor has no use
+ * for its working notes.
+ *
+ * `SUBMITTED_QUOTATION` is deliberately NOT here. The quotation is visible to
+ * every caller of this query, its corrections are usually made BY the sales user
+ * reading them, and its reason is written about a figure they can already see.
+ */
+const FINANCE_ONLY_SUBJECTS: ReadonlySet<AuditSubject> = new Set([
+  "APPROVED_PURCHASE_AMOUNT",
+  "RECONCILIATION_FLAG",
+]);
+
+/**
  * WHAT HAPPENED to it. Four events, named rather than inferred from prose.
  *
  * `WITHDRAWN` and `SUPERSEDED` are deliberately separate. Both leave the deal
@@ -856,13 +881,11 @@ export const getEconomics = query({
       /**
        * The corrections on this deal, newest first — with the person named.
        *
-       * Gated PER SUBJECT, not per array. The approved purchase amount is the
-       * figure `redactSettlementEvidence` withholds, and `recordOverride`
-       * stringifies it into `previousValue`/`newValue` — that helper names this
-       * query's `overrides[]` as one of three routes by which a `view:sales`
-       * caller recovers it. So rows about that subject follow the same predicate
-       * as the figure itself, imported rather than restated so the history and
-       * the number it describes can never disagree about who may see them.
+       * Gated PER SUBJECT, not per array — see `FINANCE_ONLY_SUBJECTS` for
+       * which subjects are withheld and why. The predicate is the same one
+       * `redactSettlementEvidence` applies to the approved amount itself,
+       * imported rather than restated so the history and the number it describes
+       * can never disagree about who may see them.
        *
        * Withholding the WHOLE array on that predicate — which is what shipped —
        * was both too much and too little. Too much, because a corrected
@@ -895,7 +918,7 @@ export const getEconomics = query({
               const projected = presentCorrection(row);
               // A field this product cannot name, so it cannot say what changed.
               if (!projected) return undefined;
-              if (projected.subject === "APPROVED_PURCHASE_AMOUNT" && !canWorkDisbursement) {
+              if (FINANCE_ONLY_SUBJECTS.has(projected.subject) && !canWorkDisbursement) {
                 return undefined;
               }
               return {

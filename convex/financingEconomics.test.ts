@@ -3883,6 +3883,42 @@ describe("the correction history follows the amount it describes", () => {
       "APPROVED_PURCHASE_AMOUNT"
     );
   });
+
+  test("a reconciliation note is withheld from sales for its REASON, not its figures", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        needsFinancingReconciliation: true,
+        financingReconciliationReason: "Legacy deal.",
+      })
+    );
+    // The note a finance user writes about what they checked quotes deal
+    // figures as a matter of course — the same free-text route
+    // `redactSettlementEvidence` already documents for `approvedPurchaseNotes`.
+    await seed.asUser.mutation(api.financingEconomics.resolveFinancingReconciliation, {
+      orgId: seed.orgId,
+      applicationId,
+      note: "Agrees with the approved 18,902 on the advice.",
+    });
+
+    const asSales = await addSalesUser(seed);
+    const forSales = await asSales.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    // The old all-or-nothing gate hid this row as a side effect. Moving to
+    // per-subject gating would have opened it, so the reason it stays closed is
+    // now a written rule rather than an accident of the previous design.
+    expect(forSales.overrides.map((row) => row.subject)).toEqual([]);
+
+    const forFinance = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(forFinance.overrides.map((row) => row.subject)).toEqual(["RECONCILIATION_FLAG"]);
+  });
 });
 
 /**
