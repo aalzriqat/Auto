@@ -8,9 +8,21 @@
  * in both locales, at both widths. A screenshot cannot be asserted on and a
  * jsdom test has no layout at all; only a real browser can answer this.
  *
- * Deliberately NOT part of the CI suite. It needs a dev deployment with a
- * financed deal on it, and it is run by hand as the design gate — hence the
- * `.gate.spec.ts` suffix, which `testMatch` does not pick up.
+ * Run by hand as the design gate, against a deployment carrying a financed deal.
+ *
+ * `RUN_DESIGN_GATE` is the ONLY thing keeping it out of CI, and the `.gate`
+ * segment in the filename is decorative — an earlier version of this comment
+ * claimed `testMatch` excluded it, which is false and was disproved by
+ * `playwright test --list --project=chromium`: the default matcher is
+ * `**\/*.@(spec|test).?(c|m)[jt]s?(x)`, the file still ends in `.spec.ts`, and
+ * all four cases are collected and then skipped.
+ *
+ * That distinction matters to whoever reads this next. Setting
+ * `RUN_DESIGN_GATE` broadly — a repo-wide env, a workflow-level `env:` block —
+ * would make these four execute inside the ordinary chromium run, against an
+ * ephemeral CI deployment with no seeded financed deal, and they would fail on
+ * the "no pairs were laid out" assertion below. Enable it for a run you are
+ * pointing at real data, never as a default.
  */
 import { test, expect, type Page } from "@playwright/test";
 
