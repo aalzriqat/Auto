@@ -1407,6 +1407,126 @@ describe("reopening an approval", () => {
     expect(economics.overrides).toHaveLength(0);
   });
 
+  /**
+   * The correction that actually happened in production, end to end.
+   *
+   * A manager recorded 150,000 JOD against a ~12,500 deal, reopened it, and put
+   * 15,000 back. The audit table came out of that holding ONE row — the
+   * withdrawal — because `approvalMateriallyChanged` requires the field to
+   * already be set, and `reopenApproval` clears it. So the history recorded that
+   * 150,000 was taken off the record and never that 15,000 replaced it, who
+   * recorded it, or when. A history missing the replacement cannot explain the
+   * deal, which is the only thing it exists to do.
+   *
+   * Through the real writers, deliberately: the projection this feeds is only
+   * worth testing against rows the server genuinely emits.
+   */
+  test("a correction records the replacement, not only the withdrawal", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+
+    // A figure unlike anything on this deal — acknowledged, because AutoFlow
+    // challenges it but is not entitled to refuse the finance company's number.
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(150_000),
+      basis: "MANUAL",
+      notes: "Read off the advice note.",
+      outlierAcknowledged: true,
+    });
+    // The FIRST approval is not a correction. Nothing was replaced, and
+    // approvedPurchaseApprovedBy/At already record who and when — a row here
+    // would put a correction entry on every healthy deal.
+    expect(await readOverrides(seed, applicationId)).toHaveLength(0);
+
+    await seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "The amount entered was wrong.",
+    });
+
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(15_000),
+      basis: "MANUAL",
+      notes: "Recorded the amount the company actually approved.",
+    });
+
+    const rows = await readOverrides(seed, applicationId);
+    // TWO events: the withdrawal and the replacement. One is the defect.
+    expect(rows).toHaveLength(2);
+
+    const [replacement, withdrawal] = rows;
+    expect(withdrawal?.newValue).toBe("reopened");
+    expect(withdrawal?.previousValue).toContain(String(jod(150_000)));
+
+    // The replacement names the new amount, its actor and its time — the three
+    // facts the withdrawal row cannot carry.
+    expect(replacement?.field).toBe("approvedDealerPurchaseAmountMinor");
+    expect(replacement?.newValue).toContain(String(jod(15_000)));
+    expect(replacement?.changedBy).toBe(seed.approverId);
+    expect(replacement?.changedAt).toBeGreaterThanOrEqual(withdrawal!.changedAt);
+    expect(replacement?.reason).toBe("Recorded the amount the company actually approved.");
+    // Nothing was on record to move FROM: the withdrawal already said what left.
+    expect(replacement?.previousValue).toBeUndefined();
+
+    // And the deal itself carries the corrected figure, so the history is
+    // explaining a real change rather than describing one that did not land.
+    expect((await readApp(seed, applicationId)).approvedDealerPurchaseAmountMinor).toBe(
+      jod(15_000)
+    );
+  });
+
+  /**
+   * The other way an approval leaves the record: superseded by new evidence.
+   *
+   * Same defect, different door — `recordAppraisal` clears the approved amount
+   * when a new appraisal invalidates it, so the approval that follows was
+   * equally unrecorded.
+   */
+  test("an approval replacing one a new appraisal withdrew is recorded too", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+    });
+
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_000),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+      reappraisalReason: "Company re-inspected the vehicle.",
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_000),
+      basis: "APPRAISAL",
+    });
+
+    const rows = await readOverrides(seed, applicationId);
+    expect(rows).toHaveLength(2);
+    expect(rows[1]?.newValue).toBe("cleared");
+    expect(rows[0]?.newValue).toContain(String(jod(11_000)));
+    expect(rows[0]?.changedBy).toBe(seed.approverId);
+  });
+
   test("blocks approving your own application", async () => {
     const seed = await seedDealer();
     const applicationId = await createApplication(seed);

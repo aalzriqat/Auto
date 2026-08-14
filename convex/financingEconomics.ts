@@ -226,6 +226,21 @@ function appendReconciliationReason(existing: string | undefined, addition: stri
 }
 
 /**
+ * The audit field the approval history hangs off, and the two ways an approval
+ * leaves the record.
+ *
+ * Both sentinels are written into `newValue`, which otherwise holds a figure —
+ * so every reader has to know them, and a literal repeated across four sites is
+ * how one reader ends up knowing only some. `cleared` was missed exactly that
+ * way.
+ */
+const APPROVED_AMOUNT_FIELD = "approvedDealerPurchaseAmountMinor";
+/** A person took the amount off the record, to put a corrected one back. */
+const APPROVAL_WITHDRAWN = "reopened";
+/** New evidence invalidated it — nobody chose to withdraw it. */
+const APPROVAL_SUPERSEDED = "cleared";
+
+/**
  * Turns a stored override row into something a screen may show.
  *
  * The rows are written for an AUDIT TABLE, not for a person. `recordOverride`
@@ -286,14 +301,51 @@ function presentOverrideValues(row: Doc<"financeApplicationOverrides">): {
   // showed a bare previous amount with no arrow and nothing saying the figure
   // had been withdrawn. On the one screen whose entire job is explaining why a
   // number changed, that reads as "unchanged".
-  const sentinel = row.newValue === "reopened" || row.newValue === "cleared";
+  const sentinel =
+    row.newValue === APPROVAL_WITHDRAWN || row.newValue === APPROVAL_SUPERSEDED;
 
   return {
     previousAmountMinor: leadingAmount(row.previousValue),
-    newIsReopened: row.newValue === "reopened",
-    newIsCleared: row.newValue === "cleared",
+    newIsReopened: row.newValue === APPROVAL_WITHDRAWN,
+    newIsCleared: row.newValue === APPROVAL_SUPERSEDED,
     newAmountMinor: sentinel ? undefined : leadingAmount(row.newValue),
   };
+}
+
+/**
+ * Whether this deal's approved purchase amount has ever been taken off the
+ * record.
+ *
+ * `approveDealerPurchaseAmount` cannot tell a FIRST approval from one replacing
+ * a withdrawn figure by looking at the application: `reopenApproval` and the
+ * superseding branch of `recordAppraisal` both CLEAR the amount, so both cases
+ * arrive with the field undefined and identical in every other respect. The
+ * history is the only place the difference is recorded, so the history is what
+ * is asked.
+ *
+ * Derived rather than stored on the application deliberately. A
+ * `withdrawnAt` column would be undefined on every deal already sitting in a
+ * withdrawn state right now, and each of those would silently miss the very
+ * event this exists to record — reintroducing the defect for exactly the deals
+ * that have already hit it. Reading the rows needs no backfill to be right.
+ *
+ * The read is bounded by the corrections on ONE application — a handful of rows
+ * on a deal that has been corrected, none on one that has not — and `getEconomics`
+ * already collects the same set for the same application.
+ */
+async function approvalWasWithdrawn(
+  ctx: MutationCtx,
+  applicationId: Id<"financeApplications">
+): Promise<boolean> {
+  const rows = await ctx.db
+    .query("financeApplicationOverrides")
+    .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+    .collect();
+  return rows.some(
+    (row) =>
+      row.field === APPROVED_AMOUNT_FIELD &&
+      (row.newValue === APPROVAL_WITHDRAWN || row.newValue === APPROVAL_SUPERSEDED)
+  );
 }
 
 async function recordOverride(
@@ -1346,9 +1398,9 @@ export const recordAppraisal = mutation({
       await recordOverride(ctx, {
         orgId: args.orgId,
         applicationId: args.applicationId,
-        field: "approvedDealerPurchaseAmountMinor",
+        field: APPROVED_AMOUNT_FIELD,
         previousValue: app.approvedDealerPurchaseAmountMinor,
-        newValue: "cleared",
+        newValue: APPROVAL_SUPERSEDED,
         reason:
           args.reappraisalReason?.trim() ??
           "A new appraisal replaced the evidence the approval was based on.",
@@ -1708,11 +1760,27 @@ export const approveDealerPurchaseAmount = mutation({
         app.appliedLtvPercent !== appliedLtvPercent ||
         app.approvedPurchaseApprovedBy !== user._id ||
         (app.approvedPurchaseNotes ?? "") !== (args.notes?.trim() ?? ""));
-    if (approvalMateriallyChanged) {
+    // An approval PUTTING BACK a figure that was taken off the record.
+    //
+    // `approvalMateriallyChanged` is structurally blind to this: it opens with
+    // `app.approvedDealerPurchaseAmountMinor !== undefined`, and both routes out
+    // of an approval — a person reopening it, or a new appraisal superseding it
+    // — clear that field. So the condition is false exactly when the correction
+    // lands. The audit table came out of the real production correction holding
+    // one row saying 150,000 had been withdrawn, and nothing saying 15,000
+    // replaced it, who recorded it, or when.
+    //
+    // Not folded into `approvalMateriallyChanged` because the two answer
+    // different questions and one of them must stay false for a FIRST approval,
+    // which is not a correction and belongs in no history of corrections.
+    const replacesWithdrawnApproval =
+      app.approvedDealerPurchaseAmountMinor === undefined &&
+      (await approvalWasWithdrawn(ctx, args.applicationId));
+    if (approvalMateriallyChanged || replacesWithdrawnApproval) {
       await recordOverride(ctx, {
         orgId: args.orgId,
         applicationId: args.applicationId,
-        field: "approvedDealerPurchaseAmountMinor",
+        field: APPROVED_AMOUNT_FIELD,
         // EVERY input in the change condition above, on both sides — not just
         // the money ones. Recording the approver in the condition but not in
         // the payload wrote a row whose two value fields were the identical
@@ -1725,7 +1793,15 @@ export const approveDealerPurchaseAmount = mutation({
             ? undefined
             : `${app.approvedDealerPurchaseAmountMinor} (${app.approvedPurchaseBasis ?? "unknown basis"} @ ${app.appliedLtvPercent ?? "unknown"}% LTV, approved by ${app.approvedPurchaseApprovedBy ?? "unrecorded"})`,
         newValue: `${args.approvedAmountMinor} (${args.basis} @ ${appliedLtvPercent}% LTV, approved by ${user._id})`,
-        reason: args.notes?.trim() ?? `Re-approved on the ${args.basis} basis.`,
+        // `||`, not `??`. Blank notes trim to "" — which `??` passes straight
+        // through, and an empty reason is the one field of a correction entry a
+        // person actually wrote. The panel would render the line with nothing
+        // where the explanation goes.
+        reason:
+          args.notes?.trim() ||
+          (replacesWithdrawnApproval
+            ? "Recorded after the approved amount was taken off the record."
+            : `Re-approved on the ${args.basis} basis.`),
         changedBy: user._id,
       });
     }
@@ -1925,9 +2001,9 @@ export const reopenApproval = mutation({
     await recordOverride(ctx, {
       orgId: args.orgId,
       applicationId: args.applicationId,
-      field: "approvedDealerPurchaseAmountMinor",
+      field: APPROVED_AMOUNT_FIELD,
       previousValue: app.approvedDealerPurchaseAmountMinor,
-      newValue: "reopened",
+      newValue: APPROVAL_WITHDRAWN,
       reason,
       changedBy: user._id,
     });
