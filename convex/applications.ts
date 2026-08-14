@@ -2579,6 +2579,30 @@ export const registerVehicleHandover = mutation({
     // the missing funding split is the more useful one to reach the operator.
     assertDealerEconomicsRecorded(app, "handing over the vehicle");
     /**
+     * The denomination, enforced HERE and not only in what the screens render.
+     *
+     * `handoverEvidenceFor` already refuses to show figures whose currency
+     * AutoFlow cannot vouch for, and that is a display rule — a direct caller,
+     * an internal caller, or a client built against this API tomorrow renders
+     * nothing at all. A refusal that lives only in a projection is not
+     * enforcement; the irreversible boundary is this mutation.
+     *
+     * Scoped to a deal that actually HAS recorded economics to seal. Where no
+     * approved amount was ever recorded there is no money-bearing figure being
+     * made permanent and so no denomination to verify — and refusing there
+     * would build a new dead end for exactly the historical deals that need the
+     * recovery path (SCRUM-61) most.
+     */
+    if (
+      app.approvedDealerPurchaseAmountMinor !== undefined &&
+      denominationOf(app.economicsCurrency) === null
+    ) {
+      throw new ConvexError(
+        "AutoFlow cannot confirm which currency this deal's approved amount is recorded in, so the vehicle cannot be handed over yet. Record the deal's economics again to restate them in a supported currency."
+      );
+    }
+
+    /**
      * The concurrency check — asked of everyone, keyed to nothing about the
      * caller. See the argument's note for why visibility was the wrong basis.
      */

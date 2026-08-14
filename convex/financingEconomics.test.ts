@@ -3952,6 +3952,54 @@ describe("handover seals the approved amount, and the amount that was verified",
     expect(deal?.handoverEvidence.currency).toBeNull();
   });
 
+  for (const [label, currency] of [
+    ["unsupported", "JD"],
+    ["absent", undefined],
+  ] as const) {
+    test(`handover is REFUSED when the denomination is ${label}`, async () => {
+      const { seed, applicationId } = await approvedDeal();
+      // The stamp is obtained BEFORE the currency is disturbed, so the deal is
+      // otherwise perfectly sealable — this isolates the denomination as the
+      // only reason to refuse.
+      const stamp = await stampFrom(seed, applicationId);
+      await seed.t.run((ctx) => ctx.db.patch(applicationId, { economicsCurrency: currency }));
+
+      // The projection already refuses to show these figures, but a projection
+      // is not enforcement: a direct or internal caller never renders anything.
+      // The mutation is the boundary that has to hold.
+      await expect(
+        seed.asUser.mutation(api.applications.registerVehicleHandover, {
+          orgId: seed.orgId,
+          applicationId,
+          economicsStamp: stamp,
+        })
+      ).rejects.toThrow(/currency/i);
+
+      // And nothing was sealed by the refusal — this door does not reopen.
+      const app = await readApp(seed, applicationId);
+      expect(app?.vehicleHandoverAt).toBeUndefined();
+    });
+  }
+
+  test("a deal with no recorded economics can still be handed over", async () => {
+    // The SCRUM-61 recovery path. Nothing money-bearing is being sealed here,
+    // so there is no denomination to verify and refusing would build a new dead
+    // end for exactly the historical deals that need the path most.
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { status: "APPROVED", economicsCurrency: undefined })
+    );
+
+    await seed.asUser.mutation(api.applications.registerVehicleHandover, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await stampFrom(seed, applicationId),
+    });
+    const app = await readApp(seed, applicationId);
+    expect(app?.vehicleHandoverAt).toBeTypeOf("number");
+  });
+
   test("the denomination is carried with its scale, not re-derived", async () => {
     const { seed, applicationId } = await approvedDeal();
     const deal = await seed.asUser.query(api.applications.dealCockpit, {
