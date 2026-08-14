@@ -3944,18 +3944,56 @@ describe("every audit field a writer records can reach the panel", () => {
     eager: true,
   }) as Record<string, string>;
 
-  /** Every `field:` literal passed to an override insert, anywhere in convex/. */
+  /**
+   * Every field name passed to an override insert, anywhere in convex/.
+   *
+   * Resolves CONSTANTS as well as literals, and throws on a call site it cannot
+   * read. Reading only `field: "literal"` was the first attempt and both
+   * adversarial reviewers took it apart independently: all three writers of
+   * `approvedDealerPurchaseAmountMinor` name the field through
+   * `APPROVED_AMOUNT_FIELD`, so the discovery silently returned six fields
+   * without the one that matters most — while the "not vacuous" assertions
+   * below still passed. A guard whose blind spot is the most consequential
+   * subject in the table is worse than no guard, because it is believed.
+   *
+   * Throwing rather than skipping is the point: an unreadable call site must
+   * fail this test, not quietly shrink the set it claims to cover.
+   */
   function auditFieldsWrittenAnywhere(): string[] {
     const found = new Set<string>();
     for (const [path, source] of Object.entries(CONVEX_SOURCES)) {
       if (path.includes(".test.") || path.includes("/_generated/")) continue;
+      // `recordOverride` is the shared writer, not a call site. Its own body
+      // inserts `field: args.field` — whichever field its caller passed — and
+      // every one of those callers is discovered separately below. Located by
+      // name rather than waved through as "a dotted expression", so an
+      // unreadable field ANYWHERE else still throws.
+      const helper = source.indexOf("async function recordOverride(");
+      const insideHelper = (index: number) =>
+        helper !== -1 && index >= helper && index < helper + 900;
       const callSites = /insert\(\s*"financeApplicationOverrides"|recordOverride\(\s*ctx\s*,/g;
       let site: RegExpExecArray | null;
       while ((site = callSites.exec(source)) !== null) {
+        if (insideHelper(site.index)) continue;
         // The `field:` belongs to the object literal that opens at the call, so
         // a window is enough and avoids parsing TypeScript to find one key.
-        const field = /field:\s*"([^"]+)"/.exec(source.slice(site.index, site.index + 700));
-        if (field) found.add(field[1]);
+        const window = source.slice(site.index, site.index + 700);
+        const field = /field:\s*(?:"([^"]+)"|([A-Za-z_$][\w$]*))/.exec(window);
+        if (!field) {
+          throw new Error(`Override write at ${path} names no field this test can read`);
+        }
+        if (field[1] !== undefined) {
+          found.add(field[1]);
+          continue;
+        }
+        // A constant. Resolved from its declaration in the same module — the
+        // only form these writers use, and anything else must announce itself
+        // rather than be dropped.
+        const declared = new RegExp(`const ${field[2]}\\s*=\\s*"([^"]+)"`).exec(source);
+        if (!declared) {
+          throw new Error(`Override write at ${path} names field \`${field[2]}\`, which this test cannot resolve`);
+        }
+        found.add(declared[1]);
       }
     }
     return [...found].sort((a, b) => a.localeCompare(b));
@@ -3968,7 +4006,13 @@ describe("every audit field a writer records can reach the panel", () => {
     expect(fields).toContain("submittedQuotationMinor");
     expect(fields).toContain("accountingClassification");
     expect(fields).toContain("financeDealCustody.status");
-    expect(fields.length).toBeGreaterThanOrEqual(5);
+    // The approved purchase amount above all. Its three writers name the field
+    // through a CONSTANT rather than a literal, and a discovery that reads only
+    // literals silently omits the single most consequential subject in this
+    // table while every other assertion here still passes. Both adversarial
+    // reviewers found that independently.
+    expect(fields).toContain("approvedDealerPurchaseAmountMinor");
+    expect(fields.length).toBeGreaterThanOrEqual(6);
   });
 
   test("each one is named by the projection rather than silently dropped", async () => {
