@@ -122,15 +122,23 @@ export function CorrectionHistoryCard({
         <p className="text-xs text-muted-foreground">{t("CorrectionHistoryIntro")}</p>
       </CardHeader>
       <CardContent className="space-y-4">
-        {entries.map((entry) => {
+        {entries.map((entry, index) => {
           const eventLabel = EVENT_LABEL[entry.event];
+          // Named once per RUN, not once per line. A correction usually comes in
+          // a burst about one figure — withdraw, re-record — and repeating the
+          // same label down four consecutive entries is noise that reads as four
+          // unrelated things. The label still appears the moment the subject
+          // changes, which is the only place it carries information.
+          const opensRun = index === 0 || entries[index - 1].subject !== entry.subject;
           return (
             <div key={entry.id} className="space-y-1 border-s-2 ps-3">
               {/* WHICH figure, before anything else. An entry that does not name
                   its subject is read as being about the figure above it. */}
-              <p className="text-[0.65rem] font-medium uppercase tracking-wide text-muted-foreground">
-                {t(SUBJECT_LABEL[entry.subject])}
-              </p>
+              {opensRun && (
+                <p className="text-[0.65rem] font-medium uppercase tracking-wide text-muted-foreground">
+                  {t(SUBJECT_LABEL[entry.subject])}
+                </p>
+              )}
               {/* The reason — the only part a person wrote, and the only part
                   that answers "why is this different from what I remember". */}
               <p className="text-sm font-medium">{entry.reason}</p>

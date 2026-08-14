@@ -1278,7 +1278,7 @@ describe("corrections are visible on the deal, not just recorded", () => {
     expect(screen.queryByText(/\breopened\b/)).toBeNull();
   });
 
-  test("every entry names the figure it is about", () => {
+  test("a run of corrections to one figure names it once", () => {
     render(
       <DealCockpitView
         deal={dealFixture()}
@@ -1288,10 +1288,32 @@ describe("corrections are visible on the deal, not just recorded", () => {
       />
     );
 
-    // Without the subject an entry is read as being about the figure above it —
-    // and the projection this replaced described every money-suffixed audit
-    // field through one unlabelled shape.
-    expect(screen.getAllByText("CorrectionSubjectApprovedAmount").length).toBe(2);
+    // Both entries are about the approved amount, so the label carries
+    // information exactly once. Repeating it down every line reads as several
+    // unrelated things and is the noise the grouping exists to remove.
+    expect(screen.getAllByText("CorrectionSubjectApprovedAmount").length).toBe(1);
+  });
+
+  test("a change of figure is always named, which is what the label is for", () => {
+    render(
+      <DealCockpitView
+        deal={dealFixture()}
+        financeDecision={wiring()}
+        corrections={asEntries([
+          ...CORRECTED_APPROVAL_SEQUENCE,
+          ...EXPENSE_ONLY_QUOTATION_CORRECTION,
+        ])}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    // The guarantee that matters: an entry about a DIFFERENT figure can never
+    // inherit the one above it. Grouping must not weaken that — it is the whole
+    // reason the subject exists.
+    expect(screen.getAllByText("CorrectionSubjectApprovedAmount").length).toBe(1);
+    expect(screen.getAllByText("CorrectionSubjectQuotation").length).toBe(1);
+    const quotation = entryFor(EXPENSE_ONLY_QUOTATION_CORRECTION[0].reason);
+    expect(within(quotation).getByText("CorrectionSubjectQuotation")).toBeTruthy();
   });
 
   test("the figure is money in the deal's currency, never the stored audit string", () => {
@@ -1384,7 +1406,9 @@ describe("corrections are visible on the deal, not just recorded", () => {
     // RTL must not turn the audit prose back on through a different door.
     expect(within(entry).queryByText(/approved by|MANUAL/)).toBeNull();
     // The subject survives translation rather than being English-only chrome.
-    expect(within(entry).getByText("CorrectionSubjectApprovedAmount")).toBeTruthy();
+    // Panel-scoped, not entry-scoped: it is named once for the run these two
+    // entries share.
+    expect(screen.getByText("CorrectionSubjectApprovedAmount")).toBeTruthy();
   });
 
   test("a deal that was never corrected shows no history at all", () => {
