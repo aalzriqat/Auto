@@ -181,11 +181,24 @@ export async function createFinancedApplication(
 
   // A draft left by an earlier run puts a resume banner over the wizard; start
   // clean rather than steering someone else's half-finished deal.
+  //
+  // The banner and the wizard's first control are RACED rather than the banner
+  // being counted. `count()` resolves instantly, so on a slow render it
+  // returned 0 before the banner had painted, the click was skipped, and the
+  // run carried on inside a resumed draft — the exact outcome this exists to
+  // prevent, arriving silently and only sometimes. Waiting for the banner
+  // alone would be worse: it would hang for the full timeout on every clean
+  // run, which is most of them.
   const startFresh = page.getByRole("button", { name: "Start Fresh" });
-  if (await startFresh.count()) await startFresh.click();
+  const selectVehicle = page.getByRole("button", { name: /Select an available vehicle/ });
+  await expect(startFresh.or(selectVehicle).first()).toBeVisible();
+  if (await startFresh.isVisible()) {
+    await startFresh.click();
+    await expect(selectVehicle).toBeVisible();
+  }
 
   // --- step 1: the car, the money, and the financing company ---------------
-  await page.getByRole("button", { name: /Select an available vehicle/ }).click();
+  await selectVehicle.click();
   await page.getByText(fixtures.model, { exact: false }).first().click();
 
   await page.locator('input[name="vehiclePrice"]').fill(VEHICLE_PRICE);
