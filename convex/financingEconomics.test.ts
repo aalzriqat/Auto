@@ -3922,6 +3922,89 @@ describe("the correction history follows the amount it describes", () => {
 });
 
 /**
+ * No writer's corrections can vanish from the panel without a test saying so.
+ *
+ * `financeApplicationOverrides` types `field` as `v.string()`, and SIX call
+ * sites across two modules write to it. The projection recognises fields from a
+ * registry and drops anything else, which is the right failure mode for a row it
+ * cannot name — and a silent one, indistinguishable on screen from "nothing was
+ * ever corrected here".
+ *
+ * That is not hypothetical. Raised in adversarial review of this branch and
+ * confirmed: moving to the registry dropped four real financial corrections
+ * written by `financeDealCosts.ts` — an accounting classification withdrawn, a
+ * custody settlement reopened, a reconciled cost re-recorded, a legal invoice
+ * replaced. Every one of them is exactly the kind of change this panel exists to
+ * explain, and none reached it.
+ *
+ * So the writers are discovered from the source rather than listed by hand. A
+ * seventh call site added later fails here instead of quietly disappearing.
+ */
+describe("every audit field a writer records can reach the panel", () => {
+  const CONVEX_SOURCES = import.meta.glob("./**/*.ts", {
+    query: "?raw",
+    import: "default",
+    eager: true,
+  }) as Record<string, string>;
+
+  /** Every `field:` literal passed to an override insert, anywhere in convex/. */
+  function auditFieldsWrittenAnywhere(): string[] {
+    const found = new Set<string>();
+    for (const [path, source] of Object.entries(CONVEX_SOURCES)) {
+      if (path.includes(".test.") || path.includes("/_generated/")) continue;
+      const callSites = /insert\(\s*"financeApplicationOverrides"|recordOverride\(\s*ctx\s*,/g;
+      let site: RegExpExecArray | null;
+      while ((site = callSites.exec(source)) !== null) {
+        // The `field:` belongs to the object literal that opens at the call, so
+        // a window is enough and avoids parsing TypeScript to find one key.
+        const field = /field:\s*"([^"]+)"/.exec(source.slice(site.index, site.index + 700));
+        if (field) found.add(field[1]);
+      }
+    }
+    return [...found].sort((a, b) => a.localeCompare(b));
+  }
+
+  test("the discovery itself still finds the writers, so this is not vacuous", () => {
+    const fields = auditFieldsWrittenAnywhere();
+    // A regex that stops matching would make every assertion below pass on an
+    // empty list — the exact shape of a guard that guards nothing.
+    expect(fields).toContain("submittedQuotationMinor");
+    expect(fields).toContain("accountingClassification");
+    expect(fields).toContain("financeDealCustody.status");
+    expect(fields.length).toBeGreaterThanOrEqual(5);
+  });
+
+  test("each one is named by the projection rather than silently dropped", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+
+    for (const field of auditFieldsWrittenAnywhere()) {
+      await seed.t.run((ctx) =>
+        ctx.db.insert("financeApplicationOverrides", {
+          orgId: seed.orgId,
+          applicationId,
+          field,
+          previousValue: "1000 (something)",
+          newValue: "2000 (something else)",
+          reason: `a correction to ${field}`,
+          changedBy: seed.approverId,
+          changedAt: Date.now(),
+        })
+      );
+    }
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    const named = new Set(economics.overrides.map((row) => row.reason));
+    for (const field of auditFieldsWrittenAnywhere()) {
+      expect(named.has(`a correction to ${field}`)).toBe(true);
+    }
+  });
+});
+
+/**
  * A correction to one figure is never rendered as a correction to another.
  *
  * `recordSubmittedQuotation` stringifies the quotation together with every

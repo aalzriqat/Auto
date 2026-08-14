@@ -27,7 +27,14 @@
  * so a divergence is still a compile error where it matters. */
 export type PinnedCorrection = {
   _id: string;
-  subject: "APPROVED_PURCHASE_AMOUNT" | "SUBMITTED_QUOTATION" | "RECONCILIATION_FLAG";
+  subject:
+    | "APPROVED_PURCHASE_AMOUNT"
+    | "SUBMITTED_QUOTATION"
+    | "RECONCILIATION_FLAG"
+    | "ACCOUNTING_CLASSIFICATION"
+    | "CUSTODY_SETTLEMENT"
+    | "DEAL_COST"
+    | "LEGAL_INVOICE";
   event: "CORRECTED" | "WITHDRAWN" | "SUPERSEDED" | "RESOLVED";
   previousAmountMinor?: number;
   newAmountMinor?: number;

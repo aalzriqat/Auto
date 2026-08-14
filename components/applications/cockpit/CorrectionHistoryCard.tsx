@@ -26,7 +26,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 export type CorrectionSubject =
   | "APPROVED_PURCHASE_AMOUNT"
   | "SUBMITTED_QUOTATION"
-  | "RECONCILIATION_FLAG";
+  | "RECONCILIATION_FLAG"
+  | "ACCOUNTING_CLASSIFICATION"
+  | "CUSTODY_SETTLEMENT"
+  | "DEAL_COST"
+  | "LEGAL_INVOICE";
 
 /** WHAT HAPPENED to it. */
 export type CorrectionEvent = "CORRECTED" | "WITHDRAWN" | "SUPERSEDED" | "RESOLVED";
@@ -81,10 +85,20 @@ type CorrectionHistoryCardProps = {
   t: (key: string) => string;
 };
 
+/**
+ * Exhaustive by TYPE, so a subject the server learns to send cannot arrive here
+ * with no label. `Record<CorrectionSubject, string>` makes adding one to the
+ * union a compile error until it is named in both languages — the alternative
+ * renders an entry whose heading is blank or, worse, the raw enum.
+ */
 const SUBJECT_LABEL: Record<CorrectionSubject, string> = {
   APPROVED_PURCHASE_AMOUNT: "CorrectionSubjectApprovedAmount",
   SUBMITTED_QUOTATION: "CorrectionSubjectQuotation",
   RECONCILIATION_FLAG: "CorrectionSubjectReconciliation",
+  ACCOUNTING_CLASSIFICATION: "CorrectionSubjectClassification",
+  CUSTODY_SETTLEMENT: "CorrectionSubjectCustody",
+  DEAL_COST: "CorrectionSubjectDealCost",
+  LEGAL_INVOICE: "CorrectionSubjectLegalInvoice",
 };
 
 /** The events that are a STATE rather than a figure, said in words. */

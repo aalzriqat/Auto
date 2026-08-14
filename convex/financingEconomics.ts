@@ -259,6 +259,17 @@ const AUDIT_SUBJECTS = {
   [APPROVED_AMOUNT_FIELD]: "APPROVED_PURCHASE_AMOUNT",
   submittedQuotationMinor: "SUBMITTED_QUOTATION",
   needsFinancingReconciliation: "RECONCILIATION_FLAG",
+  // Written by `financeDealCosts.ts`, into this same table and against this
+  // same application. Missing them dropped four real financial corrections —
+  // an accounting classification withdrawn, a custody settlement reopened, a
+  // reconciled cost re-recorded, a legal invoice replaced — off the one panel
+  // that exists to explain why a deal's figures changed. A registry is only as
+  // good as its coverage, and a silent drop looks exactly like "nothing
+  // happened here".
+  accountingClassification: "ACCOUNTING_CLASSIFICATION",
+  "financeDealCustody.status": "CUSTODY_SETTLEMENT",
+  "financeDealFees.actualAmountMinor": "DEAL_COST",
+  legalInvoiceAmountMinor: "LEGAL_INVOICE",
 } as const;
 
 type AuditSubject = (typeof AUDIT_SUBJECTS)[keyof typeof AUDIT_SUBJECTS];
@@ -286,6 +297,14 @@ type AuditSubject = (typeof AUDIT_SUBJECTS)[keyof typeof AUDIT_SUBJECTS];
 const FINANCE_ONLY_SUBJECTS: ReadonlySet<AuditSubject> = new Set([
   "APPROVED_PURCHASE_AMOUNT",
   "RECONCILIATION_FLAG",
+  // The four accounting subjects, for the same reason and then some: their
+  // reasons are written by finance people about costs, write-offs and invoices,
+  // and cost figures are gated by VIEW_COST_PRICE everywhere else in this
+  // codebase. Opening them here would be a new door into the same room.
+  "ACCOUNTING_CLASSIFICATION",
+  "CUSTODY_SETTLEMENT",
+  "DEAL_COST",
+  "LEGAL_INVOICE",
 ]);
 
 /**
@@ -384,8 +403,24 @@ function presentCorrection(
     return { subject, event: "RESOLVED" };
   }
 
-  // SUBMITTED_QUOTATION — a correction whose subject is nameable and whose
-  // movement is not. Reported without figures rather than with wrong ones.
+  // Something that had been settled being put back in play. Both of these
+  // reverse a decision rather than adjust a figure, and the operator's next step
+  // follows from that rather than from any number.
+  if (subject === "ACCOUNTING_CLASSIFICATION" || subject === "CUSTODY_SETTLEMENT") {
+    return { subject, event: "WITHDRAWN" };
+  }
+
+  // Everything else is a correction whose subject is nameable and whose movement
+  // is not, reported without figures rather than with wrong ones:
+  //
+  //   • SUBMITTED_QUOTATION and LEGAL_INVOICE serialize the amount together with
+  //     every other input that moved, so the leading integer is unchanged when
+  //     something else was corrected;
+  //   • DEAL_COST does name its amount unambiguously, but `financeDealFees`
+  //     carries its OWN currency (schema.ts) while this panel formats in the
+  //     application's. A fee recorded in one currency rendered at another
+  //     currency's scale is a wrong number stated confidently, which is the
+  //     failure this projection exists to prevent.
   return { subject, event: "CORRECTED" };
 }
 
