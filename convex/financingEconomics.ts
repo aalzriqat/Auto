@@ -1359,9 +1359,6 @@ export const recordAppraisal = mutation({
     }
 
     const now = Date.now();
-    // Refuses to carry an unrecognised code forward. `??` PRESERVES a bad
-    // value rather than replacing it, so one legacy row would otherwise
-    // scale every later figure by a guess.
     assertSupportedDenomination(app.economicsCurrency, "recording these economics");
     const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
     const appraisalId = await ctx.db.insert("financeAppraisals", {
@@ -1591,10 +1588,7 @@ export const approveDealerPurchaseAmount = mutation({
         // A vehicle with no recorded cost is not evidence that nothing is owed;
         // `completeSale` refuses that sale outright. Nothing is asserted here.
         if (costAmount > 0) {
-          // Refuses to carry an unrecognised code forward. `??` PRESERVES a bad
-    // value rather than replacing it, so one legacy row would otherwise
-    // scale every later figure by a guess.
-    const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
+          const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
           const refusal = directSettlementBelowEntitlementRefusal({
             approvedAmountMinor: args.approvedAmountMinor,
             supplierEntitlementMinor: toMinorUnits(costAmount, currency),

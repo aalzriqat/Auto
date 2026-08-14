@@ -80,9 +80,21 @@ export function assertSupportedDenomination(
   // every writer preserves it, while a truthiness check waves it through as if
   // nothing were recorded. It then scales by the guessed fallback like any
   // other unrecognised code.
-  if (currency !== undefined && supportedCurrencyScale(currency) === null) {
+  if (currency === undefined) return;
+
+  // CANONICAL SPELLING, not merely a recognisable one.
+  //
+  // `supportedCurrencyScale` uppercases for its lookup, so "jod" resolved to a
+  // valid scale and passed — while every writer preserves the original string.
+  // `completeSale` then compares the currency case-sensitively against the
+  // org's canonical "JOD" and throws, so the deal stranded AFTER handover:
+  // sealed, unfinalizable, and past the point where the approval could be
+  // corrected. A guard that admits a value the rest of the system rejects is
+  // worse than no guard, because it certifies the deal as safe to seal.
+  const canonical = currency.toUpperCase();
+  if (supportedCurrencyScale(canonical) === null || currency !== canonical) {
     throw new ConvexError(
-      `This deal's economics are recorded in "${currency}", which AutoFlow does not recognise, so ${action} would scale the amount by a guess. Restate the deal in a supported currency first.`
+      `This deal's economics are recorded in "${currency}", which AutoFlow cannot use as a currency, so ${action} would scale the amount by a guess or fail later with the deal already sealed. Restate the deal in a supported currency first.`
     );
   }
 }

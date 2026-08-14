@@ -4120,6 +4120,33 @@ describe("handover seals the approved amount, and the amount that was verified",
     expect(suggestion.available).toBe(false);
   });
 
+  test("a non-canonical spelling is refused before the vehicle goes out", async () => {
+    // `supportedCurrencyScale` uppercases for its LOOKUP, so "jod" resolved to
+    // a valid scale and my guard passed it — while every writer preserved the
+    // original spelling. `completeSale` then compares the currency
+    // case-sensitively against the org's canonical "JOD" and throws, so the
+    // deal stranded AFTER handover: sealed, unfinalizable, and past the point
+    // where the approval could be corrected. A guard that admits a value the
+    // rest of the system rejects is worse than no guard, because it promises
+    // the deal is safe to seal.
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { status: "APPROVED", economicsCurrency: "jod" })
+    );
+
+    await expect(
+      seed.asUser.mutation(api.applications.registerVehicleHandover, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await stampFrom(seed, applicationId),
+      })
+    ).rejects.toThrow(/currency|recognise/i);
+
+    const app = await readApp(seed, applicationId);
+    expect(app?.vehicleHandoverAt).toBeUndefined();
+  });
+
   test("the denomination is carried with its scale, not re-derived", async () => {
     const { seed, applicationId } = await approvedDeal();
     const deal = await seed.asUser.query(api.applications.dealCockpit, {
