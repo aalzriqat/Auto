@@ -41,6 +41,11 @@ import {
   ReopenApprovedPurchaseDialog,
 } from "./ReopenApprovedPurchaseDialog";
 import { ConfirmHandoverDialog } from "./ConfirmHandoverDialog";
+import { ConfirmFinalizeDialog } from "./ConfirmFinalizeDialog";
+import {
+  RegisterExpectedPaymentDialog,
+  type ExpectedPaymentMethod,
+} from "../RegisterExpectedPaymentDialog";
 import {
   RecordApprovedPurchaseDialog,
   type ApprovalBasis,
@@ -260,6 +265,8 @@ export function DealCockpit({
   const recordSubmittedQuotation = useMutation(api.financingEconomics.recordSubmittedQuotation);
   const reopenApproval = useMutation(api.financingEconomics.reopenApproval);
   const registerVehicleHandover = useMutation(api.applications.registerVehicleHandover);
+  const registerExpectedPayment = useMutation(api.applications.registerExpectedPayment);
+  const finalizeDeal = useMutation(api.applications.finalizeDeal);
   const approveDealerPurchaseAmount = useMutation(
     api.financingEconomics.approveDealerPurchaseAmount
   );
@@ -376,39 +383,113 @@ export function DealCockpit({
   const [confirmingHandover, setConfirmingHandover] = useState(false);
   const [handoverSubmitting, setHandoverSubmitting] = useState(false);
   const [handoverError, setHandoverError] = useState<string | null>(null);
+  const [registeringPayment, setRegisteringPayment] = useState(false);
+  const [paymentSubmitting, setPaymentSubmitting] = useState(false);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [confirmingFinalize, setConfirmingFinalize] = useState(false);
+  const [finalizeSubmitting, setFinalizeSubmitting] = useState(false);
+  const [finalizeError, setFinalizeError] = useState<string | null>(null);
 
   /**
    * The action for the stage the rail is currently naming.
    *
-   * Handover first, because it is the step the rail names on a deal whose
-   * economics are recorded — and the one the product could not perform. The
-   * permission is its OWN (`register:vehicle_handover`), not the approval
-   * permission: a caller may legitimately hold one and not the other, so a
-   * single flag over the whole tail would hide a step somebody is entitled to
-   * take.
+   * ONE action at a time, keyed to a stage, because the tail is strictly ordered
+   * on the server and each step refuses a second attempt: handover requires an
+   * APPROVED application, the expected payment requires the handover, and
+   * `finalizeDeal` requires both. Offering all three at once would put two
+   * guaranteed refusals on screen beside the one step that can actually be
+   * taken.
+   *
+   * Each step is gated on its OWN permission — `register:vehicle_handover`,
+   * `register:expected_payment`, `finalize:financed_deal` are three separate
+   * strings on customizable roles, so a caller may hold one and not the next.
+   * A single flag over the whole tail would hide a step somebody is entitled to
+   * take, and would show one they are not.
+   *
+   * The last two hang off SETTLEMENT rather than off stages of their own. The
+   * rail's stages are the ones `deriveDealStages` emits, and inventing client
+   * stages it does not know about would give the screen a second opinion about
+   * the deal's shape. SETTLEMENT is where the deal actually sits while these two
+   * are outstanding, and it is the stage whose blocker the operator is trying to
+   * clear.
    */
   const handoverStage = deal?.stages.find((stage) => stage.key === "HANDOVER");
-  const workflowAction =
-    handoverStage && handoverStage.state !== "COMPLETE" && !permissionsLoading
-      ? {
-          stageKey: "HANDOVER",
-          actionKey: "RegisterHandoverAction",
-          onStart: () => {
-            setHandoverError(null);
-            setConfirmingHandover(true);
-          },
-          // The server's own precondition, surfaced instead of discovered as a
-          // failed submit: `registerVehicleHandover` requires an APPROVED
-          // application. A blocked stage keeps its blocker text, which the
-          // block already renders, so only the permission gap is added here.
-          unavailableReasonKey: hasPermission(PERMISSIONS.REGISTER_VEHICLE_HANDOVER)
-            ? undefined
-            : "HandoverNeedsPermission",
-        }
-      : undefined;
+  const settlementStage = deal?.stages.find((stage) => stage.key === "SETTLEMENT");
+  /**
+   * Whether the payment fact `finalizeDeal` requires is on file — from the
+   * SERVER, never inferred from the rail. No stage completes on the expected
+   * payment, so the rail cannot answer this, and guessing from SETTLEMENT's
+   * blocker would have offered finalize on a deal that has no payment recorded.
+   */
+  const expectedPaymentRegistered =
+    deal && "expectedPaymentRegistered" in deal ? deal.expectedPaymentRegistered : false;
+
+  function buildWorkflowAction() {
+    if (permissionsLoading || !deal) return undefined;
+
+    // Handover first: the step the rail names on a deal whose economics are
+    // recorded, and the one the product could not perform at all.
+    if (handoverStage && handoverStage.state !== "COMPLETE") {
+      return {
+        stageKey: "HANDOVER",
+        actionKey: "RegisterHandoverAction",
+        onStart: () => {
+          setHandoverError(null);
+          setConfirmingHandover(true);
+        },
+        // The server's own precondition, surfaced instead of discovered as a
+        // failed submit: `registerVehicleHandover` requires an APPROVED
+        // application. A blocked stage keeps its blocker text, which the block
+        // already renders, so only the permission gap is added here.
+        unavailableReasonKey: hasPermission(PERMISSIONS.REGISTER_VEHICLE_HANDOVER)
+          ? undefined
+          : "HandoverNeedsPermission",
+      };
+    }
+
+    // Everything below is only reachable while the application is still
+    // APPROVED. Once `finalizeDeal` has run the deal is CLOSED and the money it
+    // is now waiting on is settled through the receipt and settlement surfaces,
+    // which have their own actions on this screen. Offering finalize again on a
+    // CLOSED deal would be offering a no-op the server answers by returning the
+    // sale it already made.
+    if (!settlementStage || settlementStage.state === "COMPLETE") return undefined;
+    if (deal.status !== "APPROVED") return undefined;
+
+    if (!expectedPaymentRegistered) {
+      return {
+        stageKey: "SETTLEMENT",
+        actionKey: "RegisterExpectedPaymentAction",
+        onStart: () => {
+          setPaymentError(null);
+          setRegisteringPayment(true);
+        },
+        unavailableReasonKey: hasPermission(PERMISSIONS.REGISTER_EXPECTED_PAYMENT)
+          ? undefined
+          : "ExpectedPaymentNeedsPermission",
+      };
+    }
+
+    return {
+      stageKey: "SETTLEMENT",
+      actionKey: "FinalizeDealAction",
+      onStart: () => {
+        setFinalizeError(null);
+        setConfirmingFinalize(true);
+      },
+      unavailableReasonKey: hasPermission(PERMISSIONS.FINALIZE_FINANCED_DEAL)
+        ? undefined
+        : "FinalizeNeedsPermission",
+    };
+  }
+
+  const workflowAction = buildWorkflowAction();
   // One key per correction attempt, so a retry after a lost response is the same
   // amendment rather than a second audited one.
   const correctionKeyRef = useRef<string | null>(null);
+  // The same discipline for finalization, and it matters more here: the
+  // operation this key protects creates the sale and posts its journals.
+  const finalizeKeyRef = useRef<string | null>(null);
 
   // Below every hook, deliberately. An early return placed above `useRef` changes
   // the hook order between renders — eslint's rules-of-hooks caught exactly that
@@ -553,6 +634,64 @@ export function DealCockpit({
             toast.error(message);
           } finally {
             setHandoverSubmitting(false);
+          }
+        },
+      }}
+      expectedPayment={{
+        registering: registeringPayment,
+        submitting: paymentSubmitting,
+        error: paymentError,
+        onOpenChange: setRegisteringPayment,
+        onSubmit: async (values) => {
+          setPaymentSubmitting(true);
+          setPaymentError(null);
+          try {
+            await registerExpectedPayment({ orgId, applicationId, ...values });
+            toast.success(t("ExpectedPaymentRegisteredSuccess"));
+            setRegisteringPayment(false);
+          } catch (error) {
+            const message = getErrorMessage(error);
+            setPaymentError(message);
+            toast.error(message);
+          } finally {
+            setPaymentSubmitting(false);
+          }
+        },
+      }}
+      finalize={{
+        confirming: confirmingFinalize,
+        submitting: finalizeSubmitting,
+        error: finalizeError,
+        onOpenChange: setConfirmingFinalize,
+        onSubmit: async () => {
+          setFinalizeSubmitting(true);
+          setFinalizeError(null);
+          try {
+            // ONE key per finalize attempt, minted on the first try and reused
+            // by every retry after it. A finalize that runs twice is not a UI
+            // glitch — it is a second sale, a second set of journals and a
+            // second inventory movement for one car. Cleared only once the
+            // server has confirmed, so a lost response retries the SAME
+            // operation rather than starting a new one.
+            finalizeKeyRef.current ??= `finalize-deal:${crypto.randomUUID()}`;
+            await finalizeDeal({
+              orgId,
+              applicationId,
+              idempotencyKey: finalizeKeyRef.current,
+            });
+            finalizeKeyRef.current = null;
+            toast.success(t("DealFinalizedSuccess"));
+            setConfirmingFinalize(false);
+          } catch (error) {
+            // Deliberately keeps the key: every refusal here is actionable and
+            // names what to change — an unrecorded settlement route, missing
+            // economics, an unresolved عربون — so the next attempt is the same
+            // finalize with the same key, not a second one.
+            const message = getErrorMessage(error);
+            setFinalizeError(message);
+            toast.error(message);
+          } finally {
+            setFinalizeSubmitting(false);
           }
         },
       }}
@@ -850,6 +989,8 @@ export function DealCockpitView({
   financeDecision,
   workflowAction,
   handover,
+  expectedPayment,
+  finalize,
   canCorrectAdvice = false,
   onCorrectSettlementAdvice,
   onRecordSupplierReceipt,
@@ -890,6 +1031,26 @@ export function DealCockpitView({
     error: string | null;
     onOpenChange: (open: boolean) => void;
     onSubmit: (values: { notes?: string }) => void | Promise<void>;
+  };
+  /** The expected-payment form's own state. */
+  expectedPayment?: {
+    registering: boolean;
+    submitting: boolean;
+    error: string | null;
+    onOpenChange: (open: boolean) => void;
+    onSubmit: (values: {
+      method: ExpectedPaymentMethod;
+      expectedDate: number;
+      chequeDetails?: { bank: string; chequeNumber: string };
+    }) => void | Promise<void>;
+  };
+  /** The finalization confirmation's own state. */
+  finalize?: {
+    confirming: boolean;
+    submitting: boolean;
+    error: string | null;
+    onOpenChange: (open: boolean) => void;
+    onSubmit: () => void | Promise<void>;
   };
   /**
    * Whether this caller may amend a recorded settlement advice (MANAGE_FINANCE).
@@ -1782,6 +1943,34 @@ export function DealCockpitView({
           t={t}
           onOpenChange={handover.onOpenChange}
           onSubmit={handover.onSubmit}
+        />
+      )}
+
+      {/* The form itself is the review dialog's, reused rather than rebuilt:
+          one shape for the cheque fields, one schema, one set of rules about
+          what a cheque needs. Only its opener differs — here the next-step
+          block owns that, so the dialog renders without its own trigger. */}
+      {expectedPayment && (
+        <RegisterExpectedPaymentDialog
+          open={expectedPayment.registering}
+          withTrigger={false}
+          disabled={expectedPayment.submitting}
+          submitting={expectedPayment.submitting}
+          error={expectedPayment.error}
+          t={t}
+          onOpenChange={expectedPayment.onOpenChange}
+          onConfirm={expectedPayment.onSubmit}
+        />
+      )}
+
+      {finalize && (
+        <ConfirmFinalizeDialog
+          open={finalize.confirming}
+          submitting={finalize.submitting}
+          error={finalize.error}
+          t={t}
+          onOpenChange={finalize.onOpenChange}
+          onSubmit={finalize.onSubmit}
         />
       )}
 

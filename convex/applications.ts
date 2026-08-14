@@ -1653,6 +1653,25 @@ export const dealCockpit = query({
        */
       settlementAdviceRequiresReconciliation: adviceRequiresReconciliation,
       /**
+       * Whether the fact `finalizeDeal` demands about the payment is on file.
+       *
+       * Deliberately `expectedPaymentMethod && expectedPaymentDate` — the exact
+       * pair `finalizeDeal` refuses without — and NOT the
+       * `expectedPaymentRegisteredAt` timestamp that `registerExpectedPayment`
+       * checks for a repeat. The two answer different questions, and the
+       * difference is only visible on a row written before that timestamp
+       * existed: reading the timestamp would tell such a deal to register a
+       * payment it already has, and the mutation would agree and overwrite it.
+       * The review dialog gates on the method for the same reason.
+       *
+       * A WORKFLOW condition, so it sits outside the money gate with
+       * `settlementAdviceRequiresReconciliation`: it carries no amount, no date
+       * and no method — only that the step is done. Whoever may see the deal may
+       * see which step it is waiting on.
+       */
+      expectedPaymentRegistered:
+        app.expectedPaymentMethod !== undefined && app.expectedPaymentDate !== undefined,
+      /**
        * The FIGURES behind that flag, and they are gated.
        *
        * `null` here means one of two different things and the client must not

@@ -843,6 +843,26 @@ export const salesEn = {
   HandoverNotesPlaceholder: "e.g. collected by the customer's brother, ID checked",
   ConfirmHandoverAction: "Confirm handover",
   HandoverRegistered: "Vehicle handover registered",
+
+  RegisterExpectedPaymentAction: "Register the expected payment",
+  ExpectedPaymentNeedsPermission:
+    "You do not have permission to register the expected payment. Someone who does completes this step.",
+  FinalizeDealAction: "Close the deal",
+  FinalizeNeedsPermission:
+    "You do not have permission to close the deal. Someone who does completes this step.",
+  ConfirmFinalizeTitle: "Close the deal",
+  ConfirmFinalizeDesc:
+    "The handover and the expected payment are on file, so the deal can be closed.",
+  /**
+   * What closing actually does, said before it is done.
+   *
+   * `finalizeDeal` is not a status change: it creates the sale, posts its
+   * journals and moves the vehicle. There is no unwind — reversing it means
+   * cancelling the sale — so the word "close" is not left to carry that alone.
+   */
+  FinalizeCreatesTheSale:
+    "Closing records the sale and posts it to the books. It cannot be undone; correcting it afterwards means cancelling the sale.",
+  ConfirmFinalizeAction: "Close the deal",
   DerivedEconomicsHeading: "What that leaves",
   DerivedEconomicsNote: "Worked out by AutoFlow from the two figures above. Not editable.",
   DerivedFundedPortion: "Funded by the finance company",
@@ -1708,6 +1728,17 @@ export const salesAr = {
   HandoverNotesPlaceholder: "مثال: استلمها شقيق العميل، وتم التحقق من الهوية",
   ConfirmHandoverAction: "تأكيد التسليم",
   HandoverRegistered: "تم تسجيل تسليم المركبة",
+
+  RegisterExpectedPaymentAction: "تسجيل الدفعة المتوقعة",
+  ExpectedPaymentNeedsPermission:
+    "لا تملك صلاحية تسجيل الدفعة المتوقعة. يُكمل هذه الخطوة من يملكها.",
+  FinalizeDealAction: "إغلاق الصفقة",
+  FinalizeNeedsPermission: "لا تملك صلاحية إغلاق الصفقة. يُكمل هذه الخطوة من يملكها.",
+  ConfirmFinalizeTitle: "إغلاق الصفقة",
+  ConfirmFinalizeDesc: "التسليم والدفعة المتوقعة مسجَّلان، ويمكن إغلاق الصفقة.",
+  FinalizeCreatesTheSale:
+    "الإغلاق يسجّل البيع ويقيّده في الدفاتر، ولا يمكن التراجع عنه؛ وتصحيحه بعد ذلك يعني إلغاء البيع.",
+  ConfirmFinalizeAction: "إغلاق الصفقة",
   DerivedEconomicsHeading: "ما ينتج عن ذلك",
   DerivedEconomicsNote: "يحتسبه أوتوفلو من الرقمين أعلاه، وغير قابل للتعديل.",
   DerivedFundedPortion: "الجزء المموَّل من شركة التمويل",
