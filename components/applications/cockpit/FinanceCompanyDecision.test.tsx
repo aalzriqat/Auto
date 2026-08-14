@@ -17,8 +17,14 @@
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { format } from "date-fns";
 import type { DealCockpitData, FinanceDecisionWiring } from "./DealCockpit";
 import type { FinanceDecisionFacts } from "./FinanceCompanyDecisionCard";
+import { toCorrectionEntries, type ServerCorrection } from "./corrections";
+import {
+  CORRECTED_APPROVAL_SEQUENCE,
+  EXPENSE_ONLY_QUOTATION_CORRECTION,
+} from "@/test-utils/fixtures/correctionHistory";
 
 const language = vi.hoisted(() => ({ locale: "ar" as "ar" | "en" }));
 
@@ -1211,5 +1217,253 @@ describe("the departure question is carried to the server, and retired when it s
       within(dialog).queryByRole("button", { name: "ApprovedAmountConfirmAction" })
     ).toBeNull();
     expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeTruthy();
+  });
+});
+
+/**
+ * The correction history — the audit trail that existed and was invisible.
+ *
+ * The economics writers have always recorded who changed what, from what, to
+ * what and why, and nothing ever read one — so a deal corrected from 150,000 to
+ * 15,000 showed 15,000 and looked exactly like a deal that was always right.
+ *
+ * Every row rendered below comes from `CORRECTED_APPROVAL_SEQUENCE`, which
+ * `convex/financingEconomics.test.ts` pins against the output of the real
+ * mutations through the real query. The first version of these tests built its
+ * rows by hand and asserted a sequence the server does not emit; the assertions
+ * passed and described a screen that could not exist. Nothing here is invented,
+ * and if the writers or the projection change, the pinning test fails first.
+ */
+describe("corrections are visible on the deal, not just recorded", () => {
+  /** The same adapter the cockpit uses, formatting the same way. */
+  const asEntries = (rows: ServerCorrection[]) =>
+    toCorrectionEntries(rows, (value) => format(value, "d MMM yyyy HH:mm"));
+
+  const [replacement, withdrawal] = CORRECTED_APPROVAL_SEQUENCE;
+  const corrected = asEntries(CORRECTED_APPROVAL_SEQUENCE);
+
+  /**
+   * The entry whose reason is `reason`, so each figure is asserted inside its
+   * own line rather than anywhere on the page. A page-wide match passes on any
+   * element containing the digits and proves nothing about the correction being
+   * legible.
+   */
+  const entryFor = (reason: string) => screen.getByText(reason).closest("div")!;
+
+  test("the reason, what changed, the movement and who made it are all on screen", () => {
+    render(
+      <DealCockpitView
+        deal={dealFixture()}
+        financeDecision={wiring()}
+        corrections={corrected}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    expect(screen.getByText("CorrectionHistoryHeading")).toBeTruthy();
+    // The reason is the only part a person wrote, and the only part that
+    // answers "why is this different from what I remember".
+    expect(screen.getByText(withdrawal.reason)).toBeTruthy();
+    expect(screen.getAllByText("Econ Approver").length).toBe(2);
+    // WHEN, inside the entry it belongs to. Derived through the same formatter
+    // rather than pinned as a literal, because a hard-coded local time makes
+    // this test pass or fail on the machine's timezone rather than on the code.
+    expect(
+      within(entryFor(withdrawal.reason)).getByText(
+        format(withdrawal.changedAt, "d MMM yyyy HH:mm")
+      )
+    ).toBeTruthy();
+    // The sentinel `reopened` is written for an audit table, not for a screen.
+    expect(screen.getByText("CorrectionValueReopened")).toBeTruthy();
+    expect(screen.queryByText(/\breopened\b/)).toBeNull();
+  });
+
+  test("a run of corrections to one figure names it once", () => {
+    render(
+      <DealCockpitView
+        deal={dealFixture()}
+        financeDecision={wiring()}
+        corrections={corrected}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    // Both entries are about the approved amount, so the label carries
+    // information exactly once. Repeating it down every line reads as several
+    // unrelated things and is the noise the grouping exists to remove.
+    expect(screen.getAllByText("CorrectionSubjectApprovedAmount").length).toBe(1);
+  });
+
+  test("a change of figure is always named, which is what the label is for", () => {
+    render(
+      <DealCockpitView
+        deal={dealFixture()}
+        financeDecision={wiring()}
+        corrections={asEntries([
+          ...CORRECTED_APPROVAL_SEQUENCE,
+          ...EXPENSE_ONLY_QUOTATION_CORRECTION,
+        ])}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    // The guarantee that matters: an entry about a DIFFERENT figure can never
+    // inherit the one above it. Grouping must not weaken that — it is the whole
+    // reason the subject exists.
+    expect(screen.getAllByText("CorrectionSubjectApprovedAmount").length).toBe(1);
+    expect(screen.getAllByText("CorrectionSubjectQuotation").length).toBe(1);
+    const quotation = entryFor(EXPENSE_ONLY_QUOTATION_CORRECTION[0].reason);
+    expect(within(quotation).getByText("CorrectionSubjectQuotation")).toBeTruthy();
+  });
+
+  test("the figure is money in the deal's currency, never the stored audit string", () => {
+    // `recordOverride` stores "150000000 (MANUAL @ 85% LTV, approved by pd78…)".
+    // Rendering that put a figure a THOUSAND TIMES too large on screen beside an
+    // internal user id — a materially false money UI, and the reason the value
+    // now arrives as a number the deal's own formatter renders.
+    render(
+      <DealCockpitView
+        deal={dealFixture()}
+        financeDecision={wiring()}
+        corrections={corrected}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    const entry = entryFor(withdrawal.reason);
+    expect(within(entry).getByText(/150,000/)).toBeTruthy();
+    expect(within(entry).queryByText(/150000000/)).toBeNull();
+    expect(within(entry).queryByText(/MANUAL/)).toBeNull();
+    expect(within(entry).queryByText(/approved by/)).toBeNull();
+    // No internal identifier anywhere in the entry.
+    expect(within(entry).queryByText(/pd7|ps7|jx7/)).toBeNull();
+  });
+
+  test("the full corrected sequence reads 150,000 -> off the record -> 15,000", () => {
+    render(
+      <DealCockpitView
+        deal={dealFixture()}
+        financeDecision={wiring()}
+        corrections={corrected}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    // Both ends of the correction are legible as money, which is the whole
+    // point: an operator has to be able to see that 150,000 became 15,000.
+    const wrong = entryFor(withdrawal.reason);
+    const right = entryFor(replacement.reason);
+
+    expect(within(wrong).getByText(/150,000/)).toBeTruthy();
+    expect(within(wrong).getByText("CorrectionValueReopened")).toBeTruthy();
+    expect(within(right).getByText(/15,000/)).toBeTruthy();
+    // The withdrawal is not reported as money moving TO anything, and the
+    // replacement had nothing on record to move FROM.
+    expect(within(wrong).queryByText("CorrectionTo")).toBeNull();
+    expect(within(right).queryByText("CorrectionFrom")).toBeNull();
+    // Neither entry shows raw minor units.
+    expect(within(wrong).queryByText(/150000000/)).toBeNull();
+    expect(within(right).queryByText(/15000000\b/)).toBeNull();
+  });
+
+  test("a correction to another figure is never dressed as approved money", () => {
+    const quotation = EXPENSE_ONLY_QUOTATION_CORRECTION[0];
+    render(
+      <DealCockpitView
+        deal={dealFixture()}
+        financeDecision={wiring()}
+        corrections={asEntries(EXPENSE_ONLY_QUOTATION_CORRECTION)}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    // The quotation writer stores the quotation amount unchanged on BOTH sides
+    // when only the expenses moved, so the projection this replaced rendered an
+    // expense correction as an unlabelled 12,500 to 12,500. It is now named as
+    // the quotation and carries no movement at all.
+    const entry = entryFor(quotation.reason);
+    expect(within(entry).getByText("CorrectionSubjectQuotation")).toBeTruthy();
+    expect(within(entry).queryByText("CorrectionSubjectApprovedAmount")).toBeNull();
+    expect(within(entry).queryByText("CorrectionFrom")).toBeNull();
+    expect(within(entry).queryByText("CorrectionTo")).toBeNull();
+    expect(within(entry).queryByText(/12,500/)).toBeNull();
+  });
+
+  test("renders the same way in Arabic, with the figures still legible", () => {
+    language.locale = "ar";
+    render(
+      <DealCockpitView
+        deal={dealFixture()}
+        financeDecision={wiring()}
+        corrections={corrected}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    const entry = entryFor(withdrawal.reason);
+    expect(within(entry).getByText(/150,000/)).toBeTruthy();
+    expect(within(entry).queryByText(/150000000/)).toBeNull();
+    // RTL must not turn the audit prose back on through a different door.
+    expect(within(entry).queryByText(/approved by|MANUAL/)).toBeNull();
+    // The subject survives translation rather than being English-only chrome.
+    // Panel-scoped, not entry-scoped: it is named once for the run these two
+    // entries share.
+    expect(screen.getByText("CorrectionSubjectApprovedAmount")).toBeTruthy();
+  });
+
+  test("a deal that was never corrected shows no history at all", () => {
+    render(
+      <DealCockpitView
+        deal={dealFixture()}
+        financeDecision={wiring()}
+        corrections={[]}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    // Absent rather than an empty panel: a permanent "no corrections" heading
+    // on every healthy deal is noise, and it reads as something missing.
+    expect(screen.queryByText("CorrectionHistoryHeading")).toBeNull();
+  });
+
+  test("withheld history renders nothing, and the screen does not re-decide the permission", () => {
+    // The server drops each entry whose SUBJECT the caller may not see, so a
+    // caller without the approved amount receives none of these rows. That case
+    // and "never corrected" correctly render the same nothing.
+    render(
+      <DealCockpitView
+        deal={dealFixture()}
+        financeDecision={wiring({ facts: { approvedPurchaseRecorded: true } })}
+        corrections={[]}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    expect(screen.queryByText("CorrectionHistoryHeading")).toBeNull();
+    // ...and the deal itself still renders. A withheld history must not take
+    // the screen with it.
+    expect(screen.getByText("FinanceDecisionHeading")).toBeTruthy();
+  });
+
+  test("an unrenderable timestamp costs the line, never the screen", () => {
+    // Convex stores NaN and infinities verbatim through `v.number()`, and
+    // date-fns `format()` THROWS on them. Formatting one inline would take the
+    // whole cockpit down to render a single history row. Driven through the
+    // ADAPTER, so the guard under test is the one the cockpit actually calls.
+    const corrupt = asEntries([{ ...withdrawal, changedAt: Number.NaN }]);
+    expect(corrupt[0].changedAtLabel).toBeUndefined();
+
+    render(
+      <DealCockpitView
+        deal={dealFixture()}
+        financeDecision={wiring()}
+        corrections={corrupt}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+
+    expect(screen.getByText(withdrawal.reason)).toBeTruthy();
+    expect(screen.getByText("Econ Approver")).toBeTruthy();
+    expect(screen.getByText("FinanceDecisionHeading")).toBeTruthy();
   });
 });

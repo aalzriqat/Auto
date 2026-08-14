@@ -41,6 +41,11 @@ import {
   ReopenApprovedPurchaseDialog,
 } from "./ReopenApprovedPurchaseDialog";
 import {
+  CorrectionHistoryCard,
+  type CorrectionEntry,
+} from "./CorrectionHistoryCard";
+import { isRenderableMoment, toCorrectionEntries } from "./corrections";
+import {
   RecordApprovedPurchaseDialog,
   type ApprovalBasis,
 } from "./RecordApprovedPurchaseDialog";
@@ -67,30 +72,6 @@ import type { PaymentMethod } from "@/components/payments/PaymentMethodSelect";
  * Arabic/Latin run — VIN, currency, references, timestamps — is isolated in its
  * own `<bdi>` so bidi reordering cannot scramble one into its neighbour.
  */
-
-/**
- * Whether a stored moment can actually be formatted.
- *
- * `Number.isFinite` is NOT sufficient, which cost two review rounds to learn.
- * JavaScript's `Date` domain is ±8,640,000,000,000,000 ms, so `8640000000000001`,
- * `1e300` and `Number.MAX_VALUE` are all finite yet outside it — and date-fns
- * `format` throws `RangeError: Invalid time value` on every one of them. An
- * uncaught throw during render loses the WHOLE screen, not one row, which is the
- * defect class this cockpit has already been repaired for twice.
- *
- * Those values are reachable rather than theoretical: `z.number()` accepts any
- * finite number and Convex's `v.number()` stores it verbatim, so a corrupt row
- * arrives intact. SCRUM-45 tracks the same class in the posting path, where the
- * consequence is an aborted accounting drain rather than a lost screen.
- *
- * `isValid(new Date(v))` subsumes `undefined`, `NaN`, `±Infinity` and the
- * out-of-range case in one test. The `typeof` narrowing is load-bearing, not
- * decorative: neither `isValid` nor `Number.isFinite` is a type predicate, so
- * without it `format(entry.changedAt)` is a compile error on `number | undefined`.
- */
-function isRenderableMoment(value: number | undefined): value is number {
-  return typeof value === "number" && isValid(new Date(value));
-}
 
 type StageState = "COMPLETE" | "CURRENT" | "BLOCKED" | "PENDING" | "STOPPED";
 
@@ -284,6 +265,23 @@ export function DealCockpit({
     canViewApplications && deal ? { orgId, applicationId } : "skip"
   );
   const economicsApp = economics?.application ?? null;
+
+  /**
+   * The deal's corrections, ready to render.
+   *
+   * The server withholds each entry by SUBJECT from a caller who may not see the
+   * figure it is about, so a shorter list here is either "nothing else was
+   * corrected" or "not yours to see" — and both correctly render nothing. The
+   * screen does not re-decide the permission; `getEconomics` owns it.
+   */
+  // Through the SAME adapter the history tests drive with real `getEconomics`
+  // output. The subject, the event and the figures are all named by the server;
+  // nothing here infers any of them from a field name or from stored prose. The
+  // timestamp is guarded rather than formatted raw — a corrupt one arrives
+  // intact and `format()` throws, costing the whole screen to render one line.
+  const corrections = toCorrectionEntries(economics?.overrides ?? [], (value) =>
+    format(value, "d MMM yyyy HH:mm")
+  );
 
   /**
    * The calculator, mounted wherever the quotation action can actually be
@@ -491,6 +489,7 @@ export function DealCockpit({
     <DealCockpitView
       deal={deal}
       financeDecision={financeDecision}
+      corrections={corrections}
       canCorrectAdvice={canCorrectAdvice}
       onCorrectSettlementAdvice={async (correction) => {
         correctionKeyRef.current ??= `amend-supplier-advice:${crypto.randomUUID()}`;
@@ -777,6 +776,7 @@ export type FinanceDecisionWiring = {
 export function DealCockpitView({
   deal,
   financeDecision,
+  corrections = [],
   canCorrectAdvice = false,
   onCorrectSettlementAdvice,
   onRecordSupplierReceipt,
@@ -788,6 +788,13 @@ export function DealCockpitView({
    * was skipped for want of `view:finance_applications`.
    */
   financeDecision?: FinanceDecisionWiring;
+  /**
+   * Corrections made to this deal's recorded figures, newest first.
+   *
+   * Defaults to none so a caller that forgets it renders no history rather than
+   * claiming a clean record it never checked.
+   */
+  corrections?: ReadonlyArray<CorrectionEntry>;
   /**
    * Whether this caller may amend a recorded settlement advice (MANAGE_FINANCE).
    *
@@ -1321,6 +1328,11 @@ export function DealCockpitView({
           }}
         />
       )}
+
+      {/* Directly beneath the figures it explains. A correction is only
+          meaningful next to the number it produced — read on its own, further
+          down the page, "150,000 → reopened" is a fact about nothing. */}
+      <CorrectionHistoryCard entries={corrections} money={decisionMoney} t={t} />
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">

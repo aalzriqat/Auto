@@ -4,7 +4,12 @@ import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
-import { requireOwnedRow, requireTenantAuth, redactSettlementEvidence } from "./utils/tenancy";
+import {
+  requireOwnedRow,
+  requireTenantAuth,
+  redactSettlementEvidence,
+  canSeeApprovedPurchaseAmount,
+} from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import {
@@ -218,6 +223,256 @@ function appendReconciliationReason(existing: string | undefined, addition: stri
   if (!existing) return addition;
   if (existing.includes(addition)) return existing;
   return `${existing} ${addition}`;
+}
+
+/**
+ * The audit field the approval history hangs off, and the two ways an approval
+ * leaves the record.
+ *
+ * Both sentinels are written into `newValue`, which otherwise holds a figure —
+ * so every reader has to know them, and a literal repeated across four sites is
+ * how one reader ends up knowing only some. `cleared` was missed exactly that
+ * way.
+ */
+const APPROVED_AMOUNT_FIELD = "approvedDealerPurchaseAmountMinor";
+/** A person took the amount off the record, to put a corrected one back. */
+const APPROVAL_WITHDRAWN = "reopened";
+/** New evidence invalidated it — nobody chose to withdraw it. */
+const APPROVAL_SUPERSEDED = "cleared";
+
+/**
+ * WHAT a correction was about — one entry per audit field this product knows how
+ * to describe.
+ *
+ * The previous projection asked `field.endsWith("Minor")` instead, and that
+ * question is not the one that matters. It answers "does this string probably
+ * start with a number", not "what did this row change" — so every money-suffixed
+ * field was rendered through one shape with no indication of WHICH figure moved,
+ * and a quotation correction was indistinguishable on screen from a correction
+ * to the approved purchase amount. A registry says only what it has been taught.
+ *
+ * A row whose field is absent here is DROPPED. It is a change this product
+ * cannot name, and an unnamed change rendered beside named ones reads as if it
+ * were about the figure above it.
+ */
+const AUDIT_SUBJECTS = {
+  [APPROVED_AMOUNT_FIELD]: "APPROVED_PURCHASE_AMOUNT",
+  submittedQuotationMinor: "SUBMITTED_QUOTATION",
+  needsFinancingReconciliation: "RECONCILIATION_FLAG",
+  // Written by `financeDealCosts.ts`, into this same table and against this
+  // same application. Missing them dropped four real financial corrections —
+  // an accounting classification withdrawn, a custody settlement reopened, a
+  // reconciled cost re-recorded, a legal invoice replaced — off the one panel
+  // that exists to explain why a deal's figures changed. A registry is only as
+  // good as its coverage, and a silent drop looks exactly like "nothing
+  // happened here".
+  accountingClassification: "ACCOUNTING_CLASSIFICATION",
+  "financeDealCustody.status": "CUSTODY_SETTLEMENT",
+  "financeDealFees.actualAmountMinor": "DEAL_COST",
+  legalInvoiceAmountMinor: "LEGAL_INVOICE",
+} as const;
+
+type AuditSubject = (typeof AUDIT_SUBJECTS)[keyof typeof AUDIT_SUBJECTS];
+
+/**
+ * The whole correction history is finance-only, because EVERY entry carries a
+ * free-text reason and free text cannot be classified.
+ *
+ * The gate started as the approved-amount predicate applied to the whole array,
+ * became per-subject when that looked too coarse, and came back here when an
+ * adversarial reviewer pointed at the one field the subject cannot speak for.
+ * `recordSubmittedQuotation` takes an unrestricted `overrideReason`, and a
+ * manager correcting a quotation writes what actually happened — "adjusted after
+ * the company approved 18,902". The subject of that row is the quotation, which
+ * a sales caller may see; the sentence is the approved amount, which they may
+ * not. Returning the entry and withholding the figure would have handed over the
+ * figure in prose, which is precisely the failure `redactSettlementEvidence`
+ * documents for `approvedPurchaseNotes`.
+ *
+ * So the rule is the one that can actually be enforced: a caller who may not see
+ * the approved purchase amount does not read this deal's corrections at all. It
+ * costs a salesperson the knowledge that their own quotation was corrected —
+ * genuinely useful, and worth returning as a reason-less entry once there is a
+ * shape for one. That is a feature to design, not a redaction to improvise into
+ * a money screen during review.
+ *
+ * The registry above still earns its place: it is what names each entry for the
+ * people who CAN see it, and what stops a row being rendered as the wrong figure.
+ * This decides only who reads them.
+ */
+
+/**
+ * WHAT HAPPENED to it. Four events, named rather than inferred from prose.
+ *
+ * `WITHDRAWN` and `SUPERSEDED` are deliberately separate. Both leave the deal
+ * with no approved amount, but a person choosing to take a figure off the record
+ * and new evidence invalidating one are different facts with different next
+ * steps, and a history that conflated them would answer "what changed" and never
+ * "why".
+ */
+type CorrectionEventKind = "CORRECTED" | "WITHDRAWN" | "SUPERSEDED" | "RESOLVED";
+
+type CorrectionProjection = {
+  subject: AuditSubject;
+  event: CorrectionEventKind;
+  /**
+   * Present only where the subject's stored form names a figure UNAMBIGUOUSLY.
+   *
+   * Absent is not an error and never a zero: the entry then carries the subject,
+   * the event, the reason, the person and the time, which still explains the
+   * deal. Rendering a figure this function is not sure of is the failure mode
+   * that matters — a money screen that is confidently wrong.
+   */
+  previousAmountMinor?: number;
+  newAmountMinor?: number;
+};
+
+/**
+ * Reads the amount out of the approved-purchase writer's own serialization.
+ *
+ * Scoped to ONE subject on purpose. This is decoding a format this module
+ * writes — `"150000000 (MANUAL @ 85% LTV, approved by pd78…)"`, or the bare
+ * integer the withdrawal sites store — not guessing at prose. The quotation
+ * subject deliberately does NOT come through here: its writer stringifies the
+ * amount together with every other input that moved, so the leading integer is
+ * unchanged when only the expenses were corrected, and reading it would render
+ * an expense correction as an unchanged 12,500 → 12,500.
+ */
+function decodeApprovedAmount(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  // ANCHORED over the WHOLE value, against the only two forms this module's
+  // writers produce: the bare integer, or the integer followed by the
+  // parenthesised decision.
+  //
+  // Matching a delimited prefix was not enough. `^(\d+)(?=$|[\s(])` accepts
+  // "150000000 garbage" and "150000000 (truncated" and renders both as a
+  // confident 150,000 — and the schema types this column as a plain string, so a
+  // repair script or a bad import can put anything in it. A value this function
+  // does not fully recognise is a value it does not understand, and the contract
+  // is that it shows nothing rather than something believable. Raised in
+  // adversarial review; the earlier form only fixed the decimal case ("12.5"
+  // read as twelve minor units).
+  const match = /^(\d+)(?: \(.*\))?$/.exec(value.trim());
+  if (!match) return undefined;
+  const parsed = Number(match[1]);
+  // Fails closed on anything outside the range money can be counted in.
+  // `Number.isSafeInteger` covers NaN, ±Infinity, fractions and magnitudes past
+  // 2^53 — beyond which the arithmetic that would follow is not exact anyway.
+  if (!Number.isSafeInteger(parsed) || parsed < 0) return undefined;
+  return parsed;
+}
+
+/**
+ * Turns a stored override row into a typed fact a screen may show, or nothing.
+ *
+ * The rows are written for an AUDIT TABLE, not for a person: `recordOverride`
+ * stringifies whatever changed, and the approval site builds that string with
+ * the whole decision inside it. Rendering one verbatim put a raw minor-unit
+ * integer and an internal user id in front of an operator — a money figure a
+ * thousand times too large beside an identifier that means nothing to anyone.
+ *
+ * So nothing stored reaches the client. The subject and the event are named from
+ * the registry above, the figures are decoded only where the stored form is
+ * unambiguous, and the prose is dropped rather than displayed.
+ */
+function presentCorrection(
+  row: Doc<"financeApplicationOverrides">
+): CorrectionProjection | undefined {
+  const subject: AuditSubject | undefined =
+    AUDIT_SUBJECTS[row.field as keyof typeof AUDIT_SUBJECTS];
+  if (subject === undefined) return undefined;
+
+  if (subject === "APPROVED_PURCHASE_AMOUNT") {
+    if (row.newValue === APPROVAL_WITHDRAWN || row.newValue === APPROVAL_SUPERSEDED) {
+      return {
+        subject,
+        event: row.newValue === APPROVAL_WITHDRAWN ? "WITHDRAWN" : "SUPERSEDED",
+        previousAmountMinor: decodeApprovedAmount(row.previousValue),
+      };
+    }
+    return {
+      subject,
+      event: "CORRECTED",
+      previousAmountMinor: decodeApprovedAmount(row.previousValue),
+      newAmountMinor: decodeApprovedAmount(row.newValue),
+    };
+  }
+
+  if (subject === "RECONCILIATION_FLAG") {
+    // Never money. `previousValue` here is the free-text reason the deal was
+    // flagged and `newValue` is a state word — a subject the old projection
+    // happened to leave alone only because its field name lacked the suffix it
+    // was keying on.
+    return { subject, event: "RESOLVED" };
+  }
+
+  // Something that had been settled being put back in play. Both of these
+  // reverse a decision rather than adjust a figure, and the operator's next step
+  // follows from that rather than from any number.
+  if (subject === "ACCOUNTING_CLASSIFICATION" || subject === "CUSTODY_SETTLEMENT") {
+    return { subject, event: "WITHDRAWN" };
+  }
+
+  // Everything else is a correction whose subject is nameable and whose movement
+  // is not, reported without figures rather than with wrong ones:
+  //
+  //   • SUBMITTED_QUOTATION and LEGAL_INVOICE serialize the amount together with
+  //     every other input that moved, so the leading integer is unchanged when
+  //     something else was corrected;
+  //   • DEAL_COST does name its amount unambiguously, but `financeDealFees`
+  //     carries its OWN currency (schema.ts) while this panel formats in the
+  //     application's. A fee recorded in one currency rendered at another
+  //     currency's scale is a wrong number stated confidently, which is the
+  //     failure this projection exists to prevent.
+  return { subject, event: "CORRECTED" };
+}
+
+/**
+ * Whether this deal's approved purchase amount has ever been taken off the
+ * record.
+ *
+ * `approveDealerPurchaseAmount` cannot tell a FIRST approval from one replacing
+ * a withdrawn figure by looking at the application: `reopenApproval` and the
+ * superseding branch of `recordAppraisal` both CLEAR the amount, so both cases
+ * arrive with the field undefined and identical in every other respect. The
+ * history is the only place the difference is recorded, so the history is what
+ * is asked.
+ *
+ * Derived rather than stored on the application deliberately. A
+ * `withdrawnAt` column would be undefined on every deal already sitting in a
+ * withdrawn state right now, and each of those would silently miss the very
+ * event this exists to record — reintroducing the defect for exactly the deals
+ * that have already hit it. Reading the rows needs no backfill to be right.
+ *
+ * Two indexed lookups of at most one row each, never a scan. Collecting the
+ * deal's corrections and filtering in memory read fine on any deal anyone has
+ * seen, and that is exactly what makes it the wrong shape here: this runs on the
+ * path that sets the figure the entire funding split derives from, quotation
+ * corrections carry uncapped free text, and enough of them would push this
+ * mutation past Convex's transaction read limit — turning "somebody wrote a lot
+ * of notes" into "this deal can no longer be approved". Raised in adversarial
+ * review; `getEconomics` having the same shape is not a bound on a mutation.
+ */
+async function approvalWasWithdrawn(
+  ctx: MutationCtx,
+  applicationId: Id<"financeApplications">
+): Promise<boolean> {
+  const sentinel = async (newValue: string) =>
+    await ctx.db
+      .query("financeApplicationOverrides")
+      .withIndex("by_application_field_value", (q) =>
+        q
+          .eq("applicationId", applicationId)
+          .eq("field", APPROVED_AMOUNT_FIELD)
+          .eq("newValue", newValue)
+      )
+      .first();
+
+  // Both, because either one means the amount left the record. Checked in
+  // sequence rather than in parallel only because the first is by far the more
+  // common and short-circuits.
+  if (await sentinel(APPROVAL_WITHDRAWN)) return true;
+  return (await sentinel(APPROVAL_SUPERSEDED)) !== null;
 }
 
 async function recordOverride(
@@ -654,6 +909,10 @@ export const getEconomics = query({
     // Blanked rather than omitted so the returned shape stays the same for
     // every caller — a union of "has the key" and "does not" would make every
     // consumer narrow before reading anything.
+    // The SAME predicate `redactSettlementEvidence` applies to the amount
+    // itself — imported, not restated, so the history and the figure it
+    // describes can never disagree about who may see them.
+    const canWorkDisbursement = canSeeApprovedPurchaseAmount(auth.role);
     const canSeeCost =
       isSystemOwnerRole(auth.role) ||
       auth.role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
@@ -669,7 +928,58 @@ export const getEconomics = query({
         vehiclePurchaseCostMinor: canSeeCost ? app.vehiclePurchaseCostMinor : undefined,
       },
       appraisals: appraisals.sort((a, b) => b.appraisedAt - a.appraisedAt),
-      overrides: overrides.sort((a, b) => b.changedAt - a.changedAt),
+      /**
+       * The corrections on this deal, newest first — with the person named.
+       *
+       * WITHHELD ENTIRELY from a caller who may not see the approved purchase
+       * amount. Every entry carries a free-text `reason`, and free text cannot be
+       * classified: `recordSubmittedQuotation` takes an unrestricted
+       * `overrideReason`, so a correction whose SUBJECT is the quotation can have
+       * the approved amount written into its sentence. Returning such an entry
+       * and withholding the figure hands over the figure in prose — the exact
+       * route `redactSettlementEvidence` documents for `approvedPurchaseNotes`.
+       *
+       * The predicate is the one that helper applies to the amount itself,
+       * imported rather than restated so the history and the number it describes
+       * can never disagree about who may see them.
+       *
+       * This closes ONE of the three routes that helper names. It does not create
+       * the boundary — the other two (deriving the amount from the funded portion
+       * and the LTV, and reading it out of the free-text approval notes) are
+       * untouched, and that rework is tracked separately. Claiming otherwise here
+       * would be the "false assurance behind a longer comment" it warns about.
+       */
+      overrides: !canWorkDisbursement
+        ? []
+        : (
+        await Promise.all(
+          overrides
+            // `changedAt` is `Date.now()` at the writing mutation, so two
+            // corrections a moment apart can carry the SAME millisecond — a
+            // reopen and the re-approval that follows it being the exact pair
+            // this panel exists to show. Sorting on it alone left their order to
+            // whatever the read returned, and a history that can print the
+            // replacement above the withdrawal is not telling the sequence.
+            // `_creationTime` is assigned per insert and breaks the tie in the
+            // order the rows were actually written.
+            .sort((a, b) => b.changedAt - a.changedAt || b._creationTime - a._creationTime)
+            .map(async (row) => {
+              const projected = presentCorrection(row);
+              // A field this product cannot name, so it cannot say what changed.
+              if (!projected) return undefined;
+              return {
+                _id: row._id,
+                reason: row.reason,
+                changedAt: row.changedAt,
+                // Resolved here rather than in the browser: the id alone tells
+                // an operator nothing, and a history that cannot say who made a
+                // correction is not an audit trail.
+                changedByName: (await ctx.db.get(row.changedBy))?.name,
+                ...projected,
+              };
+            })
+        )
+      ).filter((entry): entry is NonNullable<typeof entry> => entry !== undefined),
     };
   },
 });
@@ -1232,11 +1542,18 @@ export const recordAppraisal = mutation({
       await recordOverride(ctx, {
         orgId: args.orgId,
         applicationId: args.applicationId,
-        field: "approvedDealerPurchaseAmountMinor",
+        field: APPROVED_AMOUNT_FIELD,
         previousValue: app.approvedDealerPurchaseAmountMinor,
-        newValue: "cleared",
+        newValue: APPROVAL_SUPERSEDED,
+        // `||`, not `??`. A reason is REQUIRED only when this appraisal
+        // supersedes a live one — but a FIRST finance-company appraisal can
+        // supersede a MANUAL approval, which needs no appraisal at all. That
+        // path accepts whitespace, `.trim()` makes it "", and `??` passes ""
+        // through as the correction's reason, leaving the panel to draw an
+        // entry whose only human-written part is blank. The same fix as in
+        // `approveDealerPurchaseAmount`, which this writer did not inherit.
         reason:
-          args.reappraisalReason?.trim() ??
+          args.reappraisalReason?.trim() ||
           "A new appraisal replaced the evidence the approval was based on.",
         changedBy: user._id,
       });
@@ -1594,11 +1911,27 @@ export const approveDealerPurchaseAmount = mutation({
         app.appliedLtvPercent !== appliedLtvPercent ||
         app.approvedPurchaseApprovedBy !== user._id ||
         (app.approvedPurchaseNotes ?? "") !== (args.notes?.trim() ?? ""));
-    if (approvalMateriallyChanged) {
+    // An approval PUTTING BACK a figure that was taken off the record.
+    //
+    // `approvalMateriallyChanged` is structurally blind to this: it opens with
+    // `app.approvedDealerPurchaseAmountMinor !== undefined`, and both routes out
+    // of an approval — a person reopening it, or a new appraisal superseding it
+    // — clear that field. So the condition is false exactly when the correction
+    // lands. The audit table came out of the real production correction holding
+    // one row saying 150,000 had been withdrawn, and nothing saying 15,000
+    // replaced it, who recorded it, or when.
+    //
+    // Not folded into `approvalMateriallyChanged` because the two answer
+    // different questions and one of them must stay false for a FIRST approval,
+    // which is not a correction and belongs in no history of corrections.
+    const replacesWithdrawnApproval =
+      app.approvedDealerPurchaseAmountMinor === undefined &&
+      (await approvalWasWithdrawn(ctx, args.applicationId));
+    if (approvalMateriallyChanged || replacesWithdrawnApproval) {
       await recordOverride(ctx, {
         orgId: args.orgId,
         applicationId: args.applicationId,
-        field: "approvedDealerPurchaseAmountMinor",
+        field: APPROVED_AMOUNT_FIELD,
         // EVERY input in the change condition above, on both sides — not just
         // the money ones. Recording the approver in the condition but not in
         // the payload wrote a row whose two value fields were the identical
@@ -1611,7 +1944,15 @@ export const approveDealerPurchaseAmount = mutation({
             ? undefined
             : `${app.approvedDealerPurchaseAmountMinor} (${app.approvedPurchaseBasis ?? "unknown basis"} @ ${app.appliedLtvPercent ?? "unknown"}% LTV, approved by ${app.approvedPurchaseApprovedBy ?? "unrecorded"})`,
         newValue: `${args.approvedAmountMinor} (${args.basis} @ ${appliedLtvPercent}% LTV, approved by ${user._id})`,
-        reason: args.notes?.trim() ?? `Re-approved on the ${args.basis} basis.`,
+        // `||`, not `??`. Blank notes trim to "" — which `??` passes straight
+        // through, and an empty reason is the one field of a correction entry a
+        // person actually wrote. The panel would render the line with nothing
+        // where the explanation goes.
+        reason:
+          args.notes?.trim() ||
+          (replacesWithdrawnApproval
+            ? "Recorded after the approved amount was taken off the record."
+            : `Re-approved on the ${args.basis} basis.`),
         changedBy: user._id,
       });
     }
@@ -1811,9 +2152,9 @@ export const reopenApproval = mutation({
     await recordOverride(ctx, {
       orgId: args.orgId,
       applicationId: args.applicationId,
-      field: "approvedDealerPurchaseAmountMinor",
+      field: APPROVED_AMOUNT_FIELD,
       previousValue: app.approvedDealerPurchaseAmountMinor,
-      newValue: "reopened",
+      newValue: APPROVAL_WITHDRAWN,
       reason,
       changedBy: user._id,
     });

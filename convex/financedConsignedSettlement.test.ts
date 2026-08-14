@@ -4709,7 +4709,11 @@ describe("a settlement advice that contradicts the approval", () => {
     const economics = (await s.asUser.query(api.financingEconomics.getEconomics, {
       orgId: s.orgId,
       applicationId,
-    })) as unknown as { application: unknown; overrides: unknown[] };
+    })) as unknown as {
+      application: unknown;
+      overrides: unknown[];
+      appraisals: unknown[];
+    };
     const queue = (await s.asUser.query(api.financingEconomics.listNeedingReconciliation, {
       orgId: s.orgId,
       paginationOpts,
@@ -4726,7 +4730,23 @@ describe("a settlement advice that contradicts the approval", () => {
     expect(detail).toBeTruthy();
     expect(cockpitView).toBeTruthy();
     expect(economics.application).toBeTruthy();
-    expect(economics.overrides.length).toBeGreaterThan(0);
+    // `overrides` USED to carry the realism for this door, and no longer can:
+    // the rows stringify the approved amount, so `getEconomics` now withholds
+    // them from a caller who may not see that amount — which is exactly this
+    // role. Asserted as the guarantee it now is, rather than deleted, because
+    // an anti-vacuity guard that quietly stops guarding is worse than one that
+    // fails. The deal is still approved twice above, so the rows DO exist and a
+    // privileged caller still receives them (see the paired test in
+    // financingEconomics.test.ts).
+    expect(economics.overrides).toEqual([]);
+    // Realism for this door now rests on the APPLICATION object, which is
+    // where the tier-1 fields would actually appear if they leaked — the
+    // override rows never carried them. Stated exactly rather than dropped:
+    // this deal is approved twice and disbursed above, so a populated
+    // application is a genuinely realistic payload for the scan, and the other
+    // doors (`listed.page`, `queue.page`) still contribute non-empty nested
+    // arrays to the same sweep.
+    expect(Object.keys(economics.application as Record<string, unknown>).length).toBeGreaterThan(0);
     expect(queue.page.length).toBeGreaterThan(0);
 
     const suggestion = await s.asUser.query(api.financingEconomics.suggestQuotation, {

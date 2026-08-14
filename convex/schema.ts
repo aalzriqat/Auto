@@ -2622,7 +2622,15 @@ export default defineSchema({
     changedAt: v.number(),
   })
     .index("by_org", ["orgId"])
-    .index("by_application", ["applicationId"]),
+    .index("by_application", ["applicationId"])
+    // Answers "has this deal's approved amount ever been taken off the record"
+    // in two bounded lookups instead of collecting every correction on the deal.
+    // `approveDealerPurchaseAmount` asks it on the path that sets the figure the
+    // whole funding split derives from, and an unbounded read there is a way to
+    // block the approval outright: quotation corrections carry uncapped free
+    // text, and enough of them would push that mutation past the transaction
+    // read limit.
+    .index("by_application_field_value", ["applicationId", "field", "newValue"]),
 
   deposits: defineTable({
     orgId: v.id("organizations"),

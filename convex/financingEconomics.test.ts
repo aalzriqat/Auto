@@ -5,6 +5,11 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
+import {
+  CORRECTED_APPROVAL_SEQUENCE,
+  EXPENSE_ONLY_QUOTATION_CORRECTION,
+  withoutRuntimeIdentity,
+} from "../test-utils/fixtures/correctionHistory";
 
 type TestConvex = ConvexTestInstance<typeof schema>;
 type AuthenticatedTestConvex = ReturnType<TestConvex["withIdentity"]>;
@@ -223,6 +228,30 @@ async function readApp(seed: Seed, applicationId: Id<"financeApplications">) {
   const app = await seed.t.run((ctx) => ctx.db.get(applicationId));
   if (!app) throw new Error("application vanished");
   return app;
+}
+
+/**
+ * The override rows AS STORED, newest first.
+ *
+ * Read from the table rather than off `getEconomics`, because these assertions
+ * are about the AUDIT RECORD — that a change left a trace, and what that trace
+ * says. The query returns a presentation projection instead: the stored strings
+ * embed the whole decision (`"150000000 (MANUAL @ 85% LTV, approved by pd78…)"`)
+ * and shipping that to a screen showed a raw minor-unit integer and an internal
+ * user id, so the query now extracts the figure and drops the prose. The prose
+ * is still the audit trail, and this is where it is checked.
+ */
+async function readOverrides(seed: Seed, applicationId: Id<"financeApplications">) {
+  const rows = await seed.t.run((ctx) =>
+    ctx.db
+      .query("financeApplicationOverrides")
+      .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+      .collect()
+  );
+  // Same tiebreak the query uses. Two corrections can share a millisecond, and
+  // sorting on `changedAt` alone made "which came first" a coin toss — in the
+  // assertions as much as on the screen.
+  return rows.sort((a, b) => b.changedAt - a.changedAt || b._creationTime - a._creationTime);
 }
 
 // ---------------------------------------------------------------------------
@@ -1276,7 +1305,7 @@ describe("reopening an approval", () => {
       applicationId,
     });
     expect(economics.overrides).toHaveLength(1);
-    expect(economics.overrides[0]?.newValue).toContain("MANUAL");
+    expect((await readOverrides(seed, applicationId))[0]?.newValue).toContain("MANUAL");
   });
 
   test("records an approval that changes only its LTV", async () => {
@@ -1308,8 +1337,8 @@ describe("reopening an approval", () => {
     });
     expect(economics.overrides).toHaveLength(1);
     // The row has to say which input moved. "11500 → 11500" reads as a no-op.
-    expect(economics.overrides[0]?.previousValue).toContain("85% LTV");
-    expect(economics.overrides[0]?.newValue).toContain("80% LTV");
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain("85% LTV");
+    expect((await readOverrides(seed, applicationId))[0]?.newValue).toContain("80% LTV");
   });
 
   test("a second approver re-submitting an identical approval leaves a trace", async () => {
@@ -1359,8 +1388,8 @@ describe("reopening an approval", () => {
     // A row is not a trace. Asserting only its existence passed on a row whose
     // previousValue and newValue were the identical string, leaving the prior
     // approver as unrecoverable as before — this table is the only history.
-    expect(economics.overrides[0]?.previousValue).toContain(String(seed.approverId));
-    expect(economics.overrides[0]?.newValue).toContain(String(secondApproverId));
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain(String(seed.approverId));
+    expect((await readOverrides(seed, applicationId))[0]?.newValue).toContain(String(secondApproverId));
   });
 
   test("the same approver re-submitting does not advance the approval timestamp", async () => {
@@ -1384,6 +1413,152 @@ describe("reopening an approval", () => {
       applicationId,
     });
     expect(economics.overrides).toHaveLength(0);
+  });
+
+  /**
+   * The correction that actually happened in production, end to end.
+   *
+   * A manager recorded 150,000 JOD against a ~12,500 deal, reopened it, and put
+   * 15,000 back. The audit table came out of that holding ONE row — the
+   * withdrawal — because `approvalMateriallyChanged` requires the field to
+   * already be set, and `reopenApproval` clears it. So the history recorded that
+   * 150,000 was taken off the record and never that 15,000 replaced it, who
+   * recorded it, or when. A history missing the replacement cannot explain the
+   * deal, which is the only thing it exists to do.
+   *
+   * Through the real writers, deliberately: the projection this feeds is only
+   * worth testing against rows the server genuinely emits.
+   */
+  test("a correction records the replacement, not only the withdrawal", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+
+    // A figure unlike anything on this deal — acknowledged, because AutoFlow
+    // challenges it but is not entitled to refuse the finance company's number.
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(150_000),
+      basis: "MANUAL",
+      notes: "Read off the advice note.",
+      outlierAcknowledged: true,
+    });
+    // The FIRST approval is not a correction. Nothing was replaced, and
+    // approvedPurchaseApprovedBy/At already record who and when — a row here
+    // would put a correction entry on every healthy deal.
+    expect(await readOverrides(seed, applicationId)).toHaveLength(0);
+
+    await seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "The amount entered was wrong.",
+    });
+
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(15_000),
+      basis: "MANUAL",
+      notes: "Recorded the amount the company actually approved.",
+    });
+
+    const rows = await readOverrides(seed, applicationId);
+    // TWO events: the withdrawal and the replacement. One is the defect.
+    expect(rows).toHaveLength(2);
+
+    const [replacement, withdrawal] = rows;
+    expect(withdrawal?.newValue).toBe("reopened");
+    expect(withdrawal?.previousValue).toContain(String(jod(150_000)));
+
+    // The replacement names the new amount, its actor and its time — the three
+    // facts the withdrawal row cannot carry.
+    expect(replacement?.field).toBe("approvedDealerPurchaseAmountMinor");
+    expect(replacement?.newValue).toContain(String(jod(15_000)));
+    expect(replacement?.changedBy).toBe(seed.approverId);
+    expect(replacement?.changedAt).toBeGreaterThanOrEqual(withdrawal!.changedAt);
+    expect(replacement?.reason).toBe("Recorded the amount the company actually approved.");
+    // Nothing was on record to move FROM: the withdrawal already said what left.
+    expect(replacement?.previousValue).toBeUndefined();
+
+    // And the deal itself carries the corrected figure, so the history is
+    // explaining a real change rather than describing one that did not land.
+    expect((await readApp(seed, applicationId)).approvedDealerPurchaseAmountMinor).toBe(
+      jod(15_000)
+    );
+
+    // The sequence reaches the screen in the order it happened. These two rows
+    // are written a moment apart and routinely share a millisecond, so ordering
+    // on `changedAt` alone printed the replacement above the withdrawal about as
+    // often as not — and a history out of order is not a history.
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.overrides.map((entry) => entry.event)).toEqual([
+      "CORRECTED",
+      "WITHDRAWN",
+    ]);
+    expect(economics.overrides[0]?.newAmountMinor).toBe(jod(15_000));
+    // Nothing was on record to move FROM once it had been withdrawn.
+    expect(economics.overrides[0]?.previousAmountMinor).toBeUndefined();
+    expect(economics.overrides[1]?.previousAmountMinor).toBe(jod(150_000));
+    expect(economics.overrides[1]?.newAmountMinor).toBeUndefined();
+
+    // And this whole projection is what the cockpit's history tests render.
+    // Pinning it here is what stops those tests proving anything about a screen
+    // the server cannot produce — which is exactly what they did when the rows
+    // they rendered were written by hand.
+    expect(economics.overrides.map(withoutRuntimeIdentity)).toEqual(
+      CORRECTED_APPROVAL_SEQUENCE.map(withoutRuntimeIdentity)
+    );
+  });
+
+  /**
+   * The other way an approval leaves the record: superseded by new evidence.
+   *
+   * Same defect, different door — `recordAppraisal` clears the approved amount
+   * when a new appraisal invalidates it, so the approval that follows was
+   * equally unrecorded.
+   */
+  test("an approval replacing one a new appraisal withdrew is recorded too", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+    });
+
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_000),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+      reappraisalReason: "Company re-inspected the vehicle.",
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_000),
+      basis: "APPRAISAL",
+    });
+
+    const rows = await readOverrides(seed, applicationId);
+    expect(rows).toHaveLength(2);
+    expect(rows[1]?.newValue).toBe("cleared");
+    expect(rows[0]?.newValue).toContain(String(jod(11_000)));
+    expect(rows[0]?.changedBy).toBe(seed.approverId);
   });
 
   test("blocks approving your own application", async () => {
@@ -1490,7 +1665,7 @@ describe("reconciliation queue", () => {
       orgId: seed.orgId,
       applicationId,
     });
-    expect(economics.overrides.some((o) => o.field === "needsFinancingReconciliation")).toBe(true);
+    expect(economics.overrides.some((o) => o.subject === "RECONCILIATION_FLAG")).toBe(true);
   });
 });
 
@@ -1913,8 +2088,8 @@ describe("overrides and audit", () => {
     expect(economics.overrides).toHaveLength(1);
     // A row is not a trace if both sides read the same. Same lesson the
     // approver audit next door had to learn.
-    expect(economics.overrides[0]?.previousValue).toContain(String(seed.userId));
-    expect(economics.overrides[0]?.newValue).toContain(String(seed.approverId));
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain(String(seed.userId));
+    expect((await readOverrides(seed, applicationId))[0]?.newValue).toContain(String(seed.approverId));
   });
 
   test("the same person re-recording an identical quotation does not advance its timestamp", async () => {
@@ -1989,8 +2164,8 @@ describe("overrides and audit", () => {
     // value fields read identically and whose reason claimed a source/recorder
     // change that never happened — while the patch overwrote the old inputs, so
     // the cause of every moved derived figure was unrecoverable.
-    expect(economics.overrides[0]?.previousValue).toContain(String(jod(300)));
-    expect(economics.overrides[0]?.newValue).toContain(String(jod(900)));
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain(String(jod(300)));
+    expect((await readOverrides(seed, applicationId))[0]?.newValue).toContain(String(jod(900)));
     expect(economics.overrides[0]?.reason).toMatch(/expenses/i);
     expect(economics.overrides[0]?.reason).not.toMatch(/source|recorder/i);
     expect((await readApp(seed, applicationId)).estimatedDealerBorneExpensesMinor).toBe(jod(900));
@@ -2355,14 +2530,18 @@ describe("overrides and audit", () => {
       applicationId,
     });
     expect(economics.overrides).toHaveLength(1);
-    expect(economics.overrides[0]).toMatchObject({
+    // Read from the TABLE: `changedBy` is an internal id and no longer leaves
+    // the server — the projection carries the person's NAME instead, because an
+    // id on screen tells an operator nothing. The actor is still audited, and
+    // this is where that is checked.
+    expect((await readOverrides(seed, applicationId))[0]).toMatchObject({
       field: "submittedQuotationMinor",
       changedBy: seed.userId,
     });
     // The row names the mode alongside the figure, because the mode is rewritten
     // by the same patch and has no history of its own.
-    expect(economics.overrides[0]?.previousValue).toContain(String(jod(12_500)));
-    expect(economics.overrides[0]?.newValue).toContain(String(jod(13_000)));
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain(String(jod(12_500)));
+    expect((await readOverrides(seed, applicationId))[0]?.newValue).toContain(String(jod(13_000)));
     expect(economics.overrides[0]?.reason).toMatch(/revised quotation/);
   });
 
@@ -2403,9 +2582,9 @@ describe("overrides and audit", () => {
       applicationId,
     });
     expect(economics.overrides).toHaveLength(1);
-    expect(economics.overrides[0]?.previousValue).toContain("CALCULATED_WITH_OVERRIDE");
-    expect(economics.overrides[0]?.previousValue).toContain("cover its own fee");
-    expect(economics.overrides[0]?.newValue).toContain("MANUAL_ENTRY");
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain("CALCULATED_WITH_OVERRIDE");
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain("cover its own fee");
+    expect((await readOverrides(seed, applicationId))[0]?.newValue).toContain("MANUAL_ENTRY");
   });
 
   /**
@@ -2456,7 +2635,7 @@ describe("overrides and audit", () => {
       applicationId,
     });
     expect(economics.overrides).toHaveLength(1);
-    const override = economics.overrides[0];
+    const override = (await readOverrides(seed, applicationId))[0];
     // The figure it moved FROM has to survive, because the patch has just
     // overwritten it and there is no other history of that field anywhere.
     expect(override?.previousValue).toContain(String(jod(DEAL.targetSelling)));
@@ -2510,7 +2689,7 @@ describe("overrides and audit", () => {
       applicationId,
     });
     expect(economics.overrides).toHaveLength(1);
-    expect(economics.overrides[0]?.previousValue).toContain(String(driftedNetProceeds));
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain(String(driftedNetProceeds));
     expect(economics.overrides[0]?.reason).toMatch(/net proceeds/i);
   });
 
@@ -2559,10 +2738,10 @@ describe("overrides and audit", () => {
     });
     expect(economics.overrides).toHaveLength(1);
     // Both starting figures survive, because the patch has overwritten both.
-    expect(economics.overrides[0]?.previousValue).toContain(
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain(
       String(jod(DEAL.exampleDealerBorneExpenses))
     );
-    expect(economics.overrides[0]?.previousValue).toContain(String(driftedClosing));
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain(String(driftedClosing));
     expect(economics.overrides[0]?.reason).toMatch(/closing expenses/i);
   });
 
@@ -2598,7 +2777,7 @@ describe("overrides and audit", () => {
       applicationId,
     });
     expect(economics.overrides).toHaveLength(1);
-    expect(economics.overrides[0]?.previousValue).toContain(String(driftedClosing));
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain(String(driftedClosing));
     expect(economics.overrides[0]?.reason).toMatch(/closing expenses/i);
   });
 
@@ -2687,9 +2866,9 @@ describe("overrides and audit", () => {
       applicationId,
     });
     expect(economics.overrides).toHaveLength(1);
-    expect(economics.overrides[0]?.field).toBe("submittedQuotationMinor");
-    expect(economics.overrides[0]?.previousValue).toContain(String(jod(12_500)));
-    expect(economics.overrides[0]?.newValue).toContain(String(jod(9_000)));
+    expect(economics.overrides[0]?.subject).toBe("SUBMITTED_QUOTATION");
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain(String(jod(12_500)));
+    expect((await readOverrides(seed, applicationId))[0]?.newValue).toContain(String(jod(9_000)));
   });
 
   test("the quotation cannot be changed after the company has approved an amount", async () => {
@@ -3596,5 +3775,553 @@ describe("the correction workflow's guards are enforced by the server", () => {
     expect((await readApp(seed, applicationId)).approvedDealerPurchaseAmountMinor).toBe(
       jod(40_000)
     );
+  });
+});
+
+/**
+ * The correction history is only as private as the figure inside it.
+ *
+ * `recordOverride` stringifies the approved amount into `previousValue` and
+ * `newValue`. `redactSettlementEvidence` names this query's `overrides[]` as
+ * one of three routes by which a `view:sales` caller recovers a number the row
+ * itself withholds — harmless while nothing rendered them, and a leak in front
+ * of the exact role it is withheld from the moment a screen does.
+ */
+describe("the correction history follows the amount it describes", () => {
+  async function seedCorrectedDeal() {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_800),
+      basis: "MANUAL",
+      notes: "Negotiated directly.",
+    });
+    await seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "Entered from the wrong advice.",
+    });
+    return { seed, applicationId };
+  }
+
+  test("a caller who may see the amount gets the history, with the person named", async () => {
+    const { seed, applicationId } = await seedCorrectedDeal();
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+
+    expect(economics.overrides).toHaveLength(1);
+    expect(economics.overrides[0]?.reason).toBe("Entered from the wrong advice.");
+    // The id alone tells an operator nothing; a history that cannot say who is
+    // not an audit trail.
+    expect(economics.overrides[0]?.changedByName).toBeDefined();
+    // And the replaced figure survives — this row is the only place it does.
+    expect((await readOverrides(seed, applicationId))[0]?.previousValue).toContain(String(jod(11_800)));
+  });
+
+  test("a sales caller gets NO history, because the rows carry the amount withheld from them", async () => {
+    const { seed, applicationId } = await seedCorrectedDeal();
+    const asSales = await addSalesUser(seed);
+
+    const forSales = await asSales.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+
+    // The amount is withheld from this caller...
+    expect(forSales.application.approvedDealerPurchaseAmountMinor).toBeUndefined();
+    // ...so the rows that spell it out in prose must be withheld too. Returning
+    // them would hand back, in a string, the number the line above removed.
+    expect(forSales.overrides).toEqual([]);
+    // The rest of the deal still serves — withholding the history must not
+    // withhold the deal.
+    expect(forSales.application.submittedQuotationMinor).toBe(jod(DEAL.quotation));
+  });
+
+  test("a correction to another figure still cannot carry the amount in its prose", async () => {
+    const { seed, applicationId } = await seedCorrectedDeal();
+    const asSales = await addSalesUser(seed);
+
+    // The approval on this deal has been withdrawn, so the quotation is
+    // writable again. Its SUBJECT is the quotation, which this caller may see —
+    // and its reason is whatever a manager typed, which here is the figure they
+    // may not. `overrideReason` is `v.optional(v.string())`: unrestricted.
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(11_900),
+      source: "MANUAL_ENTRY",
+      overrideReason: "Matched approved amount 18,902.",
+    });
+
+    const forSales = await asSales.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+
+    // Raised in adversarial review, against a version of this query that gated
+    // per subject and returned this row. Withholding the figure while returning
+    // the sentence hands over the figure in prose — the exact route
+    // `redactSettlementEvidence` documents for `approvedPurchaseNotes`.
+    expect(JSON.stringify(forSales.overrides)).not.toContain("18,902");
+    expect(forSales.overrides).toEqual([]);
+
+    // A finance caller reads all of it, so the assertion above is about the
+    // GATE and not about a history that is empty for everyone.
+    const forFinance = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(forFinance.overrides.map((row) => row.subject)).toContain("SUBMITTED_QUOTATION");
+    expect(JSON.stringify(forFinance.overrides)).toContain("18,902");
+  });
+
+  test("a reconciliation note is withheld from sales for its REASON, not its figures", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        needsFinancingReconciliation: true,
+        financingReconciliationReason: "Legacy deal.",
+      })
+    );
+    // The note a finance user writes about what they checked quotes deal
+    // figures as a matter of course — the same free-text route
+    // `redactSettlementEvidence` already documents for `approvedPurchaseNotes`.
+    await seed.asUser.mutation(api.financingEconomics.resolveFinancingReconciliation, {
+      orgId: seed.orgId,
+      applicationId,
+      note: "Agrees with the approved 18,902 on the advice.",
+    });
+
+    const asSales = await addSalesUser(seed);
+    const forSales = await asSales.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    // The old all-or-nothing gate hid this row as a side effect. Moving to
+    // per-subject gating would have opened it, so the reason it stays closed is
+    // now a written rule rather than an accident of the previous design.
+    expect(forSales.overrides.map((row) => row.subject)).toEqual([]);
+
+    const forFinance = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(forFinance.overrides.map((row) => row.subject)).toEqual(["RECONCILIATION_FLAG"]);
+  });
+});
+
+/**
+ * No writer's corrections can vanish from the panel without a test saying so.
+ *
+ * `financeApplicationOverrides` types `field` as `v.string()`, and SIX call
+ * sites across two modules write to it. The projection recognises fields from a
+ * registry and drops anything else, which is the right failure mode for a row it
+ * cannot name — and a silent one, indistinguishable on screen from "nothing was
+ * ever corrected here".
+ *
+ * That is not hypothetical. Raised in adversarial review of this branch and
+ * confirmed: moving to the registry dropped four real financial corrections
+ * written by `financeDealCosts.ts` — an accounting classification withdrawn, a
+ * custody settlement reopened, a reconciled cost re-recorded, a legal invoice
+ * replaced. Every one of them is exactly the kind of change this panel exists to
+ * explain, and none reached it.
+ *
+ * So the writers are discovered from the source rather than listed by hand. A
+ * seventh call site added later fails here instead of quietly disappearing.
+ */
+describe("every audit field a writer records can reach the panel", () => {
+  const CONVEX_SOURCES = import.meta.glob("./**/*.ts", {
+    query: "?raw",
+    import: "default",
+    eager: true,
+  }) as Record<string, string>;
+
+  /**
+   * Every field name passed to an override insert, anywhere in convex/.
+   *
+   * Resolves CONSTANTS as well as literals, and throws on a call site it cannot
+   * read. Reading only `field: "literal"` was the first attempt and both
+   * adversarial reviewers took it apart independently: all three writers of
+   * `approvedDealerPurchaseAmountMinor` name the field through
+   * `APPROVED_AMOUNT_FIELD`, so the discovery silently returned six fields
+   * without the one that matters most — while the "not vacuous" assertions
+   * below still passed. A guard whose blind spot is the most consequential
+   * subject in the table is worse than no guard, because it is believed.
+   *
+   * Throwing rather than skipping is the point: an unreadable call site must
+   * fail this test, not quietly shrink the set it claims to cover.
+   */
+  function auditFieldsWrittenAnywhere(): string[] {
+    const found = new Set<string>();
+    for (const [path, source] of Object.entries(CONVEX_SOURCES)) {
+      if (path.includes(".test.") || path.includes("/_generated/")) continue;
+      // `recordOverride` is the shared writer, not a call site. Its own body
+      // inserts `field: args.field` — whichever field its caller passed — and
+      // every one of those callers is discovered separately below. Located by
+      // name rather than waved through as "a dotted expression", so an
+      // unreadable field ANYWHERE else still throws.
+      const helper = source.indexOf("async function recordOverride(");
+      const insideHelper = (index: number) =>
+        helper !== -1 && index >= helper && index < helper + 900;
+      const callSites = /insert\(\s*"financeApplicationOverrides"|recordOverride\(\s*ctx\s*,/g;
+      let site: RegExpExecArray | null;
+      while ((site = callSites.exec(source)) !== null) {
+        if (insideHelper(site.index)) continue;
+        // The `field:` belongs to the object literal that opens at the call, so
+        // a window is enough and avoids parsing TypeScript to find one key.
+        const window = source.slice(site.index, site.index + 700);
+        const field = /field:\s*(?:"([^"]+)"|([A-Za-z_$][\w$]*))/.exec(window);
+        if (!field) {
+          throw new Error(`Override write at ${path} names no field this test can read`);
+        }
+        if (field[1] !== undefined) {
+          found.add(field[1]);
+          continue;
+        }
+        // A constant. Resolved from its declaration in the same module — the
+        // only form these writers use, and anything else must announce itself
+        // rather than be dropped.
+        const declared = new RegExp(`const ${field[2]}\\s*=\\s*"([^"]+)"`).exec(source);
+        if (!declared) {
+          throw new Error(`Override write at ${path} names field \`${field[2]}\`, which this test cannot resolve`);
+        }
+        found.add(declared[1]);
+      }
+    }
+    return [...found].sort((a, b) => a.localeCompare(b));
+  }
+
+  test("the discovery itself still finds the writers, so this is not vacuous", () => {
+    const fields = auditFieldsWrittenAnywhere();
+    // A regex that stops matching would make every assertion below pass on an
+    // empty list — the exact shape of a guard that guards nothing.
+    expect(fields).toContain("submittedQuotationMinor");
+    expect(fields).toContain("accountingClassification");
+    expect(fields).toContain("financeDealCustody.status");
+    // The approved purchase amount above all. Its three writers name the field
+    // through a CONSTANT rather than a literal, and a discovery that reads only
+    // literals silently omits the single most consequential subject in this
+    // table while every other assertion here still passes. Both adversarial
+    // reviewers found that independently.
+    expect(fields).toContain("approvedDealerPurchaseAmountMinor");
+    expect(fields.length).toBeGreaterThanOrEqual(6);
+  });
+
+  test("each one is named by the projection rather than silently dropped", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+
+    for (const field of auditFieldsWrittenAnywhere()) {
+      await seed.t.run((ctx) =>
+        ctx.db.insert("financeApplicationOverrides", {
+          orgId: seed.orgId,
+          applicationId,
+          field,
+          previousValue: "1000 (something)",
+          newValue: "2000 (something else)",
+          reason: `a correction to ${field}`,
+          changedBy: seed.approverId,
+          changedAt: Date.now(),
+        })
+      );
+    }
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    const named = new Set(economics.overrides.map((row) => row.reason));
+    for (const field of auditFieldsWrittenAnywhere()) {
+      expect(named.has(`a correction to ${field}`)).toBe(true);
+    }
+  });
+});
+
+/**
+ * A correction to one figure is never rendered as a correction to another.
+ *
+ * `recordSubmittedQuotation` stringifies the quotation together with every
+ * other input that moved, so a correction to the DEALER-BORNE EXPENSES stores
+ * the same leading integer on both sides of the row. The projection this
+ * replaces keyed on `field.endsWith("Minor")` and read that integer, so an
+ * expense correction arrived at the screen as an unlabelled money movement from
+ * 12,500 to 12,500 — a figure that did not change, presented next to approved
+ * purchase amounts that had.
+ */
+describe("a correction names the figure it is about", () => {
+  test("an expense-only correction shows no money movement, and is not approved money", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordManualBaseline(seed, applicationId);
+
+    // Same quotation, same source. Only the expenses behind it move.
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(900),
+      customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+      overrideReason: "Registration came in higher than estimated.",
+    });
+
+    // The trap is really in the data: both stored sides lead with the SAME
+    // integer, so a projection that reads it renders 12,500 -> 12,500. Without
+    // this the assertions below would pass on a row that never had the problem.
+    const stored = (await readOverrides(seed, applicationId))[0];
+    expect(stored?.field).toBe("submittedQuotationMinor");
+    expect(stored?.previousValue?.startsWith(String(jod(DEAL.quotation)))).toBe(true);
+    expect(stored?.newValue.startsWith(String(jod(DEAL.quotation)))).toBe(true);
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    const entry = economics.overrides[0];
+
+    // Named as the quotation, so it can never be read as the approved amount.
+    expect(entry?.subject).toBe("SUBMITTED_QUOTATION");
+    // And carrying no movement, because the figure the writer serialized is not
+    // the figure that changed. The reason is what explains this entry.
+    expect(entry?.previousAmountMinor).toBeUndefined();
+    expect(entry?.newAmountMinor).toBeUndefined();
+    expect(entry?.reason).toBe("Registration came in higher than estimated.");
+
+    // Pinned for the cockpit test that renders this case, so what it draws is
+    // what this writer and this query actually produce.
+    expect(economics.overrides.map(withoutRuntimeIdentity)).toEqual(
+      EXPENSE_ONLY_QUOTATION_CORRECTION.map(withoutRuntimeIdentity)
+    );
+  });
+});
+
+/**
+ * The history projection fails CLOSED on anything it does not understand.
+ *
+ * Raised in review: a `*Minor` row holding something non-numeric, unsafe or
+ * out of range must not be formatted into plausible-looking money, and a future
+ * override field must not acquire denomination semantics merely because its
+ * stored prose happens to begin with digits. Showing nothing is always
+ * recoverable; showing a confident wrong number is not.
+ */
+describe("the correction history refuses to invent money", () => {
+  async function withStoredOverride(value: string, field = "approvedDealerPurchaseAmountMinor") {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run((ctx) =>
+      ctx.db.insert("financeApplicationOverrides", {
+        orgId: seed.orgId,
+        applicationId,
+        field,
+        previousValue: value,
+        newValue: value,
+        reason: "crafted row",
+        changedBy: seed.approverId,
+        changedAt: Date.now(),
+      })
+    );
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    return economics.overrides[0];
+  }
+
+  test("a truncated decimal is not shown as whole minor units", async () => {
+    // `^(\d+)` alone reads this as 12 and renders twelve minor units — a
+    // confident figure invented by dropping the fraction.
+    const row = await withStoredOverride("12.5");
+    expect(row?.previousAmountMinor).toBeUndefined();
+    expect(row?.newAmountMinor).toBeUndefined();
+    // The line still carries what a person wrote.
+    expect(row?.reason).toBe("crafted row");
+  });
+
+  test("non-numeric, signed and empty values are omitted rather than guessed at", async () => {
+    for (const value of ["", "   ", "unknown", "-5000", "+5000", "NaN", "Infinity", "1e6"]) {
+      const row = await withStoredOverride(value);
+      expect(row?.previousAmountMinor).toBeUndefined();
+      expect(row?.newAmountMinor).toBeUndefined();
+    }
+  });
+
+  test("a magnitude past exact integer arithmetic is omitted, not rounded", async () => {
+    const row = await withStoredOverride("9007199254740993");
+    expect(row?.previousAmountMinor).toBeUndefined();
+  });
+
+  test("a value with trailing junk is not read as the figure it starts with", async () => {
+    // Raised in adversarial review. Matching a delimited PREFIX accepted every
+    // one of these and rendered a confident 150,000 — and this column is a plain
+    // string, so a repair script or a bad import can put anything in it. The
+    // whole value has to be a form this module's writers actually produce.
+    for (const value of [
+      "150000000 garbage",
+      "150000000 (truncated",
+      "150000000 (MANUAL @ 85% LTV, approved by u_1) and then some",
+      "150000000\t(MANUAL)",
+      "150000000  (MANUAL)",
+    ]) {
+      const row = await withStoredOverride(value);
+      expect(row?.previousAmountMinor).toBeUndefined();
+      expect(row?.newAmountMinor).toBeUndefined();
+    }
+  });
+
+  test("an audit field this product cannot name is not shown at all", async () => {
+    // Not merely stripped of its figures — DROPPED. An unnamed entry rendered
+    // beside named ones reads as if it were about the figure above it, and the
+    // suffix rule it used to be judged by answered "does this string probably
+    // start with a number" rather than "what did this row change".
+    const row = await withStoredOverride("150000000 (whatever this becomes)", "someFutureField");
+    expect(row).toBeUndefined();
+  });
+
+  test("the real stored shape still reads as money, so this is not vacuous", async () => {
+    // The whole point of the guards above is that the GENUINE format keeps
+    // working. Without this, every assertion here would pass on a projection
+    // that presented nothing at all.
+    const row = await withStoredOverride("150000000 (MANUAL @ 85% LTV, approved by u_1)");
+    expect(row?.previousAmountMinor).toBe(150_000_000);
+    const bare = await withStoredOverride("15000000");
+    expect(bare?.previousAmountMinor).toBe(15_000_000);
+  });
+});
+
+/**
+ * A withdrawn approval says it was withdrawn.
+ *
+ * Found in adversarial review of PR #233. `recordAppraisal` writes the sentinel
+ * `"cleared"` when new evidence supersedes the approval that rested on it
+ * (`convex/financingEconomics.ts:1339`), and the first cut of the projection
+ * knew only `"reopened"`. So the row came back with no amount and no state, and
+ * the panel rendered a bare previous figure with no arrow and nothing saying it
+ * had been withdrawn — on the one screen whose entire job is explaining why a
+ * number changed, that reads as "unchanged".
+ *
+ * Distinct from a reopen on purpose: a reopen is a person correcting a figure,
+ * this is new evidence invalidating one. Conflating them would answer "what
+ * changed" and never "why".
+ */
+describe("an approval withdrawn by new evidence is reported as withdrawn", () => {
+  test("the projection reports the cleared state, not a silent blank", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_800),
+      providerType: "FINANCE_COMPANY",
+      providerName: "First assessor",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_800),
+      basis: "APPRAISAL",
+    });
+
+    // New evidence arrives and invalidates the approval that rested on it.
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(10_500),
+      providerType: "FINANCE_COMPANY",
+      providerName: "Second assessor",
+      appraisedAt: Date.now(),
+      reappraisalReason: "Company re-inspected the vehicle.",
+    });
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    const cleared = economics.overrides.find(
+      (row) => row.subject === "APPROVED_PURCHASE_AMOUNT"
+    );
+
+    expect(cleared).toBeDefined();
+    // The figure it moved FROM survives...
+    expect(cleared?.previousAmountMinor).toBe(jod(11_800));
+    // ...and the row says what happened rather than going blank.
+    expect(cleared?.event).toBe("SUPERSEDED");
+    // The sentinel is a STATE, never presented as money.
+    expect(cleared?.newAmountMinor).toBeUndefined();
+  });
+
+  test("a superseded approval still says why, even on a blank reappraisal reason", async () => {
+    // Raised by CodeRabbit. `recordAppraisal` REQUIRES a reason only when the
+    // appraisal supersedes a live one — but a FIRST finance-company appraisal
+    // can supersede a MANUAL approval, which needs no appraisal at all. So this
+    // path accepts whitespace, `.trim()` makes it "", and `??` passes "" through
+    // as the correction's reason. The panel then draws an entry whose only
+    // human-written part is blank.
+    //
+    // The identical defect was fixed in `approveDealerPurchaseAmount` and not
+    // carried across to the other writer of the same audit row.
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_800),
+      basis: "MANUAL",
+      notes: "Negotiated directly; no appraisal on this deal.",
+    });
+
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_000),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+      // Accepted here: nothing live is being superseded in the APPRAISAL class.
+      reappraisalReason: "   ",
+    });
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    const cleared = economics.overrides.find((row) => row.event === "SUPERSEDED");
+    expect(cleared).toBeDefined();
+    expect(cleared?.reason.trim()).not.toBe("");
+  });
+
+  test("a reopen and a clearance are not conflated", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_800),
+      basis: "MANUAL",
+      notes: "Negotiated directly.",
+    });
+    await seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "Entered from the wrong advice.",
+    });
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    // A person correcting a figure — the other cause entirely.
+    expect(economics.overrides[0]?.event).toBe("WITHDRAWN");
   });
 });
