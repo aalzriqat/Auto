@@ -3936,6 +3936,22 @@ describe("handover seals the approved amount, and the amount that was verified",
     expect(deal?.handoverEvidence.currency).toBeNull();
   });
 
+  test("a currency AutoFlow does not support is not a denomination", async () => {
+    const { seed, applicationId } = await approvedDeal();
+    // `economicsCurrency` is a free string in the schema, and
+    // `scaleForCurrency` answers 2 for anything it does not recognise. So a
+    // typo or a raw-edited value sails through as a valid denomination: "JD"
+    // for JOD renders 11,500,000 fils as 115,000 — the same order-of-magnitude
+    // error the null case was made to prevent, entering by a different door.
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { economicsCurrency: "JD" }));
+
+    const deal = await seed.asUser.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(deal?.handoverEvidence.currency).toBeNull();
+  });
+
   test("the denomination is carried with its scale, not re-derived", async () => {
     const { seed, applicationId } = await approvedDeal();
     const deal = await seed.asUser.query(api.applications.dealCockpit, {

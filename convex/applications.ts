@@ -28,7 +28,7 @@ import {
   assertValidMinorAmount,
   toMinorSameCurrencyOrUndefined,
   outstandingMinorFromMajor,
-  scaleForCurrency,
+  supportedCurrencyScale,
 } from "./utils/money";
 import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
 import {
@@ -1522,6 +1522,25 @@ function economicsStamp(app: Doc<"financeApplications">): string {
  * refuses the confirmation rather than spelling a number in a currency nobody
  * verified.
  */
+/**
+ * The deal's denomination, or null when AutoFlow cannot vouch for it.
+ *
+ * Two ways it can be unknowable and both fail closed. ABSENT: the row predates
+ * `economicsCurrency`, and the organization's current currency is not a
+ * fallback because `orgSettings` does not lock currency for
+ * `financeApplications` — the org may have switched since. UNSUPPORTED: the
+ * field is a free string, so "JD" or a raw-edited code reaches here, and
+ * `scaleForCurrency` would answer 2 for it rather than admit it does not know.
+ * A wrong scale is an order-of-magnitude error on an irreversible screen.
+ */
+function denominationOf(
+  currency: string | undefined
+): { code: string; scale: number } | null {
+  if (!currency) return null;
+  const scale = supportedCurrencyScale(currency);
+  return scale === null ? null : { code: currency, scale };
+}
+
 async function handoverEvidenceFor(
   ctx: QueryCtx,
   app: Doc<"financeApplications">,
@@ -1550,9 +1569,7 @@ async function handoverEvidenceFor(
       appraisals,
       maySeeFigures
     ),
-    currency: app.economicsCurrency
-      ? { code: app.economicsCurrency, scale: scaleForCurrency(app.economicsCurrency) }
-      : null,
+    currency: denominationOf(app.economicsCurrency),
   };
 }
 

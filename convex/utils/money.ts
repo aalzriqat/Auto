@@ -17,6 +17,25 @@ const CURRENCY_SCALES: Record<string, CurrencyScale> = {
   JPY: 0,
 };
 
+/**
+ * The scale AutoFlow can actually vouch for, or null when it cannot.
+ *
+ * `scaleForCurrency` below answers 2 for anything unrecognised, which is the
+ * right behaviour for display and arithmetic that must not crash — but it is a
+ * GUESS, and a guess is unacceptable where a wrong scale changes a figure by an
+ * order of magnitude. `economicsCurrency` is a free string in the schema, so a
+ * typo or a raw-edited value like "JD" reaches this code: JOD is scale 3, the
+ * fallback would call it 2, and 11,500,000 fils would render as 115,000 on the
+ * screen that seals a deal permanently.
+ *
+ * Callers that seal or display money irreversibly use THIS one and fail closed
+ * on null.
+ */
+export function supportedCurrencyScale(currency: string): CurrencyScale | null {
+  const scale = CURRENCY_SCALES[currency.toUpperCase()];
+  return scale === undefined ? null : scale;
+}
+
 export function scaleForCurrency(currency: string): CurrencyScale {
   const scale = CURRENCY_SCALES[currency.toUpperCase()];
   if (scale === undefined) return 2;
