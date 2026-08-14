@@ -3843,6 +3843,43 @@ describe("handover seals the approved amount, and the amount that was verified",
     expect(sealed?.vehicleHandoverAt).toBeTypeOf("number");
   });
 
+  test("the cockpit shows the confirmation figures to everyone entitled to them", async () => {
+    const { seed, applicationId } = await approvedDeal();
+
+    // Entitled to the approved amount — `redactSettlementEvidence` serves it to
+    // `confirm:finance_disbursement` — but WITHOUT `view:finance_applications`,
+    // so the cockpit never mounts `getEconomics`. It used to render the
+    // confirmation with no figures and no anomaly warning while the stamp
+    // arrived anyway and the handover sealed: entitled to see, shown nothing,
+    // and still able to close the one-way door.
+    const asDisbursement = await callerWith(seed, "cockpitdisb", [
+      "view:sales",
+      "confirm:finance_disbursement",
+      "register:vehicle_handover",
+    ]);
+    const deal = await asDisbursement.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(deal?.handoverEvidence.approvedPurchaseAmountMinor).toBe(jod(11_500));
+
+    // And a caller the figure is withheld from is still told nothing — the
+    // evidence is redacted by the same policy `applications.get` applies, so
+    // the two screens cannot disagree about the same deal for the same role.
+    const asSalesOnly = await callerWith(seed, "cockpitsales", [
+      "view:sales",
+      "register:vehicle_handover",
+    ]);
+    const withheld = await asSalesOnly.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(withheld?.handoverEvidence.approvedPurchaseAmountMinor).toBeNull();
+    // The stamp is NOT withheld from them: display is permission-shaped, the
+    // obligation is not.
+    expect(withheld?.economicsStamp).toBeTruthy();
+  });
+
   test("the stamp says nothing about the money it protects", async () => {
     const { seed, applicationId } = await approvedDeal();
     const stamp = await stampFrom(seed, applicationId);

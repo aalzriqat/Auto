@@ -1287,6 +1287,27 @@ export function DealCockpitView({
   );
   const decisionMarker =
     locale === "ar" && decisionCurrency === currency.code ? currency.symbol : decisionCurrency;
+  /**
+   * What the handover confirmation shows — from the COCKPIT's own payload, not
+   * from `getEconomics`.
+   *
+   * The cockpit only mounts `getEconomics` for `view:finance_applications`. A
+   * role holding `confirm:finance_disbursement` without it is entitled to the
+   * approved amount, and the legacy Review screen shows it — but here the
+   * confirmation rendered blank while the handover still sealed. Both screens
+   * now read the same server-side redaction, so the same caller sees the same
+   * deal whichever door they open.
+   */
+  const handoverEvidence =
+    deal && "handoverEvidence" in deal ? deal.handoverEvidence : undefined;
+  // Denominated in the DEAL's currency where it has one, so these figures are
+  // not spelled in whatever the organization reports in today. The dialog also
+  // freezes this formatter on open — the integers alone were not enough.
+  const handoverCurrency = handoverEvidence?.currency ?? decisionCurrency;
+  const handoverFactor = Math.pow(10, scaleForCurrency(handoverCurrency));
+  const handoverMoney = (minor: number) =>
+    `${(minor / handoverFactor).toLocaleString()} ${handoverCurrency}`;
+
   const decisionMoney = (minor: number) =>
     `${(minor / decisionFactor).toLocaleString()} ${decisionMarker}`;
   const adviceRecordedLabel =
@@ -2051,27 +2072,24 @@ export function DealCockpitView({
           // Read from the SAME facts the decision card renders, so the figures
           // the dialog asks the operator to verify are the ones they have been
           // looking at — not a second derivation that could disagree.
-          approvedAmountMinor={financeDecision?.facts.approvedPurchaseAmountMinor ?? null}
+          approvedAmountMinor={handoverEvidence?.approvedPurchaseAmountMinor ?? null}
           financeCompanyFundedPortionMinor={
-            financeDecision?.facts.financeCompanyFundedPortionMinor ?? null
+            handoverEvidence?.financeCompanyFundedPortionMinor ?? null
           }
-          dealerContributionMinor={financeDecision?.facts.dealerContributionMinor ?? null}
+          dealerContributionMinor={handoverEvidence?.dealerContributionMinor ?? null}
           // The SERVER's verdict, threaded straight through. The dialog does
           // not re-derive it, and nothing on this screen owns a second opinion
           // about what counts as an unusual amount.
-          approvedAmountIsFarFromEvidence={financeDecision?.approvedAmountIsFarFromEvidence ?? false}
-          // From the cockpit query, NOT from `financeDecision`. The figures
-          // above come from `getEconomics`, which a caller without
-          // `view:finance_applications` never mounts — keying the stamp to that
-          // query would leave exactly those callers unable to hand over at all,
-          // which is the dead end this redesign removes.
+          approvedAmountIsFarFromEvidence={
+            handoverEvidence?.approvedAmountIsFarFromEvidence ?? false
+          }
           // `deal` is a union — the cash variant comes from `sales.dealCockpit`
           // and carries no stamp, because nothing on that path seals financing
           // economics. Narrowed by presence rather than by `dealKind` so a
           // future payload that stops issuing one fails here, at the point that
           // needs it, instead of silently sending `undefined` to the mutation.
           economicsStamp={deal && "economicsStamp" in deal ? deal.economicsStamp : undefined}
-          money={decisionMoney}
+          money={handoverMoney}
           t={t}
           onOpenChange={handover.onOpenChange}
           onSubmit={handover.onSubmit}

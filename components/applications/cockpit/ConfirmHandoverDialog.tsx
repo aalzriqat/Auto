@@ -121,6 +121,18 @@ export function ConfirmHandoverDialog({
     dealerContributionMinor: number | null;
     approvedAmountIsFarFromEvidence: boolean;
     economicsStamp: string | undefined;
+    // The FORMATTER, frozen with the figures it formats.
+    //
+    // Freezing the minor-unit integers alone was not enough. `money` is derived
+    // from the deal's `economicsCurrency` falling back to the ORG's current
+    // currency, so on a legacy row that carries no currency of its own, an
+    // organization switching JOD to USD while this dialog is open re-renders
+    // 11,500,000 as 115,000 USD rather than 11,500 JOD — a figure wrong by a
+    // factor of ten and labelled in the wrong currency, from numbers that never
+    // moved. The stamp does not change either, because the row did not, so the
+    // server accepts the confirmation. The race the snapshot closed came back
+    // in the denomination.
+    money: (minor: number) => string;
   } | null>(null);
   if (open !== wasOpen) {
     setWasOpen(open);
@@ -132,9 +144,13 @@ export function ConfirmHandoverDialog({
         dealerContributionMinor,
         approvedAmountIsFarFromEvidence,
         economicsStamp,
+        money,
       });
     }
   }
+  // Everything rendered below comes from the snapshot, including how it is
+  // spelled. `money` is deliberately not read directly past this point.
+  const showMoney = confirmed?.money ?? money;
 
   const figures: Array<{ key: string; label: string; minor: number; flagged?: boolean }> = [];
   if (confirmed?.approvedAmountMinor != null) {
@@ -202,7 +218,7 @@ export function ConfirmHandoverDialog({
                             : "tabular-nums font-medium"
                         }
                       >
-                        {money(figure.minor)}
+                        {showMoney(figure.minor)}
                       </bdi>
                     </dd>
                   </div>

@@ -1792,6 +1792,45 @@ export const dealCockpit = query({
        */
       economicsStamp: economicsStamp(app),
       /**
+       * What the handover confirmation shows, on `base` so it survives the
+       * money gate — and derived through `redactSettlementEvidence`, the same
+       * policy `applications.get` uses.
+       *
+       * The cockpit used to read these from `getEconomics`, which it only
+       * mounts for `view:finance_applications`. A role holding
+       * `confirm:finance_disbursement` without it is ENTITLED to the approved
+       * amount — `applications.get` shows it — yet the cockpit rendered the
+       * confirmation with no figures and no anomaly warning, while the stamp
+       * still arrived and the handover still sealed. The two entry points to
+       * the same one-way door disagreed about the same deal for the same
+       * caller, and the cockpit was the one that showed less.
+       *
+       * Redaction is a DISPLAY question and belongs here. What must never come
+       * back is keying the OBLIGATION to it: the stamp above is demanded of
+       * everyone, and a caller shown nothing is still held to the deal not
+       * having moved.
+       */
+      handoverEvidence: {
+        approvedPurchaseAmountMinor:
+          redactSettlementEvidence(app, role).approvedDealerPurchaseAmountMinor ?? null,
+        // Not redacted anywhere — `getEconomics` and `applications.get` both
+        // return the split in full — so withholding it only here would make
+        // the cockpit show less than the screen it is replacing.
+        financeCompanyFundedPortionMinor: app.financeCompanyFundedPortionMinor ?? null,
+        dealerContributionMinor: app.dealerContributionMinor ?? null,
+        approvedAmountIsFarFromEvidence: approvedAmountIsFarFromEvidenceFor(
+          app,
+          await ctx.db
+            .query("financeAppraisals")
+            .withIndex("by_application", (q) => q.eq("applicationId", args.applicationId))
+            .collect(),
+          redactSettlementEvidence(app, role).approvedDealerPurchaseAmountMinor !== undefined
+        ),
+        // The deal's OWN denomination, so the dialog does not spell these
+        // figures in whatever the organization happens to report in today.
+        currency: app.economicsCurrency ?? null,
+      },
+      /**
        * The FIGURES behind that flag, and they are gated.
        *
        * `null` here means one of two different things and the client must not

@@ -1326,6 +1326,18 @@ describe("handover states the door it closes, with the figures to check", () => 
             { key: "APPLICATION", state: "COMPLETE" },
             { key: "HANDOVER", state: "CURRENT" },
           ],
+          // The confirmation's figures come from the COCKPIT payload now, not
+          // from `getEconomics` — a caller without `view:finance_applications`
+          // never mounts that query, and used to get a blank confirmation over
+          // a handover that sealed anyway.
+          handoverEvidence: {
+            approvedPurchaseAmountMinor: 150_000 * JOD,
+            financeCompanyFundedPortionMinor: 127_500 * JOD,
+            dealerContributionMinor: 22_500 * JOD,
+            approvedAmountIsFarFromEvidence: false,
+            currency: "JOD",
+            ...factOverrides,
+          },
         })}
         financeDecision={wiring({
           facts: {
@@ -1333,7 +1345,6 @@ describe("handover states the door it closes, with the figures to check", () => 
             approvedPurchaseAmountMinor: 150_000 * JOD,
             financeCompanyFundedPortionMinor: 127_500 * JOD,
             dealerContributionMinor: 22_500 * JOD,
-            ...factOverrides,
           },
         })}
         workflowAction={{
@@ -1423,6 +1434,13 @@ describe("a flagged amount does not look ordinary at the one-way door", () => {
             { key: "APPLICATION", state: "COMPLETE" },
             { key: "HANDOVER", state: "CURRENT" },
           ],
+          handoverEvidence: {
+            approvedPurchaseAmountMinor: amountMinor,
+            financeCompanyFundedPortionMinor: 127_500 * JOD,
+            dealerContributionMinor: 22_500 * JOD,
+            approvedAmountIsFarFromEvidence: flagged,
+            currency: "JOD",
+          },
         })}
         financeDecision={wiring({
           approvedAmountIsFarFromEvidence: flagged,

@@ -100,6 +100,40 @@ describe("the handover confirmation is about the figures the operator read", () 
     );
   });
 
+  test("an organization currency change cannot re-denominate what is on screen", () => {
+    const onSubmit = vi.fn();
+    const props = {
+      open: true as const,
+      submitting: false,
+      error: null,
+      approvedAmountMinor: 11_500_000,
+      financeCompanyFundedPortionMinor: 10_000_000,
+      dealerContributionMinor: 1_500_000,
+      approvedAmountIsFarFromEvidence: false,
+      economicsStamp: "v2|7",
+      // JOD: scale 3.
+      money: (minor: number) => `${minor / 1000} JOD`,
+      t,
+      onOpenChange: vi.fn(),
+      onSubmit,
+    };
+    const { rerender } = render(<ConfirmHandoverDialog {...props} />);
+    expect(screen.getByText("11500 JOD")).toBeTruthy();
+
+    // A legacy row carries no `economicsCurrency`, so the formatter falls back
+    // to the ORG's currency — which an admin can change while this dialog is
+    // open. Nothing about the deal moves, so the stamp still matches and the
+    // server still accepts: freezing the integers without freezing their scale
+    // put the race back in the denomination. USD is scale 2, so the same minor
+    // units would read as 115,000 in the wrong currency.
+    rerender(
+      <ConfirmHandoverDialog {...props} money={(minor: number) => `${minor / 100} USD`} />
+    );
+
+    expect(screen.getByText("11500 JOD")).toBeTruthy();
+    expect(screen.queryByText("115000 USD")).toBeNull();
+  });
+
   test("re-opening takes a fresh snapshot", () => {
     const onSubmit = vi.fn();
     const props = {
