@@ -134,6 +134,42 @@ describe("the handover confirmation is about the figures the operator read", () 
     expect(screen.queryByText("115000 USD")).toBeNull();
   });
 
+  test("the warning and the emphasis describe the same state of the deal", () => {
+    const props = {
+      open: true as const,
+      submitting: false,
+      error: null,
+      approvedAmountMinor: 150_000_000,
+      financeCompanyFundedPortionMinor: 127_500_000,
+      dealerContributionMinor: 22_500_000,
+      approvedAmountIsFarFromEvidence: true,
+      economicsStamp: "v2|7",
+      money: (minor: number) => `JD ${minor / 1000}`,
+      t,
+      onOpenChange: vi.fn(),
+      onSubmit: vi.fn(),
+    };
+    const { rerender } = render(<ConfirmHandoverDialog {...props} />);
+    expect(screen.getByText("HandoverAmountLooksUnusual")).toBeTruthy();
+
+    // The styling read the snapshot and the WARNING read the live prop, so a
+    // reactive update left the frozen figures described by a verdict about a
+    // different state — the flagged amount still on screen, the sentence
+    // saying it was flagged now gone. Not a server bypass, since the stamp
+    // still refuses; an internally contradictory confirmation at the one-way
+    // door, which is worse than either half alone.
+    rerender(<ConfirmHandoverDialog {...props} approvedAmountIsFarFromEvidence={false} />);
+    expect(screen.getByText("HandoverAmountLooksUnusual")).toBeTruthy();
+
+    // ...and re-opening is allowed to adopt the new verdict, because then the
+    // figures beside it are the new ones too.
+    rerender(
+      <ConfirmHandoverDialog {...props} open={false} approvedAmountIsFarFromEvidence={false} />
+    );
+    rerender(<ConfirmHandoverDialog {...props} approvedAmountIsFarFromEvidence={false} />);
+    expect(screen.queryByText("HandoverAmountLooksUnusual")).toBeNull();
+  });
+
   test("re-opening takes a fresh snapshot", () => {
     const onSubmit = vi.fn();
     const props = {

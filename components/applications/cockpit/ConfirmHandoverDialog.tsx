@@ -148,34 +148,55 @@ export function ConfirmHandoverDialog({
       });
     }
   }
-  // Everything rendered below comes from the snapshot, including how it is
-  // spelled. `money` is deliberately not read directly past this point.
-  const showMoney = confirmed?.money ?? money;
+  /**
+   * The ONE thing anything below is allowed to render from.
+   *
+   * Three separate defects in this dialog were the same mistake: some of what
+   * the operator sees came from the snapshot and some from the live props, so
+   * the confirmation described two different states of the deal at once. The
+   * figures were fixed, then the currency they were spelled in, then the
+   * "this looks unusual" warning — each found by a reviewer, after the previous
+   * one had been called done.
+   *
+   * Collapsing every read into a single object is what stops a fourth. Adding a
+   * field to the dialog now means adding it here, and reaching past it for a
+   * live prop is visible on the line rather than invisible three screens down.
+   * Before the snapshot exists there is nothing to be inconsistent WITH, so the
+   * fallback to live props is safe — the dialog is closed at that point.
+   */
+  const shown = confirmed ?? {
+    approvedAmountMinor,
+    financeCompanyFundedPortionMinor,
+    dealerContributionMinor,
+    approvedAmountIsFarFromEvidence,
+    economicsStamp,
+    money,
+  };
 
   const figures: Array<{ key: string; label: string; minor: number; flagged?: boolean }> = [];
-  if (confirmed?.approvedAmountMinor != null) {
+  if (shown.approvedAmountMinor != null) {
     figures.push({
       key: "approved",
       label: t("ApprovedPurchaseLabel"),
-      minor: confirmed.approvedAmountMinor,
+      minor: shown.approvedAmountMinor,
       // The figure this dialog exists to have a last look at, and the one the
       // server has already judged unusual. Presenting it with the same weight
       // as the rest is how an order-of-magnitude mistake reads as ordinary.
-      flagged: confirmed.approvedAmountIsFarFromEvidence,
+      flagged: shown.approvedAmountIsFarFromEvidence,
     });
   }
-  if (confirmed?.financeCompanyFundedPortionMinor != null) {
+  if (shown.financeCompanyFundedPortionMinor != null) {
     figures.push({
       key: "funded",
       label: t("DerivedFundedPortion"),
-      minor: confirmed.financeCompanyFundedPortionMinor,
+      minor: shown.financeCompanyFundedPortionMinor,
     });
   }
-  if (confirmed?.dealerContributionMinor != null) {
+  if (shown.dealerContributionMinor != null) {
     figures.push({
       key: "contribution",
       label: t("DerivedDealerContribution"),
-      minor: confirmed.dealerContributionMinor,
+      minor: shown.dealerContributionMinor,
     });
   }
 
@@ -218,7 +239,7 @@ export function ConfirmHandoverDialog({
                             : "tabular-nums font-medium"
                         }
                       >
-                        {showMoney(figure.minor)}
+                        {shown.money(figure.minor)}
                       </bdi>
                     </dd>
                   </div>
@@ -227,7 +248,7 @@ export function ConfirmHandoverDialog({
             )}
             {/* Named, not merely coloured: colour alone is not a message, and
                 it is not available to every reader. */}
-            {approvedAmountIsFarFromEvidence && (
+            {shown.approvedAmountIsFarFromEvidence && (
               <p className="text-sm font-medium text-destructive">
                 {t("HandoverAmountLooksUnusual")}
               </p>
@@ -265,7 +286,7 @@ export function ConfirmHandoverDialog({
                 // The stamp from the snapshot, never the live prop. Reading it
                 // fresh here would compare the deal to itself and pass however
                 // much had changed since the operator started reading.
-                economicsStamp: confirmed?.economicsStamp,
+                economicsStamp: shown.economicsStamp,
               })
             }
           >
