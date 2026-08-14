@@ -3598,3 +3598,106 @@ describe("the correction workflow's guards are enforced by the server", () => {
     );
   });
 });
+
+/**
+ * What actually decides which appraisal the anomaly verdict is judged against.
+ *
+ * Raised in review: sharing `resolveComparisonAppraisal` between the query and
+ * the mutation proves they AGREE, not that they agree on the right row. The
+ * answer is that the choice does not rest on the sort at all — `recordAppraisal`
+ * supersedes every live appraisal in the same class, so at most one non-estimate
+ * appraisal is ever live and the sort is a defensive tie-break that cannot fire.
+ *
+ * Pinned here because that invariant is the authority. If supersession ever
+ * stopped being total, the selection would silently become "whichever date is
+ * highest" — and `appraisedAt` is operator-supplied with no upper bound
+ * (SCRUM-71), which is exactly when a stale row could start winning.
+ */
+describe("the appraisal the anomaly verdict is judged against", () => {
+  test("is the only live one, because a reappraisal supersedes its predecessor", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_000),
+      providerType: "FINANCE_COMPANY",
+      providerName: "First assessor",
+      appraisedAt: Date.now(),
+    });
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      // DELIBERATELY dated EARLIER than the one it replaces. If the selection
+      // rested on the date, the superseded row would win; it must not.
+      appraisedAt: Date.now() - 30 * 24 * 60 * 60 * 1000,
+      appraisalAmountMinor: jod(90_000),
+      providerType: "FINANCE_COMPANY",
+      providerName: "Second assessor",
+      reappraisalReason: "Company re-inspected the vehicle.",
+    });
+
+    const rows = await seed.t.run((ctx) =>
+      ctx.db
+        .query("financeAppraisals")
+        .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+        .collect()
+    );
+    const live = rows.filter((r) => r.status === "RECORDED" || r.status === "APPROVED");
+    // The invariant the selection actually rests on.
+    expect(live).toHaveLength(1);
+    expect(live[0]?.appraisalAmountMinor).toBe(jod(90_000));
+
+    // And the verdict follows the LIVE row, not the newest date: 90,000 is
+    // within half of itself, so an approval at 90,000 is ordinary — while the
+    // superseded 11,000 would have made it a glaring outlier.
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(90_000),
+      basis: "MANUAL",
+      notes: "Matches the current appraisal.",
+    });
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.approvedAmountIsFarFromEvidence).toBe(false);
+  });
+
+  test("the verdict and the mutation cannot disagree about the same deal", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+
+    // The mutation refuses this without acknowledgement...
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: seed.orgId,
+        applicationId,
+        approvedAmountMinor: jod(125_000),
+        basis: "MANUAL",
+        notes: "Done",
+      })
+    ).rejects.toThrow(/far from this deal's/i);
+
+    // ...and once acknowledged, the QUERY says the same thing about the stored
+    // figure. A screen that called this normal while the mutation called it an
+    // outlier would be two authorities on one number.
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(125_000),
+      basis: "MANUAL",
+      notes: "Confirmed by the company.",
+      outlierAcknowledged: true,
+    });
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.approvedAmountIsFarFromEvidence).toBe(true);
+  });
+});
