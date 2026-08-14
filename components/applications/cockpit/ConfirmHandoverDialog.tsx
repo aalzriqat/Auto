@@ -30,155 +30,137 @@ import {
  * the deal that prompted this whole workstream carried a 150,000 JOD figure
  * against a 17,000 quotation. This is the last screen that would have shown it.
  */
+/**
+ * What the server says this deal's economics are, as one object.
+ *
+ * Resolved by `handoverEvidenceFor` and consumed identically by the cockpit and
+ * the legacy Review screen, so the two doors into the same irreversible action
+ * cannot describe the same deal differently.
+ */
+export type HandoverEvidence = {
+  approvedPurchaseAmountMinor: number | null;
+  financeCompanyFundedPortionMinor: number | null;
+  dealerContributionMinor: number | null;
+  approvedAmountIsFarFromEvidence: boolean;
+  /** Null when the deal's denomination cannot be established. Fails closed. */
+  currency: { code: string; scale: number } | null;
+};
+
 type ConfirmHandoverDialogProps = {
   open: boolean;
   submitting: boolean;
-  error: string | null;
-  /**
-   * What the finance company approved, when this caller may see it.
-   *
-   * Null where `redactSettlementEvidence` withheld it. The warning still
-   * applies — the door still closes — so it is stated either way, and the
-   * dialog simply cannot show the figure it is asking about. Suppressing the
-   * whole warning because one caller cannot see one number would remove the
-   * safeguard from the deals it protects.
-   */
-  approvedAmountMinor: number | null;
-  financeCompanyFundedPortionMinor: number | null;
-  dealerContributionMinor: number | null;
-  /**
-   * The SERVER's verdict that this amount is unlike every figure on file.
-   *
-   * Consumed, never re-derived. `getEconomics` computes it with the same rule
-   * and against the same appraisal that `approveDealerPurchaseAmount` uses to
-   * refuse an unacknowledged outlier, so this dialog cannot form a second
-   * opinion about what counts as unusual. A screen that disagreed with the
-   * mutation about the same deal would be worse than one that said nothing.
-   *
-   * It changes emphasis only. The mutation stays authoritative regardless of
-   * what is rendered here, and handover is never refused on this basis — an
-   * unusual amount can be perfectly correct.
-   */
-  approvedAmountIsFarFromEvidence: boolean;
-  money: (minor: number) => string;
+  evidence: HandoverEvidence;
+  /** The revision this deal stood at. Snapshotted with the evidence. */
+  economicsStamp: string | undefined;
   t: (key: string) => string;
   onOpenChange: (open: boolean) => void;
   /**
-   * The server's stamp of the economics this dialog was opened against.
+   * Rejects to report a refusal. The dialog catches it and holds the message
+   * against THIS attempt.
    *
-   * Sent back on confirm so the mutation can refuse a deal whose figures moved
-   * while the operator was reading them. Issued to every caller, including one
-   * whose amounts are redacted above — they cannot see what changed, but they
-   * equally must not seal a deal that did.
+   * Error state deliberately does not live in the parent. It did, and the
+   * parent cleared it on submit rather than on open — so reopening after a
+   * stale-stamp refusal showed the previous attempt's "the figures changed"
+   * message beside freshly snapshotted figures from a different revision. That
+   * was the fifth defect of one class in this component, and the reason it is
+   * now shaped this way: an error that belongs to an attempt cannot outlive it
+   * if the attempt owns it.
    */
-  economicsStamp: string | undefined;
-  /**
-   * Carries back the stamp this dialog was actually opened against — not the
-   * current one. That distinction is the entire guarantee: see the snapshot
-   * note in the body.
-   */
-  onSubmit: (values: { notes?: string; economicsStamp: string | undefined }) => void;
+  onSubmit: (values: { notes?: string; economicsStamp: string | undefined }) => Promise<void>;
 };
 
 export function ConfirmHandoverDialog({
   open,
   submitting,
-  error,
-  approvedAmountMinor,
-  financeCompanyFundedPortionMinor,
-  dealerContributionMinor,
-  approvedAmountIsFarFromEvidence,
+  evidence,
   economicsStamp,
-  money,
   t,
   onOpenChange,
   onSubmit,
 }: Readonly<ConfirmHandoverDialogProps>) {
-  const [notes, setNotes] = useState("");
-
   /**
-   * Everything this dialog shows and sends, frozen at the moment it opened.
+   * ONE confirmation attempt, created atomically when the dialog opens.
    *
-   * The props are live: they come from a Convex subscription, so a second
-   * approver committing a new amount re-renders this dialog underneath the
-   * operator. Rendering and submitting the live values moved display and
-   * payload together — the figure silently became a different one, the server's
-   * comparison passed, and the deal sealed against economics nobody had read.
-   * The machine race was closed; the human one was not.
+   * This component used to be a dialog with props, and five separate defects
+   * came from that shape: part of what the operator saw was frozen and part was
+   * live, so the screen described two states of the deal at once. The figures,
+   * then the currency they were spelled in, then the anomaly warning, then the
+   * error — each found by a reviewer after the previous was called fixed, and
+   * the fourth fix (collapsing the economics reads) still missed the error
+   * because it drew the boundary around the wrong thing.
    *
-   * So the snapshot is taken on the closed -> open transition and never
-   * refreshed. If the deal moves while the dialog is open, the stamp below no
-   * longer matches and the mutation refuses — which is the outcome the whole
-   * confirmation exists to produce.
+   * So the unit here is an ATTEMPT, not a dialog. Everything the operator is
+   * asked to confirm, everything used to spell it, the revision it stands at,
+   * and any refusal it earns all belong to the same object and are replaced
+   * together. A live Convex refetch may invalidate an attempt — the server's
+   * stamp comparison is what enforces that — but it cannot alter what the
+   * operator is currently being asked to confirm.
    *
-   * Set during render rather than in an effect so the first paint already shows
-   * the frozen figures; an effect would flash the live ones for a frame.
+   * Nothing below reads a prop. If a future field needs rendering it must join
+   * the attempt, and reaching past it is visible on the line.
    */
-  const [wasOpen, setWasOpen] = useState(false);
-  const [confirmed, setConfirmed] = useState<{
-    approvedAmountMinor: number | null;
-    financeCompanyFundedPortionMinor: number | null;
-    dealerContributionMinor: number | null;
-    approvedAmountIsFarFromEvidence: boolean;
+  type Attempt = {
+    evidence: HandoverEvidence;
     economicsStamp: string | undefined;
-    // The FORMATTER, frozen with the figures it formats.
-    //
-    // Freezing the minor-unit integers alone was not enough. `money` is derived
-    // from the deal's `economicsCurrency` falling back to the ORG's current
-    // currency, so on a legacy row that carries no currency of its own, an
-    // organization switching JOD to USD while this dialog is open re-renders
-    // 11,500,000 as 115,000 USD rather than 11,500 JOD — a figure wrong by a
-    // factor of ten and labelled in the wrong currency, from numbers that never
-    // moved. The stamp does not change either, because the row did not, so the
-    // server accepts the confirmation. The race the snapshot closed came back
-    // in the denomination.
-    money: (minor: number) => string;
-  } | null>(null);
+    notes: string;
+    error: string | null;
+  };
+  const [attempt, setAttempt] = useState<Attempt | null>(null);
+  const [wasOpen, setWasOpen] = useState(false);
   if (open !== wasOpen) {
     setWasOpen(open);
-    if (open) {
-      setNotes("");
-      setConfirmed({
-        approvedAmountMinor,
-        financeCompanyFundedPortionMinor,
-        dealerContributionMinor,
-        approvedAmountIsFarFromEvidence,
-        economicsStamp,
-        money,
-      });
-    }
+    // A new open is a new attempt — never a reset of the previous one, which is
+    // how a stale error survived into a fresh confirmation.
+    if (open) setAttempt({ evidence, economicsStamp, notes: "", error: null });
   }
+
+  // Before the first open there is no attempt and nothing is rendered from it;
+  // the dialog is closed, so there is no state to be inconsistent with.
+  const live: Attempt = attempt ?? { evidence, economicsStamp, notes: "", error: null };
+  const shown = live.evidence;
+
   /**
-   * The ONE thing anything below is allowed to render from.
+   * The attempt's own formatter, built from the denomination the SERVER
+   * established for this deal.
    *
-   * Three separate defects in this dialog were the same mistake: some of what
-   * the operator sees came from the snapshot and some from the live props, so
-   * the confirmation described two different states of the deal at once. The
-   * figures were fixed, then the currency they were spelled in, then the
-   * "this looks unusual" warning — each found by a reviewer, after the previous
-   * one had been called done.
-   *
-   * Collapsing every read into a single object is what stops a fourth. Adding a
-   * field to the dialog now means adding it here, and reaching past it for a
-   * live prop is visible on the line rather than invisible three screens down.
-   * Before the snapshot exists there is nothing to be inconsistent WITH, so the
-   * fallback to live props is safe — the dialog is closed at that point.
+   * No fallback chain. The previous version fell from the deal's currency to
+   * the org's to a hardcoded default, and for a role that cannot read org
+   * settings that meant a USD deal rendered in JOD — 1,150,000 minor units
+   * shown as 1,150 on the screen that seals the deal permanently.
    */
-  const shown = confirmed ?? {
-    approvedAmountMinor,
-    financeCompanyFundedPortionMinor,
-    dealerContributionMinor,
-    approvedAmountIsFarFromEvidence,
-    economicsStamp,
-    money,
+  const money = (minor: number) =>
+    shown.currency
+      ? `${(minor / Math.pow(10, shown.currency.scale)).toLocaleString()} ${shown.currency.code}`
+      : "";
+  // Figures exist but nobody can say what they are denominated in: refuse
+  // rather than spell them in a currency nobody verified.
+  const denominationUnverified =
+    shown.currency === null && shown.approvedPurchaseAmountMinor !== null;
+
+  const setNotes = (value: string) =>
+    setAttempt((current) => (current ? { ...current, notes: value } : current));
+  const notes = live.notes;
+
+  const submit = async () => {
+    setAttempt((current) => (current ? { ...current, error: null } : current));
+    try {
+      await onSubmit({
+        notes: live.notes.trim() || undefined,
+        // The revision this attempt was opened against, never a fresh read.
+        economicsStamp: live.economicsStamp,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setAttempt((current) => (current ? { ...current, error: message } : current));
+    }
   };
 
   const figures: Array<{ key: string; label: string; minor: number; flagged?: boolean }> = [];
-  if (shown.approvedAmountMinor != null) {
+  if (shown.approvedPurchaseAmountMinor != null) {
     figures.push({
       key: "approved",
       label: t("ApprovedPurchaseLabel"),
-      minor: shown.approvedAmountMinor,
+      minor: shown.approvedPurchaseAmountMinor,
       // The figure this dialog exists to have a last look at, and the one the
       // server has already judged unusual. Presenting it with the same weight
       // as the rest is how an order-of-magnitude mistake reads as ordinary.
@@ -239,7 +221,7 @@ export function ConfirmHandoverDialog({
                             : "tabular-nums font-medium"
                         }
                       >
-                        {shown.money(figure.minor)}
+                        {money(figure.minor)}
                       </bdi>
                     </dd>
                   </div>
@@ -267,9 +249,15 @@ export function ConfirmHandoverDialog({
             />
           </div>
 
-          {error && (
+          {denominationUnverified && (
             <p role="alert" className="text-sm font-medium text-destructive">
-              {error}
+              {t("HandoverCurrencyUnverified")}
+            </p>
+          )}
+
+          {live.error && (
+            <p role="alert" className="text-sm font-medium text-destructive">
+              {live.error}
             </p>
           )}
         </div>
@@ -279,16 +267,11 @@ export function ConfirmHandoverDialog({
             {t("Cancel")}
           </Button>
           <Button
-            disabled={submitting}
-            onClick={() =>
-              onSubmit({
-                notes: notes.trim() || undefined,
-                // The stamp from the snapshot, never the live prop. Reading it
-                // fresh here would compare the deal to itself and pass however
-                // much had changed since the operator started reading.
-                economicsStamp: shown.economicsStamp,
-              })
-            }
+            // Refused outright while the denomination is unverified: an
+            // operator cannot meaningfully confirm a figure whose currency
+            // nobody can establish, and this door does not reopen.
+            disabled={submitting || denominationUnverified}
+            onClick={submit}
           >
             {submitting ? (
               <Loader2 className="h-4 w-4 animate-spin" />

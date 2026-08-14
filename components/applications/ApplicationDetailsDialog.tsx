@@ -62,10 +62,6 @@ export function ApplicationDetailsDialog({
   const [isConfirmingDisbursement, setIsConfirmingDisbursement] = useState(false);
   const [isHandoverDialogOpen, setIsHandoverDialogOpen] = useState(false);
   const [isRegisteringHandover, setIsRegisteringHandover] = useState(false);
-  // Shown inside the dialog as well as toasted. "The figures changed while you
-  // were confirming" is a refusal the operator has to act on, and a toast that
-  // has already faded cannot be re-read from a dialog that stayed open.
-  const [handoverError, setHandoverError] = useState<string | null>(null);
   const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false);
   const [isRegisteringPayment, setIsRegisteringPayment] = useState(false);
   const [resolvingDepositId, setResolvingDepositId] = useState<Id<"deposits"> | null>(null);
@@ -227,7 +223,6 @@ export function ApplicationDetailsDialog({
   }) => {
     if (!activeOrgId) return;
     setIsRegisteringHandover(true);
-    setHandoverError(null);
     try {
       await registerVehicleHandover({
         orgId: activeOrgId,
@@ -252,9 +247,11 @@ export function ApplicationDetailsDialog({
       // you were confirming", which names the thing to re-check. Collapsing it
       // into "unexpected error" would leave the operator re-pressing a button
       // that will keep refusing.
+      // Rethrown so the refusal belongs to the dialog's attempt. Held here, it
+      // outlived the attempt that earned it and reappeared over a fresh one.
       const message = getErrorMessage(error);
-      setHandoverError(message);
       toast.error(message);
+      throw new Error(message);
     } finally {
       setIsRegisteringHandover(false);
     }
@@ -781,23 +778,26 @@ export function ApplicationDetailsDialog({
                           <ConfirmHandoverDialog
                             open={isHandoverDialogOpen}
                             submitting={isRegisteringHandover}
-                            error={handoverError}
-                            approvedAmountMinor={app.approvedDealerPurchaseAmountMinor ?? null}
-                            financeCompanyFundedPortionMinor={
-                              app.financeCompanyFundedPortionMinor ?? null
-                            }
-                            dealerContributionMinor={app.dealerContributionMinor ?? null}
-                            // The SERVER's verdict, now projected onto this
-                            // screen's own payload. It was hardcoded false,
-                            // which meant the cockpit could warn that an amount
-                            // is unlike every figure on file while this
-                            // confirmation — the same one-way door — presented
-                            // the same deal as ordinary.
-                            approvedAmountIsFarFromEvidence={
-                              app.approvedAmountIsFarFromEvidence ?? false
+                            // The SAME object the cockpit consumes, from the
+                            // same server projection — figures, anomaly verdict
+                            // and denomination together. This screen previously
+                            // assembled them itself from three fields and a
+                            // local formatter, and disagreed with the cockpit
+                            // about all three at various points.
+                            // Fails CLOSED when the payload carries no
+                            // projection: no figures and no denomination, so
+                            // the dialog refuses rather than rendering
+                            // undefined through a formatter.
+                            evidence={
+                              app.handoverEvidence ?? {
+                                approvedPurchaseAmountMinor: null,
+                                financeCompanyFundedPortionMinor: null,
+                                dealerContributionMinor: null,
+                                approvedAmountIsFarFromEvidence: false,
+                                currency: null,
+                              }
                             }
                             economicsStamp={app.economicsStamp}
-                            money={formatEconomics}
                             t={(key) => t(key as any)}
                             onOpenChange={setIsHandoverDialogOpen}
                             onSubmit={handleRegisterHandover}

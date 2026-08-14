@@ -71,6 +71,13 @@ function dealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
   return {
     dealKind: "FINANCED",
     economicsStamp: STAMP,
+    handoverEvidence: {
+      approvedPurchaseAmountMinor: null,
+      financeCompanyFundedPortionMinor: null,
+      dealerContributionMinor: null,
+      approvedAmountIsFarFromEvidence: false,
+      currency: { code: "JOD", scale: 3 },
+    },
     dealRef: "app_2048",
     applicationId: "app_2048",
     saleId: null,
@@ -1335,7 +1342,7 @@ describe("handover states the door it closes, with the figures to check", () => 
             financeCompanyFundedPortionMinor: 127_500 * JOD,
             dealerContributionMinor: 22_500 * JOD,
             approvedAmountIsFarFromEvidence: false,
-            currency: "JOD",
+            currency: { code: "JOD", scale: 3 },
             ...factOverrides,
           },
         })}
@@ -1355,7 +1362,6 @@ describe("handover states the door it closes, with the figures to check", () => 
         handover={{
           confirming: true,
           submitting: false,
-          error: null,
           onOpenChange: vi.fn(),
           onSubmit,
         }}
@@ -1439,7 +1445,7 @@ describe("a flagged amount does not look ordinary at the one-way door", () => {
             financeCompanyFundedPortionMinor: 127_500 * JOD,
             dealerContributionMinor: 22_500 * JOD,
             approvedAmountIsFarFromEvidence: flagged,
-            currency: "JOD",
+            currency: { code: "JOD", scale: 3 },
           },
         })}
         financeDecision={wiring({
@@ -1459,7 +1465,6 @@ describe("a flagged amount does not look ordinary at the one-way door", () => {
         handover={{
           confirming: true,
           submitting: false,
-          error: null,
           onOpenChange: vi.fn(),
           onSubmit: vi.fn(noopAsync),
         }}

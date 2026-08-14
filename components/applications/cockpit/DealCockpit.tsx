@@ -405,7 +405,6 @@ export function DealCockpit({
   const canCorrectAdvice = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
   const [confirmingHandover, setConfirmingHandover] = useState(false);
   const [handoverSubmitting, setHandoverSubmitting] = useState(false);
-  const [handoverError, setHandoverError] = useState<string | null>(null);
   const [registeringPayment, setRegisteringPayment] = useState(false);
   const [paymentSubmitting, setPaymentSubmitting] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
@@ -512,7 +511,6 @@ export function DealCockpit({
         stageKey: "HANDOVER",
         actionKey: "RegisterHandoverAction",
         onStart: () => {
-          setHandoverError(null);
           setConfirmingHandover(true);
         },
         // The server's own precondition, surfaced instead of discovered as a
@@ -716,11 +714,15 @@ export function DealCockpit({
       handover={{
         confirming: confirmingHandover,
         submitting: handoverSubmitting,
-        error: handoverError,
         onOpenChange: setConfirmingHandover,
+        /**
+         * RETHROWS. The refusal belongs to the attempt that earned it, and the
+         * attempt lives in the dialog — holding it here is what let a stale
+         * "the figures changed" message survive into a freshly opened
+         * confirmation about a different revision.
+         */
         onSubmit: async (values) => {
           setHandoverSubmitting(true);
-          setHandoverError(null);
           try {
             await registerVehicleHandover({
               orgId,
@@ -738,8 +740,8 @@ export function DealCockpit({
             // yet, already handed over. Replacing them with a generic message
             // would turn the one recovery path this state has into a dead end.
             const message = getErrorMessage(error);
-            setHandoverError(message);
             toast.error(message);
+            throw new Error(message);
           } finally {
             setHandoverSubmitting(false);
           }
@@ -1141,12 +1143,12 @@ export function DealCockpitView({
   handover?: {
     confirming: boolean;
     submitting: boolean;
-    error: string | null;
     onOpenChange: (open: boolean) => void;
+    /** Rejects on refusal; the error belongs to the dialog's attempt. */
     onSubmit: (values: {
       notes?: string;
       economicsStamp: string | undefined;
-    }) => void | Promise<void>;
+    }) => Promise<void>;
   };
   /** The expected-payment form's own state. */
   expectedPayment?: {
@@ -1300,14 +1302,6 @@ export function DealCockpitView({
    */
   const handoverEvidence =
     deal && "handoverEvidence" in deal ? deal.handoverEvidence : undefined;
-  // Denominated in the DEAL's currency where it has one, so these figures are
-  // not spelled in whatever the organization reports in today. The dialog also
-  // freezes this formatter on open — the integers alone were not enough.
-  const handoverCurrency = handoverEvidence?.currency ?? decisionCurrency;
-  const handoverFactor = Math.pow(10, scaleForCurrency(handoverCurrency));
-  const handoverMoney = (minor: number) =>
-    `${(minor / handoverFactor).toLocaleString()} ${handoverCurrency}`;
-
   const decisionMoney = (minor: number) =>
     `${(minor / decisionFactor).toLocaleString()} ${decisionMarker}`;
   const adviceRecordedLabel =
@@ -2068,20 +2062,20 @@ export function DealCockpitView({
         <ConfirmHandoverDialog
           open={handover.confirming}
           submitting={handover.submitting}
-          error={handover.error}
           // Read from the SAME facts the decision card renders, so the figures
           // the dialog asks the operator to verify are the ones they have been
           // looking at — not a second derivation that could disagree.
-          approvedAmountMinor={handoverEvidence?.approvedPurchaseAmountMinor ?? null}
-          financeCompanyFundedPortionMinor={
-            handoverEvidence?.financeCompanyFundedPortionMinor ?? null
-          }
-          dealerContributionMinor={handoverEvidence?.dealerContributionMinor ?? null}
-          // The SERVER's verdict, threaded straight through. The dialog does
-          // not re-derive it, and nothing on this screen owns a second opinion
-          // about what counts as an unusual amount.
-          approvedAmountIsFarFromEvidence={
-            handoverEvidence?.approvedAmountIsFarFromEvidence ?? false
+          // The server's one answer, handed over whole. This screen forms no
+          // opinion about the figures, the anomaly verdict, or how any of it is
+          // denominated — the legacy Review screen consumes the same object.
+          evidence={
+            handoverEvidence ?? {
+              approvedPurchaseAmountMinor: null,
+              financeCompanyFundedPortionMinor: null,
+              dealerContributionMinor: null,
+              approvedAmountIsFarFromEvidence: false,
+              currency: null,
+            }
           }
           // `deal` is a union — the cash variant comes from `sales.dealCockpit`
           // and carries no stamp, because nothing on that path seals financing
@@ -2089,7 +2083,6 @@ export function DealCockpitView({
           // future payload that stops issuing one fails here, at the point that
           // needs it, instead of silently sending `undefined` to the mutation.
           economicsStamp={deal && "economicsStamp" in deal ? deal.economicsStamp : undefined}
-          money={handoverMoney}
           t={t}
           onOpenChange={handover.onOpenChange}
           onSubmit={handover.onSubmit}

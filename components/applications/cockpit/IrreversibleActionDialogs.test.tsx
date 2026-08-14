@@ -14,7 +14,7 @@
  * about it was not.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 // `components/ui/dialog` reads the locale for its own close affordance, so the
 // dialog primitive cannot render outside a provider.
@@ -29,182 +29,152 @@ afterEach(cleanup);
 
 const t = (key: string) => key;
 
+const JOD = { code: "JOD", scale: 3 };
+
+function evidence(over: Record<string, unknown> = {}) {
+  return {
+    approvedPurchaseAmountMinor: 150_000_000,
+    financeCompanyFundedPortionMinor: 127_500_000,
+    dealerContributionMinor: 22_500_000,
+    approvedAmountIsFarFromEvidence: false,
+    currency: JOD,
+    ...over,
+  } as never;
+}
+
 function renderHandover(submitting: boolean, onOpenChange = vi.fn()) {
   render(
     <ConfirmHandoverDialog
       open
       submitting={submitting}
-      error={null}
-      approvedAmountMinor={150_000_000}
-      financeCompanyFundedPortionMinor={135_000_000}
-      dealerContributionMinor={15_000_000}
-      approvedAmountIsFarFromEvidence={false}
+      evidence={evidence()}
       economicsStamp="v2|7"
-      money={(minor) => `JD ${minor / 1000}`}
       t={t}
       onOpenChange={onOpenChange}
-      onSubmit={vi.fn()}
+      onSubmit={vi.fn(async () => {})}
     />
   );
   return onOpenChange;
 }
 
-describe("the handover confirmation is about the figures the operator read", () => {
-  /**
-   * The props are a live Convex subscription. A second approver committing a
-   * new amount re-renders this dialog underneath the operator, and the version
-   * this replaces rendered and submitted the live values — so display and
-   * payload moved together, the server's comparison passed, and the deal sealed
-   * against economics nobody had looked at. The machine race was closed; the
-   * human one was not.
-   */
-  test("a refetch while it is open changes neither the figures nor the stamp", () => {
-    const onSubmit = vi.fn();
-    const props = {
-      open: true as const,
-      submitting: false,
-      error: null,
-      approvedAmountMinor: 11_500_000,
-      financeCompanyFundedPortionMinor: 10_000_000,
-      dealerContributionMinor: 1_500_000,
-      approvedAmountIsFarFromEvidence: false,
-      economicsStamp: "v2|7",
-      money: (minor: number) => `JD ${minor / 1000}`,
-      t,
-      onOpenChange: vi.fn(),
-      onSubmit,
-    };
-    const { rerender } = render(<ConfirmHandoverDialog {...props} />);
-    expect(screen.getByText("JD 11500")).toBeTruthy();
+/**
+ * The whole class, not each symptom.
+ *
+ * Five defects reached this component from one mistake — part of what the
+ * operator saw belonged to the attempt and part was live. Testing the five
+ * symptoms would leave the sixth. So every money-bearing or rendered fact is
+ * moved underneath an OPEN dialog here, and the assertion is the same each
+ * time: what the operator was asked to confirm does not change while they are
+ * being asked, and a new open is a new attempt.
+ */
+describe("every rendered fact belongs to one confirmation attempt", () => {
+  const OPEN = {
+    open: true as const,
+    submitting: false,
+    economicsStamp: "v2|7",
+    t,
+    onOpenChange: vi.fn(),
+  };
 
-    // The deal moves while the operator is still reading it.
-    rerender(
+  const MOVED: Array<[string, Record<string, unknown>, string]> = [
+    ["the approved amount", { approvedPurchaseAmountMinor: 12_750_000 }, "150,000 JOD"],
+    ["the funding split", { financeCompanyFundedPortionMinor: 99_000_000 }, "127,500 JOD"],
+    ["the dealer contribution", { dealerContributionMinor: 1_000_000 }, "22,500 JOD"],
+    ["the denomination", { currency: { code: "USD", scale: 2 } }, "150,000 JOD"],
+  ];
+
+  for (const [what, change, mustStillRead] of MOVED) {
+    test(`${what} moving underneath an open dialog changes nothing on screen`, () => {
+      const { rerender } = render(
+        <ConfirmHandoverDialog {...OPEN} evidence={evidence()} onSubmit={vi.fn(async () => {})} />
+      );
+      expect(screen.getByText(mustStillRead)).toBeTruthy();
+      rerender(
+        <ConfirmHandoverDialog
+          {...OPEN}
+          evidence={evidence(change)}
+          onSubmit={vi.fn(async () => {})}
+        />
+      );
+      expect(screen.getByText(mustStillRead)).toBeTruthy();
+    });
+  }
+
+  test("the anomaly verdict moving does not change the warning", () => {
+    const flagged = { ...OPEN };
+    const { rerender } = render(
       <ConfirmHandoverDialog
-        {...props}
-        approvedAmountMinor={12_750_000}
-        financeCompanyFundedPortionMinor={11_000_000}
-        economicsStamp="v2|8"
+        {...flagged}
+        evidence={evidence({ approvedAmountIsFarFromEvidence: true })}
+        onSubmit={vi.fn(async () => {})}
       />
     );
+    expect(screen.getByText("HandoverAmountLooksUnusual")).toBeTruthy();
+    rerender(
+      <ConfirmHandoverDialog {...flagged} evidence={evidence()} onSubmit={vi.fn(async () => {})} />
+    );
+    expect(screen.getByText("HandoverAmountLooksUnusual")).toBeTruthy();
+  });
 
-    // What they were asked to confirm is still on the screen — the dialog does
-    // not quietly restate itself around a number they never saw.
-    expect(screen.getByText("JD 11500")).toBeTruthy();
-    expect(screen.queryByText("JD 12750")).toBeNull();
+  test("the revision moving does not change the stamp that gets submitted", async () => {
+    const onSubmit = vi.fn(async () => {});
+    const { rerender } = render(
+      <ConfirmHandoverDialog {...OPEN} evidence={evidence()} onSubmit={onSubmit} />
+    );
+    rerender(
+      <ConfirmHandoverDialog
+        {...OPEN}
+        economicsStamp="v2|8"
+        evidence={evidence()}
+        onSubmit={onSubmit}
+      />
+    );
+    fireEvent.click(screen.getByText("ConfirmHandoverAction"));
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ economicsStamp: "v2|7" }))
+    );
+  });
+
+  test("a refusal does not survive into the next attempt", async () => {
+    // The fifth defect, and the one the previous fix missed: the error lived in
+    // the parent and was cleared on submit rather than on open, so reopening
+    // after a stale-stamp refusal showed revision 7's message beside revision
+    // 8's figures.
+    const onSubmit = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("The deal's approved figures changed"))
+      .mockResolvedValue(undefined);
+    const props = { ...OPEN, evidence: evidence(), onSubmit };
+    const { rerender } = render(<ConfirmHandoverDialog {...props} />);
 
     fireEvent.click(screen.getByText("ConfirmHandoverAction"));
-    // And the stamp is the one it opened against, so the server refuses rather
-    // than sealing the deal that moved.
-    expect(onSubmit).toHaveBeenCalledWith(
-      expect.objectContaining({ economicsStamp: "v2|7" })
-    );
-  });
+    // Queried by its TEXT, not by role: the permanence warning is also an
+    // alert, and a role query matches both.
+    await waitFor(() => expect(screen.getByText(/approved figures changed/i)).toBeTruthy());
 
-  test("an organization currency change cannot re-denominate what is on screen", () => {
-    const onSubmit = vi.fn();
-    const props = {
-      open: true as const,
-      submitting: false,
-      error: null,
-      approvedAmountMinor: 11_500_000,
-      financeCompanyFundedPortionMinor: 10_000_000,
-      dealerContributionMinor: 1_500_000,
-      approvedAmountIsFarFromEvidence: false,
-      economicsStamp: "v2|7",
-      // JOD: scale 3.
-      money: (minor: number) => `${minor / 1000} JOD`,
-      t,
-      onOpenChange: vi.fn(),
-      onSubmit,
-    };
-    const { rerender } = render(<ConfirmHandoverDialog {...props} />);
-    expect(screen.getByText("11500 JOD")).toBeTruthy();
-
-    // A legacy row carries no `economicsCurrency`, so the formatter falls back
-    // to the ORG's currency — which an admin can change while this dialog is
-    // open. Nothing about the deal moves, so the stamp still matches and the
-    // server still accepts: freezing the integers without freezing their scale
-    // put the race back in the denomination. USD is scale 2, so the same minor
-    // units would read as 115,000 in the wrong currency.
-    rerender(
-      <ConfirmHandoverDialog {...props} money={(minor: number) => `${minor / 100} USD`} />
-    );
-
-    expect(screen.getByText("11500 JOD")).toBeTruthy();
-    expect(screen.queryByText("115000 USD")).toBeNull();
-  });
-
-  test("the warning and the emphasis describe the same state of the deal", () => {
-    const props = {
-      open: true as const,
-      submitting: false,
-      error: null,
-      approvedAmountMinor: 150_000_000,
-      financeCompanyFundedPortionMinor: 127_500_000,
-      dealerContributionMinor: 22_500_000,
-      approvedAmountIsFarFromEvidence: true,
-      economicsStamp: "v2|7",
-      money: (minor: number) => `JD ${minor / 1000}`,
-      t,
-      onOpenChange: vi.fn(),
-      onSubmit: vi.fn(),
-    };
-    const { rerender } = render(<ConfirmHandoverDialog {...props} />);
-    expect(screen.getByText("HandoverAmountLooksUnusual")).toBeTruthy();
-
-    // The styling read the snapshot and the WARNING read the live prop, so a
-    // reactive update left the frozen figures described by a verdict about a
-    // different state — the flagged amount still on screen, the sentence
-    // saying it was flagged now gone. Not a server bypass, since the stamp
-    // still refuses; an internally contradictory confirmation at the one-way
-    // door, which is worse than either half alone.
-    rerender(<ConfirmHandoverDialog {...props} approvedAmountIsFarFromEvidence={false} />);
-    expect(screen.getByText("HandoverAmountLooksUnusual")).toBeTruthy();
-
-    // ...and re-opening is allowed to adopt the new verdict, because then the
-    // figures beside it are the new ones too.
-    rerender(
-      <ConfirmHandoverDialog {...props} open={false} approvedAmountIsFarFromEvidence={false} />
-    );
-    rerender(<ConfirmHandoverDialog {...props} approvedAmountIsFarFromEvidence={false} />);
-    expect(screen.queryByText("HandoverAmountLooksUnusual")).toBeNull();
-  });
-
-  test("re-opening takes a fresh snapshot", () => {
-    const onSubmit = vi.fn();
-    const props = {
-      submitting: false,
-      error: null,
-      approvedAmountMinor: 11_500_000,
-      financeCompanyFundedPortionMinor: 10_000_000,
-      dealerContributionMinor: 1_500_000,
-      approvedAmountIsFarFromEvidence: false,
-      economicsStamp: "v2|7",
-      money: (minor: number) => `JD ${minor / 1000}`,
-      t,
-      onOpenChange: vi.fn(),
-      onSubmit,
-    };
-    const { rerender } = render(<ConfirmHandoverDialog {...props} open />);
-    // Closed, the deal moves, and the operator opens it again to look properly.
+    // Close, the deal moves on, reopen.
     rerender(<ConfirmHandoverDialog {...props} open={false} />);
     rerender(
+      <ConfirmHandoverDialog {...props} economicsStamp="v2|8" evidence={evidence()} />
+    );
+    expect(screen.queryByText(/approved figures changed/i)).toBeNull();
+  });
+
+  test("an unverifiable denomination refuses the confirmation instead of guessing", () => {
+    // `economicsCurrency` absent on a legacy row, and the org's current
+    // currency is not a fallback — orgSettings does not lock currency for
+    // financeApplications, so the org may have switched since. Guessing put a
+    // USD amount on screen labelled JOD, ten times wrong, on the screen that
+    // seals the deal permanently.
+    render(
       <ConfirmHandoverDialog
-        {...props}
-        open
-        approvedAmountMinor={12_750_000}
-        financeCompanyFundedPortionMinor={11_000_000}
-        economicsStamp="v2|8"
+        {...OPEN}
+        evidence={evidence({ currency: null })}
+        onSubmit={vi.fn(async () => {})}
       />
     );
-
-    // Otherwise the snapshot would be a trap: the figures on file would be
-    // permanently unconfirmable and handover could never complete.
-    expect(screen.getByText("JD 12750")).toBeTruthy();
-    fireEvent.click(screen.getByText("ConfirmHandoverAction"));
-    expect(onSubmit).toHaveBeenCalledWith(
-      expect.objectContaining({ economicsStamp: "v2|8" })
-    );
+    expect(screen.getByText("HandoverCurrencyUnverified")).toBeTruthy();
+    expect((screen.getByText("ConfirmHandoverAction").closest("button") as HTMLButtonElement).disabled).toBe(true);
   });
 });
 

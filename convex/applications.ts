@@ -28,6 +28,7 @@ import {
   assertValidMinorAmount,
   toMinorSameCurrencyOrUndefined,
   outstandingMinorFromMajor,
+  scaleForCurrency,
 } from "./utils/money";
 import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
 import {
@@ -1433,14 +1434,12 @@ export const get = query({
        * confirmation presented it as ordinary. Read from the shared derivation
        * rather than recomputed, so the two cannot form separate opinions.
        */
-      approvedAmountIsFarFromEvidence: approvedAmountIsFarFromEvidenceFor(
-        app,
-        await ctx.db
-          .query("financeAppraisals")
-          .withIndex("by_application", (q) => q.eq("applicationId", args.applicationId))
-          .collect(),
-        visibleApp.approvedDealerPurchaseAmountMinor !== undefined
-      ),
+      /**
+       * The SAME projection the cockpit consumes, so the two doors into the
+       * handover cannot describe the same deal differently — including how its
+       * figures are denominated.
+       */
+      handoverEvidence: await handoverEvidenceFor(ctx, app, role),
       customer,
       vehicle,
       company,
@@ -1495,6 +1494,66 @@ export const get = query({
  */
 function economicsStamp(app: Doc<"financeApplications">): string {
   return `v2|${app.economicsRevision ?? 0}`;
+}
+
+/**
+ * Everything the handover confirmation is allowed to show, resolved ONCE on the
+ * server and consumed identically by `dealCockpit` and `applications.get`.
+ *
+ * Five defects of one class reached this screen before it looked like this:
+ * some of what the operator saw came from one query and some from another, or
+ * some from a snapshot and some from live props, and the two disagreed. The
+ * cure is not another careful patch — it is that there is now exactly one
+ * answer, computed in one place, for both doors into the same one-way action.
+ *
+ * THE FIGURES MOVE TOGETHER. The split is not separately gated: with the
+ * approved amount withheld but its two addends shown, an operator recovers the
+ * withheld figure by adding them — `funded + contribution` IS the approved
+ * amount. Showing a decomposition of a number that is being withheld is not a
+ * partial disclosure, it is the whole one with an extra step.
+ *
+ * CURRENCY FAILS CLOSED. `economicsCurrency` is the deal's own denomination and
+ * the only trustworthy one. The organization's current currency is NOT a
+ * fallback: `orgSettings` does not count `financeApplications` among the rows
+ * that lock it, so an org can record economics in JOD and later switch to USD —
+ * this schema says so in as many words. Guessing would render 1,150,000 minor
+ * units of USD as 1,150 JOD on the screen that seals the deal permanently. When
+ * the denomination cannot be established, this returns null and the client
+ * refuses the confirmation rather than spelling a number in a currency nobody
+ * verified.
+ */
+async function handoverEvidenceFor(
+  ctx: QueryCtx,
+  app: Doc<"financeApplications">,
+  role: Doc<"roles">
+): Promise<{
+  approvedPurchaseAmountMinor: number | null;
+  financeCompanyFundedPortionMinor: number | null;
+  dealerContributionMinor: number | null;
+  approvedAmountIsFarFromEvidence: boolean;
+  currency: { code: string; scale: number } | null;
+}> {
+  const visibleAmount = redactSettlementEvidence(app, role).approvedDealerPurchaseAmountMinor;
+  const maySeeFigures = visibleAmount !== undefined;
+  const appraisals = await ctx.db
+    .query("financeAppraisals")
+    .withIndex("by_application", (q) => q.eq("applicationId", app._id))
+    .collect();
+  return {
+    approvedPurchaseAmountMinor: visibleAmount ?? null,
+    financeCompanyFundedPortionMinor: maySeeFigures
+      ? app.financeCompanyFundedPortionMinor ?? null
+      : null,
+    dealerContributionMinor: maySeeFigures ? app.dealerContributionMinor ?? null : null,
+    approvedAmountIsFarFromEvidence: approvedAmountIsFarFromEvidenceFor(
+      app,
+      appraisals,
+      maySeeFigures
+    ),
+    currency: app.economicsCurrency
+      ? { code: app.economicsCurrency, scale: scaleForCurrency(app.economicsCurrency) }
+      : null,
+  };
 }
 
 /**
@@ -1810,26 +1869,7 @@ export const dealCockpit = query({
        * everyone, and a caller shown nothing is still held to the deal not
        * having moved.
        */
-      handoverEvidence: {
-        approvedPurchaseAmountMinor:
-          redactSettlementEvidence(app, role).approvedDealerPurchaseAmountMinor ?? null,
-        // Not redacted anywhere — `getEconomics` and `applications.get` both
-        // return the split in full — so withholding it only here would make
-        // the cockpit show less than the screen it is replacing.
-        financeCompanyFundedPortionMinor: app.financeCompanyFundedPortionMinor ?? null,
-        dealerContributionMinor: app.dealerContributionMinor ?? null,
-        approvedAmountIsFarFromEvidence: approvedAmountIsFarFromEvidenceFor(
-          app,
-          await ctx.db
-            .query("financeAppraisals")
-            .withIndex("by_application", (q) => q.eq("applicationId", args.applicationId))
-            .collect(),
-          redactSettlementEvidence(app, role).approvedDealerPurchaseAmountMinor !== undefined
-        ),
-        // The deal's OWN denomination, so the dialog does not spell these
-        // figures in whatever the organization happens to report in today.
-        currency: app.economicsCurrency ?? null,
-      },
+      handoverEvidence: await handoverEvidenceFor(ctx, app, role),
       /**
        * The FIGURES behind that flag, and they are gated.
        *

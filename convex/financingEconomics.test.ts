@@ -3880,6 +3880,73 @@ describe("handover seals the approved amount, and the amount that was verified",
     expect(withheld?.economicsStamp).toBeTruthy();
   });
 
+  test("the split is withheld with the amount, not beside it", async () => {
+    const { seed, applicationId } = await approvedDeal();
+    const asSalesOnly = await callerWith(seed, "splitrecovery", [
+      "view:sales",
+      "register:vehicle_handover",
+    ]);
+    const deal = await asSalesOnly.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+
+    // `funded + contribution` IS the approved amount. Withholding the total
+    // while showing its two addends discloses the whole figure with one
+    // addition — on the screen built to withhold it.
+    expect(deal?.handoverEvidence.approvedPurchaseAmountMinor).toBeNull();
+    expect(deal?.handoverEvidence.financeCompanyFundedPortionMinor).toBeNull();
+    expect(deal?.handoverEvidence.dealerContributionMinor).toBeNull();
+  });
+
+  test("both doors answer identically for the same caller", async () => {
+    const { seed, applicationId } = await approvedDeal();
+    const shapes = [
+      ["view:sales", "register:vehicle_handover"],
+      ["view:sales", "confirm:finance_disbursement", "register:vehicle_handover"],
+      ["view:sales", "view:finance", "register:vehicle_handover"],
+    ];
+    for (const [index, permissions] of shapes.entries()) {
+      // Indexed, not keyed on length — two of these shapes have the same
+      // length, so a length-based tag created two users with one clerkId.
+      const as = await callerWith(seed, `doors_${index}`, permissions);
+      const [cockpit, legacy] = await Promise.all([
+        as.query(api.applications.dealCockpit, { orgId: seed.orgId, applicationId }),
+        as.query(api.applications.get, { orgId: seed.orgId, applicationId }),
+      ]);
+      // One projection, two queries. They cannot drift, because there is
+      // nothing to drift — this asserts the wiring, not an agreement of two
+      // independent derivations.
+      expect(cockpit?.handoverEvidence).toEqual(legacy?.handoverEvidence);
+    }
+  });
+
+  test("a deal whose denomination cannot be established says so", async () => {
+    const { seed, applicationId } = await approvedDeal();
+    // A legacy row predating `economicsCurrency`. The org's CURRENT currency is
+    // not a fallback: `orgSettings` does not lock currency for
+    // `financeApplications`, so the org may have switched since — and guessing
+    // renders a USD figure as JOD, ten times wrong, on the one-way door.
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { economicsCurrency: undefined }));
+
+    const deal = await seed.asUser.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(deal?.handoverEvidence.currency).toBeNull();
+  });
+
+  test("the denomination is carried with its scale, not re-derived", async () => {
+    const { seed, applicationId } = await approvedDeal();
+    const deal = await seed.asUser.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    // Scale travels with the code so the client cannot pair one currency's
+    // label with another's scale.
+    expect(deal?.handoverEvidence.currency).toEqual({ code: "JOD", scale: 3 });
+  });
+
   test("the stamp says nothing about the money it protects", async () => {
     const { seed, applicationId } = await approvedDeal();
     const stamp = await stampFrom(seed, applicationId);
