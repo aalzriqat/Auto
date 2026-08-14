@@ -40,6 +40,7 @@ import {
 import {
   ReopenApprovedPurchaseDialog,
 } from "./ReopenApprovedPurchaseDialog";
+import { ConfirmHandoverDialog } from "./ConfirmHandoverDialog";
 import {
   RecordApprovedPurchaseDialog,
   type ApprovalBasis,
@@ -250,10 +251,15 @@ export function DealCockpit({
   canonicalizeUrl?: boolean;
 }>) {
   const deal = useQuery(api.applications.dealCockpit, { orgId, applicationId });
+  // The container raises its own toasts, so it needs its own translator — the
+  // view's `t` is not in scope here, and an English string in a toast is how a
+  // screen that is otherwise fully Arabic starts leaking its source language.
+  const { t } = useLanguage();
   const recordReceipt = useMutation(api.supplierReceivables.recordReceipt);
   const amendAdvice = useMutation(api.applications.amendSupplierDisbursementAdvice);
   const recordSubmittedQuotation = useMutation(api.financingEconomics.recordSubmittedQuotation);
   const reopenApproval = useMutation(api.financingEconomics.reopenApproval);
+  const registerVehicleHandover = useMutation(api.applications.registerVehicleHandover);
   const approveDealerPurchaseAmount = useMutation(
     api.financingEconomics.approveDealerPurchaseAmount
   );
@@ -367,6 +373,39 @@ export function DealCockpit({
   // an action that appears and then vanishes reads as a bug, and the server is
   // the authority either way.
   const canCorrectAdvice = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
+  const [confirmingHandover, setConfirmingHandover] = useState(false);
+  const [handoverSubmitting, setHandoverSubmitting] = useState(false);
+  const [handoverError, setHandoverError] = useState<string | null>(null);
+
+  /**
+   * The action for the stage the rail is currently naming.
+   *
+   * Handover first, because it is the step the rail names on a deal whose
+   * economics are recorded — and the one the product could not perform. The
+   * permission is its OWN (`register:vehicle_handover`), not the approval
+   * permission: a caller may legitimately hold one and not the other, so a
+   * single flag over the whole tail would hide a step somebody is entitled to
+   * take.
+   */
+  const handoverStage = deal?.stages.find((stage) => stage.key === "HANDOVER");
+  const workflowAction =
+    handoverStage && handoverStage.state !== "COMPLETE" && !permissionsLoading
+      ? {
+          stageKey: "HANDOVER",
+          actionKey: "RegisterHandoverAction",
+          onStart: () => {
+            setHandoverError(null);
+            setConfirmingHandover(true);
+          },
+          // The server's own precondition, surfaced instead of discovered as a
+          // failed submit: `registerVehicleHandover` requires an APPROVED
+          // application. A blocked stage keeps its blocker text, which the
+          // block already renders, so only the permission gap is added here.
+          unavailableReasonKey: hasPermission(PERMISSIONS.REGISTER_VEHICLE_HANDOVER)
+            ? undefined
+            : "HandoverNeedsPermission",
+        }
+      : undefined;
   // One key per correction attempt, so a retry after a lost response is the same
   // amendment rather than a second audited one.
   const correctionKeyRef = useRef<string | null>(null);
@@ -491,6 +530,31 @@ export function DealCockpit({
     <DealCockpitView
       deal={deal}
       financeDecision={financeDecision}
+      workflowAction={workflowAction}
+      handover={{
+        confirming: confirmingHandover,
+        submitting: handoverSubmitting,
+        error: handoverError,
+        onOpenChange: setConfirmingHandover,
+        onSubmit: async (values) => {
+          setHandoverSubmitting(true);
+          setHandoverError(null);
+          try {
+            await registerVehicleHandover({ orgId, applicationId, notes: values.notes });
+            toast.success(t("HandoverRegistered"));
+            setConfirmingHandover(false);
+          } catch (error) {
+            // The server's refusals name the thing to change — not APPROVED
+            // yet, already handed over. Replacing them with a generic message
+            // would turn the one recovery path this state has into a dead end.
+            const message = getErrorMessage(error);
+            setHandoverError(message);
+            toast.error(message);
+          } finally {
+            setHandoverSubmitting(false);
+          }
+        },
+      }}
       canCorrectAdvice={canCorrectAdvice}
       onCorrectSettlementAdvice={async (correction) => {
         correctionKeyRef.current ??= `amend-supplier-advice:${crypto.randomUUID()}`;
@@ -777,6 +841,8 @@ export type FinanceDecisionWiring = {
 export function DealCockpitView({
   deal,
   financeDecision,
+  workflowAction,
+  handover,
   canCorrectAdvice = false,
   onCorrectSettlementAdvice,
   onRecordSupplierReceipt,
@@ -788,6 +854,36 @@ export function DealCockpitView({
    * was skipped for want of `view:finance_applications`.
    */
   financeDecision?: FinanceDecisionWiring;
+  /**
+   * The action belonging to the stage the rail currently names.
+   *
+   * One at a time, keyed to a stage, because the workflow tail is strictly
+   * ordered on the server: handover requires an APPROVED application, expected
+   * payment requires the handover, and each refuses a second attempt. Offering
+   * the whole tail at once would put three buttons on screen of which two are
+   * guaranteed refusals.
+   *
+   * `unavailableReasonKey` is the other half and is not optional in spirit:
+   * when this caller cannot take the step the rail is naming, the screen says
+   * so. A named step with neither a button nor a reason is the dead end this
+   * issue exists to remove.
+   */
+  workflowAction?: {
+    stageKey: string;
+    /** i18n key for the button label — never a raw string. */
+    actionKey: string;
+    onStart: () => void;
+    /** Set when the step cannot be taken; the button is withheld and this is shown. */
+    unavailableReasonKey?: string;
+  };
+  /** The handover confirmation's own state — absent on a deal that cannot reach it. */
+  handover?: {
+    confirming: boolean;
+    submitting: boolean;
+    error: string | null;
+    onOpenChange: (open: boolean) => void;
+    onSubmit: (values: { notes?: string }) => void | Promise<void>;
+  };
   /**
    * Whether this caller may amend a recorded settlement advice (MANAGE_FINANCE).
    *
@@ -1270,9 +1366,29 @@ export function DealCockpitView({
             <CardTitle className="text-base">{t("NextStepHeading")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            <p className="font-medium">{t(STAGE_LABEL[live.key] ?? live.key)}</p>
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+              <p className="font-medium">{t(STAGE_LABEL[live.key] ?? live.key)}</p>
+              {/* The action for the step this block NAMES.
+                  Until now the rail announced "vehicle handover" and offered
+                  nothing that performs it, so the operator went looking for a
+                  screen — Finance Applications -> Review — that the rail never
+                  mentions. A step worth naming is a step worth doing here. */}
+              {workflowAction?.stageKey === live.key &&
+                workflowAction.unavailableReasonKey === undefined && (
+                  <Button size="sm" onClick={workflowAction.onStart}>
+                    {t(workflowAction.actionKey)}
+                  </Button>
+                )}
+            </div>
             {live.blocker && (
               <p className="text-sm text-muted-foreground">{t(`Blocker${live.blocker}`)}</p>
+            )}
+            {/* Why the named step is not actionable BY THIS CALLER. Silence
+                here is the defect this issue exists to remove. */}
+            {workflowAction?.stageKey === live.key && workflowAction.unavailableReasonKey && (
+              <p className="text-sm text-muted-foreground">
+                {t(workflowAction.unavailableReasonKey)}
+              </p>
             )}
             {live.blocker === "DocumentsIncomplete" && (
               <ul className="space-y-1 pt-1">
@@ -1636,6 +1752,26 @@ export function DealCockpitView({
             onSubmit={handleReopenApproved}
           />
         </>
+      )}
+
+      {handover && (
+        <ConfirmHandoverDialog
+          open={handover.confirming}
+          submitting={handover.submitting}
+          error={handover.error}
+          // Read from the SAME facts the decision card renders, so the figures
+          // the dialog asks the operator to verify are the ones they have been
+          // looking at — not a second derivation that could disagree.
+          approvedAmountMinor={financeDecision?.facts.approvedPurchaseAmountMinor ?? null}
+          financeCompanyFundedPortionMinor={
+            financeDecision?.facts.financeCompanyFundedPortionMinor ?? null
+          }
+          dealerContributionMinor={financeDecision?.facts.dealerContributionMinor ?? null}
+          money={decisionMoney}
+          t={t}
+          onOpenChange={handover.onOpenChange}
+          onSubmit={handover.onSubmit}
+        />
       )}
 
       {discrepancy && canCorrectAdvice && (

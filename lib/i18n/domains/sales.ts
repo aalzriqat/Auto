@@ -813,6 +813,28 @@ export const salesEn = {
   ReopenApprovalWhatHappensNext:
     "The amount comes off the record along with the funding split worked out from it, and handover is blocked again until the correct amount is recorded.",
   ReopenApprovedPurchaseAction: "Reopen for correction",
+
+  RegisterHandoverAction: "Register vehicle handover",
+  HandoverNeedsPermission:
+    "You do not have permission to register the vehicle handover. Someone who does completes this step.",
+  ConfirmHandoverTitle: "Register the vehicle handover",
+  ConfirmHandoverDesc: "The vehicle goes out to the customer. This is recorded as a fact, and it closes the deal's figures.",
+  /**
+   * The one-way door, stated BEFORE it closes.
+   *
+   * `reopenApproval` refuses once the vehicle has gone out, so from this point
+   * a wrong approved amount can only be undone by cancelling the application.
+   * The dialog shows the amount and the split so the verification it asks for
+   * can actually be done here, rather than from memory.
+   */
+  HandoverSealsApprovedAmount:
+    "After the vehicle is handed over, the recorded approved amount can no longer be corrected through the normal correction flow.",
+  HandoverVerifyBeforeContinuing:
+    "Check the approved amount and the funding split above before continuing.",
+  HandoverNotesLabel: "Notes (optional)",
+  HandoverNotesPlaceholder: "e.g. collected by the customer's brother, ID checked",
+  ConfirmHandoverAction: "Confirm handover",
+  HandoverRegistered: "Vehicle handover registered",
   DerivedEconomicsHeading: "What that leaves",
   DerivedEconomicsNote: "Worked out by AutoFlow from the two figures above. Not editable.",
   DerivedFundedPortion: "Funded by the finance company",
@@ -1664,6 +1686,18 @@ export const salesAr = {
   ReopenApprovalWhatHappensNext:
     "يُرفع المبلغ عن السجل مع تقسيم التمويل المحسوب منه، ويُمنع التسليم من جديد إلى أن يُسجَّل المبلغ الصحيح.",
   ReopenApprovedPurchaseAction: "إعادة الفتح للتصحيح",
+
+  RegisterHandoverAction: "تسجيل تسليم المركبة",
+  HandoverNeedsPermission: "لا تملك صلاحية تسجيل تسليم المركبة. يُكمل هذه الخطوة من يملكها.",
+  ConfirmHandoverTitle: "تسجيل تسليم المركبة",
+  ConfirmHandoverDesc: "تخرج المركبة إلى العميل. يُسجَّل ذلك كواقعة، ويُغلق أرقام الصفقة.",
+  HandoverSealsApprovedAmount:
+    "بعد تسليم المركبة لا يعود بالإمكان تصحيح المبلغ المعتمد المسجَّل عبر مسار التصحيح المعتاد.",
+  HandoverVerifyBeforeContinuing: "تحقّق من المبلغ المعتمد وتقسيم التمويل أعلاه قبل المتابعة.",
+  HandoverNotesLabel: "ملاحظات (اختياري)",
+  HandoverNotesPlaceholder: "مثال: استلمها شقيق العميل، وتم التحقق من الهوية",
+  ConfirmHandoverAction: "تأكيد التسليم",
+  HandoverRegistered: "تم تسجيل تسليم المركبة",
   DerivedEconomicsHeading: "ما ينتج عن ذلك",
   DerivedEconomicsNote: "يحتسبه أوتوفلو من الرقمين أعلاه، وغير قابل للتعديل.",
   DerivedFundedPortion: "الجزء المموَّل من شركة التمويل",

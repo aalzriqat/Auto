@@ -1213,3 +1213,177 @@ describe("the departure question is carried to the server, and retired when it s
     expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeTruthy();
   });
 });
+
+/**
+ * The step the rail names is a step the screen can take — SCRUM-78.
+ *
+ * The owner walked a real deal and found the cockpit announcing
+ * "الخطوة التالية: تسليم المركبة" with nothing on the page that performs it.
+ * Handover lived in `Finance Applications -> Review`, a screen the rail never
+ * mentions, which is why the E2E stayed green while the workspace could not
+ * finish a deal.
+ */
+describe("the stage the rail names carries its own action", () => {
+  const awaitingHandover = dealFixture({
+    stages: [
+      { key: "APPLICATION", state: "COMPLETE" },
+      { key: "APPROVED_PURCHASE", state: "COMPLETE" },
+      { key: "HANDOVER", state: "CURRENT" },
+      { key: "SETTLEMENT", state: "PENDING" },
+    ],
+  });
+
+  const handoverWiring = (overrides: Record<string, unknown> = {}) => ({
+    confirming: false,
+    submitting: false,
+    error: null,
+    onOpenChange: vi.fn(),
+    onSubmit: vi.fn(noopAsync),
+    ...overrides,
+  });
+
+  function renderAwaitingHandover(props: Record<string, unknown> = {}) {
+    const handover = handoverWiring(
+      (props.handover as Record<string, unknown> | undefined) ?? {}
+    );
+    render(
+      <DealCockpitView
+        deal={awaitingHandover}
+        financeDecision={wiring({
+          facts: {
+            approvedPurchaseRecorded: true,
+            approvedPurchaseAmountMinor: 150_000 * JOD,
+            financeCompanyFundedPortionMinor: 127_500 * JOD,
+            dealerContributionMinor: 22_500 * JOD,
+          },
+        })}
+        workflowAction={{
+          stageKey: "HANDOVER",
+          actionKey: "RegisterHandoverAction",
+          onStart: (props.onStart as () => void) ?? vi.fn(),
+          unavailableReasonKey: props.unavailableReasonKey as string | undefined,
+        }}
+        handover={handover}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    return handover;
+  }
+
+  test("offers the handover action beside the step it names", () => {
+    const onStart = vi.fn();
+    renderAwaitingHandover({ onStart });
+
+    const action = cardButton("RegisterHandoverAction");
+    expect(action).toBeTruthy();
+    fireEvent.click(action!);
+    expect(onStart).toHaveBeenCalled();
+  });
+
+  test("a caller who cannot register it is told so, never left with silence", () => {
+    renderAwaitingHandover({ unavailableReasonKey: "HandoverNeedsPermission" });
+
+    // The defect this issue exists to remove: a named step with no button and
+    // no reason. The button is correctly withheld; the reason must be there.
+    expect(cardButton("RegisterHandoverAction")).toBeUndefined();
+    expect(screen.getByText("HandoverNeedsPermission")).toBeTruthy();
+  });
+
+  test("the action is absent once handover is already complete", () => {
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          stages: [
+            { key: "APPLICATION", state: "COMPLETE" },
+            { key: "HANDOVER", state: "COMPLETE" },
+            { key: "SETTLEMENT", state: "CURRENT" },
+          ],
+        })}
+        financeDecision={wiring()}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    expect(cardButton("RegisterHandoverAction")).toBeUndefined();
+  });
+});
+
+describe("handover states the door it closes, with the figures to check", () => {
+  const openDialog = (factOverrides: Record<string, unknown> = {}) => {
+    const onSubmit = vi.fn(noopAsync);
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          stages: [
+            { key: "APPLICATION", state: "COMPLETE" },
+            { key: "HANDOVER", state: "CURRENT" },
+          ],
+        })}
+        financeDecision={wiring({
+          facts: {
+            approvedPurchaseRecorded: true,
+            approvedPurchaseAmountMinor: 150_000 * JOD,
+            financeCompanyFundedPortionMinor: 127_500 * JOD,
+            dealerContributionMinor: 22_500 * JOD,
+            ...factOverrides,
+          },
+        })}
+        workflowAction={{
+          stageKey: "HANDOVER",
+          actionKey: "RegisterHandoverAction",
+          onStart: vi.fn(),
+        }}
+        handover={{
+          confirming: true,
+          submitting: false,
+          error: null,
+          onOpenChange: vi.fn(),
+          onSubmit,
+        }}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    return { dialog: screen.getByRole("dialog"), onSubmit };
+  };
+
+  test("warns that the approved amount can no longer be corrected", () => {
+    const { dialog } = openDialog();
+    expect(within(dialog).getByText("HandoverSealsApprovedAmount")).toBeTruthy();
+    expect(within(dialog).getByText("HandoverVerifyBeforeContinuing")).toBeTruthy();
+  });
+
+  test("shows the amount and the split it asks the operator to verify", () => {
+    // A confirmation that says "check the approved amount" without showing it
+    // is asking someone to remember a number. The deal that prompted this
+    // carried 150,000 against a 17,000 quotation, and this is the last screen
+    // that would have shown it before the figure became permanent.
+    const { dialog } = openDialog();
+    expect(within(dialog).getByText(/150,000|150000/)).toBeTruthy();
+    expect(within(dialog).getByText(/127,500|127500/)).toBeTruthy();
+    expect(within(dialog).getByText(/22,500|22500/)).toBeTruthy();
+  });
+
+  test("still warns when the amount is withheld from this caller", () => {
+    // `redactSettlementEvidence` hides the figure from weaker roles. The door
+    // still closes for them, so removing the warning with the number would
+    // take the safeguard away from exactly the callers least able to check.
+    const { dialog } = openDialog({
+      approvedPurchaseAmountMinor: null,
+      financeCompanyFundedPortionMinor: null,
+      dealerContributionMinor: null,
+    });
+    expect(within(dialog).getByText("HandoverSealsApprovedAmount")).toBeTruthy();
+    expect(within(dialog).queryByText(/150,000|150000/)).toBeNull();
+  });
+
+  test("confirming sends the notes through to the caller", async () => {
+    const { dialog, onSubmit } = openDialog();
+    fireEvent.change(within(dialog).getByLabelText("HandoverNotesLabel"), {
+      target: { value: "collected by the customer" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "ConfirmHandoverAction" }));
+
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith({ notes: "collected by the customer" })
+    );
+  });
+});
