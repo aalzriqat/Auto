@@ -4260,6 +4260,46 @@ describe("an approval withdrawn by new evidence is reported as withdrawn", () =>
     expect(cleared?.newAmountMinor).toBeUndefined();
   });
 
+  test("a superseded approval still says why, even on a blank reappraisal reason", async () => {
+    // Raised by CodeRabbit. `recordAppraisal` REQUIRES a reason only when the
+    // appraisal supersedes a live one — but a FIRST finance-company appraisal
+    // can supersede a MANUAL approval, which needs no appraisal at all. So this
+    // path accepts whitespace, `.trim()` makes it "", and `??` passes "" through
+    // as the correction's reason. The panel then draws an entry whose only
+    // human-written part is blank.
+    //
+    // The identical defect was fixed in `approveDealerPurchaseAmount` and not
+    // carried across to the other writer of the same audit row.
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_800),
+      basis: "MANUAL",
+      notes: "Negotiated directly; no appraisal on this deal.",
+    });
+
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_000),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+      // Accepted here: nothing live is being superseded in the APPRAISAL class.
+      reappraisalReason: "   ",
+    });
+
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    const cleared = economics.overrides.find((row) => row.event === "SUPERSEDED");
+    expect(cleared).toBeDefined();
+    expect(cleared?.reason.trim()).not.toBe("");
+  });
+
   test("a reopen and a clearance are not conflated", async () => {
     const seed = await seedDealer();
     const applicationId = await createApplication(seed);

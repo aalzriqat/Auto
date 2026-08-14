@@ -1545,8 +1545,15 @@ export const recordAppraisal = mutation({
         field: APPROVED_AMOUNT_FIELD,
         previousValue: app.approvedDealerPurchaseAmountMinor,
         newValue: APPROVAL_SUPERSEDED,
+        // `||`, not `??`. A reason is REQUIRED only when this appraisal
+        // supersedes a live one — but a FIRST finance-company appraisal can
+        // supersede a MANUAL approval, which needs no appraisal at all. That
+        // path accepts whitespace, `.trim()` makes it "", and `??` passes ""
+        // through as the correction's reason, leaving the panel to draw an
+        // entry whose only human-written part is blank. The same fix as in
+        // `approveDealerPurchaseAmount`, which this writer did not inherit.
         reason:
-          args.reappraisalReason?.trim() ??
+          args.reappraisalReason?.trim() ||
           "A new appraisal replaced the evidence the approval was based on.",
         changedBy: user._id,
       });
