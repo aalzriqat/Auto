@@ -772,12 +772,47 @@ export const salesEn = {
   ApprovedPurchaseLtvDrivesSplit:
     "This rate divides the approved amount into the financed and unfinanced portions.",
   RecordApprovedPurchaseAction: "Record approved amount",
+  /**
+   * The one check standing between a typed figure and the deal's economics.
+   *
+   * A WARNING, never a refusal: a finance company is entitled to approve an
+   * amount unlike anything the dealership put in front of it, and AutoFlow does
+   * not get to overrule that. It only makes sure a person meant to type it.
+   */
+  // Deliberately does not name the quotation and the appraisal, though the
+  // ruling's example did: the rule fires on whichever figures the deal actually
+  // has, and a deal with no appraisal was being told its amount differed from
+  // an appraisal that does not exist — caught in the browser, not in a test.
+  // The rows below name exactly what it was compared against.
+  ApprovedAmountFarFromEvidence:
+    "This amount is significantly different from the figures recorded on this deal.",
+  ApprovedAmountYouEntered: "You entered",
+  ApprovedAmountConfirmPrompt:
+    "Please confirm this is the amount the finance company communicated.",
+  ApprovedAmountConfirmAction: "Yes, record this amount",
+  GoBack: "Go back",
   QuotationNeededFirst: "Record the submitted quotation first.",
   ApprovedPurchaseNeedsApprover:
     "A manager records this. You do not have permission to record what the finance company approved.",
   ApprovedPurchaseNotOwnDeal:
     "You cannot record the approved amount on your own deal. A manager or the dealership owner records it.",
   FinanceDecisionClosed: "This deal is closed. Its recorded figures can no longer be changed.",
+  CorrectApprovedPurchaseAction: "Correct approved amount",
+  /**
+   * Shown to an approver on a deal whose amount is recorded and whose vehicle
+   * has gone out. `reopenApproval` refuses there, and it names the remedy.
+   */
+  ApprovedPurchaseSealedByHandover:
+    "The vehicle has already been handed over, so the approved amount can no longer be corrected. If it is wrong, the deal has to be cancelled and re-entered.",
+  ReopenApprovedPurchaseTitle: "Correct the approved amount",
+  ReopenApprovedPurchaseDesc:
+    "Only when the amount on record is not what the finance company actually approved. The figure below stays in the deal's history with your reason beside it.",
+  ReopenApprovalReasonLabel: "Why are you correcting this?",
+  ReopenApprovalReasonPlaceholder: "e.g. entered as 150,000 by mistake; the company approved 15,000",
+  ReopenApprovalReasonRequired: "Say why the recorded amount is being corrected.",
+  ReopenApprovalWhatHappensNext:
+    "The amount comes off the record along with the funding split worked out from it, and handover is blocked again until the correct amount is recorded.",
+  ReopenApprovedPurchaseAction: "Reopen for correction",
   DerivedEconomicsHeading: "What that leaves",
   DerivedEconomicsNote: "Worked out by AutoFlow from the two figures above. Not editable.",
   DerivedFundedPortion: "Funded by the finance company",
@@ -857,6 +892,7 @@ export const salesEn = {
     "No appraisal from the finance company is recorded on this deal, so only an amount they named directly can be recorded.",
   ApprovedAmountInvalid: "Enter an amount greater than zero.",
   ApprovedPurchaseRecorded: "Approved amount recorded",
+  ApprovedPurchaseReopened: "Reopened for correction — record the correct amount",
 };
 
 export const salesAr = {
@@ -1604,12 +1640,30 @@ export const salesAr = {
   ApprovedPurchaseLtvDrivesSplit:
     "هذه النسبة هي التي تقسّم المبلغ المعتمد إلى جزء مموَّل وآخر غير مموَّل.",
   RecordApprovedPurchaseAction: "تسجيل المبلغ المعتمد",
+  ApprovedAmountFarFromEvidence:
+    "هذا المبلغ يختلف اختلافاً كبيراً عن الأرقام المسجَّلة على هذه الصفقة.",
+  ApprovedAmountYouEntered: "المبلغ الذي أدخلته",
+  ApprovedAmountConfirmPrompt: "يرجى تأكيد أن هذا هو المبلغ الذي أبلغتك به شركة التمويل.",
+  ApprovedAmountConfirmAction: "نعم، سجِّل هذا المبلغ",
+  GoBack: "رجوع",
   QuotationNeededFirst: "سجِّل عرض السعر المُرسَل أولاً.",
   ApprovedPurchaseNeedsApprover:
     "يسجّله المدير. لا تملك صلاحية تسجيل ما اعتمدته شركة التمويل.",
   ApprovedPurchaseNotOwnDeal:
     "لا يمكنك تسجيل المبلغ المعتمد على صفقتك أنت. يسجّله المدير أو مالك المعرض.",
   FinanceDecisionClosed: "هذه الصفقة مغلقة، ولم يعد بالإمكان تعديل أرقامها المسجّلة.",
+  CorrectApprovedPurchaseAction: "تصحيح المبلغ المعتمد",
+  ApprovedPurchaseSealedByHandover:
+    "تم تسليم المركبة، ولم يعد بالإمكان تصحيح المبلغ المعتمد. إذا كان المبلغ خاطئاً فيجب إلغاء الصفقة وإعادة إدخالها.",
+  ReopenApprovedPurchaseTitle: "تصحيح المبلغ المعتمد",
+  ReopenApprovedPurchaseDesc:
+    "يُستخدم فقط عندما لا يكون المبلغ المسجَّل هو ما اعتمدته شركة التمويل فعلاً. يبقى المبلغ أدناه في سجل الصفقة مقروناً بالسبب الذي تكتبه.",
+  ReopenApprovalReasonLabel: "ما سبب التصحيح؟",
+  ReopenApprovalReasonPlaceholder: "مثال: أُدخل 150,000 بالخطأ، والمبلغ الذي اعتمدته الشركة 15,000",
+  ReopenApprovalReasonRequired: "اذكر سبب تصحيح المبلغ المسجَّل.",
+  ReopenApprovalWhatHappensNext:
+    "يُرفع المبلغ عن السجل مع تقسيم التمويل المحسوب منه، ويُمنع التسليم من جديد إلى أن يُسجَّل المبلغ الصحيح.",
+  ReopenApprovedPurchaseAction: "إعادة الفتح للتصحيح",
   DerivedEconomicsHeading: "ما ينتج عن ذلك",
   DerivedEconomicsNote: "يحتسبه أوتوفلو من الرقمين أعلاه، وغير قابل للتعديل.",
   DerivedFundedPortion: "الجزء المموَّل من شركة التمويل",
@@ -1682,4 +1736,5 @@ export const salesAr = {
     "لا يوجد تخمين من شركة التمويل مسجَّل على هذه الصفقة، لذلك يمكن تسجيل المبلغ الذي حدّدته مباشرة فقط.",
   ApprovedAmountInvalid: "أدخل مبلغاً أكبر من صفر.",
   ApprovedPurchaseRecorded: "تم تسجيل المبلغ المعتمد",
+  ApprovedPurchaseReopened: "أُعيد الفتح للتصحيح — سجِّل المبلغ الصحيح",
 };

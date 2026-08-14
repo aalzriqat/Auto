@@ -15,6 +15,8 @@ export {
   computeFundingComposition,
   computeSubmittedQuotation,
   computeAppraisalGap,
+  APPROVAL_DEPARTURE_TOLERANCE,
+  isApprovalFarFromEvidence,
   validateGapShares,
   classifyGapResolution,
   computeExpectedRemittance,

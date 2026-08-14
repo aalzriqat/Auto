@@ -3,6 +3,7 @@ import {
   FinancingEconomicsError,
   classifyGapResolution,
   computeAppraisalGap,
+  isApprovalFarFromEvidence,
   computeDealerProceeds,
   computeExpectedRemittance,
   computeFundingComposition,
@@ -1078,5 +1079,109 @@ describe("reconcileSettlement", () => {
     expect(reconciliation.expectedLinesBalanced).toBe(false);
     expect(reconciliation.actualLinesBalanced).toBe(false);
     expect(reconciliation.reconciled).toBe(false);
+  });
+});
+
+/**
+ * The boundary of the only numeric challenge on an approved amount.
+ *
+ * Pinned here, at the rule itself, because two callers enforce it — the cockpit
+ * dialog asks the operator, and `approveDealerPurchaseAmount` refuses an
+ * unacknowledged outlier. Testing it only through either caller would leave the
+ * boundary itself unowned.
+ */
+describe("isApprovalFarFromEvidence", () => {
+  const QUOTATION = 12_500_000;
+
+  it("catches the decimal slip that put 150,000 on a deal quoted at 17,000", () => {
+    expect(
+      isApprovalFarFromEvidence({
+        approvedAmountMinor: 150_000_000,
+        submittedQuotationMinor: 17_000_000,
+        appraisalAmountMinor: 16_000_000,
+      })
+    ).toBe(true);
+  });
+
+  it("is inclusive at both boundaries, so nobody meets a challenge they cannot see", () => {
+    // Exactly half again, and exactly half.
+    expect(
+      isApprovalFarFromEvidence({
+        approvedAmountMinor: QUOTATION * 1.5,
+        submittedQuotationMinor: QUOTATION,
+      })
+    ).toBe(false);
+    expect(
+      isApprovalFarFromEvidence({
+        approvedAmountMinor: QUOTATION * 0.5,
+        submittedQuotationMinor: QUOTATION,
+      })
+    ).toBe(false);
+    // And immediately outside it, in both directions.
+    expect(
+      isApprovalFarFromEvidence({
+        approvedAmountMinor: QUOTATION * 1.5 + 1,
+        submittedQuotationMinor: QUOTATION,
+      })
+    ).toBe(true);
+    expect(
+      isApprovalFarFromEvidence({
+        approvedAmountMinor: QUOTATION * 0.5 - 1,
+        submittedQuotationMinor: QUOTATION,
+      })
+    ).toBe(true);
+  });
+
+  it("is cleared by agreeing with ANY single reference", () => {
+    // Far from the quotation, equal to the appraisal — which is precisely what
+    // an appraisal-based decision looks like, and must not be challenged.
+    expect(
+      isApprovalFarFromEvidence({
+        approvedAmountMinor: 40_000_000,
+        submittedQuotationMinor: QUOTATION,
+        appraisalAmountMinor: 40_000_000,
+      })
+    ).toBe(false);
+    // ...and the mirror case.
+    expect(
+      isApprovalFarFromEvidence({
+        approvedAmountMinor: QUOTATION,
+        submittedQuotationMinor: QUOTATION,
+        appraisalAmountMinor: 40_000_000,
+      })
+    ).toBe(false);
+  });
+
+  it("asks nothing when there is nothing to compare against", () => {
+    // A challenge with no figures behind it is a challenge the operator cannot
+    // check, so absent, null and non-positive references all yield silence
+    // rather than a question about nothing.
+    expect(isApprovalFarFromEvidence({ approvedAmountMinor: 150_000_000 })).toBe(false);
+    expect(
+      isApprovalFarFromEvidence({
+        approvedAmountMinor: 150_000_000,
+        submittedQuotationMinor: null,
+        appraisalAmountMinor: undefined,
+      })
+    ).toBe(false);
+    expect(
+      isApprovalFarFromEvidence({
+        approvedAmountMinor: 150_000_000,
+        submittedQuotationMinor: 0,
+        appraisalAmountMinor: -1,
+      })
+    ).toBe(false);
+  });
+
+  it("says nothing about an amount that is not a positive figure", () => {
+    // Zero and negative amounts are refused by the mutation's own validation,
+    // which names the real problem. Reporting them as "far from the evidence"
+    // would answer a different question than the one that was asked.
+    expect(
+      isApprovalFarFromEvidence({ approvedAmountMinor: 0, submittedQuotationMinor: QUOTATION })
+    ).toBe(false);
+    expect(
+      isApprovalFarFromEvidence({ approvedAmountMinor: -5, submittedQuotationMinor: QUOTATION })
+    ).toBe(false);
   });
 });

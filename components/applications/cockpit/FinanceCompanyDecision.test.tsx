@@ -119,6 +119,7 @@ function wiring(overrides: WiringOverrides = {}): FinanceDecisionWiring {
     appraisal: null,
     onRecordQuotation: noopAsync,
     onRecordApproved: noopAsync,
+    onReopenApproved: noopAsync,
     onRecordAppraisal: noopAsync,
     canRecordAppraisal: true,
     ...rest,
@@ -956,5 +957,259 @@ describe("recording what the finance company approved", () => {
         notes: undefined,
       })
     );
+  });
+});
+
+/**
+ * Correcting an amount already on the record — SCRUM-77.
+ *
+ * Found in production: a manager recorded 150,000 JOD against a 17,000
+ * quotation and a 16,000 appraisal, and the deal sealed itself. The card
+ * withdraws the record action the moment an amount exists (correctly — the
+ * server refuses to move a quotation an approval rests on), `reopenApproval`
+ * had no caller anywhere outside tests, and no numeric check stood between the
+ * keystroke and a 150,000 JOD expected remittance. So the wrong figure was
+ * permanent, and nothing had questioned it on the way in.
+ *
+ * Both halves are pinned here: a way OUT of a wrong amount, and a challenge
+ * BEFORE one goes in.
+ */
+describe("a recorded approved amount can be corrected", () => {
+  const recorded = {
+    submittedQuotationMinor: 17_000 * JOD,
+    approvedPurchaseRecorded: true,
+    approvedPurchaseAmountMinor: 150_000 * JOD,
+  };
+
+  test("the action is offered, and as a correction rather than a fresh recording", () => {
+    renderCockpit(wiring({ facts: recorded }));
+
+    expect(cardButton("CorrectApprovedPurchaseAction")).toBeTruthy();
+    // Not the first-time action wearing the same clothes. An operator who sees
+    // "record" on a deal that already has an amount cannot tell whether the
+    // figure took, which is what makes a silent overwrite feel safe.
+    expect(cardButton("RecordApprovedPurchaseAction")).toBeUndefined();
+  });
+
+  test("it is withheld from the deal's own salesperson, who could reopen and then be refused", () => {
+    renderCockpit(wiring({ isOwnDeal: true, facts: recorded }));
+
+    // `reopenApproval` would let them through — it asks only for the approval
+    // permission — but `approveDealerPurchaseAmount` refuses them. Offering it
+    // would trade a deal with a wrong number for one with NO number.
+    expect(cardButton("CorrectApprovedPurchaseAction")).toBeUndefined();
+    expect(screen.getByText("ApprovedPurchaseNotOwnDeal")).toBeTruthy();
+  });
+
+  test("handover seals it, and the card says so instead of going quiet", () => {
+    renderCockpit(wiring({ facts: { ...recorded, handedOver: true } }));
+
+    expect(cardButton("CorrectApprovedPurchaseAction")).toBeUndefined();
+    expect(screen.getByText("ApprovedPurchaseSealedByHandover")).toBeTruthy();
+  });
+
+  test("a caller who cannot approve is not told about a correction they cannot make", () => {
+    renderCockpit(wiring({ canRecordApproval: false, facts: { ...recorded, handedOver: true } }));
+
+    // Nothing on this screen ASKS for a correction, so a note for every viewer
+    // would be permanent noise on deals where nothing is wrong.
+    expect(screen.queryByText("ApprovedPurchaseSealedByHandover")).toBeNull();
+  });
+
+  test("reopening sends the reason, and lands on the recorder rather than an empty deal", async () => {
+    const onReopenApproved = vi.fn(noopAsync);
+    renderCockpit(wiring({ facts: recorded, onReopenApproved }));
+
+    fireEvent.click(cardButton("CorrectApprovedPurchaseAction")!);
+    const dialog = screen.getByRole("dialog");
+
+    // The reason is the ONLY place the replaced figure survives: the override
+    // row is the deal's whole history of this change.
+    expect(
+      within(dialog).getByRole("button", { name: "ReopenApprovedPurchaseAction" })
+    ).toHaveProperty("disabled", true);
+
+    fireEvent.change(within(dialog).getByLabelText("ReopenApprovalReasonLabel"), {
+      target: { value: "entered as 150,000 by mistake" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "ReopenApprovedPurchaseAction" }));
+
+    await waitFor(() =>
+      expect(onReopenApproved).toHaveBeenCalledWith({ reason: "entered as 150,000 by mistake" })
+    );
+    // Reopening leaves the deal with no amount and handover blocked. Stopping
+    // there would replace a wrong number with a missing one.
+    await waitFor(() =>
+      expect(screen.getByRole("dialog").textContent).toContain("RecordApprovedPurchaseTitle")
+    );
+  });
+});
+
+describe("an amount unlike the deal's own figures is questioned before it is recorded", () => {
+  const withAppraisal = {
+    facts: { submittedQuotationMinor: 17_000 * JOD },
+    appraisal: { id: "appraisal_1", amountMinor: 16_000 * JOD },
+  };
+
+  /** Opens the recorder on the MANUAL basis with an amount and a note. */
+  function typeManualAmount(amountMajor: number) {
+    fireEvent.click(cardButton("RecordApprovedPurchaseAction")!);
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("radio", { name: /BasisManual/ }));
+    fireEvent.change(within(dialog).getByLabelText("ApprovedAmountLabel"), {
+      target: { value: String(amountMajor) },
+    });
+    fireEvent.change(within(dialog).getByLabelText("BasisManualNotesLabel"), {
+      target: { value: "what the company said" },
+    });
+    return dialog;
+  }
+
+  test("the production typo stops and states the figures side by side", async () => {
+    const onRecordApproved = vi.fn(noopAsync);
+    renderCockpit(wiring({ ...withAppraisal, onRecordApproved }));
+
+    const dialog = typeManualAmount(150_000);
+    fireEvent.click(within(dialog).getByRole("button", { name: "RecordApprovedPurchaseAction" }));
+
+    // Nothing was written. This is the whole point: the check happens BEFORE
+    // the funding split is derived from the wrong number, not after.
+    expect(onRecordApproved).not.toHaveBeenCalled();
+    expect(within(dialog).getByText("ApprovedAmountFarFromEvidence")).toBeTruthy();
+
+    // And it is a question, not a refusal — AutoFlow is not entitled to decide
+    // the finance company's number is impossible.
+    fireEvent.click(within(dialog).getByRole("button", { name: "ApprovedAmountConfirmAction" }));
+    await waitFor(() =>
+      expect(onRecordApproved).toHaveBeenCalledWith(
+        expect.objectContaining({ approvedAmountMinor: 150_000 * JOD, basis: "MANUAL" })
+      )
+    );
+  });
+
+  test("an ordinary negotiated figure records on the first click", async () => {
+    const onRecordApproved = vi.fn(noopAsync);
+    renderCockpit(wiring({ ...withAppraisal, onRecordApproved }));
+
+    // 14,000 against a 16,000 appraisal is a normal commercial move. Nagging
+    // here is how an operator learns to click through the warning that matters.
+    const dialog = typeManualAmount(14_000);
+    fireEvent.click(within(dialog).getByRole("button", { name: "RecordApprovedPurchaseAction" }));
+
+    await waitFor(() =>
+      expect(onRecordApproved).toHaveBeenCalledWith(
+        expect.objectContaining({ approvedAmountMinor: 14_000 * JOD })
+      )
+    );
+    expect(screen.queryByText("ApprovedAmountFarFromEvidence")).toBeNull();
+  });
+
+  test("going back from the question returns to the form with the amount intact", () => {
+    renderCockpit(wiring(withAppraisal));
+
+    const dialog = typeManualAmount(150_000);
+    fireEvent.click(within(dialog).getByRole("button", { name: "RecordApprovedPurchaseAction" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "GoBack" }));
+
+    expect(within(dialog).queryByText("ApprovedAmountFarFromEvidence")).toBeNull();
+    expect(within(dialog).getByLabelText("ApprovedAmountLabel")).toHaveProperty("value", "150000");
+  });
+});
+
+/**
+ * The ordering guard Sonnet asked for on #231: both withdrawals at once.
+ *
+ * Each existing case varies one of `{canRecordAppraisal, handedOver}` while
+ * holding the other at the value that makes the wrong branch fire, so a
+ * refactor that swapped the two arms would pass them both.
+ */
+describe("handover outranks the permission when explaining the appraisal", () => {
+  test("a caller with neither the permission nor a vehicle still present is told about the handover", () => {
+    renderCockpit(
+      wiring({
+        canRecordAppraisal: false,
+        facts: { submittedQuotationMinor: 12_500 * JOD, handedOver: true },
+      })
+    );
+
+    expect(screen.getByText("AppraisalClosedByHandover")).toBeTruthy();
+    expect(screen.queryByText("AppraisalNeedsReviewer")).toBeNull();
+  });
+});
+
+/**
+ * The answer reaches the server, and a retired question stops being asked.
+ *
+ * Both were fixes to review findings and neither was pinned by anything but the
+ * type checker, which cannot tell whether a flag is passed on the right branch
+ * or a footer still offers to confirm something nobody was asked about.
+ */
+describe("the departure question is carried to the server, and retired when it stops applying", () => {
+  const withAppraisal = {
+    facts: { submittedQuotationMinor: 17_000 * JOD },
+    appraisal: { id: "appraisal_1", amountMinor: 16_000 * JOD },
+  };
+
+  function openManual(dialogAmount: number) {
+    fireEvent.click(cardButton("RecordApprovedPurchaseAction")!);
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("radio", { name: /BasisManual/ }));
+    fireEvent.change(within(dialog).getByLabelText("ApprovedAmountLabel"), {
+      target: { value: String(dialogAmount) },
+    });
+    fireEvent.change(within(dialog).getByLabelText("BasisManualNotesLabel"), {
+      target: { value: "what the company said" },
+    });
+    return dialog;
+  }
+
+  test("an acknowledged outlier carries the acknowledgement, and an ordinary amount does not", async () => {
+    const onRecordApproved = vi.fn(noopAsync);
+    const { unmount } = renderCockpit(wiring({ ...withAppraisal, onRecordApproved }));
+
+    const dialog = openManual(150_000);
+    fireEvent.click(within(dialog).getByRole("button", { name: "RecordApprovedPurchaseAction" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "ApprovedAmountConfirmAction" }));
+
+    // The server refuses an outlier without this, so the flag IS the answer
+    // being carried across — not a note about what the screen displayed.
+    await waitFor(() =>
+      expect(onRecordApproved).toHaveBeenCalledWith(
+        expect.objectContaining({ outlierAcknowledged: true })
+      )
+    );
+
+    unmount();
+    const onOrdinary = vi.fn(noopAsync);
+    renderCockpit(wiring({ ...withAppraisal, onRecordApproved: onOrdinary }));
+    const ordinary = openManual(14_000);
+    fireEvent.click(within(ordinary).getByRole("button", { name: "RecordApprovedPurchaseAction" }));
+
+    // Acknowledging a departure nobody was shown is the same as having no
+    // guard: the flag must only ever answer a question that was asked.
+    await waitFor(() =>
+      expect(onOrdinary).toHaveBeenCalledWith(
+        expect.objectContaining({ outlierAcknowledged: undefined })
+      )
+    );
+  });
+
+  test("changing the basis retires the question instead of leaving it on screen", () => {
+    renderCockpit(wiring(withAppraisal));
+
+    const dialog = openManual(150_000);
+    fireEvent.click(within(dialog).getByRole("button", { name: "RecordApprovedPurchaseAction" }));
+    expect(within(dialog).getByText("ApprovedAmountFarFromEvidence")).toBeTruthy();
+
+    // Only MANUAL can depart from anything — under APPRAISAL the amount IS one
+    // of the reference figures. Leaving the confirmation pending offered to
+    // confirm an amount nothing had been asked about.
+    fireEvent.click(within(dialog).getByRole("radio", { name: /BasisAppraisal/ }));
+
+    expect(within(dialog).queryByText("ApprovedAmountFarFromEvidence")).toBeNull();
+    expect(
+      within(dialog).queryByRole("button", { name: "ApprovedAmountConfirmAction" })
+    ).toBeNull();
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeTruthy();
   });
 });
