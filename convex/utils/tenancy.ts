@@ -440,6 +440,28 @@ export async function requireOwnedRow<T extends OrgScopedTable>(
  * every caller — Convex drops undefined values from the wire, so nothing leaks,
  * while consumers keep one type instead of a union they must narrow.
  */
+/**
+ * Whether this role is shown the approved purchase amount at all.
+ *
+ * Exported because a second caller now needs the SAME answer, and asking it a
+ * second way is how the two drift. `registerVehicleHandover` requires an
+ * operator who can see the figure to confirm which figure they saw — and
+ * deciding that with a hand-rolled `VIEW_FINANCE` test would have let a
+ * `confirm:finance_disbursement` caller, who IS shown the amount, skip the
+ * confirmation entirely and keep the bypass open.
+ *
+ * `VIEW_FINANCE` or `CONFIRM_FINANCE_DISBURSEMENT`, matching the tier-2 gate
+ * below exactly — one predicate, used twice, rather than two predicates that
+ * agree today.
+ */
+export function canSeeApprovedPurchaseAmount(role: Doc<"roles">): boolean {
+  return (
+    isSystemOwnerRole(role) ||
+    role.permissions.includes(PERMISSIONS.VIEW_FINANCE) ||
+    role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT)
+  );
+}
+
 export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
   app: T,
   role: Doc<"roles">
@@ -447,7 +469,7 @@ export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
   const has = (permission: Permission) =>
     isSystemOwnerRole(role) || role.permissions.includes(permission);
   const canSeeFinance = has(PERMISSIONS.VIEW_FINANCE);
-  const canWorkDisbursement = canSeeFinance || has(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+  const canWorkDisbursement = canSeeApprovedPurchaseAmount(role);
 
   return {
     ...app,

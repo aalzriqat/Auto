@@ -3,7 +3,11 @@ import { MutationCtx, QueryCtx, query } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
-import { requireTenantAuth, redactSettlementEvidence } from "./utils/tenancy";
+import {
+  requireTenantAuth,
+  redactSettlementEvidence,
+  canSeeApprovedPurchaseAmount,
+} from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
@@ -2369,11 +2373,40 @@ export const registerVehicleHandover = mutation({
     verifiedApprovedAmountMinor: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REGISTER_VEHICLE_HANDOVER]);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REGISTER_VEHICLE_HANDOVER]);
     const app = await ctx.db.get(args.applicationId);
     if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
     if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before registering handover.");
     if (app.vehicleHandoverAt) throw new ConvexError("Vehicle handover has already been registered.");
+    // Deal fitness first. A deal that cannot be handed over at all is not
+    // improved by being asked to confirm a figure — and the refusal that names
+    // the missing funding split is the more useful one to reach the operator.
+    assertDealerEconomicsRecorded(app, "handing over the vehicle");
+    /**
+     * Who must confirm what they saw — decided HERE, not by the caller.
+     *
+     * Leaving the argument merely optional made the check opt-in: any client
+     * could skip it by not sending the field, which is the bypass this closes.
+     * The server asks the canonical question instead — can this role see the
+     * approved amount — and demands the confirmation from everyone who can.
+     *
+     * `canSeeApprovedPurchaseAmount` rather than a local `VIEW_FINANCE` test,
+     * because `confirm:finance_disbursement` is shown the figure too. Gating on
+     * the narrower permission would have let exactly that caller omit the value
+     * and seal a stale amount — the same predicate, asked twice, is how the two
+     * would have drifted apart.
+     *
+     * A caller who is shown nothing is not asked to have verified anything, and
+     * neither is anyone on a deal with no approved amount recorded: there is no
+     * figure on their screen either way.
+     */
+    const mustConfirmAmount =
+      app.approvedDealerPurchaseAmountMinor !== undefined && canSeeApprovedPurchaseAmount(role);
+    if (mustConfirmAmount && args.verifiedApprovedAmountMinor === undefined) {
+      throw new ConvexError(
+        "Confirm the approved purchase amount shown on the deal before registering the handover."
+      );
+    }
     if (
       args.verifiedApprovedAmountMinor !== undefined &&
       args.verifiedApprovedAmountMinor !== app.approvedDealerPurchaseAmountMinor
@@ -2382,7 +2415,6 @@ export const registerVehicleHandover = mutation({
         "The approved purchase amount changed while you were confirming the handover. Re-check the figures on the deal before handing the vehicle over."
       );
     }
-    assertDealerEconomicsRecorded(app, "handing over the vehicle");
 
     const now = Date.now();
     await ctx.db.patch(args.applicationId, {

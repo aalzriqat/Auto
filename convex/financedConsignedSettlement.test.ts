@@ -247,7 +247,24 @@ async function runDeal(
   // which is also the only order an operator could achieve.
   await opts.beforeHandover?.(applicationId);
 
-  await s.asUser.mutation(api.applications.registerVehicleHandover, { orgId: s.orgId, applicationId });
+  // Confirming the figure that is actually on the deal at this moment, because
+  // the server now requires a caller who can SEE the approved amount to say
+  // which one they saw. Read rather than assumed: `beforeHandover` may have
+  // recorded one, and most callers here have not.
+  const approvedAtHandover = await s.t.run(async (ctx) => {
+    const row = await ctx.db.get(applicationId);
+    return row?.approvedDealerPurchaseAmountMinor;
+  });
+  await s.asUser.mutation(api.applications.registerVehicleHandover, {
+    orgId: s.orgId,
+    applicationId,
+    // `typeof === "number"`, not `!== undefined`: `t.run` serializes an absent
+    // field to NULL on the way back, and `null` sails through an undefined
+    // check straight into a validator that wanted a number.
+    ...(typeof approvedAtHandover === "number"
+      ? { verifiedApprovedAmountMinor: approvedAtHandover }
+      : {}),
+  });
   await s.asUser.mutation(api.applications.registerExpectedPayment, {
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
   });

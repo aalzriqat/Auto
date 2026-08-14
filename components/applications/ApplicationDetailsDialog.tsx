@@ -218,11 +218,33 @@ export function ApplicationDetailsDialog({
     if (!activeOrgId) return;
     setIsRegisteringHandover(true);
     try {
-      await registerVehicleHandover({ orgId: activeOrgId, applicationId, notes });
+      await registerVehicleHandover({
+        orgId: activeOrgId,
+        applicationId,
+        notes,
+        /**
+         * The amount THIS screen was showing, sent for the same reason the
+         * cockpit sends it: the server refuses to seal a figure that moved
+         * while the operator was deciding.
+         *
+         * Wired here too rather than only on the cockpit, because a guard that
+         * one of two callers can skip is not a guard — it is a detour. The
+         * value is already redacted server-side for a caller who may not see
+         * it, so `undefined` here means exactly what the server expects it to
+         * mean.
+         */
+        ...(app?.approvedDealerPurchaseAmountMinor !== undefined
+          ? { verifiedApprovedAmountMinor: app.approvedDealerPurchaseAmountMinor }
+          : {}),
+      });
       toast.success(t("VehicleHandoverRegisteredSuccess" as any));
       setIsHandoverDialogOpen(false);
-    } catch {
-      toast.error(t("UnexpectedError" as any));
+    } catch (error) {
+      // The refusals reachable from here now include "the amount changed while
+      // you were confirming", which names the thing to re-check. Collapsing it
+      // into "unexpected error" would leave the operator re-pressing a button
+      // that will keep refusing.
+      toast.error(getErrorMessage(error));
     } finally {
       setIsRegisteringHandover(false);
     }

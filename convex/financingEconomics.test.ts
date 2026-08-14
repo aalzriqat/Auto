@@ -3757,6 +3757,9 @@ describe("handover seals the approved amount, and the amount that was verified",
     await seed.asUser.mutation(api.applications.registerVehicleHandover, {
       orgId: seed.orgId,
       applicationId,
+      // This caller can see the figure, so the server requires them to say
+      // which one they saw — the same demand the screens now satisfy.
+      verifiedApprovedAmountMinor: jod(11_500),
     });
     return { seed, applicationId };
   }
@@ -3821,14 +3824,90 @@ describe("handover seals the approved amount, and the amount that was verified",
     expect(sealed?.vehicleHandoverAt).toBeTypeOf("number");
   });
 
-  test("a caller who was shown no figure is not asked to have verified one", async () => {
-    const { seed, applicationId } = await approvedDeal();
 
-    // `redactSettlementEvidence` withholds the amount from callers without the
-    // finance permission, so their dialog states the consequence without being
-    // able to show the figure. Demanding a verification they were never given
-    // the means to make would block handover for them entirely.
-    await seed.asUser.mutation(api.applications.registerVehicleHandover, {
+  /**
+   * A caller with EXACTLY the permissions named, so the visibility question is
+   * asked of a real role rather than of a convenient one.
+   */
+  async function callerWith(
+    seed: Seed,
+    tag: string,
+    permissions: string[]
+  ): Promise<AuthenticatedTestConvex> {
+    const userId = await seed.t.run((ctx) =>
+      ctx.db.insert("users", {
+        clerkId: `handover_${tag}`,
+        email: `${tag}@example.com`,
+        name: tag,
+      })
+    );
+    const roleId = await seed.t.run((ctx) =>
+      ctx.db.insert("roles", { orgId: seed.orgId, name: tag, permissions })
+    );
+    await seed.t.run((ctx) =>
+      ctx.db.insert("memberships", { orgId: seed.orgId, userId, roleId })
+    );
+    return seed.t.withIdentity({ subject: `handover_${tag}` });
+  }
+
+  test("a caller who CAN see the amount must say which amount they saw", async () => {
+    const { seed, applicationId } = await approvedDeal();
+    const asFinance = await callerWith(seed, "finance", [
+      "view:sales",
+      "view:finance",
+      "register:vehicle_handover",
+    ]);
+
+    // Optional-in-the-validator made the whole check opt-in: a client could
+    // skip it by simply not sending the field. The server decides now.
+    await expect(
+      asFinance.mutation(api.applications.registerVehicleHandover, {
+        orgId: seed.orgId,
+        applicationId,
+      })
+    ).rejects.toThrow(/confirm the approved purchase amount/i);
+  });
+
+  test("confirm:finance_disbursement is shown the amount, so it is asked too", async () => {
+    const { seed, applicationId } = await approvedDeal();
+    // The bypass a hand-rolled VIEW_FINANCE test would have left open. This
+    // role holds no `view:finance` at all, and `redactSettlementEvidence` still
+    // shows it the approved amount — so it can verify, and must.
+    const asDisbursement = await callerWith(seed, "disbursement", [
+      "view:sales",
+      "confirm:finance_disbursement",
+      "register:vehicle_handover",
+    ]);
+
+    await expect(
+      asDisbursement.mutation(api.applications.registerVehicleHandover, {
+        orgId: seed.orgId,
+        applicationId,
+      })
+    ).rejects.toThrow(/confirm the approved purchase amount/i);
+
+    // And it can proceed by confirming what it was actually shown.
+    await asDisbursement.mutation(api.applications.registerVehicleHandover, {
+      orgId: seed.orgId,
+      applicationId,
+      verifiedApprovedAmountMinor: jod(11_500),
+    });
+    const app = await readApp(seed, applicationId);
+    expect(app?.vehicleHandoverAt).toBeTypeOf("number");
+  });
+
+  test("a caller the figure is withheld from is not asked to confirm it", async () => {
+    const { seed, applicationId } = await approvedDeal();
+    // Neither `view:finance` nor `confirm:finance_disbursement`, so
+    // `redactSettlementEvidence` blanks the amount for them. Demanding a
+    // confirmation they were never given the means to make would block handover
+    // for this role entirely — a worse failure than the one being prevented.
+    const asSales = await callerWith(seed, "salesonly", [
+      "view:sales",
+      "register:vehicle_handover",
+    ]);
+
+    await asSales.mutation(api.applications.registerVehicleHandover, {
       orgId: seed.orgId,
       applicationId,
     });
