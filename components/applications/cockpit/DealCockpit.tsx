@@ -423,6 +423,16 @@ export function DealCockpit({
    */
   const expectedPaymentRegistered =
     deal && "expectedPaymentRegistered" in deal ? deal.expectedPaymentRegistered : false;
+  /**
+   * Whether `finalizeDeal` will refuse for want of a settlement route — the
+   * server's own answer, computed from the same inputs the mutation refuses on.
+   * Nothing on this side reconstructs it; `money.routeKnown` is a different
+   * question and reports this deal as fine.
+   */
+  const settlementRouteRequired =
+    deal && "supplierSettlementRouteRequired" in deal
+      ? deal.supplierSettlementRouteRequired
+      : false;
 
   function buildWorkflowAction() {
     if (permissionsLoading || !deal) return undefined;
@@ -448,11 +458,15 @@ export function DealCockpit({
     }
 
     // Everything below is only reachable while the application is still
-    // APPROVED. Once `finalizeDeal` has run the deal is CLOSED and the money it
-    // is now waiting on is settled through the receipt and settlement surfaces,
-    // which have their own actions on this screen. Offering finalize again on a
-    // CLOSED deal would be offering a no-op the server answers by returning the
-    // sale it already made.
+    // APPROVED, because all three of these mutations refuse anything else.
+    //
+    // A CLOSED deal still shows SETTLEMENT as its live stage until the money
+    // actually arrives, and this returns no action for it. That stage's
+    // confirmations — the financier's disbursement and the supplier's — are
+    // still only in the review dialog, so the cockpit names a step it cannot
+    // take there. That is the SAME defect one stage further along, it predates
+    // this change, and it is filed rather than fixed here: it is a fourth
+    // action, on a different surface, and this issue scopes to three.
     if (!settlementStage || settlementStage.state === "COMPLETE") return undefined;
     if (deal.status !== "APPROVED") return undefined;
 
@@ -477,9 +491,28 @@ export function DealCockpit({
         setFinalizeError(null);
         setConfirmingFinalize(true);
       },
-      unavailableReasonKey: hasPermission(PERMISSIONS.FINALIZE_FINANCED_DEAL)
-        ? undefined
-        : "FinalizeNeedsPermission",
+      /**
+       * Two different reasons the close cannot be taken, and the PREREQUISITE
+       * is named before the permission.
+       *
+       * The route is the one that would otherwise have been discovered as a
+       * refusal: on a consigned car with an external financier and no route
+       * recorded — the ordinary shape of a consigned financed deal —
+       * `finalizeDeal` is certain to reject, and the operator only reaches it
+       * after handover has already sealed the approved amount. Telling a caller
+       * who cannot close anyway that they lack the permission would be true and
+       * useless; the deal is not closeable by anyone yet.
+       *
+       * Recording the route is still done in the review dialog. Saying so is the
+       * issue's own minimum bar — a pointer is not as good as the action, but it
+       * is not a dead end — and bringing that control across is filed separately
+       * rather than folded into this change.
+       */
+      unavailableReasonKey: settlementRouteRequired
+        ? "FinalizeNeedsSettlementRoute"
+        : hasPermission(PERMISSIONS.FINALIZE_FINANCED_DEAL)
+          ? undefined
+          : "FinalizeNeedsPermission",
     };
   }
 
@@ -889,7 +922,12 @@ function MoneyPanel({
       {profit.available && (
         <>
           <Separator />
-          <dl className="space-y-1.5 text-sm">
+          {/* Capped for the same reason as the decision card's rows: this is a
+              working of one figure, and a term separated from its label by the
+              full width of the panel has to be re-associated by eye on every
+              line. Left as a single column — these lines are a SUM, and the
+              order they are read in is part of the meaning. */}
+          <dl className="max-w-xl space-y-1.5 text-sm">
             {profit.lines
               // A zero on an OPTIONAL line is noise, not information:
               // the customer-direct amount has no writer yet, so it
@@ -1538,7 +1576,7 @@ export function DealCockpitView({
           <CardHeader className="pb-3">
             <CardTitle className="text-base">{t("NextStepHeading")}</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-2">
+          <CardContent className="max-w-2xl space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
               <p className="font-medium">{t(STAGE_LABEL[live.key] ?? live.key)}</p>
               {/* The action for the step this block NAMES.

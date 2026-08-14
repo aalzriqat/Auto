@@ -850,6 +850,16 @@ export const salesEn = {
   FinalizeDealAction: "Close the deal",
   FinalizeNeedsPermission:
     "You do not have permission to close the deal. Someone who does completes this step.",
+  /**
+   * The prerequisite, named before it becomes a refusal.
+   *
+   * On a consigned car with an external financier the route decides opposite
+   * balance sheets — a payable to the supplier for his whole entitlement, or a
+   * claim on him for the margin — so `finalizeDeal` refuses until it is on the
+   * record. It says where, because the control is still in the review dialog.
+   */
+  FinalizeNeedsSettlementRoute:
+    "This car belongs to the supplier and the deal is financed, so who the finance company pays has to be recorded before the deal can be closed. It is chosen in Finance Applications → Review.",
   ConfirmFinalizeTitle: "Close the deal",
   ConfirmFinalizeDesc:
     "The handover and the expected payment are on file, so the deal can be closed.",
@@ -1741,6 +1751,8 @@ export const salesAr = {
     "لا تملك صلاحية تسجيل الدفعة المتوقعة. يُكمل هذه الخطوة من يملكها.",
   FinalizeDealAction: "إغلاق الصفقة",
   FinalizeNeedsPermission: "لا تملك صلاحية إغلاق الصفقة. يُكمل هذه الخطوة من يملكها.",
+  FinalizeNeedsSettlementRoute:
+    "هذه المركبة تعود للمورد والصفقة ممولة، لذا يجب تسجيل الجهة التي تدفع لها شركة التمويل قبل إغلاق الصفقة. يُختار ذلك من طلبات التمويل ← مراجعة.",
   ConfirmFinalizeTitle: "إغلاق الصفقة",
   ConfirmFinalizeDesc: "التسليم والدفعة المتوقعة مسجَّلان، ويمكن إغلاق الصفقة.",
   FinalizeCreatesTheSale:

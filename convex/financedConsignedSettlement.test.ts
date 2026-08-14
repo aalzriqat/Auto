@@ -5902,3 +5902,187 @@ describe("the deal cockpit's canonical sale destination", () => {
     expect(view!.dealRef).toBe(applicationId);
   });
 });
+
+/**
+ * A deal walked to APPROVED with the vehicle handed over and NOTHING else.
+ *
+ * `runDeal` registers the expected payment on its way past, which is right for
+ * every settlement case in this file and wrong for the two below: they are about
+ * the moment before that registration, and about what happens when it is
+ * refused.
+ */
+async function approvedHandedOverDeal(s: Seeded): Promise<Id<"financeApplications">> {
+  const quoteId = await s.asUser.mutation(api.quotes.saveQuote, {
+    orgId: s.orgId,
+    customerId: s.customerId,
+    vehicleId: s.vehicleId,
+    vehiclePrice: VEHICLE_PRICE,
+    downPayment: 0,
+    termMonths: 48,
+    mode: "CONFIGURED_FINANCE_COMPANY",
+    companyId: s.companyId,
+    totalFinancedAmount: VEHICLE_PRICE,
+  });
+  const applicationId = await s.asUser.mutation(api.applications.createFromQuote, {
+    orgId: s.orgId,
+    quoteId,
+  });
+  await s.asUser.mutation(api.applications.updateStatus, {
+    orgId: s.orgId,
+    applicationId,
+    status: "UNDER_REVIEW",
+  });
+  await s.asApprover.mutation(api.applications.updateStatus, {
+    orgId: s.orgId,
+    applicationId,
+    status: "APPROVED",
+  });
+  await s.asUser.mutation(api.applications.registerVehicleHandover, {
+    orgId: s.orgId,
+    applicationId,
+  });
+  return applicationId;
+}
+
+/**
+ * The workflow facts the DEAL COCKPIT projects, and the boundary that keeps one
+ * of them from becoming unreachable state.
+ *
+ * SCRUM-78 moved handover, expected payment and close onto the cockpit, so the
+ * screen now has to answer "can this step be taken" for itself. Two adversarial
+ * findings landed exactly there, and both are the query and the mutation
+ * disagreeing about the same deal.
+ */
+describe("the cockpit's workflow projections", () => {
+  test("names the settlement route as outstanding before it offers a close", async () => {
+    const s = await seedDealership("cockpitroute");
+    const { applicationId } = await runDeal(s, { finalize: false });
+
+    const before = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+
+    // A consigned car, an external financier, no route chosen — the ordinary
+    // shape of a consigned financed deal, and the one `finalizeDeal` refuses.
+    // Without this projection the cockpit offered a close that was certain to
+    // be rejected, one step AFTER handover had sealed the approved amount.
+    expect(before!.supplierSettlementRouteRequired).toBe(true);
+    // And it really would have been refused — asserted against the mutation
+    // rather than assumed from reading it, because "the screen and the server
+    // agree about this deal" is the only thing this projection is for.
+    await expect(
+      s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId })
+    ).rejects.toThrow(/settlement route/i);
+
+    await s.asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId: s.orgId,
+      applicationId,
+      route: "THROUGH_DEALERSHIP",
+    });
+
+    const after = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    expect(after!.supplierSettlementRouteRequired).toBe(false);
+  });
+
+  test("reports the expected payment only once one is really on file", async () => {
+    const s = await seedDealership("cockpitpay");
+    const applicationId = await approvedHandedOverDeal(s);
+
+    const before = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    expect(before!.expectedPaymentRegistered).toBe(false);
+
+    await s.asUser.mutation(api.applications.registerExpectedPayment, {
+      orgId: s.orgId,
+      applicationId,
+      method: "BANK_TRANSFER",
+      expectedDate: Date.now(),
+    });
+
+    const after = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    // Asserted across the REAL writer rather than by setting the flag in a
+    // fixture. The component tests hand this boolean to the screen, so nothing
+    // there proves the query computes it at all.
+    expect(after!.expectedPaymentRegistered).toBe(true);
+  });
+
+  test("refuses an expected-payment date that would strand the deal", async () => {
+    const s = await seedDealership("cockpitzero");
+    const applicationId = await approvedHandedOverDeal(s);
+
+    // 1970-01-01, which the date field will happily produce. `v.number()`
+    // admits it and `finalizeDeal` tests the value for truth — so it used to be
+    // accepted here, stamped as registered, and then block the close forever
+    // while this mutation refused a second attempt and the sealed approval could
+    // no longer be reopened. There was no way out but cancelling the deal.
+    await expect(
+      s.asUser.mutation(api.applications.registerExpectedPayment, {
+        orgId: s.orgId,
+        applicationId,
+        method: "BANK_TRANSFER",
+        expectedDate: 0,
+      })
+    ).rejects.toThrow(/valid date/i);
+
+    // The refusal has to leave the deal exactly where it was, or it has only
+    // moved the dead end: a stamped `expectedPaymentRegisteredAt` would refuse
+    // every later attempt too.
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    expect(view!.expectedPaymentRegistered).toBe(false);
+
+    await s.asUser.mutation(api.applications.registerExpectedPayment, {
+      orgId: s.orgId,
+      applicationId,
+      method: "BANK_TRANSFER",
+      expectedDate: Date.now(),
+    });
+    const recovered = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    expect(recovered!.expectedPaymentRegistered).toBe(true);
+  });
+
+  test("tells a caller who cannot see the money which step the deal is on", async () => {
+    const s = await seedDealership("cockpitgate");
+    const { applicationId } = await runDeal(s, { finalize: false });
+
+    // `view:sales` and nothing financial — the salesperson tracking their own
+    // deal's progress. The money block is withheld from them by design, and the
+    // workflow conditions have to survive that: a step nobody is shown is the
+    // same dead end in a different place.
+    const watcherId = await s.t.run((ctx) =>
+      ctx.db.insert("users", {
+        clerkId: "cockpitgate_watch",
+        email: "watch.cockpitgate@example.com",
+        name: "Watcher",
+      })
+    );
+    const watcherRoleId = await s.t.run((ctx) =>
+      ctx.db.insert("roles", { orgId: s.orgId, name: "Watcher", permissions: ["view:sales"] })
+    );
+    await s.t.run((ctx) =>
+      ctx.db.insert("memberships", { orgId: s.orgId, userId: watcherId, roleId: watcherRoleId })
+    );
+
+    const view = await s.t
+      .withIdentity({ subject: "cockpitgate_watch", clerkId: "cockpitgate_watch" })
+      .query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+
+    expect(view!.money).toBeNull();
+    expect(view!.expectedPaymentRegistered).toBe(true);
+    expect(view!.supplierSettlementRouteRequired).toBe(true);
+  });
+});

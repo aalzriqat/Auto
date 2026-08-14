@@ -115,7 +115,18 @@ function DecisionRow({
   action?: React.ReactNode;
 }>) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+    // Bounded, and this is the whole reason the owner had to zoom to 50% to
+    // read one deal. `justify-between` on an unbounded row puts the label at
+    // one edge of a 1780px monitor and the figure it names at the other, about
+    // a metre apart on a physical screen. Halving the font size does not add
+    // information; it just halves that distance, which is why zooming felt like
+    // the fix. Capping the measure removes the need for it.
+    //
+    // Kept as `justify-between` inside the cap rather than collapsed to a plain
+    // gap, so the figures stay on a common edge and can be compared down the
+    // column — and because it is direction-agnostic, which a padding-based
+    // alignment would not be in Arabic.
+    <div className="flex max-w-2xl flex-wrap items-center justify-between gap-x-4 gap-y-2">
       <div className="min-w-0 space-y-0.5">
         <p className="text-sm text-muted-foreground">{label}</p>
         <p className="font-semibold">{value}</p>
@@ -377,9 +388,17 @@ export function FinanceCompanyDecisionCard({
             <Separator />
             <div className="space-y-1.5">
               <p className="text-sm font-medium">{t("DerivedEconomicsHeading")}</p>
-              <dl className="space-y-1.5 text-sm">
+              {/* Columns rather than one full-width list. These are three
+                  short label/amount pairs, and stacking them down a 1780px card
+                  is what put `الجزء المموَّل من شركة التمويل` at one edge and
+                  its figure at the other. Side by side they also read as what
+                  they are — one split, not three unrelated facts. */}
+              <dl className="grid gap-x-10 gap-y-1.5 text-sm sm:grid-cols-2 xl:grid-cols-3">
                 {derived.map((line) => (
-                  <div key={line.key} className="flex items-center justify-between gap-4">
+                  <div
+                    key={line.key}
+                    className="flex max-w-sm items-baseline justify-between gap-4"
+                  >
                     <dt className="text-muted-foreground">{line.label}</dt>
                     <dd>
                       <bdi className="tabular-nums">{line.value}</bdi>

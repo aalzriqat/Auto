@@ -42,8 +42,21 @@ export function ConfirmFinalizeDialog({
   onSubmit,
 }: Readonly<ConfirmFinalizeDialogProps>) {
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+    // Not dismissible while the mutation is in flight.
+    //
+    // Escape, the overlay and the built-in × are all `onOpenChange(false)`, and
+    // none of them cancels the request — there is no abort path, and the sale
+    // posts regardless. An operator who backs out of "close the deal" and
+    // watches the dialog disappear has been told the action was stopped. It was
+    // not. `SettlementAdviceCorrectionDialog` already refuses to close mid-
+    // submit; this is the same rule on the action that has no unwind at all.
+    <Dialog open={open} onOpenChange={(next) => !submitting && onOpenChange(next)}>
+      <DialogContent
+        className="max-w-md"
+        onEscapeKeyDown={(event) => submitting && event.preventDefault()}
+        onPointerDownOutside={(event) => submitting && event.preventDefault()}
+        onInteractOutside={(event) => submitting && event.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle>{t("ConfirmFinalizeTitle")}</DialogTitle>
           <DialogDescription>{t("ConfirmFinalizeDesc")}</DialogDescription>
@@ -66,7 +79,7 @@ export function ConfirmFinalizeDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" disabled={submitting} onClick={() => onOpenChange(false)}>
             {t("Cancel")}
           </Button>
           <Button disabled={submitting} onClick={onSubmit}>

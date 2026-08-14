@@ -139,6 +139,7 @@ function cockpit(overrides: Record<string, unknown> = {}) {
     settlementAdviceRequiresReconciliation: false,
     settlementAdviceDiscrepancy: null,
     expectedPaymentRegistered: false,
+    supplierSettlementRouteRequired: false,
     stages: stages("AWAITING_HANDOVER"),
     documents: [],
     timeline: [],
@@ -239,6 +240,53 @@ describe("the step the rail names is a step this screen can take", () => {
     // made. A button for that is an invitation to wonder whether it worked.
     expect(screen.queryByRole("button", { name: "FinalizeDealAction" })).toBeNull();
     expect(screen.queryByRole("button", { name: "RegisterExpectedPaymentAction" })).toBeNull();
+  });
+});
+
+describe("a step the server would refuse is not offered as a step", () => {
+  test("the close is withheld while the settlement route is outstanding, and says so", () => {
+    grantTheWholeTail();
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        stages: stages("AFTER_HANDOVER"),
+        expectedPaymentRegistered: true,
+        // A consigned car with an external financier and no route recorded —
+        // the ordinary shape of a consigned financed deal. `finalizeDeal` is
+        // certain to reject it, and the operator only gets here AFTER handover
+        // has sealed the approved amount.
+        supplierSettlementRouteRequired: true,
+      })
+    );
+
+    renderCockpit();
+
+    const block = nextStepBlock();
+    expect(within(block).queryByRole("button", { name: "FinalizeDealAction" })).toBeNull();
+    // The prerequisite, not the permission: this caller holds every permission
+    // in the tail and still cannot close, so naming the permission would be
+    // true and useless.
+    expect(within(block).getByText("FinalizeNeedsSettlementRoute")).toBeTruthy();
+    expect(within(block).queryByText("FinalizeNeedsPermission")).toBeNull();
+  });
+
+  test("the route prerequisite outranks the permission gap, because neither can close it", () => {
+    // No FINALIZE_FINANCED_DEAL, and the route is missing too. The deal is not
+    // closeable by anyone yet, so the reason given is the one that is about the
+    // deal rather than about the caller.
+    permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        stages: stages("AFTER_HANDOVER"),
+        expectedPaymentRegistered: true,
+        supplierSettlementRouteRequired: true,
+      })
+    );
+
+    renderCockpit();
+
+    expect(within(nextStepBlock()).getByText("FinalizeNeedsSettlementRoute")).toBeTruthy();
   });
 });
 

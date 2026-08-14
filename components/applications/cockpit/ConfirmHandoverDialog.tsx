@@ -118,8 +118,19 @@ export function ConfirmHandoverDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+    // Not dismissible while the mutation is in flight. Escape, the overlay and
+    // the built-in × all resolve to `onOpenChange(false)` and none of them
+    // cancels the request — the handover records regardless, and it is the
+    // moment the approved amount stops being correctable. An operator who backs
+    // out and watches the dialog close has been told the one-way door did not
+    // open. It did.
+    <Dialog open={open} onOpenChange={(next) => !submitting && onOpenChange(next)}>
+      <DialogContent
+        className="max-w-md"
+        onEscapeKeyDown={(event) => submitting && event.preventDefault()}
+        onPointerDownOutside={(event) => submitting && event.preventDefault()}
+        onInteractOutside={(event) => submitting && event.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle>{t("ConfirmHandoverTitle")}</DialogTitle>
           <DialogDescription>{t("ConfirmHandoverDesc")}</DialogDescription>
@@ -181,7 +192,7 @@ export function ConfirmHandoverDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" disabled={submitting} onClick={() => onOpenChange(false)}>
             {t("Cancel")}
           </Button>
           <Button

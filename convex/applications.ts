@@ -1600,6 +1600,23 @@ export const dealCockpit = query({
           }
         : null;
 
+    /**
+     * `finalizeDeal`'s settlement-route prerequisite, evaluated with its own
+     * inputs rather than approximated.
+     *
+     * Scoped exactly as the mutation scopes it: a consigned car (the supplier's,
+     * so somebody owes somebody), and an EXTERNAL financier — which is the quote
+     * MODE, not `companyId`, because a MANUAL_FINANCE_COMPANY deal structurally
+     * cannot carry one. Nothing already closed is asked, since its sale has
+     * already posted one of the two answers.
+     */
+    const settlementRouteRequired =
+      app.status !== "CLOSED" &&
+      app.supplierSettlementRoute === undefined &&
+      vehicle !== null &&
+      isConsignedAgentSale(vehicle) &&
+      (await settlementPayerForApplication(ctx, app)).external;
+
     const base = {
       /**
        * What KIND of deal this is. SCRUM-29 put a cash deal on the same screen,
@@ -1669,8 +1686,25 @@ export const dealCockpit = query({
        * and no method — only that the step is done. Whoever may see the deal may
        * see which step it is waiting on.
        */
-      expectedPaymentRegistered:
-        app.expectedPaymentMethod !== undefined && app.expectedPaymentDate !== undefined,
+      expectedPaymentRegistered: Boolean(app.expectedPaymentMethod && app.expectedPaymentDate),
+      /**
+       * That `finalizeDeal` will refuse until the settlement route is recorded.
+       *
+       * The SAME predicate the mutation refuses on, evaluated here rather than
+       * reconstructed: a consigned car, an external financier, and no route
+       * chosen. It cannot be derived from anything the screen already had —
+       * `money.routeKnown` answers whether the SALE is readable, and an absent
+       * route reads as the legacy THROUGH_DEALERSHIP default everywhere else, so
+       * both would report this deal as perfectly fine.
+       *
+       * Without it the cockpit offered a close that the server was certain to
+       * reject, on the ordinary shape of a consigned financed deal, and it did
+       * so one step AFTER handover had sealed the approved amount.
+       *
+       * A workflow condition with no amounts in it, so it sits outside the money
+       * gate like the other two.
+       */
+      supplierSettlementRouteRequired: settlementRouteRequired,
       /**
        * The FIGURES behind that flag, and they are gated.
        *
@@ -2356,6 +2390,21 @@ export const registerExpectedPayment = mutation({
     if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before registering expected payment.");
     if (!app.vehicleHandoverAt) throw new ConvexError("Register the vehicle handover before the expected payment.");
     if (app.expectedPaymentRegisteredAt) throw new ConvexError("Expected payment has already been registered.");
+    // A date this mutation ACCEPTS but `finalizeDeal` will not.
+    //
+    // `v.number()` admits 0 and NaN, and 0 is what the date field produces for
+    // 1970-01-01. `finalizeDeal` tests `!app.expectedPaymentDate`, so a zero
+    // sails in here and then blocks the close — while THIS mutation refuses a
+    // second attempt because it has already stamped
+    // `expectedPaymentRegisteredAt`. With the handover recorded the approval can
+    // no longer be reopened either, so the deal has no supported way forward at
+    // all: the only remedy left is cancelling the application.
+    //
+    // Refused at the boundary rather than repaired downstream, because the
+    // state is unrecoverable once written.
+    if (!Number.isFinite(args.expectedDate) || args.expectedDate <= 0) {
+      throw new ConvexError("Record a valid date for the expected payment.");
+    }
 
     if (args.method === "CHEQUE") {
       if (!args.chequeDetails?.bank?.trim() || !args.chequeDetails?.chequeNumber?.trim()) {
