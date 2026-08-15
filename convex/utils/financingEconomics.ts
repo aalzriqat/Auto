@@ -18,7 +18,15 @@ import {
 
 // Pass-throughs, re-exported directly so they do not sit in this module's local
 // scope pretending to be used here.
-export { classifyGapResolution, evaluateQuotationException } from "../../lib/financingEconomics";
+export {
+  classifyGapResolution,
+  evaluateQuotationException,
+  // Re-exported so the gap-resolution mutation reconciles an allocation with
+  // the SAME arithmetic this module already validates settlements against.
+  // A second copy of the two identities is how the destination fields get
+  // dropped, which understates the owner's profit by the whole gap.
+  validateGapShares,
+} from "../../lib/financingEconomics";
 
 /**
  * Server-side vocabulary and invariants for the dealer side of a financed sale.
@@ -1469,4 +1477,33 @@ export function deriveAccountingProfit(args: {
     lines: reconciles ? lines : [],
     reconcilesToLedger: true,
   };
+}
+
+/**
+ * A stamp of the economics an irreversible confirmation is about, issued to
+ * every caller who can load the deal and demanded back by the mutations that
+ * act on those figures — `registerVehicleHandover` seals them, and
+ * `resolveAppraisalGap` reconciles an allocation against them.
+ *
+ * Deliberately NOT permission-shaped: a caller whose amounts are redacted still
+ * needs one, because the deal must not be acted on against figures that moved
+ * regardless of who is looking. Keying this to visibility is what left default
+ * SALES unguarded and dead-ended `confirm:finance_disbursement` roles at once.
+ *
+ * And deliberately CARRYING NO MONEY. The first version encoded the approved
+ * amount and its split directly — `v1|<approved>|<funded>|<contribution>` — and
+ * projected it to every caller, handing the exact figures
+ * `redactSettlementEvidence` withholds to the callers it withholds them from,
+ * legible at a glance. A digest would not have saved it: the format is known
+ * and at 100% LTV the search collapses to a single figure. So the token is a
+ * revision counter and says nothing about the deal but that it changed.
+ *
+ * It lives HERE rather than in `applications.ts` because two modules now demand
+ * it. A second copy would be a second definition of "the economics moved", and
+ * the two would drift the first time one of them learned about a new writer.
+ */
+export function economicsStamp(app: {
+  economicsRevision?: number;
+}): string {
+  return `v2|${app.economicsRevision ?? 0}`;
 }

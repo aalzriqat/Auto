@@ -37,6 +37,7 @@ import {
   creditDecisionForStatus,
   deriveDealStages,
   deriveManagementProfit,
+  economicsStamp,
   handoverStatusForFacts,
   obligationFromRow,
   positionForObligation,
@@ -1476,26 +1477,6 @@ export const get = query({
  * Returns `null` for an application that does not exist or belongs to another
  * org — the same shape `get` uses, so the screen has one not-found path.
  */
-/**
- * A stamp of the economics a handover confirmation is about, issued to every
- * caller who can load the deal and demanded back by `registerVehicleHandover`.
- *
- * Deliberately NOT permission-shaped: a caller whose amounts are redacted still
- * needs one, because the deal must not be sealed against figures that moved
- * regardless of who is looking. Keying this to visibility is what left default
- * SALES unguarded and dead-ended `confirm:finance_disbursement` roles at once.
- *
- * And deliberately CARRYING NO MONEY. The first version of this encoded the
- * approved amount and its split directly — `v1|<approved>|<funded>|<contribution>`
- * — and then projected it to every caller, handing the exact figures
- * `redactSettlementEvidence` withholds to the callers it withholds them from,
- * legible at a glance. A digest would not have saved it: the format is known
- * and at 100% LTV the search collapses to a single figure. So the token is a
- * revision counter and says nothing about the deal but that it changed.
- */
-function economicsStamp(app: Doc<"financeApplications">): string {
-  return `v2|${app.economicsRevision ?? 0}`;
-}
 
 /**
  * Everything the handover confirmation is allowed to show, resolved ONCE on the

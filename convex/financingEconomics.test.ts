@@ -4400,4 +4400,291 @@ describe("handover seals the approved amount, and the amount that was verified",
     );
     expect(new Set(stamps).size).toBe(1);
   });
+
+  /**
+   * SCRUM-83 — the appraisal gap gets an exit.
+   *
+   * `approvedDeal()` above quotes 12,500 and approves 11,500, so every case here
+   * runs against a 1,000 JOD raw gap. That is the production pilot deal's exact
+   * shape (1,000,000 minor units, PENDING_NEGOTIATION), reproduced here rather
+   * than reached for in production.
+   *
+   * The owner fixed the semantics on SCRUM-83 comment 11941, and the identities
+   * were already in the shared engine before this workflow existed:
+   *
+   *     customerGapShare + dealerGapShare            = rawAppraisalGap
+   *     customerCash + customerInstallments + toFinanceCompany = customerGapShare
+   *
+   * The second identity is the one that carries money. `recomputeAndPatchEconomics`
+   * composes `customerDirectToDealerMinor` from cash + installments ONLY, so a
+   * share written without its destinations understates the owner's profit by the
+   * whole gap — and the money a customer pays the FINANCE COMPANY must never
+   * become dealer proceeds. Both directions are asserted below.
+   */
+  describe("resolving the appraisal gap", () => {
+    const RAW_GAP = jod(1_000);
+
+    /** The allocation a customer-absorbs resolution needs, spelled in full. */
+    function customerAbsorbs(over: Record<string, number> = {}) {
+      return {
+        customerGapShareMinor: RAW_GAP,
+        dealerGapShareMinor: 0,
+        customerGapCashToDealerMinor: RAW_GAP,
+        customerGapInstallmentToDealerMinor: 0,
+        customerGapToFinanceCompanyMinor: 0,
+        ...over,
+      };
+    }
+
+    async function gapStampFrom(
+      seed: Seed,
+      applicationId: Id<"financeApplications">,
+      as: AuthenticatedTestConvex = seed.asApprover
+    ): Promise<string> {
+      const stamp = await as.query(api.applications.handoverStamp, {
+        orgId: seed.orgId,
+        applicationId,
+      });
+      if (!stamp) throw new Error("no economics stamp issued");
+      return stamp;
+    }
+
+    test("the deal starts blocked with nothing able to resolve it", async () => {
+      // The defect this workflow exists for: the stage rail names a step and
+      // the codebase has no writer that can take it.
+      const { seed, applicationId } = await approvedDeal();
+      const app = await readApp(seed, applicationId);
+
+      expect(app?.rawAppraisalGapMinor).toBe(RAW_GAP);
+      expect(app?.gapResolution).toBe("PENDING_NEGOTIATION");
+    });
+
+    test("the customer absorbing the gap resolves it, and every field lands together", async () => {
+      const { seed, applicationId } = await approvedDeal();
+
+      await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await gapStampFrom(seed, applicationId),
+        ...customerAbsorbs(),
+        notes: "Customer pays the shortfall in cash on collection.",
+      });
+
+      const app = await readApp(seed, applicationId);
+      // Classified from the SHARES by the shared helper, never from a label the
+      // caller supplied — a caller must not be able to name a resolution its
+      // own numbers contradict.
+      expect(app?.gapResolution).toBe("CUSTOMER_ABSORBS");
+      expect(app?.customerGapShareMinor).toBe(RAW_GAP);
+      expect(app?.dealerGapShareMinor).toBe(0);
+      expect(app?.customerGapCashToDealerMinor).toBe(RAW_GAP);
+      expect(app?.customerGapInstallmentToDealerMinor).toBe(0);
+      expect(app?.customerGapToFinanceCompanyMinor).toBe(0);
+      // Auditability: who and when, recoverable from the row itself.
+      expect(typeof app?.gapResolvedAt).toBe("number");
+      expect(app?.gapResolvedBy).toBeDefined();
+      expect(app?.gapResolutionNotes).toContain("cash on collection");
+    });
+
+    test("a split is classified as one, and both sides are recorded", async () => {
+      const { seed, applicationId } = await approvedDeal();
+
+      await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await gapStampFrom(seed, applicationId),
+        customerGapShareMinor: jod(600),
+        dealerGapShareMinor: jod(400),
+        customerGapCashToDealerMinor: jod(250),
+        customerGapInstallmentToDealerMinor: jod(350),
+        customerGapToFinanceCompanyMinor: 0,
+      });
+
+      const app = await readApp(seed, applicationId);
+      expect(app?.gapResolution).toBe("SPLIT");
+      expect(app?.customerGapShareMinor).toBe(jod(600));
+      expect(app?.dealerGapShareMinor).toBe(jod(400));
+    });
+
+    test("shares that do not sum to the raw gap are refused, and nothing is written", async () => {
+      const { seed, applicationId } = await approvedDeal();
+
+      await expect(
+        seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+          orgId: seed.orgId,
+          applicationId,
+          economicsStamp: await gapStampFrom(seed, applicationId),
+          ...customerAbsorbs({ customerGapShareMinor: jod(900) }),
+        })
+      ).rejects.toThrow(/raw appraisal gap|sum/i);
+
+      // Atomicity. A half-resolved row is the failure mode the owner ruled out:
+      // a share recorded against a gap it does not reconcile to.
+      const app = await readApp(seed, applicationId);
+      expect(app?.gapResolution).toBe("PENDING_NEGOTIATION");
+      expect(app?.customerGapShareMinor).toBeUndefined();
+      expect(app?.gapResolvedAt).toBeUndefined();
+    });
+
+    test("a customer share with no destination is refused — absence is not zero", async () => {
+      const { seed, applicationId } = await approvedDeal();
+
+      await expect(
+        seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+          orgId: seed.orgId,
+          applicationId,
+          economicsStamp: await gapStampFrom(seed, applicationId),
+          ...customerAbsorbs({ customerGapCashToDealerMinor: 0 }),
+        })
+      ).rejects.toThrow(/destination|cash|installment|financing company/i);
+
+      const app = await readApp(seed, applicationId);
+      expect(app?.customerGapCashToDealerMinor).toBeUndefined();
+    });
+
+    test("negative amounts are refused", async () => {
+      const { seed, applicationId } = await approvedDeal();
+
+      await expect(
+        seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+          orgId: seed.orgId,
+          applicationId,
+          economicsStamp: await gapStampFrom(seed, applicationId),
+          ...customerAbsorbs({
+            customerGapCashToDealerMinor: jod(1_200),
+            customerGapToFinanceCompanyMinor: -jod(200),
+          }),
+        })
+      ).rejects.toThrow(/non-negative|negative/i);
+    });
+
+    test("money the customer pays the FINANCE COMPANY never becomes dealer profit", async () => {
+      // The whole reason the destination is recorded rather than inferred.
+      // Two resolutions of the SAME 1,000 gap: one paid to the dealership, one
+      // paid to the financier. Only the first may move the owner's figure.
+      const toDealer = await approvedDeal();
+      await toDealer.seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: toDealer.seed.orgId,
+        applicationId: toDealer.applicationId,
+        economicsStamp: await gapStampFrom(toDealer.seed, toDealer.applicationId),
+        ...customerAbsorbs(),
+      });
+
+      const toFinancier = await approvedDeal();
+      await toFinancier.seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: toFinancier.seed.orgId,
+        applicationId: toFinancier.applicationId,
+        economicsStamp: await gapStampFrom(toFinancier.seed, toFinancier.applicationId),
+        ...customerAbsorbs({
+          customerGapCashToDealerMinor: 0,
+          customerGapToFinanceCompanyMinor: RAW_GAP,
+        }),
+      });
+
+      const dealerRow = await readApp(toDealer.seed, toDealer.applicationId);
+      const financierRow = await readApp(toFinancier.seed, toFinancier.applicationId);
+
+      // Both are CUSTOMER_ABSORBS and both reconcile — they differ only in
+      // where the money went, which is exactly the distinction that must survive.
+      expect(dealerRow?.gapResolution).toBe("CUSTOMER_ABSORBS");
+      expect(financierRow?.gapResolution).toBe("CUSTOMER_ABSORBS");
+      expect(dealerRow?.customerGapCashToDealerMinor).toBe(RAW_GAP);
+      expect(financierRow?.customerGapCashToDealerMinor).toBe(0);
+      expect(financierRow?.customerGapToFinanceCompanyMinor).toBe(RAW_GAP);
+    });
+
+    test("a resolution agreed against a gap that has since moved is refused", async () => {
+      const { seed, applicationId } = await approvedDeal();
+      const stamp = await gapStampFrom(seed, applicationId);
+
+      // The approver re-approves while the operator's dialog is open. The gap
+      // is now 500, not 1,000 — and the allocation on screen reconciles to a
+      // number that no longer describes this deal.
+      await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: seed.orgId,
+        applicationId,
+        approvedAmountMinor: jod(12_000),
+        basis: "MANUAL",
+        notes: "Re-approved after the company revised its position.",
+      });
+
+      await expect(
+        seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+          orgId: seed.orgId,
+          applicationId,
+          economicsStamp: stamp,
+          ...customerAbsorbs(),
+        })
+      ).rejects.toThrow(/changed|stale|again/i);
+    });
+
+    test("re-approving after a resolution reopens the negotiation", async () => {
+      // Existing behaviour, asserted here because this workflow is what makes
+      // it observable: a resolution agreed about 1,000 must not survive onto a
+      // deal whose shortfall is now a different number.
+      const { seed, applicationId } = await approvedDeal();
+      await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await gapStampFrom(seed, applicationId),
+        ...customerAbsorbs(),
+      });
+      expect((await readApp(seed, applicationId))?.gapResolution).toBe("CUSTOMER_ABSORBS");
+
+      await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: seed.orgId,
+        applicationId,
+        approvedAmountMinor: jod(12_000),
+        basis: "MANUAL",
+        notes: "Re-approved after the company revised its position.",
+      });
+
+      const app = await readApp(seed, applicationId);
+      expect(app?.gapResolution).toBe("PENDING_NEGOTIATION");
+      expect(app?.customerGapShareMinor).toBeUndefined();
+      expect(app?.gapResolvedAt).toBeUndefined();
+    });
+
+    test("a caller without approval authority cannot resolve the gap", async () => {
+      const { seed, applicationId } = await approvedDeal();
+      const stamp = await gapStampFrom(seed, applicationId);
+      const asSales = await addSalesUser(seed);
+
+      await expect(
+        asSales.mutation(api.financingEconomics.resolveAppraisalGap, {
+          orgId: seed.orgId,
+          applicationId,
+          economicsStamp: stamp,
+          ...customerAbsorbs(),
+        })
+      ).rejects.toThrow();
+    });
+
+    test("a deal with no gap cannot be given one", async () => {
+      const seed = await seedDealer();
+      const applicationId = await createApplication(seed);
+      await recordBaselineQuotation(seed, applicationId);
+      await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: seed.orgId,
+        applicationId,
+        approvedAmountMinor: jod(DEAL.quotation),
+        basis: "MANUAL",
+        notes: "Approved at the quoted amount.",
+      });
+      expect((await readApp(seed, applicationId))?.gapResolution).toBe("NOT_REQUIRED");
+
+      await expect(
+        seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+          orgId: seed.orgId,
+          applicationId,
+          economicsStamp: await gapStampFrom(seed, applicationId),
+          customerGapShareMinor: 0,
+          dealerGapShareMinor: 0,
+          customerGapCashToDealerMinor: 0,
+          customerGapInstallmentToDealerMinor: 0,
+          customerGapToFinanceCompanyMinor: 0,
+        })
+      ).rejects.toThrow(/no.*gap|nothing to resolve|not required/i);
+    });
+  });
 });
