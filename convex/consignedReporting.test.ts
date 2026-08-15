@@ -1738,6 +1738,55 @@ describe("turnover past the dashboard's costing cap", () => {
     );
   }, HEAVY_TEST_TIMEOUT_MS);
 
+  /**
+   * The vehicle stays authoritative past the cap, so a DEALER-OWNED row cannot
+   * be reclassified by stale consignment fields on its sale.
+   *
+   * Found by the Codex reviewer against the dashboard consolidation. Past the
+   * costing cap a STOCK vehicle is recorded as `{ consigned: false }` — its
+   * classification IS known, only its cost is not. Collapsing that to "vehicle
+   * unknown" handed `saleEconomics` a `vehicle: null`, which invites it to
+   * classify from the SALE's frozen evidence instead: a stale
+   * `consignedMarginMinor` (raw-editor reachable — the writer only ever sets it
+   * on a sourced sale, which `SCRUM-40 O-3` pins) would then be read as an agent
+   * sale, publishing that stale margin as turnover in place of the sale price
+   * and crediting it as profit for a car the dealership owned.
+   *
+   * The report keeps the vehicle authoritative, so the two would disagree at the
+   * cap boundary — the class of defect this whole lane exists to remove.
+   */
+  test("a dealer-owned sale past the cap is not reclassified by a stale consigned margin", async () => {
+    const { s, pastCap } = await dealerPastTheCap("capStaleConsigned");
+
+    await s.t.run(async (ctx) => {
+      const sale = (await ctx.db
+        .query("sales")
+        .filter((q) => q.eq(q.field("vehicleId"), pastCap.owned))
+        .first())!;
+      // Corruption, not a writer output: a dealer-owned sale carrying the
+      // frozen fields that only ever belong to a consigned one.
+      await ctx.db.patch(sale._id, {
+        consignedMarginMinor: 1_000 * 1_000,
+        consignedMarginCurrency: "JOD",
+      });
+    });
+
+    const dash = await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId, timeRange: "YEAR" as const,
+    });
+
+    // Its TURNOVER is still its sale price — the dealership sold its own car —
+    // and emphatically not the stale 1,000 margin.
+    expect(dash.salesVolumeThisMonth).toBe(
+      CAP * OWNED_PRICE + PAST_CAP_OWNED_PRICE + MARGIN
+    );
+    // And its unknowable profit is not invented from that stale figure. The
+    // cap's own flag reports the shortfall.
+    expect(dash.salesTrend.reduce((total, point) => total + point.Profit, 0)).toBe(
+      CAP * (OWNED_PRICE - OWNED_COST) + MARGIN
+    );
+  }, HEAVY_TEST_TIMEOUT_MS);
+
   test("a consigned sale with no recorded supplier cost is excluded, and says so", async () => {
     // The one case that genuinely cannot be answered. Zero counts as missing,
     // exactly as `hasVehicleCostBasis` treats it: a 0 basis would report the

@@ -481,7 +481,34 @@ export const stats = query({
      */
     type WindowVehicleBasis =
       | { known: true; consigned: boolean; cost: number }
+      /**
+       * Classification known, cost NOT — a dealer-owned row past the costing cap.
+       *
+       * ⚠️ Found by the Codex reviewer. Collapsing this into `known: false`
+       * handed `saleEconomics` a `vehicle: null`, which invites it to classify
+       * from the SALE's frozen evidence — and a dealer-owned row carrying a
+       * stale `consignedMarginMinor` (raw-editor reachable; the writer only ever
+       * sets it on a sourced sale) would then be read as an agent sale, its
+       * stale margin published as turnover INSTEAD of the sale price and
+       * credited as profit for a car the vehicle row says the dealership owned.
+       *
+       * The vehicle stays authoritative wherever it was actually read. Only a
+       * genuinely unreadable row falls back to the sale's own evidence.
+       */
+      | { known: true; consigned: false; cost: null }
       | { known: false };
+
+    /**
+     * Whether this window can state a PROFIT for the row at all.
+     *
+     * A known dealer-owned row with no cost is a real turnover (its price) and
+     * an unknowable profit. `saleEconomics` is handed `capitalizedCost: 0` for
+     * it, which makes its margin the whole sale price — correct arithmetic on a
+     * basis that is not real — so the margin is not published. `profitTruncated`
+     * already reports the shortfall, set from the cap itself.
+     */
+    const profitIsPublishable = (basis: WindowVehicleBasis): boolean =>
+      !(basis.known && basis.cost === null);
 
     /**
      * One sale's economics on this window's basis, from the shared authority.
@@ -500,7 +527,10 @@ export const stats = query({
           vehicle: basis.known
             ? { sourceType: basis.consigned ? "SOURCED" : "STOCK" }
             : null,
-          capitalizedCost: basis.known ? basis.cost : 0,
+          // `0` only ever stands in for a basis that does not exist; where the
+          // classification is known but the cost is not, `profitIsPublishable`
+          // keeps the resulting margin off the trend.
+          capitalizedCost: basis.known && basis.cost !== null ? basis.cost : 0,
           supplierSettlementRoute: sale.supplierSettlementRoute,
           recordedMargin: recordedConsignedMargin(sale),
           recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
@@ -527,6 +557,9 @@ export const stats = query({
       }
       const tail = uncostedBasisByVehicle.get(sale.vehicleId);
       if (tail?.consigned) return { known: true, consigned: true, cost: tail.supplierCost };
+      // Dealer-owned past the cap: the row WAS read, so its classification is a
+      // fact and must not be re-decided from the sale's frozen fields.
+      if (tail) return { known: true, consigned: false, cost: null };
       return { known: false };
     };
 
@@ -632,7 +665,7 @@ export const stats = query({
            * `recognizedRevenueOfSale` above sets it.
            */
           const margin = currentEconomics(sale).dealershipMargin;
-          if (margin !== null) {
+          if (margin !== null && profitIsPublishable(currentBasis(sale))) {
             monthlyProfits[key] = (monthlyProfits[key] || 0) + margin;
           }
         }
@@ -982,25 +1015,28 @@ export const stats = query({
       0,
     );
 
-    // Cost basis for the previous window's profit, from the same authority the
-    // current window uses. Vehicles already costed above are reused rather than
-    // re-read — a car that sold in both windows is a returned unit, not a
-    // reason to run `computeVehicleCapitalizedCost` twice.
+    // Still counted, because `previousProfitTruncated` is a statement about how
+    // many DISTINCT vehicles this window sold — not about anything that gets
+    // read. The costing itself happens once, in `previousRevenueBasisByVehicle`.
     const previousSoldVehicleIds = Array.from(new Set(previousSales.map((s) => s.vehicleId)));
     const previousProfitTruncated = previousSoldVehicleIds.length > PROFIT_VEHICLE_CAP;
     let previousProfit = -previousGeneralExpenses;
     if (canViewProfitMetrics && !previousProfitTruncated) {
-      const previousCostByVehicle = new Map(
-        await Promise.all(
-          previousSoldVehicleIds.map(async (vehicleId) => {
-            const cached = capitalizedCostByVehicle.get(vehicleId);
-            if (cached !== undefined) return [vehicleId, cached] as const;
-            const vehicle = await ctx.db.get(vehicleId);
-            if (!vehicle || vehicle.orgId !== args.orgId) return [vehicleId, undefined] as const;
-            return [vehicleId, await computeVehicleCapitalizedCost(ctx, vehicle)] as const;
-          })
-        )
-      );
+      /**
+       * ⚠️ A SECOND costing pass used to run here, and after the consolidation
+       * it had no consumer at all — found by the Codex reviewer. It re-fetched
+       * up to `PROFIT_VEHICLE_CAP` previous-window vehicles and ran
+       * `computeVehicleCapitalizedCost` (itself a read over expense rows) on
+       * each, duplicating the costing `previousRevenueBasisByVehicle` performs
+       * immediately above, on a live subscription query that re-runs on every
+       * write to sales or expenses. That is the read amplification this file
+       * has already been through once; past the limit the dashboard does not
+       * shorten a number, it goes blank.
+       *
+       * The previous window's profit now comes from `previousEconomics`, which
+       * is the same authority its turnover uses — so the two cannot disagree
+       * either.
+       */
       for (const sale of previousSales) {
         // The same three-way answer the current window's chart makes, in the
         // same order. This arm read only the live vehicle cost, so a consigned
@@ -1021,7 +1057,7 @@ export const stats = query({
          * than correcting one side of it.
          */
         const margin = previousEconomics(sale).dealershipMargin;
-        if (margin !== null) previousProfit += margin;
+        if (margin !== null && profitIsPublishable(previousBasis(sale))) previousProfit += margin;
       }
     }
 
