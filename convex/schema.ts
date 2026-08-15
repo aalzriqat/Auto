@@ -495,6 +495,14 @@ export default defineSchema({
       description: v.optional(v.string()),
     })),
     idempotencyKey: v.string(),
+    // The date the adjustment BELONGS to, stated by whoever drafted it —
+    // distinct from `createdAt` and from `decidedAt`, which are audit metadata
+    // (SCRUM-50). Approval posts to this date and to the period covering it.
+    //
+    // Optional only so drafts written before this field existed still satisfy
+    // the schema. `approveManualJournal` refuses those rather than guessing:
+    // substituting approval time is precisely the defect this closes.
+    accountingDate: v.optional(v.number()),
     createdBy: v.id("users"),
     createdAt: v.number(),
     reviewedBy: v.optional(v.id("users")),

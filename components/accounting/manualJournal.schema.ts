@@ -9,6 +9,11 @@ export const manualJournalLineSchema = z.object({
 
 export const manualJournalSchema = z.object({
   memo: z.string().min(1, "Memo is required"),
+  // The date the adjustment belongs to, as `yyyy-MM-dd`. Required with no
+  // default (SCRUM-50): a manual journal that inherits a date from whenever it
+  // happened to be approved is the defect this form exists to prevent, and a
+  // prefilled "today" is the same mistake made one step earlier.
+  accountingDate: z.string().min(1, "Accounting date is required"),
   lines: z.array(manualJournalLineSchema).min(2, "Add at least two lines"),
 });
 

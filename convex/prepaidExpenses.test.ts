@@ -1548,7 +1548,7 @@ describe("Fix #3 — inactive accounts cannot be posted to", () => {
 
     await expect(
       asOwner.mutation(api.financialAudit.createManualJournal, {
-        orgId, memo: "test", idempotencyKey: "mj-inactive-1",
+        orgId, memo: "test", accountingDate: Date.now(), idempotencyKey: "mj-inactive-1",
         lines: [
           { accountId: acctId, debitMinor: 1000, creditMinor: 0 },
           { accountId: genExp._id, debitMinor: 0, creditMinor: 1000 },
