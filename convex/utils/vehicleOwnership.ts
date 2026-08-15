@@ -269,6 +269,18 @@ export interface SaleEconomics {
    *     cost is zero (`basisUnknown`, SCRUM-33 / O-2). This one can be reached
    *     by a sale that does NOT classify as an agent sale — the classification
    *     itself is what could not be established.
+   *  5. An AGENT sale whose derived margin comes out NEGATIVE
+   *     (`derivedMarginIsCorrupt`). `saleCompletion` refuses a sourced sale
+   *     below the supplier's entitlement, so a negative agent spread cannot be
+   *     what the sale was posted on — it means the live `sourceCost`, which
+   *     stays editable after a consigned sale, has drifted above the sale price.
+   *     Corruption is not a loss. Dealer-owned is NOT included: a dealership
+   *     really can sell its own stock below cost.
+   *
+   * ⚠️ This enumeration was already stale ONCE, which is what SCRUM-40 O-4 was.
+   * Cause 5 was then added by a later round of the very same change and missed
+   * again, caught by the adversarial reviewer. If you add a way for this to
+   * return `null`, add it here in the same commit.
    */
   dealershipMargin: number | null;
   /**

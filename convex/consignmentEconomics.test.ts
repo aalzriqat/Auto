@@ -725,6 +725,17 @@ describe("SCRUM-40 O-2 — a live basis that is not a basis", () => {
     expect(e.dealershipMargin).toBeNull();
     expect(e.dealershipMargin).not.toBe(-3_500);
     expect(e.recognizedRevenue).toBeNull();
+    /**
+     * The half the first version of this test forgot to assert, and the more
+     * consequential one — it feeds `supplierPayable` on the deal cockpit.
+     *
+     * In this branch the settlement comes from the SAME drifted cost, so
+     * publishing it would state a supplier share larger than the whole car.
+     * Without this line the old `capitalizedCost` fallback could be restored for
+     * the settlement alone and every test would stay green.
+     */
+    expect(e.supplierSettlement).toBeNull();
+    expect(e.supplierSettlement).not.toBe(SALE_PRICE + 3_500);
   });
 
   test("a dealer-owned sale sold at a genuine loss still reports that loss", () => {
