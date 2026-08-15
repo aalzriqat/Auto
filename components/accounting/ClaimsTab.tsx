@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { usePaginatedQuery } from "convex/react";
+import { usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -10,6 +10,7 @@ import { useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
 import { format } from "date-fns";
 import { ArrowLeft, ArrowRight, AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   AccountingEmptyRow,
@@ -52,10 +53,18 @@ export function ClaimsTab() {
   // reading the clock during render is not idempotent.
   const [now] = useState(() => Date.now());
 
-  const { results: rows, status } = usePaginatedQuery(
+  const { results: rows, status, loadMore } = usePaginatedQuery(
     api.claims.listFinanceCompanyReceivables,
     activeOrgId ? { orgId: activeOrgId } : "skip",
-    { initialNumItems: 100 }
+    { initialNumItems: 50 }
+  );
+
+  // The headline is org-wide, from its own query. Summing the loaded page
+  // would label a subtotal as the total, and this list is newest-first, so the
+  // oldest and most overdue balances are exactly what a page-bounded sum drops.
+  const totals = useQuery(
+    api.claims.financeCompanyOutstandingTotals,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
   );
 
   if (status === "LoadingFirstPage") {
@@ -65,17 +74,7 @@ export function ClaimsTab() {
   const money = (minor: number, currency: string, scale: number) =>
     formatIn(minor / Math.pow(10, scale), currency, scale);
 
-  // Grouped by currency, never summed across them — a single cross-currency
-  // total is the exact misstatement accountingPhase14 exists to prevent.
-  const outstandingByCurrency = rows.reduce<Record<string, { minor: number; scale: number }>>(
-    (acc, row) => {
-      if (row.outstandingMinor <= 0) return acc;
-      const bucket = acc[row.currency] ?? { minor: 0, scale: row.scale };
-      return { ...acc, [row.currency]: { minor: bucket.minor + row.outstandingMinor, scale: row.scale } };
-    },
-    {}
-  );
-  const outstandingEntries = Object.entries(outstandingByCurrency);
+  const outstandingEntries = totals ?? [];
   const Arrow = isRtl ? ArrowLeft : ArrowRight;
 
   return (
@@ -87,13 +86,13 @@ export function ClaimsTab() {
 
       {outstandingEntries.length > 0 && (
         <div className="flex flex-wrap items-end gap-x-10 gap-y-4 border-b border-slate-200 pb-5">
-          {outstandingEntries.map(([currency, { minor, scale }]) => (
+          {outstandingEntries.map(({ currency, outstandingMinor, scale }) => (
             <div key={currency}>
               <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
                 {t("TotalOutstandingFromFinanciers" as any)}
               </div>
               <div className="mt-1 text-3xl font-semibold tabular-nums text-slate-900">
-                <bdi>{money(minor, currency, scale)}</bdi>
+                <bdi>{money(outstandingMinor, currency, scale)}</bdi>
               </div>
             </div>
           ))}
@@ -158,14 +157,23 @@ export function ClaimsTab() {
                       </bdi>
                     </TableCell>
                     <TableCell className="text-end">
-                      {activeOrgId && row.applicationId && (
+                      {activeOrgId && row.hasOwningDeal && row.applicationId ? (
+                        // Deliberately the applications list with the deal
+                        // deep-linked open, NOT /applications/<id>/deal: the
+                        // cockpit reports the deal but does not call
+                        // confirmDisbursement, so linking there would promise a
+                        // settlement the destination cannot perform (SCRUM-80).
                         <Link
-                          href={`/${activeOrgId}/applications/${row.applicationId}/deal`}
+                          href={`/${activeOrgId}/applications?application=${row.applicationId}`}
                           className="inline-flex items-center gap-1 text-sm font-medium text-sky-700 hover:text-sky-900 hover:underline"
                         >
                           {t("OpenTheDeal" as any)}
                           <Arrow className="h-3.5 w-3.5 shrink-0" />
                         </Link>
+                      ) : (
+                        // Says why there is no action instead of rendering an
+                        // empty cell that reads like a missing button.
+                        <span className="text-xs text-slate-400">{t("NoOwningDeal" as any)}</span>
                       )}
                     </TableCell>
                   </TableRow>
@@ -175,6 +183,14 @@ export function ClaimsTab() {
           </TableBody>
         </Table>
       </AccountingTableFrame>
+
+      {status === "CanLoadMore" && (
+        <div className="flex justify-center">
+          <Button variant="outline" size="sm" onClick={() => loadMore(50)}>
+            {t("LoadMore" as any)}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

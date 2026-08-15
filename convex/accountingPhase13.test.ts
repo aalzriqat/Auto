@@ -259,6 +259,95 @@ describe("Phase 13 / SCRUM-51 — finance-company receivable work queue", () => 
     expect(page.page[0].outstandingMinor).toBe(42_000);
   });
 
+  test.each(["WRITTEN_OFF", "REVERSED", "CANCELLED"] as const)(
+    "a %s receivable is not reported as outstanding",
+    async (status) => {
+      const ctx = await seedClaimsDealer();
+      const { receivableDocumentId } = await seedFinanceCompanyReceivable(ctx, {
+        amountMinor: 750_000,
+        financierName: "Jordan Finance Co",
+      });
+      await ctx.t.run((c) => c.db.patch(receivableDocumentId, { status }));
+
+      // getReceivableOutstandingMinor zeroes only CANCELLED, so a written-off
+      // or reversed document comes back at its FULL original amount. Reporting
+      // that would assert the financier still owes money already given up on.
+      const page = await ctx.asOwner.query(api.claims.listFinanceCompanyReceivables, {
+        orgId: ctx.orgId,
+        paginationOpts: { numItems: 10, cursor: null },
+      });
+      expect(page.page[0].status).toBe(status);
+      expect(page.page[0].outstandingMinor).toBe(0);
+
+      const totals = await ctx.asOwner.query(api.claims.financeCompanyOutstandingTotals, {
+        orgId: ctx.orgId,
+      });
+      expect(totals).toEqual([]);
+    }
+  );
+
+  test("totals are org-wide and per currency, never one cross-currency sum", async () => {
+    const ctx = await seedClaimsDealer();
+    await seedFinanceCompanyReceivable(ctx, {
+      amountMinor: 750_000,
+      allocatedMinor: 250_000,
+      financierName: "JOD FC",
+    });
+    await ctx.t.run(async (c) => {
+      const customerId = await c.db.insert("customers", {
+        orgId: ctx.orgId, firstName: "USD", lastName: "Buyer",
+      });
+      await c.db.insert("receivableDocuments", {
+        orgId: ctx.orgId,
+        documentType: "INVOICE" as const,
+        documentNumber: "AR-FC-USD",
+        payerType: "FINANCE_COMPANY" as const,
+        customerId,
+        sourceType: "finance_application",
+        sourceId: "another_application",
+        originalAmountMinor: 50_000,
+        currency: "USD",
+        scale: 2,
+        issueDate: Date.now(),
+        dueDate: Date.now(),
+        status: "OPEN" as const,
+        createdAt: Date.now(),
+        createdBy: ctx.userId,
+      });
+    });
+
+    const totals = await ctx.asOwner.query(api.claims.financeCompanyOutstandingTotals, {
+      orgId: ctx.orgId,
+    });
+
+    expect(totals).toHaveLength(2);
+    expect(totals.find((row) => row.currency === "JOD")).toEqual({
+      currency: "JOD", scale: 3, outstandingMinor: 500_000,
+    });
+    expect(totals.find((row) => row.currency === "USD")).toEqual({
+      currency: "USD", scale: 2, outstandingMinor: 50_000,
+    });
+  });
+
+  test("totals cover receivables beyond the first page of the queue", async () => {
+    const ctx = await seedClaimsDealer();
+    for (let i = 0; i < 5; i++) {
+      await seedFinanceCompanyReceivable(ctx, { amountMinor: 100_000, financierName: `FC ${i}` });
+    }
+
+    // One page short of the whole set: the headline must still be the total.
+    const page = await ctx.asOwner.query(api.claims.listFinanceCompanyReceivables, {
+      orgId: ctx.orgId,
+      paginationOpts: { numItems: 2, cursor: null },
+    });
+    expect(page.page).toHaveLength(2);
+
+    const totals = await ctx.asOwner.query(api.claims.financeCompanyOutstandingTotals, {
+      orgId: ctx.orgId,
+    });
+    expect(totals).toEqual([{ currency: "JOD", scale: 3, outstandingMinor: 500_000 }]);
+  });
+
   test("requires view:finance", async () => {
     const ctx = await seedClaimsDealer();
     await seedFinanceCompanyReceivable(ctx, { amountMinor: 100_000, financierName: "FC" });
