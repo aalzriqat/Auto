@@ -9,6 +9,7 @@ import { useOrg } from "@/components/providers/OrgProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { ImportWizard, ImportFieldConfig, ImportRow, normalizeKey } from "@/components/import/ImportWizard";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import { assertDirectVehicleCreateStatus } from "@/convex/utils/vehicleStatusGuards";
 import { cn } from "@/lib/utils";
 import { SpreadsheetRows } from "@/lib/spreadsheet";
 import { downloadVehicleTemplate } from "@/components/vehicles/vehicleSheet";
@@ -250,6 +251,17 @@ function validateVehicleRow(row: Record<string, any>): string[] {
   const errors: string[] = [];
   if (!row.make) errors.push("Missing Make");
   if (!row.model) errors.push("Missing Model");
+  // The server's own guard, called rather than restated — it throws both for an
+  // unrecognized status and for the workflow-controlled ones (a car becomes
+  // SOLD by completing a sale, RESERVED by taking a deposit). Catching it here
+  // matters more since the import posts: without this the row sails through the
+  // preview, and in a file bigger than one chunk it throws only after earlier
+  // chunks have already committed vehicles AND their journal entries.
+  try {
+    assertDirectVehicleCreateStatus(row.status);
+  } catch (err) {
+    errors.push(err instanceof Error ? err.message : "Invalid Status");
+  }
   if (!row.year || isNaN(row.year) || row.year < 1900 || row.year > new Date().getFullYear() + 2) errors.push("Invalid Year");
   if (row.mileage !== undefined && (isNaN(row.mileage) || row.mileage < 0)) errors.push("Invalid Mileage");
   if (row.sourceType === "SOURCED") {
@@ -580,14 +592,33 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
           const totals = { inserted: 0, skipped: 0 };
           for (let i = 0; i < payload.length; i += chunkSize) {
             const chunk = payload.slice(i, i + chunkSize);
-            const result = await importBulk({
-              orgId: activeOrgId,
-              acquisitionPosting: posting,
-              purchasePaymentMethod: posting === "PURCHASE" ? paymentMethod! : undefined,
-              vehicles: chunk as any,
-            });
-            totals.inserted += result.inserted;
-            totals.skipped += result.skipped;
+            try {
+              const result = await importBulk({
+                orgId: activeOrgId,
+                acquisitionPosting: posting,
+                purchasePaymentMethod: posting === "PURCHASE" ? paymentMethod! : undefined,
+                vehicles: chunk as any,
+              });
+              totals.inserted += result.inserted;
+              totals.skipped += result.skipped;
+            } catch (err) {
+              // Each chunk is its own transaction, so a failure here leaves the
+              // earlier ones committed — vehicles AND, in PURCHASE mode, their
+              // journal entries. Saying so is the difference between an
+              // operator who knows to fix the bad row and re-import, and one
+              // who has no idea anything landed.
+              //
+              // Re-importing the same file afterwards is safe: a PURCHASE row
+              // must carry a real VIN, so the already-imported cars are skipped
+              // as duplicates rather than capitalized a second time (covered by
+              // "re-importing the same VIN does not capitalize it twice").
+              const detail = err instanceof Error ? err.message : String(err);
+              throw new Error(
+                totals.inserted > 0
+                  ? `Imported ${totals.inserted} vehicle(s), then stopped: ${detail} Fix the reported rows and import the file again — the vehicles already added will be skipped.`
+                  : detail
+              );
+            }
           }
           return totals;
         })();

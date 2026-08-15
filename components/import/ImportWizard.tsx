@@ -231,7 +231,10 @@ export function ImportWizard(props: ImportWizardProps) {
       onOpenChange(false);
       resetAll();
     } catch (err: any) {
-      toast.error(err);
+      // Render the message, not the object — an Error passed straight to the
+      // toast stringifies to nothing an operator can act on, which hid the
+      // "how far did it get" detail the vehicle importer now reports.
+      toast.error(err instanceof Error ? err.message : String(err));
     } finally {
       setImporting(false);
     }
