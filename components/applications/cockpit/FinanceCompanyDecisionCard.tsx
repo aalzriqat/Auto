@@ -393,7 +393,17 @@ export function FinanceCompanyDecisionCard({
                   is what put `الجزء المموَّل من شركة التمويل` at one edge and
                   its figure at the other. Side by side they also read as what
                   they are — one split, not three unrelated facts. */}
-              <dl className="grid gap-x-10 gap-y-1.5 text-sm sm:grid-cols-2 xl:grid-cols-3">
+              {/* The reading-measure gate anchors HERE, and this is the block
+                  that earned it: these are the pairs that sat at opposite edges
+                  of a 1780px card. The gate used to count every dt/dd on the
+                  page, which meant it could not say which rows it had measured
+                  — and it turned out to be measuring these ones by accident
+                  rather than by intent. Naming the root makes the gate assert
+                  what it was always actually checking. */}
+              <dl
+                data-testid="deal-decision-economics-rows"
+                className="grid gap-x-10 gap-y-1.5 text-sm sm:grid-cols-2 xl:grid-cols-3"
+              >
                 {derived.map((line) => (
                   <div
                     key={line.key}

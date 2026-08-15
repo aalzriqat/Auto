@@ -59,15 +59,22 @@ async function measureLabelToFigureGaps(
 ): Promise<{ widest: number; measured: number; economics: number }> {
   return page.evaluate(() => {
     // The cap applies to every label/figure pair on the deal, so `widest` still
-    // sweeps the whole page. `economics` counts only the derived-economics rows.
+    // sweeps the whole page. `economics` counts the DECISION-CARD split rows —
+    // funded by the finance company, not financed, dealership contribution.
     //
-    // They are counted apart because the anti-vacuity guard was satisfied by the
-    // wrong pairs: it asked whether ANY dt/dd had laid out, and the
-    // settlement-advice block and the finance-decision card each render their
-    // own. So on a page where the economics rows had not arrived, the guard
-    // passed on their neighbours and the gate reported a measure it had never
-    // taken. Counting nothing and counting something else both have to fail.
-    const economicsRoot = document.querySelector('[data-testid="deal-economics-rows"]');
+    // Those are the pairs behind the original complaint: at 1780px they sat at
+    // opposite edges of the card, and in Arabic the label and its figure ended
+    // up on opposite sides of the screen. They are what this gate exists for.
+    //
+    // Counted separately because the anti-vacuity guard used to ask only whether
+    // ANY dt/dd had laid out, and several blocks render their own. It could not
+    // distinguish "measured the rows that matter" from "measured whatever was
+    // on screen" — and it was passing on these rows by accident rather than by
+    // intent. Naming the root makes the gate assert what it is actually
+    // checking, so counting nothing and counting something else both fail.
+    const economicsRoot = document.querySelector(
+      '[data-testid="deal-decision-economics-rows"]',
+    );
     let widest = 0;
     let measured = 0;
     let economics = 0;
@@ -164,19 +171,19 @@ test.describe("the deal cockpit's reading measure", () => {
             .poll(() => page.evaluate(() => document.documentElement.dir))
             .toBe(locale === "ar" ? "rtl" : "ltr");
 
-          // The economics rows arrive on their OWN query, not the one that
-          // renders the next-step card, so `deal-next-step` being visible says
-          // nothing about whether there is anything to measure yet. CI caught
-          // this: one Arabic attempt measured 0 pairs and only passed on retry
-          // — a gate that depends on a retry is not a gate, and the same race
-          // could equally have measured a half-laid-out row and passed it.
+          // The split rows arrive on their OWN query, not the one that renders
+          // the next-step card, so `deal-next-step` being visible says nothing
+          // about whether there is anything to measure yet. CI caught this: one
+          // Arabic attempt measured 0 pairs and only passed on retry — a gate
+          // that depends on a retry is not a gate, and the same race could
+          // equally have measured a half-laid-out row and passed it.
           //
           // Polled rather than slept: the wait ends when the rows are actually
           // there, and the anti-vacuity assertion below still fails honestly if
           // they never arrive.
           await expect
             .poll(async () => (await measureLabelToFigureGaps(page)).economics, {
-              message: "the deal's economics rows never laid out",
+              message: "the decision card's split rows never laid out",
             })
             .toBeGreaterThan(0);
 
@@ -187,22 +194,22 @@ test.describe("the deal cockpit's reading measure", () => {
           });
 
           // Asserted BEFORE the distance, because a widest-gap of zero is what a
-          // deal with no economics rows produces — and "nothing to measure"
-          // would otherwise read as "everything measured well".
+          // page with no rows produces — and "nothing to measure" would
+          // otherwise read as "everything measured well".
           //
-          // On the DERIVED-ECONOMICS rows specifically. Those are the ones the
-          // owner had to zoom out to read, and they are the last thing on the
-          // page to arrive; a count that any dt/dd could satisfy let their
-          // neighbours stand in for them.
+          // On the DECISION-CARD split rows specifically. A count that any dt/dd
+          // could satisfy let their neighbours stand in for them, which is how
+          // this gate spent several rounds reporting a measurement it could not
+          // name.
           expect(
             economics,
-            "no derived-economics label/figure pairs were laid out — the fixture deal has no recorded economics",
+            "the decision card's split rows were not laid out — nothing was measured for the reading cap",
           ).toBeGreaterThan(0);
           // Logged, not asserted: the run itself then shows how many of the
-          // measured pairs were the economics rows, so a future reader can see
+          // measured pairs were the rows under test, so a future reader can see
           // at a glance that the two counts are not the same thing.
           console.log(
-            `[measure] ${locale} @ ${viewport.name}: ${economics} economics pairs of ${measured} measured`,
+            `[measure] ${locale} @ ${viewport.name}: ${economics} decision-card split rows of ${measured} pairs measured`,
           );
           expect(
             widest,

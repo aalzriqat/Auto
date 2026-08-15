@@ -1004,12 +1004,7 @@ function MoneyPanel({
               full width of the panel has to be re-associated by eye on every
               line. Left as a single column — these lines are a SUM, and the
               order they are read in is part of the meaning. */}
-          {/* Named so the reading-measure gate can prove it measured THESE
-              rows. Its anti-vacuity check counted every dt/dd pair on the page,
-              and the settlement-advice block and the decision card have their
-              own — so the gate could have passed having never seen a single
-              derived-economics row. */}
-          <dl className="max-w-xl space-y-1.5 text-sm" data-testid="deal-economics-rows">
+          <dl className="max-w-xl space-y-1.5 text-sm">
             {profit.lines
               // A zero on an OPTIONAL line is noise, not information:
               // the customer-direct amount has no writer yet, so it
