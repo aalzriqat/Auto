@@ -203,13 +203,19 @@ export const listPendingApprovals = query({
       requests.map(async (req) => {
         const salesperson = await ctx.db.get(req.salespersonId);
         const vehicle = await ctx.db.get(req.vehicleId);
+        // Same fail-closed enrichment rule as `listMyPendingApprovals`. This
+        // one additionally returns the VIN, so an unchecked foreign reference
+        // discloses more, not less. `salespersonId` is deliberately not given
+        // the same treatment: proving it in-org needs a membership lookup per
+        // row, and a name is not comparable to a VIN and margin figures.
+        const vehicleInOrg = vehicle && vehicle.orgId === args.orgId ? vehicle : null;
         return {
           ...req,
           salespersonName: salesperson?.name || salesperson?.email || "Unknown",
-          vehicleMakeModel: vehicle
-            ? `${vehicle.make} ${vehicle.model} ${vehicle.year}`
+          vehicleMakeModel: vehicleInOrg
+            ? `${vehicleInOrg.make} ${vehicleInOrg.model} ${vehicleInOrg.year}`
             : "Unknown Vehicle",
-          vehicleVin: vehicle?.vin || "N/A",
+          vehicleVin: vehicleInOrg?.vin || "N/A",
         };
       })
     );
@@ -242,41 +248,25 @@ export const cancelMyApproval = mutation({
 });
 
 export const listMyPendingApprovals = query({
-  // The caller passes its clock, rounded to the minute. A Convex query re-runs
-  // when its *read set* changes, never merely because time passed, so deriving
-  // the window solely from a clock read inside the handler makes it stale by
-  // construction and churns the query cache.
+  // ⚠️ The 7-day window is derived from the SERVER clock, deliberately.
   //
-  // ⚠️ Optional, not required. This query is already live in production, and the
-  // frontend auto-deploys on merge while the Convex backend deploy is manual —
-  // a required argument would make every Sales page in the gap between the two
-  // fail argument validation and take the dashboard to its error boundary.
-  args: { orgId: v.id("organizations"), now: v.optional(v.number()) },
+  // An earlier revision let the caller pass its own clock so that identical
+  // query arguments would let Convex reuse a cached result. Flooring that value
+  // stopped it widening the window, but not narrowing it: a browser clock two
+  // days fast produced a five-day window, and the approvals that silently
+  // vanished were APPROVED ones — precisely the rows the sales page turns into
+  // "Resume Deal". A skewed client clock is an ordinary condition, not an
+  // attack, and losing a salesperson's resumable deal is not an acceptable
+  // failure mode for a caching optimisation.
+  //
+  // Keeping the cutoff server-authoritative also removes the deploy-ordering
+  // hazard a new required argument introduced. The caching question is real but
+  // it is a separate change, to be measured on its own.
+  args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
 
-    // ⚠️ Convex accepts NaN for `v.number()`. An unchecked NaN cutoff makes the
-    // range comparison below meaningless, so reject it rather than fail open.
-    if (args.now !== undefined && !Number.isFinite(args.now)) {
-      throw new ConvexError("Invalid timestamp.");
-    }
-
-    const WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-    // Absorbs honest clock skew between the caller and the server.
-    const CLOCK_SKEW_MS = 24 * 60 * 60 * 1000;
-
-    // ⚠️ The client chooses the cache key; the server chooses how far back it may
-    // look. A caller that ignores the page's rounding and sends `now: 0` would
-    // otherwise push the cutoff to 1970 and read back every approval it ever
-    // filed — its own rows in its own org, so not a tenancy escape, but exactly
-    // the unbounded read this issue exists to remove. Flooring against server
-    // time binds only that abuse: for an honest `now` the result is unchanged,
-    // so the caching benefit above survives.
-    const serverNow = Date.now();
-    const cutoff = Math.max(
-      (args.now ?? serverNow) - WINDOW_MS,
-      serverNow - WINDOW_MS - CLOCK_SKEW_MS
-    );
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
 
     // SCRUM-100. `orgId` leads the index because it is the tenant boundary:
     // `by_salesperson` keys on a global user id, so this previously returned the
@@ -296,10 +286,16 @@ export const listMyPendingApprovals = query({
 
     return await Promise.all(recent.map(async (r) => {
       const vehicle = await ctx.db.get(r.vehicleId);
+      // ⚠️ The approval row is proven in-org by the index range above; the
+      // vehicle it points at is not. `requestProfitApproval` refuses a foreign
+      // vehicle, so a malformed reference should not exist — but "should not
+      // exist" is an argument about reachability, and this is a confidentiality
+      // read. It fails closed instead, exactly as a missing vehicle does.
+      const vehicleInOrg = vehicle && vehicle.orgId === args.orgId ? vehicle : null;
       return {
         ...r,
-        vehicleSummary: vehicle
-          ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`
+        vehicleSummary: vehicleInOrg
+          ? `${vehicleInOrg.year} ${vehicleInOrg.make} ${vehicleInOrg.model}`
           : "Unknown Vehicle",
       };
     }));

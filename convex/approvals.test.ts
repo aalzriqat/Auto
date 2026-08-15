@@ -475,22 +475,21 @@ describe("Approvals Outcomes", () => {
  * membership and the org switcher is built on it), and at least six production
  * users hold two.
  *
- * ⚠️ Which of these are regression tests, and which are not — verified by
- * reverting the fix and re-running, not assumed:
+ * ⚠️ Which of these are regression tests, and which are not — established by
+ * reverting each fix and re-running, not assumed:
  *
- *  - FAIL before the fix (true regression tests for the leak):
- *      "returns only the queried org's rows"
- *      "keeps APPROVED rows"
- *  - FAIL before their own later fix (adversarial review of 9926d5bb):
- *      "refuses to widen the 7-day window"
- *      "still applies the window when `now` is omitted"
- *  - Pass both before and after: the salesperson, 7-day-edge, tied-createdAt,
- *    countPending and NaN-guard cases. They pin real properties but prove
- *    nothing about the tenancy defect — `countPending` was already org-scoped
- *    via `by_org`. Of these the NaN-guard case is independently non-vacuous
- *    (removing the guard fails it), whereas tied-createdAt really asserts a
- *    Convex engine guarantee and is kept only because a future
- *    pagination-based rewrite could break it.
+ *  - FAIL without their fix (genuine regression tests):
+ *      "returns only the queried org's rows"        — the leak itself
+ *      "keeps APPROVED rows"                        — the index-shape trap
+ *      "does not disclose a vehicle ... enrichment" — reverting the org check
+ *          on enrichment yields '2022 Honda Model' instead of 'Unknown Vehicle'
+ *  - Pass with and without: the salesperson, 7-day-edge, server-clock window,
+ *    tied-createdAt, countPending and ordering cases. They pin real properties
+ *    but prove nothing about the tenancy defect — `countPending` was already
+ *    org-scoped through `by_org`, and the ordering case is an equivalence pin
+ *    against the previous implementation rather than a defect guard.
+ *    tied-createdAt really asserts a Convex engine guarantee, and is kept only
+ *    because a future pagination-based rewrite could break it.
  *
  * That is all 9 tests in this block accounted for.
  */
@@ -572,7 +571,7 @@ describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
     const { orgA, orgB } = await seedMultiOrg(t);
     const asUser = t.withIdentity({ subject: "multi_org_sales" });
 
-    const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA, now: Date.now() });
+    const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA });
 
     // The leak: every returned row must belong to the org that was asked for.
     expect(rows.every((r: any) => r.orgId === orgA)).toBe(true);
@@ -593,7 +592,7 @@ describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
     const { orgA } = await seedMultiOrg(t);
     const asUser = t.withIdentity({ subject: "multi_org_sales" });
 
-    const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA, now: Date.now() });
+    const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA });
     const statuses = rows.map((r: any) => r.status).sort();
 
     // Exactly Org A's PENDING + APPROVED. An index pinned to status === "PENDING"
@@ -633,7 +632,7 @@ describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
     });
 
     const asUser = t.withIdentity({ subject: "multi_org_sales" });
-    const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA, now: Date.now() });
+    const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA });
 
     expect(rows.map((r: any) => r.requestedProfit)).not.toContain(7777);
   });
@@ -674,7 +673,7 @@ describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
     });
 
     const asUser = t.withIdentity({ subject: "multi_org_sales" });
-    const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA, now: Date.now() });
+    const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA });
     const profits = rows.map((r: any) => r.requestedProfit);
 
     expect(profits).toContain(6001); // inside the window
@@ -709,24 +708,12 @@ describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
     });
 
     const asUser = t.withIdentity({ subject: "multi_org_sales" });
-    const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA, now: Date.now() });
+    const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA });
     const profits = rows.map((r: any) => r.requestedProfit);
 
     for (const profit of [8001, 8002, 8003]) {
       expect(profits.filter((p: number) => p === profit)).toHaveLength(1);
     }
-  });
-
-  it("rejects a non-finite `now` instead of failing open", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgA } = await seedMultiOrg(t);
-    const asUser = t.withIdentity({ subject: "multi_org_sales" });
-
-    // Convex accepts NaN for v.number(). An unchecked NaN cutoff makes the
-    // index range comparison meaningless, so it must refuse, not return rows.
-    await expect(
-      asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA, now: NaN })
-    ).rejects.toThrow("Invalid timestamp.");
   });
 
   it("countPending counts only the queried org", async () => {
@@ -755,14 +742,13 @@ describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
   });
 
   /**
-   * Adversarial review of 9926d5bb, finding 1. `now` is client-supplied, so a
-   * caller that ignores the page's minute-rounding and sends `now: 0` pushes the
-   * cutoff into 1970 and reads back every approval they ever filed. It stays
-   * inside their own org and their own rows, so it is not a tenancy escape — but
-   * it is an UNBOUNDED READ, which is the entire defect class this issue exists
-   * to remove. The server must floor the window regardless of what it is told.
+   * The cutoff is server-derived, so no caller can move the window in either
+   * direction. An earlier revision took it from a client-supplied `now`; that
+   * could be pushed back to widen the read, and — the reason it was removed
+   * entirely — pushed FORWARD by an ordinarily fast browser clock to shrink it,
+   * silently hiding APPROVED rows the sales page turns into "Resume Deal".
    */
-  it("refuses to widen the 7-day window when the caller supplies an old `now`", async () => {
+  it("applies the 7-day window from the server clock, not the caller's", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgA } = await seedMultiOrg(t);
 
@@ -775,76 +761,94 @@ describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
         .query("users")
         .filter((q: any) => q.eq(q.field("clerkId"), "multi_org_sales"))
         .first();
-      await ctx.db.insert("profitApprovalRequests", {
-        orgId: orgA,
-        vehicleId: veh._id,
-        requestedProfit: 4242,
-        minimumProfit: 500,
-        salespersonId: user._id,
-        status: "PENDING",
-        createdAt: Date.now() - 730 * DAY, // two years old
-      });
-      // ⚠️ Pins the MAGNITUDE of the floor, not merely its existence. With only
-      // the two-year-old row above, widening CLOCK_SKEW_MS from 1 day to 60
-      // survived the whole suite — the mutant escaped because two years is
-      // outside even a badly misconfigured tolerance. 40 days is comfortably
-      // outside a correct 8-day window and comfortably inside that mutant.
-      await ctx.db.insert("profitApprovalRequests", {
-        orgId: orgA,
-        vehicleId: veh._id,
-        requestedProfit: 4343,
-        minimumProfit: 500,
-        salespersonId: user._id,
-        status: "PENDING",
-        createdAt: Date.now() - 40 * DAY,
-      });
-    });
-
-    const asUser = t.withIdentity({ subject: "multi_org_sales" });
-    const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA, now: 0 });
-    const profits = rows.map((r: any) => r.requestedProfit);
-
-    expect(profits).not.toContain(4242);
-    expect(profits).not.toContain(4343);
-  });
-
-  /**
-   * Adversarial review of 9926d5bb, finding 2. `now` was added as a REQUIRED arg
-   * to a query that is already live in production. The frontend auto-deploys on
-   * merge while the Convex backend deploy is manual, so between the two a client
-   * calling without `now` would hit an ArgumentValidationError and take the whole
-   * dashboard to its error boundary. It must stay callable without `now`.
-   */
-  it("still applies the window when `now` is omitted entirely", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgA } = await seedMultiOrg(t);
-
-    await t.run(async (ctx: any) => {
-      const veh = await ctx.db
-        .query("vehicles")
-        .filter((q: any) => q.eq(q.field("orgId"), orgA))
-        .first();
-      const user = await ctx.db
-        .query("users")
-        .filter((q: any) => q.eq(q.field("clerkId"), "multi_org_sales"))
-        .first();
-      await ctx.db.insert("profitApprovalRequests", {
-        orgId: orgA,
-        vehicleId: veh._id,
-        requestedProfit: 5150,
-        minimumProfit: 500,
-        salespersonId: user._id,
-        status: "PENDING",
-        createdAt: Date.now() - 30 * DAY, // outside the window
-      });
+      for (const [profit, age] of [[4242, 730], [4343, 40], [5150, 30]] as const) {
+        await ctx.db.insert("profitApprovalRequests", {
+          orgId: orgA,
+          vehicleId: veh._id,
+          requestedProfit: profit,
+          minimumProfit: 500,
+          salespersonId: user._id,
+          status: "PENDING",
+          createdAt: Date.now() - age * DAY,
+        });
+      }
     });
 
     const asUser = t.withIdentity({ subject: "multi_org_sales" });
     const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA });
     const profits = rows.map((r: any) => r.requestedProfit);
 
-    expect(profits).toContain(1000); // in-window PENDING still returned
-    expect(profits).toContain(1100); // in-window APPROVED still returned
-    expect(profits).not.toContain(5150); // 30 days old, still excluded
+    expect(profits).toContain(1000); // in-window PENDING
+    expect(profits).toContain(1100); // in-window APPROVED — the Resume Deal row
+    for (const stale of [4242, 4343, 5150]) {
+      expect(profits).not.toContain(stale);
+    }
+  });
+
+  /**
+   * ⚠️ Independent review finding. The index range proves the APPROVAL row is in
+   * the caller's org. It proves nothing about the VEHICLE that row points at.
+   * The enrichment step does a bare `ctx.db.get(r.vehicleId)` and renders
+   * year/make/model — and in `listPendingApprovals`, the VIN as well.
+   *
+   * `requestProfitApproval` refuses a foreign vehicle, so a malformed reference
+   * should not arise through the normal writer. "Should not arise" is a claim
+   * about reachability, not a guarantee, and this is a confidentiality read: it
+   * has to fail closed on its own.
+   */
+  it("does not disclose a vehicle belonging to another org via enrichment", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgA, orgB } = await seedMultiOrg(t);
+
+    await t.run(async (ctx: any) => {
+      const user = await ctx.db
+        .query("users")
+        .filter((q: any) => q.eq(q.field("clerkId"), "multi_org_sales"))
+        .first();
+      // Org B's vehicle — the one that must never be described back.
+      const foreignVehicle = await ctx.db
+        .query("vehicles")
+        .filter((q: any) => q.eq(q.field("orgId"), orgB))
+        .first();
+      // A malformed but in-org approval row pointing at it.
+      await ctx.db.insert("profitApprovalRequests", {
+        orgId: orgA,
+        vehicleId: foreignVehicle._id,
+        requestedProfit: 3131,
+        minimumProfit: 500,
+        salespersonId: user._id,
+        status: "PENDING",
+        createdAt: Date.now() - 1 * DAY,
+      });
+    });
+
+    const asUser = t.withIdentity({ subject: "multi_org_sales" });
+    const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA });
+    const malformed = rows.find((r: any) => r.requestedProfit === 3131);
+
+    // The row itself is legitimately in Org A, so it is still returned...
+    expect(malformed).toBeDefined();
+    // ...but Org B's vehicle must not be described.
+    expect(malformed!.vehicleSummary).toBe("Unknown Vehicle");
+    expect(malformed!.vehicleSummary).not.toContain("Honda");
+  });
+
+  /**
+   * The acceptance criteria asked for old/new ordering equivalence. The
+   * tied-`createdAt` case proves nothing is dropped or duplicated; it does not
+   * pin the order. The old implementation collected `by_salesperson` and
+   * filtered in JS, so rows arrived in index order — ascending `createdAt`
+   * within a salesperson. The new range walk must preserve that.
+   */
+  it("returns rows in ascending createdAt order, as the previous implementation did", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgA } = await seedMultiOrg(t);
+
+    const asUser = t.withIdentity({ subject: "multi_org_sales" });
+    const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA });
+    const times = rows.map((r: any) => r.createdAt);
+
+    expect(times).toEqual([...times].sort((a: number, b: number) => a - b));
+    expect(times.length).toBeGreaterThan(1); // an ordering assertion over 0 or 1 row is vacuous
   });
 });
