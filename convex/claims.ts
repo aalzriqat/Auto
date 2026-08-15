@@ -179,9 +179,11 @@ export const listFinanceCompanyReceivables = query({
  *    allocations;
  *  - and `reverseAllocation` will not overwrite a terminal disposition on the
  *    way back, so the recompute cannot move a row out of that set either. It
- *    used to: a cancelled receivable whose cleared cheque was later returned
- *    was relabelled PAID. That is fixed at the writer, not filtered out here —
- *    `subledger.test.ts` holds the rule for every consumer.
+ *    used to relabel a CANCELLED document PAID. No traced mutation chain
+ *    actually reached that state — the reasons are recorded at the guard in
+ *    `subledger.ts` — so it is defense in depth rather than a bug this query
+ *    was ever exposed to. It is enforced at the writer instead of filtered out
+ *    here, so every consumer gets it, and `subledger.test.ts` holds the rule.
  *
  * So a status transition either keeps the balance honest or lands somewhere
  * this query already treats as nothing owed.

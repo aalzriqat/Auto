@@ -338,16 +338,33 @@ export async function reverseAllocation(
   // The terminal three are not. They record a decision someone made about the
   // document itself, and an unrelated reversal must not overwrite one.
   //
-  // Reachable today via a cheque: collections.ts refuses to cancel a receivable
-  // holding a HELD or DEPOSITED cheque, but a CLEARED one has already
-  // allocated, so cancelling is allowed — and returning that cheque afterwards
-  // reverses an allocation on a document that is by then CANCELLED. Without
-  // this guard the recompute read the cancelled document's outstanding as 0
-  // (getReceivableOutstandingMinor short-circuits CANCELLED) and relabelled it
-  // PAID, so a cancelled receivable claimed to have been settled. WRITTEN_OFF
-  // and REVERSED have no writer today, but the schema admits them and they
-  // would land on OPEN — debt the dealership had given up on, collectible
-  // again.
+  // Without the guard the recompute did overwrite them, and the two outcomes
+  // differ: a CANCELLED document's outstanding reads 0 (getReceivableOutstandingMinor
+  // short-circuits it), and 0 maps to PAID — a cancelled receivable claiming to
+  // have been settled. WRITTEN_OFF and REVERSED would land on OPEN — debt the
+  // dealership had given up on, collectible again.
+  //
+  // DEFENSE IN DEPTH, not a live bug. No traced mutation chain reaches a
+  // terminal document that still has a reversible allocation, and the claim
+  // that one did was wrong twice over, so it is written down rather than
+  // re-derived:
+  //
+  //  - the cheque route was the candidate — collections.ts refuses to cancel a
+  //    receivable holding a HELD or DEPOSITED cheque, but a CLEARED one has
+  //    already allocated. It does not reach here: CANCEL_RECEIVABLE throws on
+  //    `paidAmount > 0` FIRST (collections.ts:1625), and clearing any cheque
+  //    reduces `outstandingAmount` via applyPostedPayment, so cancellation is
+  //    already blocked before the cheque-status check is read;
+  //  - cancelSaleReceivableIfSafe (utils/saleCancellation.ts) reverses every
+  //    active allocation BEFORE patching CANCELLED;
+  //  - the finance-application void path (applications.ts) never reverses an
+  //    allocation at all;
+  //  - and no production writer sets WRITTEN_OFF or REVERSED on a
+  //    receivableDocument in the first place.
+  //
+  // The guard stays because the invariant belongs at the writer: it is what
+  // lets every consumer — claims.ts's totals among them — rely on a terminal
+  // status meaning what it says, without each one re-deriving this trace.
   const receivable = await ctx.db.get(allocation.receivableDocumentId);
   if (receivable && !TERMINAL_RECEIVABLE_STATUSES.has(receivable.status)) {
     const outstanding = await getReceivableOutstandingMinor(ctx, allocation.receivableDocumentId);
