@@ -240,22 +240,25 @@ describe("subledger balances", () => {
  * — CANCELLED because the sale was cancelled or the deal voided — could be
  * relabelled by the arithmetic of an unrelated reversal.
  *
- * The reachable path is a cheque: `collections.ts` refuses to cancel a
- * receivable holding a HELD or DEPOSITED cheque, but a CLEARED one has already
- * allocated, so cancelling is allowed; when that cheque is later returned, the
- * return path reverses the allocation on a document that is by then CANCELLED.
- *
  * What that produced is worth stating precisely, because the reviews that
  * raised it predicted something else. `getReceivableOutstandingMinor` returns 0
  * for CANCELLED before the recompute reads it, and 0 maps to PAID — so a
  * cancelled receivable was relabelled **PAID**, not reopened. Nothing became
- * collectible again. The defect is that a cancelled document claimed to have
- * been settled.
+ * collectible again. WRITTEN_OFF and REVERSED would have landed on OPEN.
  *
- * WRITTEN_OFF and REVERSED have no production writer today, so their
- * resurrection to OPEN was never reachable — but the schema admits them and
- * `claims.ts` treats all three as non-collectible, so the rule is stated once
- * for the set rather than for the one status that happens to be reachable.
+ * These tests pin the WRITER, and reach it directly rather than through a
+ * business flow, because no business flow reaches it: this is defense in depth
+ * against an unreachable state, not a live bug. The reachability argument was
+ * wrong when first made, and the correction is recorded in `subledger.ts` so it
+ * is not re-derived — briefly, CANCEL_RECEIVABLE throws on `paidAmount > 0`
+ * before it ever reads a cheque's status, `cancelSaleReceivableIfSafe` reverses
+ * allocations before cancelling, and nothing writes WRITTEN_OFF or REVERSED at
+ * all.
+ *
+ * That is exactly why the setup patches the status directly. Driving a real
+ * mutation chain here would assert that the chain refuses — a different and
+ * already-covered claim — and would leave the writer itself untested, which is
+ * the thing consumers depend on.
  */
 describe("terminal receivable dispositions survive allocation reversal", () => {
   test.each(["CANCELLED", "WRITTEN_OFF", "REVERSED"] as const)(
