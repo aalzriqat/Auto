@@ -1,18 +1,22 @@
 /**
- * SCRUM-53 — the legacy cashbook must not be editable once the GL represents it.
+ * SCRUM-53 — the legacy cashbook must not be a second set of books.
  *
- * `transactions` is the operational cashbook. The authoritative books are
- * `journalEntries` + `journalLines`, and `migrateUnpostedTransactions` copies a
- * cashbook row into the GL, recording an `accountingEvents` row with
- * `sourceType: "transactions"` and `sourceId` = the transaction id.
+ * `transactions` is the operational CASHBOOK. The authoritative books are
+ * `journalEntries` + `journalLines`. Rows are written as a side effect of the
+ * domain event that caused them; nothing may create, edit or delete one through
+ * the public API, because none of those writes reaches the GL.
  *
- * After that point the amount exists twice and only one copy is the books.
- * Editing or deleting the cashbook row moves the copy nobody reports from,
- * while the Trial Balance, P&L and Balance Sheet keep the original figure —
- * so a finance user watches their correction succeed and the statements
- * disagree with it permanently, with nothing on screen saying which is right.
+ * An earlier revision of this change tried to allow edits and refuse only the
+ * rows the GL already represented, by looking for an `accountingEvents` row
+ * keyed `sourceType: "transactions"`. That key has exactly one producer —
+ * `migrateUnpostedTransactions`, backfilling legacy rows. Every real-time
+ * workflow posts against the DOMAIN entity instead ("vehicles", "sales",
+ * "expenses", "deposits", "collectionPayments"), so the guard could not see the
+ * postings that matter, and a production audit found 113 cashbook rows and ZERO
+ * events keyed to "transactions" — it protected nothing that existed.
  *
- * These assert the REFUSAL, not the shape of the guard.
+ * These tests assert the REFUSAL and the absence of the doors, not the shape of
+ * any particular guard.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -50,8 +54,6 @@ async function setupOrgWithCashbookRow() {
 
   // Inserted directly, the way the seven domain modules that own real cashbook
   // rows do it (collections, expenses, deposits, sales, vehicles, work orders).
-  // There is no longer a public mutation that creates one — see the
-  // "no public door" suite at the bottom of this file.
   const transactionId = await t.run((ctx) =>
     ctx.db.insert("transactions", {
       orgId,
@@ -63,208 +65,180 @@ async function setupOrgWithCashbookRow() {
     })
   );
 
-  /** Mirrors what `migrateUnpostedTransactions` records when it posts the row. */
-  async function representInGl(
-    status: "POSTED" | "PENDING" | "REVERSED" | "FAILED",
-    options: { withJournalEntry?: boolean } = {}
-  ) {
-    const journalEntryId = options.withJournalEntry
-      ? await t.run((ctx) =>
-          ctx.db.insert("journalEntries", {
-            orgId,
-            journalNumber: `JE-${status}-${Date.now()}`,
-            accountingDate: Date.now(),
-            sourceType: "transactions",
-            sourceId: transactionId as string,
-            category: "SYSTEM",
-            memo: "Migrated cashbook row",
-            currency: "JOD",
-            status: status === "REVERSED" ? "REVERSED" : "POSTED",
-            postedBy: userId,
-            postedAt: Date.now(),
-            createdAt: Date.now(),
-          })
-        )
-      : undefined;
+  return { t, orgId, userId, asManager, transactionId };
+}
 
-    await t.run((ctx) =>
-      ctx.db.insert("accountingEvents", {
+describe("no public write door into the legacy cashbook", () => {
+  test("convex/transactions.ts declares no mutation at all", () => {
+    const source = fs.readFileSync(path.join(process.cwd(), "convex", "transactions.ts"), "utf8");
+
+    // The file explains the removed mutations at length on purpose. Strip
+    // comments so the explanation of the fix cannot be mistaken for the defect.
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+    expect(code).not.toMatch(/\bmutation\s*\(/);
+    expect(code).not.toMatch(/\.db\.(insert|patch|replace)\(/);
+
+    // …and the module is still the cashbook reader, so this cannot pass by the
+    // file having been emptied or renamed.
+    expect(code).toMatch(/export const list = query\(/);
+  });
+
+  test.each(["add", "update", "remove"])(
+    "transactions.%s is gone from the generated public API surface",
+    async (name) => {
+      const { orgId, asManager, transactionId } = await setupOrgWithCashbookRow();
+
+      // Referenced through `anyApi` so this stays a RUNTIME assertion about the
+      // deployed function surface. A typed `api.transactions.add` reference
+      // would fail to COMPILE instead, which proves nothing about a client that
+      // was built before the mutation was removed and still calls it by name —
+      // an already-installed mobile build is exactly that client.
+      //
+      // Asserted on "no such export" specifically, not on any rejection at all.
+      // These payloads are a superset of each mutation's arguments, so a plain
+      // `.rejects.toThrow()` would also be satisfied by an ARGUMENT VALIDATOR
+      // error from a mutation that still exists — the test would pass while the
+      // door stood open. That is exactly how it first passed for `remove`.
+      await expect(
+        asManager.mutation(anyApi.transactions[name], {
+          orgId,
+          transactionId,
+          type: "IN",
+          amount: 5_000,
+          date: Date.now(),
+          category: "CAPITAL_INJECTION",
+          description: "Straight into the cashbook",
+        })
+      ).rejects.toThrow(/no such export/i);
+    }
+  );
+
+  test("a refused call leaves the cashbook exactly as it was", async () => {
+    // A door that throws AFTER writing would satisfy the assertions above.
+    const { t, orgId, asManager, transactionId } = await setupOrgWithCashbookRow();
+
+    for (const name of ["update", "remove"]) {
+      await expect(
+        asManager.mutation(anyApi.transactions[name], { orgId, transactionId, amount: 9_999 })
+      ).rejects.toThrow();
+    }
+
+    const row = await t.run((ctx) => ctx.db.get(transactionId));
+    expect(row?.amount).toBe(1_500);
+    expect(row?.isDeleted).not.toBe(true);
+
+    const rowCount = await t.run(async (ctx) =>
+      (await ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).length
+    );
+    expect(rowCount).toBe(1);
+  });
+});
+
+/**
+ * The case a `sourceType: "transactions"` guard could never see.
+ *
+ * `vehicles.ts` inserts the VEHICLE_PURCHASE cashbook row and then calls
+ * `hookVehicleAcquired`, which posts the GL event against the VEHICLE. Both
+ * halves describe the same money. A guard querying `by_org_source` for
+ * `sourceType: "transactions"` finds nothing here and would allow the edit —
+ * which is why the doors are gone instead of guarded.
+ */
+describe("a cashbook row whose money the GL already carries", () => {
+  test("cannot be edited or deleted through the API, even though the GL posting is sourced from the vehicle", async () => {
+    const { t, orgId, userId, asManager } = await setupOrgWithCashbookRow();
+
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
         orgId,
-        eventType: "LEGACY_TRANSACTION_MIGRATED",
-        sourceType: "transactions",
-        sourceId: transactionId as string,
-        eventVersion: 1,
-        idempotencyKey: `migrated-${transactionId}-${status}`,
-        occurredAt: Date.now(),
+        vin: "CASHBOOKGL0001",
+        make: "Kia",
+        model: "Sportage",
+        year: 2023,
+        mileage: 12_000,
+        color: "White",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        sellingPrice: 21_000,
+        status: "AVAILABLE",
+      })
+    );
+
+    // Exactly the pair `vehicles.ts` writes on acquisition.
+    const purchaseRowId = await t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId,
+        type: "OUT",
+        amount: 18_000,
+        date: Date.now(),
+        category: "VEHICLE_PURCHASE",
+        description: "Purchase of vehicle 2023 Kia Sportage",
+        vehicleId,
+      })
+    );
+    const journalEntryId = await t.run((ctx) =>
+      ctx.db.insert("journalEntries", {
+        orgId,
+        journalNumber: "JE-ACQ-1",
         accountingDate: Date.now(),
+        sourceType: "vehicles",
+        sourceId: vehicleId as string,
+        category: "SYSTEM",
+        memo: "Vehicle acquired",
         currency: "JOD",
-        payload: {},
-        status,
-        journalEntryId,
-        createdBy: userId,
+        status: "POSTED",
+        postedBy: userId,
+        postedAt: Date.now(),
         createdAt: Date.now(),
       })
     );
-  }
-
-  return { t, orgId, asManager, transactionId, representInGl };
-}
-
-describe("legacy cashbook rows already represented in the GL", () => {
-  test("cannot be edited once the migration event is POSTED", async () => {
-    const { orgId, asManager, transactionId, representInGl } = await setupOrgWithCashbookRow();
-    await representInGl("POSTED");
-
-    await expect(
-      asManager.mutation(api.transactions.update, {
-        orgId,
-        transactionId,
-        amount: 9_999,
-      })
-    ).rejects.toThrow(/already been posted to the general ledger/i);
-  });
-
-  test("the refused edit really did not happen", async () => {
-    // A guard that throws AFTER patching would still satisfy the assertion
-    // above. The point of the refusal is that the cashbook and the GL keep
-    // agreeing, so the stored amount is what actually matters.
-    const { t, orgId, asManager, transactionId, representInGl } = await setupOrgWithCashbookRow();
-    await representInGl("POSTED");
-
-    await expect(
-      asManager.mutation(api.transactions.update, { orgId, transactionId, amount: 9_999 })
-    ).rejects.toThrow();
-
-    const row = await t.run((ctx) => ctx.db.get(transactionId));
-    expect(row?.amount).toBe(1_500);
-  });
-
-  test("cannot be soft-deleted once the migration event is POSTED", async () => {
-    // A delete is not gentler than an edit here: it removes the row from the
-    // cashbook while the GL keeps the posting, so the books disagree in the
-    // direction that HIDES money rather than restating it.
-    const { t, orgId, asManager, transactionId, representInGl } = await setupOrgWithCashbookRow();
-    await representInGl("POSTED");
-
-    await expect(
-      asManager.mutation(api.transactions.remove, { orgId, transactionId })
-    ).rejects.toThrow(/already been posted to the general ledger/i);
-
-    const row = await t.run((ctx) => ctx.db.get(transactionId));
-    expect(row?.isDeleted).not.toBe(true);
-  });
-
-  test("a PENDING migration event does not block — nothing has posted yet", async () => {
-    const { orgId, asManager, transactionId, representInGl } = await setupOrgWithCashbookRow();
-    await representInGl("PENDING");
-
-    await asManager.mutation(api.transactions.update, {
-      orgId,
-      transactionId,
-      amount: 1_750,
-    });
-  });
-
-  test("a REVERSED migration event still blocks — a reversal does not un-write the GL", async () => {
-    // The original event is patched to REVERSED *in place* and keeps its
-    // journal entry; a second, inverted entry is posted beside it. Both halves
-    // stay in the books and `getPostedLines` reads both. Letting the cashbook
-    // row change afterwards leaves the surviving audit trail describing an
-    // amount that no longer exists at its own source.
-    const { t, orgId, asManager, transactionId, representInGl } = await setupOrgWithCashbookRow();
-    await representInGl("REVERSED", { withJournalEntry: true });
-
-    await expect(
-      asManager.mutation(api.transactions.remove, { orgId, transactionId })
-    ).rejects.toThrow(/already been posted to the general ledger/i);
-
-    await expect(
-      asManager.mutation(api.transactions.update, { orgId, transactionId, amount: 9_999 })
-    ).rejects.toThrow(/already been posted to the general ledger/i);
-
-    const row = await t.run((ctx) => ctx.db.get(transactionId));
-    expect(row?.amount).toBe(1_500);
-    expect(row?.isDeleted).not.toBe(true);
-  });
-
-  test("an event carrying a journal entry blocks whatever its status says", async () => {
-    // Status alone is not evidence in either direction: POSTED without a
-    // journal entry posted nothing, and a journal entry can be attached under
-    // another status. The guard fails closed on the journal entry itself.
-    const { orgId, asManager, transactionId, representInGl } = await setupOrgWithCashbookRow();
-    await representInGl("FAILED", { withJournalEntry: true });
-
-    await expect(
-      asManager.mutation(api.transactions.update, { orgId, transactionId, amount: 9_999 })
-    ).rejects.toThrow(/already been posted to the general ledger/i);
-  });
-
-  test("a FAILED event with no journal entry does not block — nothing reached the books", async () => {
-    const { t, orgId, asManager, transactionId, representInGl } = await setupOrgWithCashbookRow();
-    await representInGl("FAILED");
-
-    await asManager.mutation(api.transactions.update, { orgId, transactionId, amount: 1_800 });
-    const row = await t.run((ctx) => ctx.db.get(transactionId));
-    expect(row?.amount).toBe(1_800);
-  });
-
-  test("an unmigrated row is still fully editable", async () => {
-    // The guard must not become a blanket freeze on the cashbook: rows that
-    // never reached the GL are exactly what the legacy screen is still for.
-    const { t, orgId, asManager, transactionId } = await setupOrgWithCashbookRow();
-
-    await asManager.mutation(api.transactions.update, {
-      orgId,
-      transactionId,
-      amount: 2_000,
-    });
-    const row = await t.run((ctx) => ctx.db.get(transactionId));
-    expect(row?.amount).toBe(2_000);
-  });
-
-  test("another org's posted event cannot freeze this org's row", async () => {
-    // `by_org_source` is keyed on orgId first; if the guard ever dropped that
-    // it would leak one tenant's migration state into another's cashbook.
-    const { t, orgId, asManager, transactionId } = await setupOrgWithCashbookRow();
-    const otherOrgId = await t.run((ctx) =>
-      ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() })
-    );
-    const otherUserId = await t.run((ctx) =>
-      ctx.db.insert("users", { clerkId: "other", email: "other@example.com", name: "Other" })
-    );
     await t.run((ctx) =>
       ctx.db.insert("accountingEvents", {
-        orgId: otherOrgId,
-        eventType: "LEGACY_TRANSACTION_MIGRATED",
-        sourceType: "transactions",
-        sourceId: transactionId as string,
+        orgId,
+        eventType: "VEHICLE_ACQUIRED",
+        sourceType: "vehicles",
+        sourceId: vehicleId as string,
         eventVersion: 1,
-        idempotencyKey: "cross-tenant",
+        idempotencyKey: `vehicle_acquired_${vehicleId}`,
         occurredAt: Date.now(),
         accountingDate: Date.now(),
         currency: "JOD",
         payload: {},
         status: "POSTED",
-        createdBy: otherUserId,
+        journalEntryId,
+        createdBy: userId,
         createdAt: Date.now(),
       })
     );
 
-    await asManager.mutation(api.transactions.update, { orgId, transactionId, amount: 2_500 });
-    const row = await t.run((ctx) => ctx.db.get(transactionId));
-    expect(row?.amount).toBe(2_500);
+    await expect(
+      asManager.mutation(anyApi.transactions.update, {
+        orgId,
+        transactionId: purchaseRowId,
+        amount: 999,
+      })
+    ).rejects.toThrow();
+
+    await expect(
+      asManager.mutation(anyApi.transactions.remove, { orgId, transactionId: purchaseRowId })
+    ).rejects.toThrow();
+
+    // The decisive assertion: capitalized inventory cost in the GL and the cash
+    // side in the cashbook still agree. An edit here would have moved one and
+    // left the balance sheet, COGS and every later margin on the original.
+    const row = await t.run((ctx) => ctx.db.get(purchaseRowId));
+    expect(row?.amount).toBe(18_000);
+    expect(row?.isDeleted).not.toBe(true);
   });
 });
 
 /**
- * The replay question, asked of the real migration rather than of the guard.
+ * The replay question, asked of the real migration rather than of a guard.
  *
  * A row whose GL posting was reversed is the one case where "is this on the
- * books?" has a genuinely ambiguous answer. The danger is not the edit itself
- * but what a later replay concludes: if `migrateUnpostedTransactions` decided
- * "no live posting, therefore unposted money", it would post the row a SECOND
- * time — and if the row had been edited in between, it would post an amount
- * nobody ever recorded.
+ * books?" has a genuinely ambiguous answer. The danger is what a later replay
+ * concludes: if `migrateUnpostedTransactions` decided "no live posting,
+ * therefore unposted money", it would post the row a SECOND time.
  */
 describe("a reversed cashbook row cannot come back as fresh unposted money", () => {
   async function seedMigratableOrg() {
@@ -367,7 +341,9 @@ describe("a reversed cashbook row cannot come back as fresh unposted money", () 
       dryRun: false,
     });
 
-    const row = result.results.find((r: { transactionId: string }) => r.transactionId === transactionId.toString());
+    const row = result.results.find(
+      (r: { transactionId: string }) => r.transactionId === transactionId.toString()
+    );
     expect(row).toMatchObject({ action: "SKIP", reason: "already_posted" });
 
     // The decisive assertion: no second posting of a row the books already
@@ -380,16 +356,52 @@ describe("a reversed cashbook row cannot come back as fresh unposted money", () 
 });
 
 /**
- * Fails the build if a THIRD writer of the `transactions` table appears without
- * the guard.
+ * Which modules may mutate an EXISTING cashbook row.
  *
- * The two guarded paths are the only ones today, but sibling paths do not
- * inherit a fix — that is how this repository has shipped the same defect twice
- * before. Every other module only INSERTS into `transactions`, which is fine:
- * a brand-new row cannot already be represented in the GL.
+ * The previous version of this test claimed `transactions.ts` held "the only two
+ * writers". That was false — it matched only `.db.patch(transactionId` by
+ * variable name and therefore missed `saleCancellation.ts`, which patches
+ * `row._id` inside a loop, and `migrateConsignedSaleBasis.ts`, which patches
+ * `tx._id` after `const tx = candidates[0]`. A test that asserts a false
+ * inventory is worse than no test: it tells the next engineer the invariant is
+ * covered.
+ *
+ * So the detector follows simple bindings out of a `transactions` query instead
+ * of matching a name, and the inventory below is explicit and reviewed. A new
+ * entry is not a build error to be silenced — it is a module that can move a
+ * number the general ledger also carries, and it needs the same argument the two
+ * below have.
  */
-describe("no unguarded writer of an existing transactions row", () => {
-  test("every patch of a transactions row is preceded by the GL guard", () => {
+describe("every module that mutates an existing cashbook row is a reviewed one", () => {
+  /**
+   * Modules allowed to patch a `transactions` row, each with its reason.
+   *
+   * Every one of them is a DOMAIN module maintaining the cashbook row it
+   * created, inside the same workflow that moves the underlying record — which
+   * is the model SCRUM-53 endorses. The cashbook row is a side effect of the
+   * domain event, so the domain owns it. That is categorically different from a
+   * general-purpose "edit any cashbook row" endpoint, which is what was removed.
+   */
+  const REVIEWED_WRITERS: Record<string, string> = {
+    // Soft-deletes the VEHICLE_SALE rows when a completed sale is cancelled.
+    // Correct: it runs inside the cancellation that ALSO reverses the sale's GL
+    // posting, so the cashbook and the books move together rather than apart.
+    "utils/saleCancellation.ts": "runs inside the cancellation that also reverses the GL posting",
+    // Sets `recognizedRevenueAmount` on a consigned sale's row so the P&L stops
+    // counting the gross as revenue. Restates the REPORTING BASIS of a row whose
+    // cash amount it deliberately refuses to touch, and bails out when the row
+    // has already been changed.
+    "migrateConsignedSaleBasis.ts": "restates reporting basis only, and refuses rows whose amount already moved",
+    // Mirrors an expense edit onto the cashbook row the expense created
+    // (amount/date), and soft-deletes it with the expense. The expense workflow
+    // owns its own GL posting and reversal, so both sides move together.
+    "expenses.ts": "mirrors the expense's own edit/delete onto the row it created, alongside its GL handling",
+    // Patches the original deposit IN row when a deposit is voided or refunded,
+    // in the same mutation that voids the mirrored payment.
+    "deposits.ts": "adjusts the deposit's own cashbook row inside the void/refund workflow",
+  };
+
+  function transactionRowWriters(): string[] {
     const convexDir = path.join(process.cwd(), "convex");
     const files: string[] = [];
     (function walk(dir: string) {
@@ -403,79 +415,67 @@ describe("no unguarded writer of an existing transactions row", () => {
       }
     })(convexDir);
 
-    // Sanity floor: if the walk ever matches nothing, this whole test passes
+    // Sanity floor: if the walk ever matches nothing this whole suite passes
     // vacuously and stops protecting anything.
     expect(files.length).toBeGreaterThan(20);
 
-    const offenders: string[] = [];
+    const writers: string[] = [];
     for (const file of files) {
       const source = fs.readFileSync(file, "utf8");
-      // Only `transactions.ts` may patch a transactions row, and only because
-      // both of its writers call the guard (asserted by the tests above).
-      if (path.basename(file) === "transactions.ts") continue;
-      if (/\.db\.patch\(\s*(args\.)?transactionId/.test(source)) {
-        offenders.push(path.relative(convexDir, file));
+      if (!/query\(\s*["']transactions["']\s*\)/.test(source)) continue;
+
+      // Identifiers holding rows that came out of a `transactions` query, plus
+      // anything derived from them by one simple hop — a for-of, an index, an
+      // array callback parameter. That is how both real writers reach `_id`.
+      const tainted = new Set<string>();
+      const seed = /(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=[\s\S]{0,400}?query\(\s*["']transactions["']\s*\)/g;
+      for (const m of source.matchAll(seed)) tainted.add(m[1]);
+
+      for (let pass = 0; pass < 5; pass++) {
+        const before = tainted.size;
+        for (const name of [...tainted]) {
+          const derived = [
+            new RegExp(`for\\s*\\(\\s*const\\s+([A-Za-z_$][\\w$]*)\\s+of\\s+${name}\\b`, "g"),
+            new RegExp(`(?:const|let)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*${name}\\s*\\[`, "g"),
+            new RegExp(`(?:const|let)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*(?:await\\s+)?${name}\\b[^;]*`, "g"),
+            new RegExp(`${name}\\s*\\.\\s*(?:map|filter|find|forEach|flatMap)\\s*\\(\\s*\\(?\\s*([A-Za-z_$][\\w$]*)`, "g"),
+          ];
+          for (const re of derived) {
+            for (const m of source.matchAll(re)) tainted.add(m[1]);
+          }
+        }
+        if (tainted.size === before) break;
+      }
+
+      for (const name of tainted) {
+        const patches = new RegExp(`\\.db\\.(?:patch|replace)\\(\\s*${name}\\b`);
+        if (patches.test(source)) {
+          writers.push(path.relative(convexDir, file).split(path.sep).join("/"));
+          break;
+        }
       }
     }
-    expect(offenders).toEqual([]);
-  });
-});
+    return writers.sort();
+  }
 
-/**
- * No public door into the cashbook.
- *
- * A Convex `mutation` is a public API endpoint. Whether the shipped UI offers a
- * button is irrelevant — any authenticated client holding `manage:finance` can
- * call it. `transactions.add` was such a door: it wrote money into the
- * operational cashbook with no accounting event, no journal entry, no period
- * check and no audit record. Its removal is the point of this change, so it is
- * asserted rather than assumed.
- */
-describe("no public door into the legacy cashbook", () => {
-  test("convex/transactions.ts exposes no mutation that inserts a transactions row", () => {
-    const source = fs.readFileSync(path.join(process.cwd(), "convex", "transactions.ts"), "utf8");
-
-    // Comments describe the removed mutation on purpose; strip them so the
-    // explanation of the fix cannot be mistaken for the defect.
-    const code = source
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "");
-
-    expect(code).not.toMatch(/\.db\.insert\(\s*["']transactions["']/);
-
-    // And the module still exports the guarded writers, so this suite cannot
-    // pass by the file having been emptied.
-    expect(code).toMatch(/export const update = mutation\(/);
-    expect(code).toMatch(/export const remove = mutation\(/);
+  test("the detector actually finds the writers it is meant to find", () => {
+    // Positive control. Without this the test below passes just as happily when
+    // the detector is broken and returns nothing — which is exactly how the
+    // previous version shipped a false claim.
+    const writers = transactionRowWriters();
+    expect(writers).toContain("utils/saleCancellation.ts");
+    expect(writers).toContain("migrateConsignedSaleBasis.ts");
+    expect(writers).toContain("expenses.ts");
+    expect(writers).toContain("deposits.ts");
   });
 
-  test("the mutation is gone from the generated public API surface", async () => {
-    const t = convexTestWithComponents(schema, MODULES);
-    const orgId = await t.run((ctx) =>
-      ctx.db.insert("organizations", { name: "Door Dealer", createdAt: Date.now() })
-    );
-    const userId = await t.run((ctx) =>
-      ctx.db.insert("users", { clerkId: "door_manager", email: "door@example.com", name: "Door" })
-    );
-    const roleId = await t.run((ctx) =>
-      ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ALL_PERMISSIONS, isSystemOwnerRole: true })
-    );
-    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+  test("no module outside the reviewed inventory patches a cashbook row", () => {
+    const writers = transactionRowWriters();
+    const unreviewed = writers.filter((file) => !(file in REVIEWED_WRITERS));
+    expect(unreviewed).toEqual([]);
+  });
 
-    // Referenced through `anyApi` so this stays a RUNTIME assertion about the
-    // deployed function surface. A typed `api.transactions.add` reference would
-    // fail to compile instead, which proves nothing about a client that was
-    // built before the mutation was removed and still calls it by name.
-    const asManager = t.withIdentity({ subject: "door_manager" });
-    await expect(
-      asManager.mutation(anyApi.transactions.add, {
-        orgId,
-        type: "IN",
-        amount: 5_000,
-        date: Date.now(),
-        category: "CAPITAL_INJECTION",
-        description: "Straight into the cashbook",
-      })
-    ).rejects.toThrow();
+  test("transactions.ts is not among them", () => {
+    expect(transactionRowWriters()).not.toContain("transactions.ts");
   });
 });

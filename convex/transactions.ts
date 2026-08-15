@@ -1,10 +1,18 @@
-import { v, ConvexError } from "convex/values";
-import { query, QueryCtx, type DatabaseReader } from "./_generated/server";
-import { mutation } from "./functions";
+/**
+ * The legacy operational CASHBOOK — read-only.
+ *
+ * These rows are not the general ledger. The authoritative books are
+ * `journalEntries` + `journalLines`. Rows here are written as a side effect of
+ * the domain event that caused them (a sale, an expense, a collection, a
+ * deposit, a work order), and this module deliberately exposes no way to create,
+ * edit or delete one. See the note at the bottom of the file for why the write
+ * mutations were removed rather than guarded.
+ */
+import { v } from "convex/values";
+import { query, QueryCtx } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
-import { notifyManagers, getActorName } from "./utils/notifications";
 import { Doc, Id } from "./_generated/dataModel";
 
 type LedgerTransaction = Doc<"transactions">;
@@ -234,8 +242,8 @@ export const list = query({
  * this module ever inserts into `transactions` again.
  */
 
-/**
- * Refuses to mutate a legacy cashbook row that the GL has already represented.
+/*
+ * Why a "refuse if already represented in the GL" guard was tried, and dropped.
  *
  * `transactions` is the operational cashbook, not the authoritative ledger —
  * the books are `journalEntries` + `journalLines`. `migrateUnpostedTransactions`
@@ -266,139 +274,51 @@ export const list = query({
  *   - POSTED does not by itself prove a journal entry exists, and a row can
  *     carry a `journalEntryId` under another status.
  *
- * So this blocks on POSTED, on REVERSED, and on any event that carries a
- * `journalEntryId` — whichever arrives first. PENDING and FAILED events with no
- * journal entry do not block: a queued event is not GL representation, and the
- * unmigrated cashbook is exactly what the legacy screen is still for. That is
- * the same POSTED/REVERSED-need-real-journal-evidence distinction Lane 5's
- * integrity diagnostic uses, rather than a second interpretation of status.
- *
- * Both writers below call this. They are the only two paths that patch a
- * `transactions` row (`transactions.ts:update` and `:remove`); every other
- * module only inserts. `transactionsGlDivergence.test.ts` fails if a third
- * writer appears without the guard.
+ * Kept as history because it is the reasoning that led here, and because the
+ * same trap recurs elsewhere in this codebase: a status label is not evidence of
+ * GL representation, the journal entry is. But the guard is gone — see below for
+ * why a guard was the wrong shape for this problem entirely.
  */
-export async function assertNotRepresentedInGl(
-  ctx: { db: DatabaseReader },
-  orgId: Id<"organizations">,
-  transactionId: Id<"transactions">
-): Promise<void> {
-  const events = await ctx.db
-    .query("accountingEvents")
-    .withIndex("by_org_source", (q) =>
-      q.eq("orgId", orgId).eq("sourceType", "transactions").eq("sourceId", transactionId as string)
-    )
-    .collect();
 
-  const representedInGl = events.some(
-    (event) =>
-      event.status === "POSTED" ||
-      event.status === "REVERSED" ||
-      event.journalEntryId !== undefined
-  );
-
-  if (representedInGl) {
-    throw new ConvexError(
-      "This entry has already been posted to the general ledger and can no longer be edited or deleted here. Record a correcting journal entry instead, so the change is auditable."
-    );
-  }
-}
-
-export const update = mutation({
-  args: {
-    orgId: v.id("organizations"),
-    transactionId: v.id("transactions"),
-    type: v.optional(v.union(v.literal("IN"), v.literal("OUT"))),
-    amount: v.optional(v.number()),
-    date: v.optional(v.number()),
-    category: v.optional(v.union(
-      v.literal("VEHICLE_SALE"), v.literal("VEHICLE_PURCHASE"),
-      v.literal("EXPENSE"), v.literal("DEPOSIT"),
-      v.literal("COLLECTION_PAYMENT"), v.literal("REFUND"),
-      v.literal("PARTNER_DRAW"), v.literal("CAPITAL_INJECTION"),
-      v.literal("CLAIM_PAYMENT"), v.literal("OTHER")
-    )),
-    description: v.optional(v.string()),
-    vehicleId: v.optional(v.id("vehicles")),
-    userId: v.optional(v.id("users")),
-    expenseId: v.optional(v.id("expenses")),
-  },
-  handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    const { orgId, transactionId, ...updates } = args;
-
-    // Verify the transaction belongs to this org
-    const transaction = await ctx.db.get(transactionId);
-    if (!transaction || transaction.orgId !== orgId) {
-      throw new ConvexError("Transaction not found in this organization.");
-    }
-
-    await assertNotRepresentedInGl(ctx, orgId, transactionId);
-
-    if (updates.vehicleId) {
-      const vehicle = await ctx.db.get(updates.vehicleId);
-      if (!vehicle || vehicle.orgId !== orgId) {
-        throw new ConvexError("Vehicle not found in this organization.");
-      }
-    }
-    if (updates.expenseId) {
-      const expense = await ctx.db.get(updates.expenseId);
-      if (!expense || expense.orgId !== orgId) {
-        throw new ConvexError("Expense not found in this organization.");
-      }
-    }
-
-    // Clean up undefined optional values
-    const cleanedUpdates = Object.fromEntries(
-      Object.entries(updates).filter(([_, v]) => v !== undefined)
-    );
-
-    await ctx.db.patch(transactionId, cleanedUpdates);
-
-    const actorName = await getActorName(ctx);
-    await notifyManagers(
-      ctx,
-      orgId,
-      "transaction.updated",
-      { actorName },
-      { link: `/${orgId}/accounting` }
-    );
-  },
-});
-
-// TODO: Add admin recovery endpoint if needed
-export const remove = mutation({
-  args: {
-    orgId: v.id("organizations"),
-    transactionId: v.id("transactions"),
-  },
-  handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    const transaction = await ctx.db.get(args.transactionId);
-    if (!transaction || transaction.orgId !== args.orgId) {
-      throw new ConvexError("Transaction not found in this organization.");
-    }
-
-    // Same guard as `update`. A soft delete is not gentler than an edit here:
-    // it removes the row from the cashbook while the GL keeps the posting, so
-    // the two disagree in the direction that hides money rather than restates it.
-    await assertNotRepresentedInGl(ctx, args.orgId, args.transactionId);
-
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new ConvexError("Unauthenticated");
-    await ctx.db.patch(args.transactionId, {
-      isDeleted: true,
-      deletedAt: Date.now(),
-      deletedBy: identity.subject
-    });
-
-    const actorName = await getActorName(ctx);
-    await notifyManagers(
-      ctx,
-      args.orgId,
-      "transaction.removed",
-      { actorName },
-      { link: `/${args.orgId}/accounting` }
-    );
-  },
-});
+/*
+ * `transactions.update` and `transactions.remove` are gone for the same reason,
+ * and the guard that used to protect them is gone with them.
+ *
+ * The guard asked "is this row already represented in the GL?" by looking for an
+ * `accountingEvents` row keyed `sourceType: "transactions"`, `sourceId` = the
+ * transaction id. That key is written by exactly ONE producer in the codebase:
+ * `migrateUnpostedTransactions`, backfilling legacy pre-cutover rows.
+ *
+ * Every real-time domain workflow posts its GL exposure against the DOMAIN
+ * entity instead. `vehicles.ts` inserts the VEHICLE_PURCHASE cashbook row and
+ * then calls `hookVehicleAcquired`, which posts `sourceType: "vehicles"`;
+ * `saleHelpers` posts `"sales"`, `expenses` posts `"expenses"`, the deposit
+ * helpers post `"deposits"`, `collections` posts `"collectionPayments"`.
+ * `accountingMigration.ts` documents this mismatch explicitly — its own
+ * VEHICLE_ACQUIRED check exists precisely because "the lookup above can never
+ * find it there."
+ *
+ * So the guard could not see the postings that matter. A read-only audit of
+ * production found 113 cashbook rows and ZERO events keyed to `"transactions"`:
+ * it protected nothing that exists today, and would have started protecting
+ * things only after the SCRUM-4 cutover ran.
+ *
+ * The fix is not a longer guard. Recovering "which GL posting represents this
+ * cashbook row" means re-deriving a link the schema does not store — there is no
+ * foreign key from a `transactions` row to its journal entry, which is why
+ * `saleCancellation.ts` has to find its rows by (org, vehicle, category,
+ * customer) instead. Any enumeration of domain link types fails OPEN on the
+ * cases it forgot, and a guard that fails open on an unknown row is not a guard.
+ *
+ * Neither mutation had a caller in the product once the mobile Accounting module
+ * became read-only. So the module is now READ-ONLY: `list` and nothing else. A
+ * cashbook row is written only as a side effect of the domain event that caused
+ * it, and corrected only by a journal entry against the books themselves — which
+ * is what SCRUM-53 asks for and what leaves an audit trail.
+ *
+ * One system path still soft-deletes cashbook rows: `voidSaleCashflowTransaction`
+ * in `utils/saleCancellation.ts`, when a completed sale is cancelled. That is
+ * correct and deliberately left alone — it runs inside the cancellation that
+ * ALSO reverses the sale's GL posting, so the two move together instead of
+ * diverging. `transactionsGlDivergence.test.ts` holds that inventory explicitly.
+ */
