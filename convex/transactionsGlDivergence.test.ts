@@ -393,12 +393,18 @@ describe("every module that mutates an existing cashbook row is a reviewed one",
     // has already been changed.
     "migrateConsignedSaleBasis.ts": "restates reporting basis only, and refuses rows whose amount already moved",
     // Mirrors an expense edit onto the cashbook row the expense created
-    // (amount/date), and soft-deletes it with the expense. The expense workflow
-    // owns its own GL posting and reversal, so both sides move together.
-    "expenses.ts": "mirrors the expense's own edit/delete onto the row it created, alongside its GL handling",
-    // Patches the original deposit IN row when a deposit is voided or refunded,
-    // in the same mutation that voids the mirrored payment.
-    "deposits.ts": "adjusts the deposit's own cashbook row inside the void/refund workflow",
+    // (amount/date), and soft-deletes it with the expense. Safe because
+    // `expenses.ts:521` refuses the edit outright when the expense already has
+    // GL exposure — "Posted expenses are locked. Use a correction or reversal
+    // workflow" — checked against the expense's OWN sourceType, which is the
+    // link that actually exists. The cashbook sync only ever runs on rows the
+    // books have not taken.
+    "expenses.ts": "refuses any material edit once the expense has GL exposure, so the sync only touches unposted rows",
+    // Patches the original deposit IN row when a deposit is voided. Safe
+    // because the same mutation calls `hookDepositVoided` (deposits.ts:312) to
+    // reverse the DEPOSIT_RECEIVED posting, and refuses outright when the
+    // deposit has been partly refunded or applied to a completed sale.
+    "deposits.ts": "reverses the DEPOSIT_RECEIVED posting in the same mutation that adjusts the row",
   };
 
   function transactionRowWriters(): string[] {
