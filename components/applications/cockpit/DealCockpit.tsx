@@ -8,9 +8,6 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
-// The STRICT one. `scaleForCurrency` above answers 2 for anything it does not
-// recognise, which is a guess; this returns null and lets the caller withhold.
-import { denominationOf } from "@/convex/utils/money";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -1330,29 +1327,34 @@ export function DealCockpitView({
   // about the scale. A missing figure renders as unknown rather than as zero —
   // "the advice says nothing" and "the advice says nought" are different
   // claims, and only one of them is ever true here.
-  // ...but scaled by the SAME authority the deal's own figures answer to, not
-  // by the guessing one.
+  // DELIBERATELY still the guessing scaler. See SCRUM-88 before changing it.
   //
-  // This strip predates the denomination work (it arrived with SCRUM-30) and
-  // kept its own `scaleForCurrency` call, which returns 2 for any code it does
-  // not know. So a reconciliation row pinned to "JD" rendered at the wrong
-  // scale directly above the panel that says the deal's currency cannot be
-  // spelled — the screen contradicting itself about the same deal. Withheld on
-  // the same terms as everything else here: absent, unsupported and
-  // non-canonical all land together, matching what the writers refuse.
+  // This strip does render a legacy "JD" row at the wrong scale, and an earlier
+  // revision of this PR tried to fix that here by switching to the strict
+  // `denominationOf`. That made things worse, not better: this same factor
+  // prefills the EDITABLE amount in `SettlementAdviceCorrectionDialog` below,
+  // while the submit path converts back with `scaleForCurrency`. Making only
+  // the display side strict left the two disagreeing, so an operator opening
+  // the dialog to correct a reference and submitting without touching the
+  // amount persisted 100x the recorded figure over the advice and its audit
+  // row. A display fault became a write corruption.
+  //
+  // The two sides have to move together — display, prefill, submit and a
+  // server-side denomination guard on the amend mutation, which currently takes
+  // no currency argument and so cannot check one. That is a change to a shipped
+  // financial correction flow, not a hunk in a release-verification pass, and
+  // it is tracked separately. Keeping main's behavior here is the smaller risk:
+  // wrong on screen, but internally consistent, and it round-trips exactly.
   const discrepancy = deal?.settlementAdviceDiscrepancy ?? null;
   const discrepancyCurrency = discrepancy?.currency ?? dealCurrency;
-  const discrepancyDenomination = denominationOf(discrepancyCurrency);
   const discrepancyFactor = useMemo(
-    () => Math.pow(10, discrepancyDenomination?.scale ?? 0),
-    [discrepancyDenomination]
+    () => Math.pow(10, scaleForCurrency(discrepancyCurrency)),
+    [discrepancyCurrency]
   );
   const discrepancyMarker =
     locale === "ar" && discrepancyCurrency === currency.code ? currency.symbol : discrepancyCurrency;
   const discrepancyMoney = (minor: number) =>
-    discrepancyDenomination === null
-      ? "—"
-      : `${(minor / discrepancyFactor).toLocaleString()} ${discrepancyMarker}`;
+    `${(minor / discrepancyFactor).toLocaleString()} ${discrepancyMarker}`;
 
   // The economics block is denominated in the APPLICATION's pinned currency,
   // which the money block need not even be present to establish — a MANAGER
