@@ -1107,11 +1107,15 @@ describe("Collections", () => {
       });
     });
 
+    // SCRUM-56: the summary and the aging report now read the same model as the
+    // collection queue, which excludes soft-deleted rows — as listReceivablesDueBetween
+    // already did below. The "Deleted balance" row's 30 used to be counted here as
+    // money owed, overstating both the total and today's due figure.
     const summary = await asFinance.query(api.collections.summary, { orgId });
     expect(summary).toMatchObject({
-      totalOutstanding: 225,
+      totalOutstanding: 195,
       overdueOutstanding: 120,
-      dueToday: 105,
+      dueToday: 75,
       collectedToday: 20,
       upcomingChequeTotal: 500,
       upcomingChequeCount: 2,
@@ -1166,7 +1170,8 @@ describe("Collections", () => {
     expect(upcoming.rows.map((row) => row.chequeNumber)).toEqual(expect.arrayContaining(["RPT-1", "RPT-2"]));
 
     const aging = await asFinance.query(api.collections.agingReport, { orgId });
-    expect(aging.current).toMatchObject({ count: 2, amount: 105 });
+    // One current row, not two — the soft-deleted balance is no longer aged.
+    expect(aging.current).toMatchObject({ count: 1, amount: 75 });
     expect(aging.days31To60).toMatchObject({ count: 1, amount: 120 });
   });
 
