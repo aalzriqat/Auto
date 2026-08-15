@@ -79,9 +79,10 @@ async function seedMultiCurrencyDealer() {
 
   /**
    * Control accounts (Bank, AR) refuse manual posting in the default chart —
-   * that control is covered by financialAudit's own tests. This file is about
-   * per-currency *reporting*, so the flag is relaxed here as seed setup to get
-   * two-currency lines onto the exact accounts the assertions below name.
+   * that control is covered by `manualJournalControlAccounts.test.ts`. This
+   * file is about per-currency *reporting*, so the flag is relaxed here as seed
+   * setup to get two-currency lines onto the exact accounts the assertions
+   * below name.
    */
   async function accountId(systemKey: string) {
     const account = await t.run((ctx) =>

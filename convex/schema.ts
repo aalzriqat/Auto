@@ -350,7 +350,12 @@ export default defineSchema({
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_org_source", ["orgId", "sourceType", "sourceId"])
     .index("by_org_status", ["orgId", "status"])
-    .index("by_org_dueDate", ["orgId", "dueDate"]),
+    .index("by_org_dueDate", ["orgId", "dueDate"])
+    // Finance-company AR is a small slice of a table dominated by customer
+    // receivables. Without this, the finance-company queue scans every
+    // customer receivable in the org and post-filters, which grows with sales
+    // volume rather than with financed deals.
+    .index("by_org_payerType", ["orgId", "payerType"]),
 
   canonicalPayments: defineTable({
     orgId: v.id("organizations"),

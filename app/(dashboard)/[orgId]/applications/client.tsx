@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -34,6 +35,19 @@ export function ApplicationClient() {
 
   const [selectedAppId, setSelectedAppId] = useState<any>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+
+  // `confirmDisbursement` — the only mutation that settles finance-company AR —
+  // lives in this dialog, and the dialog used to be reachable only by finding
+  // the row and clicking it. Accounting's finance-company AR queue reports the
+  // outstanding balance but deliberately cannot settle it, so it needs to send
+  // the accountant to the door that can; a link is only an answer if it opens.
+  const searchParams = useSearchParams();
+  const deepLinkedApplicationId = searchParams.get("application");
+  useEffect(() => {
+    if (!deepLinkedApplicationId) return;
+    setSelectedAppId(deepLinkedApplicationId);
+    setIsDialogOpen(true);
+  }, [deepLinkedApplicationId]);
   const [statusFilter, setStatusFilter] = useState("ALL");
   const statusValueFor = (app: { status: string; hasPendingDepositResolution?: boolean }) =>
     app.hasPendingDepositResolution ? "DEPOSIT_PENDING" : app.status;

@@ -18,8 +18,10 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 
 const stubs = vi.hoisted(() => ({
   rows: [] as unknown[],
+  totals: [] as unknown[],
   status: "Exhausted" as string,
   isRtl: false,
+  loadMore: (() => {}) as (n: number) => void,
 }));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
@@ -31,7 +33,8 @@ vi.mock("@/components/providers/OrgProvider", () => ({
 }));
 
 vi.mock("convex/react", () => ({
-  usePaginatedQuery: () => ({ results: stubs.rows, status: stubs.status, loadMore: vi.fn() }),
+  usePaginatedQuery: () => ({ results: stubs.rows, status: stubs.status, loadMore: stubs.loadMore }),
+  useQuery: () => stubs.totals,
 }));
 
 import { ClaimsTab } from "./ClaimsTab";
@@ -43,6 +46,7 @@ function row(overrides: Record<string, unknown> = {}) {
     receivableDocumentId: "rd1",
     documentNumber: "AR-FC-1",
     applicationId: "app1",
+    hasOwningDeal: true,
     sourceType: "finance_application",
     financingEntity: "Jordan Finance Co",
     buyerName: "Buyer X",
@@ -60,8 +64,10 @@ function row(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   cleanup();
   stubs.rows = [];
+  stubs.totals = [];
   stubs.status = "Exhausted";
   stubs.isRtl = false;
+  stubs.loadMore = () => {};
 });
 
 describe("finance-company AR queue", () => {
@@ -80,6 +86,10 @@ describe("finance-company AR queue", () => {
       row({ receivableDocumentId: "rd1", currency: "JOD", scale: 3, outstandingMinor: 750_000 }),
       row({ receivableDocumentId: "rd2", currency: "USD", scale: 2, outstandingMinor: 50_000 }),
     ];
+    stubs.totals = [
+      { currency: "JOD", scale: 3, outstandingMinor: 750_000 },
+      { currency: "USD", scale: 2, outstandingMinor: 50_000 },
+    ];
     render(<ClaimsTab />);
 
     // Two separate totals — 750 JOD and 500 USD — and never their raw sum.
@@ -88,11 +98,42 @@ describe("finance-company AR queue", () => {
     expect(screen.queryByText(/800,000|800000/)).toBeNull();
   });
 
+  test("the headline is the org-wide total, not a sum of the loaded page", () => {
+    // One row loaded, but the org owes far more — the server total must win.
+    stubs.rows = [row({ outstandingMinor: 100_000 })];
+    stubs.totals = [{ currency: "JOD", scale: 3, outstandingMinor: 900_000 }];
+    stubs.status = "CanLoadMore";
+    render(<ClaimsTab />);
+
+    expect(screen.getByText(/900/)).toBeTruthy();
+  });
+
+  test("offers a way to load the rest of the queue", () => {
+    stubs.rows = [row()];
+    stubs.status = "CanLoadMore";
+    const loadMore = vi.fn();
+    stubs.loadMore = loadMore;
+    render(<ClaimsTab />);
+
+    const button = screen.getByText("LoadMore");
+    button.click();
+    expect(loadMore).toHaveBeenCalled();
+  });
+
   test("a fully paid receivable contributes no outstanding headline", () => {
     stubs.rows = [row({ outstandingMinor: 0, status: "PAID" })];
+    stubs.totals = [];
     render(<ClaimsTab />);
 
     expect(screen.queryByText("TotalOutstandingFromFinanciers")).toBeNull();
+  });
+
+  test("says why a row with no owning deal has no action", () => {
+    stubs.rows = [row({ applicationId: null, hasOwningDeal: false, sourceType: "claims" })];
+    render(<ClaimsTab />);
+
+    expect(screen.queryAllByRole("link")).toHaveLength(0);
+    expect(screen.getByText("NoOwningDeal")).toBeTruthy();
   });
 
   test("marks a row overdue only when money is still outstanding", () => {
@@ -108,21 +149,26 @@ describe("finance-company AR queue", () => {
 
   test("links to the deal that owns the receivable, and omits the link when there is none", () => {
     stubs.rows = [
-      row({ receivableDocumentId: "rd1", applicationId: "app1" }),
-      row({ receivableDocumentId: "rd2", applicationId: null }),
+      row({ receivableDocumentId: "rd1", applicationId: "app1", hasOwningDeal: true }),
+      row({ receivableDocumentId: "rd2", applicationId: null, hasOwningDeal: false }),
     ];
     render(<ClaimsTab />);
 
     const links = screen.getAllByRole("link");
     expect(links).toHaveLength(1);
-    expect(links[0].getAttribute("href")).toBe("/org1/applications/app1/deal");
+    // The applications list with the deal deep-linked open — that is where
+    // confirmDisbursement lives. The cockpit route cannot settle, so linking
+    // there would promise something the destination cannot do.
+    expect(links[0].getAttribute("href")).toBe("/org1/applications?application=app1");
   });
 
   test("offers no way to create, settle or reject from Accounting", () => {
     stubs.rows = [row()];
+    stubs.status = "Exhausted";
     render(<ClaimsTab />);
 
     // Claims originates and settles nothing; the actions live on the deal.
+    // (Load more is the only button, and only when there is more to load.)
     expect(screen.queryAllByRole("button")).toHaveLength(0);
   });
 

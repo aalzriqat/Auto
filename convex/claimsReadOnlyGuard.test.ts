@@ -79,7 +79,7 @@ const FORBIDDEN_WRITE_TABLES = [
 ];
 
 export interface ClaimsGuardViolation {
-  kind: "mutation" | "money-helper" | "table-write";
+  kind: "mutation" | "money-helper" | "table-write" | "db-write" | "indirect-write";
   detail: string;
 }
 
@@ -96,11 +96,38 @@ export function findClaimsWriteCapabilities(source: string): ClaimsGuardViolatio
 
   const violations: ClaimsGuardViolation[] = [];
 
-  // `export const x = mutation({` / `internalMutation({` — Claims must expose
-  // no writer at all, public or internal.
-  const mutationDecl = /export\s+const\s+(\w+)\s*=\s*(internalMutation|mutation)\s*\(/g;
+  // A registration can be renamed on import — `import { mutation as writer }` —
+  // so the local names that mean "mutation" are resolved first rather than
+  // matching the bare word. Codex's review found this exact bypass.
+  const registrationNames = new Set(["mutation", "internalMutation"]);
+  const importRe = /import\s*\{([^}]*)\}\s*from\s*["'][^"']+["']/g;
+  for (const imp of code.matchAll(importRe)) {
+    for (const clause of imp[1].split(",")) {
+      const aliased = /^\s*(\w+)\s+as\s+(\w+)\s*$/.exec(clause);
+      if (aliased && registrationNames.has(aliased[1])) registrationNames.add(aliased[2]);
+    }
+  }
+
+  const names = [...registrationNames].join("|");
+  // Covers `export const x = <reg>(` and `export const x = <reg><any generics>(`.
+  const mutationDecl = new RegExp(`export\\s+const\\s+(\\w+)\\s*=\\s*(${names})\\s*[<(]`, "g");
   for (const m of code.matchAll(mutationDecl)) {
     violations.push({ kind: "mutation", detail: `${m[1]} = ${m[2]}(...)` });
+  }
+
+  // Any database write at all, whatever it targets. `ctx.db.patch` on an id
+  // needs no table name, so a table-name scan alone never sees it.
+  for (const op of ["insert", "patch", "replace", "delete"]) {
+    if (new RegExp(`\\.db\\s*\\.\\s*${op}\\s*\\(`).test(code)) {
+      violations.push({ kind: "db-write", detail: `ctx.db.${op}(...)` });
+    }
+  }
+
+  // Reaching a writer indirectly is still writing.
+  for (const escape of ["runMutation", "scheduler"]) {
+    if (new RegExp(`\\b${escape}\\b`).test(code)) {
+      violations.push({ kind: "indirect-write", detail: escape });
+    }
   }
 
   for (const helper of FORBIDDEN_MONEY_HELPERS) {
@@ -119,6 +146,35 @@ export function findClaimsWriteCapabilities(source: string): ClaimsGuardViolatio
   }
 
   return violations;
+}
+
+/**
+ * True when the source raises a **receivable document** stamped with the Claims
+ * source — the shape of the retired defect — as opposed to merely mentioning
+ * that source string, which the accounting event legitimately does.
+ *
+ * Scans the argument object of each call that can create one, bounded to the
+ * call's own braces so a later unrelated `sourceType` cannot be attributed to it.
+ */
+export function findClaimsSourcedReceivable(code: string): boolean {
+  const callSites = /(ensureReceivableDocument\s*\(|\.insert\s*\(\s*["'`]receivableDocuments["'`])/g;
+
+  for (const match of code.matchAll(callSites)) {
+    const start = (match.index ?? 0) + match[0].length;
+    let depth = 0;
+    let end = start;
+    for (; end < code.length; end++) {
+      const ch = code[end];
+      if (ch === "{" || ch === "(") depth++;
+      else if (ch === "}" || ch === ")") {
+        if (depth === 0) break;
+        depth--;
+      }
+    }
+    if (/sourceType\s*:\s*["'`]claims["'`]/.test(code.slice(start, end))) return true;
+  }
+
+  return false;
 }
 
 /** Verbatim shape of `claims.add` as it shipped pre-fix (the CRITICAL defect). */
@@ -167,6 +223,69 @@ describe("SCRUM-51 guard self-tests", () => {
     expect(findClaimsWriteCapabilities(READ_ONLY)).toEqual([]);
   });
 
+  test("flags a mutation smuggled in under an aliased import", () => {
+    const aliased = `
+      import { mutation as writer } from "./functions";
+      export const settle = writer({
+        args: {},
+        handler: async (ctx) => { await ctx.db.patch(id, { status: "PAID" }); },
+      });
+    `;
+    const kinds = findClaimsWriteCapabilities(aliased).map((v) => v.kind);
+    expect(kinds).toContain("mutation");
+    expect(kinds).toContain("db-write");
+  });
+
+  test("flags a table-agnostic write and an indirect one", () => {
+    expect(
+      findClaimsWriteCapabilities(`const f = async (ctx) => ctx.db.patch(id, {});`)
+        .map((v) => v.detail)
+    ).toContain("ctx.db.patch(...)");
+
+    expect(
+      findClaimsWriteCapabilities(`const f = async (ctx) => ctx.runMutation(internal.x.y, {});`)
+        .map((v) => v.detail)
+    ).toContain("runMutation");
+
+    expect(
+      findClaimsWriteCapabilities(`const f = async (ctx) => ctx.scheduler.runAfter(0, internal.x.y, {});`)
+        .map((v) => v.detail)
+    ).toContain("scheduler");
+  });
+
+  test("tells a claims-sourced receivable apart from a claims-sourced event", () => {
+    // The real pre-fix shape: the receivable itself is stamped.
+    expect(
+      findClaimsSourcedReceivable(`
+        await ensureReceivableDocument(ctx, {
+          payerType: "FINANCE_COMPANY",
+          sourceType: "claims",
+          sourceId: claimId.toString(),
+        });
+      `)
+    ).toBe(true);
+
+    // workflowHooks' postClaimEvent — legitimate, and must not be flagged.
+    expect(
+      findClaimsSourcedReceivable(`
+        await postDomainEvent(ctx, {
+          eventType,
+          sourceType: "claims",
+          sourceId: args.claimId.toString(),
+        });
+      `)
+    ).toBe(false);
+
+    // A receivable raised for a different source, with an unrelated claims
+    // event later in the same file, must not be attributed to the call.
+    expect(
+      findClaimsSourcedReceivable(`
+        await ensureReceivableDocument(ctx, { sourceType: "finance_application" });
+        await postDomainEvent(ctx, { sourceType: "claims" });
+      `)
+    ).toBe(false);
+  });
+
   test("does not trip on prose describing the retired behaviour", () => {
     const documented = `
       // Claims used to call ensureReceivableDocument here; it no longer does.
@@ -213,6 +332,38 @@ describe("SCRUM-51 — convex/claims.ts originates and settles nothing", () => {
         `matching debit is originated by Finance Applications, and a second\n` +
         `settlement door double-credits the GL. Found:\n` +
         callers.map((c) => `  - ${c}`).join("\n")
+    ).toEqual([]);
+  });
+
+  test("no module anywhere raises a claims-sourced receivable", () => {
+    // The other half of the bypass: origination does not have to live in
+    // claims.ts to recreate a second finance-company AR authority. What defines
+    // the defect is a receivable stamped with the Claims source, wherever the
+    // code sits.
+    const originators: string[] = [];
+
+    for (const file of convexSourceFiles(CONVEX_ROOT)) {
+      const code = fs
+        .readFileSync(file, "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+      // Deliberately NOT a bare search for `sourceType: "claims"`. That string
+      // also appears on the *accounting event* in workflowHooks' postClaimEvent,
+      // which is legitimate — accountingMigration still replays legacy
+      // CLAIM_PAYMENT rows as CLAIM_SETTLED and they are sourced to claims. The
+      // defect is a claims-sourced RECEIVABLE, so only the two calls that can
+      // create one are inspected.
+      if (findClaimsSourcedReceivable(code)) {
+        originators.push(path.relative(CONVEX_ROOT, file));
+      }
+    }
+
+    expect(
+      originators,
+      `A receivable stamped sourceType:"claims" has no originating GL debit —\n` +
+        `Finance Applications own finance-company AR. Found in:\n` +
+        originators.map((f) => `  - ${f}`).join("\n")
     ).toEqual([]);
   });
 

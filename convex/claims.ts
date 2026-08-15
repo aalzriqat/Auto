@@ -24,8 +24,10 @@
  *
  * `convex/claimsReadOnlyGuard.test.ts` fails CI if a writer is added back.
  *
- * The legacy `claims` table is retained (read-only, no writer) so historical
- * rows stay inspectable; production carried none at 214c843a.
+ * The legacy `claims` table is retained with no writer so historical rows are
+ * not destroyed. In-org Accounting does not read it — the only remaining reader
+ * is the cross-tenant Super Admin browser (`adminData.ts`). Both production and
+ * dev carried zero rows at 214c843a, so nothing is hidden by that.
  */
 import { v } from "convex/values";
 import { query } from "./_generated/server";
@@ -36,6 +38,22 @@ import { getReceivableOutstandingMinor } from "./subledger";
 
 /** `applications.ts` stamps this on the receivable it owns. */
 const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
+
+/**
+ * Statuses that mean nothing is collectible.
+ *
+ * `getReceivableOutstandingMinor` only zeroes CANCELLED, so a WRITTEN_OFF or
+ * REVERSED document with no active allocations comes back at its **full**
+ * original amount. Reporting that as outstanding would assert the financier
+ * still owes money the dealership has already given up on — and would mark it
+ * overdue and add it to the headline. `applications.ts` excludes exactly these
+ * three for the same reason; this is that rule, not a second one.
+ */
+const NOT_COLLECTIBLE_STATUSES = new Set(["CANCELLED", "WRITTEN_OFF", "REVERSED"]);
+
+function collectibleOutstanding(status: string, derivedOutstandingMinor: number) {
+  return NOT_COLLECTIBLE_STATUSES.has(status) ? 0 : derivedOutstandingMinor;
+}
 
 /**
  * The finance-company AR work queue: every canonical receivable owed by a
@@ -52,14 +70,18 @@ export const listFinanceCompanyReceivables = query({
 
     const page = await ctx.db
       .query("receivableDocuments")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .withIndex("by_org_payerType", (q) =>
+        q.eq("orgId", args.orgId).eq("payerType", "FINANCE_COMPANY")
+      )
       .order("desc")
-      .filter((q) => q.eq(q.field("payerType"), "FINANCE_COMPANY"))
       .paginate(args.paginationOpts);
 
     const rows = await Promise.all(
       page.page.map(async (doc) => {
-        const outstandingMinor = await getReceivableOutstandingMinor(ctx, doc._id);
+        const outstandingMinor = collectibleOutstanding(
+          doc.status,
+          await getReceivableOutstandingMinor(ctx, doc._id)
+        );
 
         // The financier's name comes from the configured company when there is
         // one. A MANUAL_FINANCE_COMPANY deal has no company row by
@@ -100,6 +122,10 @@ export const listFinanceCompanyReceivables = query({
           documentNumber: doc.documentNumber,
           applicationId,
           sourceType: doc.sourceType,
+          // A row whose receivable was not raised by a finance application has
+          // no deal to act on. The screen says so rather than rendering a row
+          // with a silently missing action.
+          hasOwningDeal: applicationId !== null,
           financingEntity,
           buyerName,
           originalAmountMinor: doc.originalAmountMinor,
@@ -114,5 +140,53 @@ export const listFinanceCompanyReceivables = query({
     );
 
     return { ...page, page: rows };
+  },
+});
+
+/**
+ * Org-wide outstanding per currency.
+ *
+ * Separate from the paginated queue on purpose: a headline computed from
+ * whichever page happened to load is a subtotal wearing the word "total", and
+ * this table is ordered newest-first, so the oldest and most overdue balances
+ * are exactly the ones a page-bounded sum would omit.
+ *
+ * Never summed across currencies — a receivable is denominated when it is
+ * raised, and one cross-currency number is the misstatement `accountingPhase14`
+ * exists to prevent.
+ *
+ * Bounded by the org's finance-company receivables (roughly one per financed
+ * deal), not by the whole receivables table, which is what the
+ * `by_org_payerType` index buys.
+ */
+export const financeCompanyOutstandingTotals = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+
+    const docs = await ctx.db
+      .query("receivableDocuments")
+      .withIndex("by_org_payerType", (q) =>
+        q.eq("orgId", args.orgId).eq("payerType", "FINANCE_COMPANY")
+      )
+      .collect();
+
+    const byCurrency = new Map<string, { currency: string; scale: number; outstandingMinor: number }>();
+    for (const doc of docs) {
+      const outstandingMinor = collectibleOutstanding(
+        doc.status,
+        await getReceivableOutstandingMinor(ctx, doc._id)
+      );
+      if (outstandingMinor <= 0) continue;
+      const bucket = byCurrency.get(doc.currency) ?? {
+        currency: doc.currency,
+        scale: doc.scale,
+        outstandingMinor: 0,
+      };
+      bucket.outstandingMinor += outstandingMinor;
+      byCurrency.set(doc.currency, bucket);
+    }
+
+    return [...byCurrency.values()];
   },
 });
