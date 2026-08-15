@@ -244,48 +244,59 @@ export function OpeningBalanceApprovalView({
           visually between LTR and RTL, so there is no stable convention to fall
           back on. Same reasoning as the account-name fallback below: approving
           what you cannot read is the rubber-stamp this panel exists to prevent. */}
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-amber-300 text-xs uppercase tracking-wide text-amber-900">
-            <th scope="col" className="py-1 text-start font-medium">
-              {t("Account")}
-            </th>
-            <th scope="col" className="py-1 ps-3 text-end font-medium">
-              {t("Debit")}
-            </th>
-            <th scope="col" className="py-1 ps-3 text-end font-medium">
-              {t("Credit")}
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {draft.lines.map((line, index) => (
-            <tr key={`${index}-${line.accountId}`} className="border-t border-amber-200/70">
-              <td className="py-1.5 text-slate-800">{line.accountName}</td>
-              <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-slate-800">
-                {line.debitMinor > 0 ? formatMinor(line.debitMinor, draft.currency, draft.denominationKnown) : ""}
+      {/* The table scrolls inside its own container rather than pushing the page
+          sideways. Undenominated drafts print RAW minor units with no thousands
+          separators, and a digit run offers no break opportunity — so with the
+          `whitespace-nowrap` below, a large enough amount beside a long account
+          name overflowed the viewport. Measured: 28px past the edge at 390px and
+          98px at 320px. Raised by the Sonnet reviewer attacking the nowrap this
+          same commit introduced; it reported 320px, and measuring found 390px
+          too. The approve/reject controls sit outside this wrapper, so they stay
+          reachable regardless of how wide the table gets. */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-amber-300 text-xs uppercase tracking-wide text-amber-900">
+              <th scope="col" className="py-1 text-start font-medium">
+                {t("Account")}
+              </th>
+              <th scope="col" className="py-1 ps-3 text-end font-medium">
+                {t("Debit")}
+              </th>
+              <th scope="col" className="py-1 ps-3 text-end font-medium">
+                {t("Credit")}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {draft.lines.map((line, index) => (
+              <tr key={`${index}-${line.accountId}`} className="border-t border-amber-200/70">
+                <td className="py-1.5 text-slate-800">{line.accountName}</td>
+                <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-slate-800">
+                  {line.debitMinor > 0 ? formatMinor(line.debitMinor, draft.currency, draft.denominationKnown) : ""}
+                </td>
+                <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-slate-800">
+                  {line.creditMinor > 0 ? formatMinor(line.creditMinor, draft.currency, draft.denominationKnown) : ""}
+                </td>
+              </tr>
+            ))}
+            <tr className="border-t-2 border-amber-300 font-semibold">
+              <td className="py-1.5 text-slate-900">{t("Total")}</td>
+              {/* ps-3 + nowrap: the debit and credit totals rendered with a
+                  MEASURED 0px gap at 390px, so the one pair of figures a reviewer
+                  uses to check that the draft balances read as a single
+                  22-character run. The columns are sized by content and sit flush
+                  otherwise, so the padding is what guarantees the separation. */}
+              <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-slate-900">
+                {formatMinor(totalDebitMinor, draft.currency, draft.denominationKnown)}
               </td>
-              <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-slate-800">
-                {line.creditMinor > 0 ? formatMinor(line.creditMinor, draft.currency, draft.denominationKnown) : ""}
+              <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-slate-900">
+                {formatMinor(totalCreditMinor, draft.currency, draft.denominationKnown)}
               </td>
             </tr>
-          ))}
-          <tr className="border-t-2 border-amber-300 font-semibold">
-            <td className="py-1.5 text-slate-900">{t("Total")}</td>
-            {/* ps-3 + nowrap: the debit and credit totals rendered with a
-                MEASURED 0px gap at 390px, so the one pair of figures a reviewer
-                uses to check that the draft balances read as a single
-                22-character run. The columns are sized by content and sit flush
-                otherwise, so the padding is what guarantees the separation. */}
-            <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-slate-900">
-              {formatMinor(totalDebitMinor, draft.currency, draft.denominationKnown)}
-            </td>
-            <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-slate-900">
-              {formatMinor(totalCreditMinor, draft.currency, draft.denominationKnown)}
-            </td>
-          </tr>
-        </tbody>
-      </table>
+          </tbody>
+        </table>
+      </div>
 
       {/* Facts first, then the one instruction for this viewer. Never both a
           "reject it" and a "you cannot reject it" line — see computeApprovalGate. */}
