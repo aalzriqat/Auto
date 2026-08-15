@@ -1402,6 +1402,36 @@ export const list = query({
   },
 });
 
+/**
+ * Turns an untrusted string — a URL query parameter, or a receivable's
+ * free-string `sourceId` — into an application id this caller may actually open.
+ *
+ * Deliberately takes `v.string()`. Passing arbitrary URL input straight to a
+ * `v.id()` argument throws an argument-validation error out of the reactive
+ * query and into the React tree, so `?application=garbage` would take the whole
+ * page down rather than showing nothing.
+ *
+ * Returns null for anything malformed, deleted, or belonging to another org —
+ * the same tenancy rule as `get`, so this cannot become a cross-org probe.
+ */
+export const resolveApplicationId = query({
+  args: {
+    orgId: v.id("organizations"),
+    candidateId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+
+    const applicationId = ctx.db.normalizeId("financeApplications", args.candidateId);
+    if (!applicationId) return null;
+
+    const app = await ctx.db.get(applicationId);
+    if (!app || app.orgId !== args.orgId) return null;
+
+    return applicationId;
+  },
+});
+
 export const get = query({
   args: {
     orgId: v.id("organizations"),

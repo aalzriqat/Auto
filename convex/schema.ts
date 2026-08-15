@@ -355,7 +355,13 @@ export default defineSchema({
     // receivables. Without this, the finance-company queue scans every
     // customer receivable in the org and post-filters, which grows with sales
     // volume rather than with financed deals.
-    .index("by_org_payerType", ["orgId", "payerType"]),
+    //
+    // Status is the third component so the outstanding total can read only the
+    // OPEN/PARTIALLY_PAID working set instead of every receivable ever raised —
+    // settled history grows without bound, the open set does not. The
+    // (orgId, payerType) prefix still serves the paginated queue, which does
+    // want the settled rows.
+    .index("by_org_payerType_status", ["orgId", "payerType", "status"]),
 
   canonicalPayments: defineTable({
     orgId: v.id("organizations"),

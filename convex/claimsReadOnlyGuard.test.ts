@@ -109,8 +109,13 @@ export function findClaimsWriteCapabilities(source: string): ClaimsGuardViolatio
   }
 
   const names = [...registrationNames].join("|");
-  // Covers `export const x = <reg>(` and `export const x = <reg><any generics>(`.
-  const mutationDecl = new RegExp(`export\\s+const\\s+(\\w+)\\s*=\\s*(${names})\\s*[<(]`, "g");
+  // Covers `export const x = <reg>(`, generics, and a namespace-qualified
+  // registration such as `functions.mutation(` — which a bare-identifier match
+  // would walk straight past.
+  const mutationDecl = new RegExp(
+    `export\\s+const\\s+(\\w+)\\s*=\\s*(?:\\w+\\s*\\.\\s*)?(${names})\\s*[<(]`,
+    "g"
+  );
   for (const m of code.matchAll(mutationDecl)) {
     violations.push({ kind: "mutation", detail: `${m[1]} = ${m[2]}(...)` });
   }
@@ -157,7 +162,12 @@ export function findClaimsWriteCapabilities(source: string): ClaimsGuardViolatio
  * call's own braces so a later unrelated `sourceType` cannot be attributed to it.
  */
 export function findClaimsSourcedReceivable(code: string): boolean {
-  const callSites = /(ensureReceivableDocument\s*\(|\.insert\s*\(\s*["'`]receivableDocuments["'`])/g;
+  // `createReceivableDocument` is the lower-level constructor `subledger.ts`
+  // exports alongside `ensureReceivableDocument`; it takes an arbitrary
+  // sourceType and writes the table, so scanning only the ensure- variant left
+  // the defect one import away from returning. Codex's re-review found this.
+  const callSites =
+    /((?:ensure|create)ReceivableDocument\s*\(|\.insert\s*\(\s*["'`]receivableDocuments["'`])/g;
 
   for (const match of code.matchAll(callSites)) {
     const start = (match.index ?? 0) + match[0].length;
@@ -284,6 +294,26 @@ describe("SCRUM-51 guard self-tests", () => {
         await postDomainEvent(ctx, { sourceType: "claims" });
       `)
     ).toBe(false);
+  });
+
+  test("flags the lower-level receivable constructor and a namespaced registration", () => {
+    // subledger.ts exports createReceivableDocument next to the ensure- variant;
+    // it takes an arbitrary sourceType and writes the table.
+    expect(
+      findClaimsSourcedReceivable(`
+        await createReceivableDocument(ctx, {
+          payerType: "FINANCE_COMPANY",
+          sourceType: "claims",
+        });
+      `)
+    ).toBe(true);
+
+    expect(
+      findClaimsWriteCapabilities(`
+        import * as functions from "./functions";
+        export const settle = functions.mutation({ handler: async () => {} });
+      `).map((v) => v.kind)
+    ).toContain("mutation");
   });
 
   test("does not trip on prose describing the retired behaviour", () => {
