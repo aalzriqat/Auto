@@ -413,6 +413,16 @@ function ImportAccountingChoice({
         {option("PURCHASE", t("ImportAsPurchase" as any), t("ImportAsPurchaseHint" as any))}
       </div>
 
+      {/* Directly under the choice that caused it, and above the payment row.
+          The rendered pass at 390px found it below the fold when it sat at the
+          bottom of this block: a disabled Import button whose reason the
+          operator had to scroll to find is a dead end, not a control. */}
+      {posting === "PURCHASE" && blockers.missingVin > 0 && (
+        <p className="text-xs font-medium leading-snug text-destructive">
+          {t("ImportVinRequiredForPurchase" as any).replace("{count}", String(blockers.missingVin))}
+        </p>
+      )}
+
       {posting === "PURCHASE" && (
         <div className="space-y-3 ps-1">
           <div className="flex flex-wrap items-center gap-3">
@@ -446,12 +456,6 @@ function ImportAccountingChoice({
               </span>
             </span>
           </div>
-
-          {blockers.missingVin > 0 && (
-            <p className="text-xs font-medium text-destructive">
-              {t("ImportVinRequiredForPurchase" as any).replace("{count}", String(blockers.missingVin))}
-            </p>
-          )}
         </div>
       )}
 
@@ -620,14 +624,17 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
               // VIN-less rows, which get a fresh placeholder each time and would
               // be added again — promising blanket retry safety there would be
               // false.
-              const retryAdvice =
-                posting === "PURCHASE"
-                  ? "Fix the reported rows and import the file again — the vehicles already added will be skipped."
-                  : "Fix the reported rows and import the file again. Vehicles that carry a VIN will be skipped as duplicates, but rows without one would be added a second time — remove those that already imported.";
+              const retryAdvice = t(
+                (posting === "PURCHASE"
+                  ? "ImportRetryAdvicePurchase"
+                  : "ImportRetryAdviceOpeningStock") as any
+              );
+              const stopped = t("ImportStoppedAfter" as any).replace(
+                "{count}",
+                String(totals.inserted)
+              );
               throw new Error(
-                totals.inserted > 0
-                  ? `Imported ${totals.inserted} vehicle(s), then stopped: ${detail} ${retryAdvice}`
-                  : detail
+                totals.inserted > 0 ? `${stopped} ${detail} ${retryAdvice}` : detail
               );
             }
           }
