@@ -242,26 +242,41 @@ export const cancelMyApproval = mutation({
 });
 
 export const listMyPendingApprovals = query({
-  // `now` is supplied by the caller, rounded to the minute, rather than read
-  // from `Date.now()` here. A Convex query re-runs when its *read set* changes,
-  // never merely because time passed — so a clock read inside the handler makes
-  // the 7-day window stale by construction, and it churns the query cache.
+  // The caller passes its clock, rounded to the minute. A Convex query re-runs
+  // when its *read set* changes, never merely because time passed, so deriving
+  // the window solely from a clock read inside the handler makes it stale by
+  // construction and churns the query cache.
   //
-  // It cannot be used to cross a boundary: the tenant and ownership bounds below
-  // come from `args.orgId` (proven by `requireTenantAuth`) and from the
-  // authenticated `user._id`. `now` only slides the time window over rows the
-  // caller already owns in an org they are already a member of.
-  args: { orgId: v.id("organizations"), now: v.number() },
+  // ⚠️ Optional, not required. This query is already live in production, and the
+  // frontend auto-deploys on merge while the Convex backend deploy is manual —
+  // a required argument would make every Sales page in the gap between the two
+  // fail argument validation and take the dashboard to its error boundary.
+  args: { orgId: v.id("organizations"), now: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
 
     // ⚠️ Convex accepts NaN for `v.number()`. An unchecked NaN cutoff makes the
     // range comparison below meaningless, so reject it rather than fail open.
-    if (!Number.isFinite(args.now)) {
+    if (args.now !== undefined && !Number.isFinite(args.now)) {
       throw new ConvexError("Invalid timestamp.");
     }
 
-    const cutoff = args.now - 7 * 24 * 60 * 60 * 1000;
+    const WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+    // Absorbs honest clock skew between the caller and the server.
+    const CLOCK_SKEW_MS = 24 * 60 * 60 * 1000;
+
+    // ⚠️ The client chooses the cache key; the server chooses how far back it may
+    // look. A caller that ignores the page's rounding and sends `now: 0` would
+    // otherwise push the cutoff to 1970 and read back every approval it ever
+    // filed — its own rows in its own org, so not a tenancy escape, but exactly
+    // the unbounded read this issue exists to remove. Flooring against server
+    // time binds only that abuse: for an honest `now` the result is unchanged,
+    // so the caching benefit above survives.
+    const serverNow = Date.now();
+    const cutoff = Math.max(
+      (args.now ?? serverNow) - WINDOW_MS,
+      serverNow - WINDOW_MS - CLOCK_SKEW_MS
+    );
 
     // SCRUM-100. `orgId` leads the index because it is the tenant boundary:
     // `by_salesperson` keys on a global user id, so this previously returned the

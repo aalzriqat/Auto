@@ -475,7 +475,20 @@ describe("Approvals Outcomes", () => {
  * membership and the org switcher is built on it), and at least six production
  * users hold two.
  *
- * Every test in this block must FAIL before the fix.
+ * ⚠️ Which of these are regression tests, and which are not — verified by
+ * reverting the fix and re-running, not assumed:
+ *
+ *  - FAIL before the fix (true regression tests for the leak):
+ *      "returns only the queried org's rows"
+ *      "keeps APPROVED rows"
+ *  - FAIL before their own later fix (adversarial review of 9926d5bb):
+ *      "refuses to widen the 7-day window"
+ *      "still applies the window when `now` is omitted"
+ *  - Pass both before and after: the salesperson, 7-day-edge, tied-createdAt
+ *    and countPending cases. They pin real properties but prove nothing about
+ *    the tenancy defect — `countPending` was already org-scoped via `by_org`,
+ *    and the tied-createdAt case really asserts a Convex engine guarantee.
+ *    It is kept because a future pagination-based rewrite could break it.
  */
 describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
   const DAY = 24 * 60 * 60 * 1000;
@@ -735,5 +748,83 @@ describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
     const asUser = t.withIdentity({ subject: "multi_org_sales" });
     expect(await asUser.query(api.approvals.countPending, { orgId: orgA })).toBe(1);
     expect(await asUser.query(api.approvals.countPending, { orgId: orgB })).toBe(1);
+  });
+
+  /**
+   * Adversarial review of 9926d5bb, finding 1. `now` is client-supplied, so a
+   * caller that ignores the page's minute-rounding and sends `now: 0` pushes the
+   * cutoff into 1970 and reads back every approval they ever filed. It stays
+   * inside their own org and their own rows, so it is not a tenancy escape — but
+   * it is an UNBOUNDED READ, which is the entire defect class this issue exists
+   * to remove. The server must floor the window regardless of what it is told.
+   */
+  it("refuses to widen the 7-day window when the caller supplies an old `now`", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgA } = await seedMultiOrg(t);
+
+    await t.run(async (ctx: any) => {
+      const veh = await ctx.db
+        .query("vehicles")
+        .filter((q: any) => q.eq(q.field("orgId"), orgA))
+        .first();
+      const user = await ctx.db
+        .query("users")
+        .filter((q: any) => q.eq(q.field("clerkId"), "multi_org_sales"))
+        .first();
+      await ctx.db.insert("profitApprovalRequests", {
+        orgId: orgA,
+        vehicleId: veh._id,
+        requestedProfit: 4242,
+        minimumProfit: 500,
+        salespersonId: user._id,
+        status: "PENDING",
+        createdAt: Date.now() - 730 * DAY, // two years old
+      });
+    });
+
+    const asUser = t.withIdentity({ subject: "multi_org_sales" });
+    const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA, now: 0 });
+
+    expect(rows.map((r: any) => r.requestedProfit)).not.toContain(4242);
+  });
+
+  /**
+   * Adversarial review of 9926d5bb, finding 2. `now` was added as a REQUIRED arg
+   * to a query that is already live in production. The frontend auto-deploys on
+   * merge while the Convex backend deploy is manual, so between the two a client
+   * calling without `now` would hit an ArgumentValidationError and take the whole
+   * dashboard to its error boundary. It must stay callable without `now`.
+   */
+  it("still applies the window when `now` is omitted entirely", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgA } = await seedMultiOrg(t);
+
+    await t.run(async (ctx: any) => {
+      const veh = await ctx.db
+        .query("vehicles")
+        .filter((q: any) => q.eq(q.field("orgId"), orgA))
+        .first();
+      const user = await ctx.db
+        .query("users")
+        .filter((q: any) => q.eq(q.field("clerkId"), "multi_org_sales"))
+        .first();
+      await ctx.db.insert("profitApprovalRequests", {
+        orgId: orgA,
+        vehicleId: veh._id,
+        requestedProfit: 5150,
+        minimumProfit: 500,
+        salespersonId: user._id,
+        status: "PENDING",
+        createdAt: Date.now() - 30 * DAY, // outside the window
+      });
+    });
+
+    const asUser = t.withIdentity({ subject: "multi_org_sales" });
+    const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA });
+    const profits = rows.map((r: any) => r.requestedProfit);
+
+    expect(profits).toContain(1000); // in-window PENDING still returned
+    expect(profits).toContain(1100); // in-window APPROVED still returned
+    expect(profits).not.toContain(5150); // 30 days old, still excluded
   });
 });
