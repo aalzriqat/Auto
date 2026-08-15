@@ -236,7 +236,16 @@ export function ResolveGapDialog({
 
   return (
     <Dialog open={open} onOpenChange={submitting ? () => {} : onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      {/* The height cap is load-bearing, not styling. DialogContent is
+          `position: fixed` and vertically centred with no max-height of its
+          own, so a dialog taller than the viewport hangs off BOTH ends with
+          nothing able to scroll it — measured at 1027px against an 844px
+          phone, which put the confirm button 30 of its 36 pixels below the
+          fold and, on a 667px-tall phone, entirely out of reach. This is the
+          tallest dialog in the cockpit because SPLIT reveals four more inputs,
+          so it is the one that crosses the line. Matches the cap the rest of
+          the app's tall dialogs already carry. */}
+      <DialogContent className="sm:max-w-lg max-h-[90dvh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Scale className="h-4 w-4" />
