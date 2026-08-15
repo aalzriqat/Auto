@@ -392,6 +392,35 @@ describe("the reviewer can actually read what they are approving", () => {
     expect(headerCells()).toEqual(["Account", "Debit", "Credit"]);
   });
 
+  test("the scrollable lines region can be reached and named by a keyboard user", () => {
+    // The table holds no focusable elements, so the scroll container only
+    // enters the tab order if it says so itself — and WebKit, unlike Blink and
+    // Gecko, will not focus an overflow container on its own. Without this a
+    // keyboard-only Safari user tabs straight from the heading to Approve,
+    // unable to reach columns that are clipped in exactly the undenominated
+    // case the container exists for. Asserted as attributes because that IS
+    // the contract; jsdom performs no layout, so the scrolling itself is
+    // verified in a browser instead. Raised by Codex.
+    render(
+      <OpeningBalanceApprovalView
+        draft={draftFixture()}
+        isOwnDraft={false}
+        busy={false}
+        onApprove={() => {}}
+        onReject={() => {}}
+      />
+    );
+    const panel = screen.getByTestId("opening-balance-approval");
+    const table = panel.querySelector("table");
+    const region = table?.closest("[role='region']");
+    expect(region, "the table is not inside a named region").not.toBeNull();
+    expect(region?.getAttribute("tabindex")).toBe("0");
+    // An unnamed region is announced as just "region" and is worse than none.
+    expect(region?.getAttribute("aria-label")).toBeTruthy();
+    // And it must be the element that actually scrolls, not a bare wrapper.
+    expect(region?.className).toContain("overflow-x-auto");
+  });
+
   test("the amounts state the currency they are denominated in", () => {
     render(
       <OpeningBalanceApprovalView

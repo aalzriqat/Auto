@@ -252,8 +252,26 @@ export function OpeningBalanceApprovalView({
           98px at 320px. Raised by the Sonnet reviewer attacking the nowrap this
           same commit introduced; it reported 320px, and measuring found 390px
           too. The approve/reject controls sit outside this wrapper, so they stay
-          reachable regardless of how wide the table gets. */}
-      <div className="overflow-x-auto">
+          reachable regardless of how wide the table gets.
+
+          `tabIndex={0}` + a named region is not boilerplate here. The table
+          contains no focusable elements, so without it the scroll container
+          never enters the tab order — and WebKit, unlike Blink and Gecko, does
+          not make an overflow container focusable on its own (WebKit bug
+          277290). A keyboard-only Safari user would tab straight past the
+          table to Approve, unable to reach the columns that are clipped in
+          exactly the undenominated case this wrapper exists for. On the one
+          screen whose whole purpose is that the reviewer can read every value
+          before approving, that is the rubber-stamp again, reached by a
+          different route. Raised by Codex; Sonnet judged the same gap LOW and
+          app-wide. Fixed here because this panel is the one place where it
+          defeats the control the panel exists to be. */}
+      <div
+        tabIndex={0}
+        role="region"
+        aria-label={t("OpeningBalanceLinesRegion")}
+        className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-600"
+      >
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-amber-300 text-xs uppercase tracking-wide text-amber-900">

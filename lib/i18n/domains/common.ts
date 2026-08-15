@@ -335,6 +335,7 @@ export const commonEn = {
   OpeningBalanceAwaitingApproval: "Opening balance awaiting your approval",
   OpeningBalancePreparedBy: "Prepared by",
   OpeningBalanceAsOf: "as of",
+  OpeningBalanceLinesRegion: "Opening balance lines, scrollable",
   OpeningBalanceSegregationOfDutiesNotice:
     "You submitted this opening balance, so you cannot approve or reject it yourself. The owner or another finance user must review it.",
   OpeningBalanceRejectionReasonPlaceholder: "Why is this being rejected?",
@@ -1222,6 +1223,7 @@ export const commonAr = {
   OpeningBalanceAwaitingApproval: "رصيد افتتاحي بانتظار موافقتك",
   OpeningBalancePreparedBy: "أعدّه",
   OpeningBalanceAsOf: "كما في",
+  OpeningBalanceLinesRegion: "بنود الرصيد الافتتاحي، قابلة للتمرير",
   OpeningBalanceSegregationOfDutiesNotice:
     "لقد أرسلت هذا الرصيد الافتتاحي، لذا لا يمكنك الموافقة عليه أو رفضه بنفسك. يجب أن يراجعه المالك أو مستخدم مالية آخر.",
   OpeningBalanceRejectionReasonPlaceholder: "ما سبب الرفض؟",
