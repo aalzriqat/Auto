@@ -693,6 +693,54 @@ describe("SCRUM-40 O-2 — a live basis that is not a basis", () => {
     expect(e.supplierSettlement).not.toBe(0);
   });
 
+  /**
+   * A supplier cost edited ABOVE the sale price is corruption, not a loss.
+   *
+   * Raised by the Codex reviewer against the dashboard consolidation, which
+   * dropped a `Math.max(0, …)` floor the old dashboard applied to its turnover.
+   * The floor is not the right answer either — it published a confident zero —
+   * but neither is an exact negative, and the deeper point is that
+   * `reports.ts` NEVER had the floor, so both surfaces were already publishing
+   * it. Fixing it in the shared authority fixes both.
+   *
+   * Reachable in production: a consigned car is never capitalized into
+   * inventory, so the acquisition lock never engages and `sourceCost` stays
+   * editable after the sale. `saleCompletion` REFUSES to complete a sourced sale
+   * below the supplier's entitlement, so a negative agent spread cannot be what
+   * the sale was posted on — it is evidence the live basis has drifted, which is
+   * exactly the rule `recordedConsignedMargin` and `validFrozenEntitlementFor`
+   * already apply to their own fields.
+   */
+  test("a live supplier cost above the sale price is UNKNOWN, not a loss", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      // Corrected upward after the sale, past what the car sold for.
+      capitalizedCost: SALE_PRICE + 3_500,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: undefined,
+    });
+
+    expect(e.dealershipMargin).toBeNull();
+    expect(e.dealershipMargin).not.toBe(-3_500);
+    expect(e.recognizedRevenue).toBeNull();
+  });
+
+  test("a dealer-owned sale sold at a genuine loss still reports that loss", () => {
+    // The other side, and the reason this rule is agent-only. A dealership can
+    // and does sell its own stock below cost; that is a real trading result and
+    // withholding it would hide a fact the owner needs.
+    const e = saleEconomics({
+      salePrice: 8_000,
+      vehicle: { sourceType: "STOCK" },
+      capitalizedCost: 9_500,
+    });
+
+    expect(e.dealershipMargin).toBe(-1_500);
+    expect(e.recognizedRevenue).toBe(8_000);
+  });
+
   test("a dealer-owned sale is not caught by the agent-only zero-cost rule", () => {
     // A dealer-owned car genuinely can carry a zero cost basis on a legacy row,
     // and `salePrice − 0` is what its own sale posted on. Widening the rule to

@@ -574,17 +574,29 @@ export const stats = query({
      * the sales report.
      */
     const revenueOrNull = (sale: Doc<"sales">): number | null => {
+      /**
+       * No fallback, deliberately — and this needs saying, because there WAS
+       * one and removing it is not an oversight.
+       *
+       * A dealer-owned row past both caps still has a known turnover: its
+       * classification is a fact and only its cost is missing. That case is now
+       * answered by `saleEconomics` itself — `currentBasis` reports it as
+       * `{known: true, consigned: false, cost: null}`, so the non-agent branch
+       * returns `recognizedRevenue: salePrice` — rather than by a special case
+       * here.
+       *
+       * ⚠️ The special case survived that change as DEAD code and was found by
+       * the adversarial reviewer. `tail` being truthy now always implies
+       * `known: true`, so `!known && tail` cannot hold. Left in place it was a
+       * trap rather than mere clutter: if a future edit again collapsed a
+       * window's third state to `known: false` — the exact mistake this file has
+       * already made — it would spring back to life and silently repair the
+       * TURNOVER symptom alone, while the profit side, which has no equivalent
+       * fallback, stayed broken. A turnover-only assertion would then pass over
+       * a real defect.
+       */
       const economics = currentEconomics(sale);
-      if (economics.recognizedRevenue !== null) return economics.recognizedRevenue;
-      // The one shape where a withheld EARNING still has a known TURNOVER: a
-      // dealer-owned row past both caps. Its classification is known and only
-      // its cost is not, and for owned stock the price is the turnover — which
-      // never depended on the cost. Booking it at price is what this window has
-      // always done, and dropping it here would shorten the headline for a
-      // reason that does not apply to it.
-      const tail = uncostedBasisByVehicle.get(sale.vehicleId);
-      if (!currentBasis(sale).known && tail && !tail.consigned) return sale.salePrice;
-      return null;
+      return economics.recognizedRevenue;
     };
 
     const recognizedRevenueOfSale = (sale: Doc<"sales">): number => {
@@ -987,12 +999,12 @@ export const stats = query({
 
     const previousRecognizedRevenueOfSale = (sale: Doc<"sales">): number => {
       if (!canViewProfitMetrics) return sale.salePrice;
+      // The same dead fallback stood here, and is removed for the same reason —
+      // see `revenueOrNull`. Both windows lose it together, because a guard that
+      // exists in one and not the other is how this file broke last time.
       const economics = previousEconomics(sale);
       if (economics.recognizedRevenue !== null) return economics.recognizedRevenue;
-      const basis = previousBasis(sale);
-      const tail = previousUncostedBasisByVehicle.get(sale.vehicleId);
-      if (!basis.known && tail && !tail.consigned) return sale.salePrice;
-      if (basis.known) previousUnknownMarginExcluded = true;
+      if (previousBasis(sale).known) previousUnknownMarginExcluded = true;
       else previousTurnoverTruncated = true;
       return 0;
     };

@@ -763,14 +763,42 @@ export function saleEconomics(args: {
   // The two withholding rules above are checked BEFORE the recorded margin,
   // because each names a case where the recorded margin — or its absence — is
   // exactly what cannot be relied on. Everything after them is unchanged.
+  /**
+   * The margin this row would carry if it has to be derived rather than read.
+   *
+   * ⚠️ A NEGATIVE one is refused on an AGENT sale — raised by the Codex reviewer
+   * and reproduced. `sourceCost` stays editable after a consigned sale (a
+   * consigned car is never capitalized, so the acquisition lock never engages),
+   * so a later correction can raise it above what the car sold for and this
+   * subtraction goes negative. That is not a loss: `saleCompletion` REFUSES to
+   * complete a sourced sale below the supplier's entitlement, so a negative
+   * agent spread cannot be what the sale was posted on. It is evidence the live
+   * basis has drifted away from the frozen one.
+   *
+   * This is the same rule `recordedConsignedMargin` applies to a corrupt frozen
+   * margin and `validFrozenEntitlementFor` applies to a corrupt entitlement —
+   * "corruption is not a loss" — reaching the one basis that had escaped it.
+   *
+   * DEALER-OWNED is deliberately untouched. A dealership can and does sell its
+   * own stock below cost, that is a real trading result, and withholding it
+   * would hide a fact the owner needs.
+   *
+   * The old dashboard floored this at zero (`Math.max(0, …)`) while
+   * `reports.ts` never did, so the two surfaces disagreed AND the floor
+   * published a confident zero. `null` is the honest answer, and putting it
+   * here rather than at either call site is what stops them diverging again.
+   */
+  const derivedMargin = salePrice - (eligibleSupplierEntitlement ?? capitalizedCost);
+  const derivedMarginIsCorrupt = agent && derivedMargin < 0;
+
   const margin =
     financedDirectUnverified || basisUnknown
       ? null
       : agent && args.recordedMargin !== undefined
         ? args.recordedMargin
-        : evidenceRequired
+        : evidenceRequired || derivedMarginIsCorrupt
           ? null
-          : salePrice - (eligibleSupplierEntitlement ?? capitalizedCost);
+          : derivedMargin;
 
   if (!agent) {
     return {
@@ -812,9 +840,17 @@ export function saleEconomics(args: {
     // it as the dealership's margin. `financedDirectUnverified` does NOT — what
     // the supplier is owed is its own frozen fact and does not depend on proving
     // what the financier paid.
+    //
+    // `derivedMarginIsCorrupt` joins them: in that branch the settlement comes
+    // from the SAME drifted `capitalizedCost`, and publishing a supplier share
+    // larger than the whole car is the corruption the entitlement ceiling
+    // already refuses — arriving through the live basis instead of the frozen
+    // one.
     supplierSettlement:
       eligibleSupplierEntitlement ??
-      (evidenceRequired || basisUnknown || supplierBasisUnknown ? null : capitalizedCost),
+      (evidenceRequired || basisUnknown || supplierBasisUnknown || derivedMarginIsCorrupt
+        ? null
+        : capitalizedCost),
     dealershipMargin: margin,
     // The whole point. Turnover is what the dealership sold, and on a consigned
     // car that is its service, not the vehicle.
