@@ -172,10 +172,16 @@ export const listFinanceCompanyReceivables = query({
  *    recompute `status` from the derived balance, so OPEN/PARTIALLY_PAID/PAID
  *    always agree with the allocations;
  *  - every other writer — `cancelSaleReceivableIfSafe`
- *    (utils/saleCancellation.ts) and the finance-application void path
- *    (applications.ts) — moves the row straight to CANCELLED, which
+ *    (utils/saleCancellation.ts), the finance-application void path
+ *    (applications.ts) and the legacy-receivable cancellation in
+ *    collections.ts — moves the row straight to CANCELLED, which
  *    `getReceivableOutstandingMinor` forces to zero regardless of its
- *    allocations.
+ *    allocations;
+ *  - and `reverseAllocation` will not overwrite a terminal disposition on the
+ *    way back, so the recompute cannot move a row out of that set either. It
+ *    used to: a cancelled receivable whose cleared cheque was later returned
+ *    was relabelled PAID. That is fixed at the writer, not filtered out here —
+ *    `subledger.test.ts` holds the rule for every consumer.
  *
  * So a status transition either keeps the balance honest or lands somewhere
  * this query already treats as nothing owed.

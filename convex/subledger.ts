@@ -9,6 +9,18 @@ import { requireFeature } from "./subscriptions";
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
+/**
+ * Statuses that record a decision about the receivable rather than an amount
+ * outstanding on it. Nothing that merely recomputes a balance may overwrite
+ * one — see `reverseAllocation`. `claims.ts` treats the same three as
+ * non-collectible on the reporting side.
+ */
+const TERMINAL_RECEIVABLE_STATUSES: ReadonlySet<string> = new Set([
+  "CANCELLED",
+  "WRITTEN_OFF",
+  "REVERSED",
+]);
+
 export async function getReceivableOutstandingMinor(
   ctx: QueryCtx | MutationCtx,
   receivableId: Id<"receivableDocuments">
@@ -319,10 +331,26 @@ export async function reverseAllocation(
   });
   await ctx.db.patch(args.allocationId, { status: "REVERSED", reversedByAllocationId: reversalId });
 
-  // Recompute receivable status
-  const outstanding = await getReceivableOutstandingMinor(ctx, allocation.receivableDocumentId);
+  // Recompute receivable status — but only while the document is still live.
+  //
+  // OPEN/PARTIALLY_PAID/PAID are arithmetic: they describe how much of the
+  // document the active allocations cover, and they must follow a reversal.
+  // The terminal three are not. They record a decision someone made about the
+  // document itself, and an unrelated reversal must not overwrite one.
+  //
+  // Reachable today via a cheque: collections.ts refuses to cancel a receivable
+  // holding a HELD or DEPOSITED cheque, but a CLEARED one has already
+  // allocated, so cancelling is allowed — and returning that cheque afterwards
+  // reverses an allocation on a document that is by then CANCELLED. Without
+  // this guard the recompute read the cancelled document's outstanding as 0
+  // (getReceivableOutstandingMinor short-circuits CANCELLED) and relabelled it
+  // PAID, so a cancelled receivable claimed to have been settled. WRITTEN_OFF
+  // and REVERSED have no writer today, but the schema admits them and they
+  // would land on OPEN — debt the dealership had given up on, collectible
+  // again.
   const receivable = await ctx.db.get(allocation.receivableDocumentId);
-  if (receivable) {
+  if (receivable && !TERMINAL_RECEIVABLE_STATUSES.has(receivable.status)) {
+    const outstanding = await getReceivableOutstandingMinor(ctx, allocation.receivableDocumentId);
     await ctx.db.patch(allocation.receivableDocumentId, {
       status: outstanding >= receivable.originalAmountMinor ? "OPEN" : outstanding > 0 ? "PARTIALLY_PAID" : "PAID",
     });
