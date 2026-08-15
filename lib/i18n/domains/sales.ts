@@ -649,6 +649,11 @@ export const salesEn = {
   ProfitEstimatedAwaitingSettlement: "Estimated — awaiting settlement",
   ProfitActualUnpostable: "Actual — not posted to the books",
   ProfitNotCalculable: "Cannot be calculated yet",
+  // Deliberately NOT "yet". This deal's financing mode has no finance company
+  // approving a purchase amount, so there is no step to go and complete.
+  ProfitNotApplicable: "Not available for this financing mode",
+  ProfitNotApplicableForMode:
+    "The dealership's profit here is not measured from a finance company's approved purchase, because this deal has none.",
   ProfitNeedsApprovedPurchase: "The finance company's approved purchase amount is not recorded.",
   ProfitNeedsSupplierSettlement: "What the supplier settles at is not recorded.",
   ProfitNeedsDealerContribution: "The dealership's own contribution to the purchase is not recorded.",
@@ -1641,6 +1646,9 @@ export const salesAr = {
   ProfitEstimatedAwaitingSettlement: "تقديري — بانتظار التسوية",
   ProfitActualUnpostable: "فعلي — غير مُرحَّل للقيود",
   ProfitNotCalculable: "لا يمكن احتسابه بعد",
+  ProfitNotApplicable: "غير متاح لهذا النوع من التمويل",
+  ProfitNotApplicableForMode:
+    "ربح المعرض في هذه الصفقة لا يُقاس من قيمة شراء معتمدة من شركة تمويل، لأن هذه الصفقة لا تتضمن واحدة.",
   ProfitNeedsApprovedPurchase: "قيمة الشراء المعتمدة من شركة التمويل غير مُسجَّلة.",
   ProfitNeedsSupplierSettlement: "قيمة تسوية المورد غير مُسجَّلة.",
   ProfitNeedsDealerContribution: "مساهمة المعرض في قيمة الشراء غير مُسجَّلة.",

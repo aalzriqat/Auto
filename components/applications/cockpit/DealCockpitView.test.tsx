@@ -198,6 +198,29 @@ describe("the headline figure", () => {
     expect(screen.getByText("ProfitNotCalculable")).toBeTruthy();
     expect(screen.getByText("ProfitNeedsApprovedPurchase")).toBeTruthy();
   });
+
+  /**
+   * SCRUM-61's other half. "Cannot be calculated YET" promises a figure that is
+   * coming; on a mode with no finance company there is nothing to wait for and
+   * no screen that will accept the number. Telling the operator to go and record
+   * it is the same dead end as the guard, reached through the copy.
+   */
+  test("a financing mode with no finance company is told so, not told to wait", () => {
+    renderCockpit(
+      dealFixture({
+        money: {
+          ...dealFixture().money,
+          profit: { available: false, reason: "NotApplicableForFinancingMode" },
+        },
+      })
+    );
+    expect(screen.getByText("ProfitNotApplicable")).toBeTruthy();
+    expect(screen.getByText("ProfitNotApplicableForMode")).toBeTruthy();
+    // The headline that promises a pending figure must be GONE, not merely
+    // accompanied by the new line.
+    expect(screen.queryByText("ProfitNotCalculable")).toBeNull();
+    expect(screen.queryByText("ProfitNeedsApprovedPurchase")).toBeNull();
+  });
 });
 
 /**

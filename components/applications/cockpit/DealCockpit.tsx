@@ -167,6 +167,8 @@ const PROFIT_LINE_LABEL: Record<string, string> = {
  */
 const PROFIT_BLOCKED_REASON: Record<
   "NoApprovedPurchaseAmount"
+  /** The figure does not exist for this financing mode, so nothing is pending. */
+  | "NotApplicableForFinancingMode"
   | "NoSupplierSettlement"
   | "NoDealerContribution"
   | "CorruptInput"
@@ -180,6 +182,7 @@ const PROFIT_BLOCKED_REASON: Record<
   string
 > = {
   NoApprovedPurchaseAmount: "ProfitNeedsApprovedPurchase",
+  NotApplicableForFinancingMode: "ProfitNotApplicableForMode",
   NoSupplierSettlement: "ProfitNeedsSupplierSettlement",
   NoDealerContribution: "ProfitNeedsDealerContribution",
   CorruptInput: "ProfitInputCorrupt",
@@ -986,8 +989,16 @@ function MoneyPanel({
           </>
         ) : (
           <>
+            {/* "Cannot be calculated YET" promises the figure is coming. On a
+                mode that never produces one it is simply not part of the deal,
+                and a headline that implies otherwise sends the operator looking
+                for a screen that will never accept the number. */}
             <p className="text-2xl font-semibold text-muted-foreground">
-              {t("ProfitNotCalculable")}
+              {t(
+                profit.reason === "NotApplicableForFinancingMode"
+                  ? "ProfitNotApplicable"
+                  : "ProfitNotCalculable"
+              )}
             </p>
             <p className="text-xs text-muted-foreground">
               {t(PROFIT_BLOCKED_REASON[profit.reason])}

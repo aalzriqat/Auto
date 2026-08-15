@@ -131,6 +131,12 @@ async function seedDealership(tag: string, opts: { sourceType?: "STOCK" | "SOURC
     ctx.db.insert("financeCompanies", {
       orgId, name: "Jordan Auto Finance", profitRate: 5, maxTermMonths: 60,
       gracePeriodMonths: 0, isActive: true,
+      // The quotation solver refuses a company with no lending ratio, which is
+      // correct: a configured provider without one is not configured. Seeded
+      // here so every configured deal in this file can record its economics
+      // through the real writers; tests that care about a specific ratio still
+      // patch their own.
+      defaultLtvPercent: 85,
     })
   );
 
@@ -180,12 +186,35 @@ async function runDeal(
      * one. Rows written before the field existed look exactly like this.
      */
     omitMode?: boolean;
+    /**
+     * Runs on the APPROVED application, immediately before handover.
+     *
+     * This is where a test that owns its own economics puts them — quotation
+     * different from the approved amount, an appraisal shortfall, a specific
+     * LTV. Supplying it replaces the default seeding below rather than adding
+     * to it.
+     *
+     * It exists because the lifecycle position moved, not to make room for a
+     * bypass. `assertDealerEconomicsRecorded` still runs at handover: a callback
+     * that records nothing leaves the deal refused, exactly as production would
+     * refuse it. There is deliberately no flag that skips the guard — a helper
+     * able to manufacture a state production rejects is worse than a red suite.
+     */
+    beforeHandover?: (applicationId: Id<"financeApplications">) => Promise<void>;
+    /**
+     * Stop at APPROVED and never hand over.
+     *
+     * For tests whose subject is the economics writers themselves — an approval
+     * that must be REFUSED, for instance. Such a deal legitimately never reaches
+     * handover, so driving it there would be asserting against a state the deal
+     * could not occupy. This is the honest way to stay short of the guard:
+     * not reaching a step, rather than passing it without its evidence.
+     */
+    stopAtApproved?: boolean;
     depositResolution?: {
       treatment: "APPLY_TO_DEALER_AMOUNT" | "APPLY_TO_TRANSACTION_SETTLEMENT" | "REFUND_TO_CUSTOMER" | "FORFEITED" | "OTHER";
       reason?: string;
     };
-    /** Runs after the route is chosen and before the vehicle goes out. */
-    beforeHandover?: (applicationId: Id<"financeApplications">) => Promise<void>;
   } = {}
 ) {
   const downPayment = opts.downPayment ?? 0;
@@ -238,19 +267,90 @@ async function runDeal(
     });
   }
 
-  // Anything that must be on the record BEFORE the vehicle goes out.
-  //
-  // Handover seals the approved amount: `approveDealerPurchaseAmount` now
-  // refuses to change a recorded one afterwards, as `reopenApproval` and
-  // `recordAppraisal` already did. A case that needs a CORRECTION on the record
-  // — an override history, say — has to make it while the door is still open,
-  // which is also the only order an operator could achieve.
+  if (opts.stopAtApproved) return { quoteId, applicationId, saleId: null };
+
+  /**
+   * A CONFIGURED deal's economics, recorded through the REAL writers before
+   * handover.
+   *
+   * SCRUM-61 moved the requirement earlier: `assertDealerEconomicsRecorded` now
+   * refuses a CONFIGURED deal at HANDOVER, not just at finalization, and once a
+   * quotation exists it also requires the approved amount and the funding
+   * split. So a configured deal can no longer reach handover with its economics
+   * supplied afterwards — which is the point of the fix, and it is why this is
+   * seeded here rather than by each caller.
+   *
+   * Approved AT the vehicle price by default, which is what every expectation
+   * in this file was written against: with `approved === salePrice` the
+   * dealership's claim is `salePrice − entitlement`, exactly as before. This
+   * records facts that used to be implicit; it does not change any deal's
+   * economics. Callers that need them to DIFFER pass `approvedAmount`.
+   *
+   * Modes other than CONFIGURED are left alone deliberately — the guard does not
+   * apply to them, and manufacturing a quotation for a LEASE or a manual deal
+   * would invent the very business rule the product ruling refused.
+   *
+   * Whichever branch runs, it runs BEFORE the vehicle goes out, because handover
+   * seals the approved amount: `approveDealerPurchaseAmount` refuses to change a
+   * recorded one afterwards, as `reopenApproval` and `recordAppraisal` already
+   * did. A case that needs a CORRECTION on the record — an override history, say
+   * — has to make it while the door is still open, which is also the only order
+   * an operator could achieve.
+   */
+
+  /**
+   * `omitMode` does NOT exempt the deal.
+   *
+   * That fixture still attaches `s.companyId` to the quote — it omits the mode
+   * FIELD, not the finance company — and a quote carrying a real company is
+   * held to the requirement whether or not anyone wrote the mode down. Treating
+   * the missing field as an exemption is precisely the bypass two reviews
+   * found: it reached the terminal CLOSED state with no economics while naming
+   * a real financier.
+   */
+  const configured = mode === "CONFIGURED_FINANCE_COMPANY";
   await opts.beforeHandover?.(applicationId);
 
+  // Seeded by what is actually MISSING, not by which branch ran.
+  //
+  // `beforeHandover` is not an alternative to the economics — several callers
+  // use it for something else entirely (a route change, a deposit), and making
+  // it replace the seeding sent those deals into handover with none, which the
+  // new guard rightly refuses. Others record the economics themselves to build
+  // an override history, and re-recording underneath them would either throw or
+  // silently rewrite what the test set up. Reading the row is the only version
+  // that is correct for both.
+  if (configured) {
+    const missing = await s.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      return {
+        quotation: app?.submittedQuotationMinor === undefined,
+        approval: app?.approvedDealerPurchaseAmountMinor === undefined,
+      };
+    });
+    if (missing.quotation) {
+      await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: s.orgId,
+        applicationId,
+        submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+        source: "MANUAL_ENTRY",
+      });
+    }
+    if (missing.approval) {
+      await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: s.orgId,
+        applicationId,
+        approvedAmountMinor: (opts.approvedAmount ?? VEHICLE_PRICE) * SCALE,
+        basis: "MANUAL",
+        notes: "Approved at the submitted quotation.",
+      });
+    }
+  }
+
   // The stamp of the economics as they stand at this moment, taken from the
-  // deal payload the way a real screen gets it. Read rather than assumed:
-  // `beforeHandover` may have recorded an approval, and most callers here have
-  // not, so the stamp differs between cases.
+  // deal payload the way a real screen gets it. Read rather than assumed: the
+  // branch above may have recorded an approval, and the non-configured cases
+  // have not, so the stamp differs between them.
   await registerHandover(s.asUser, api, s.orgId, applicationId);
   await s.asUser.mutation(api.applications.registerExpectedPayment, {
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
@@ -1181,25 +1281,28 @@ describe("the deal cockpit query", () => {
       await ctx.db.patch(s.companyId, { defaultLtvPercent: 90 });
     });
 
+    // Through the real writers, so the approval carries whatever the engine
+    // derives alongside it (notably the dealer contribution) — and now BEFORE
+    // handover, which is where the economics have to exist. The quotation and
+    // the approved amount differ deliberately: that difference is the subject.
     const { applicationId } = await runDeal(s, {
       route: "DIRECT_TO_SUPPLIER",
       finalize: false,
-    });
-
-    // Through the real writers, so the approval carries whatever the engine
-    // derives alongside it (notably the dealer contribution).
-    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
-      orgId: s.orgId,
-      applicationId,
-      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
-      source: "MANUAL_ENTRY",
-    });
-    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId,
-      applicationId,
-      approvedAmountMinor: APPROVED * SCALE,
-      basis: "MANUAL",
-      notes: "Approved below the quotation.",
+      beforeHandover: async (applicationId) => {
+        await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+          orgId: s.orgId,
+          applicationId,
+          submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+          source: "MANUAL_ENTRY",
+        });
+        await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+          orgId: s.orgId,
+          applicationId,
+          approvedAmountMinor: APPROVED * SCALE,
+          basis: "MANUAL",
+          notes: "Approved below the quotation.",
+        });
+      },
     });
 
     await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
@@ -1256,7 +1359,9 @@ describe("the deal cockpit query", () => {
 
   test("an unstarted deal reports that the profit cannot be computed, not that it is zero", async () => {
     const s = await seedDealership("cockpitNoProfit");
-    const { applicationId } = await runDeal(s, { finalize: false });
+    // Stops at APPROVED so the deal genuinely has NO economics — which is the
+    // subject. A deal that has reached handover now necessarily carries them.
+    const { applicationId } = await runDeal(s, { stopAtApproved: true });
 
     const view = await s.asUser.query(api.applications.dealCockpit, {
       orgId: s.orgId,
@@ -2678,20 +2783,24 @@ describe("the supplier is never made debtor for money that did not reach him", (
     const { applicationId } = await runDeal(s, {
       route: "DIRECT_TO_SUPPLIER",
       finalize: false,
-    });
-
-    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
-      orgId: s.orgId,
-      applicationId,
-      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
-      source: "MANUAL_ENTRY",
-    });
-    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId,
-      applicationId,
-      approvedAmountMinor: approvedAmount * SCALE,
-      basis: "MANUAL",
-      notes: `Approved at ${approvedAmount}.`,
+      // Recorded before handover, through the real writers, so the approval
+      // carries the split the engine derives. `approvedAmount` is the point of
+      // this helper: each caller approves a different figure.
+      beforeHandover: async (applicationId) => {
+        await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+          orgId: s.orgId,
+          applicationId,
+          submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+          source: "MANUAL_ENTRY",
+        });
+        await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+          orgId: s.orgId,
+          applicationId,
+          approvedAmountMinor: approvedAmount * SCALE,
+          basis: "MANUAL",
+          notes: `Approved at ${approvedAmount}.`,
+        });
+      },
     });
     return { s, applicationId };
   }
@@ -2917,9 +3026,11 @@ describe("the supplier is never made debtor for money that did not reach him", (
     await s.t.run(async (ctx) => {
       await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
     });
+    // Stops at APPROVED: the approval below is REFUSED, so this deal never
+    // legitimately reaches handover and must not be driven there.
     const { applicationId } = await runDeal(s, {
       route: "DIRECT_TO_SUPPLIER",
-      finalize: false,
+      stopAtApproved: true,
     });
     await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
       orgId: s.orgId,
@@ -2948,7 +3059,9 @@ describe("the supplier is never made debtor for money that did not reach him", (
       await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
     });
     // No route yet, so the approval-time guard has nothing to check against.
-    const { applicationId } = await runDeal(s, { finalize: false });
+    // Stops at APPROVED: the route choice below is refused, so this deal never
+    // reaches handover.
+    const { applicationId } = await runDeal(s, { stopAtApproved: true });
     await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
       orgId: s.orgId,
       applicationId,
@@ -2974,18 +3087,74 @@ describe("the supplier is never made debtor for money that did not reach him", (
     ).rejects.toThrow(/he is owed/i);
   });
 
-  test("a direct deal with no approved amount is refused rather than settled at the sale price", async () => {
-    const s = await seedDealership("s30NoApproval");
+  test("a MANUAL direct deal with no approved amount is still refused at finalization", async () => {
+    /**
+     * Pins the FINALIZE-time direct-route check on its own.
+     *
+     * A reviewer caught that moving the CONFIGURED version of this test to
+     * handover left `finalizeDeal`'s own check with no coverage: a configured
+     * deal can no longer reach finalization in that state at all, so the
+     * assertion that used to exercise this line now exercises the handover
+     * guard instead. Both messages happen to match the same pattern, so it went
+     * green while covering a different branch.
+     *
+     * MANUAL_FINANCE_COMPANY reaches it, because the economics requirement
+     * deliberately does not apply to that mode — yet the direct route still
+     * measures the supplier's debt from what the financier approved. Without it
+     * `completeSale` falls back to the sale price and opens a debt for money
+     * that never reached him.
+     */
+    const s = await seedDealership("s30ManualDirectNoApproval");
     const { applicationId } = await runDeal(s, {
+      mode: "MANUAL_FINANCE_COMPANY",
+      manualProviderName: "شركة تمويل يدوية",
       route: "DIRECT_TO_SUPPLIER",
       finalize: false,
+    });
+
+    await expect(
+      s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId })
+    ).rejects.toThrow(/approved purchase amount is not recorded/i);
+  });
+
+  test("a direct deal with no approved amount is refused rather than settled at the sale price", async () => {
+    const s = await seedDealership("s30NoApproval");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
+    });
+
+    /**
+     * The refusal moved EARLIER, and the expectation moved with it rather than
+     * being forced back to where it used to fire.
+     *
+     * This asserted the refusal at `finalizeDeal`. SCRUM-61 put the same guard
+     * on handover, so a deal with a quotation and no approved amount is now
+     * stopped one step sooner — the state "handed over, no approved amount" is
+     * unreachable, which is the entire point of the fix. Asserting at
+     * finalization would now require manufacturing a state production refuses.
+     *
+     * The subject is unchanged: a direct deal may not proceed on an approval
+     * nobody recorded. Only the lifecycle position of the refusal changed.
+     */
+    const { applicationId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      stopAtApproved: true,
+    });
+    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId,
+      applicationId,
+      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+      source: "MANUAL_ENTRY",
     });
 
     // The fallback this replaces is the whole defect: with no approval recorded,
     // `completeSale` measured the supplier's debt against `quote.vehiclePrice`
     // and opened a claim for money nobody had paid him.
     await expect(
-      s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId })
+      s.asUser.mutation(api.applications.registerVehicleHandover, {
+        orgId: s.orgId,
+        applicationId,
+      })
     ).rejects.toThrow(/approved purchase amount is not recorded/i);
 
     expect(await claimDueOf(s)).toBeUndefined();
@@ -3142,24 +3311,27 @@ describe("the claim cannot be reopened through a second door", () => {
       await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
     });
 
+    // Before handover: SCRUM-61 requires a CONFIGURED deal to carry its
+    // economics by then. Same figures, same subject, correct position.
     const { applicationId } = await runDeal(s, {
       route: "DIRECT_TO_SUPPLIER",
       finalize: false,
+      beforeHandover: async (applicationId) => {
+        await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+          orgId: s.orgId,
+          applicationId,
+          submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+          source: "MANUAL_ENTRY",
+        });
+        await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+          orgId: s.orgId,
+          applicationId,
+          approvedAmountMinor: 18_000 * SCALE,
+          basis: "MANUAL",
+          notes: "Approved in the deal's pinned currency.",
+        });
+      },
     });
-    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
-      orgId: s.orgId,
-      applicationId,
-      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
-      source: "MANUAL_ENTRY",
-    });
-    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId,
-      applicationId,
-      approvedAmountMinor: 18_000 * SCALE,
-      basis: "MANUAL",
-      notes: "Approved in the deal's pinned currency.",
-    });
-
     // The org switches reporting currency AFTER the approval is frozen.
     // `orgSettings` does not count `financeApplications` among the rows that
     // lock an org's currency, so nothing prevents this.
@@ -3274,19 +3446,24 @@ describe("automatic commission is based on recognized earnings, not the commerci
     const { applicationId } = await runDeal(s, {
       route: "DIRECT_TO_SUPPLIER",
       finalize: false,
-    });
-    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
-      orgId: s.orgId,
-      applicationId,
-      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
-      source: "MANUAL_ENTRY",
-    });
-    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId,
-      applicationId,
-      approvedAmountMinor: approvedAmount * SCALE,
-      basis: "MANUAL",
-      notes: `Approved at ${approvedAmount}.`,
+      // Before handover, where the economics now have to exist. The approved
+      // amount differing from the quotation is this cluster's whole subject:
+      // the commission must follow the recognized margin, not the spread.
+      beforeHandover: async (applicationId) => {
+        await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+          orgId: s.orgId,
+          applicationId,
+          submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+          source: "MANUAL_ENTRY",
+        });
+        await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+          orgId: s.orgId,
+          applicationId,
+          approvedAmountMinor: approvedAmount * SCALE,
+          basis: "MANUAL",
+          notes: `Approved at ${approvedAmount}.`,
+        });
+      },
     });
     const saleId = await s.asUser.mutation(api.applications.finalizeDeal, {
       orgId: s.orgId,
@@ -3389,22 +3566,26 @@ describe("the sales reports reconcile to the ledger on a financed direct deal", 
     await s.t.run(async (ctx) => {
       await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
     });
+    // Before handover: SCRUM-61 requires a CONFIGURED deal to carry its
+    // economics by then. Same figures, same subject, correct position.
     const { applicationId } = await runDeal(s, {
       route: "DIRECT_TO_SUPPLIER",
       finalize: false,
-    });
-    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
-      orgId: s.orgId,
-      applicationId,
-      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
-      source: "MANUAL_ENTRY",
-    });
-    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId,
-      applicationId,
-      approvedAmountMinor: approvedAmount * SCALE,
-      basis: "MANUAL",
-      notes: `Approved at ${approvedAmount}.`,
+      beforeHandover: async (applicationId) => {
+        await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+          orgId: s.orgId,
+          applicationId,
+          submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+          source: "MANUAL_ENTRY",
+        });
+        await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+          orgId: s.orgId,
+          applicationId,
+          approvedAmountMinor: approvedAmount * SCALE,
+          basis: "MANUAL",
+          notes: `Approved at ${approvedAmount}.`,
+        });
+      },
     });
     await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
     return s;
@@ -3514,19 +3695,27 @@ describe("financed direct evidence that has gone missing fails closed", () => {
       }
     });
 
-    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: false });
-    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
-      orgId: s.orgId,
-      applicationId,
-      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
-      source: "MANUAL_ENTRY",
-    });
-    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId,
-      applicationId,
-      approvedAmountMinor: approvedAmount * SCALE,
-      basis: "MANUAL",
-      notes: `Approved at ${approvedAmount}.`,
+    // Recorded BEFORE handover: SCRUM-61 requires a CONFIGURED deal to carry
+    // its economics by then, so supplying them afterwards is no longer a state
+    // the deal can reach. The figures and the subject are unchanged.
+    const { applicationId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      finalize: false,
+      beforeHandover: async (applicationId) => {
+        await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+          orgId: s.orgId,
+          applicationId,
+          submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+          source: "MANUAL_ENTRY",
+        });
+        await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+          orgId: s.orgId,
+          applicationId,
+          approvedAmountMinor: approvedAmount * SCALE,
+          basis: "MANUAL",
+          notes: `Approved at ${approvedAmount}.`,
+        });
+      },
     });
     const saleId = (await s.asUser.mutation(api.applications.finalizeDeal, {
       orgId: s.orgId,
@@ -4130,19 +4319,27 @@ describe("a settlement advice that contradicts the approval", () => {
     await s.t.run(async (ctx) => {
       await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
     });
-    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: false });
-    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
-      orgId: s.orgId,
-      applicationId,
-      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
-      source: "MANUAL_ENTRY",
-    });
-    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId,
-      applicationId,
-      approvedAmountMinor: approvedAmount * SCALE,
-      basis: "MANUAL",
-      notes: `Approved at ${approvedAmount}.`,
+    // Recorded BEFORE handover: SCRUM-61 requires a CONFIGURED deal to carry
+    // its economics by then, so supplying them afterwards is no longer a state
+    // the deal can reach. The figures and the subject are unchanged.
+    const { applicationId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      finalize: false,
+      beforeHandover: async (applicationId) => {
+        await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+          orgId: s.orgId,
+          applicationId,
+          submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+          source: "MANUAL_ENTRY",
+        });
+        await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+          orgId: s.orgId,
+          applicationId,
+          approvedAmountMinor: approvedAmount * SCALE,
+          basis: "MANUAL",
+          notes: `Approved at ${approvedAmount}.`,
+        });
+      },
     });
     const saleId = await s.asUser.mutation(api.applications.finalizeDeal, {
       orgId: s.orgId,
@@ -4675,10 +4872,12 @@ describe("a settlement advice that contradicts the approval", () => {
     await s.t.run(async (ctx) => {
       await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
     });
-    // Recorded BEFORE the handover, which is the only order the product allows
-    // now that the vehicle going out seals the approved amount — and the order
-    // an operator would have had to follow anyway. The two approvals are here
-    // to populate an override history, not to assert that a post-handover
+    // Both approvals happen BEFORE handover — the only order the product allows
+    // now that the vehicle going out seals the approved amount, and where a
+    // CONFIGURED deal's economics have to exist at all. The second approval is
+    // the point: it is what makes `recordOverride` fire and gives
+    // `getEconomics` a non-empty history to scan, so the tier-1 assertion below
+    // searches a realistic payload. It is not asserting that a post-handover
     // correction is legal; that one is refused, and proved refused elsewhere.
     const { applicationId } = await runDeal(s, {
       route: "DIRECT_TO_SUPPLIER",
@@ -5411,19 +5610,27 @@ describe("amending one field of a settlement advice", () => {
     await s.t.run(async (ctx) => {
       await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
     });
-    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: false });
-    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
-      orgId: s.orgId,
-      applicationId,
-      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
-      source: "MANUAL_ENTRY",
-    });
-    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId,
-      applicationId,
-      approvedAmountMinor: 18_000 * SCALE,
-      basis: "MANUAL",
-      notes: "Approved at 18,000.",
+    // Recorded BEFORE handover: SCRUM-61 requires a CONFIGURED deal to carry
+    // its economics by then, so supplying them afterwards is no longer a state
+    // the deal can reach. The figures and the subject are unchanged.
+    const { applicationId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      finalize: false,
+      beforeHandover: async (applicationId) => {
+        await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+          orgId: s.orgId,
+          applicationId,
+          submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+          source: "MANUAL_ENTRY",
+        });
+        await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+          orgId: s.orgId,
+          applicationId,
+          approvedAmountMinor: 18_000 * SCALE,
+          basis: "MANUAL",
+          notes: "Approved at 18,000.",
+        });
+      },
     });
     await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
     // The advice as it actually arrived: wrong amount, but a real cheque number
@@ -5532,19 +5739,27 @@ describe("one recognized-earning rule, asked identically by every surface", () =
     await s.t.run(async (ctx) => {
       await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
     });
-    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: false });
-    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
-      orgId: s.orgId,
-      applicationId,
-      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
-      source: "MANUAL_ENTRY",
-    });
-    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId,
-      applicationId,
-      approvedAmountMinor: 18_000 * SCALE,
-      basis: "MANUAL",
-      notes: "Approved at 18,000.",
+    // Recorded BEFORE handover: SCRUM-61 requires a CONFIGURED deal to carry
+    // its economics by then, so supplying them afterwards is no longer a state
+    // the deal can reach. The figures and the subject are unchanged.
+    const { applicationId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      finalize: false,
+      beforeHandover: async (applicationId) => {
+        await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+          orgId: s.orgId,
+          applicationId,
+          submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+          source: "MANUAL_ENTRY",
+        });
+        await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+          orgId: s.orgId,
+          applicationId,
+          approvedAmountMinor: 18_000 * SCALE,
+          basis: "MANUAL",
+          notes: "Approved at 18,000.",
+        });
+      },
     });
     const saleId = (await s.asUser.mutation(api.applications.finalizeDeal, {
       orgId: s.orgId,
@@ -5847,19 +6062,27 @@ describe("one recognized-earning rule, asked identically by every surface", () =
     await s.t.run(async (ctx) => {
       await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
     });
-    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: false });
-    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
-      orgId: s.orgId,
-      applicationId,
-      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
-      source: "MANUAL_ENTRY",
-    });
-    await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: s.orgId,
-      applicationId,
-      approvedAmountMinor: 18_000 * SCALE,
-      basis: "MANUAL",
-      notes: "Approved at 18,000.",
+    // Recorded BEFORE handover: SCRUM-61 requires a CONFIGURED deal to carry
+    // its economics by then, so supplying them afterwards is no longer a state
+    // the deal can reach. The figures and the subject are unchanged.
+    const { applicationId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      finalize: false,
+      beforeHandover: async (applicationId) => {
+        await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+          orgId: s.orgId,
+          applicationId,
+          submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+          source: "MANUAL_ENTRY",
+        });
+        await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+          orgId: s.orgId,
+          applicationId,
+          approvedAmountMinor: 18_000 * SCALE,
+          basis: "MANUAL",
+          notes: "Approved at 18,000.",
+        });
+      },
     });
     await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
     return { s, applicationId };
@@ -5977,6 +6200,25 @@ async function approvedHandedOverDeal(s: Seeded): Promise<Id<"financeApplication
     applicationId,
     status: "APPROVED",
   });
+
+  // A CONFIGURED deal, so its financier economics have to be on the record
+  // before the vehicle goes out. Quoted and approved at the vehicle price, so
+  // this introduces no shortfall and no dealer contribution and leaves the
+  // cockpit projections these tests assert on exactly as they were.
+  await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+    orgId: s.orgId,
+    applicationId,
+    submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+    source: "MANUAL_ENTRY",
+  });
+  await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    orgId: s.orgId,
+    applicationId,
+    approvedAmountMinor: VEHICLE_PRICE * SCALE,
+    basis: "MANUAL",
+    notes: "Approved at the submitted quotation.",
+  });
+
   await registerHandover(s.asUser, api, s.orgId, applicationId);
   return applicationId;
 }

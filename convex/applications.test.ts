@@ -964,6 +964,11 @@ async function setupFinalizedFinancedDeal() {
       maxTermMonths: 60,
       gracePeriodMonths: 0,
       isActive: true,
+      // A configured finance company that lends against 85% of the vehicle.
+      // The quotation solver refuses a company with no LTV, and rightly so — a
+      // configured provider with no lending ratio is not configured. This
+      // fixture simply never needed one until its economics became real.
+      defaultLtvPercent: 85,
     })
   );
 
@@ -999,6 +1004,37 @@ async function setupFinalizedFinancedDeal() {
     applicationId,
     status: "APPROVED",
   });
+  // The finance company's economics, recorded through the REAL writers before
+  // handover — which is where `assertDealerEconomicsRecorded` now refuses a
+  // CONFIGURED deal that has none.
+  //
+  // This fixture stays CONFIGURED_FINANCE_COMPANY deliberately. It exists to
+  // exercise a configured finance-company deal end to end, and switching it to
+  // a mode with no economics requirement would have made the suite green by
+  // deleting the coverage this issue is protecting.
+  //
+  // The amounts are the fixture's own terms, not numbers chosen to satisfy a
+  // validator: the quote is a 20,000 vehicle, so the dealership submits 20,000
+  // and the company approves at the quotation. Approving at the quotation means
+  // no appraisal shortfall and no dealer contribution, which keeps this
+  // fixture's downstream accounting exactly what it was before the guard.
+  await asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+    orgId,
+    applicationId,
+    submittedQuotationMinor: 20_000 * 1_000,
+    source: "MANUAL_ENTRY",
+  });
+  await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    orgId,
+    applicationId,
+    approvedAmountMinor: 20_000 * 1_000,
+    basis: "MANUAL",
+    notes: "Approved at the submitted quotation.",
+  });
+
+  // Through the helper, because handover now demands an `economicsStamp` that
+  // the deal screen supplies. Recording the economics above is what makes a
+  // stamp exist to read.
   await registerHandover(asUser, api, orgId, applicationId);
   await asUser.mutation(api.applications.registerExpectedPayment, {
     orgId,
@@ -1272,6 +1308,10 @@ describe("applications logs, expected payment, and finalization guards", () => {
         maxTermMonths: 60,
         gracePeriodMonths: 0,
         isActive: true,
+        // The company actually quoted against, so it needs a lending ratio.
+        // The second one is never quoted against — the point of the test is
+        // that the quote is repointed at it afterwards.
+        defaultLtvPercent: 85,
       });
       const secondCompanyId = await ctx.db.insert("financeCompanies", {
         orgId,
@@ -1297,6 +1337,27 @@ describe("applications logs, expected payment, and finalization guards", () => {
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
     await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
     await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+    // Kept CONFIGURED with real economics rather than moved to a mode that
+    // needs none: a finance-company mismatch is only possible on a configured
+    // deal, so the mode IS this test's subject. It has to reach `finalizeDeal`
+    // legitimately for the mismatch refusal to be the thing under test.
+    await asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId,
+      applicationId,
+      submittedQuotationMinor: 20_000 * 1_000,
+      source: "MANUAL_ENTRY",
+    });
+    await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 20_000 * 1_000,
+      basis: "MANUAL",
+      notes: "Approved at the submitted quotation.",
+    });
+
+    // Through the helper, because handover now demands an `economicsStamp`
+    // that the deal screen supplies. Recording the economics above is what
+    // makes a stamp exist to read.
     await registerHandover(asUser, api, orgId, applicationId);
     await asUser.mutation(api.applications.registerExpectedPayment, {
       orgId,
@@ -1325,6 +1386,11 @@ async function setupFinalizedFinancedDealWithCheque() {
       maxTermMonths: 60,
       gracePeriodMonths: 0,
       isActive: true,
+      // A configured finance company that lends against 85% of the vehicle.
+      // The quotation solver refuses a company with no LTV, and rightly so — a
+      // configured provider with no lending ratio is not configured. This
+      // fixture simply never needed one until its economics became real.
+      defaultLtvPercent: 85,
     })
   );
 
@@ -1343,6 +1409,27 @@ async function setupFinalizedFinancedDealWithCheque() {
   const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
   await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
   await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+  // Same reasoning as `setupFinalizedFinancedDeal`: this fixture stays
+  // CONFIGURED because its subject is a configured finance-company deal paid by
+  // cheque, and its economics are the quote's own terms rather than numbers
+  // picked to clear a validator.
+  await asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+    orgId,
+    applicationId,
+    submittedQuotationMinor: 20_000 * 1_000,
+    source: "MANUAL_ENTRY",
+  });
+  await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    orgId,
+    applicationId,
+    approvedAmountMinor: 20_000 * 1_000,
+    basis: "MANUAL",
+    notes: "Approved at the submitted quotation.",
+  });
+
+  // Through the helper, because handover now demands an `economicsStamp`
+  // that the deal screen supplies. Recording the economics above is what
+  // makes a stamp exist to read.
   await registerHandover(asUser, api, orgId, applicationId);
   await asUser.mutation(api.applications.registerExpectedPayment, {
     orgId,

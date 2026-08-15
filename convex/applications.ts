@@ -138,9 +138,33 @@ async function getActiveReceivableAllocations(
  */
 function assertDealerEconomicsRecorded(
   app: Doc<"financeApplications">,
-  action: "handing over the vehicle" | "finalizing"
+  action: "handing over the vehicle" | "finalizing",
+  quoteMode: QuoteMode | undefined
 ): void {
-  if (app.submittedQuotationMinor === undefined) return;
+  // A CONFIGURED deal is the one shape where the financier's economics are
+  // always knowable: a configured company approves a purchase amount, and that
+  // amount is what the dealership's profit is measured from. Letting one through
+  // without it produced a deal that is CLOSED — which is terminal, see
+  // VALID_STATUS_TRANSITIONS — with no way to ever record the amount afterwards:
+  // `recordSubmittedQuotation`, `approveDealerPurchaseAmount` and
+  // `reopenApproval` all refuse a closed application. The dealership's profit on
+  // that deal is then permanently uncomputable and the deal cockpit asks the
+  // operator for a figure nothing will accept.
+  //
+  // Deliberately NOT extended to the other modes. MANUAL_FINANCE_COMPANY, LEASE
+  // and INTERNAL_INSTALLMENT may not produce this artefact at all, and demanding
+  // it there would invent a business rule and dead-end those deals instead —
+  // the same defect wearing different clothes.
+  const financierEconomicsAreKnowable = financierApprovesPurchase({
+    quoteMode,
+    companyId: app.companyId,
+  });
+  if (app.submittedQuotationMinor === undefined) {
+    if (!financierEconomicsAreKnowable) return;
+    throw new ConvexError(
+      `The finance company's submitted quotation is not recorded on this deal. Record it before ${action}.`
+    );
+  }
   if (app.approvedDealerPurchaseAmountMinor === undefined) {
     throw new ConvexError(
       `The finance company's approved purchase amount is not recorded on this deal. Record it before ${action}.`
@@ -237,15 +261,52 @@ async function closedDealSettlesDirectToSupplier(
  * and is refused the direct route, rather than being attributed to whoever the
  * quote happens to name today.
  */
+async function resolveQuoteMode(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">
+): Promise<QuoteMode | undefined> {
+  if (app.quoteModeAtSubmission !== undefined) return app.quoteModeAtSubmission;
+  const quote = await ctx.db.get(app.quoteId);
+  return quote && quote.orgId === app.orgId ? quote.mode : undefined;
+}
+
+/**
+ * Whether this deal is one a configured finance company approves a purchase on.
+ *
+ * NOT `quoteMode === "CONFIGURED_FINANCE_COMPANY"`. `mode` is optional on both
+ * the quote and the application, and `quotes.saveQuote` rejects a `companyId`
+ * only when a mode is present and is not the configured one — so a quote
+ * carrying a real finance company with NO mode is creatable today through the
+ * ordinary public mutation, not merely inherited from history.
+ *
+ * Keying the guard on the mode alone left exactly that shape failing OPEN: two
+ * independent reviews found it and one reproduced it end to end, reaching the
+ * terminal CLOSED state with no economics while carrying a real `companyId` —
+ * the precise defect this issue exists to remove.
+ *
+ * So the company itself is evidence, which is the rule `settlementPayer`
+ * already applies to the same shape: "when it carries a configured finance
+ * company, that company IS the answer the mode cannot give"
+ * (`vehicleOwnership.ts`). Two derivations disagreeing about what kind of deal
+ * this is was the second source of truth this work set out to avoid.
+ */
+function financierApprovesPurchase(args: {
+  quoteMode: QuoteMode | undefined;
+  companyId: Id<"financeCompanies"> | undefined;
+}): boolean {
+  if (args.quoteMode === "CONFIGURED_FINANCE_COMPANY") return true;
+  // A mode that IS recorded and is not configured settles the question — the
+  // company field must not drag a LEASE or an internal-instalment deal into a
+  // requirement its mode says it does not have.
+  if (args.quoteMode !== undefined) return false;
+  return args.companyId !== undefined;
+}
+
 async function settlementPayerForApplication(
   ctx: QueryCtx | MutationCtx,
   app: Doc<"financeApplications">
 ): Promise<SettlementPayer> {
-  let quoteMode = app.quoteModeAtSubmission;
-  if (quoteMode === undefined) {
-    const quote = await ctx.db.get(app.quoteId);
-    if (quote && quote.orgId === app.orgId) quoteMode = quote.mode;
-  }
+  const quoteMode = await resolveQuoteMode(ctx, app);
   return settlementPayer({
     quoteMode,
     financeCompanyId: app.companyId,
@@ -1105,6 +1166,16 @@ async function buildCockpitMoney(
       actualExpensesMinor,
       currency,
       fullySettled,
+      // Only a configured finance company approves a purchase amount. On the
+      // other modes the figure is not late, it does not exist — so the screen
+      // must say "not available for this financing mode" rather than sending
+      // the operator to record something nothing will accept. Same resolution
+      // the guard uses, so the two cannot disagree about what kind of deal
+      // this is.
+      financierEconomicsApplicable: financierApprovesPurchase({
+        quoteMode: await resolveQuoteMode(ctx, app),
+        companyId: app.companyId,
+      }),
     });
 
   return {
@@ -2590,7 +2661,7 @@ export const registerVehicleHandover = mutation({
     // Deal fitness first. A deal that cannot be handed over at all is not
     // improved by being asked to confirm a figure — and the refusal that names
     // the missing funding split is the more useful one to reach the operator.
-    assertDealerEconomicsRecorded(app, "handing over the vehicle");
+    assertDealerEconomicsRecorded(app, "handing over the vehicle", await resolveQuoteMode(ctx, app));
     /**
      * The denomination, enforced HERE and not only in what the screens render.
      *
@@ -2922,7 +2993,7 @@ export const finalizeDeal = mutation({
         // Same guard as registerVehicleHandover: an approval cleared by a
         // reappraisal leaves status APPROVED, so this is the only thing
         // stopping a sale being completed on economics nothing supports.
-        assertDealerEconomicsRecorded(app, "finalizing");
+        assertDealerEconomicsRecorded(app, "finalizing", await resolveQuoteMode(ctx, app));
         // The last step in the ordering Codex traced, and the one that creates
         // a SALE. A deal whose denomination cannot be established must not be
         // turned into money here either — otherwise every guard upstream is
