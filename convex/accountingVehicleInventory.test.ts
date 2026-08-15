@@ -2269,6 +2269,71 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
   });
 
+  // The next two tests exist to keep one call ATOMIC, not to check the status
+  // rule itself.
+  //
+  // A dealer's export routinely lists already-sold stock alongside available
+  // stock, and `assertDirectVehicleCreateStatus` is applied per row inside the
+  // insert loop — so row 2 can throw after row 1 has already been inserted and
+  // posted. Nothing survives that today because `importBulk` is a single Convex
+  // transaction with no `ctx.runMutation` sub-transactions, and a throw rolls
+  // the whole call back.
+  //
+  // That guarantee is load-bearing now that a row also writes journal entries,
+  // and it is exactly what a future change would break: SCRUM-92 contemplates
+  // resumable server-side batches to raise the 25-row posting cap, and the
+  // established pattern for that in this codebase
+  // (`backfillVehicleInventoryOpeningBalances`) is per-item `ctx.runMutation`,
+  // which commits each item independently. Doing that here without re-checking
+  // every row up front would leave a half-posted import behind.
+  test("a workflow-controlled status in a later row leaves nothing written", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59k");
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId,
+        acquisitionPosting: "PURCHASE",
+        purchasePaymentMethod: "CASH",
+        vehicles: [
+          { ...baseImportRow, vin: "IMPORTSTATUS00001", purchasePrice: 10000 },
+          { ...baseImportRow, vin: "IMPORTSTATUS00002", purchasePrice: 10000, status: "SOLD" },
+        ],
+      })
+    ).rejects.toThrow(/sale/i);
+
+    const vehicles = await t.run((ctx) =>
+      ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(vehicles).toHaveLength(0);
+    const lines = await t.run((ctx) =>
+      ctx.db.query("journalLines").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(lines).toHaveLength(0);
+  });
+
+  test("an unrecognized status in a later row leaves nothing written, in either mode", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59l");
+
+    for (const acquisitionPosting of ["OPENING_STOCK", "PURCHASE"] as const) {
+      await expect(
+        asOwner.mutation(api.vehicles.importBulk, {
+          orgId,
+          acquisitionPosting,
+          ...(acquisitionPosting === "PURCHASE" ? { purchasePaymentMethod: "CASH" as const } : {}),
+          vehicles: [
+            { ...baseImportRow, vin: "IMPORTSTATUS00003", purchasePrice: 10000 },
+            { ...baseImportRow, vin: "IMPORTSTATUS00004", purchasePrice: 10000, status: "IN STOCK" },
+          ],
+        })
+      ).rejects.toThrow(/status/i);
+    }
+
+    const vehicles = await t.run((ctx) =>
+      ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(vehicles).toHaveLength(0);
+  });
+
   test("a PURCHASE batch is capped well below the insert-only ceiling", async () => {
     const { orgId, asOwner } = await seedDealer("s59j");
     const rows = Array.from({ length: 26 }, (_, i) => ({
