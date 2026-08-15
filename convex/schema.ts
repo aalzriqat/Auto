@@ -4281,6 +4281,127 @@ export default defineSchema({
     .index("by_org_platform_sender", ["orgId", "platform", "senderRawId"])
     .index("by_org", ["orgId"]),
 
+  /**
+   * One row per Social Inbox conversation thread — the unit the inbox list
+   * actually displays, materialised so it can be paginated.
+   *
+   * `socialInbox.listConversations` derived these by `.collect()`-ing every
+   * Instagram and Facebook event the org had ever received and grouping them in
+   * JavaScript: a live subscription over the tables ingestion writes to, so
+   * every inbound message made it re-read the whole history. A conversation is
+   * not a row, so there was nothing to paginate — the "cursor" was an offset
+   * into an in-memory array and each page re-scanned everything.
+   *
+   * ## Grouping key
+   *
+   * `conversationKey` is the exact string the old grouping used, so the split
+   * is unchanged: comments thread per (platform × customer × post), DMs per
+   * (platform × customer). Stored rather than recomputed so the upsert is one
+   * indexed point lookup.
+   *
+   * ⚠️ The key's inputs are MUTATED after insert — `socialInboxBackfill`
+   * patches `postId`, and a customer merge repoints `customerId`. So the
+   * maintenance path must handle RE-KEYING, not just insert and delete.
+   *
+   * ## Why the denormalised fields are here
+   *
+   * `lastEventAt` is the sort key — the list orders by most recent activity, so
+   * it has to be indexed, not computed. The rest (`latestText`, the sender
+   * fields, `eventCount`, `unansweredCount`, `vehicleIds`, `leadId`) are what a
+   * row renders; keeping them here is what lets a page read 25 small rows
+   * instead of every event in the org.
+   *
+   * `unansweredCount` is a count, not the `needsReply` boolean the UI wants,
+   * because a boolean cannot be maintained: answering one event tells you
+   * nothing about whether the others are still unanswered. `needsReply` is
+   * `unansweredCount > 0`.
+   *
+   * `vehicleIds` is the distinct set in first-seen order, because the list
+   * shows both a count of linked vehicles and a summary of the first one.
+   */
+  socialConversations: defineTable({
+    orgId: v.id("organizations"),
+    conversationKey: v.string(),
+    platform: v.union(v.literal("instagram"), v.literal("facebook")),
+    conversationKind: v.union(v.literal("comment"), v.literal("dm")),
+    conversationPostId: v.optional(v.string()),
+    customerId: v.id("customers"),
+    lastEventAt: v.number(),
+    eventCount: v.number(),
+    unansweredCount: v.number(),
+    vehicleIds: v.array(v.id("vehicles")),
+    // `vehicleIds.length`, stored: Convex's filter expressions cannot measure an
+    // array, and the "has a linked vehicle" filter has to run inside the
+    // paginated read rather than after it.
+    vehicleCount: v.number(),
+    leadId: v.optional(v.id("leads")),
+    latestText: v.optional(v.string()),
+    latestSenderHandle: v.optional(v.string()),
+    latestSenderRawId: v.string(),
+  })
+    // Upsert path: resolve a thread from an event in one lookup.
+    .index("by_org_key", ["orgId", "conversationKey"])
+    // The list itself — descending gives most-recent-activity order directly.
+    .index("by_org_lastEventAt", ["orgId", "lastEventAt"])
+    // The two filters the inbox offers as first-class controls; the rest
+    // (hasVehicle, needsReply) are evaluated against the paginated stream,
+    // which reads these small rows rather than the events behind them.
+    .index("by_org_platform_lastEventAt", ["orgId", "platform", "lastEventAt"])
+    .index("by_org_kind_lastEventAt", ["orgId", "conversationKind", "lastEventAt"]),
+
+  /**
+   * Whether `socialConversations` may be trusted as the authoritative source
+   * for one org and platform.
+   *
+   * This table exists because of a real production incident (SCRUM-20). The
+   * materialised reader was deployed while the table behind it was still empty,
+   * and the Social Inbox answered "no conversations" with total confidence for
+   * an org holding a thousand events. Code and schema existing is not evidence
+   * that the data behind them exists, so readiness has to be recorded durably
+   * rather than inferred — and it cannot be inferred from row counts either,
+   * because zero conversations is a legitimate completed result for a quiet org.
+   *
+   * One row per (org, generation, platform). Absence means NOT STARTED, which
+   * is why the reader treats a missing row as "not ready" rather than as an
+   * empty result: fail closed toward the slow-but-correct legacy path.
+   *
+   * `generation` is what stops an old completed backfill from vouching for a
+   * newer materialisation shape. Bump `SOCIAL_CONVERSATION_GENERATION` whenever
+   * the meaning of a `socialConversations` row changes, and every reader falls
+   * back until the new generation is proven complete.
+   */
+  socialMaterializationState: defineTable({
+    orgId: v.id("organizations"),
+    platform: v.union(v.literal("instagram"), v.literal("facebook")),
+    generation: v.number(),
+    // No "notStarted": that is the absence of the row. No "interrupted"
+    // either — an abandoned chain leaves `running` with a stale
+    // `lastProgressAt`, and interruption is derived from that rather than
+    // stored, because the process that would have written it is by definition
+    // the one that died.
+    status: v.union(v.literal("running"), v.literal("completed"), v.literal("failed")),
+    // Fences concurrent chains: a scheduled continuation carries the runId it
+    // was started under and aborts if the record has moved on to another.
+    runId: v.string(),
+    cursor: v.optional(v.string()),
+    // Source rows read, and threads recomputed. Deliberately distinct: a batch
+    // of 250 events belonging to 3 threads processes 250 and materialises 3,
+    // and collapsing them would make "0 changed" indistinguishable from
+    // "0 examined".
+    processedCount: v.number(),
+    materializedCount: v.number(),
+    // The aggregate's event count at the last progress write. A progress
+    // indicator only — never the completion criterion, which is pagination
+    // exhaustion. Events arriving mid-run move this number.
+    expectedCount: v.number(),
+    startedAt: v.number(),
+    lastProgressAt: v.number(),
+    completedAt: v.optional(v.number()),
+    failureMessage: v.optional(v.string()),
+  })
+    .index("by_org_generation_platform", ["orgId", "generation", "platform"])
+    .index("by_org", ["orgId"]),
+
   // Full Messenger thread: one row per message (in or out), enabling complete
   // conversation history including messages sent before AutoFlow existed.
   facebookMessages: defineTable({

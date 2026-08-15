@@ -3,7 +3,7 @@ import {
   mutation as rawMutation,
   internalMutation as rawInternalMutation,
 } from "./_generated/server";
-import { aggregateTriggers } from "./aggregates";
+import { aggregateTriggers, deferredThreadTriggers } from "./aggregates";
 
 /**
  * Mutation builders whose `ctx.db` keeps the aggregate component in step with
@@ -24,4 +24,26 @@ export const mutation = customMutation(rawMutation, customCtx(aggregateTriggers.
 export const internalMutation = customMutation(
   rawInternalMutation,
   customCtx(aggregateTriggers.wrapDB)
+);
+
+/**
+ * Builder for the two mutations that patch many of one customer's social events
+ * in a loop: `customers.mergeCustomers` and `socialInbox.setConversationVehicle`.
+ *
+ * Everything `mutation` maintains is still maintained here *except* the
+ * per-write conversation recompute, which is what makes those loops O(N²) — see
+ * `deferredThreadTriggers`. The trade is that the handler owes the recompute
+ * itself: collect each touched thread with `collectSocialThread` and call
+ * `syncDeferredSocialThreads` before returning.
+ *
+ * Deliberately narrow rather than a `{ skipSync: true }` argument on the normal
+ * builder. A flag is one keystroke for a future caller to add to a mutation
+ * that then silently commits stale conversation rows; a separate builder makes
+ * the obligation visible at the definition, and
+ * `convex/deferredThreadSync.test.ts` fails the build if a module takes this
+ * builder without calling the sync.
+ */
+export const socialBulkMutation = customMutation(
+  rawMutation,
+  customCtx(deferredThreadTriggers.wrapDB)
 );

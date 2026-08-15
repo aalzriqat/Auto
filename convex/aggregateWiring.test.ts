@@ -65,6 +65,22 @@ test("a trigger is registered for every table an aggregate counts", () => {
 
   expect(countedTables.length).toBeGreaterThan(0);
   for (const table of countedTables) {
-    expect(aggregates).toContain(`aggregateTriggers.register("${table}"`);
+    expect(aggregates).toContain(`triggers.register("${table}"`);
   }
+
+  // The registrations live in `registerCountingTriggers` so that both writers
+  // get them from one list. That only holds while both writers actually call
+  // it: a new `Triggers` instance that skipped the call would maintain no tree
+  // at all, and every count would drift for exactly the mutations built on it —
+  // silently, and only during those operations.
+  for (const writer of ["aggregateTriggers", "deferredThreadTriggers"]) {
+    expect(aggregates).toContain(`registerCountingTriggers(${writer})`);
+  }
+
+  // The conversation recompute is the one trigger deliberately absent from the
+  // deferred writer. Pinned so that "suppressed on purpose" cannot quietly
+  // become "suppressed everywhere" — the normal webhook path must keep it.
+  expect(aggregates).toContain('aggregateTriggers.register("instagramEvents"');
+  expect(aggregates).toContain('aggregateTriggers.register("facebookEvents"');
+  expect(aggregates).not.toContain("deferredThreadTriggers.register(");
 });
