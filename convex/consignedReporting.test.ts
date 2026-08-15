@@ -1864,4 +1864,47 @@ describe("turnover past the dashboard's costing cap", () => {
       CAP * OWNED_PRICE + PAST_CAP_OWNED_PRICE + MARGIN
     );
   }, HEAVY_TEST_TIMEOUT_MS);
+
+  /**
+   * The comparison window's copy of the stale-consignment guard.
+   *
+   * Asked for by the Codex reviewer, and it caught a real one: the third
+   * `WindowVehicleBasis` state was added to `currentBasis` and lost from
+   * `previousBasis` during a revert/restore cycle, so the two windows
+   * classified the same sale differently. That asymmetry is worse here than in
+   * either window alone — a sale ageing from one window into the other would
+   * change its own contribution, and the delta between them reports that as a
+   * change in trade the dealership never had.
+   *
+   * Every previous-window assertion above is on CLEAN data, so none of them
+   * could see it. This one carries the corruption across the boundary.
+   */
+  test("a stale consigned margin does not reclassify a past-cap owned sale in the COMPARISON window either", async () => {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const { s, pastCap } = await dealerPastTheCap(
+      "capPrevStale",
+      Date.now() - 45 * DAY_MS
+    );
+
+    await s.t.run(async (ctx) => {
+      const sale = (await ctx.db
+        .query("sales")
+        .filter((q) => q.eq(q.field("vehicleId"), pastCap.owned))
+        .first())!;
+      await ctx.db.patch(sale._id, {
+        consignedMarginMinor: 1_000 * 1_000,
+        consignedMarginCurrency: "JOD",
+      });
+    });
+
+    const dash = await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId, timeRange: "MONTH" as const,
+    });
+
+    // The dealership owned that car. Its full price is the turnover, in this
+    // window exactly as in the other one.
+    expect(dash.previousPeriod?.sales).toBe(
+      CAP * OWNED_PRICE + PAST_CAP_OWNED_PRICE + MARGIN
+    );
+  }, HEAVY_TEST_TIMEOUT_MS);
 });

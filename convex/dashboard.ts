@@ -974,6 +974,12 @@ export const stats = query({
       if (basis) return { known: true, consigned: basis.consigned, cost: basis.cost };
       const tail = previousUncostedBasisByVehicle.get(sale.vehicleId);
       if (tail?.consigned) return { known: true, consigned: true, cost: tail.supplierCost };
+      // The SAME third state the current window carries. Missing it here meant
+      // the two windows classified one sale differently — the comparison window
+      // reading a dealer-owned past-cap row as unknown, and so re-deciding it
+      // from stale frozen fields — which is precisely the asymmetry that turns a
+      // period-over-period delta into a change the business never had.
+      if (tail) return { known: true, consigned: false, cost: null };
       return { known: false };
     };
 
