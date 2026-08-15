@@ -176,6 +176,10 @@ describe("SCRUM-41 — a frozen margin nothing can substantiate", () => {
       recordedMargin: REAL_EARNING,
       recordedSupplierEntitlement: ENTITLEMENT,
       recordedSupplierGrossReceipt: APPROVED,
+      // A financed DIRECT sale is only constructible through `finalizeDeal`,
+      // which records the application on the sale — so a realistic fixture for
+      // this route carries one. See the no-application case below.
+      hasFinancingApplication: true,
     });
 
     // Withholding a figure that IS substantiated is a different wrong answer,
@@ -183,6 +187,63 @@ describe("SCRUM-41 — a frozen margin nothing can substantiate", () => {
     expect(e.dealershipMargin).toBe(REAL_EARNING);
     expect(e.recognizedRevenue).toBe(REAL_EARNING);
     expect(e.supplierSettlement).toBe(ENTITLEMENT);
+  });
+
+  /**
+   * Raised by the Codex reviewer as CRITICAL, and its stated reachability was
+   * DISPROVED before this test was written — see the SCRUM-41 Jira comment.
+   * `consignedSupplierGrossReceiptMinor` and the write-path guard that forces a
+   * real approved amount (`FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT`) reached main
+   * in the SAME merge, 51c62fc2 / PR #218, so the "field exists but guard does
+   * not" window never existed in any deployed state: a pre-#218 row carries no
+   * receipt at all and is already withheld by the rule above.
+   *
+   * The hardening is taken anyway, because the reviewer's underlying point is
+   * right for a different reason. `/admin`'s raw-JSON editor can fabricate a row
+   * whose receipt equals its sale price, and — more importantly — the CASH deal
+   * cockpit already refuses EVERY no-application financed-direct row
+   * (`financedDirectWithoutApproval` in convex/sales.ts). `saleEconomics` being
+   * more permissive than a screen that already ships is two authorities
+   * disagreeing about one sale, which is the exact defect this lane exists to
+   * remove.
+   *
+   * It costs nothing legitimate: a financed DIRECT sale is only constructible
+   * through `finalizeDeal`, which records `applicationId` on the sale.
+   */
+  test("a receipt equal to the sale price does not verify a margin with no application behind it", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: ENTITLEMENT,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: true,
+      recordedMargin: MARGIN,
+      recordedSupplierEntitlement: ENTITLEMENT,
+      // Present, and indistinguishable from the historical sale-price fallback.
+      recordedSupplierGrossReceipt: SALE_PRICE,
+      // Nothing approved this. There is no application to prove what a
+      // financier paid, so the receipt proves only its own presence.
+      hasFinancingApplication: false,
+    });
+
+    expect(e.dealershipMargin).toBeNull();
+    expect(e.dealershipMargin).not.toBe(MARGIN);
+  });
+
+  test("...and the same row WITH its application keeps the margin", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: ENTITLEMENT,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      externallyFinanced: true,
+      recordedMargin: REAL_EARNING,
+      recordedSupplierEntitlement: ENTITLEMENT,
+      recordedSupplierGrossReceipt: APPROVED,
+      hasFinancingApplication: true,
+    });
+
+    expect(e.dealershipMargin).toBe(REAL_EARNING);
   });
 
   test("a CASH direct row is untouched — the buyer really does hand over the sale price", () => {
@@ -312,6 +373,60 @@ describe("SCRUM-33 — a sale with no basis on the row and no vehicle to ask", (
     expect(e.supplierSettlement).toBe(ENTITLEMENT);
   });
 
+  /**
+   * Found INDEPENDENTLY by both adversarial reviewers, and reproduced before
+   * fixing. It is the case the first cut of this lane missed, and the miss was
+   * caused by the fix itself: moving `saleEconomics` to withhold while leaving
+   * the dashboard's own parallel rule alone made the two surfaces disagree MORE
+   * than before, under a comment asserting they now agreed.
+   *
+   * The vehicle is PRESENT here — that is what makes it different from the test
+   * below, and it is why the dashboard's rule sailed past it: the only question
+   * that rule asked was whether the sale was financed-DIRECT. It then reached
+   * `Math.max(0, salePrice − 0)` and published the whole ticket as this window's
+   * turnover AND its profit trend, feeding the top-performer tile with it.
+   */
+  test("a present vehicle with no cost basis is withheld by BOTH surfaces, not just the report", async () => {
+    const s = await seedDealer("s33zerocost");
+    const { saleId, vehicleId } = await sellConsigned(s, "VIN33Z1");
+    await s.t.run(async (ctx) => {
+      // The legacy row: completed before the frozen fields existed.
+      await ctx.db.patch(saleId, {
+        consignedMarginMinor: undefined,
+        consignedMarginCurrency: undefined,
+        consignedSupplierEntitlementMinor: undefined,
+        consignedSupplierGrossReceiptMinor: undefined,
+        supplierSettlementRoute: undefined,
+      });
+      // ...whose supplier cost was later cleared. The row itself SURVIVES.
+      await ctx.db.patch(vehicleId, { sourceCost: 0 });
+    });
+
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId: s.orgId, ...range(),
+    });
+    const dash = (await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId,
+      timeRange: "ALL_TIME",
+    })) as {
+      salesVolumeThisMonth: number;
+      truncated: { turnover: boolean };
+      salesTrend: Array<{ Revenue: number; Profit: number }>;
+    };
+
+    expect(report.totalProfit).toBe(0);
+    expect(report.unknownMarginSaleCount).toBe(1);
+
+    // Before the fix: 12,500 as turnover, 12,500 as profit, `truncated.turnover`
+    // false — an owner's home screen contradicting their own sales report.
+    expect(dash.salesVolumeThisMonth).toBe(0);
+    expect(dash.truncated.turnover).toBe(true);
+    for (const point of dash.salesTrend) {
+      expect(point.Revenue).toBe(0);
+      expect(point.Profit).toBe(0);
+    }
+  });
+
   test("the report withholds it, and the dashboard agrees on the same sale", async () => {
     const s = await seedDealer("s33report");
     const { saleId, vehicleId } = await sellConsigned(s, "VIN33R1");
@@ -381,6 +496,8 @@ describe("SCRUM-40 O-1 — the entitlement is bounded by what the supplier recei
       recordedMargin: HIGH_APPROVAL - HIGH_ENTITLEMENT,
       recordedSupplierEntitlement: HIGH_ENTITLEMENT,
       recordedSupplierGrossReceipt: HIGH_APPROVAL,
+      // The approval this test is about came FROM an application.
+      hasFinancingApplication: true,
     });
 
     expect(e.supplierSettlement).toBe(HIGH_ENTITLEMENT);
@@ -454,6 +571,45 @@ describe("SCRUM-40 O-2 — a live basis that is not a basis", () => {
 
     expect(e.dealershipMargin).toBe(MARGIN);
     expect(e.supplierSettlement).toBe(ENTITLEMENT);
+  });
+
+  /**
+   * Raised by the Codex reviewer, VALIDATED by reproduction, and a genuine gap
+   * in my first cut: I coupled the supplier's uncertainty to the margin's.
+   *
+   * `basisUnknown` requires the margin to be absent, so a row that HAS a frozen
+   * margin skipped it entirely — and the settlement beside it then fell through
+   * to a live cost of zero and published "the supplier is owed nothing", with no
+   * unknown-settlement count to say otherwise. The two figures answer different
+   * questions from different evidence and their uncertainty is not shared: a
+   * surviving margin says nothing about whether the supplier's basis survived.
+   *
+   * Note this is the OPPOSITE direction from the "ONE predicate governs BOTH
+   * halves" rule established in an earlier round. That rule is about which
+   * ENTITLEMENT is eligible, and it still holds — an entitlement unfit to derive
+   * the margin is still unfit to be published. This is about which figure may be
+   * withheld, and there the two are independent.
+   */
+  test("a surviving frozen margin does not certify the supplier's basis beside it", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      // Cleared after the sale — a consigned car is never capitalized, so the
+      // acquisition lock never engages and `sourceCost` stays editable.
+      capitalizedCost: 0,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      // The sale froze what IT earned...
+      recordedMargin: MARGIN,
+      // ...but what the supplier was owed predates the field, or was erased.
+      recordedSupplierEntitlement: undefined,
+    });
+
+    // The margin is still known: it has its own frozen evidence.
+    expect(e.dealershipMargin).toBe(MARGIN);
+    // The supplier's share is NOT. Zero is the claim that he is owed nothing
+    // for his own car, and nothing on this row supports it.
+    expect(e.supplierSettlement).toBeNull();
+    expect(e.supplierSettlement).not.toBe(0);
   });
 
   test("a dealer-owned sale is not caught by the agent-only zero-cost rule", () => {

@@ -227,8 +227,14 @@ describe("the economics split", () => {
        *
        * The withheld-margin case is not lost: it is `SCRUM-41 — a frozen margin
        * nothing can substantiate` in `consignmentEconomics.test.ts`.
+       *
+       * The application is supplied for the same reason: on this route a receipt
+       * proves its amount, not its provenance, so both are required before the
+       * frozen margin is believed. A real financed DIRECT sale always has one —
+       * `finalizeDeal` is the only thing that can create the shape.
        */
       recordedSupplierGrossReceipt: SALE_PRICE,
+      hasFinancingApplication: true,
     });
 
     // The half that was already right: the frozen margin is still trusted.
@@ -626,21 +632,39 @@ describe("a recorded margin the reader cannot trust", () => {
   test("an erased entitlement makes the supplier total a floor without touching profit", async () => {
     const s = await seedDealer("reportEntitlementGone");
     const saleId = await sellConsigned(s, "VINENT1");
+    /**
+     * ⚠️ The FIXTURE changed for SCRUM-49 Lane 4; the assertions did not.
+     *
+     * This used to be a financed DIRECT row patched by hand. That shape can no
+     * longer demonstrate what this test is for: SCRUM-41 withholds a frozen
+     * margin on that route unless the row carries BOTH a frozen receipt and the
+     * application that approved it, and an application cannot be conjured by a
+     * `db.patch` — it needs a real quote and a real application row. Left as it
+     * was, BOTH counters would fire and the distinction this test exists to pin
+     * would be gone.
+     *
+     * So it now reaches the SAME withholding rule through `evidenceRequired`'s
+     * other arm — an agent sale whose vehicle row is gone, with its frozen
+     * margin surviving and its frozen entitlement not. That is a real production
+     * shape (the `/admin` raw editor, a part-failed `hardDeleteOrg`), and it is
+     * arguably a more honest fixture than a hand-patched financed row that no
+     * writer could have produced.
+     *
+     * The financed-DIRECT settlement arm is still covered at unit level by
+     * `a frozen margin beside a missing frozen entitlement is UNKNOWN, never the
+     * live cost` above, which supplies the application the pure function needs.
+     */
     await s.t.run(async (ctx) => {
+      const sale = await ctx.db.get(saleId);
       await ctx.db.patch(saleId, {
-        // The financed DIRECT shape, where the frozen evidence is required.
-        financingType: "FINANCED",
-        supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+        // What the sale earned, still frozen on the row.
         consignedMarginMinor: MARGIN * 1_000,
-        // SCRUM-41: the receipt is what substantiates a frozen margin on this
-        // route, and this test's subject is the ENTITLEMENT counter, not the
-        // margin. Without it the margin would be withheld too and the two
-        // counters this test exists to tell apart would both fire — see the
-        // same note on the unit test above.
-        consignedSupplierGrossReceiptMinor: SALE_PRICE * 1_000,
         // ...and the half that was erased afterwards.
         consignedSupplierEntitlementMinor: undefined,
       });
+      // The cost basis leaves with the vehicle, so nothing can re-derive what
+      // the supplier was owed.
+      await ctx.db.delete(sale!.vehicleId);
     });
 
     const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {

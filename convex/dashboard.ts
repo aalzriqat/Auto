@@ -547,16 +547,59 @@ export const stats = query({
      * replace — the rule would then be the same everywhere only in the half of
      * the query anybody looked at.
      */
-    type WindowVehicleFacts = { known: boolean; consigned: boolean };
+    type WindowVehicleFacts = {
+      known: boolean;
+      consigned: boolean;
+      /**
+       * Whether this window's cost for the vehicle is actually a BASIS.
+       *
+       * ⚠️ SCRUM-33 / SCRUM-40 O-2. On a consigned car a zero capitalized cost
+       * is not the fact that the supplier is owed nothing for his own vehicle —
+       * `saleCompletion` refuses to complete a sourced sale without a positive
+       * cost, so zero cannot be what the sale posted on. It is missing evidence,
+       * and `salePrice − 0` publishes the whole ticket.
+       *
+       * Carried on the facts rather than read from a map below, because the two
+       * windows keep their costs in different places and the comparison window
+       * reading the current window's map is a mistake this type already exists
+       * to prevent.
+       */
+      costIsBasis: boolean;
+    };
     const currentVehicleFacts = (sale: Doc<"sales">): WindowVehicleFacts => ({
       known: capitalizedCostByVehicle.has(sale.vehicleId),
       consigned: consignedVehicleIds.has(sale.vehicleId),
+      costIsBasis: (capitalizedCostByVehicle.get(sale.vehicleId) ?? 0) > 0,
     });
 
     const earningIsUnknownGiven = (
       facts: (sale: Doc<"sales">) => WindowVehicleFacts
     ) => (sale: Doc<"sales">): boolean => {
       if (trustedFrozenMargin(sale) !== undefined) return false;
+      /**
+       * ⚠️ SCRUM-33 / SCRUM-40 O-2 parity with `saleEconomics`'s `basisUnknown`.
+       *
+       * Found by the adversarial reviewer and REPRODUCED before fixing: a
+       * consigned sale with no trusted frozen margin whose vehicle is PRESENT
+       * but carries no positive cost fell straight past this predicate — because
+       * the only question asked below is whether the row is financed-DIRECT.
+       * `recognizedRevenueOfSale` then reached `Math.max(0, salePrice − 0)` at
+       * `:630` and published the entire ticket as this window's turnover AND as
+       * its profit trend, while `reports.getSalesAndProfitReport` withheld the
+       * same sale and counted it unknown.
+       *
+       * That is the divergence this file's own comments say must not exist, and
+       * the SCRUM-41 fix above made it WIDER rather than narrower by moving the
+       * report without moving this. It also feeds the top-performer tile, so a
+       * salesperson could be ranked first on a car whose margin the sales report
+       * says is unknown.
+       *
+       * The vehicle must be KNOWN for this to fire. An unknown vehicle is
+       * already excluded further down — it has no basis in either map — and
+       * treating "not read" as "zero cost" would fail the wrong rows closed.
+       */
+      const basisFacts = facts(sale);
+      if (basisFacts.known && basisFacts.consigned && !basisFacts.costIsBasis) return true;
       if (!needsFrozenMarginEvidence(sale)) return false;
       // The vehicle answers whenever it is present, exactly as it does in
       // `saleEconomics`. Making this rule vehicle-independent was never the
@@ -565,8 +608,7 @@ export const stats = query({
       // carrying a settlement route left over from when it was thought to be
       // the supplier's: the report and the ledger counted it in full while the
       // dashboard excluded it and called the remainder complete.
-      const vehicle = facts(sale);
-      return !(vehicle.known && !vehicle.consigned);
+      return !(basisFacts.known && !basisFacts.consigned);
     };
 
     const recognizedEarningIsUnknown = earningIsUnknownGiven(currentVehicleFacts);
@@ -985,8 +1027,8 @@ export const stats = query({
       earningIsUnknownGiven((sale) => {
         const basis = previousRevenueBasisByVehicle.get(sale.vehicleId);
         return basis
-          ? { known: true, consigned: basis.consigned }
-          : { known: false, consigned: false };
+          ? { known: true, consigned: basis.consigned, costIsBasis: basis.cost > 0 }
+          : { known: false, consigned: false, costIsBasis: false };
       })
     );
 

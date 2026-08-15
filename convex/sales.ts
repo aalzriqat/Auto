@@ -2484,6 +2484,12 @@ export const dealCockpit = query({
       recordedMargin: recordedConsignedMargin(sale),
       recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
       recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+      // Always false on this screen in practice — `money` is already null for a
+      // sale that HAS an application, because its real screen is the
+      // application-keyed one. Passed rather than hardcoded so the two can never
+      // drift, and so `financedDirectWithoutApproval` below and `saleEconomics`
+      // reach their verdict from the same fact rather than two copies of it.
+      hasFinancingApplication: sale.applicationId !== undefined,
       externallyFinanced:
         sale.financingType === "FINANCED" || sale.financingType === "LEASE",
     });

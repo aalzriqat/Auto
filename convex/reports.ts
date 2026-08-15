@@ -162,6 +162,9 @@ export const getSalesAndProfitReport = query({
         recordedMargin: recordedConsignedMargin(sale),
         recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
         recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+        // The application that approved what the financier would pay. A frozen
+        // receipt proves its amount, not its provenance — see the field's note.
+        hasFinancingApplication: sale.applicationId !== undefined,
         externallyFinanced:
           sale.financingType === "FINANCED" || sale.financingType === "LEASE",
       });
@@ -787,6 +790,7 @@ export const getSalespersonPerformance = query({
           recordedMargin: recordedConsignedMargin(sale),
           recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
           recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+          hasFinancingApplication: sale.applicationId !== undefined,
           externallyFinanced:
             sale.financingType === "FINANCED" || sale.financingType === "LEASE",
         });

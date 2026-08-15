@@ -542,6 +542,33 @@ export function saleEconomics(args: {
    */
   recordedSupplierGrossReceipt?: number;
   /**
+   * Whether the sale carries an `applicationId` — the finance application that
+   * approved what the financier would pay.
+   *
+   * ⚠️ Raised by the Codex reviewer. A frozen receipt proves its own PRESENCE,
+   * not its PROVENANCE: `saleCompletion`'s direct-route fallback is
+   * `args.supplierGrossReceiptMinor ?? salePriceMinor`, so a receipt equal to the
+   * sale price is indistinguishable from a real approval that happened to match
+   * it. The reviewer's stated route to such a row was disproved — the receipt
+   * field and the guard that forces a real approved amount reached main in the
+   * SAME merge (51c62fc2 / PR #218), so no deployed state ever had one without
+   * the other — but two things make the hardening right anyway.
+   *
+   * First, `/admin`'s raw-JSON editor can fabricate exactly that row, and this
+   * file already treats that editor as the reason readers validate at all.
+   * Second, and decisively: the CASH deal cockpit ALREADY refuses every
+   * no-application financed-direct row (`financedDirectWithoutApproval` in
+   * convex/sales.ts). `saleEconomics` being more permissive than a screen that
+   * already ships is two authorities disagreeing about one sale — the exact
+   * defect this lane exists to remove.
+   *
+   * It withholds nothing legitimate. A financed DIRECT sale is only
+   * constructible through `finalizeDeal`, which records the application on the
+   * sale; and a row predating that workflow carries no receipt either, so it was
+   * already withheld.
+   */
+  hasFinancingApplication?: boolean;
+  /**
    * Whether a third party financed this sale (FINANCED or LEASE).
    *
    * It is what separates the two readings of an absent `recordedMargin`. On a
@@ -628,8 +655,13 @@ export function saleEconomics(args: {
    * substituting the sale price. This is that rule reaching the owner-facing
    * report figures it had never been applied to.
    */
+  // BOTH halves are required: the receipt is the amount, and the application is
+  // the provenance that makes the amount an approval rather than a fallback.
+  // See `hasFinancingApplication` for why presence alone is not enough.
   const financedDirectUnverified =
-    financedDirect && verifiedSupplierReceiptFor(args.recordedSupplierGrossReceipt) === undefined;
+    financedDirect &&
+    (verifiedSupplierReceiptFor(args.recordedSupplierGrossReceipt) === undefined ||
+      args.hasFinancingApplication !== true);
   /**
    * ⚠️ SCRUM-33 / SCRUM-40 O-2 — no basis on the row, and none to be had.
    *
@@ -663,6 +695,29 @@ export function saleEconomics(args: {
     args.recordedMargin === undefined &&
     eligibleSupplierEntitlement === undefined &&
     (vehicleUnknown || (agent && !(capitalizedCost > 0)));
+  /**
+   * ⚠️ The SUPPLIER's basis, asked independently of the dealership's.
+   *
+   * Raised by the Codex reviewer and reproduced: `basisUnknown` requires the
+   * margin to be absent, so an agent row that HAS a frozen margin skipped it
+   * entirely — and the settlement beside it then fell through to a live cost of
+   * zero and published "the supplier is owed nothing for his own car", with no
+   * unknown-settlement count to say otherwise.
+   *
+   * The two figures answer different questions from different evidence, and
+   * their uncertainty is not shared: a surviving margin says nothing about
+   * whether the supplier's basis survived. `consignedSupplierEntitlementMinor`
+   * post-dates `consignedMarginMinor`, so a row carrying one and not the other
+   * is an ordinary legacy shape rather than a corrupt one.
+   *
+   * This does NOT contradict the "ONE predicate governs BOTH halves" rule an
+   * earlier round established. That rule is about which ENTITLEMENT is eligible
+   * — an entitlement unfit to derive the margin is still unfit to be published —
+   * and it is untouched. This is about which figure may be WITHHELD, where the
+   * two are independent.
+   */
+  const supplierBasisUnknown =
+    agent && eligibleSupplierEntitlement === undefined && !(capitalizedCost > 0);
   // When the margin is missing, rebuild it from the SURVIVING FROZEN basis
   // before reaching for the live one.
   //
@@ -758,7 +813,8 @@ export function saleEconomics(args: {
     // the supplier is owed is its own frozen fact and does not depend on proving
     // what the financier paid.
     supplierSettlement:
-      eligibleSupplierEntitlement ?? (evidenceRequired || basisUnknown ? null : capitalizedCost),
+      eligibleSupplierEntitlement ??
+      (evidenceRequired || basisUnknown || supplierBasisUnknown ? null : capitalizedCost),
     dealershipMargin: margin,
     // The whole point. Turnover is what the dealership sold, and on a consigned
     // car that is its service, not the vehicle.
