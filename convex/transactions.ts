@@ -5,7 +5,6 @@ import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
-import { runWithIdempotency } from "./utils/idempotency";
 import { Doc, Id } from "./_generated/dataModel";
 
 type LedgerTransaction = Doc<"transactions">;
@@ -210,77 +209,30 @@ export const list = query({
   },
 });
 
-export const add = mutation({
-  args: {
-    orgId: v.id("organizations"),
-    type: v.union(v.literal("IN"), v.literal("OUT")),
-    amount: v.number(),
-    date: v.number(),
-    category: v.union(
-      v.literal("VEHICLE_SALE"), v.literal("VEHICLE_PURCHASE"),
-      v.literal("EXPENSE"), v.literal("DEPOSIT"),
-      v.literal("COLLECTION_PAYMENT"), v.literal("REFUND"),
-      v.literal("PARTNER_DRAW"), v.literal("CAPITAL_INJECTION"),
-      v.literal("CLAIM_PAYMENT"), v.literal("OTHER")
-    ),
-    description: v.string(),
-    vehicleId: v.optional(v.id("vehicles")),
-    userId: v.optional(v.id("users")),
-    expenseId: v.optional(v.id("expenses")),
-    idempotencyKey: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-
-    return await runWithIdempotency(
-      ctx,
-      {
-        orgId: args.orgId,
-        operation: "transactions.add",
-        idempotencyKey: args.idempotencyKey,
-        actorId: user._id,
-      },
-      async () => {
-        if (args.vehicleId) {
-          const vehicle = await ctx.db.get(args.vehicleId);
-          if (!vehicle || vehicle.orgId !== args.orgId) {
-            throw new ConvexError("Vehicle not found in this organization.");
-          }
-        }
-        if (args.expenseId) {
-          const expense = await ctx.db.get(args.expenseId);
-          if (!expense || expense.orgId !== args.orgId) {
-            throw new ConvexError("Expense not found in this organization.");
-          }
-        }
-
-        const transactionId = await ctx.db.insert("transactions", {
-          orgId: args.orgId,
-          type: args.type,
-          amount: args.amount,
-          date: args.date,
-          category: args.category,
-          description: args.description,
-          vehicleId: args.vehicleId,
-          userId: args.userId,
-          expenseId: args.expenseId,
-          idempotencyKey: args.idempotencyKey,
-        });
-
-        const actorName = await getActorName(ctx);
-        await notifyManagers(
-          ctx,
-          args.orgId,
-          "transaction.recorded",
-          { actorName, amount: String(args.amount) },
-          { link: `/${args.orgId}/accounting` }
-        );
-
-        return transactionId;
-      }
-    );
-  },
-});
+/*
+ * `transactions.add` used to live here, and is deliberately gone.
+ *
+ * It let any caller holding `manage:finance` insert a row into the operational
+ * cashbook directly, choosing its own amount, date and category — including
+ * VEHICLE_SALE, CAPITAL_INJECTION and PARTNER_DRAW. Nothing about that write
+ * reached the authoritative books: no accounting event, no journal entry, no
+ * period check, no `financialAuditLog`. It was a second place to record money.
+ *
+ * Its only caller in the entire repository was the mobile Accounting module,
+ * which this change makes read-only. But a Convex `mutation` is a public API
+ * endpoint, not an internal helper: it stays callable by any authenticated
+ * client that holds the permission, whether or not the shipped UI offers a
+ * button. Having zero callers is a reason it can be retired, not evidence that
+ * it was unreachable.
+ *
+ * New financial activity now has exactly two doors: a real domain workflow (a
+ * sale, an expense, a collection, a deposit, a work order — each of which
+ * inserts its own cashbook row as a side effect of the thing that actually
+ * happened) or an explicit manual journal entry. Both leave an audit trail.
+ *
+ * `transactionsGlDivergence.test.ts` fails the build if a public mutation in
+ * this module ever inserts into `transactions` again.
+ */
 
 /**
  * Refuses to mutate a legacy cashbook row that the GL has already represented.
@@ -299,9 +251,27 @@ export const add = mutation({
  * after migration has to be a journal entry or an explicit reversal, both of
  * which leave an auditable trail — so this refuses rather than silently diverging.
  *
- * REVERSED is deliberately not blocking: a reversed event no longer represents
- * the row in the GL, so the cashbook row is editable again. PENDING is not
- * blocking either — nothing has posted yet.
+ * What counts as "represented" is REAL JOURNAL EVIDENCE, not the event's status
+ * label. The status alone is wrong in both directions:
+ *
+ *   - REVERSED does NOT mean the GL forgot the row. `reversals.ts` patches the
+ *     ORIGINAL event to REVERSED *in place*, keeps its `journalEntryId`, and
+ *     posts a second, inverted entry beside it. Both halves stay in the books —
+ *     `accountingReports.getPostedLines` deliberately reads REVERSED entries'
+ *     lines, because dropping the original half of a cancelled pair would leave
+ *     the reversal's inverted lines alone and turn a net-zero cancellation into
+ *     a one-sided wrong balance. So a reversed row is represented in the GL
+ *     twice, and editing the cashbook copy afterwards makes the surviving audit
+ *     trail describe an amount that no longer exists at its own source.
+ *   - POSTED does not by itself prove a journal entry exists, and a row can
+ *     carry a `journalEntryId` under another status.
+ *
+ * So this blocks on POSTED, on REVERSED, and on any event that carries a
+ * `journalEntryId` — whichever arrives first. PENDING and FAILED events with no
+ * journal entry do not block: a queued event is not GL representation, and the
+ * unmigrated cashbook is exactly what the legacy screen is still for. That is
+ * the same POSTED/REVERSED-need-real-journal-evidence distinction Lane 5's
+ * integrity diagnostic uses, rather than a second interpretation of status.
  *
  * Both writers below call this. They are the only two paths that patch a
  * `transactions` row (`transactions.ts:update` and `:remove`); every other
@@ -320,7 +290,14 @@ export async function assertNotRepresentedInGl(
     )
     .collect();
 
-  if (events.some((event) => event.status === "POSTED")) {
+  const representedInGl = events.some(
+    (event) =>
+      event.status === "POSTED" ||
+      event.status === "REVERSED" ||
+      event.journalEntryId !== undefined
+  );
+
+  if (representedInGl) {
     throw new ConvexError(
       "This entry has already been posted to the general ledger and can no longer be edited or deleted here. Record a correcting journal entry instead, so the change is auditable."
     );

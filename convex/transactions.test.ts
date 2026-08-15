@@ -2,6 +2,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import type { Doc } from "./_generated/dataModel";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 
 const MODULES = import.meta.glob("./**/*.*s");
@@ -52,36 +53,33 @@ async function setupLedgerOrg() {
     })
   );
 
-  return { t, orgId, userId, customerId, vehicleId, asManager };
+  /**
+   * Cashbook rows are created by the domain workflows that own them (a sale, an
+   * expense, a collection, a deposit, a work order), never by a public mutation
+   * — SCRUM-53 removed `transactions.add` for exactly that reason. These tests
+   * insert the row the same way those modules do.
+   */
+  async function recordCashbookRow(
+    fields: Partial<Doc<"transactions">> & Pick<Doc<"transactions">, "type" | "amount" | "date" | "category" | "description">
+  ) {
+    return await t.run((ctx) => ctx.db.insert("transactions", { orgId, ...fields }));
+  }
+
+  return { t, orgId, userId, customerId, vehicleId, asManager, recordCashbookRow };
 }
 
 describe("transactions ledger", () => {
-  test("add_is_idempotent_and_list_enriches_vehicle_context", async () => {
-    const { orgId, vehicleId, asManager } = await setupLedgerOrg();
-    const date = Date.now();
+  test("list_enriches_vehicle_context", async () => {
+    const { orgId, vehicleId, asManager, recordCashbookRow } = await setupLedgerOrg();
 
-    const transactionId = await asManager.mutation(api.transactions.add, {
-      orgId,
+    const transactionId = await recordCashbookRow({
       type: "IN",
       amount: 750,
-      date,
+      date: Date.now(),
       category: "DEPOSIT",
       description: "Deposit held for walk-in customer",
       vehicleId,
-      idempotencyKey: "deposit-ledger-1",
     });
-    const repeatedId = await asManager.mutation(api.transactions.add, {
-      orgId,
-      type: "IN",
-      amount: 999,
-      date,
-      category: "DEPOSIT",
-      description: "Should not create a second row",
-      vehicleId,
-      idempotencyKey: "deposit-ledger-1",
-    });
-
-    expect(repeatedId).toBe(transactionId);
 
     const page = await asManager.query(api.transactions.list, {
       orgId,
@@ -97,9 +95,8 @@ describe("transactions ledger", () => {
   });
 
   test("update_and_remove_keep_transactions_auditable_but_hidden_from_list", async () => {
-    const { t, orgId, vehicleId, asManager } = await setupLedgerOrg();
-    const transactionId = await asManager.mutation(api.transactions.add, {
-      orgId,
+    const { t, orgId, vehicleId, asManager, recordCashbookRow } = await setupLedgerOrg();
+    const transactionId = await recordCashbookRow({
       type: "OUT",
       amount: 400,
       date: Date.now(),
@@ -135,20 +132,18 @@ describe("transactions ledger", () => {
   });
 
   test("list_applies_date_window_when_both_bounds_are_present", async () => {
-    const { orgId, asManager } = await setupLedgerOrg();
+    const { orgId, asManager, recordCashbookRow } = await setupLedgerOrg();
     const olderDate = Date.now() - 10 * 24 * 60 * 60 * 1000;
     const currentDate = Date.now();
 
-    await asManager.mutation(api.transactions.add, {
-      orgId,
+    await recordCashbookRow({
       type: "IN",
       amount: 100,
       date: olderDate,
       category: "OTHER",
       description: "Outside reporting window",
     });
-    const currentTransactionId = await asManager.mutation(api.transactions.add, {
-      orgId,
+    const currentTransactionId = await recordCashbookRow({
       type: "IN",
       amount: 200,
       date: currentDate,
@@ -287,40 +282,8 @@ describe("transactions ledger", () => {
     });
   });
 
-  test("rejects_cross_org_vehicle_references", async () => {
-    const { t, orgId, asManager } = await setupLedgerOrg();
-    const otherVehicleId = await t.run(async (ctx) => {
-      const otherOrgId = await ctx.db.insert("organizations", { name: "Other Ledger Dealer", createdAt: Date.now() });
-      return await ctx.db.insert("vehicles", {
-        orgId: otherOrgId,
-        vin: "OTHERLEDGER001",
-        make: "Ford",
-        model: "Escape",
-        year: 2021,
-        mileage: 25_000,
-        color: "White",
-        fuelType: "Gasoline",
-        transmission: "Automatic",
-        sellingPrice: 15_000,
-        status: "AVAILABLE",
-      });
-    });
-
-    await expect(
-      asManager.mutation(api.transactions.add, {
-        orgId,
-        type: "OUT",
-        amount: 500,
-        date: Date.now(),
-        category: "VEHICLE_PURCHASE",
-        description: "Wrong org vehicle",
-        vehicleId: otherVehicleId,
-      })
-    ).rejects.toThrow(/vehicle not found/i);
-  });
-
-  test("rejects_cross_org_expense_references_on_add_and_update", async () => {
-    const { t, orgId, vehicleId, asManager } = await setupLedgerOrg();
+  test("rejects_cross_org_vehicle_and_expense_references_on_update", async () => {
+    const { t, orgId, vehicleId, asManager, recordCashbookRow } = await setupLedgerOrg();
     const otherOrgReferences = await t.run(async (ctx) => {
       const otherOrgId = await ctx.db.insert("organizations", { name: "Other Expense Dealer", createdAt: Date.now() });
       const otherVehicleId = await ctx.db.insert("vehicles", {
@@ -346,20 +309,7 @@ describe("transactions ledger", () => {
       return { otherVehicleId, otherExpenseId };
     });
 
-    await expect(
-      asManager.mutation(api.transactions.add, {
-        orgId,
-        type: "OUT",
-        amount: 200,
-        date: Date.now(),
-        category: "EXPENSE",
-        description: "Wrong org expense",
-        expenseId: otherOrgReferences.otherExpenseId,
-      })
-    ).rejects.toThrow(/expense not found/i);
-
-    const transactionId = await asManager.mutation(api.transactions.add, {
-      orgId,
+    const transactionId = await recordCashbookRow({
       type: "OUT",
       amount: 300,
       date: Date.now(),
