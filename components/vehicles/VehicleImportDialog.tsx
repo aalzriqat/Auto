@@ -315,6 +315,22 @@ function capitalizingRows(rows: Record<string, any>[]) {
 }
 
 /**
+ * The server's PURCHASE rules, re-checked here across the WHOLE file.
+ *
+ * Not a duplicate of the server control — the server still refuses, per call.
+ * This exists because a file larger than a chunk arrives as several separate
+ * transactions: without a whole-file check, a bad row in the last chunk is only
+ * discovered after the earlier chunks have already posted real journal entries,
+ * leaving the operator with a half-capitalized import and a generic error.
+ */
+function purchaseBlockers(rows: Record<string, any>[]): { missingVin: number } {
+  const posting = capitalizingRows(rows);
+  return {
+    missingVin: posting.filter((r) => !String(r.vin ?? "").trim()).length,
+  };
+}
+
+/**
  * The last thing between a spreadsheet and the ledger.
  *
  * Deliberately not a card: it is the terms of the action about to be taken, so
@@ -344,6 +360,7 @@ function ImportAccountingChoice({
 
   const capitalizing = capitalizingRows(validRows);
   const totalCost = capitalizing.reduce((sum, r) => sum + Number(r.purchasePrice ?? 0), 0);
+  const blockers = purchaseBlockers(validRows);
 
   const option = (value: AcquisitionPosting, label: string, hint: string) => {
     const selected = posting === value;
@@ -401,16 +418,27 @@ function ImportAccountingChoice({
             </div>
           </div>
 
-          {/* The ledger consequence, stated before it happens. */}
-          <div className="flex items-baseline justify-between gap-4 border-s-2 border-primary/40 ps-3">
-            <span className="text-xs text-muted-foreground">
+          {/* The ledger consequence, stated before it happens. The amount leads
+              on narrow screens instead of being squeezed to the far edge of a
+              row it shares with two lines of explanation — at 390px that put the
+              figure half outside the dialog in both directions. */}
+          <div className="flex flex-col gap-1 border-s-2 border-primary/40 ps-3 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4">
+            <bdi className="text-base font-semibold tabular-nums sm:order-2">
+              {currency.format(totalCost)}
+            </bdi>
+            <span className="text-xs leading-snug text-muted-foreground sm:order-1">
               {t("ImportWillCapitalize" as any)}
               <span className="mt-0.5 block">
                 {t("ImportWillCapitalizeNote" as any).replace("{count}", String(capitalizing.length))}
               </span>
             </span>
-            <bdi className="text-base font-semibold tabular-nums">{currency.format(totalCost)}</bdi>
           </div>
+
+          {blockers.missingVin > 0 && (
+            <p className="text-xs font-medium text-destructive">
+              {t("ImportVinRequiredForPurchase" as any).replace("{count}", String(blockers.missingVin))}
+            </p>
+          )}
         </div>
       )}
 
@@ -432,6 +460,13 @@ interface Props {
 /** Must not exceed importBulk's IMPORT_BULK_MAX_ROWS. */
 const IMPORT_CHUNK_SIZE = 200;
 
+/**
+ * Must not exceed importBulk's IMPORT_BULK_MAX_POSTING_ROWS. A PURCHASE row
+ * writes a journal entry and its lines on top of the vehicle insert, so the
+ * transaction it shares fills up an order of magnitude faster.
+ */
+const IMPORT_POSTING_CHUNK_SIZE = 25;
+
 export function VehicleImportDialog({ open, onOpenChange }: Props) {
   const { t } = useLanguage();
   const { activeOrgId } = useOrg();
@@ -446,7 +481,11 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
   const [posting, setPosting] = useState<AcquisitionPosting | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(null);
 
-  const blocked = posting === null || (posting === "PURCHASE" && paymentMethod === null);
+  const isBlocked = ({ validRows }: { validRows: Record<string, any>[] }) => {
+    if (posting === null) return true;
+    if (posting !== "PURCHASE") return false;
+    return paymentMethod === null || purchaseBlockers(validRows).missingVin > 0;
+  };
 
   const handleOpenChange = (next: boolean) => {
     if (!next) {
@@ -492,7 +531,7 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
 
         return { extraFields, extraAutoGuess };
       }}
-      blocked={blocked}
+      isBlocked={isBlocked}
       renderPreflight={({ validRows }) => (
         <ImportAccountingChoice
           validRows={validRows}
@@ -507,7 +546,7 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
         // The wizard's Import button is disabled until this is answered; the
         // guard is here as well because a disabled button is a hint, not a
         // control, and importBulk itself refuses an unstated method.
-        if (posting === null || (posting === "PURCHASE" && paymentMethod === null)) {
+        if (posting === null || isBlocked({ validRows: vehicles })) {
           return Promise.resolve({ inserted: 0, skipped: 0 });
         }
         // Send only the fields importBulk's validator declares — Convex rejects
@@ -534,11 +573,13 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
         // Chunked to match importBulk's server-side row cap: one transaction
         // per chunk, so a large spreadsheet cannot exceed Convex's
         // per-transaction write budget now that each row also maintains the
-        // vehicle aggregate.
+        // vehicle aggregate — and a much smaller chunk when each row also posts
+        // a journal entry, which costs an order of magnitude more per row.
+        const chunkSize = posting === "PURCHASE" ? IMPORT_POSTING_CHUNK_SIZE : IMPORT_CHUNK_SIZE;
         return (async () => {
           const totals = { inserted: 0, skipped: 0 };
-          for (let i = 0; i < payload.length; i += IMPORT_CHUNK_SIZE) {
-            const chunk = payload.slice(i, i + IMPORT_CHUNK_SIZE);
+          for (let i = 0; i < payload.length; i += chunkSize) {
+            const chunk = payload.slice(i, i + chunkSize);
             const result = await importBulk({
               orgId: activeOrgId,
               acquisitionPosting: posting,

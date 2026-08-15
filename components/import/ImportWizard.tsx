@@ -82,13 +82,17 @@ interface ImportWizardProps {
    * rows they are about to commit (vehicles use it to declare what the file
    * means in accounting terms; see SCRUM-59).
    *
-   * `blocked` is what actually stops the import. It is a separate prop rather
-   * than something inferred from the returned node because the wizard must not
-   * have to understand the entity-specific rule to enforce it — and because
-   * a required decision that only *looks* required is not a control.
+   * `isBlocked` is what actually stops the import. It is a separate callback
+   * rather than something inferred from the returned node because the wizard
+   * must not have to understand the entity-specific rule to enforce it — and
+   * because a required decision that only *looks* required is not a control.
+   *
+   * It receives every valid row in the file, not just the current chunk, so a
+   * rule that must hold across the whole import can be checked before the first
+   * chunk is sent rather than discovered after earlier chunks have committed.
    */
   renderPreflight?: (info: { validRows: Record<string, any>[] }) => React.ReactNode;
-  blocked?: boolean;
+  isBlocked?: (info: { validRows: Record<string, any>[] }) => boolean;
   onImport: (validRows: Record<string, any>[]) => Promise<{ inserted: number; skipped: number; companiesCreated?: number }>;
 }
 
@@ -114,7 +118,7 @@ export function ImportWizard(props: ImportWizardProps) {
     open, onOpenChange, entityType, title, description, fields, autoGuess,
     parseWorksheet = defaultParseWorksheet, deriveRow, validateRow,
     previewColumns, renderPreviewCell, templateBuilder, resolveDynamicFields,
-    renderPreflight, blocked = false, onImport,
+    renderPreflight, isBlocked, onImport,
   } = props;
 
   const { activeOrgId } = useOrg();
@@ -412,7 +416,10 @@ export function ImportWizard(props: ImportWizardProps) {
             </Button>
           )}
           {step === "preview" && (
-            <Button onClick={handleImport} disabled={validRows.length === 0 || importing || blocked}>
+            <Button
+              onClick={handleImport}
+              disabled={validRows.length === 0 || importing || (isBlocked?.({ validRows }) ?? false)}
+            >
               {importing ? t("ImportingEllipsis" as any) : `${t("Import" as any) ?? "Import"} (${validRows.length})`}
             </Button>
           )}

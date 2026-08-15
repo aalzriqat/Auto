@@ -2143,6 +2143,25 @@ export const getRelations = query({
 export const IMPORT_BULK_MAX_ROWS = 200;
 
 /**
+ * A much lower ceiling once the batch also POSTS.
+ *
+ * 200 was sized for a transaction whose per-row cost was an insert plus the
+ * aggregate B-tree walk. A PURCHASE row additionally writes an
+ * `accountingEvents` row, a `journalEntries` row and its lines, an
+ * `incrementAccountSnapshot` read+patch per line, an audit entry, and either a
+ * legacy `transactions` row or a `vehicleSupplierPayables` row — roughly an
+ * order of magnitude more documents touched, all inside the one transaction.
+ *
+ * This number is deliberately conservative rather than measured: `convex-test`
+ * does not enforce Convex's real per-transaction limits, so a green suite is no
+ * evidence at all here (the same trap that let a backfill clear 2,115 tests and
+ * fail on its first production call). The cost of being too low is more chunks;
+ * the cost of being too high is an opaque rollback of a dealer's whole import.
+ * Measuring the real ceiling against a live deployment is follow-up work.
+ */
+export const IMPORT_BULK_MAX_POSTING_ROWS = 25;
+
+/**
  * What an import means in accounting terms — the operator states it, the server
  * never guesses.
  *
@@ -2217,9 +2236,11 @@ export const importBulk = mutation({
     })),
   },
   handler: async (ctx, args) => {
-    if (args.vehicles.length > IMPORT_BULK_MAX_ROWS) {
+    const postsAcquisitions = args.acquisitionPosting === "PURCHASE";
+    const maxRows = postsAcquisitions ? IMPORT_BULK_MAX_POSTING_ROWS : IMPORT_BULK_MAX_ROWS;
+    if (args.vehicles.length > maxRows) {
       throw new ConvexError(
-        `Import too large: ${args.vehicles.length} rows in one request (max ${IMPORT_BULK_MAX_ROWS}). Split the file and import again.`
+        `Import too large: ${args.vehicles.length} rows in one request (max ${maxRows}). Split the file and import again.`
       );
     }
 
@@ -2241,17 +2262,44 @@ export const importBulk = mutation({
       }
     }
 
-    // Same two rules vehicles.create enforces for a single acquisition, applied
-    // to the whole batch up front (like the numeric validation above) so a file
-    // that can't be posted correctly fails before any of it is written rather
-    // than half-importing and half-posting.
-    const postsAcquisitions = args.acquisitionPosting === "PURCHASE";
+    // The same rules vehicles.create enforces for a single acquisition, applied
+    // to this batch up front (like the numeric validation above) so a request
+    // that can't be posted correctly is rejected before any of it is written
+    // rather than half-importing and half-posting.
+    //
+    // "This batch", not "the whole file": a file larger than the cap arrives as
+    // several calls, and each one is its own transaction. The client re-checks
+    // these same rules across every row before sending the first chunk, so a
+    // bad row late in a large file stops the import instead of being discovered
+    // after earlier chunks have already posted.
     if (postsAcquisitions) {
       // A purchase price with no declared payment method would post as CASH —
       // normalizePaymentMethod's default — even when the dealer paid by bank
       // transfer, cheque or card.
       if (!args.purchasePaymentMethod) {
         throw new ConvexError("Payment method is required when importing purchased vehicles.");
+      }
+      // A car that posts must be identifiable, and vehicles.create already
+      // refuses a non-sourced vehicle with no VIN for exactly this reason.
+      //
+      // It matters more here than there. A blank or filler VIN is replaced with
+      // generateImportVinPlaceholder(), which is random per call — so the
+      // duplicate-VIN check below can never match it, and re-submitting the same
+      // file (a network retry, or an operator retrying after a later chunk
+      // failed) would insert a second vehicle and post a SECOND acquisition for
+      // a car already on the books, cash included. Before this change that
+      // retry only duplicated inert rows; posting is what turns it into
+      // duplicated money.
+      const missingVin = args.vehicles.filter(
+        (row) =>
+          (row.sourceType ?? "").trim().toUpperCase() !== "SOURCED" &&
+          (row.purchasePrice ?? 0) > 0 &&
+          isPlaceholderVin(row.vin)
+      );
+      if (missingVin.length > 0) {
+        throw new ConvexError(
+          `A VIN is required for every purchased vehicle — ${missingVin.length} row(s) have none. Add the VINs, or import them as stock you already own.`
+        );
       }
       if (args.purchasePaymentMethod === "ON_ACCOUNT") {
         // sourcedFromName doubles as the generic "who is this owed to" field

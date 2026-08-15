@@ -2228,6 +2228,68 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     expect(await glBalanceMinor(t, orgId, "CASH_ON_HAND")).toBe(0);
   });
 
+  test("PURCHASE refuses a row with no real VIN, so a retry cannot capitalize it twice", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59h");
+
+    // A placeholder VIN gets a fresh random value on every import, so the
+    // by-VIN dedup below can never match it — re-submitting the same file would
+    // insert a second vehicle AND post a second acquisition for a car already
+    // on the books. vehicles.create refuses a non-sourced vehicle with no VIN
+    // for the same reason; PURCHASE-mode import now applies the same rule.
+    for (const vin of ["", "xxxxxxxxxxxxxxxxx", "N/A"]) {
+      await expect(
+        asOwner.mutation(api.vehicles.importBulk, {
+          orgId,
+          acquisitionPosting: "PURCHASE",
+          purchasePaymentMethod: "CASH",
+          vehicles: [{ ...baseImportRow, vin, purchasePrice: 10000 }],
+        })
+      ).rejects.toThrow(/VIN/i);
+    }
+
+    const vehicles = await t.run((ctx) =>
+      ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(vehicles).toHaveLength(0);
+  });
+
+  test("OPENING_STOCK still accepts VIN-less rows — nothing posts, so nothing can double-post", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59i");
+
+    const result = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId,
+      acquisitionPosting: "OPENING_STOCK",
+      vehicles: [
+        { ...baseImportRow, vin: "xxxxxxxxxxxxxxxxx", purchasePrice: 10000 },
+        { ...baseImportRow, vin: "N/A", purchasePrice: 10000 },
+      ],
+    });
+
+    expect(result.inserted).toBe(2);
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
+  });
+
+  test("a PURCHASE batch is capped well below the insert-only ceiling", async () => {
+    const { orgId, asOwner } = await seedDealer("s59j");
+    const rows = Array.from({ length: 26 }, (_, i) => ({
+      ...baseImportRow,
+      vin: `IMPORTCAP${String(i).padStart(8, "0")}`,
+      purchasePrice: 1000,
+    }));
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: rows,
+      })
+    ).rejects.toThrow(/Import too large/);
+
+    // The same 26 rows are fine when nothing posts.
+    const ok = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "OPENING_STOCK", vehicles: rows,
+    });
+    expect(ok.inserted).toBe(26);
+  });
+
   test("re-importing the same VIN does not capitalize it twice", async () => {
     const { t, orgId, asOwner } = await seedDealer("s59g");
     const rows = [{ ...baseImportRow, vin: "IMPORTDUP00000001", purchasePrice: 10000 }];
