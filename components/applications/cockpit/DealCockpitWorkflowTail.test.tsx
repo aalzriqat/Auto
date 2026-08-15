@@ -362,6 +362,11 @@ describe("the stage that nothing can clear", () => {
     // operator is not being shown — the defect the handover confirmation spent
     // nine review rounds removing.
     grantTheWholeTail();
+    // The permission is GRANTED here, so the only thing missing is the money.
+    // Without it this case could not tell "hidden because the figure is
+    // withheld" from "hidden because the caller cannot approve" — and would
+    // still pass if the money half of the guard were deleted.
+    permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
     queryResults.set(
       COCKPIT_QUERY,
       cockpit({

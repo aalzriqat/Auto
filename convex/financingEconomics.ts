@@ -2194,8 +2194,49 @@ export const resolveAppraisalGap = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [
       PERMISSIONS.APPROVE_FINANCE_APPLICATION,
     ]);
-    const app = await ctx.db.get(args.applicationId);
-    if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId
+    );
+
+    // Separation of duties, the same one `approveDealerPurchaseAmount` and
+    // `reopenApproval` enforce. Deciding where the customer's share of a
+    // shortfall lands moves the owner-facing profit — routing all of it to the
+    // dealership raises the figure by the whole gap — so the person who sold
+    // the vehicle does not get to decide it on their own deal, however senior.
+    // Enforced here and not only in the card, because this mutation is
+    // reachable directly.
+    if (user._id === app.salespersonId) {
+      throw new ConvexError(
+        "You cannot settle the appraisal gap on your own application. A manager or the dealership owner records it."
+      );
+    }
+
+    // The lifecycle, before anything else about the money.
+    //
+    // These economics are SEALED by the steps that follow. `registerVehicleHandover`
+    // freezes the approved figures and `finalizeDeal` creates the sale and writes
+    // the remittance — a resolution recorded afterwards would recompute the
+    // owner's profit behind a deal whose journal already exists, and on a
+    // direct-to-supplier deal would overwrite the zero remittance finalization
+    // deliberately wrote. The negotiation belongs before the vehicle leaves.
+    if (app.status !== "APPROVED") {
+      throw new ConvexError(
+        "Only an approved application can have its appraisal gap settled."
+      );
+    }
+    if (app.vehicleHandoverAt !== undefined) {
+      throw new ConvexError(
+        "The vehicle has already been handed over on this deal, so its figures are sealed and the appraisal gap can no longer be settled here."
+      );
+    }
+    if (app.finalizedSaleId !== undefined) {
+      throw new ConvexError(
+        "This deal has already been closed, so its figures are sealed and the appraisal gap can no longer be settled here."
+      );
+    }
 
     assertSupportedDenomination(app.economicsCurrency, "recording this gap resolution");
 
@@ -2239,6 +2280,19 @@ export const resolveAppraisalGap = mutation({
       args.customerGapShareMinor,
       args.dealerGapShareMinor
     );
+    // The owner authorised customer-absorbs and split, and deliberately NOT
+    // dealer-absorbs: an enum member is not evidence that the dealership eating
+    // a shortfall alone is a normal outcome, and no production row has ever
+    // used it. Refused at the SERVER, because a payload with a zero customer
+    // share classifies as DEALER_ABSORBS whatever the screen called it — a
+    // client-side rule would have let "Split" record a full dealership loss.
+    // Historical rows keep the value and stay readable; this is about what may
+    // be newly created.
+    if (resolution === "DEALER_ABSORBS") {
+      throw new ConvexError(
+        "The customer's share cannot be nothing. Recording the dealership as absorbing the whole difference is not something this step does — record what the customer covers, or reopen the approved amount if the dealership is taking the loss."
+      );
+    }
 
     const notes = args.notes?.trim();
     await ctx.db.patch(args.applicationId, {
@@ -2265,7 +2319,11 @@ export const resolveAppraisalGap = mutation({
       field: "gapResolution",
       previousValue: app.gapResolution,
       newValue: `${resolution} (customer ${args.customerGapShareMinor}, dealer ${args.dealerGapShareMinor}; customer share as cash ${args.customerGapCashToDealerMinor}, installments ${args.customerGapInstallmentToDealerMinor}, to the finance company ${args.customerGapToFinanceCompanyMinor}; against a raw gap of ${rawAppraisalGapMinor})`,
-      reason: notes ?? `Appraisal gap settled as ${resolution}.`,
+      // `notes ? notes : …`, NOT `??`. A whitespace-only note trims to "", which
+      // is defined, so nullish coalescing would keep it and write an EMPTY
+      // reason onto the one audit row that explains why money moved. The UI
+      // cannot send that today; this mutation is public and a script could.
+      reason: notes ? notes : `Appraisal gap settled as ${resolution}.`,
       changedBy: user._id,
     });
 

@@ -28,6 +28,25 @@ import {
  */
 export type GapMode = "CUSTOMER_ABSORBS" | "SPLIT";
 
+/**
+ * One confirmation attempt: what the operator typed AND the figures they were
+ * typing against.
+ *
+ * The gap and the stamp are captured on the closed -> open transition and never
+ * re-read while the dialog is open. An earlier revision of this component took
+ * the gap from a live prop and let the parent send the live stamp at submit
+ * time, which quietly destroyed the very protection the stamp exists for: a
+ * re-approval mid-dialog moved the shortfall from 1,000 to 1,200, the dealer's
+ * derived share changed underneath the operator, and the submission carried the
+ * NEW stamp, so the server accepted an allocation nobody had agreed to. That is
+ * the same live-vs-snapshot fault the handover confirmation was rebuilt to
+ * remove, which is why every figure below comes from the snapshot.
+ */
+type Attempt = {
+  rawAppraisalGapMinor: number;
+  economicsStamp: string | undefined;
+};
+
 /** What the operator typed, before it is anything the server would accept. */
 type Draft = {
   mode: GapMode;
@@ -81,6 +100,7 @@ export function ResolveGapDialog({
   open,
   submitting,
   rawAppraisalGapMinor,
+  economicsStamp,
   factor,
   money,
   t,
@@ -91,6 +111,8 @@ export function ResolveGapDialog({
   submitting: boolean;
   /** The shortfall being settled, as the server currently states it. */
   rawAppraisalGapMinor: number;
+  /** The revision those figures belong to; snapshotted alongside them. */
+  economicsStamp: string | undefined;
   /** Minor units per major unit, for the deal's own denomination. */
   factor: number;
   money: (minor: number) => string;
@@ -103,14 +125,16 @@ export function ResolveGapDialog({
     customerGapInstallmentToDealerMinor: number;
     customerGapToFinanceCompanyMinor: number;
     notes: string;
+    economicsStamp: string | undefined;
   }) => Promise<void>;
 }>) {
   const [draft, setDraft] = useState<Draft>(EMPTY);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState<Attempt | null>(null);
 
-  // Reset on the closed -> open transition only, matching the sibling dialogs:
-  // the gap arrives from a live query, and resetting on every change would
-  // clear the operator's entry mid-typing.
+  // Reset on the closed -> open transition only, and snapshot the figures with
+  // it. Resetting on every change would clear an entry mid-typing; re-reading
+  // the gap on every change would move the number being allocated.
   const wasOpenRef = useRef(false);
   useEffect(() => {
     const justOpened = open && !wasOpenRef.current;
@@ -118,7 +142,13 @@ export function ResolveGapDialog({
     if (!justOpened) return;
     setDraft(EMPTY);
     setError(null);
-  }, [open]);
+    setAttempt({ rawAppraisalGapMinor, economicsStamp });
+  }, [open, rawAppraisalGapMinor, economicsStamp]);
+
+  // Before the first open there is no snapshot yet, and the live values are
+  // correct in that window because nothing has been typed against them.
+  const live: Attempt = attempt ?? { rawAppraisalGapMinor, economicsStamp };
+  const gapMinor = live.rawAppraisalGapMinor;
 
   const set = (patch: Partial<Draft>) => setDraft((current) => ({ ...current, ...patch }));
 
@@ -131,14 +161,12 @@ export function ResolveGapDialog({
    * knows would only create a way to get it wrong.
    */
   const customerShareMinor =
-    draft.mode === "CUSTOMER_ABSORBS"
-      ? rawAppraisalGapMinor
-      : toMinor(draft.customerShare, factor);
+    draft.mode === "CUSTOMER_ABSORBS" ? gapMinor : toMinor(draft.customerShare, factor);
 
   // Derived, never typed. Entering one side and computing the other is what
   // stops two boxes from disagreeing about a number that must sum exactly.
   const dealerShareMinor =
-    customerShareMinor === null ? null : rawAppraisalGapMinor - customerShareMinor;
+    customerShareMinor === null ? null : gapMinor - customerShareMinor;
 
   const cashMinor = toMinor(draft.cash, factor) ?? (draft.cash.trim() === "" ? 0 : null);
   const installmentsMinor =
@@ -162,7 +190,7 @@ export function ResolveGapDialog({
   // server accepts or invite one it refuses.
   const violations =
     parsed && dealerShareMinor >= 0
-      ? validateGapShares(rawAppraisalGapMinor, {
+      ? validateGapShares(gapMinor, {
           customerGapShareMinor: customerShareMinor,
           dealerGapShareMinor: dealerShareMinor,
           customerGapCashToDealerMinor: cashMinor,
@@ -171,7 +199,17 @@ export function ResolveGapDialog({
         })
       : [{ code: "NEGATIVE_AMOUNT" as const, message: "" }];
 
-  const canSubmit = !submitting && parsed && violations.length === 0;
+  /**
+   * A "split" that leaves the customer with nothing is dealer-absorbs wearing
+   * the wrong label. The server refuses that outright; the button should not
+   * offer it either. Bounded at both ends, because the whole gap on the
+   * customer is the OTHER radio and this one should mean what it says.
+   */
+  const splitIsRealSplit =
+    draft.mode !== "SPLIT" ||
+    (customerShareMinor !== null && customerShareMinor > 0 && customerShareMinor < gapMinor);
+
+  const canSubmit = !submitting && parsed && splitIsRealSplit && violations.length === 0;
 
   const submit = async () => {
     if (!canSubmit || customerShareMinor === null || dealerShareMinor === null) return;
@@ -184,6 +222,10 @@ export function ResolveGapDialog({
         customerGapInstallmentToDealerMinor: installmentsMinor ?? 0,
         customerGapToFinanceCompanyMinor: toFinanceCompanyMinor ?? 0,
         notes: draft.notes.trim(),
+        // The stamp the dialog was OPENED against, not whatever the deal says
+        // now. Sending the live one would tell the server the operator had seen
+        // a revision they never saw.
+        economicsStamp: live.economicsStamp,
       });
     } catch (caught) {
       // Shown here rather than thrown away: the server owns the refusal, and
@@ -209,7 +251,7 @@ export function ResolveGapDialog({
               the approval is wrong, which is a different action. */}
           <div className="flex items-baseline justify-between gap-4 rounded-md border bg-muted/40 px-3 py-2">
             <span className="text-sm text-muted-foreground">{t("ResolveGapAmount")}</span>
-            <span className="font-semibold tabular-nums">{money(rawAppraisalGapMinor)}</span>
+            <span className="font-semibold tabular-nums">{money(gapMinor)}</span>
           </div>
 
           <RadioCardGroup

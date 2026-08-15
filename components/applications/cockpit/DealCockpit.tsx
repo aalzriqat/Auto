@@ -785,7 +785,11 @@ export function DealCockpit({
               // The stamp the SCREEN was rendered against. If the approval moved
               // while the operator was agreeing the split, the server refuses
               // rather than reconciling an allocation to a gap that is gone.
-              economicsStamp: deal && "economicsStamp" in deal ? deal.economicsStamp : "",
+              // The stamp the DIALOG snapshotted when it opened, passed
+              // straight through. Re-reading it from `deal` here would undo
+              // that snapshot and hand the server a revision the operator
+              // never saw — the fault the handover submit documents.
+              economicsStamp: values.economicsStamp ?? "",
               customerGapShareMinor: values.customerGapShareMinor,
               dealerGapShareMinor: values.dealerGapShareMinor,
               customerGapCashToDealerMinor: values.customerGapCashToDealerMinor,
@@ -1221,6 +1225,7 @@ export function DealCockpitView({
       customerGapInstallmentToDealerMinor: number;
       customerGapToFinanceCompanyMinor: number;
       notes: string;
+      economicsStamp: string | undefined;
     }) => Promise<void>;
   };
   /** The expected-payment form's own state. */
@@ -2280,6 +2285,7 @@ export function DealCockpitView({
           open={gapResolution.resolving}
           submitting={gapResolution.submitting}
           rawAppraisalGapMinor={rawAppraisalGapMinor}
+          economicsStamp={deal && "economicsStamp" in deal ? deal.economicsStamp : undefined}
           factor={factor}
           money={money}
           t={t}

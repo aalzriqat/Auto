@@ -430,10 +430,15 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // mistyped settlement advice. Same shape as the two above — `orgId` plus a
   // caller-supplied `applicationId` — so it lands in `analysed` too, and it
   // satisfies the rule the same inline way.
+  // SCRUM-83 adds a fourth: `resolveAppraisalGap`, which records how the parties
+  // settled the shortfall a finance company left. Same shape again — `orgId`
+  // plus a caller-supplied `applicationId` — so it lands in `analysed`, and it
+  // proves ownership through `requireOwnedRow` rather than the inline compare
+  // its neighbours use.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 473,
-      analysed: 315,
+      totalMutations: 474,
+      analysed: 316,
       skippedNoArgsBlock: 13,
       skippedNoOrgId: 145,
     });
