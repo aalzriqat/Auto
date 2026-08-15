@@ -1291,6 +1291,21 @@ export function rulePaymentLinkReceived(p: PaymentLinkReceivedPayload): RuleResu
   };
 }
 
+/**
+ * DEAD for new events, and deliberately left on the OLD tax convention.
+ *
+ * Nothing emits `SALE_CANCELLED` — `hookSaleCancelled` is a `makeReversalHook`,
+ * so a cancellation mirrors the original journal's own lines rather than
+ * recomputing them here. This rule is reachable only by an event queued before
+ * that was true, and such an event must reverse what the old convention
+ * actually posted. "Fixing" it to match `ruleSaleCompleted` (SCRUM-22) would
+ * make a reversal disagree with the entry it reverses, leaving the difference
+ * stranded in AR forever.
+ *
+ * So the divergence below is intentional, not an oversight. `saleTaxConventionGuard.test.ts`
+ * fails if anything ever starts emitting this event, because the moment one
+ * does, this becomes wrong for a live path.
+ */
 export function ruleSaleCancelled(p: SaleCancelledPayload): RuleResult {
   const revenueMinor = p.taxMinor ? p.saleAmountMinor - p.taxMinor : p.saleAmountMinor;
   const dims = { customerId: p.customerId, vehicleId: p.vehicleId, salespersonId: p.salespersonId };
