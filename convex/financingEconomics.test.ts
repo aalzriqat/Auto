@@ -4168,6 +4168,36 @@ describe("handover seals the approved amount, and the amount that was verified",
     });
   }
 
+  test("a deal with nothing recorded reports no economics, whoever is asking", async () => {
+    // `buildCockpitMoney` returns zeroed rows to any caller holding
+    // `view:finance`, so the client used to read "there is a money object" as
+    // "economics exist" and warned on every brand-new deal. The server states
+    // the fact now, and states it the same way for a caller whose figures are
+    // withheld.
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    for (const as of [seed.asUser, seed.asApprover]) {
+      const deal = await as.query(api.applications.dealCockpit, {
+        orgId: seed.orgId,
+        applicationId,
+      });
+      expect(deal?.economicsRecorded).toBe(false);
+    }
+  });
+
+  test("a quotation alone counts as economics on the record", async () => {
+    // Not only the approved amount: a deal carrying just a quotation still
+    // shows money, so a denomination nobody can vouch for matters there too.
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    const deal = await seed.asUser.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(deal?.economicsRecorded).toBe(true);
+  });
+
   test("a deal in a supported canonical currency still shows its figures", async () => {
     // The other half: the refusal must not swallow every deal. This is what
     // proves the null above is a judgement and not a constant.

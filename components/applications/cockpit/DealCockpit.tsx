@@ -1254,13 +1254,27 @@ export function DealCockpitView({
    * withheld and the reason is stated. Absent, unsupported and non-canonical
    * all land here, matching exactly what the writers refuse.
    */
-  const denomination = deal && "denomination" in deal ? deal.denomination : null;
-  // Derived from the stage rail, which the SERVER computes from the unredacted
-  // row — so this is true even for a caller whose money block is withheld.
+  // Only a payload that CARRIES the projection can be judged by it. The cash
+  // variant comes from `sales.dealCockpit`, which projects no denomination at
+  // all — reading its absence as "unusable" would have hidden the figures on
+  // every live cash sale, which is a far worse fault than the one this guards.
+  const hasDenominationProjection = deal != null && "denomination" in deal;
+  const denomination = hasDenominationProjection ? deal.denomination : null;
+  /**
+   * Whether economics are actually ON the record.
+   *
+   * NOT `Boolean(deal.money)`. That object is permission-shaped: `dealCockpit`
+   * builds it for any caller holding `view:finance` and returns zeroed party
+   * rows for a deal where nothing has ever been recorded. Using it here put the
+   * red restatement panel on every freshly created financed deal for the OWNER,
+   * telling them to record again something that was never recorded once.
+   *
+   * The stage rail is the real signal, and the server derives it from the
+   * unredacted row — so it is equally true for a caller whose money is withheld.
+   */
   const economicsRecorded =
-    Boolean(deal?.money) ||
-    deal?.stages?.some((stage) => stage.key === "APPROVED_PURCHASE" && stage.state === "COMPLETE") === true;
-  const denominationUnusable = denomination === null && economicsRecorded;
+    hasDenominationProjection && "economicsRecorded" in deal ? deal.economicsRecorded === true : false;
+  const denominationUnusable = hasDenominationProjection && denomination === null && economicsRecorded;
   const dealCurrency = denomination?.code ?? deal?.money?.currency ?? currency.code;
   const factor = useMemo(
     () => Math.pow(10, denomination?.scale ?? scaleForCurrency(dealCurrency)),
@@ -1326,8 +1340,12 @@ export function DealCockpitView({
    */
   const handoverEvidence =
     deal && "handoverEvidence" in deal ? deal.handoverEvidence : undefined;
+  // Withheld outright rather than approximated: a figure the operator cannot
+  // tell is wrong is worse than a visible blank beside the restatement notice.
   const decisionMoney = (minor: number) =>
-    `${(minor / decisionFactor).toLocaleString()} ${decisionMarker}`;
+    denominationUnusable
+      ? "—"
+      : `${(minor / decisionFactor).toLocaleString()} ${decisionMarker}`;
   const adviceRecordedLabel =
     discrepancy?.recordedMinor != null ? discrepancyMoney(discrepancy.recordedMinor) : t("Unknown");
   const adviceApprovedLabel =

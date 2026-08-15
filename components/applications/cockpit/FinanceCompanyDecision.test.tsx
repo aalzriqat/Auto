@@ -72,6 +72,7 @@ function dealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
     dealKind: "FINANCED",
     economicsStamp: STAMP,
     denomination: { code: "JOD", scale: 3 },
+    economicsRecorded: true,
     handoverEvidence: {
       approvedPurchaseAmountMinor: null,
       financeCompanyFundedPortionMinor: null,
@@ -189,14 +190,11 @@ describe("a denomination nobody can vouch for", () => {
       <DealCockpitView
         deal={dealFixture({
           denomination: null,
-          // Money withheld from this caller AND economics on the record: the
-          // stage rail is what proves they exist, so the warning reaches a
-          // caller who cannot see the figures either way.
+          // Money withheld from this caller AND economics on the record. The
+          // server states both, so the warning reaches a caller who cannot see
+          // the figures either way.
           money: null,
-          stages: [
-            { key: "APPLICATION", state: "COMPLETE" },
-            { key: "APPROVED_PURCHASE", state: "COMPLETE" },
-          ],
+          economicsRecorded: true,
         })}
         onRecordSupplierReceipt={async () => {}}
       />
@@ -205,12 +203,46 @@ describe("a denomination nobody can vouch for", () => {
     expect(screen.getByText("EconomicsCurrencyUnusableHint")).toBeTruthy();
   });
 
+  test("does not fire for a PRIVILEGED caller on a deal with no economics yet", () => {
+    // The shape both reviewers said the suite never exercised, and the one the
+    // dealership owner sees most: `dealCockpit` builds a money object for any
+    // caller holding `view:finance` — zeroed rows, no economics recorded — so a
+    // predicate keyed on `Boolean(deal.money)` put a red "record it again"
+    // panel on every newly created financed deal. Nothing had been recorded
+    // once.
+    render(
+      <DealCockpitView
+        deal={dealFixture({ denomination: null, economicsRecorded: false })}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    expect(screen.queryByText("EconomicsCurrencyUnusable")).toBeNull();
+  });
+
+  test("does not fire for a CASH deal, whose payload carries no denomination", () => {
+    // `sales.dealCockpit` projects no denomination at all. Reading that absence
+    // as "unusable" would have hidden the figures on every live cash sale — a
+    // regression far worse than the display fault this guards against.
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          dealKind: "CASH",
+          applicationId: null,
+          denomination: undefined,
+          economicsRecorded: undefined,
+        })}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    expect(screen.queryByText("EconomicsCurrencyUnusable")).toBeNull();
+  });
+
   test("does not fire for a deal with no economics recorded", () => {
     // Absent currency on a deal with nothing to denominate is ordinary, not an
     // error — warning there would put a red panel on every new deal.
     render(
       <DealCockpitView
-        deal={dealFixture({ denomination: null, money: null })}
+        deal={dealFixture({ denomination: null, money: null, economicsRecorded: false })}
         onRecordSupplierReceipt={async () => {}}
       />
     );

@@ -1864,6 +1864,23 @@ export const dealCockpit = query({
        */
       denomination: denominationOf(app.economicsCurrency),
       /**
+       * Whether any economics are actually ON this deal.
+       *
+       * The client had to guess at this and guessed with `Boolean(deal.money)`,
+       * which is PERMISSION-shaped: `buildCockpitMoney` returns zeroed rows for
+       * any caller holding `view:finance`, recorded or not. That put a red
+       * "record it again" panel on every freshly created financed deal for the
+       * owner, about figures that had never been recorded once.
+       *
+       * Any of the three, not just the approved amount: a deal carrying only a
+       * quotation still shows money, so a denomination nobody can vouch for
+       * matters there too.
+       */
+      economicsRecorded:
+        app.submittedQuotationMinor !== undefined ||
+        app.approvedDealerPurchaseAmountMinor !== undefined ||
+        app.financeCompanyFundedPortionMinor !== undefined,
+      /**
        * What the handover confirmation shows, on `base` so it survives the
        * money gate — and derived through `redactSettlementEvidence`, the same
        * policy `applications.get` uses.
