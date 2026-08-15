@@ -738,6 +738,49 @@ describe("SCRUM-40 O-2 — a live basis that is not a basis", () => {
     expect(e.supplierSettlement).not.toBe(SALE_PRICE + 3_500);
   });
 
+  /**
+   * The guard that decides "is there a live basis at all" is written
+   * `!(capitalizedCost > 0)`, twice — `basisUnknown` and `supplierBasisUnknown`.
+   *
+   * SonarCloud flags both on PR #238 as S1940, "use the opposite operator (<=)
+   * instead". That rewrite is not equivalent and would be a defect: every
+   * comparison against `NaN` is false, so `!(NaN > 0)` is TRUE (no basis, and
+   * the figure is withheld) while `NaN <= 0` is FALSE (a basis exists, and
+   * `salePrice − NaN` is published).
+   *
+   * Reachable, not theoretical. Convex stores `NaN` under a `v.number()`
+   * validator without complaint, and `computeVehicleCapitalizedCost` returns
+   * `vehicle.sourceCost ?? 0` for a sourced car — `NaN ?? 0` is `NaN`, so it
+   * arrives here unchanged. One such row then renders EVERY other sale's profit
+   * in the org as `NaN`, the same failure `consignedReporting.test.ts` already
+   * pins for the frozen margin field.
+   *
+   * This test exists to make that suggestion fail loudly rather than be applied
+   * on a quiet cleanup pass. Verified by mutation: inverting either operator to
+   * `<= 0` turns the assertions below red.
+   */
+  test("a NaN live cost is not a basis — the `<= 0` rewrite would publish NaN", () => {
+    const e = saleEconomics({
+      salePrice: SALE_PRICE,
+      vehicle: { sourceType: "SOURCED" },
+      capitalizedCost: NaN,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      recordedMargin: undefined,
+      recordedSupplierEntitlement: undefined,
+    });
+
+    expect(e.dealershipMargin).toBeNull();
+    expect(e.recognizedRevenue).toBeNull();
+    // The supplier half asks the same question independently, so it needs its
+    // own assertion — `supplierBasisUnknown` carries the second `!(… > 0)`.
+    expect(e.supplierSettlement).toBeNull();
+
+    // Stated separately from `toBeNull()`: a NaN leaking through reads as
+    // "not null" in a way the failure message above would not name.
+    expect(Number.isNaN(e.dealershipMargin as number)).toBe(false);
+    expect(Number.isNaN(e.supplierSettlement as number)).toBe(false);
+  });
+
   test("a dealer-owned sale sold at a genuine loss still reports that loss", () => {
     // The other side, and the reason this rule is agent-only. A dealership can
     // and does sell its own stock below cost; that is a real trading result and
