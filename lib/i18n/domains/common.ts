@@ -203,7 +203,7 @@ export const commonEn = {
   ImportWillCapitalize: "Will add to Vehicle Inventory",
   ImportWillCapitalizeNote: "{count} vehicle(s) with a cost. Rows with no cost, and sourced vehicles, post nothing.",
   ImportVinRequiredForPurchase:
-    "{count} vehicle(s) with a cost have no VIN. A purchased vehicle needs one — without it a repeated import would record the purchase twice. Add the VINs, or import these as stock you already own.",
+    "{count} vehicle(s) have no VIN. Every vehicle in a purchase import needs one — without it a repeated import would add the same car again and record its purchase twice. Add the VINs, or import these as stock you already own.",
 
   ImportCustomersTitle: "Import Customers from Excel / CSV",
   ImportCustomersDesc: "Upload your existing customer list from a spreadsheet. Supported: .xlsx, .csv",
@@ -1110,7 +1110,7 @@ export const commonAr = {
   ImportWillCapitalize: "ستُضاف إلى مخزون المركبات",
   ImportWillCapitalizeNote: "{count} مركبة لها تكلفة. الصفوف بلا تكلفة والمركبات الموردة لا تُقيَّد.",
   ImportVinRequiredForPurchase:
-    "{count} مركبة لها تكلفة بلا رقم شاصي. المركبة المشتراة تحتاج إليه — بدونه سيُسجَّل الشراء مرتين عند إعادة الاستيراد. أضف أرقام الشاصي، أو استوردها كمركبات تملكها بالفعل.",
+    "{count} مركبة بلا رقم شاصي. كل مركبة في استيراد شراء تحتاج إليه — بدونه ستُضاف السيارة نفسها مجدداً ويُسجَّل شراؤها مرتين عند إعادة الاستيراد. أضف أرقام الشاصي، أو استوردها كمركبات تملكها بالفعل.",
 
   ImportCustomersTitle: "استيراد العملاء من Excel / CSV",
   ImportCustomersDesc: "قم برفع قائمة عملائك من جدول بيانات. المدعوم: .xlsx و .csv",

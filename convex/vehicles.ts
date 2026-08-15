@@ -2279,26 +2279,33 @@ export const importBulk = mutation({
       if (!args.purchasePaymentMethod) {
         throw new ConvexError("Payment method is required when importing purchased vehicles.");
       }
-      // A car that posts must be identifiable, and vehicles.create already
-      // refuses a non-sourced vehicle with no VIN for exactly this reason.
+      // EVERY row in a purchase import must be identifiable — not only the ones
+      // that post today. vehicles.create already refuses a non-sourced vehicle
+      // with no VIN, and this is the same rule applied to the whole file.
       //
-      // It matters more here than there. A blank or filler VIN is replaced with
-      // generateImportVinPlaceholder(), which is random per call — so the
-      // duplicate-VIN check below can never match it, and re-submitting the same
-      // file (a network retry, or an operator retrying after a later chunk
-      // failed) would insert a second vehicle and post a SECOND acquisition for
-      // a car already on the books, cash included. Before this change that
-      // retry only duplicated inert rows; posting is what turns it into
-      // duplicated money.
-      const missingVin = args.vehicles.filter(
-        (row) =>
-          (row.sourceType ?? "").trim().toUpperCase() !== "SOURCED" &&
-          (row.purchasePrice ?? 0) > 0 &&
-          isPlaceholderVin(row.vin)
-      );
+      // The reason is that a purchase import's retry safety IS the VIN dedup
+      // below. A blank or filler VIN is replaced with
+      // generateImportVinPlaceholder(), which is random per call, so the dedup
+      // can never match it and re-submitting the same file — a network retry, or
+      // an operator retrying after a later chunk failed — inserts a second
+      // vehicle for the same car.
+      //
+      // Restricting this to rows that post today would leave the hole open, for
+      // two shapes that look harmless and are not:
+      //
+      //   - a SOURCED row posts nothing now, but converting it to STOCK with a
+      //     purchase price later posts VEHICLE_ACQUIRED. Duplicate it here and
+      //     both copies post, capitalizing one physical car twice.
+      //     hasVehicleAcquisitionAccountingExposure guards per vehicleId and
+      //     cannot know two rows are one car.
+      //   - a cost-less owned row is the same story once a price is set.
+      //
+      // It also makes the retry guidance the importer shows honest: in this mode
+      // every row has a VIN, so every already-imported car really is skipped.
+      const missingVin = args.vehicles.filter((row) => isPlaceholderVin(row.vin));
       if (missingVin.length > 0) {
         throw new ConvexError(
-          `A VIN is required for every purchased vehicle — ${missingVin.length} row(s) have none. Add the VINs, or import them as stock you already own.`
+          `A VIN is required for every vehicle in a purchase import — ${missingVin.length} row(s) have none. Add the VINs, or import them as stock you already own.`
         );
       }
       if (args.purchasePaymentMethod === "ON_ACCOUNT") {

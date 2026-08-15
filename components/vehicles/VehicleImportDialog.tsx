@@ -336,9 +336,10 @@ function capitalizingRows(rows: Record<string, any>[]) {
  * leaving the operator with a half-capitalized import and a generic error.
  */
 function purchaseBlockers(rows: Record<string, any>[]): { missingVin: number } {
-  const posting = capitalizingRows(rows);
+  // Every row, not just the ones that post today — see the server's own
+  // `missingVin` check for why a sourced or cost-less row is not harmless.
   return {
-    missingVin: posting.filter((r) => !String(r.vin ?? "").trim()).length,
+    missingVin: rows.filter((r) => !String(r.vin ?? "").trim()).length,
   };
 }
 
@@ -613,9 +614,19 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
               // as duplicates rather than capitalized a second time (covered by
               // "re-importing the same VIN does not capitalize it twice").
               const detail = err instanceof Error ? err.message : String(err);
+              // What a re-import actually does depends on the mode. A PURCHASE
+              // file has a real VIN on every row, so every car already added is
+              // skipped as a duplicate. An OPENING_STOCK file may contain
+              // VIN-less rows, which get a fresh placeholder each time and would
+              // be added again — promising blanket retry safety there would be
+              // false.
+              const retryAdvice =
+                posting === "PURCHASE"
+                  ? "Fix the reported rows and import the file again — the vehicles already added will be skipped."
+                  : "Fix the reported rows and import the file again. Vehicles that carry a VIN will be skipped as duplicates, but rows without one would be added a second time — remove those that already imported.";
               throw new Error(
                 totals.inserted > 0
-                  ? `Imported ${totals.inserted} vehicle(s), then stopped: ${detail} Fix the reported rows and import the file again — the vehicles already added will be skipped.`
+                  ? `Imported ${totals.inserted} vehicle(s), then stopped: ${detail} ${retryAdvice}`
                   : detail
               );
             }

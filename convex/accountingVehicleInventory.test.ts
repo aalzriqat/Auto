@@ -2253,6 +2253,34 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     expect(vehicles).toHaveLength(0);
   });
 
+  test("PURCHASE refuses a VIN-less row of ANY shape, because retry safety is VIN dedup", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59m");
+
+    // A sourced row and a cost-less owned row post nothing TODAY, so an earlier
+    // version of this guard let them through. Both are still inserted, both get
+    // a fresh random placeholder VIN, and both therefore duplicate on a retry —
+    // and a duplicate is not inert: converting each SOURCED row to STOCK with a
+    // purchase price later posts its own VEHICLE_ACQUIRED, capitalizing one
+    // physical car twice. `hasVehicleAcquisitionAccountingExposure` guards per
+    // vehicleId and cannot know two rows are one car.
+    for (const row of [
+      { ...baseImportRow, vin: "", sourceType: "SOURCED", sourcedFromName: "Gulf Motors", sourceCost: 9000 },
+      { ...baseImportRow, vin: "N/A", purchasePrice: 0 },
+      { ...baseImportRow, vin: "xxxxxxxxxxxxxxxxx" },
+    ]) {
+      await expect(
+        asOwner.mutation(api.vehicles.importBulk, {
+          orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: [row],
+        })
+      ).rejects.toThrow(/VIN/i);
+    }
+
+    const vehicles = await t.run((ctx) =>
+      ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(vehicles).toHaveLength(0);
+  });
+
   test("OPENING_STOCK still accepts VIN-less rows — nothing posts, so nothing can double-post", async () => {
     const { t, orgId, asOwner } = await seedDealer("s59i");
 
