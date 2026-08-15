@@ -55,10 +55,18 @@ export function ApplicationClient() {
       : "skip"
   );
   useEffect(() => {
-    if (!resolvedApplicationId) return;
+    // Only drives the dialog while a candidate is in the URL. Navigating the
+    // parameter away must not leave the previous deal on screen, but with no
+    // candidate at all this must keep its hands off the row-click path.
+    if (!candidateApplicationId) return;
+    if (!resolvedApplicationId) {
+      setIsDialogOpen(false);
+      setSelectedAppId(null);
+      return;
+    }
     setSelectedAppId(resolvedApplicationId);
     setIsDialogOpen(true);
-  }, [resolvedApplicationId]);
+  }, [candidateApplicationId, resolvedApplicationId]);
   const [statusFilter, setStatusFilter] = useState("ALL");
   const statusValueFor = (app: { status: string; hasPendingDepositResolution?: boolean }) =>
     app.hasPendingDepositResolution ? "DEPOSIT_PENDING" : app.status;

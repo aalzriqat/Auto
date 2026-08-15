@@ -380,7 +380,35 @@ describe("Phase 13 / SCRUM-51 — finance-company receivable work queue", () => 
     expect(totals).toEqual([{ currency: "JOD", scale: 3, outstandingMinor: 500_000 }]);
   });
 
-  test("requires view:finance", async () => {
+  test("orders the queue newest-first, not grouped by status", async () => {
+    // An index sorts by its trailing components, so querying
+    // by_org_payerType_status with status unbound would order by status first:
+    // WRITTEN_OFF and REVERSED would head the queue and OPEN would sink to the
+    // bottom, which is the opposite of what an accountant is working from.
+    const ctx = await seedClaimsDealer();
+    const first = await seedFinanceCompanyReceivable(ctx, { amountMinor: 1_000, financierName: "First" });
+    const second = await seedFinanceCompanyReceivable(ctx, { amountMinor: 2_000, financierName: "Second" });
+    const third = await seedFinanceCompanyReceivable(ctx, { amountMinor: 3_000, financierName: "Third" });
+    // Statuses chosen so that a status-ordered index would produce a different
+    // sequence from the creation order.
+    await ctx.t.run(async (c) => {
+      await c.db.patch(first.receivableDocumentId, { status: "WRITTEN_OFF" });
+      await c.db.patch(third.receivableDocumentId, { status: "OPEN" });
+    });
+
+    const page = await ctx.asOwner.query(api.claims.listFinanceCompanyReceivables, {
+      orgId: ctx.orgId,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+
+    expect(page.page.map((row) => row.receivableDocumentId)).toEqual([
+      third.receivableDocumentId,
+      second.receivableDocumentId,
+      first.receivableDocumentId,
+    ]);
+  });
+
+  test("refuses a non-member outright", async () => {
     const ctx = await seedClaimsDealer();
     await seedFinanceCompanyReceivable(ctx, { amountMinor: 100_000, financierName: "FC" });
 
@@ -390,6 +418,36 @@ describe("Phase 13 / SCRUM-51 — finance-company receivable work queue", () => 
         orgId: ctx.orgId,
         paginationOpts: { numItems: 10, cursor: null },
       })
+    ).rejects.toThrow();
+  });
+
+  test("refuses a member of this org who lacks view:finance", async () => {
+    // The non-member case above does not exercise the permission at all — it is
+    // refused for not belonging to the org. This is the boundary that actually
+    // matters: someone who IS on the team but may not see the money.
+    const ctx = await seedClaimsDealer();
+    await seedFinanceCompanyReceivable(ctx, { amountMinor: 100_000, financierName: "FC" });
+
+    await ctx.t.run(async (c) => {
+      const salesRoleId = await c.db.insert("roles", {
+        orgId: ctx.orgId, name: "Sales", permissions: ["view:sales"],
+      });
+      const salesUserId = await c.db.insert("users", {
+        clerkId: "p13_sales", email: "p13sales@example.com", name: "Sales",
+      });
+      await c.db.insert("memberships", { orgId: ctx.orgId, userId: salesUserId, roleId: salesRoleId });
+    });
+    const asSales = ctx.t.withIdentity({ subject: "p13_sales", clerkId: "p13_sales" });
+
+    await expect(
+      asSales.query(api.claims.listFinanceCompanyReceivables, {
+        orgId: ctx.orgId,
+        paginationOpts: { numItems: 10, cursor: null },
+      })
+    ).rejects.toThrow();
+
+    await expect(
+      asSales.query(api.claims.financeCompanyOutstandingTotals, { orgId: ctx.orgId })
     ).rejects.toThrow();
   });
 });

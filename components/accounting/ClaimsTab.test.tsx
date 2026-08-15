@@ -190,6 +190,10 @@ describe("finance-company AR queue", () => {
     stubs.status = "LoadingFirstPage";
     render(<ClaimsTab />);
 
+    // Asserting only the absence of the empty state would also pass on an empty
+    // tree, or on a table with a different label — it could not fail for the
+    // reason it was written. The loading label itself is the positive claim.
+    expect(screen.getByText("LoadingClaims")).toBeTruthy();
     expect(screen.queryByText("NoFinanceCompanyAR")).toBeNull();
   });
 
