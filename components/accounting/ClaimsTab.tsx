@@ -128,7 +128,17 @@ export function ClaimsTab() {
                     <TableCell className="text-slate-600">{row.buyerName ?? "—"}</TableCell>
                     <TableCell className="text-slate-600">
                       <span className="inline-flex items-center gap-1.5">
-                        {isOverdue && <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600" />}
+                        {isOverdue && (
+                          <>
+                            <AlertTriangle
+                              aria-hidden="true"
+                              className="h-3.5 w-3.5 shrink-0 text-amber-600"
+                            />
+                            {/* Colour and an unlabelled icon are otherwise the
+                                only signals that this one is late. */}
+                            <span className="sr-only">{t("Overdue" as any)}</span>
+                          </>
+                        )}
                         <bdi className={isOverdue ? "font-medium text-amber-700" : undefined}>
                           {format(new Date(row.dueDate), "MMM d, yyyy")}
                         </bdi>

@@ -70,7 +70,10 @@ export const listFinanceCompanyReceivables = query({
 
     const page = await ctx.db
       .query("receivableDocuments")
-      .withIndex("by_org_payerType_status", (q) =>
+      // by_org_payerType, not the status variant: an index sorts by its
+      // trailing components, so leaving status unbound would order the queue by
+      // status first and put OPEN rows last. This one is newest-first.
+      .withIndex("by_org_payerType", (q) =>
         q.eq("orgId", args.orgId).eq("payerType", "FINANCE_COMPANY")
       )
       .order("desc")

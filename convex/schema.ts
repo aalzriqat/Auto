@@ -356,11 +356,16 @@ export default defineSchema({
     // customer receivable in the org and post-filters, which grows with sales
     // volume rather than with financed deals.
     //
-    // Status is the third component so the outstanding total can read only the
+    .index("by_org_payerType", ["orgId", "payerType"])
+    // Both are needed, and the difference is the sort key, not just the filter.
+    // An index sorts by its trailing components, so querying
+    // by_org_payerType_status with only (orgId, payerType) bound orders rows by
+    // STATUS first and creation time second — the queue would lead with
+    // WRITTEN_OFF and bury OPEN, which is the opposite of a work queue. The
+    // queue therefore uses by_org_payerType (newest-first), while the
+    // outstanding total binds status too, so it can read just the
     // OPEN/PARTIALLY_PAID working set instead of every receivable ever raised —
-    // settled history grows without bound, the open set does not. The
-    // (orgId, payerType) prefix still serves the paginated queue, which does
-    // want the settled rows.
+    // settled history grows without bound, the open set does not.
     .index("by_org_payerType_status", ["orgId", "payerType", "status"]),
 
   canonicalPayments: defineTable({
