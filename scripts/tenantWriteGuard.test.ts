@@ -464,10 +464,18 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // ⚠️ `analysed` stays at 315 across all four. That is the number that must
   // never drop silently — a new mutation landing in a skip bucket is only
   // acceptable when the reason is one of the two above, stated per mutation.
+  // SCRUM-51 then removes five: claims.add/settle/reject/update/remove, taking
+  // 477→472 / analysed 315→310. Claims was a second finance-company AR
+  // authority — a subledger receivable with no originating GL debit — so the
+  // module is now a read-only projection with no writer at all; see
+  // convex/claimsReadOnlyGuard.test.ts. All five were analysed, so both totals
+  // drop by exactly five and neither skip bucket moves. That is what makes this
+  // shrinkage a deliberate removal rather than the analyzer quietly losing
+  // sight of a file.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 477,
-      analysed: 315,
+      totalMutations: 472,
+      analysed: 310,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 147,
     });
