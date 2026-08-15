@@ -22,13 +22,18 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 
+// Mutable so a test can switch to Arabic. `accountDisplayName` picks `nameAr`
+// only when the locale is "ar", so a permanently-English mock would make the
+// localized-account-name assertion unwritable.
+const language = { locale: "en" as "en" | "ar" };
+
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({
     // Identity `t` so a MISSING translation surfaces as its key instead of
     // silently rendering something plausible.
     t: (key: string) => key,
-    isRtl: false,
-    locale: "en" as const,
+    isRtl: language.locale === "ar",
+    locale: language.locale,
   }),
 }));
 
@@ -83,9 +88,9 @@ function draftFixture(
     currency: "JOD",
     denominationKnown: true,
     lines: [
-      { accountId: "acc_bank", accountName: "Bank — Arab Bank", debitMinor: 10_000 * SCALE, creditMinor: 0 },
-      { accountId: "acc_inv", accountName: "Vehicle Inventory", debitMinor: 90_000 * SCALE, creditMinor: 0 },
-      { accountId: "acc_cap", accountName: "Owner Capital", debitMinor: 0, creditMinor: 100_000 * SCALE },
+      { accountId: "acc_bank", accountCode: "1010", accountName: "Bank — Arab Bank", debitMinor: 10_000 * SCALE, creditMinor: 0 },
+      { accountId: "acc_inv", accountCode: "1400", accountName: "Vehicle Inventory", debitMinor: 90_000 * SCALE, creditMinor: 0 },
+      { accountId: "acc_cap", accountCode: "3010", accountName: "Owner Capital", debitMinor: 0, creditMinor: 100_000 * SCALE },
     ],
     ...overrides,
   };
@@ -128,10 +133,16 @@ describe("opening-balance approval panel", () => {
 
     // The reviewer must be able to read what they are approving. Approving
     // opaque account ids would make the two-person control theatre.
+    // Asserted per-cell rather than with getByText, because each cell now
+    // renders `code — name` and getByText matches an element's whole content.
     const panel = screen.getByTestId("opening-balance-approval");
-    expect(within(panel).getByText("Bank — Arab Bank")).toBeTruthy();
-    expect(within(panel).getByText("Vehicle Inventory")).toBeTruthy();
-    expect(within(panel).getByText("Owner Capital")).toBeTruthy();
+    const cells = [...panel.querySelectorAll("tbody tr")].map(
+      (row) => row.querySelector("td")?.textContent ?? ""
+    );
+    expect(cells[0]).toContain("Bank — Arab Bank");
+    expect(cells[0]).toContain("1010");
+    expect(cells[1]).toContain("Vehicle Inventory");
+    expect(cells[2]).toContain("Owner Capital");
   });
 
   test("approve and reject are both reachable for a reviewer who did not prepare it", () => {
@@ -216,8 +227,8 @@ describe("opening-balance approval panel", () => {
     // org's currency instead of the draft's, would have passed. CodeRabbit
     // caught that the guard was inert.
     const lines = [
-      { accountId: "a1", accountName: "Bank", debitMinor: 1_000_000, creditMinor: 0 },
-      { accountId: "a2", accountName: "Capital", debitMinor: 0, creditMinor: 1_000_000 },
+      { accountId: "a1", accountCode: "1010", accountName: "Bank", debitMinor: 1_000_000, creditMinor: 0 },
+      { accountId: "a2", accountCode: "3010", accountName: "Capital", debitMinor: 0, creditMinor: 1_000_000 },
     ];
 
     const { unmount } = render(
@@ -251,8 +262,8 @@ describe("opening-balance approval panel", () => {
           currency: "USD",
           denominationKnown: false,
           lines: [
-            { accountId: "a1", accountName: "Bank", debitMinor: 1_000_000, creditMinor: 0 },
-            { accountId: "a2", accountName: "Capital", debitMinor: 0, creditMinor: 1_000_000 },
+            { accountId: "a1", accountCode: "1010", accountName: "Bank", debitMinor: 1_000_000, creditMinor: 0 },
+            { accountId: "a2", accountCode: "3010", accountName: "Capital", debitMinor: 0, creditMinor: 1_000_000 },
           ],
         })}
         isOwnDraft={false} busy={false} onApprove={vi.fn()} onReject={vi.fn()}
@@ -267,8 +278,8 @@ describe("opening-balance approval panel", () => {
       <OpeningBalanceApprovalView
         draft={draftFixture({
           lines: [
-            { accountId: "acc_bank", accountName: "Bank — Arab Bank", debitMinor: 10_000 * SCALE, creditMinor: 0 },
-            { accountId: "acc_cap", accountName: "Owner Capital", debitMinor: 0, creditMinor: 9_000 * SCALE },
+            { accountId: "acc_bank", accountCode: "1010", accountName: "Bank — Arab Bank", debitMinor: 10_000 * SCALE, creditMinor: 0 },
+            { accountId: "acc_cap", accountCode: "3010", accountName: "Owner Capital", debitMinor: 0, creditMinor: 9_000 * SCALE },
           ],
         })}
         isOwnDraft={false}
@@ -419,6 +430,77 @@ describe("the reviewer can actually read what they are approving", () => {
     expect(region?.getAttribute("aria-label")).toBeTruthy();
     // And it must be the element that actually scrolls, not a bare wrapper.
     expect(region?.className).toContain("overflow-x-auto");
+  });
+
+  test("each line shows the account's unique code, not just a name", () => {
+    // `name` is not unique — nothing stops an org having two accounts called
+    // "Cash" — and the code is the identifier account creation enforces. The
+    // preparer picks accounts as "code — name" in OpeningBalanceCard, so an
+    // approver shown only the name is reading a different description of the
+    // same thing. Raised by Codex.
+    render(
+      <OpeningBalanceApprovalView
+        draft={draftFixture({
+          lines: [
+            { accountId: "a1", accountCode: "1010", accountName: "Cash", debitMinor: 5_000, creditMinor: 0 },
+            { accountId: "a2", accountCode: "1020", accountName: "Cash", debitMinor: 0, creditMinor: 5_000 },
+          ],
+        })}
+        isOwnDraft={false}
+        busy={false}
+        onApprove={() => {}}
+        onReject={() => {}}
+      />
+    );
+    const panel = screen.getByTestId("opening-balance-approval");
+    const rows = [...panel.querySelectorAll("tbody tr")].map((r) =>
+      r.querySelector("td")?.textContent?.trim()
+    );
+    // Two accounts sharing a display name are told apart only by the code, so
+    // asserting the codes is asserting the reviewer can distinguish the rows.
+    expect(rows[0]).toContain("1010");
+    expect(rows[1]).toContain("1020");
+    expect(rows[0]).not.toBe(rows[1]);
+  });
+
+  test("an Arabic reviewer reads the Arabic account name", () => {
+    // The approver is the second pair of eyes on the org's entire starting GL
+    // position. Handing an Arabic-speaking reviewer an untranslated English
+    // account name is the same failure as handing them a raw account id — the
+    // thing the fallback below this already guards against.
+    language.locale = "ar";
+    try {
+      render(
+        <OpeningBalanceApprovalView
+          draft={draftFixture({
+            lines: [
+              {
+                accountId: "a1",
+                accountCode: "1010",
+                accountName: "Cash on hand",
+                accountNameAr: "النقدية بالصندوق",
+                debitMinor: 5_000,
+                creditMinor: 0,
+              },
+              { accountId: "a2", accountCode: "3010", accountName: "Capital", debitMinor: 0, creditMinor: 5_000 },
+            ],
+          })}
+          isOwnDraft={false}
+          busy={false}
+          onApprove={() => {}}
+          onReject={() => {}}
+        />
+      );
+      const panel = screen.getByTestId("opening-balance-approval");
+      const first = panel.querySelector("tbody tr td")?.textContent ?? "";
+      expect(first).toContain("النقدية بالصندوق");
+      expect(first).not.toContain("Cash on hand");
+      // An account with no Arabic name still falls back rather than blanking.
+      const rows = [...panel.querySelectorAll("tbody tr")];
+      expect(rows[1]?.querySelector("td")?.textContent).toContain("Capital");
+    } finally {
+      language.locale = "en";
+    }
   });
 
   test("the amounts state the currency they are denominated in", () => {

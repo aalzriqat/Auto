@@ -11,10 +11,22 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/sonner";
 import { errorMessage, scaleForCurrency } from "../AccountingTabShared";
+import { accountDisplayName } from "../reports/FinancialReportShared";
 
 export type PendingOpeningBalanceLine = {
   accountId: string;
+  /**
+   * The account's unique code, e.g. "1010".
+   *
+   * Carried separately because `name` is NOT unique — nothing stops an org
+   * having two accounts called "Cash", and the code is the identifier account
+   * creation actually enforces. Null only when the account could not be
+   * resolved at all.
+   */
+  accountCode: string | null;
   accountName: string;
+  /** Arabic name, when the account has one. */
+  accountNameAr?: string;
   debitMinor: number;
   creditMinor: number;
 };
@@ -163,7 +175,7 @@ export function OpeningBalanceApprovalView({
   onApprove,
   onReject,
 }: Readonly<OpeningBalanceApprovalViewProps>) {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
   const [reasonMissing, setReasonMissing] = useState(false);
@@ -289,7 +301,27 @@ export function OpeningBalanceApprovalView({
           <tbody>
             {draft.lines.map((line, index) => (
               <tr key={`${index}-${line.accountId}`} className="border-t border-amber-200/70">
-                <td className="py-1.5 text-slate-800">{line.accountName}</td>
+                  {/* The SAME identity the preparer picked from in
+                    OpeningBalanceCard: `code — localized name`. Showing only
+                    `name` here meant the two halves of one workflow disagreed
+                    about what an account is — the preparer chose
+                    "1010 — النقدية بالصندوق" and the approver was asked to sign
+                    off "Cash on hand", untranslated in Arabic and without the
+                    one field that is actually unique. Raised by Codex, and the
+                    fourth instance on this panel of the reviewer being unable
+                    to fully identify what they are approving. */}
+                <td className="py-1.5 text-slate-800">
+                  {line.accountCode ? (
+                    <>
+                      <bdi className="tabular-nums">{line.accountCode}</bdi>
+                      {" — "}
+                    </>
+                  ) : null}
+                  {accountDisplayName(
+                    { name: line.accountName, nameAr: line.accountNameAr },
+                    locale
+                  )}
+                </td>
                 <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-slate-800">
                   {line.debitMinor > 0 ? formatMinor(line.debitMinor, draft.currency, draft.denominationKnown) : ""}
                 </td>
@@ -441,7 +473,11 @@ export function OpeningBalanceApprovalPanel({
   // offering the preparer an action the backend will refuse.
   const reviewDataLoaded = accounts !== undefined && me !== undefined;
 
-  const accountNameById = new Map((accounts ?? []).map((account) => [account._id as string, account.name]));
+  // The whole account, not just its name: the reviewer is shown the same
+  // `code — localized name` identity the preparer picked from in
+  // OpeningBalanceCard. Reducing it to `name` here made the two halves of one
+  // workflow describe accounts differently, and dropped the only unique field.
+  const accountById = new Map((accounts ?? []).map((account) => [account._id as string, account]));
 
   const draft: PendingOpeningBalanceDraft = {
     _id: raw._id,
@@ -451,14 +487,19 @@ export function OpeningBalanceApprovalPanel({
     preparedByName: raw.preparedByName,
     currency: raw.currency,
     denominationKnown: raw.denominationKnown,
-    lines: raw.lines.map((line) => ({
-      accountId: line.accountId as string,
-      // Falling back to the id keeps an unresolved account visible rather than
-      // rendering a blank row the reviewer would approve without reading.
-      accountName: accountNameById.get(line.accountId as string) ?? (line.accountId as string),
-      debitMinor: line.debitMinor,
-      creditMinor: line.creditMinor,
-    })),
+    lines: raw.lines.map((line) => {
+      const account = accountById.get(line.accountId as string);
+      return {
+        accountId: line.accountId as string,
+        accountCode: account?.code ?? null,
+        // Falling back to the id keeps an unresolved account visible rather
+        // than rendering a blank row the reviewer would approve without reading.
+        accountName: account?.name ?? (line.accountId as string),
+        accountNameAr: account?.nameAr,
+        debitMinor: line.debitMinor,
+        creditMinor: line.creditMinor,
+      };
+    }),
   };
 
   async function run(action: () => Promise<unknown>, successKey: string) {
