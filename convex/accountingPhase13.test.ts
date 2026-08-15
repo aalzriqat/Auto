@@ -115,6 +115,8 @@ async function seedFinanceCompanyReceivable(
     financierName?: string;
     /** Defaults to a well-formed-but-unresolvable id, as a legacy row would carry. */
     sourceId?: string;
+    /** Create a real financeApplications row so the deep link resolves. */
+    withApplication?: boolean;
   }
 ) {
   return await t.run(async (ctx) => {
@@ -127,7 +129,32 @@ async function seedFinanceCompanyReceivable(
     const customerId = await ctx.db.insert("customers", {
       orgId, firstName: "Buyer", lastName: "X",
     });
-    const applicationId = opts.sourceId ?? "legacy_application_reference";
+    // A real application when asked for one, so the deep link can be asserted
+    // end to end; otherwise a well-formed-but-unresolvable reference, which is
+    // what a legacy row carries.
+    let applicationId: string = opts.sourceId ?? "legacy_application_reference";
+    if (opts.withApplication) {
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, make: "Toyota", model: "Camry", year: 2024, mileage: 0,
+        color: "White", fuelType: "PETROL", transmission: "AUTOMATIC",
+        sellingPrice: 20000, status: "SOLD" as const,
+      });
+      const quoteId = await ctx.db.insert("quotes", {
+        orgId, customerId, vehicleId,
+        vehiclePrice: 20000, downPayment: 0, termMonths: 60,
+        status: "ACCEPTED" as const,
+        createdBy: userId,
+        createdAt: Date.now(),
+      });
+      applicationId = await ctx.db.insert("financeApplications", {
+        orgId, quoteId, customerId, vehicleId,
+        companyId: financeCompanyId,
+        salespersonId: userId,
+        status: "APPROVED" as const,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    }
 
     const receivableDocumentId = await ctx.db.insert("receivableDocuments", {
       orgId,
@@ -189,6 +216,7 @@ describe("Phase 13 / SCRUM-51 — finance-company receivable work queue", () => 
       amountMinor: 750_000,
       allocatedMinor: 250_000,
       financierName: "Jordan Finance Co",
+      withApplication: true,
     });
 
     const page = await ctx.asOwner.query(api.claims.listFinanceCompanyReceivables, {
@@ -257,6 +285,10 @@ describe("Phase 13 / SCRUM-51 — finance-company receivable work queue", () => 
     expect(page.page).toHaveLength(1);
     expect(page.page[0].financingEntity).toBeNull();
     expect(page.page[0].outstandingMinor).toBe(42_000);
+    // A link built from an unresolvable id would land on a page that can only
+    // fail, so the row reports that it has no owning deal instead.
+    expect(page.page[0].applicationId).toBeNull();
+    expect(page.page[0].hasOwningDeal).toBe(false);
   });
 
   test.each(["WRITTEN_OFF", "REVERSED", "CANCELLED"] as const)(

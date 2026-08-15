@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { usePaginatedQuery } from "convex/react";
+import { usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -41,13 +41,24 @@ export function ApplicationClient() {
   // the row and clicking it. Accounting's finance-company AR queue reports the
   // outstanding balance but deliberately cannot settle it, so it needs to send
   // the accountant to the door that can; a link is only an answer if it opens.
+  //
+  // The parameter is arbitrary URL input, so it is resolved server-side before
+  // anything mounts: handing a raw string to a `v.id()` query argument throws
+  // an argument-validation error into the React tree, and `?application=garbage`
+  // would take the page down instead of simply showing nothing.
   const searchParams = useSearchParams();
-  const deepLinkedApplicationId = searchParams.get("application");
+  const candidateApplicationId = searchParams.get("application");
+  const resolvedApplicationId = useQuery(
+    api.applications.resolveApplicationId,
+    activeOrgId && candidateApplicationId
+      ? { orgId: activeOrgId, candidateId: candidateApplicationId }
+      : "skip"
+  );
   useEffect(() => {
-    if (!deepLinkedApplicationId) return;
-    setSelectedAppId(deepLinkedApplicationId);
+    if (!resolvedApplicationId) return;
+    setSelectedAppId(resolvedApplicationId);
     setIsDialogOpen(true);
-  }, [deepLinkedApplicationId]);
+  }, [resolvedApplicationId]);
   const [statusFilter, setStatusFilter] = useState("ALL");
   const statusValueFor = (app: { status: string; hasPendingDepositResolution?: boolean }) =>
     app.hasPendingDepositResolution ? "DEPOSIT_PENDING" : app.status;

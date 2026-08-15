@@ -70,7 +70,7 @@ export const listFinanceCompanyReceivables = query({
 
     const page = await ctx.db
       .query("receivableDocuments")
-      .withIndex("by_org_payerType", (q) =>
+      .withIndex("by_org_payerType_status", (q) =>
         q.eq("orgId", args.orgId).eq("payerType", "FINANCE_COMPANY")
       )
       .order("desc")
@@ -95,16 +95,15 @@ export const listFinanceCompanyReceivables = query({
 
         let applicationId: string | null = null;
         if (doc.sourceType === FINANCE_APP_RECEIVABLE_SOURCE) {
-          applicationId = doc.sourceId;
-          if (!financingEntity) {
-            // sourceId is a plain string on the document, so it has to be
-            // normalized rather than cast — a legacy or malformed value must
-            // read as "unknown financier", never throw the whole queue away.
-            const appId = ctx.db.normalizeId("financeApplications", doc.sourceId);
-            const app = appId ? await ctx.db.get(appId) : null;
-            if (app?.orgId === args.orgId) {
-              financingEntity = app.manualFinanceSnapshot?.providerName ?? null;
-            }
+          // sourceId is a plain string on the document, so it is normalized
+          // rather than cast: a legacy or malformed value must read as "no
+          // owning deal", never be handed to the UI as a link target. A link
+          // built from an unresolvable id lands on a page that can only fail.
+          const appId = ctx.db.normalizeId("financeApplications", doc.sourceId);
+          const app = appId ? await ctx.db.get(appId) : null;
+          if (app && app.orgId === args.orgId) {
+            applicationId = appId;
+            financingEntity = financingEntity ?? app.manualFinanceSnapshot?.providerName ?? null;
           }
         }
 
@@ -155,21 +154,35 @@ export const listFinanceCompanyReceivables = query({
  * raised, and one cross-currency number is the misstatement `accountingPhase14`
  * exists to prevent.
  *
- * Bounded by the org's finance-company receivables (roughly one per financed
- * deal), not by the whole receivables table, which is what the
- * `by_org_payerType` index buys.
+ * Reads only the OPEN/PARTIALLY_PAID working set. Settled and written-off
+ * history accumulates forever and contributes nothing to an outstanding total,
+ * so scanning it would make this query grow without bound for exactly the
+ * long-lived orgs that can least afford it. The statuses left out are the ones
+ * whose outstanding is necessarily zero: PAID by definition, and CANCELLED /
+ * WRITTEN_OFF / REVERSED by `NOT_COLLECTIBLE_STATUSES`. Both writers keep
+ * `status` consistent with the derived balance — `allocatePaymentToReceivable`
+ * and `reverseAllocation` each recompute it (subledger.ts) — so a row outside
+ * this set cannot be hiding an outstanding balance.
  */
+const OUTSTANDING_STATUSES = ["OPEN", "PARTIALLY_PAID"] as const;
+
 export const financeCompanyOutstandingTotals = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
-    const docs = await ctx.db
-      .query("receivableDocuments")
-      .withIndex("by_org_payerType", (q) =>
-        q.eq("orgId", args.orgId).eq("payerType", "FINANCE_COMPANY")
+    const docs = (
+      await Promise.all(
+        OUTSTANDING_STATUSES.map((status) =>
+          ctx.db
+            .query("receivableDocuments")
+            .withIndex("by_org_payerType_status", (q) =>
+              q.eq("orgId", args.orgId).eq("payerType", "FINANCE_COMPANY").eq("status", status)
+            )
+            .collect()
+        )
       )
-      .collect();
+    ).flat();
 
     const byCurrency = new Map<string, { currency: string; scale: number; outstandingMinor: number }>();
     for (const doc of docs) {
