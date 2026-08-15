@@ -2142,9 +2142,50 @@ export const getRelations = query({
  */
 export const IMPORT_BULK_MAX_ROWS = 200;
 
+/**
+ * What an import means in accounting terms — the operator states it, the server
+ * never guesses.
+ *
+ * A CSV of owned stock is two completely different economic facts wearing the
+ * same shape, and only the person importing knows which one it is:
+ *
+ * - OPENING_STOCK — cars the dealership already owns, being carried over from a
+ *   spreadsheet at cutover. No cash moves today, and the GL entry for them is
+ *   the opening balance: either the org's opening-balance journal (which carries
+ *   its own Vehicle Inventory line) or the per-vehicle
+ *   `accountingMigration.backfillVehicleInventoryOpeningBalances`. So this posts
+ *   nothing — byte-identical to what importBulk did before this argument
+ *   existed. Posting here as well would double-capitalize every migrated car.
+ *
+ * - PURCHASE — cars the dealership just bought. These are ordinary acquisitions
+ *   and go through the same `postVehicleAcquisitionIfOwned` the single-vehicle
+ *   create path uses, so a car bought in a batch is capitalized exactly like a
+ *   car added one at a time.
+ *
+ * There is deliberately no default. Guessing OPENING_STOCK silently recreates
+ * SCRUM-59 — imported stock with a purchasePrice but no Dr Vehicle Inventory,
+ * which `ruleSaleCompleted` then credits at sale time, driving the asset
+ * negative and leaving the balance sheet wrong while the P&L still looks right.
+ * Guessing PURCHASE would double-count every cutover migration against the
+ * opening balance and invent cash payments that never happened. Both silent
+ * choices corrupt the books, so the caller must say which one it is.
+ */
+export const IMPORT_ACQUISITION_POSTING = ["OPENING_STOCK", "PURCHASE"] as const;
+export type ImportAcquisitionPosting = (typeof IMPORT_ACQUISITION_POSTING)[number];
+
 export const importBulk = mutation({
   args: {
     orgId: v.id("organizations"),
+    /** See IMPORT_ACQUISITION_POSTING — required, never defaulted. */
+    acquisitionPosting: v.union(v.literal("OPENING_STOCK"), v.literal("PURCHASE")),
+    /**
+     * How the batch was paid for. Required for PURCHASE and ignored for
+     * OPENING_STOCK (nothing posts, so nothing is paid). One method for the
+     * whole file rather than per row: the spreadsheets dealers actually import
+     * have no payment-method column, and inferring one per row from a blank
+     * cell is exactly the silent guess this argument exists to prevent.
+     */
+    purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
     vehicles: v.array(v.object({
       make: v.string(),
       model: v.string(),
@@ -2197,6 +2238,36 @@ export const importBulk = mutation({
       if (row.sourceCost !== undefined) assertFiniteNumber(row.sourceCost, "supplier cost");
       for (const val of row.valuations ?? []) {
         assertFiniteNumber(val.valuationAmount, "valuation amount");
+      }
+    }
+
+    // Same two rules vehicles.create enforces for a single acquisition, applied
+    // to the whole batch up front (like the numeric validation above) so a file
+    // that can't be posted correctly fails before any of it is written rather
+    // than half-importing and half-posting.
+    const postsAcquisitions = args.acquisitionPosting === "PURCHASE";
+    if (postsAcquisitions) {
+      // A purchase price with no declared payment method would post as CASH —
+      // normalizePaymentMethod's default — even when the dealer paid by bank
+      // transfer, cheque or card.
+      if (!args.purchasePaymentMethod) {
+        throw new ConvexError("Payment method is required when importing purchased vehicles.");
+      }
+      if (args.purchasePaymentMethod === "ON_ACCOUNT") {
+        // sourcedFromName doubles as the generic "who is this owed to" field
+        // here exactly as it does on vehicles.create — the AP-Suppliers credit
+        // and the vehicleSupplierPayables row both need a name.
+        const missingSupplier = args.vehicles.filter(
+          (row) =>
+            (row.sourceType ?? "").trim().toUpperCase() !== "SOURCED" &&
+            (row.purchasePrice ?? 0) > 0 &&
+            !row.sourcedFromName?.trim()
+        );
+        if (missingSupplier.length > 0) {
+          throw new ConvexError(
+            `A supplier name is required for every vehicle purchased on account — ${missingSupplier.length} row(s) are missing one.`
+          );
+        }
       }
     }
 
@@ -2267,9 +2338,10 @@ export const importBulk = mutation({
         const status = normalizeVehicleStatus(row.status) ?? (isSourced ? "SOURCING" : "AVAILABLE");
         assertDirectVehicleCreateStatus(status);
 
+        const insertedVin = normalizedVin || generateImportVinPlaceholder();
         vehicleId = await ctx.db.insert("vehicles", {
           orgId: args.orgId,
-          vin: normalizedVin || generateImportVinPlaceholder(),
+          vin: insertedVin,
           make: row.make.trim(),
           model: row.model.trim(),
           year: row.year,
@@ -2290,6 +2362,25 @@ export const importBulk = mutation({
           updatedAt: Date.now(),
         });
         inserted++;
+
+        // Only newly inserted rows post. A duplicate-VIN row resolved to an
+        // existing vehicle above must not re-post an acquisition for stock that
+        // was already capitalized (postVehicleAcquisitionIfOwned's underlying
+        // event is idempotent per vehicle, but re-running it would also insert a
+        // second legacy VEHICLE_PURCHASE cash transaction, which is not).
+        if (postsAcquisitions) {
+          await postVehicleAcquisitionIfOwned(ctx, {
+            orgId: args.orgId,
+            vehicleId,
+            isSourced,
+            purchasePrice: isSourced ? sourceCost : row.purchasePrice,
+            purchasePaymentMethod: args.purchasePaymentMethod,
+            supplierName: row.sourcedFromName?.trim(),
+            vehicleLabel: `${row.year} ${row.make.trim()} ${row.model.trim()}`,
+            vin: insertedVin,
+            actorId: user._id,
+          });
+        }
       }
 
       for (const val of row.valuations ?? []) {

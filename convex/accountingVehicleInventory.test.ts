@@ -2060,3 +2060,194 @@ describe("Review issue #7 — manual receivables don't default to income", () =>
     expect(lines.find((l) => l.accountId === generalExpense._id)?.creditMinor).toBe(120_000);
   });
 });
+
+// ─── SCRUM-59 ─────────────────────────────────────────────────────────────────
+
+/** Net GL balance (debits − credits) of a system account, in minor units. */
+async function glBalanceMinor(t: Ctx["t"], orgId: Id<"organizations">, systemKey: string) {
+  const account = await accountBySystemKey(t, orgId, systemKey);
+  const lines = await t.run((ctx) =>
+    ctx.db.query("journalLines").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+  );
+  return lines
+    .filter((l) => l.accountId === account._id)
+    .reduce((sum, l) => sum + l.debitMinor - l.creditMinor, 0);
+}
+
+const baseImportRow = {
+  make: "Kia", model: "Sportage", year: 2023, color: "Silver",
+  fuelType: "Petrol", transmission: "Automatic", sellingPrice: 15000,
+};
+
+async function vehicleByVin(t: Ctx["t"], orgId: Id<"organizations">, vin: string) {
+  return t.run((ctx) =>
+    ctx.db.query("vehicles").withIndex("by_org_vin", (q) => q.eq("orgId", orgId).eq("vin", vin)).unique()
+  );
+}
+
+describe("SCRUM-59 — a CSV import must not create inventory the GL never saw", () => {
+  test("PURCHASE capitalizes every imported row, so selling one cannot drive Vehicle Inventory negative", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("s59a");
+
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId,
+      acquisitionPosting: "PURCHASE",
+      purchasePaymentMethod: "CASH",
+      vehicles: [
+        { ...baseImportRow, vin: "IMPORTGL0000001AA", purchasePrice: 10000 },
+        { ...baseImportRow, vin: "IMPORTGL0000002BB", purchasePrice: 10000 },
+      ],
+    });
+
+    // Both cars are on the books before anything is sold.
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(20_000_000); // JOD scale 3
+    expect(await glBalanceMinor(t, orgId, "CASH_ON_HAND")).toBe(-20_000_000);
+
+    const sold = await vehicleByVin(t, orgId, "IMPORTGL0000001AA");
+    await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId: sold!._id, customerId, salespersonId: userId,
+      salePrice: 15000, saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+    });
+
+    // Before the fix this was −10,000,000: the sale credited Vehicle Inventory
+    // for a car the import never debited. The remaining car's cost is what is
+    // left, not a negative asset.
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(10_000_000);
+
+    const recon = await asOwner.query(api.accountingReports.vehicleInventoryReconciliation, { orgId });
+    expect(recon.isReconciled).toBe(true);
+  });
+
+  test("OPENING_STOCK posts nothing — the opening balance is that stock's GL entry", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59b");
+
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId,
+      acquisitionPosting: "OPENING_STOCK",
+      vehicles: [{ ...baseImportRow, vin: "IMPORTOB0000001AA", purchasePrice: 10000 }],
+    });
+
+    const vehicle = await vehicleByVin(t, orgId, "IMPORTOB0000001AA");
+    const event = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicle!._id.toString())
+        )
+        .first()
+    );
+    expect(event).toBeNull();
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
+    // Nor a legacy cash transaction — no money moved for stock already owned.
+    const txns = await t.run((ctx) =>
+      ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(txns).toHaveLength(0);
+  });
+
+  test("PURCHASE refuses an import that does not say how it was paid for", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59c");
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId,
+        acquisitionPosting: "PURCHASE",
+        vehicles: [{ ...baseImportRow, vin: "IMPORTNOPM000001A", purchasePrice: 10000 }],
+      })
+    ).rejects.toThrow(/Payment method is required/);
+
+    const vehicles = await t.run((ctx) =>
+      ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(vehicles).toHaveLength(0);
+  });
+
+  test("ON_ACCOUNT without a supplier fails the whole file before any row is written", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59d");
+
+    await expect(
+      asOwner.mutation(api.vehicles.importBulk, {
+        orgId,
+        acquisitionPosting: "PURCHASE",
+        purchasePaymentMethod: "ON_ACCOUNT",
+        vehicles: [
+          { ...baseImportRow, vin: "IMPORTOA00000001A", purchasePrice: 10000, sourcedFromName: "Gulf Motors" },
+          { ...baseImportRow, vin: "IMPORTOA00000002B", purchasePrice: 10000 },
+        ],
+      })
+    ).rejects.toThrow(/supplier name is required/i);
+
+    // Not even the valid first row — a file that cannot post correctly must not
+    // half-import.
+    const vehicles = await t.run((ctx) =>
+      ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(vehicles).toHaveLength(0);
+  });
+
+  test("ON_ACCOUNT credits AP-Suppliers and creates the supplier payable instead of paying cash", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59e");
+
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId,
+      acquisitionPosting: "PURCHASE",
+      purchasePaymentMethod: "ON_ACCOUNT",
+      vehicles: [
+        { ...baseImportRow, vin: "IMPORTOA00000003C", purchasePrice: 10000, sourcedFromName: "Gulf Motors" },
+      ],
+    });
+
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(10_000_000);
+    expect(await glBalanceMinor(t, orgId, "ACCOUNTS_PAYABLE_SUPPLIERS")).toBe(-10_000_000);
+    expect(await glBalanceMinor(t, orgId, "CASH_ON_HAND")).toBe(0);
+
+    const payables = await t.run((ctx) =>
+      ctx.db.query("vehicleSupplierPayables").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(payables).toHaveLength(1);
+    expect(payables[0].sourcedFromName).toBe("Gulf Motors");
+    expect(payables[0].amountDue).toBe(10000);
+  });
+
+  test("a SOURCED row never capitalizes into inventory, even under PURCHASE", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59f");
+
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId,
+      acquisitionPosting: "PURCHASE",
+      purchasePaymentMethod: "CASH",
+      vehicles: [
+        {
+          ...baseImportRow, vin: "IMPORTSRC0000001A", sourceType: "SOURCED",
+          sourcedFromName: "Other Dealer", sourceCost: 9000,
+        },
+      ],
+    });
+
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
+    expect(await glBalanceMinor(t, orgId, "CASH_ON_HAND")).toBe(0);
+  });
+
+  test("re-importing the same VIN does not capitalize it twice", async () => {
+    const { t, orgId, asOwner } = await seedDealer("s59g");
+    const rows = [{ ...baseImportRow, vin: "IMPORTDUP00000001", purchasePrice: 10000 }];
+
+    await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: rows,
+    });
+    const second = await asOwner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "PURCHASE", purchasePaymentMethod: "CASH", vehicles: rows,
+    });
+
+    expect(second.inserted).toBe(0);
+    expect(second.skipped).toBe(1);
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(10_000_000);
+    // The legacy cash transaction is not idempotent the way the GL event is, so
+    // a re-import must not reach it at all.
+    const txns = await t.run((ctx) =>
+      ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .filter((q) => q.eq(q.field("category"), "VEHICLE_PURCHASE")).collect()
+    );
+    expect(txns).toHaveLength(1);
+  });
+});

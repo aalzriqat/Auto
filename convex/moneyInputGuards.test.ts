@@ -238,6 +238,7 @@ describe("money entry points reject NaN", () => {
     await expect(
       ids.asOwner.mutation(api.vehicles.importBulk, {
         orgId: ids.orgId,
+        acquisitionPosting: "OPENING_STOCK",
         // The good row comes first deliberately: a per-row guard would have
         // committed it before reaching the bad one, leaving a half-done import.
         vehicles: [row("VINBULKGOOD11", 20000), row("VINBULKBAD112", NaN)],

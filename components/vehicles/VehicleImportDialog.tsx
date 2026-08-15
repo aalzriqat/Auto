@@ -1,11 +1,15 @@
 "use client";
 
+import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { useCurrency } from "@/hooks/useCurrency";
 import { ImportWizard, ImportFieldConfig, ImportRow, normalizeKey } from "@/components/import/ImportWizard";
+import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import { cn } from "@/lib/utils";
 import { SpreadsheetRows } from "@/lib/spreadsheet";
 import { downloadVehicleTemplate } from "@/components/vehicles/vehicleSheet";
 
@@ -290,6 +294,134 @@ function renderVehiclePreviewCell(row: ImportRow, key: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Accounting declaration (SCRUM-59)
+// ---------------------------------------------------------------------------
+type AcquisitionPosting = "OPENING_STOCK" | "PURCHASE";
+
+/**
+ * The four settled methods only — deliberately NOT importBulk's fifth,
+ * ON_ACCOUNT. The single-vehicle create form (VehicleDialog) offers exactly
+ * these, and making the CSV importer the one place in the product where a
+ * dealer can buy on account would be a strange asymmetry to introduce here.
+ * The backend accepts and guards ON_ACCOUNT because postVehicleAcquisitionIfOwned
+ * does; exposing it is a product decision for the vehicle-acquisition surface as
+ * a whole, not something to slip in through an import dialog.
+ */
+const IMPORT_PAYMENT_METHODS: readonly PaymentMethod[] = ["CASH", "BANK_TRANSFER", "CHEQUE", "CARD"];
+
+/** Rows that will actually reach Vehicle Inventory: owned, with a cost. */
+function capitalizingRows(rows: Record<string, any>[]) {
+  return rows.filter((r) => r.sourceType !== "SOURCED" && Number(r.purchasePrice) > 0);
+}
+
+/**
+ * The last thing between a spreadsheet and the ledger.
+ *
+ * Deliberately not a card: it is the terms of the action about to be taken, so
+ * it reads as part of the footer rather than as another object on the screen.
+ * Two exclusive choices as real radios (keyboard + screen-reader correct), each
+ * carrying the consequence in the dealer's own terms rather than an accounting
+ * one — and, once "bought" is chosen, the exact figure that will land in
+ * Vehicle Inventory. Seeing that number before committing is the whole point:
+ * SCRUM-59 was possible precisely because the accounting effect of an import
+ * was invisible.
+ */
+function ImportAccountingChoice({
+  validRows,
+  posting,
+  setPosting,
+  paymentMethod,
+  setPaymentMethod,
+}: {
+  validRows: Record<string, any>[];
+  posting: AcquisitionPosting | null;
+  setPosting: (p: AcquisitionPosting) => void;
+  paymentMethod: PaymentMethod | null;
+  setPaymentMethod: (m: PaymentMethod) => void;
+}) {
+  const { t } = useLanguage();
+  const currency = useCurrency();
+
+  const capitalizing = capitalizingRows(validRows);
+  const totalCost = capitalizing.reduce((sum, r) => sum + Number(r.purchasePrice ?? 0), 0);
+
+  const option = (value: AcquisitionPosting, label: string, hint: string) => {
+    const selected = posting === value;
+    return (
+      <label
+        key={value}
+        className={cn(
+          "flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors",
+          selected ? "border-primary bg-primary/5" : "border-border hover:bg-muted/40"
+        )}
+      >
+        <input
+          type="radio"
+          name="import-acquisition-posting"
+          className="mt-1 accent-primary"
+          checked={selected}
+          onChange={() => setPosting(value)}
+        />
+        <span className="text-start">
+          <span className="block text-sm font-medium leading-tight">{label}</span>
+          <span className="mt-1 block text-xs leading-snug text-muted-foreground">{hint}</span>
+        </span>
+      </label>
+    );
+  };
+
+  return (
+    <div className="space-y-3 border-t pt-4">
+      <p className="text-sm font-semibold">{t("ImportAccountingHeading" as any)}</p>
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        {option(
+          "OPENING_STOCK",
+          t("ImportAsOpeningStock" as any),
+          t("ImportAsOpeningStockHint" as any)
+        )}
+        {option("PURCHASE", t("ImportAsPurchase" as any), t("ImportAsPurchaseHint" as any))}
+      </div>
+
+      {posting === "PURCHASE" && (
+        <div className="space-y-3 ps-1">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs font-medium text-muted-foreground" id="import-paid-from">
+              {t("ImportPaidFrom" as any)}
+            </span>
+            <div className="w-56">
+              <PaymentMethodSelect
+                t={t as any}
+                value={paymentMethod ?? undefined}
+                onValueChange={setPaymentMethod}
+                methods={IMPORT_PAYMENT_METHODS}
+                ariaLabel={t("ImportPaidFrom" as any)}
+                placeholder={t("ImportPaidFromPlaceholder" as any)}
+              />
+            </div>
+          </div>
+
+          {/* The ledger consequence, stated before it happens. */}
+          <div className="flex items-baseline justify-between gap-4 border-s-2 border-primary/40 ps-3">
+            <span className="text-xs text-muted-foreground">
+              {t("ImportWillCapitalize" as any)}
+              <span className="mt-0.5 block">
+                {t("ImportWillCapitalizeNote" as any).replace("{count}", String(capitalizing.length))}
+              </span>
+            </span>
+            <bdi className="text-base font-semibold tabular-nums">{currency.format(totalCost)}</bdi>
+          </div>
+        </div>
+      )}
+
+      {posting === null && (
+        <p className="text-xs text-muted-foreground">{t("ImportAccountingRequired" as any)}</p>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 interface Props {
@@ -309,10 +441,25 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
 
+  // No initial value on purpose — see IMPORT_ACQUISITION_POSTING in
+  // convex/vehicles.ts. Both possible defaults corrupt somebody's books.
+  const [posting, setPosting] = useState<AcquisitionPosting | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(null);
+
+  const blocked = posting === null || (posting === "PURCHASE" && paymentMethod === null);
+
+  const handleOpenChange = (next: boolean) => {
+    if (!next) {
+      setPosting(null);
+      setPaymentMethod(null);
+    }
+    onOpenChange(next);
+  };
+
   return (
     <ImportWizard
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={handleOpenChange}
       entityType="vehicle"
       title={t("ImportVehiclesTitle" as any)}
       description={t("ImportVehiclesDesc" as any)}
@@ -345,8 +492,24 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
 
         return { extraFields, extraAutoGuess };
       }}
+      blocked={blocked}
+      renderPreflight={({ validRows }) => (
+        <ImportAccountingChoice
+          validRows={validRows}
+          posting={posting}
+          setPosting={setPosting}
+          paymentMethod={paymentMethod}
+          setPaymentMethod={setPaymentMethod}
+        />
+      )}
       onImport={(vehicles) => {
         if (!activeOrgId) return Promise.resolve({ inserted: 0, skipped: 0 });
+        // The wizard's Import button is disabled until this is answered; the
+        // guard is here as well because a disabled button is a hint, not a
+        // control, and importBulk itself refuses an unstated method.
+        if (posting === null || (posting === "PURCHASE" && paymentMethod === null)) {
+          return Promise.resolve({ inserted: 0, skipped: 0 });
+        }
         // Send only the fields importBulk's validator declares — Convex rejects
         // any undeclared field, so we pick explicitly rather than spreading the
         // whole derived row (which also carries preview-only helper values).
@@ -376,7 +539,12 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
           const totals = { inserted: 0, skipped: 0 };
           for (let i = 0; i < payload.length; i += IMPORT_CHUNK_SIZE) {
             const chunk = payload.slice(i, i + IMPORT_CHUNK_SIZE);
-            const result = await importBulk({ orgId: activeOrgId, vehicles: chunk as any });
+            const result = await importBulk({
+              orgId: activeOrgId,
+              acquisitionPosting: posting,
+              purchasePaymentMethod: posting === "PURCHASE" ? paymentMethod! : undefined,
+              vehicles: chunk as any,
+            });
             totals.inserted += result.inserted;
             totals.skipped += result.skipped;
           }

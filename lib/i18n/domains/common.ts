@@ -188,6 +188,21 @@ export const commonEn = {
   // Import dialogs
   ImportVehiclesTitle: "Import Vehicles from Excel / CSV",
   ImportVehiclesDesc: "Upload your existing vehicle inventory spreadsheet. Supported: .xlsx, .csv",
+
+  // Import → accounting declaration (SCRUM-59)
+  ImportAccountingHeading: "How should these vehicles be recorded?",
+  ImportAccountingRequired: "Choose how this file affects your books before importing.",
+  ImportAsOpeningStock: "Stock I already own",
+  ImportAsOpeningStockHint:
+    "Carrying existing inventory over from a spreadsheet. No money moves today — these vehicles enter the ledger through your opening balance.",
+  ImportAsPurchase: "Vehicles I just bought",
+  ImportAsPurchaseHint:
+    "A real purchase. Each vehicle is added to Vehicle Inventory and paid for from the account you choose below.",
+  ImportPaidFrom: "Paid from",
+  ImportPaidFromPlaceholder: "Choose how you paid",
+  ImportWillCapitalize: "Will add to Vehicle Inventory",
+  ImportWillCapitalizeNote: "{count} vehicle(s) with a cost. Rows with no cost, and sourced vehicles, post nothing.",
+
   ImportCustomersTitle: "Import Customers from Excel / CSV",
   ImportCustomersDesc: "Upload your existing customer list from a spreadsheet. Supported: .xlsx, .csv",
   DropFileHere: "Drop your file here or click to browse",
@@ -1078,6 +1093,21 @@ export const commonAr = {
   // Import dialogs
   ImportVehiclesTitle: "استيراد المركبات من Excel / CSV",
   ImportVehiclesDesc: "قم برفع جدول بيانات مخزون مركباتك. المدعوم: .xlsx و .csv",
+
+  // Import → accounting declaration (SCRUM-59)
+  ImportAccountingHeading: "كيف تُقيَّد هذه المركبات محاسبياً؟",
+  ImportAccountingRequired: "اختر كيف يؤثر هذا الملف على دفاترك قبل الاستيراد.",
+  ImportAsOpeningStock: "مركبات أملكها بالفعل",
+  ImportAsOpeningStockHint:
+    "ترحيل مخزون قائم من جدول بيانات. لا تتحرك أي أموال اليوم — تدخل هذه المركبات إلى الدفاتر عبر الرصيد الافتتاحي.",
+  ImportAsPurchase: "مركبات اشتريتها للتو",
+  ImportAsPurchaseHint:
+    "عملية شراء فعلية. تُضاف كل مركبة إلى مخزون المركبات وتُدفع من الحساب الذي تختاره أدناه.",
+  ImportPaidFrom: "مدفوعة من",
+  ImportPaidFromPlaceholder: "اختر طريقة الدفع",
+  ImportWillCapitalize: "ستُضاف إلى مخزون المركبات",
+  ImportWillCapitalizeNote: "{count} مركبة لها تكلفة. الصفوف بلا تكلفة والمركبات الموردة لا تُقيَّد.",
+
   ImportCustomersTitle: "استيراد العملاء من Excel / CSV",
   ImportCustomersDesc: "قم برفع قائمة عملائك من جدول بيانات. المدعوم: .xlsx و .csv",
   DropFileHere: "أفلت ملفك هنا أو انقر للتصفح",

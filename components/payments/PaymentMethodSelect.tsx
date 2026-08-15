@@ -13,17 +13,25 @@ export function PaymentMethodSelect({
   onValueChange,
   methods = DEFAULT_PAYMENT_METHODS,
   ariaLabel,
+  placeholder,
 }: Readonly<{
   t: Translate;
-  value: PaymentMethod;
+  value: PaymentMethod | undefined;
   onValueChange: (method: PaymentMethod) => void;
   methods?: readonly PaymentMethod[];
   ariaLabel?: string;
+  /**
+   * Shown when there is no value yet. Callers that must not default a payment
+   * method (an unstated method posts as CASH downstream) leave `value`
+   * undefined and pass this, rather than seeding a guess to keep the trigger
+   * from looking empty.
+   */
+  placeholder?: string;
 }>) {
   return (
     <Select value={value} onValueChange={(method) => onValueChange(method as PaymentMethod)}>
       <SelectTrigger aria-label={ariaLabel}>
-        <SelectValue />
+        <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>
         {methods.map((method) => (
