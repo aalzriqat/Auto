@@ -4752,6 +4752,16 @@ describe("a settlement advice that contradicts the approval", () => {
       api.financingEconomics.suggestQuotationForApplication,
       { orgId: s.orgId, applicationId }
     );
+    // SCRUM-51 added this door so Accounting's finance-company AR queue can
+    // turn an untrusted URL parameter into an application id without handing a
+    // raw string to a v.id() argument. It returns an id or null and nothing
+    // else, so it carries no evidence — but the completeness check below is
+    // enumerated from the registered functions, so a new public query must be
+    // exercised here rather than merely assumed harmless.
+    const resolved = await s.asUser.query(api.applications.resolveApplicationId, {
+      orgId: s.orgId,
+      candidateId: applicationId as unknown as string,
+    });
 
     // ANTI-VACUITY. Every door must have actually returned this deal. An empty
     // page or a null document contains no evidence for the trivial reason, and
@@ -4762,6 +4772,10 @@ describe("a settlement advice that contradicts the approval", () => {
     expect(economics.application).toBeTruthy();
     expect(economics.overrides.length).toBeGreaterThan(0);
     expect(queue.page.length).toBeGreaterThan(0);
+    // Same anti-vacuity bar as the doors above: a null here would mean the
+    // resolver refused this deal, and the redaction assertion would then hold
+    // for the trivial reason rather than because nothing leaks.
+    expect(resolved).toBe(applicationId);
 
     const suggestion = await s.asUser.query(api.financingEconomics.suggestQuotation, {
       orgId: s.orgId,
@@ -4794,6 +4808,7 @@ describe("a settlement advice that contradicts the approval", () => {
       // spelled out the approved amount and its split. It is a revision
       // counter now, and this asserts that rather than trusting the comment.
       ["applications.handoverStamp", handoverToken],
+      ["applications.resolveApplicationId", resolved],
       ["financingEconomics.getEconomics", economics],
       ["financingEconomics.listNeedingReconciliation", queue],
       ["financingEconomics.suggestQuotationForApplication", quotation],
