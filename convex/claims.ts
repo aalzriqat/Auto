@@ -162,10 +162,23 @@ export const listFinanceCompanyReceivables = query({
  * so scanning it would make this query grow without bound for exactly the
  * long-lived orgs that can least afford it. The statuses left out are the ones
  * whose outstanding is necessarily zero: PAID by definition, and CANCELLED /
- * WRITTEN_OFF / REVERSED by `NOT_COLLECTIBLE_STATUSES`. Both writers keep
- * `status` consistent with the derived balance — `allocatePaymentToReceivable`
- * and `reverseAllocation` each recompute it (subledger.ts) — so a row outside
- * this set cannot be hiding an outstanding balance.
+ * WRITTEN_OFF / REVERSED by `NOT_COLLECTIBLE_STATUSES`.
+ *
+ * No row outside this set can hide an outstanding balance, and it takes both
+ * halves of the argument to know that — a review found the first half stated
+ * alone and it was not sufficient:
+ *
+ *  - `allocatePaymentToReceivable` and `reverseAllocation` (subledger.ts) each
+ *    recompute `status` from the derived balance, so OPEN/PARTIALLY_PAID/PAID
+ *    always agree with the allocations;
+ *  - every other writer — `cancelSaleReceivableIfSafe`
+ *    (utils/saleCancellation.ts) and the finance-application void path
+ *    (applications.ts) — moves the row straight to CANCELLED, which
+ *    `getReceivableOutstandingMinor` forces to zero regardless of its
+ *    allocations.
+ *
+ * So a status transition either keeps the balance honest or lands somewhere
+ * this query already treats as nothing owed.
  */
 const OUTSTANDING_STATUSES = ["OPEN", "PARTIALLY_PAID"] as const;
 
