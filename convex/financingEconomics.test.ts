@@ -4147,7 +4147,39 @@ describe("handover seals the approved amount, and the amount that was verified",
     expect(app?.vehicleHandoverAt).toBeUndefined();
   });
 
-  test("the denomination is carried with its scale, not re-derived", async () => {
+  for (const [label, currency] of [
+    ["unsupported", "JD"],
+    ["non-canonical", "jod"],
+    ["empty", ""],
+  ] as const) {
+    test(`the cockpit refuses to spell money in a ${label} denomination`, async () => {
+      const { seed, applicationId } = await approvedDeal();
+      await seed.t.run((ctx) => ctx.db.patch(applicationId, { economicsCurrency: currency }));
+
+      // The cockpit is a money-READING surface. Refusing the handover protects
+      // the irreversible step and does nothing for the figure on the page — a
+      // dealer reading 115,000 where the deal says 11,500 is damage the
+      // confirmation dialog never sees.
+      const deal = await seed.asUser.query(api.applications.dealCockpit, {
+        orgId: seed.orgId,
+        applicationId,
+      });
+      expect(deal?.denomination).toBeNull();
+    });
+  }
+
+  test("a deal in a supported canonical currency still shows its figures", async () => {
+    // The other half: the refusal must not swallow every deal. This is what
+    // proves the null above is a judgement and not a constant.
+    const { seed, applicationId } = await approvedDeal();
+    const deal = await seed.asUser.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(deal?.denomination).toEqual({ code: "JOD", scale: 3 });
+  });
+
+  test("the denomination is carried with its scale, not re-derived", async () =>{
     const { seed, applicationId } = await approvedDeal();
     const deal = await seed.asUser.query(api.applications.dealCockpit, {
       orgId: seed.orgId,

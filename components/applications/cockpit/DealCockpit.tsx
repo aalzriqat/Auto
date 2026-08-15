@@ -1240,8 +1240,32 @@ export function DealCockpitView({
   // switches to USD would otherwise be rescaled at the wrong power of ten —
   // 5,000,000 minor units rendering as 50,000 USD instead of 5,000 JOD, and the
   // same wrong factor feeding the receipt dialog.
-  const dealCurrency = deal?.money?.currency ?? currency.code;
-  const factor = useMemo(() => Math.pow(10, scaleForCurrency(dealCurrency)), [dealCurrency]);
+  /**
+   * The denomination the SERVER vouches for, or null.
+   *
+   * This screen is a money-READING surface. Everything below used to fall from
+   * the deal's currency to the org's to a hardcoded default, and then through a
+   * scaler that answers 2 for anything it does not recognise — so a legacy row
+   * carrying "JD" showed 11,500,000 fils as 115,000. Refusing the handover
+   * protects the irreversible step and does nothing for the figure a dealer
+   * reads off the page.
+   *
+   * When it is null there is no honest way to spell these amounts, so they are
+   * withheld and the reason is stated. Absent, unsupported and non-canonical
+   * all land here, matching exactly what the writers refuse.
+   */
+  const denomination = deal && "denomination" in deal ? deal.denomination : null;
+  // Derived from the stage rail, which the SERVER computes from the unredacted
+  // row — so this is true even for a caller whose money block is withheld.
+  const economicsRecorded =
+    Boolean(deal?.money) ||
+    deal?.stages?.some((stage) => stage.key === "APPROVED_PURCHASE" && stage.state === "COMPLETE") === true;
+  const denominationUnusable = denomination === null && economicsRecorded;
+  const dealCurrency = denomination?.code ?? deal?.money?.currency ?? currency.code;
+  const factor = useMemo(
+    () => Math.pow(10, denomination?.scale ?? scaleForCurrency(dealCurrency)),
+    [denomination, dealCurrency]
+  );
   // A SHORT currency marker, and a locale-appropriate one.
   //
   // `currency.format` renders "دينار اردني" in Arabic, which on a screen
@@ -1745,7 +1769,19 @@ export function DealCockpitView({
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           {/* --- money ---------------------------------------------------- */}
-          {deal.money === null ? (
+          {/* Withheld before anything is spelled, because a figure in an
+              unverifiable denomination is worse than no figure: the operator
+              cannot tell it is wrong. Placed ahead of the permission case so a
+              caller who CAN see the money is told why it is absent, rather than
+              being shown amounts scaled by a guess. */}
+          {denominationUnusable ? (
+            <Card className="border-destructive/40">
+              <CardContent className="space-y-2 py-8 text-sm">
+                <p className="font-medium text-destructive">{t("EconomicsCurrencyUnusable")}</p>
+                <p className="text-muted-foreground">{t("EconomicsCurrencyUnusableHint")}</p>
+              </CardContent>
+            </Card>
+          ) : deal.money === null ? (
             <Card>
               <CardContent className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
                 <Lock className="h-4 w-4" />

@@ -71,6 +71,7 @@ function dealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
   return {
     dealKind: "FINANCED",
     economicsStamp: STAMP,
+    denomination: { code: "JOD", scale: 3 },
     handoverEvidence: {
       approvedPurchaseAmountMinor: null,
       financeCompanyFundedPortionMinor: null,
@@ -176,6 +177,45 @@ function cardButton(name: string): HTMLElement | undefined {
 afterEach(() => {
   cleanup();
   language.locale = "ar";
+});
+
+describe("a denomination nobody can vouch for", () => {
+  test("withholds the money panel and says why, instead of guessing", () => {
+    // A legacy row carrying "JD": JOD is scale 3, the fallback scaler answers
+    // 2, and 11,500,000 fils renders as 115,000. Handover refuses such a deal,
+    // which protects the irreversible step and leaves the dealer reading a
+    // figure wrong by a factor of ten.
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          denomination: null,
+          // Money withheld from this caller AND economics on the record: the
+          // stage rail is what proves they exist, so the warning reaches a
+          // caller who cannot see the figures either way.
+          money: null,
+          stages: [
+            { key: "APPLICATION", state: "COMPLETE" },
+            { key: "APPROVED_PURCHASE", state: "COMPLETE" },
+          ],
+        })}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    expect(screen.getByText("EconomicsCurrencyUnusable")).toBeTruthy();
+    expect(screen.getByText("EconomicsCurrencyUnusableHint")).toBeTruthy();
+  });
+
+  test("does not fire for a deal with no economics recorded", () => {
+    // Absent currency on a deal with nothing to denominate is ordinary, not an
+    // error — warning there would put a red panel on every new deal.
+    render(
+      <DealCockpitView
+        deal={dealFixture({ denomination: null, money: null })}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    expect(screen.queryByText("EconomicsCurrencyUnusable")).toBeNull();
+  });
 });
 
 describe("the card is not behind the money gate", () => {

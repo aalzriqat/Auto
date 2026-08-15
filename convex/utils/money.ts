@@ -49,10 +49,16 @@ export function supportedCurrencyScale(currency: string): CurrencyScale | null {
 export function denominationOf(
   currency: string | undefined
 ): { code: string; scale: CurrencyScale } | null {
-  if (!currency) return null;
-  const code = currency.toUpperCase();
-  const scale = supportedCurrencyScale(code);
-  return scale === null ? null : { code, scale };
+  if (currency === undefined) return null;
+  // CANONICAL only — the same rule the writers assert, so a screen never shows
+  // money in a denomination the mutations would refuse. It previously
+  // uppercased, which meant "jod" rendered as perfectly good JOD right up until
+  // handover rejected the deal; and an empty string read as absent rather than
+  // as the meaningless value it is.
+  const scale = supportedCurrencyScale(currency);
+  return scale === null || currency !== currency.toUpperCase()
+    ? null
+    : { code: currency, scale };
 }
 
 /**

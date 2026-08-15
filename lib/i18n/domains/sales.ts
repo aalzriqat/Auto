@@ -848,6 +848,9 @@ export const salesEn = {
     "This approved amount is unlike the other figures recorded on this deal. AutoFlow flagged it when it was recorded.",
   HandoverVerifyBeforeContinuing:
     "Check the approved amount and the funding split above before continuing.",
+  EconomicsCurrencyUnusable: "This deal's figures cannot be shown safely.",
+  EconomicsCurrencyUnusableHint:
+    "AutoFlow cannot confirm which currency this deal's economics are recorded in, so showing the amounts could be wrong by a factor of ten. Record the deal's economics again in a supported currency to restore them.",
   HandoverCurrencyUnverified:
     "AutoFlow cannot confirm which currency this deal's figures are recorded in, so it will not show them here. Record the deal's economics again before handing the vehicle over.",
   HandoverNotesLabel: "Notes (optional)",
@@ -1773,6 +1776,9 @@ export const salesAr = {
   HandoverAmountLooksUnusual:
     "هذا المبلغ المعتمد يختلف عن باقي الأرقام المسجَّلة على هذه الصفقة، وقد نبّه أوتوفلو إليه عند تسجيله.",
   HandoverVerifyBeforeContinuing: "تحقّق من المبلغ المعتمد وتقسيم التمويل أعلاه قبل المتابعة.",
+  EconomicsCurrencyUnusable: "لا يمكن عرض أرقام هذه الصفقة بشكل موثوق.",
+  EconomicsCurrencyUnusableHint:
+    "لا يستطيع أوتوفلو تأكيد العملة المسجَّلة بها اقتصاديات هذه الصفقة، وعرض المبالغ قد يكون خاطئًا بعشرة أضعاف. أعد تسجيل اقتصاديات الصفقة بعملة مدعومة لاستعادتها.",
   HandoverCurrencyUnverified:
     "لا يستطيع أوتوفلو تأكيد العملة المسجَّلة بها أرقام هذه الصفقة، ولذلك لن يعرضها هنا. أعد تسجيل اقتصاديات الصفقة قبل تسليم المركبة.",
   HandoverNotesLabel: "ملاحظات (اختياري)",

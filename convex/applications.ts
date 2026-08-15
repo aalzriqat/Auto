@@ -1850,6 +1850,20 @@ export const dealCockpit = query({
        */
       economicsStamp: economicsStamp(app),
       /**
+       * The denomination this deal's money may be SPELLED in, or null.
+       *
+       * The cockpit is a money-READING surface, not only a place to act. It
+       * formatted every figure through the fallback scaler, so a legacy row
+       * carrying "JD" displayed 11,500,000 fils as 115,000 — a dealer reading a
+       * real deal off by a factor of ten. Handover already refused such a row,
+       * which protects the irreversible step and does nothing whatever for the
+       * number on the screen.
+       *
+       * The same authority the writers assert against, so the page cannot show
+       * money in a denomination the mutations would reject.
+       */
+      denomination: denominationOf(app.economicsCurrency),
+      /**
        * What the handover confirmation shows, on `base` so it survives the
        * money gate — and derived through `redactSettlementEvidence`, the same
        * policy `applications.get` uses.
