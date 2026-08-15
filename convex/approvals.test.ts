@@ -484,11 +484,15 @@ describe("Approvals Outcomes", () => {
  *  - FAIL before their own later fix (adversarial review of 9926d5bb):
  *      "refuses to widen the 7-day window"
  *      "still applies the window when `now` is omitted"
- *  - Pass both before and after: the salesperson, 7-day-edge, tied-createdAt
- *    and countPending cases. They pin real properties but prove nothing about
- *    the tenancy defect — `countPending` was already org-scoped via `by_org`,
- *    and the tied-createdAt case really asserts a Convex engine guarantee.
- *    It is kept because a future pagination-based rewrite could break it.
+ *  - Pass both before and after: the salesperson, 7-day-edge, tied-createdAt,
+ *    countPending and NaN-guard cases. They pin real properties but prove
+ *    nothing about the tenancy defect — `countPending` was already org-scoped
+ *    via `by_org`. Of these the NaN-guard case is independently non-vacuous
+ *    (removing the guard fails it), whereas tied-createdAt really asserts a
+ *    Convex engine guarantee and is kept only because a future
+ *    pagination-based rewrite could break it.
+ *
+ * That is all 9 tests in this block accounted for.
  */
 describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
   const DAY = 24 * 60 * 60 * 1000;
@@ -780,12 +784,28 @@ describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
         status: "PENDING",
         createdAt: Date.now() - 730 * DAY, // two years old
       });
+      // ⚠️ Pins the MAGNITUDE of the floor, not merely its existence. With only
+      // the two-year-old row above, widening CLOCK_SKEW_MS from 1 day to 60
+      // survived the whole suite — the mutant escaped because two years is
+      // outside even a badly misconfigured tolerance. 40 days is comfortably
+      // outside a correct 8-day window and comfortably inside that mutant.
+      await ctx.db.insert("profitApprovalRequests", {
+        orgId: orgA,
+        vehicleId: veh._id,
+        requestedProfit: 4343,
+        minimumProfit: 500,
+        salespersonId: user._id,
+        status: "PENDING",
+        createdAt: Date.now() - 40 * DAY,
+      });
     });
 
     const asUser = t.withIdentity({ subject: "multi_org_sales" });
     const rows = await asUser.query(api.approvals.listMyPendingApprovals, { orgId: orgA, now: 0 });
+    const profits = rows.map((r: any) => r.requestedProfit);
 
-    expect(rows.map((r: any) => r.requestedProfit)).not.toContain(4242);
+    expect(profits).not.toContain(4242);
+    expect(profits).not.toContain(4343);
   });
 
   /**
