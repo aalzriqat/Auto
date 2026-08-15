@@ -49,6 +49,28 @@ import {
 
 const SCALE = 1_000; // JOD — 3 decimal places
 
+/**
+ * Renders a major-unit amount the way the component will, for THIS machine.
+ *
+ * `formatMinor` goes through `toLocaleString(undefined, ...)`, so the group and
+ * decimal separators follow the runner's default locale: what reads "1,000.000"
+ * on an en-US machine reads "1.000,000" on a de-DE one, and a hardcoded string
+ * fails there for a reason that has nothing to do with the code. CodeRabbit
+ * caught it.
+ *
+ * The `scale` argument stays HARDCODED at each call site on purpose. The scale
+ * is the entire subject of the SCRUM-62 assertion — the same minor units read
+ * at 3 vs 2 decimal places — so deriving it from the component would make the
+ * test agree with whatever the component did and prove nothing. Only the
+ * separators, which are environmental noise, are derived.
+ */
+function atScale(majorUnits: number, scale: number): string {
+  return majorUnits.toLocaleString(undefined, {
+    minimumFractionDigits: scale,
+    maximumFractionDigits: scale,
+  });
+}
+
 function draftFixture(
   overrides: Partial<PendingOpeningBalanceDraft> = {}
 ): PendingOpeningBalanceDraft {
@@ -206,7 +228,7 @@ describe("opening-balance approval panel", () => {
     );
     // Scale 3. The identical minor units at scale 2 would read 10,000.00 —
     // exactly the 10x misstatement SCRUM-62 was about.
-    expect(screen.getAllByText("1,000.000").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(atScale(1_000, 3)).length).toBeGreaterThan(0);
     unmount();
 
     render(
@@ -215,7 +237,7 @@ describe("opening-balance approval panel", () => {
         isOwnDraft={false} busy={false} onApprove={vi.fn()} onReject={vi.fn()}
       />
     );
-    expect(screen.getAllByText("10,000.00").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(atScale(10_000, 2)).length).toBeGreaterThan(0);
   });
 
   test("an undenominated draft shows RAW minor units, not a fallback-currency amount", () => {

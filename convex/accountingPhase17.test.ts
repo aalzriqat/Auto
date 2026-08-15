@@ -479,6 +479,59 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
     ).rejects.toThrow(/currency cannot be changed/i);
   });
 
+  test("rejecting the draft releases the currency lock again", async () => {
+    // The lock is keyed to status === "PENDING_APPROVAL", so it is supposed to
+    // be temporary. Nothing asserted the RELEASE, only the hold — and an
+    // over-broad lock would be just as much of an onboarding dead end as the
+    // one SCRUM-52 is about: a fresh org that drafts an opening balance, has it
+    // rejected, and then discovers it can never correct its currency. SCRUM-52
+    // lists "rejection clears the commitment and allows corrected
+    // resubmission" among its required tests. Raised by CodeRabbit.
+    const ctx = await seedCutoverDealer();
+    const cash = account(ctx, "CASH_ON_HAND");
+    const capital = account(ctx, "PARTNER_CAPITAL");
+
+    const { draftId } = await ctx.asReviewer.mutation(
+      api.accountingCutover.draftOpeningBalance,
+      {
+        orgId: ctx.orgId,
+        asOfDate: Date.now(),
+        memo: "Cutover",
+        lines: [
+          { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
+          { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+        ],
+      }
+    );
+
+    // Still held while pending — so the release below cannot pass by the lock
+    // never having engaged in the first place.
+    await expect(
+      ctx.asOwner.mutation(api.orgSettings.upsert, { orgId: ctx.orgId, currency: "USD" })
+    ).rejects.toThrow(/currency cannot be changed/i);
+
+    // Rejected by someone other than the preparer, as segregation of duties
+    // requires on this path.
+    await ctx.asOwner.mutation(api.accountingCutover.rejectOpeningBalanceDraft, {
+      orgId: ctx.orgId,
+      draftId: draftId as Id<"openingBalanceDrafts">,
+      rejectionReason: "Wrong opening cash figure",
+    });
+
+    await ctx.asOwner.mutation(api.orgSettings.upsert, {
+      orgId: ctx.orgId,
+      currency: "USD",
+    });
+
+    const settings = await ctx.t.run((c) =>
+      c.db
+        .query("orgSettings")
+        .withIndex("by_org", (q) => q.eq("orgId", ctx.orgId))
+        .unique()
+    );
+    expect(settings?.currency).toBe("USD");
+  });
+
   test("approval posts in the currency the lines were ENTERED in, not the org's current one", async () => {
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
