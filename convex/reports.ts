@@ -22,6 +22,7 @@ import {
   saleEconomics,
   recordedConsignedMargin,
   recordedSupplierEntitlement,
+  recordedSupplierGrossReceipt,
 } from "./utils/vehicleOwnership";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { getOrgCurrency } from "./accounting/workflowHooks";
@@ -160,6 +161,7 @@ export const getSalesAndProfitReport = query({
         // salePrice - approved, which is money that reaches no party.
         recordedMargin: recordedConsignedMargin(sale),
         recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
+        recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
         externallyFinanced:
           sale.financingType === "FINANCED" || sale.financingType === "LEASE",
       });
@@ -784,6 +786,7 @@ export const getSalespersonPerformance = query({
           // includes money no party paid.
           recordedMargin: recordedConsignedMargin(sale),
           recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
+          recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
           externallyFinanced:
             sale.financingType === "FINANCED" || sale.financingType === "LEASE",
         });

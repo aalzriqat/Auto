@@ -247,10 +247,28 @@ export interface SaleEconomics {
   /**
    * What the dealership actually earned: its commission, or its gross profit.
    *
-   * `null` means UNKNOWN — the row is a financed sale settled directly with the
-   * supplier whose recorded margin is missing, so what it earned cannot be
-   * derived from the sale price. Callers must withhold it, never read it as
-   * zero and never substitute `salePrice − cost`.
+   * `null` means UNKNOWN. Callers must withhold it, never read it as zero and
+   * never substitute `salePrice − cost`.
+   *
+   * ⚠️ SCRUM-40 O-4. This block used to name ONE cause, and an incomplete
+   * enumeration in a codebase that uses these blocks as the durable record of
+   * rejected alternatives misleads the next reader into "simplifying" a branch
+   * it never mentioned. The complete list, each with the rule that produces it:
+   *
+   *  1. A financed sale settled DIRECT with the supplier whose recorded margin
+   *     is MISSING — `evidenceRequired`. `salePrice − entitlement` reaches no
+   *     party on that route.
+   *  2. The same route with a recorded margin that nothing SUBSTANTIATES — no
+   *     frozen supplier receipt (`financedDirectUnverified`, SCRUM-41). The
+   *     frozen figure exists but was computed on the wrong basis.
+   *  3. An agent sale whose vehicle row is gone and which froze no entitlement
+   *     of its own — `evidenceRequired`'s second arm. There is no cost basis
+   *     left anywhere.
+   *  4. Any sale with no frozen basis whose live basis is not a basis:
+   *     the vehicle row is unreadable, or it is an agent sale whose capitalized
+   *     cost is zero (`basisUnknown`, SCRUM-33 / O-2). This one can be reached
+   *     by a sale that does NOT classify as an agent sale — the classification
+   *     itself is what could not be established.
    */
   dealershipMargin: number | null;
   /**
@@ -326,6 +344,72 @@ export function recordedSupplierEntitlement(sale: Doc<"sales">): number | undefi
 }
 
 /**
+ * What a third party actually paid the supplier, frozen at completion, in major
+ * units — `consignedSupplierGrossReceiptMinor`.
+ *
+ * Same guards and the same currency as the two fields above, because the one
+ * writer patches all three together. On a cash direct sale this is the sale
+ * price; on a financed direct one it is the finance company's approved purchase
+ * amount, which is frequently NOT the sale price.
+ *
+ * Absent on THROUGH_DEALERSHIP by design — nobody pays him directly there — so
+ * absence alone is not a defect. It is only evidence of anything on the DIRECT
+ * route, where the writer always records it.
+ */
+export function recordedSupplierGrossReceipt(sale: Doc<"sales">): number | undefined {
+  const minor = sale.consignedSupplierGrossReceiptMinor;
+  const currency = sale.consignedMarginCurrency;
+  if (minor === undefined || !currency) return undefined;
+  if (!Number.isFinite(minor) || minor < 0) return undefined;
+  return fromMinorUnits(minor, currency);
+}
+
+/**
+ * The most the supplier can legitimately have been entitled to on this sale.
+ *
+ * ⚠️ SCRUM-40 O-1. This was the SALE PRICE, and that is the wrong yardstick on a
+ * financed DIRECT deal: `approveDealerPurchaseAmount` bounds the approval only
+ * by `> 0` and `>= entitlement`, and `MANUAL` basis accepts any figure, so an
+ * approval above the sale price is writer-producible. `completeSale` then
+ * compares the entitlement against the supplier's GROSS RECEIPT, never against
+ * the sale price — so the reader was applying a stricter bound than the writer
+ * and rejecting values the writer had legitimately stored. Reproduced by Opus:
+ * `route=DIRECT, financed, entitlement=13500, salePrice=12500` withheld a
+ * settlement of 13,500 that was correct.
+ *
+ * The receipt is the right ceiling because it IS the money that reached him: a
+ * supplier cannot be owed more than the whole of what he was paid. The sale
+ * price remains the ceiling wherever no receipt was recorded — every
+ * THROUGH_DEALERSHIP row, where the receipt is deliberately not written and the
+ * gross the dealership collected is the sale price.
+ */
+function entitlementCeiling(args: {
+  salePrice: number;
+  recordedSupplierGrossReceipt?: number;
+}): number {
+  return verifiedSupplierReceiptFor(args.recordedSupplierGrossReceipt) ?? args.salePrice;
+}
+
+/**
+ * The frozen receipt if it is worth believing at all.
+ *
+ * ONE predicate, because two questions depend on it and they must not disagree:
+ * how high the supplier's entitlement may legitimately go (`entitlementCeiling`)
+ * and whether a financed DIRECT row's frozen margin is substantiated
+ * (`financedDirectUnverified`). Same NaN/negative discipline as every other
+ * frozen field — a corrupt receipt substantiates nothing and raises no ceiling.
+ */
+function verifiedSupplierReceiptFor(
+  recordedSupplierGrossReceipt: number | undefined
+): number | undefined {
+  return recordedSupplierGrossReceipt !== undefined &&
+    Number.isFinite(recordedSupplierGrossReceipt) &&
+    recordedSupplierGrossReceipt >= 0
+    ? recordedSupplierGrossReceipt
+    : undefined;
+}
+
+/**
  * The supplier's frozen entitlement, if the row carries one worth believing.
  *
  * Bounded on BOTH sides. An entitlement above the gross subtracts to a negative
@@ -336,11 +420,11 @@ export function recordedSupplierEntitlement(sale: Doc<"sales">): number | undefi
  */
 function validFrozenEntitlementFor(
   recordedSupplierEntitlement: number | undefined,
-  salePrice: number
+  ceiling: number
 ): number | undefined {
   return recordedSupplierEntitlement !== undefined &&
     recordedSupplierEntitlement >= 0 &&
-    recordedSupplierEntitlement <= salePrice
+    recordedSupplierEntitlement <= ceiling
     ? recordedSupplierEntitlement
     : undefined;
 }
@@ -371,6 +455,13 @@ export function saleIsAgentSale(args: {
   salePrice: number;
   recordedMargin?: number;
   recordedSupplierEntitlement?: number;
+  /**
+   * `consignedSupplierGrossReceiptMinor` in major units. Only ever written on a
+   * consigned DIRECT sale, so it raises the entitlement's eligibility ceiling
+   * under the same rule `saleEconomics` applies — the classifier and the
+   * economics must not disagree about which entitlements are believable.
+   */
+  recordedSupplierGrossReceipt?: number;
   /** DIRECT_TO_SUPPLIER — itself a positive consignment signal. */
   settlesDirect: boolean;
 }): boolean {
@@ -378,7 +469,10 @@ export function saleIsAgentSale(args: {
   return (
     args.recordedMargin !== undefined ||
     args.settlesDirect ||
-    validFrozenEntitlementFor(args.recordedSupplierEntitlement, args.salePrice) !== undefined
+    validFrozenEntitlementFor(
+      args.recordedSupplierEntitlement,
+      entitlementCeiling(args)
+    ) !== undefined
   );
 }
 
@@ -432,6 +526,22 @@ export function saleEconomics(args: {
    */
   recordedSupplierEntitlement?: number;
   /**
+   * What a third party actually paid the supplier, frozen at completion.
+   *
+   * ⚠️ SCRUM-41. This is the evidence that decides whether a frozen margin on a
+   * financed DIRECT row may be believed at all, and it is not a date heuristic.
+   * `utils/saleCompletion.ts` is the only writer of the frozen consigned fields
+   * and it patches this one in the SAME statement as the margin on every direct
+   * sale, having DERIVED the margin from it (`supplierGrossReceipt − cost`). So
+   * a direct row carrying a margin and no receipt cannot have been written by
+   * the writer that computes the margin correctly — it predates the receipt, and
+   * its margin is the sale-price spread.
+   *
+   * Absent on THROUGH_DEALERSHIP by design. See `entitlementCeiling`, which uses
+   * it for the other half of the same question.
+   */
+  recordedSupplierGrossReceipt?: number;
+  /**
    * Whether a third party financed this sale (FINANCED or LEASE).
    *
    * It is what separates the two readings of an absent `recordedMargin`. On a
@@ -458,7 +568,7 @@ export function saleEconomics(args: {
   // an answer that already assumed it would be circular.
   const validFrozenEntitlement = validFrozenEntitlementFor(
     args.recordedSupplierEntitlement,
-    salePrice
+    entitlementCeiling(args)
   );
   // Through the shared classifier, which is the same rule this function has
   // always applied — including the case where a supplier entitlement survives a
@@ -472,6 +582,7 @@ export function saleEconomics(args: {
     salePrice,
     recordedMargin: args.recordedMargin,
     recordedSupplierEntitlement: args.recordedSupplierEntitlement,
+    recordedSupplierGrossReceipt: args.recordedSupplierGrossReceipt,
     settlesDirect,
   });
   // AGENT ONLY. A supplier basis must never derive a dealer-owned row's profit:
@@ -489,10 +600,69 @@ export function saleEconomics(args: {
   // `supplierGrossReceipt − entitlement`, never `salePrice − entitlement`, so a
   // surviving entitlement must not become a back door to the sale-price spread
   // this whole change exists to stop reporting.
+  const financedDirect = agent && settlesDirect && args.externallyFinanced === true;
   const evidenceRequired =
-    agent &&
-    ((settlesDirect && args.externallyFinanced === true) ||
-      (vehicleUnknown && eligibleSupplierEntitlement === undefined));
+    financedDirect || (agent && vehicleUnknown && eligibleSupplierEntitlement === undefined);
+  /**
+   * ⚠️ SCRUM-41 — the frozen margin is not self-certifying on this one route.
+   *
+   * `evidenceRequired` used to be consulted ONLY when `recordedMargin` was
+   * undefined, so a row that already carried a frozen `consignedMarginMinor`
+   * returned it unconditionally — including on the financed DIRECT route, where
+   * the earning is `approved − entitlement` and the sale-price spread reaches no
+   * party at all. `sales.create` accepts `financingType` and
+   * `supplierSettlementRoute` together with no application, and the write-path
+   * guard (`FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT`) only landed on 2026-08-11 —
+   * so rows completed before it froze the margin at the wrong basis. On a 20,000
+   * sale with a 15,000 entitlement where the financier paid the 18,000 it
+   * approved, the real earning is 3,000 and `saleEconomics` published 5,000 into
+   * `reports.salesReport`'s `totalProfit`.
+   *
+   * The discriminator is the row's own evidence, not a completion date. The one
+   * writer records the receipt in the same patch as the margin on every direct
+   * sale and derives the margin from it, so margin-without-receipt on a DIRECT
+   * row is precisely the pre-guard population.
+   *
+   * The identical rule already governs PAYROLL money: `commissionableEarnings`
+   * refuses a financed direct sale whose receipt is unrecorded rather than
+   * substituting the sale price. This is that rule reaching the owner-facing
+   * report figures it had never been applied to.
+   */
+  const financedDirectUnverified =
+    financedDirect && verifiedSupplierReceiptFor(args.recordedSupplierGrossReceipt) === undefined;
+  /**
+   * ⚠️ SCRUM-33 / SCRUM-40 O-2 — no basis on the row, and none to be had.
+   *
+   * `salePrice − capitalizedCost` is only an earning while `capitalizedCost` is
+   * a real basis. Two shapes where it is not:
+   *
+   * • The VEHICLE ROW IS GONE (`/admin`'s raw editor, or a partially-failed
+   *   `hardDeleteOrg`), so the cost arrives as 0. The agent branch already
+   *   withheld for this; a sale that carries none of the three consignment
+   *   signals did not, and was read as dealer-owned stock with a zero cost — the
+   *   ENTIRE ticket published as revenue AND as profit, with no unknown flag on
+   *   it. That is the legacy consigned THROUGH population, whose route field and
+   *   frozen margin both post-date it. The classification is what cannot be
+   *   established, so it is not repaired by guessing which way it falls: the same
+   *   arithmetic misstates a genuinely dealer-owned row just as badly.
+   *
+   * • The sale is an AGENT sale whose live cost is ZERO. A consigned car the
+   *   supplier is owed nothing for is not a real consignment — `saleCompletion`
+   *   refuses to complete a sourced sale without a positive cost — so zero here
+   *   is missing evidence, never the fact that the car was free. Reached when a
+   *   frozen entitlement is present but INELIGIBLE and `sourceCost` has also been
+   *   cleared: Opus reproduced `cost=0, entitlement=13500, margin=undefined` →
+   *   `margin=12500, settle=0`.
+   *
+   * Deliberately NARROW on both sides. A dealer-owned row keeps the live cost
+   * whatever it is, and an agent row with a POSITIVE live cost keeps it too —
+   * that is what a genuine legacy consigned sale was posted on, and withholding a
+   * derivable number is a different wrong answer, not a safer one.
+   */
+  const basisUnknown =
+    args.recordedMargin === undefined &&
+    eligibleSupplierEntitlement === undefined &&
+    (vehicleUnknown || (agent && !(capitalizedCost > 0)));
   // When the margin is missing, rebuild it from the SURVIVING FROZEN basis
   // before reaching for the live one.
   //
@@ -535,21 +705,33 @@ export function saleEconomics(args: {
   // If an entitlement is not fit to derive the margin, it is not fit to be
   // published as the supplier's share either.
 
+  // The two withholding rules above are checked BEFORE the recorded margin,
+  // because each names a case where the recorded margin — or its absence — is
+  // exactly what cannot be relied on. Everything after them is unchanged.
   const margin =
-    agent && args.recordedMargin !== undefined
-      ? args.recordedMargin
-      : evidenceRequired
-        ? null
-        : salePrice - (eligibleSupplierEntitlement ?? capitalizedCost);
+    financedDirectUnverified || basisUnknown
+      ? null
+      : agent && args.recordedMargin !== undefined
+        ? args.recordedMargin
+        : evidenceRequired
+          ? null
+          : salePrice - (eligibleSupplierEntitlement ?? capitalizedCost);
 
   if (!agent) {
     return {
       isAgentSale: false,
       settlementRoute: null,
       grossTransactionValue: grossTransactionValueForSale({ salePrice }),
-      supplierSettlement: 0,
+      // Zero is a CLAIM that no supplier is owed anything, and a row nobody can
+      // classify is in no position to make it. `null` keeps it out of
+      // `totalSupplierSettlement` and into `unknownSupplierSettlementSaleCount`,
+      // which is what tells the owner the total is a floor.
+      supplierSettlement: basisUnknown ? null : 0,
       dealershipMargin: margin,
-      recognizedRevenue: salePrice,
+      // Null exactly when the margin is — the documented contract of this
+      // object. Publishing the sale price as turnover for a row whose basis
+      // could not be read is the SCRUM-33 defect wearing revenue's name.
+      recognizedRevenue: basisUnknown ? null : salePrice,
       recognizedCost: capitalizedCost,
     };
   }
@@ -569,8 +751,14 @@ export function saleEconomics(args: {
     // stayed put. The two figures describe one deal; deriving them under
     // different rules about missing evidence is what makes the report disagree
     // with the ledger.
+    //
+    // `basisUnknown` joins the same arm: where the live cost is not a basis at
+    // all, publishing it as the supplier's share is the same error as publishing
+    // it as the dealership's margin. `financedDirectUnverified` does NOT — what
+    // the supplier is owed is its own frozen fact and does not depend on proving
+    // what the financier paid.
     supplierSettlement:
-      eligibleSupplierEntitlement ?? (evidenceRequired ? null : capitalizedCost),
+      eligibleSupplierEntitlement ?? (evidenceRequired || basisUnknown ? null : capitalizedCost),
     dealershipMargin: margin,
     // The whole point. Turnover is what the dealership sold, and on a consigned
     // car that is its service, not the vehicle.

@@ -214,6 +214,21 @@ describe("the economics split", () => {
       // this state takes a partial repair or a raw-JSON edit of one field —
       // which is exactly the case a fail-closed rule is for.
       recordedSupplierEntitlement: undefined,
+      /**
+       * SCRUM-41 added this input, and this test needed it to keep testing what
+       * it was written to test.
+       *
+       * Its subject is the SETTLEMENT half — that a missing frozen entitlement
+       * must not fall back to a drifted live cost. Its premise is that the
+       * margin beside it is sound. On the financed DIRECT route that premise is
+       * now something the row has to carry evidence for, and without the receipt
+       * the margin is withheld too — which would make the test pass for the
+       * wrong reason and stop exercising the settlement rule at all.
+       *
+       * The withheld-margin case is not lost: it is `SCRUM-41 — a frozen margin
+       * nothing can substantiate` in `consignmentEconomics.test.ts`.
+       */
+      recordedSupplierGrossReceipt: SALE_PRICE,
     });
 
     // The half that was already right: the frozen margin is still trusted.
@@ -617,6 +632,12 @@ describe("a recorded margin the reader cannot trust", () => {
         financingType: "FINANCED",
         supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
         consignedMarginMinor: MARGIN * 1_000,
+        // SCRUM-41: the receipt is what substantiates a frozen margin on this
+        // route, and this test's subject is the ENTITLEMENT counter, not the
+        // margin. Without it the margin would be withheld too and the two
+        // counters this test exists to tell apart would both fire — see the
+        // same note on the unit test above.
+        consignedSupplierGrossReceiptMinor: SALE_PRICE * 1_000,
         // ...and the half that was erased afterwards.
         consignedSupplierEntitlementMinor: undefined,
       });

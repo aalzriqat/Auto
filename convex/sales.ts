@@ -19,6 +19,7 @@ import {
   isConsignedAgentSale,
   recordedConsignedMargin,
   recordedSupplierEntitlement,
+  recordedSupplierGrossReceipt,
   saleIsAgentSale,
 } from "./utils/vehicleOwnership";
 import {
@@ -2195,6 +2196,7 @@ export const dealCockpit = query({
       salePrice: sale.salePrice,
       recordedMargin: recordedConsignedMargin(sale),
       recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
+      recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
       settlesDirect: !collectsGross,
     });
 
@@ -2481,6 +2483,7 @@ export const dealCockpit = query({
       supplierSettlementRoute: sale.supplierSettlementRoute,
       recordedMargin: recordedConsignedMargin(sale),
       recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
+      recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
       externallyFinanced:
         sale.financingType === "FINANCED" || sale.financingType === "LEASE",
     });

@@ -5,7 +5,11 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { isSystemOwnerRole, PERMISSIONS, type Permission } from "./utils/permissions";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { fromMinorUnits } from "./utils/money";
-import { consignedSettlementRoute, dealershipCollectsGross } from "./utils/vehicleOwnership";
+import {
+  consignedSettlementRoute,
+  dealershipCollectsGross,
+  recordedSupplierGrossReceipt,
+} from "./utils/vehicleOwnership";
 import {
   grossTransactionValueForSale,
   grossTransactionValueForTransaction,
@@ -484,6 +488,33 @@ export const stats = query({
       (sale.financingType === "FINANCED" || sale.financingType === "LEASE");
 
     /**
+     * The frozen margin, but only where something on the row substantiates it.
+     *
+     * ⚠️ SCRUM-41. Both readers below short-circuited on the mere PRESENCE of
+     * `consignedMarginMinor`, which is the one thing that cannot be assumed on
+     * the financed DIRECT route: there the earning is `approved − entitlement`,
+     * and a row completed before `FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT` landed
+     * froze the sale-price spread instead. This screen then published the
+     * overstated figure exactly as `reports.salesReport` did.
+     *
+     * `consignedSupplierGrossReceiptMinor` is what tells the two populations
+     * apart: `utils/saleCompletion.ts` writes it in the same patch as the margin
+     * on every direct sale and DERIVES the margin from it. Read through the
+     * shared helper rather than re-inspected here, so this surface and
+     * `saleEconomics` cannot come to different conclusions about one sale — the
+     * failure this whole file's `earningIsUnknownGiven` comment already warns
+     * about, in a branch it did not cover.
+     */
+    const trustedFrozenMargin = (sale: Doc<"sales">): number | undefined => {
+      const frozen = frozenConsignedMargin(sale);
+      if (frozen === undefined) return undefined;
+      if (needsFrozenMarginEvidence(sale) && recordedSupplierGrossReceipt(sale) === undefined) {
+        return undefined;
+      }
+      return frozen;
+    };
+
+    /**
      * Whether this sale needs a recorded earning and has none.
      *
      * Answered from the sale row alone, which is what makes it the same answer
@@ -525,7 +556,7 @@ export const stats = query({
     const earningIsUnknownGiven = (
       facts: (sale: Doc<"sales">) => WindowVehicleFacts
     ) => (sale: Doc<"sales">): boolean => {
-      if (frozenConsignedMargin(sale) !== undefined) return false;
+      if (trustedFrozenMargin(sale) !== undefined) return false;
       if (!needsFrozenMarginEvidence(sale)) return false;
       // The vehicle answers whenever it is present, exactly as it does in
       // `saleEconomics`. Making this rule vehicle-independent was never the
@@ -552,7 +583,7 @@ export const stats = query({
     const earningReader =
       (onUnknown: () => void, isUnknown: (sale: Doc<"sales">) => boolean) =>
       (sale: Doc<"sales">) => {
-        const frozen = frozenConsignedMargin(sale);
+        const frozen = trustedFrozenMargin(sale);
         if (frozen !== undefined) return frozen;
         // The same predicate the ranking asks, so the two cannot come to
         // different conclusions about one sale — the tile would then omit a row
