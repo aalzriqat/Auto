@@ -41,6 +41,7 @@ import {
   ReopenApprovedPurchaseDialog,
 } from "./ReopenApprovedPurchaseDialog";
 import { ConfirmHandoverDialog } from "./ConfirmHandoverDialog";
+import { ResolveGapDialog } from "./ResolveGapDialog";
 import { ConfirmFinalizeDialog } from "./ConfirmFinalizeDialog";
 import {
   RegisterExpectedPaymentDialog,
@@ -288,6 +289,7 @@ export function DealCockpit({
   const recordSubmittedQuotation = useMutation(api.financingEconomics.recordSubmittedQuotation);
   const reopenApproval = useMutation(api.financingEconomics.reopenApproval);
   const registerVehicleHandover = useMutation(api.applications.registerVehicleHandover);
+  const resolveAppraisalGap = useMutation(api.financingEconomics.resolveAppraisalGap);
   const registerExpectedPayment = useMutation(api.applications.registerExpectedPayment);
   const finalizeDeal = useMutation(api.applications.finalizeDeal);
   const approveDealerPurchaseAmount = useMutation(
@@ -405,6 +407,8 @@ export function DealCockpit({
   const canCorrectAdvice = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
   const [confirmingHandover, setConfirmingHandover] = useState(false);
   const [handoverSubmitting, setHandoverSubmitting] = useState(false);
+  const [resolvingGap, setResolvingGap] = useState(false);
+  const [gapSubmitting, setGapSubmitting] = useState(false);
   const [registeringPayment, setRegisteringPayment] = useState(false);
   const [paymentSubmitting, setPaymentSubmitting] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
@@ -496,11 +500,26 @@ export function DealCockpit({
      * way past it here would be answering that question by omission. SCRUM-83.
      */
     if (liveStage?.blocker === "GapUnresolved") {
+      // Withheld from a caller whose money is withheld, even if they hold the
+      // permission to act. The dialog's whole job is to show the shortfall and
+      // have somebody allocate it; offering it against a figure the screen
+      // cannot display would repeat the defect the handover confirmation spent
+      // nine rounds removing — asking for agreement about a number the operator
+      // is not being shown.
+      const gapVisible = typeof deal.money?.appraisalGapMinor === "number";
       return {
         stageKey: liveStage.key,
-        actionKey: "",
-        onStart: () => {},
-        unavailableReasonKey: "GapResolutionUnavailable",
+        actionKey: "ResolveGapAction",
+        onStart: () => {
+          setResolvingGap(true);
+        },
+        // The same authority that set the approved amount, because agreeing who
+        // absorbs the shortfall is the same negotiation — and the mutation
+        // refuses anything less.
+        unavailableReasonKey:
+          hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION) && gapVisible
+            ? undefined
+            : "GapResolutionNeedsPermission",
       };
     }
 
@@ -744,6 +763,44 @@ export function DealCockpit({
             throw new Error(message);
           } finally {
             setHandoverSubmitting(false);
+          }
+        },
+      }}
+      gapResolution={{
+        resolving: resolvingGap,
+        submitting: gapSubmitting,
+        onOpenChange: setResolvingGap,
+        /**
+         * RETHROWS, for the reason the handover submit documents: the refusal
+         * belongs to the attempt that earned it. The server's messages name the
+         * figure that did not reconcile, which is the only thing that tells the
+         * operator which of five boxes to change.
+         */
+        onSubmit: async (values) => {
+          setGapSubmitting(true);
+          try {
+            await resolveAppraisalGap({
+              orgId,
+              applicationId,
+              // The stamp the SCREEN was rendered against. If the approval moved
+              // while the operator was agreeing the split, the server refuses
+              // rather than reconciling an allocation to a gap that is gone.
+              economicsStamp: deal && "economicsStamp" in deal ? deal.economicsStamp : "",
+              customerGapShareMinor: values.customerGapShareMinor,
+              dealerGapShareMinor: values.dealerGapShareMinor,
+              customerGapCashToDealerMinor: values.customerGapCashToDealerMinor,
+              customerGapInstallmentToDealerMinor: values.customerGapInstallmentToDealerMinor,
+              customerGapToFinanceCompanyMinor: values.customerGapToFinanceCompanyMinor,
+              notes: values.notes || undefined,
+            });
+            toast.success(t("GapResolved"));
+            setResolvingGap(false);
+          } catch (error) {
+            const message = getErrorMessage(error);
+            toast.error(message);
+            throw new Error(message);
+          } finally {
+            setGapSubmitting(false);
           }
         },
       }}
@@ -1104,6 +1161,7 @@ export function DealCockpitView({
   financeDecision,
   workflowAction,
   handover,
+  gapResolution,
   expectedPayment,
   finalize,
   canCorrectAdvice = false,
@@ -1148,6 +1206,21 @@ export function DealCockpitView({
     onSubmit: (values: {
       notes?: string;
       economicsStamp: string | undefined;
+    }) => Promise<void>;
+  };
+  /** Settling the shortfall left when the company approved below the quotation. */
+  gapResolution?: {
+    resolving: boolean;
+    submitting: boolean;
+    onOpenChange: (open: boolean) => void;
+    /** Rejects on refusal, so the dialog can name the figure that did not add up. */
+    onSubmit: (values: {
+      customerGapShareMinor: number;
+      dealerGapShareMinor: number;
+      customerGapCashToDealerMinor: number;
+      customerGapInstallmentToDealerMinor: number;
+      customerGapToFinanceCompanyMinor: number;
+      notes: string;
     }) => Promise<void>;
   };
   /** The expected-payment form's own state. */
@@ -1293,6 +1366,25 @@ export function DealCockpitView({
         // catches up. One of those errors is a wrong number on a real deal.
         true;
   const denominationUnusable = hasDenominationProjection && denomination === null && economicsRecorded;
+  /**
+   * The shortfall the server says this deal has, or null.
+   *
+   * Read from the MONEY block, not from the stage rail. The rail is deliberately
+   * qualitative — stage names and blocker keys, no amounts — precisely so it can
+   * be shown to a caller who cannot see the money, and taking a figure from it
+   * would undo that. `appraisalGapMinor` travels with the other amounts, under
+   * the same gate, and is a read of what was recorded rather than a fresh
+   * computation: a locally derived gap could disagree with the one the mutation
+   * reconciles against and would then reject an operator's arithmetic for being
+   * correct.
+   *
+   * Null for a caller whose money is withheld, and that is load-bearing — the
+   * action below is withheld with it. Asking somebody to agree a split of a
+   * figure their screen cannot show them is the exact defect the handover
+   * confirmation spent nine review rounds removing.
+   */
+  const rawAppraisalGapMinor =
+    typeof deal?.money?.appraisalGapMinor === "number" ? deal.money.appraisalGapMinor : null;
   const dealCurrency = denomination?.code ?? deal?.money?.currency ?? currency.code;
   const factor = useMemo(
     () => Math.pow(10, denomination?.scale ?? scaleForCurrency(dealCurrency)),
@@ -2176,6 +2268,23 @@ export function DealCockpitView({
           t={t}
           onOpenChange={handover.onOpenChange}
           onSubmit={handover.onSubmit}
+        />
+      )}
+
+      {/* Only for a deal that actually has a shortfall. The gap comes from the
+          server's own figure — this screen never derives it, because a locally
+          computed gap could disagree with the one the mutation reconciles
+          against and would reject the operator's arithmetic for being right. */}
+      {gapResolution && rawAppraisalGapMinor !== null && (
+        <ResolveGapDialog
+          open={gapResolution.resolving}
+          submitting={gapResolution.submitting}
+          rawAppraisalGapMinor={rawAppraisalGapMinor}
+          factor={factor}
+          money={money}
+          t={t}
+          onOpenChange={gapResolution.onOpenChange}
+          onSubmit={gapResolution.onSubmit}
         />
       )}
 

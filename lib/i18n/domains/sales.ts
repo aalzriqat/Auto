@@ -895,6 +895,29 @@ export const salesEn = {
    */
   GapResolutionUnavailable:
     "The finance company approved less than the quotation, and recording who covers the difference is not available in AutoFlow yet — so this step cannot be completed here. The rest of the deal can still be handled from Finance Applications → Review.",
+  ResolveGapAction: "Record who covers the difference",
+  GapResolved: "Recorded who covers the difference.",
+  GapResolutionNeedsPermission:
+    "Agreeing who covers the difference is recorded by whoever approves the purchase amount for this deal.",
+  ResolveGapTitle: "Who covers the difference",
+  ResolveGapDescription:
+    "The finance company approved less than the quotation. Record what the customer and the dealership each agreed to cover, and where the customer's part is actually paid.",
+  ResolveGapAmount: "The difference",
+  ResolveGapWhoAbsorbs: "Who covers it",
+  GapCustomerAbsorbs: "The customer covers it",
+  GapCustomerAbsorbsHint: "The customer covers the whole difference.",
+  GapSplit: "Customer and dealership split it",
+  GapSplitHint: "Enter the customer's part; the dealership's is what remains.",
+  GapCustomerShare: "The customer's part",
+  GapDealerShare: "The dealership then covers",
+  GapWhereCustomerPays: "Where the customer's part is paid",
+  GapWhereCustomerPaysHint:
+    "Money paid to the dealership is dealership income. Money paid to the finance company is not, so it is recorded separately rather than assumed.",
+  GapCashToDealer: "Cash to us",
+  GapInstallmentsToDealer: "Instalments to us",
+  GapToFinanceCompany: "To the finance company",
+  GapStillToAllocate: "Still to account for",
+  GapNotes: "Notes",
   ConfirmFinalizeTitle: "Close the deal",
   ConfirmFinalizeDesc:
     "The handover and the expected payment are on file, so the deal can be closed.",
@@ -1797,6 +1820,29 @@ export const salesAr = {
     "هذه الصفقة بانتظار تحديد الجهة التي تدفع لها شركة التمويل، ويُسجّل ذلك من يملك صلاحية إغلاق الصفقة نفسها. يُكمل الخطوتين من يملك تلك الصلاحية.",
   GapResolutionUnavailable:
     "اعتمدت شركة التمويل مبلغاً أقل من عرض السعر، وتسجيل الجهة التي تتحمّل الفرق غير متاح في أوتوفلو بعد، لذا لا يمكن إتمام هذه الخطوة هنا. يمكن متابعة بقية الصفقة من طلبات التمويل ← مراجعة.",
+  ResolveGapAction: "تسجيل من يتحمّل الفرق",
+  GapResolved: "تم تسجيل من يتحمّل الفرق.",
+  GapResolutionNeedsPermission:
+    "يُسجّل الاتفاق على من يتحمّل الفرق من يملك صلاحية اعتماد مبلغ الشراء لهذه الصفقة.",
+  ResolveGapTitle: "من يتحمّل الفرق",
+  ResolveGapDescription:
+    "اعتمدت شركة التمويل مبلغاً أقل من عرض السعر. سجّل ما اتفق العميل والمعرض على تحمّله، وأين يُدفع نصيب العميل فعلياً.",
+  ResolveGapAmount: "الفرق",
+  ResolveGapWhoAbsorbs: "من يتحمّله",
+  GapCustomerAbsorbs: "العميل يتحمّله",
+  GapCustomerAbsorbsHint: "يتحمّل العميل الفرق كاملاً.",
+  GapSplit: "يتقاسمه العميل والمعرض",
+  GapSplitHint: "أدخل نصيب العميل، والباقي على المعرض.",
+  GapCustomerShare: "نصيب العميل",
+  GapDealerShare: "عندها يتحمّل المعرض",
+  GapWhereCustomerPays: "أين يُدفع نصيب العميل",
+  GapWhereCustomerPaysHint:
+    "ما يُدفع للمعرض هو إيراد للمعرض، وما يُدفع لشركة التمويل ليس كذلك، لذلك يُسجَّل كلٌّ منهما على حدة بدل افتراضه.",
+  GapCashToDealer: "نقداً لنا",
+  GapInstallmentsToDealer: "أقساطاً لنا",
+  GapToFinanceCompany: "لشركة التمويل",
+  GapStillToAllocate: "المتبقي دون تحديد",
+  GapNotes: "ملاحظات",
   ConfirmFinalizeTitle: "إغلاق الصفقة",
   ConfirmFinalizeDesc: "التسليم والدفعة المتوقعة مسجَّلان، ويمكن إغلاق الصفقة.",
   FinalizeCreatesTheSale:

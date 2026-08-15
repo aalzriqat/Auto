@@ -298,23 +298,41 @@ describe("a step the server would refuse is not offered as a step", () => {
 
 describe("the stage that nothing can clear", () => {
   /**
-   * SCRUM-83, found by this issue's own E2E once it stopped driving the review
-   * dialog. A finance company approving BELOW the quotation — the ordinary case,
-   * and the whole reason an appraisal gap exists — leaves `gapResolution` at
-   * PENDING_NEGOTIATION, and nothing in the product writes the values that would
-   * resolve it. The rail is strictly sequential, so that stage hides handover,
-   * settlement and every action after it.
+   * SCRUM-83, and this block used to assert the opposite.
    *
-   * The deal is genuinely completable: no server mutation consults
-   * `gapResolution`. Pinned here so the state is characterised rather than
-   * discovered again, and so nobody later "fixes" it by quietly treating
+   * A finance company approving BELOW the quotation — the ordinary case, and the
+   * whole reason an appraisal gap exists — left `gapResolution` at
+   * PENDING_NEGOTIATION with nothing in the product able to write the values
+   * that resolve it. The rail is strictly sequential, so that stage hid
+   * handover, settlement and every action after it. This suite pinned that dead
+   * end deliberately, so it could not be "fixed" by quietly treating
    * PENDING_NEGOTIATION as resolved.
+   *
+   * It is now fixed the other way: the stage has a real action, and the blocked
+   * state is still not softened. The assertions below are the SAME contract read
+   * forward — the blocker text stays, and the step is offered rather than
+   * explained away.
    */
-  test("says why it cannot be cleared here, and offers no action", () => {
+  test("offers the resolution action, without softening the blocked state", () => {
     grantTheWholeTail();
+    // Granted SEPARATELY from the tail's own permissions on purpose: agreeing
+    // who covers a shortfall is the approval authority, not the handover one,
+    // and the whole tail being granted does not imply it.
+    permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
     queryResults.set(
       COCKPIT_QUERY,
       cockpit({
+        // The shortfall travels with the other AMOUNTS, under the same gate as
+        // the rest of the money — the stage rail is deliberately qualitative.
+        money: {
+          currency: "JOD",
+          settlesDirectToSupplier: false,
+          routeKnown: true,
+          profit: { available: false, reason: "NoSupplierSettlement" },
+          expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
+          parties: [],
+          appraisalGapMinor: 1_000_000,
+        },
         stages: [
           { key: "APPRAISAL", state: "COMPLETE" },
           { key: "GAP_RESOLUTION", state: "BLOCKED", blocker: "GapUnresolved" },
@@ -328,14 +346,41 @@ describe("the stage that nothing can clear", () => {
 
     const block = nextStepBlock();
     // The blocker itself still says the gap is unresolved. This must not be
-    // softened — it is true, and the money question behind it is unanswered.
+    // softened — it is true until somebody records who covers the shortfall,
+    // and the action is how they do that rather than a way around it.
     expect(within(block).getByText("BlockerGapUnresolved")).toBeTruthy();
-    // And now it also says why the step cannot be taken here, which is the
-    // difference between a blocked stage and a dead end.
-    expect(within(block).getByText("GapResolutionUnavailable")).toBeTruthy();
-    // No action, because there is none — not even a disabled one pretending
-    // the workflow exists.
-    expect(within(block).queryByRole("button")).toBeNull();
+    // The step is now takeable from the screen that names it.
+    expect(within(block).getByRole("button", { name: "ResolveGapAction" })).toBeTruthy();
+    // And the old dead-end explanation is gone, because it is no longer true.
+    expect(within(block).queryByText("GapResolutionUnavailable")).toBeNull();
+  });
+
+  test("withholds the action from a caller whose money is withheld", () => {
+    // Holding the permission is not enough. The dialog exists to show the
+    // shortfall and have somebody allocate it, so offering it against a figure
+    // the screen cannot display would ask for agreement about a number the
+    // operator is not being shown — the defect the handover confirmation spent
+    // nine review rounds removing.
+    grantTheWholeTail();
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        money: null,
+        stages: [
+          { key: "APPRAISAL", state: "COMPLETE" },
+          { key: "GAP_RESOLUTION", state: "BLOCKED", blocker: "GapUnresolved" },
+          { key: "HANDOVER", state: "PENDING" },
+          { key: "SETTLEMENT", state: "PENDING" },
+        ],
+      })
+    );
+
+    renderCockpit();
+
+    const block = nextStepBlock();
+    expect(within(block).getByText("BlockerGapUnresolved")).toBeTruthy();
+    expect(within(block).queryByRole("button", { name: "ResolveGapAction" })).toBeNull();
+    expect(within(block).getByText("GapResolutionNeedsPermission")).toBeTruthy();
   });
 
   test("does not offer handover from behind the blocked gap", () => {
