@@ -13,14 +13,17 @@ import { Textarea } from "@/components/ui/textarea";
 import { format } from "date-fns";
 import { toast } from "@/components/ui/sonner";
 import { Separator } from "@/components/ui/separator";
-import { Upload, CheckCircle, XCircle, Clock, Eye, X, Download, History, Ban, HandCoins, Undo2 } from "lucide-react";
+import { Upload, CheckCircle, XCircle, Clock, Eye, X, Download, History, Ban, HandCoins, Undo2, Truck } from "lucide-react";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useCurrency } from "@/hooks/useCurrency";
 import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
 import { DisbursementConfirmationDialog } from "./DisbursementConfirmationDialog";
 import { getErrorMessage } from "@/lib/errors";
-import { VehicleHandoverDialog } from "./VehicleHandoverDialog";
+// The cockpit's confirmation, reused rather than kept as a second one. The
+// dialog this replaced (`VehicleHandoverDialog`, deleted) showed no figures, so
+// nothing an operator confirmed on it was ever about a number.
+import { ConfirmHandoverDialog } from "./cockpit/ConfirmHandoverDialog";
 import { RegisterExpectedPaymentDialog, type ExpectedPaymentMethod } from "./RegisterExpectedPaymentDialog";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 
@@ -214,15 +217,41 @@ export function ApplicationDetailsDialog({
     }
   };
 
-  const handleRegisterHandover = async (notes?: string) => {
+  const handleRegisterHandover = async (values: {
+    notes?: string;
+    economicsStamp: string | undefined;
+  }) => {
     if (!activeOrgId) return;
     setIsRegisteringHandover(true);
     try {
-      await registerVehicleHandover({ orgId: activeOrgId, applicationId, notes });
+      await registerVehicleHandover({
+        orgId: activeOrgId,
+        applicationId,
+        notes: values.notes,
+        /**
+         * The stamp the DIALOG was opened against, handed straight back.
+         *
+         * The previous version read `app.approvedDealerPurchaseAmountMinor`
+         * here — from the live query, at submit time — and called it "the
+         * amount this screen was showing". This screen was showing nothing:
+         * the old dialog had no figures on it. The server was therefore
+         * comparing the current value to itself, so the check could never fail
+         * on this path however long the operator had been reading.
+         */
+        economicsStamp: values.economicsStamp,
+      });
       toast.success(t("VehicleHandoverRegisteredSuccess" as any));
       setIsHandoverDialogOpen(false);
-    } catch {
-      toast.error(t("UnexpectedError" as any));
+    } catch (error) {
+      // The refusals reachable from here now include "the amount changed while
+      // you were confirming", which names the thing to re-check. Collapsing it
+      // into "unexpected error" would leave the operator re-pressing a button
+      // that will keep refusing.
+      // Rethrown so the refusal belongs to the dialog's attempt. Held here, it
+      // outlived the attempt that earned it and reappeared over a fresh one.
+      const message = getErrorMessage(error);
+      toast.error(message);
+      throw new Error(message);
     } finally {
       setIsRegisteringHandover(false);
     }
@@ -728,14 +757,52 @@ export function ApplicationDetailsDialog({
                       </Badge>
                     ) : (
                       canRegisterHandover && (
-                        <VehicleHandoverDialog
-                          open={isHandoverDialogOpen}
-                          disabled={isRegisteringHandover}
-                          submitting={isRegisteringHandover}
-                          t={(key) => t(key as any)}
-                          onOpenChange={setIsHandoverDialogOpen}
-                          onConfirm={handleRegisterHandover}
-                        />
+                        <>
+                          {/* The trigger `VehicleHandoverDialog` used to own.
+                              That dialog displayed no figures at all, so the
+                              confirmation it collected was about nothing: the
+                              submit handler re-read the live amount and the
+                              server compared it to itself. This screen now uses
+                              the cockpit's confirmation instead of keeping a
+                              second, weaker one — the same door, described the
+                              same way, wherever it is opened from. */}
+                          <Button
+                            variant="outline"
+                            className="border-orange-500/40 text-orange-600 hover:bg-orange-500/10"
+                            disabled={isRegisteringHandover}
+                            onClick={() => setIsHandoverDialogOpen(true)}
+                          >
+                            <Truck className="h-4 w-4 me-2" />
+                            {t("RegisterVehicleHandover" as any)}
+                          </Button>
+                          <ConfirmHandoverDialog
+                            open={isHandoverDialogOpen}
+                            submitting={isRegisteringHandover}
+                            // The SAME object the cockpit consumes, from the
+                            // same server projection — figures, anomaly verdict
+                            // and denomination together. This screen previously
+                            // assembled them itself from three fields and a
+                            // local formatter, and disagreed with the cockpit
+                            // about all three at various points.
+                            // Fails CLOSED when the payload carries no
+                            // projection: no figures and no denomination, so
+                            // the dialog refuses rather than rendering
+                            // undefined through a formatter.
+                            evidence={
+                              app.handoverEvidence ?? {
+                                approvedPurchaseAmountMinor: null,
+                                financeCompanyFundedPortionMinor: null,
+                                dealerContributionMinor: null,
+                                approvedAmountIsFarFromEvidence: false,
+                                currency: null,
+                              }
+                            }
+                            economicsStamp={app.economicsStamp}
+                            t={(key) => t(key as any)}
+                            onOpenChange={setIsHandoverDialogOpen}
+                            onSubmit={handleRegisterHandover}
+                          />
+                        </>
                       )
                     )}
 

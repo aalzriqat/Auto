@@ -13,6 +13,18 @@ import type { Id } from "../convex/_generated/dataModel";
  * would register the setup tests into the importing spec as well.
  */
 export const APPROVER_AUTH_FILE = "playwright/.auth/approver.json";
+/**
+ * The salesperson's session — the same file `playwright.config.ts` gives the
+ * `chromium` project.
+ *
+ * Named here because a context built with `browser.newContext()` does NOT
+ * inherit the project's `storageState`: that is applied to the built-in `page`
+ * and `context` fixtures only. A spec that needs its own context — for a second
+ * viewport, or in `beforeAll` where the fixtures do not exist — gets an
+ * anonymous browser unless it passes this, and then fails at the sign-in
+ * redirect rather than at whatever it meant to test.
+ */
+export const USER_AUTH_FILE = "playwright/.auth/user.json";
 
 const TURNSTILE_DUMMY_TOKEN = "XXXX.DUMMY.TOKEN.XXXX";
 const CLERK_CONVEX_TOKEN_TIMEOUT_MS = 30_000;

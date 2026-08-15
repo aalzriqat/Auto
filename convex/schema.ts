@@ -2180,6 +2180,26 @@ export default defineSchema({
     // neither of the two.
     appliedLtvPercent: v.optional(v.number()),
     approvedDealerPurchaseAmountMinor: v.optional(v.number()),
+    /**
+     * Bumped by every write that moves the deal's economics, and projected as
+     * the `economicsStamp` a handover confirmation must hand back.
+     *
+     * A COUNTER rather than a digest of the figures. The first version of this
+     * stamp was `v1|<approved>|<funded>|<contribution>`, issued to every caller
+     * who could load the deal — which handed the exact amounts
+     * `redactSettlementEvidence` withholds to callers it withholds them from,
+     * in a form anyone could read straight off. Hashing the tuple would not
+     * have fixed it either: the format is known and at 100% LTV the search
+     * collapses to one figure, so the digest is invertible in practice.
+     *
+     * Absent on rows written before this field existed, which reads as
+     * revision 0 — consistent for every caller, so no one is locked out.
+     *
+     * ⚠️ Every writer of the approved amount or its derived split must bump
+     * this. `convex/economicsRevisionGuard.test.ts` fails CI if one does not:
+     * a forgotten bump is fail-OPEN, and would let a stale confirmation seal.
+     */
+    economicsRevision: v.optional(v.number()),
     approvedPurchaseBasis: v.optional(approvedPurchaseBasisValidator),
     approvedPurchaseAppraisalId: v.optional(v.id("financeAppraisals")),
     approvedPurchaseExceptionRuleVersion: v.optional(v.number()),

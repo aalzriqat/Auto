@@ -44,6 +44,18 @@ type RegisterExpectedPaymentDialogProps = {
   open: boolean;
   disabled: boolean;
   submitting: boolean;
+  /**
+   * Whether this dialog owns its own opener.
+   *
+   * The review dialog stacks its actions as a column of buttons, so the trigger
+   * belongs to the dialog. The deal cockpit opens it from the next-step block
+   * instead — the button there is the one the stage rail names — and a second
+   * trigger rendered inside the cockpit would be an orphan button under the
+   * page's own action.
+   */
+  withTrigger?: boolean;
+  /** Shown above the form when a submit was refused, alongside the toast. */
+  error?: string | null;
   t: (key: string) => string;
   onOpenChange: (open: boolean) => void;
   onConfirm: (values: {
@@ -58,6 +70,8 @@ export function RegisterExpectedPaymentDialog({
   open,
   disabled,
   submitting,
+  withTrigger = true,
+  error = null,
   t,
   onOpenChange,
   onConfirm,
@@ -98,12 +112,14 @@ export function RegisterExpectedPaymentDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger asChild>
-        <Button variant="outline" className="border-indigo-500/40 text-indigo-600 hover:bg-indigo-500/10" disabled={disabled}>
-          <Wallet className="h-4 w-4 me-2" />
-          {t("RegisterExpectedPayment")}
-        </Button>
-      </DialogTrigger>
+      {withTrigger && (
+        <DialogTrigger asChild>
+          <Button variant="outline" className="border-indigo-500/40 text-indigo-600 hover:bg-indigo-500/10" disabled={disabled}>
+            <Wallet className="h-4 w-4 me-2" />
+            {t("RegisterExpectedPayment")}
+          </Button>
+        </DialogTrigger>
+      )}
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>{t("RegisterExpectedPayment")}</DialogTitle>
@@ -179,6 +195,14 @@ export function RegisterExpectedPaymentDialog({
                   )}
                 />
               </>
+            )}
+
+            {/* The server's refusal, kept on the form that caused it. A toast
+                is gone by the time the operator looks back at the fields. */}
+            {error && (
+              <p role="alert" className="text-sm font-medium text-destructive">
+                {error}
+              </p>
             )}
 
             <DialogFooter>

@@ -17,6 +17,94 @@ const CURRENCY_SCALES: Record<string, CurrencyScale> = {
   JPY: 0,
 };
 
+/**
+ * The scale AutoFlow can actually vouch for, or null when it cannot.
+ *
+ * `scaleForCurrency` below answers 2 for anything unrecognised, which is the
+ * right behaviour for display and arithmetic that must not crash — but it is a
+ * GUESS, and a guess is unacceptable where a wrong scale changes a figure by an
+ * order of magnitude. `economicsCurrency` is a free string in the schema, so a
+ * typo or a raw-edited value like "JD" reaches this code: JOD is scale 3, the
+ * fallback would call it 2, and 11,500,000 fils would render as 115,000 on the
+ * screen that seals a deal permanently.
+ *
+ * Callers that seal or display money irreversibly use THIS one and fail closed
+ * on null.
+ */
+export function supportedCurrencyScale(currency: string): CurrencyScale | null {
+  const scale = CURRENCY_SCALES[currency.toUpperCase()];
+  return scale === undefined ? null : scale;
+}
+
+/**
+ * The deal's denomination, or null when AutoFlow cannot vouch for it.
+ *
+ * ABSENT is unknowable: `orgSettings` does not lock currency for
+ * `financeApplications`, so an org can record economics in JOD and later switch
+ * to USD — the current org currency is a known-wrong fallback, not a
+ * conservative one. UNSUPPORTED is unknowable too: the field is a free string,
+ * so a legacy row or a raw edit can carry "JD", and `scaleForCurrency` answers
+ * 2 for it rather than admitting it does not know.
+ */
+export function denominationOf(
+  currency: string | undefined
+): { code: string; scale: CurrencyScale } | null {
+  if (currency === undefined) return null;
+  // CANONICAL only — the same rule the writers assert, so a screen never shows
+  // money in a denomination the mutations would refuse. It previously
+  // uppercased, which meant "jod" rendered as perfectly good JOD right up until
+  // handover rejected the deal; and an empty string read as absent rather than
+  // as the meaningless value it is.
+  const scale = supportedCurrencyScale(currency);
+  return scale === null || currency !== currency.toUpperCase()
+    ? null
+    : { code: currency, scale };
+}
+
+/**
+ * Refuses a write that would carry an UNSUPPORTED denomination forward.
+ *
+ * Absent is deliberately allowed: every economics writer fills it from the
+ * organization's currency, which `orgSettings.upsert` validates. A present but
+ * unrecognised code is the dangerous one, because each writer preserves it
+ * (`app.economicsCurrency ?? getOrgCurrency(...)`) rather than replacing it —
+ * so one bad value survives every subsequent write and ends up scaled by a
+ * guess when a sale is created.
+ *
+ * Applied at EVERY writer that can put money on a deal, not only at the one
+ * that happens to run first. A guard scoped to "economics already exist" was
+ * bypassable by ordering: hand over a legacy row with no economics, then record
+ * them afterwards, and the deal reached sale creation with an unverifiable
+ * currency and no mutation left that would refuse it.
+ */
+export function assertSupportedDenomination(
+  currency: string | undefined,
+  action: string
+): void {
+  // `undefined` is the ONLY absent state. An empty string is PRESENT and
+  // meaningless, and it is the dangerous one: `??` does not replace it, so
+  // every writer preserves it, while a truthiness check waves it through as if
+  // nothing were recorded. It then scales by the guessed fallback like any
+  // other unrecognised code.
+  if (currency === undefined) return;
+
+  // CANONICAL SPELLING, not merely a recognisable one.
+  //
+  // `supportedCurrencyScale` uppercases for its lookup, so "jod" resolved to a
+  // valid scale and passed — while every writer preserves the original string.
+  // `completeSale` then compares the currency case-sensitively against the
+  // org's canonical "JOD" and throws, so the deal stranded AFTER handover:
+  // sealed, unfinalizable, and past the point where the approval could be
+  // corrected. A guard that admits a value the rest of the system rejects is
+  // worse than no guard, because it certifies the deal as safe to seal.
+  const canonical = currency.toUpperCase();
+  if (supportedCurrencyScale(canonical) === null || currency !== canonical) {
+    throw new ConvexError(
+      `This deal's economics are recorded in "${currency}", which AutoFlow cannot use as a currency, so ${action} would scale the amount by a guess or fail later with the deal already sealed. Restate the deal in a supported currency first.`
+    );
+  }
+}
+
 export function scaleForCurrency(currency: string): CurrencyScale {
   const scale = CURRENCY_SCALES[currency.toUpperCase()];
   if (scale === undefined) return 2;

@@ -1,4 +1,5 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -168,7 +169,7 @@ describe("Phase 0 financial safety controls", () => {
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
     await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
     await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
-    await asUser.mutation(api.applications.registerVehicleHandover, { orgId, applicationId });
+    await registerHandover(asUser, api, orgId, applicationId);
     await asUser.mutation(api.applications.registerExpectedPayment, {
       orgId,
       applicationId,

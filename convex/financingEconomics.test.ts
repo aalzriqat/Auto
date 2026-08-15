@@ -3598,3 +3598,806 @@ describe("the correction workflow's guards are enforced by the server", () => {
     );
   });
 });
+
+/**
+ * What actually decides which appraisal the anomaly verdict is judged against.
+ *
+ * Raised in review: sharing `resolveComparisonAppraisal` between the query and
+ * the mutation proves they AGREE, not that they agree on the right row. The
+ * answer is that the choice does not rest on the sort at all — `recordAppraisal`
+ * supersedes every live appraisal in the same class, so at most one non-estimate
+ * appraisal is ever live and the sort is a defensive tie-break that cannot fire.
+ *
+ * Pinned here because that invariant is the authority. If supersession ever
+ * stopped being total, the selection would silently become "whichever date is
+ * highest" — and `appraisedAt` is operator-supplied with no upper bound
+ * (SCRUM-71), which is exactly when a stale row could start winning.
+ */
+describe("the appraisal the anomaly verdict is judged against", () => {
+  test("is the only live one, because a reappraisal supersedes its predecessor", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_000),
+      providerType: "FINANCE_COMPANY",
+      providerName: "First assessor",
+      appraisedAt: Date.now(),
+    });
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      // DELIBERATELY dated EARLIER than the one it replaces. If the selection
+      // rested on the date, the superseded row would win; it must not.
+      appraisedAt: Date.now() - 30 * 24 * 60 * 60 * 1000,
+      appraisalAmountMinor: jod(90_000),
+      providerType: "FINANCE_COMPANY",
+      providerName: "Second assessor",
+      reappraisalReason: "Company re-inspected the vehicle.",
+    });
+
+    const rows = await seed.t.run((ctx) =>
+      ctx.db
+        .query("financeAppraisals")
+        .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+        .collect()
+    );
+    const live = rows.filter((r) => r.status === "RECORDED" || r.status === "APPROVED");
+    // The invariant the selection actually rests on.
+    expect(live).toHaveLength(1);
+    expect(live[0]?.appraisalAmountMinor).toBe(jod(90_000));
+
+    // And the verdict follows the LIVE row, not the newest date: 90,000 is
+    // within half of itself, so an approval at 90,000 is ordinary — while the
+    // superseded 11,000 would have made it a glaring outlier.
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(90_000),
+      basis: "MANUAL",
+      notes: "Matches the current appraisal.",
+    });
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.approvedAmountIsFarFromEvidence).toBe(false);
+  });
+
+  test("the verdict and the mutation cannot disagree about the same deal", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+
+    // The mutation refuses this without acknowledgement...
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: seed.orgId,
+        applicationId,
+        approvedAmountMinor: jod(125_000),
+        basis: "MANUAL",
+        notes: "Done",
+      })
+    ).rejects.toThrow(/far from this deal's/i);
+
+    // ...and once acknowledged, the QUERY says the same thing about the stored
+    // figure. A screen that called this normal while the mutation called it an
+    // outlier would be two authorities on one number.
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(125_000),
+      basis: "MANUAL",
+      notes: "Confirmed by the company.",
+      outlierAcknowledged: true,
+    });
+    const economics = await seed.asUser.query(api.financingEconomics.getEconomics, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(economics.approvedAmountIsFarFromEvidence).toBe(true);
+  });
+});
+
+/**
+ * The one-way door, tested as a door rather than as a sentence.
+ *
+ * SCRUM-78 put a confirmation in front of the handover that tells the operator,
+ * in both languages, that *after the vehicle is handed over the recorded
+ * approved amount can no longer be corrected through the normal correction
+ * flow* — and shows them the figure so the verification it asks for can
+ * actually be done.
+ *
+ * Codex asked the obvious question nobody had: is that true? `reopenApproval`
+ * refuses after `vehicleHandoverAt`, and `recordAppraisal`'s superseding branch
+ * refuses too — but `approveDealerPurchaseAmount` is a THIRD writer of the same
+ * number, and it had no such guard. Re-approving is a supported path, not an
+ * exotic one: the mutation records an override for a materially changed
+ * approval, so it fully expects to be called again.
+ *
+ * That made the dialog's central claim false. A screen that tells an operator a
+ * figure is now permanent, while a sibling writer quietly rewrites it, is worse
+ * than a screen that says nothing — it converts an unnoticed risk into a
+ * verified one.
+ *
+ * Two failures, two guards. The first is ordering: no approval may land after
+ * the vehicle has gone out. The second is the stale confirmation the first does
+ * not cover — an approval that commits between the dialog rendering a figure
+ * and the operator confirming it, so the handover seals an amount nobody
+ * verified.
+ */
+describe("handover seals the approved amount, and the amount that was verified", () => {
+  /** A deal with a quotation, an appraisal and an approval on the record. */
+  async function approvedDeal() {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+    });
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { status: "APPROVED" }));
+    return { seed, applicationId };
+  }
+
+  /**
+   * The stamp as a real caller obtains it — from the deal payload their screen
+   * was rendered against, never recomputed here. A test that rebuilt the stamp
+   * from the row would pass no matter what the query projected.
+   */
+  async function stampFrom(
+    seed: Seed,
+    applicationId: Id<"financeApplications">,
+    as: AuthenticatedTestConvex = seed.asUser
+  ): Promise<string> {
+    const stamp = await as.query(api.applications.handoverStamp, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    if (!stamp) throw new Error("handoverStamp issued no economics stamp.");
+    return stamp;
+  }
+
+  async function approvedAndHandedOver() {
+    const { seed, applicationId } = await approvedDeal();
+    await seed.asUser.mutation(api.applications.registerVehicleHandover, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await stampFrom(seed, applicationId),
+    });
+    return { seed, applicationId };
+  }
+
+  test("no approval can be recorded once the vehicle has gone out", async () => {
+    const { seed, applicationId } = await approvedAndHandedOver();
+
+    // The gap Codex found. `reopenApproval` and `recordAppraisal` both refuse
+    // here; this writer did not, so the correction the dialog promised was
+    // impossible could be made by simply recording the approval again.
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: seed.orgId,
+        applicationId,
+        approvedAmountMinor: jod(14_000),
+        basis: "MANUAL",
+        notes: "Company revised it upward after delivery.",
+      })
+    ).rejects.toThrow(/handed over/i);
+
+    // And the figure on the record is untouched — the refusal is a refusal, not
+    // a partial write that leaves the deal describing two different amounts.
+    const app = await readApp(seed, applicationId);
+    expect(app?.approvedDealerPurchaseAmountMinor).toBe(jod(11_500));
+  });
+
+  test("handover refuses when the economics moved after the operator read them", async () => {
+    const { seed, applicationId } = await approvedDeal();
+
+    // The operator's screen rendered 11,500 and they are about to confirm, so
+    // the stamp is taken NOW — the whole point is that it predates the change.
+    const asRendered = await stampFrom(seed, applicationId);
+
+    // A second approver commits 12,750 in the meantime — legal, because the
+    // vehicle has not gone out yet, so the ordering guard above does not apply.
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(12_750),
+      basis: "MANUAL",
+      notes: "Revised before delivery.",
+    });
+
+    // Confirming now would seal a figure the operator never saw, under a dialog
+    // that had just asked them to verify a different one.
+    await expect(
+      seed.asUser.mutation(api.applications.registerVehicleHandover, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: asRendered,
+      })
+    ).rejects.toThrow(/changed/i);
+
+    // Nothing was sealed by the refusal: the door is still open, and the
+    // operator can re-read the deal and confirm the figures really on it.
+    const stillOpen = await readApp(seed, applicationId);
+    expect(stillOpen?.vehicleHandoverAt).toBeUndefined();
+
+    await seed.asUser.mutation(api.applications.registerVehicleHandover, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await stampFrom(seed, applicationId),
+    });
+    const sealed = await readApp(seed, applicationId);
+    expect(sealed?.vehicleHandoverAt).toBeTypeOf("number");
+  });
+
+  test("the cockpit shows the confirmation figures to everyone entitled to them", async () => {
+    const { seed, applicationId } = await approvedDeal();
+
+    // Entitled to the approved amount — `redactSettlementEvidence` serves it to
+    // `confirm:finance_disbursement` — but WITHOUT `view:finance_applications`,
+    // so the cockpit never mounts `getEconomics`. It used to render the
+    // confirmation with no figures and no anomaly warning while the stamp
+    // arrived anyway and the handover sealed: entitled to see, shown nothing,
+    // and still able to close the one-way door.
+    const asDisbursement = await callerWith(seed, "cockpitdisb", [
+      "view:sales",
+      "confirm:finance_disbursement",
+      "register:vehicle_handover",
+    ]);
+    const deal = await asDisbursement.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(deal?.handoverEvidence.approvedPurchaseAmountMinor).toBe(jod(11_500));
+
+    // And a caller the figure is withheld from is still told nothing — the
+    // evidence is redacted by the same policy `applications.get` applies, so
+    // the two screens cannot disagree about the same deal for the same role.
+    const asSalesOnly = await callerWith(seed, "cockpitsales", [
+      "view:sales",
+      "register:vehicle_handover",
+    ]);
+    const withheld = await asSalesOnly.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(withheld?.handoverEvidence.approvedPurchaseAmountMinor).toBeNull();
+    // The stamp is NOT withheld from them: display is permission-shaped, the
+    // obligation is not.
+    expect(withheld?.economicsStamp).toBeTruthy();
+  });
+
+  test("the split is withheld with the amount, not beside it", async () => {
+    const { seed, applicationId } = await approvedDeal();
+    const asSalesOnly = await callerWith(seed, "splitrecovery", [
+      "view:sales",
+      "register:vehicle_handover",
+    ]);
+    const deal = await asSalesOnly.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+
+    // `funded + contribution` IS the approved amount. Withholding the total
+    // while showing its two addends discloses the whole figure with one
+    // addition — on the screen built to withhold it.
+    expect(deal?.handoverEvidence.approvedPurchaseAmountMinor).toBeNull();
+    expect(deal?.handoverEvidence.financeCompanyFundedPortionMinor).toBeNull();
+    expect(deal?.handoverEvidence.dealerContributionMinor).toBeNull();
+  });
+
+  test("both doors answer identically for the same caller", async () => {
+    const { seed, applicationId } = await approvedDeal();
+    const shapes = [
+      ["view:sales", "register:vehicle_handover"],
+      ["view:sales", "confirm:finance_disbursement", "register:vehicle_handover"],
+      ["view:sales", "view:finance", "register:vehicle_handover"],
+    ];
+    for (const [index, permissions] of shapes.entries()) {
+      // Indexed, not keyed on length — two of these shapes have the same
+      // length, so a length-based tag created two users with one clerkId.
+      const as = await callerWith(seed, `doors_${index}`, permissions);
+      const [cockpit, legacy] = await Promise.all([
+        as.query(api.applications.dealCockpit, { orgId: seed.orgId, applicationId }),
+        as.query(api.applications.get, { orgId: seed.orgId, applicationId }),
+      ]);
+      // One projection, two queries. They cannot drift, because there is
+      // nothing to drift — this asserts the wiring, not an agreement of two
+      // independent derivations.
+      expect(cockpit?.handoverEvidence).toEqual(legacy?.handoverEvidence);
+    }
+  });
+
+  test("a deal whose denomination cannot be established says so", async () => {
+    const { seed, applicationId } = await approvedDeal();
+    // A legacy row predating `economicsCurrency`. The org's CURRENT currency is
+    // not a fallback: `orgSettings` does not lock currency for
+    // `financeApplications`, so the org may have switched since — and guessing
+    // renders a USD figure as JOD, ten times wrong, on the one-way door.
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { economicsCurrency: undefined }));
+
+    const deal = await seed.asUser.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(deal?.handoverEvidence.currency).toBeNull();
+  });
+
+  test("a currency AutoFlow does not support is not a denomination", async () => {
+    const { seed, applicationId } = await approvedDeal();
+    // `economicsCurrency` is a free string in the schema, and
+    // `scaleForCurrency` answers 2 for anything it does not recognise. So a
+    // typo or a raw-edited value sails through as a valid denomination: "JD"
+    // for JOD renders 11,500,000 fils as 115,000 — the same order-of-magnitude
+    // error the null case was made to prevent, entering by a different door.
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { economicsCurrency: "JD" }));
+
+    const deal = await seed.asUser.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(deal?.handoverEvidence.currency).toBeNull();
+  });
+
+  for (const [label, currency] of [
+    ["unsupported", "JD"],
+    ["absent", undefined],
+  ] as const) {
+    test(`handover is REFUSED when the denomination is ${label}`, async () => {
+      const { seed, applicationId } = await approvedDeal();
+      // The stamp is obtained BEFORE the currency is disturbed, so the deal is
+      // otherwise perfectly sealable — this isolates the denomination as the
+      // only reason to refuse.
+      const stamp = await stampFrom(seed, applicationId);
+      await seed.t.run((ctx) => ctx.db.patch(applicationId, { economicsCurrency: currency }));
+
+      // The projection already refuses to show these figures, but a projection
+      // is not enforcement: a direct or internal caller never renders anything.
+      // The mutation is the boundary that has to hold.
+      await expect(
+        seed.asUser.mutation(api.applications.registerVehicleHandover, {
+          orgId: seed.orgId,
+          applicationId,
+          economicsStamp: stamp,
+        })
+      ).rejects.toThrow(/currency/i);
+
+      // And nothing was sealed by the refusal — this door does not reopen.
+      const app = await readApp(seed, applicationId);
+      expect(app?.vehicleHandoverAt).toBeUndefined();
+    });
+  }
+
+  test("a deal with no recorded economics can still be handed over", async () => {
+    // The SCRUM-61 recovery path. Nothing money-bearing is being sealed here,
+    // so there is no denomination to verify and refusing would build a new dead
+    // end for exactly the historical deals that need the path most.
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { status: "APPROVED", economicsCurrency: undefined })
+    );
+
+    await seed.asUser.mutation(api.applications.registerVehicleHandover, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await stampFrom(seed, applicationId),
+    });
+    const app = await readApp(seed, applicationId);
+    expect(app?.vehicleHandoverAt).toBeTypeOf("number");
+  });
+
+  test("an unsupported currency cannot be laundered through the recovery path", async () => {
+    // Codex's ordering bypass, and the reason a guard scoped to "economics
+    // already exist" was not enough. A legacy row carries an unsupported code
+    // and NO economics, so the handover guard has nothing to check and lets it
+    // through — and every writer preserves `economicsCurrency` rather than
+    // replacing it (`app.economicsCurrency ?? getOrgCurrency(...)`), so the bad
+    // value survives the approval recorded afterwards. `finalizeDeal` then had
+    // no denomination check at all, and created a SALE from a figure scaled by
+    // a guessed 2 instead of JOD's 3.
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { status: "APPROVED", economicsCurrency: "JD" })
+    );
+
+    // The door closes at the first step now: an unsupported denomination that
+    // is PRESENT blocks, even with nothing yet to seal, because the deal cannot
+    // be restated once the vehicle is gone.
+    await expect(
+      seed.asUser.mutation(api.applications.registerVehicleHandover, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await stampFrom(seed, applicationId),
+      })
+    ).rejects.toThrow(/currency/i);
+
+    // And the writers that would have carried it forward refuse too, so the
+    // bad value cannot become money by any order of operations.
+    await expect(
+      seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(12_000),
+        source: "MANUAL_ENTRY",
+      })
+    ).rejects.toThrow(/currency/i);
+
+    // The approval is refused too, though by the EARLIER requirement — with the
+    // quotation blocked above there is nothing to approve against. Asserted as
+    // a plain rejection rather than a currency message, because claiming the
+    // currency guard fired here would be describing a refusal that did not
+    // happen. What matters is that no ordering reaches money.
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: seed.orgId,
+        applicationId,
+        approvedAmountMinor: jod(12_000),
+        basis: "MANUAL",
+      })
+    ).rejects.toThrow();
+
+    const app = await readApp(seed, applicationId);
+    expect(app?.vehicleHandoverAt).toBeUndefined();
+    expect(app?.approvedDealerPurchaseAmountMinor).toBeUndefined();
+  });
+
+  test("an EMPTY denomination is not an absent one", async () => {
+    // `??` only replaces null/undefined, so an empty string is PRESERVED by
+    // every writer — and a truthiness check treats it as absent and waves it
+    // through. Present-but-meaningless is the most dangerous of the three
+    // states: it looks recorded and scales by the guessed fallback.
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { status: "APPROVED", economicsCurrency: "" })
+    );
+
+    await expect(
+      seed.asUser.mutation(api.applications.registerVehicleHandover, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await stampFrom(seed, applicationId),
+      })
+    ).rejects.toThrow(/currency|recognise/i);
+
+    const app = await readApp(seed, applicationId);
+    expect(app?.vehicleHandoverAt).toBeUndefined();
+  });
+
+  test("an approval on an ordinary route is guarded too, not just a consigned one", async () => {
+    // The guard sat three conditions deep inside consigned direct-settlement
+    // handling, so dealer-owned stock and through-dealership routes skipped it.
+    // A quotation already on file is what makes this reachable: the approval
+    // then passes its prerequisite and records a figure that `finalizeDeal`
+    // will refuse forever, while the handover lock blocks correcting it.
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { economicsCurrency: "JD" }));
+
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: seed.orgId,
+        applicationId,
+        approvedAmountMinor: jod(11_500),
+        basis: "MANUAL",
+      })
+    ).rejects.toThrow(/currency|recognise/i);
+
+    const app = await readApp(seed, applicationId);
+    expect(app?.approvedDealerPurchaseAmountMinor).toBeUndefined();
+  });
+
+  test("the suggestion query REPORTS an unusable denomination instead of throwing", async () => {
+    // A read-only query must not refuse. The cockpit mounts this one whenever
+    // quotation work is available, and a Convex throw reaching `useQuery`
+    // during render loses the whole screen — so a guard here would take the
+    // deal page down for exactly the legacy rows it is meant to protect,
+    // leaving no screen from which to restate the currency.
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { economicsCurrency: "JD" }));
+
+    const suggestion = await seed.asUser.query(
+      api.financingEconomics.suggestQuotationForApplication,
+      { orgId: seed.orgId, applicationId }
+    );
+    expect(suggestion.available).toBe(false);
+  });
+
+  test("a non-canonical spelling is refused before the vehicle goes out", async () => {
+    // `supportedCurrencyScale` uppercases for its LOOKUP, so "jod" resolved to
+    // a valid scale and my guard passed it — while every writer preserved the
+    // original spelling. `completeSale` then compares the currency
+    // case-sensitively against the org's canonical "JOD" and throws, so the
+    // deal stranded AFTER handover: sealed, unfinalizable, and past the point
+    // where the approval could be corrected. A guard that admits a value the
+    // rest of the system rejects is worse than no guard, because it promises
+    // the deal is safe to seal.
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { status: "APPROVED", economicsCurrency: "jod" })
+    );
+
+    await expect(
+      seed.asUser.mutation(api.applications.registerVehicleHandover, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await stampFrom(seed, applicationId),
+      })
+    ).rejects.toThrow(/currency|recognise/i);
+
+    const app = await readApp(seed, applicationId);
+    expect(app?.vehicleHandoverAt).toBeUndefined();
+  });
+
+  for (const [label, currency] of [
+    ["unsupported", "JD"],
+    ["non-canonical", "jod"],
+    ["empty", ""],
+  ] as const) {
+    test(`the cockpit refuses to spell money in a ${label} denomination`, async () => {
+      const { seed, applicationId } = await approvedDeal();
+      await seed.t.run((ctx) => ctx.db.patch(applicationId, { economicsCurrency: currency }));
+
+      // The cockpit is a money-READING surface. Refusing the handover protects
+      // the irreversible step and does nothing for the figure on the page — a
+      // dealer reading 115,000 where the deal says 11,500 is damage the
+      // confirmation dialog never sees.
+      const deal = await seed.asUser.query(api.applications.dealCockpit, {
+        orgId: seed.orgId,
+        applicationId,
+      });
+      expect(deal?.denomination).toBeNull();
+    });
+  }
+
+  test("a deal with nothing recorded reports no economics, whoever is asking", async () => {
+    // `buildCockpitMoney` returns zeroed rows to any caller holding
+    // `view:finance`, so the client used to read "there is a money object" as
+    // "economics exist" and warned on every brand-new deal. The server states
+    // the fact now, and states it the same way for a caller whose figures are
+    // withheld.
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    // SALES is the identity that makes the claim mean anything. `asUser` and
+    // `asApprover` are both seeded with every permission, so a loop over those
+    // two proves the fact holds for privileged callers TWICE and for a redacted
+    // caller never — which is the one case the fix is actually about, since the
+    // warning has to reach an operator whose figures are withheld either way.
+    // Sonnet caught that "whoever is asking" was claiming more than it tested.
+    const asSales = await addSalesUser(seed);
+    for (const as of [seed.asUser, seed.asApprover, asSales]) {
+      const deal = await as.query(api.applications.dealCockpit, {
+        orgId: seed.orgId,
+        applicationId,
+      });
+      expect(deal?.economicsRecorded).toBe(false);
+    }
+  });
+
+  test("a redacted caller is told economics exist even though the figures are not", async () => {
+    // The other direction, and the one that matters on a bad-currency deal: a
+    // caller without `view:finance` gets no money block at all, so if
+    // `economicsRecorded` were derived from anything permission-shaped it would
+    // read false here and the restatement warning would never reach them.
+    const { seed, applicationId } = await approvedDeal();
+    const asSales = await addSalesUser(seed);
+
+    const deal = await asSales.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(deal?.money).toBeNull();
+    expect(deal?.economicsRecorded).toBe(true);
+  });
+
+  test("a quotation alone counts as economics on the record", async () => {
+    // Not only the approved amount: a deal carrying just a quotation still
+    // shows money, so a denomination nobody can vouch for matters there too.
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    const deal = await seed.asUser.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(deal?.economicsRecorded).toBe(true);
+  });
+
+  test("a deal in a supported canonical currency still shows its figures", async () => {
+    // The other half: the refusal must not swallow every deal. This is what
+    // proves the null above is a judgement and not a constant.
+    const { seed, applicationId } = await approvedDeal();
+    const deal = await seed.asUser.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(deal?.denomination).toEqual({ code: "JOD", scale: 3 });
+  });
+
+  test("the denomination is carried with its scale, not re-derived", async () =>{
+    const { seed, applicationId } = await approvedDeal();
+    const deal = await seed.asUser.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    // Scale travels with the code so the client cannot pair one currency's
+    // label with another's scale.
+    expect(deal?.handoverEvidence.currency).toEqual({ code: "JOD", scale: 3 });
+  });
+
+  test("the stamp says nothing about the money it protects", async () => {
+    const { seed, applicationId } = await approvedDeal();
+    const stamp = await stampFrom(seed, applicationId);
+
+    // The first version of this token was `v1|<approved>|<funded>|<split>`,
+    // issued to every caller who could load the deal — so it handed the exact
+    // figures `redactSettlementEvidence` withholds to the callers it withholds
+    // them from, readable at a glance. Hashing would not have fixed it: the
+    // format is known and at 100% LTV the search collapses to one figure.
+    expect(stamp).not.toContain(String(jod(11_500)));
+    expect(stamp).toMatch(/^v2\|\d+$/);
+  });
+
+
+  /**
+   * A caller with EXACTLY the permissions named, so the visibility question is
+   * asked of a real role rather than of a convenient one.
+   */
+  async function callerWith(
+    seed: Seed,
+    tag: string,
+    permissions: string[]
+  ): Promise<AuthenticatedTestConvex> {
+    const userId = await seed.t.run((ctx) =>
+      ctx.db.insert("users", {
+        clerkId: `handover_${tag}`,
+        email: `${tag}@example.com`,
+        name: tag,
+      })
+    );
+    const roleId = await seed.t.run((ctx) =>
+      ctx.db.insert("roles", { orgId: seed.orgId, name: tag, permissions })
+    );
+    await seed.t.run((ctx) =>
+      ctx.db.insert("memberships", { orgId: seed.orgId, userId, roleId })
+    );
+    return seed.t.withIdentity({ subject: `handover_${tag}` });
+  }
+
+  /**
+   * The bypass CX-9 named — asked of the DEFAULT role rather than a convenient
+   * custom one, and asked by QUERYING the surface the operator really uses.
+   *
+   * The previous version of this suite proved the obligation against roles I
+   * chose, and every one of them happened to hold `view:finance` or
+   * `confirm:finance_disbursement`. It therefore asserted the predicate's SHAPE
+   * and passed while the bypass stood open for default SALES, which holds
+   * neither — and which is the role most likely to actually hand a vehicle
+   * over. Reading the figure back from a real query is the difference.
+   */
+  /** The default role that actually hands vehicles over. */
+  async function defaultSalesCaller(seed: Seed): Promise<AuthenticatedTestConvex> {
+    const salesTemplate = DEFAULT_ROLE_TEMPLATES.find((template) => template.name === "SALES");
+    if (!salesTemplate) throw new Error("The SALES default template no longer exists.");
+    return callerWith(seed, "salesdefault", [...salesTemplate.permissions]);
+  }
+
+  test("default SALES cannot hand over without confirming the figures it acted on", async () => {
+    const { seed, applicationId } = await approvedDeal();
+    const asSales = await defaultSalesCaller(seed);
+
+    // Before the redesign this SUCCEEDED. The obligation was keyed to whether
+    // the caller could SEE the amount, and SALES holds neither `view:finance`
+    // nor `confirm:finance_disbursement` — so the staleness guarantee simply
+    // did not exist for the one role most likely to perform the handover.
+    // Whether SALES can see the figure is a separate question from whether the
+    // deal may be sealed against figures that moved; conflating the two is what
+    // left this open.
+    await expect(
+      asSales.mutation(api.applications.registerVehicleHandover, {
+        orgId: seed.orgId,
+        applicationId,
+      })
+    ).rejects.toThrow(/confirm/i);
+  });
+
+  test("the reconciliation queue shows SALES the approved amount unredacted", async () => {
+    const { seed, applicationId } = await approvedDeal();
+    const asSales = await defaultSalesCaller(seed);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { needsFinancingReconciliation: true })
+    );
+
+    // Why a visibility predicate could never have been the basis, proven by
+    // QUERYING the surface rather than reasoning about permissions.
+    //
+    // `getEconomics` and `applications.get` both redact this field, so the
+    // predicate looked exhaustive from those two doors. `listNeedingReconciliation`
+    // authorizes on `view:finance_applications` alone and projects the raw row,
+    // so the same figure reaches a caller the predicate says cannot see it.
+    // Codex named `getEconomics` as well; that half does not reproduce — this
+    // is the surface that does.
+    const queue = await asSales.query(api.financingEconomics.listNeedingReconciliation, {
+      orgId: seed.orgId,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+    const row = queue.page.find((entry) => entry._id === applicationId);
+    expect(row?.approvedDealerPurchaseAmountMinor).toBe(jod(11_500));
+  });
+
+  /**
+   * The permission matrix, asked as ONE question of every shape of caller:
+   * can this role obtain a stamp, and is it refused without one?
+   *
+   * Deliberately a matrix rather than three hand-picked roles. The suite this
+   * replaces proved the obligation against roles I chose, all of which happened
+   * to satisfy the predicate, and it passed while default SALES walked through.
+   */
+  const HANDOVER_ROLES = [
+    { tag: "finance", permissions: ["view:sales", "view:finance", "register:vehicle_handover"] },
+    {
+      tag: "disbursement",
+      permissions: ["view:sales", "confirm:finance_disbursement", "register:vehicle_handover"],
+    },
+    // The figure is redacted from this one. It must still be able to hand over,
+    // and must still be held to the stamp — the two are no longer connected.
+    { tag: "salesonly", permissions: ["view:sales", "register:vehicle_handover"] },
+  ] as const;
+
+  for (const shape of HANDOVER_ROLES) {
+    test(`${shape.tag}: refused without a stamp, and can always obtain one`, async () => {
+      const { seed, applicationId } = await approvedDeal();
+      const as = await callerWith(seed, shape.tag, [...shape.permissions]);
+
+      await expect(
+        as.mutation(api.applications.registerVehicleHandover, {
+          orgId: seed.orgId,
+          applicationId,
+        })
+      ).rejects.toThrow(/confirm the handover from the deal screen/i);
+
+      // No role is asked for something it cannot get: the stamp comes off the
+      // caller's OWN payload, so a redacted caller is neither exempt nor stuck.
+      // This is the direction that dead-ended `confirm:finance_disbursement`.
+      await as.mutation(api.applications.registerVehicleHandover, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await stampFrom(seed, applicationId, as),
+      });
+      const app = await readApp(seed, applicationId);
+      expect(app?.vehicleHandoverAt).toBeTypeOf("number");
+    });
+  }
+
+  test("every role is issued the SAME stamp, redacted or not", async () => {
+    const { seed, applicationId } = await approvedDeal();
+
+    // Otherwise the token would be a second, quieter permission surface: a
+    // caller's stamp has to be comparable to the deal, not to their view of it.
+    const stamps = await Promise.all(
+      HANDOVER_ROLES.map(async (shape) => {
+        const as = await callerWith(seed, `same_${shape.tag}`, [...shape.permissions]);
+        return stampFrom(seed, applicationId, as);
+      })
+    );
+    expect(new Set(stamps).size).toBe(1);
+  });
+});

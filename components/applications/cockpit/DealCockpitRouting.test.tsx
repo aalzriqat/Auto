@@ -73,6 +73,10 @@ const SCALE = 1_000;
 function financedDeal(overrides: Record<string, unknown> = {}): DealCockpitData {
   return {
     dealKind: "FINANCED",
+    // The denomination the SERVER vouches for. Present in every fixture because
+    // a payload without one now correctly HIDES the money rather than spelling
+    // it at a guessed scale — the fixture must supply what the server supplies.
+    denomination: { code: "JOD", scale: 3 },
     dealRef: "app_2048",
     applicationId: APP,
     saleId: null,
