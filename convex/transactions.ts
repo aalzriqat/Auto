@@ -1,5 +1,5 @@
 import { v, ConvexError } from "convex/values";
-import { query, QueryCtx } from "./_generated/server";
+import { query, QueryCtx, type DatabaseReader } from "./_generated/server";
 import { mutation } from "./functions";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -282,6 +282,51 @@ export const add = mutation({
   },
 });
 
+/**
+ * Refuses to mutate a legacy cashbook row that the GL has already represented.
+ *
+ * `transactions` is the operational cashbook, not the authoritative ledger —
+ * the books are `journalEntries` + `journalLines`. `migrateUnpostedTransactions`
+ * copies a cashbook row into the GL and records an `accountingEvents` row with
+ * `sourceType: "transactions"` and `sourceId` set to the transaction id. Once
+ * that event is POSTED, the amount exists in two places, and only one of them
+ * is the books.
+ *
+ * Editing or soft-deleting the cashbook row after that point changes the copy
+ * nobody reports from, while the Trial Balance, P&L and Balance Sheet keep the
+ * original figure. The user sees their correction succeed and the statements
+ * disagree with it forever, with nothing to indicate which is right. A correction
+ * after migration has to be a journal entry or an explicit reversal, both of
+ * which leave an auditable trail — so this refuses rather than silently diverging.
+ *
+ * REVERSED is deliberately not blocking: a reversed event no longer represents
+ * the row in the GL, so the cashbook row is editable again. PENDING is not
+ * blocking either — nothing has posted yet.
+ *
+ * Both writers below call this. They are the only two paths that patch a
+ * `transactions` row (`transactions.ts:update` and `:remove`); every other
+ * module only inserts. `transactionsGlDivergence.test.ts` fails if a third
+ * writer appears without the guard.
+ */
+export async function assertNotRepresentedInGl(
+  ctx: { db: DatabaseReader },
+  orgId: Id<"organizations">,
+  transactionId: Id<"transactions">
+): Promise<void> {
+  const events = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", orgId).eq("sourceType", "transactions").eq("sourceId", transactionId as string)
+    )
+    .collect();
+
+  if (events.some((event) => event.status === "POSTED")) {
+    throw new ConvexError(
+      "This entry has already been posted to the general ledger and can no longer be edited or deleted here. Record a correcting journal entry instead, so the change is auditable."
+    );
+  }
+}
+
 export const update = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -310,6 +355,8 @@ export const update = mutation({
     if (!transaction || transaction.orgId !== orgId) {
       throw new ConvexError("Transaction not found in this organization.");
     }
+
+    await assertNotRepresentedInGl(ctx, orgId, transactionId);
 
     if (updates.vehicleId) {
       const vehicle = await ctx.db.get(updates.vehicleId);
@@ -354,6 +401,12 @@ export const remove = mutation({
     if (!transaction || transaction.orgId !== args.orgId) {
       throw new ConvexError("Transaction not found in this organization.");
     }
+
+    // Same guard as `update`. A soft delete is not gentler than an edit here:
+    // it removes the row from the cashbook while the GL keeps the posting, so
+    // the two disagree in the direction that hides money rather than restates it.
+    await assertNotRepresentedInGl(ctx, args.orgId, args.transactionId);
+
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("Unauthenticated");
     await ctx.db.patch(args.transactionId, {
