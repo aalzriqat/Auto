@@ -210,9 +210,31 @@ describe("a denomination nobody can vouch for", () => {
     // predicate keyed on `Boolean(deal.money)` put a red "record it again"
     // panel on every newly created financed deal. Nothing had been recorded
     // once.
+    //
+    // The money block is supplied EXPLICITLY. `dealFixture` defaults it to null
+    // — the MANAGER case — and Codex caught that inheriting the default made
+    // this test vacuous: with no money object the discarded `Boolean(deal.money)`
+    // predicate is false too, so the case passed against the very code it was
+    // written to condemn. A test that cannot fail on the old implementation is
+    // not a regression test for it.
     render(
       <DealCockpitView
-        deal={dealFixture({ denomination: null, economicsRecorded: false })}
+        deal={dealFixture({
+          denomination: null,
+          economicsRecorded: false,
+          // What `buildCockpitMoney` actually returns for a deal on which
+          // nothing has been recorded: a real object, present rows, no figures.
+          // That presence is the whole trap — it is built from the caller's
+          // PERMISSION, not from the deal having any money on it.
+          money: {
+            currency: "JOD",
+            settlesDirectToSupplier: false,
+            routeKnown: false,
+            profit: { available: false, reason: "NoApprovedPurchaseAmount" },
+            expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
+            parties: [],
+          },
+        })}
         onRecordSupplierReceipt={async () => {}}
       />
     );
@@ -223,18 +245,64 @@ describe("a denomination nobody can vouch for", () => {
     // `sales.dealCockpit` projects no denomination at all. Reading that absence
     // as "unusable" would have hidden the figures on every live cash sale — a
     // regression far worse than the display fault this guards against.
+    //
+    // The keys are DELETED, not set to `undefined`. Both reviewers caught this
+    // independently: spreading an explicit `undefined` leaves the key in place,
+    // so `"denomination" in deal` stayed true and the case never touched the
+    // absent-key path it names. It passed on a coincidence — `undefined !== null`
+    // downstream — which is not the invariant being guarded.
+    const cash = dealFixture({
+      dealKind: "CASH",
+      applicationId: null,
+      // A cash sale HAS money — that is the entire point of the regression. The
+      // fixture's default is null (the MANAGER case), and inheriting it made
+      // this test pass against the broken predicate too, since `Boolean(null)`
+      // is false either way. With the figures present, reading the missing
+      // denomination as "unusable" replaces them, which is what must not happen.
+      money: {
+        currency: "JOD",
+        settlesDirectToSupplier: false,
+        routeKnown: true,
+        profit: { available: false, reason: "NoApprovedPurchaseAmount" },
+        expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
+        parties: [],
+      },
+    }) as Record<string, unknown>;
+    delete cash.denomination;
+    delete cash.economicsRecorded;
+    expect("denomination" in cash).toBe(false);
+    expect("economicsRecorded" in cash).toBe(false);
+
     render(
       <DealCockpitView
-        deal={dealFixture({
-          dealKind: "CASH",
-          applicationId: null,
-          denomination: undefined,
-          economicsRecorded: undefined,
-        })}
+        deal={cash as never}
         onRecordSupplierReceipt={async () => {}}
       />
     );
     expect(screen.queryByText("EconomicsCurrencyUnusable")).toBeNull();
+  });
+
+  test("withholds the figures when the backend is too old to say whether economics exist", () => {
+    // Version skew, which on this repository is the DEFAULT after a merge:
+    // pushing to `main` auto-deploys the frontend while the Convex functions
+    // stay on the previous version until deployed by hand. That response
+    // carries `denomination` but not `economicsRecorded`.
+    //
+    // Codex found that reading the absent key as "nothing recorded" switched the
+    // guard off in exactly that window, putting a legacy unspellable row back
+    // through the guessing scale. Unknown has to fail closed.
+    const oldBackend = dealFixture({ denomination: null }) as Record<string, unknown>;
+    delete oldBackend.economicsRecorded;
+    expect("denomination" in oldBackend).toBe(true);
+    expect("economicsRecorded" in oldBackend).toBe(false);
+
+    render(
+      <DealCockpitView
+        deal={oldBackend as never}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    expect(screen.getByText("EconomicsCurrencyUnusable")).toBeTruthy();
   });
 
   test("does not fire for a deal with no economics recorded", () => {

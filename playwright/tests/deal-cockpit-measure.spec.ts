@@ -56,10 +56,21 @@ const VIEWPORTS = [
  */
 async function measureLabelToFigureGaps(
   page: Page,
-): Promise<{ widest: number; measured: number }> {
+): Promise<{ widest: number; measured: number; economics: number }> {
   return page.evaluate(() => {
+    // The cap applies to every label/figure pair on the deal, so `widest` still
+    // sweeps the whole page. `economics` counts only the derived-economics rows.
+    //
+    // They are counted apart because the anti-vacuity guard was satisfied by the
+    // wrong pairs: it asked whether ANY dt/dd had laid out, and the
+    // settlement-advice block and the finance-decision card each render their
+    // own. So on a page where the economics rows had not arrived, the guard
+    // passed on their neighbours and the gate reported a measure it had never
+    // taken. Counting nothing and counting something else both have to fail.
+    const economicsRoot = document.querySelector('[data-testid="deal-economics-rows"]');
     let widest = 0;
     let measured = 0;
+    let economics = 0;
     for (const dt of Array.from(document.querySelectorAll("dt"))) {
       const dd = dt.parentElement?.querySelector("dd");
       if (!dd) continue;
@@ -69,10 +80,11 @@ async function measureLabelToFigureGaps(
       // Same visual row only; a stacked pair is not a reading-distance problem.
       if (Math.abs(a.top - b.top) > 24) continue;
       measured += 1;
+      if (economicsRoot?.contains(dt)) economics += 1;
       const gap = Math.max(b.left - a.right, a.left - b.right);
       if (gap > widest) widest = gap;
     }
-    return { widest, measured };
+    return { widest, measured, economics };
   });
 }
 
@@ -163,12 +175,12 @@ test.describe("the deal cockpit's reading measure", () => {
           // there, and the anti-vacuity assertion below still fails honestly if
           // they never arrive.
           await expect
-            .poll(async () => (await measureLabelToFigureGaps(page)).measured, {
+            .poll(async () => (await measureLabelToFigureGaps(page)).economics, {
               message: "the deal's economics rows never laid out",
             })
             .toBeGreaterThan(0);
 
-          const { widest, measured } = await measureLabelToFigureGaps(page);
+          const { widest, measured, economics } = await measureLabelToFigureGaps(page);
           await page.screenshot({
             path: `playwright/.gate/deal-cockpit-${locale}-${viewport.name}.png`,
             fullPage: true,
@@ -177,10 +189,21 @@ test.describe("the deal cockpit's reading measure", () => {
           // Asserted BEFORE the distance, because a widest-gap of zero is what a
           // deal with no economics rows produces — and "nothing to measure"
           // would otherwise read as "everything measured well".
+          //
+          // On the DERIVED-ECONOMICS rows specifically. Those are the ones the
+          // owner had to zoom out to read, and they are the last thing on the
+          // page to arrive; a count that any dt/dd could satisfy let their
+          // neighbours stand in for them.
           expect(
-            measured,
-            "no label/figure pairs were laid out — the fixture deal has no recorded economics",
+            economics,
+            "no derived-economics label/figure pairs were laid out — the fixture deal has no recorded economics",
           ).toBeGreaterThan(0);
+          // Logged, not asserted: the run itself then shows how many of the
+          // measured pairs were the economics rows, so a future reader can see
+          // at a glance that the two counts are not the same thing.
+          console.log(
+            `[measure] ${locale} @ ${viewport.name}: ${economics} economics pairs of ${measured} measured`,
+          );
           expect(
             widest,
             `a label and its figure are ${Math.round(widest)}px apart in ${locale} at ${viewport.width}px`,

@@ -8,6 +8,9 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
+// The STRICT one. `scaleForCurrency` above answers 2 for anything it does not
+// recognise, which is a guess; this returns null and lets the caller withhold.
+import { denominationOf } from "@/convex/utils/money";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -1004,7 +1007,12 @@ function MoneyPanel({
               full width of the panel has to be re-associated by eye on every
               line. Left as a single column — these lines are a SUM, and the
               order they are read in is part of the meaning. */}
-          <dl className="max-w-xl space-y-1.5 text-sm">
+          {/* Named so the reading-measure gate can prove it measured THESE
+              rows. Its anti-vacuity check counted every dt/dd pair on the page,
+              and the settlement-advice block and the decision card have their
+              own — so the gate could have passed having never seen a single
+              derived-economics row. */}
+          <dl className="max-w-xl space-y-1.5 text-sm" data-testid="deal-economics-rows">
             {profit.lines
               // A zero on an OPTIONAL line is noise, not information:
               // the customer-direct amount has no writer yet, so it
@@ -1272,8 +1280,26 @@ export function DealCockpitView({
    * The stage rail is the real signal, and the server derives it from the
    * unredacted row — so it is equally true for a caller whose money is withheld.
    */
-  const economicsRecorded =
-    hasDenominationProjection && "economicsRecorded" in deal ? deal.economicsRecorded === true : false;
+  const economicsRecorded = !hasDenominationProjection
+    ? false
+    : "economicsRecorded" in deal
+      ? deal.economicsRecorded === true
+      : // UNKNOWN, and unknown must not read as "nothing recorded".
+        //
+        // A response from the previous backend carries `denomination` but not
+        // `economicsRecorded`, and on this repository that pairing is the
+        // DEFAULT after a merge rather than an exotic rollback: pushing to
+        // `main` auto-deploys the frontend, while the Convex functions stay on
+        // the old version until someone deploys them by hand. So a new client
+        // talks to an old server on every merge, for as long as that gap lasts.
+        //
+        // Reading the absent field as `false` switched the guard off in exactly
+        // that window — a legacy row denominated in something unspellable would
+        // have gone back to the guessing scale and rendered 11,500,000 minor
+        // units as 115,000. Assuming instead that money MAY be recorded costs a
+        // restatement panel on a deal that has none, and only until the backend
+        // catches up. One of those errors is a wrong number on a real deal.
+        true;
   const denominationUnusable = hasDenominationProjection && denomination === null && economicsRecorded;
   const dealCurrency = denomination?.code ?? deal?.money?.currency ?? currency.code;
   const factor = useMemo(
@@ -1304,16 +1330,29 @@ export function DealCockpitView({
   // about the scale. A missing figure renders as unknown rather than as zero —
   // "the advice says nothing" and "the advice says nought" are different
   // claims, and only one of them is ever true here.
+  // ...but scaled by the SAME authority the deal's own figures answer to, not
+  // by the guessing one.
+  //
+  // This strip predates the denomination work (it arrived with SCRUM-30) and
+  // kept its own `scaleForCurrency` call, which returns 2 for any code it does
+  // not know. So a reconciliation row pinned to "JD" rendered at the wrong
+  // scale directly above the panel that says the deal's currency cannot be
+  // spelled — the screen contradicting itself about the same deal. Withheld on
+  // the same terms as everything else here: absent, unsupported and
+  // non-canonical all land together, matching what the writers refuse.
   const discrepancy = deal?.settlementAdviceDiscrepancy ?? null;
   const discrepancyCurrency = discrepancy?.currency ?? dealCurrency;
+  const discrepancyDenomination = denominationOf(discrepancyCurrency);
   const discrepancyFactor = useMemo(
-    () => Math.pow(10, scaleForCurrency(discrepancyCurrency)),
-    [discrepancyCurrency]
+    () => Math.pow(10, discrepancyDenomination?.scale ?? 0),
+    [discrepancyDenomination]
   );
   const discrepancyMarker =
     locale === "ar" && discrepancyCurrency === currency.code ? currency.symbol : discrepancyCurrency;
   const discrepancyMoney = (minor: number) =>
-    `${(minor / discrepancyFactor).toLocaleString()} ${discrepancyMarker}`;
+    discrepancyDenomination === null
+      ? "—"
+      : `${(minor / discrepancyFactor).toLocaleString()} ${discrepancyMarker}`;
 
   // The economics block is denominated in the APPLICATION's pinned currency,
   // which the money block need not even be present to establish — a MANAGER

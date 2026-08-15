@@ -4176,13 +4176,36 @@ describe("handover seals the approved amount, and the amount that was verified",
     // withheld.
     const seed = await seedDealer();
     const applicationId = await createApplication(seed);
-    for (const as of [seed.asUser, seed.asApprover]) {
+    // SALES is the identity that makes the claim mean anything. `asUser` and
+    // `asApprover` are both seeded with every permission, so a loop over those
+    // two proves the fact holds for privileged callers TWICE and for a redacted
+    // caller never — which is the one case the fix is actually about, since the
+    // warning has to reach an operator whose figures are withheld either way.
+    // Sonnet caught that "whoever is asking" was claiming more than it tested.
+    const asSales = await addSalesUser(seed);
+    for (const as of [seed.asUser, seed.asApprover, asSales]) {
       const deal = await as.query(api.applications.dealCockpit, {
         orgId: seed.orgId,
         applicationId,
       });
       expect(deal?.economicsRecorded).toBe(false);
     }
+  });
+
+  test("a redacted caller is told economics exist even though the figures are not", async () => {
+    // The other direction, and the one that matters on a bad-currency deal: a
+    // caller without `view:finance` gets no money block at all, so if
+    // `economicsRecorded` were derived from anything permission-shaped it would
+    // read false here and the restatement warning would never reach them.
+    const { seed, applicationId } = await approvedDeal();
+    const asSales = await addSalesUser(seed);
+
+    const deal = await asSales.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(deal?.money).toBeNull();
+    expect(deal?.economicsRecorded).toBe(true);
   });
 
   test("a quotation alone counts as economics on the record", async () => {
