@@ -40,6 +40,12 @@ import {
 import {
   ReopenApprovedPurchaseDialog,
 } from "./ReopenApprovedPurchaseDialog";
+import { ConfirmHandoverDialog } from "./ConfirmHandoverDialog";
+import { ConfirmFinalizeDialog } from "./ConfirmFinalizeDialog";
+import {
+  RegisterExpectedPaymentDialog,
+  type ExpectedPaymentMethod,
+} from "../RegisterExpectedPaymentDialog";
 import {
   RecordApprovedPurchaseDialog,
   type ApprovalBasis,
@@ -196,6 +202,29 @@ const STAGE_ICON: Record<StageState, React.ReactNode> = {
   PENDING: <Minus className="h-4 w-4 text-muted-foreground/60" />,
 };
 
+/**
+ * Why the close cannot be taken — and it takes BOTH conditions, because the
+ * two interact rather than merely coexisting.
+ *
+ * `setSupplierSettlementRoute` requires `finalize:financed_deal`, the same
+ * permission as the close itself, and the review dialog hides its selector
+ * without it. So telling a caller who lacks that permission to "record the
+ * route in Review" sends them to a screen with nothing on it — the dead end
+ * this issue exists to remove, rebuilt out of two correct sentences.
+ *
+ * Extracted rather than left as a nested ternary so the four combinations are
+ * enumerable, and testable, one line each.
+ */
+function finalizeUnavailableReasonKey(
+  routeRequired: boolean,
+  canFinalize: boolean
+): string | undefined {
+  if (routeRequired && !canFinalize) return "FinalizeNeedsRouteAndPermission";
+  if (routeRequired) return "FinalizeNeedsSettlementRoute";
+  if (!canFinalize) return "FinalizeNeedsPermission";
+  return undefined;
+}
+
 /** A money run is Latin digits inside Arabic prose; `<bdi>` keeps it whole. */
 function Money({ children }: Readonly<{ children: React.ReactNode }>) {
   return <bdi className="tabular-nums">{children}</bdi>;
@@ -250,10 +279,17 @@ export function DealCockpit({
   canonicalizeUrl?: boolean;
 }>) {
   const deal = useQuery(api.applications.dealCockpit, { orgId, applicationId });
+  // The container raises its own toasts, so it needs its own translator — the
+  // view's `t` is not in scope here, and an English string in a toast is how a
+  // screen that is otherwise fully Arabic starts leaking its source language.
+  const { t } = useLanguage();
   const recordReceipt = useMutation(api.supplierReceivables.recordReceipt);
   const amendAdvice = useMutation(api.applications.amendSupplierDisbursementAdvice);
   const recordSubmittedQuotation = useMutation(api.financingEconomics.recordSubmittedQuotation);
   const reopenApproval = useMutation(api.financingEconomics.reopenApproval);
+  const registerVehicleHandover = useMutation(api.applications.registerVehicleHandover);
+  const registerExpectedPayment = useMutation(api.applications.registerExpectedPayment);
+  const finalizeDeal = useMutation(api.applications.finalizeDeal);
   const approveDealerPurchaseAmount = useMutation(
     api.financingEconomics.approveDealerPurchaseAmount
   );
@@ -367,9 +403,191 @@ export function DealCockpit({
   // an action that appears and then vanishes reads as a bug, and the server is
   // the authority either way.
   const canCorrectAdvice = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
+  const [confirmingHandover, setConfirmingHandover] = useState(false);
+  const [handoverSubmitting, setHandoverSubmitting] = useState(false);
+  const [registeringPayment, setRegisteringPayment] = useState(false);
+  const [paymentSubmitting, setPaymentSubmitting] = useState(false);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [confirmingFinalize, setConfirmingFinalize] = useState(false);
+  const [finalizeSubmitting, setFinalizeSubmitting] = useState(false);
+  const [finalizeError, setFinalizeError] = useState<string | null>(null);
+
+  /**
+   * The action for the stage the rail is currently naming.
+   *
+   * ONE action at a time, keyed to a stage, because the tail is strictly ordered
+   * on the server and each step refuses a second attempt: handover requires an
+   * APPROVED application, the expected payment requires the handover, and
+   * `finalizeDeal` requires both. Offering all three at once would put two
+   * guaranteed refusals on screen beside the one step that can actually be
+   * taken.
+   *
+   * Each step is gated on its OWN permission — `register:vehicle_handover`,
+   * `register:expected_payment`, `finalize:financed_deal` are three separate
+   * strings on customizable roles, so a caller may hold one and not the next.
+   * A single flag over the whole tail would hide a step somebody is entitled to
+   * take, and would show one they are not.
+   *
+   * The last two hang off SETTLEMENT rather than off stages of their own. The
+   * rail's stages are the ones `deriveDealStages` emits, and inventing client
+   * stages it does not know about would give the screen a second opinion about
+   * the deal's shape. SETTLEMENT is where the deal actually sits while these two
+   * are outstanding, and it is the stage whose blocker the operator is trying to
+   * clear.
+   */
+  const handoverStage = deal?.stages.find((stage) => stage.key === "HANDOVER");
+  const settlementStage = deal?.stages.find((stage) => stage.key === "SETTLEMENT");
+  /**
+   * Whether the payment fact `finalizeDeal` requires is on file — from the
+   * SERVER, never inferred from the rail. No stage completes on the expected
+   * payment, so the rail cannot answer this, and guessing from SETTLEMENT's
+   * blocker would have offered finalize on a deal that has no payment recorded.
+   */
+  const expectedPaymentRegistered =
+    deal && "expectedPaymentRegistered" in deal ? deal.expectedPaymentRegistered : false;
+  /**
+   * Whether `finalizeDeal` will refuse for want of a settlement route — the
+   * server's own answer, computed from the same inputs the mutation refuses on.
+   * Nothing on this side reconstructs it; `money.routeKnown` is a different
+   * question and reports this deal as fine.
+   */
+  const settlementRouteRequired =
+    deal && "supplierSettlementRouteRequired" in deal
+      ? deal.supplierSettlementRouteRequired
+      : false;
+
+  /**
+   * The stage the rail is actually naming — the same one the view calls `live`.
+   *
+   * Read here rather than left implicit, because one branch below has to answer
+   * for a stage that has no action at all, and "return the handover entry and
+   * let the view filter it out" cannot express that.
+   */
+  const liveStage = deal?.stages.find(
+    (stage) => stage.state === "CURRENT" || stage.state === "BLOCKED"
+  );
+
+  function buildWorkflowAction() {
+    if (permissionsLoading || !deal) return undefined;
+
+    /**
+     * The stage nothing can clear — and the reason this screen must not simply
+     * go quiet on it.
+     *
+     * A finance company approving BELOW the submitted quotation is the ordinary
+     * case; it is the whole reason an appraisal gap exists.
+     * `approveDealerPurchaseAmount` then writes `PENDING_NEGOTIATION`, which
+     * `deriveDealStages` does not count as resolved — and **no code anywhere
+     * writes the values that would resolve it**. `convex/utils/financingEconomics.ts`
+     * says so itself: the recording workflow does not exist yet. So this stage
+     * has no exit, and because the rail is strictly sequential it hides handover,
+     * settlement and every action after it.
+     *
+     * No server mutation consults `gapResolution` — handover, expected payment
+     * and finalize all ignore it — so the deal is completable and the rail is
+     * merely refusing to name the step. Until SCRUM-78 that was survivable
+     * because the tail lived in the review dialog, which ignores the rail.
+     * Moving the tail here is what turns it into a dead end, so this change owes
+     * it an explanation rather than silence.
+     *
+     * Deliberately NOT an action, and deliberately not a relaxation of the
+     * blocked state. Who absorbs the shortfall — customer, dealership, or split
+     * — is a money decision that feeds the profit derivation, and inventing a
+     * way past it here would be answering that question by omission. SCRUM-83.
+     */
+    if (liveStage?.blocker === "GapUnresolved") {
+      return {
+        stageKey: liveStage.key,
+        actionKey: "",
+        onStart: () => {},
+        unavailableReasonKey: "GapResolutionUnavailable",
+      };
+    }
+
+    // Handover first: the step the rail names on a deal whose economics are
+    // recorded, and the one the product could not perform at all.
+    if (handoverStage && handoverStage.state !== "COMPLETE") {
+      return {
+        stageKey: "HANDOVER",
+        actionKey: "RegisterHandoverAction",
+        onStart: () => {
+          setConfirmingHandover(true);
+        },
+        // The server's own precondition, surfaced instead of discovered as a
+        // failed submit: `registerVehicleHandover` requires an APPROVED
+        // application. A blocked stage keeps its blocker text, which the block
+        // already renders, so only the permission gap is added here.
+        unavailableReasonKey: hasPermission(PERMISSIONS.REGISTER_VEHICLE_HANDOVER)
+          ? undefined
+          : "HandoverNeedsPermission",
+      };
+    }
+
+    // Everything below is only reachable while the application is still
+    // APPROVED, because all three of these mutations refuse anything else.
+    //
+    // A CLOSED deal still shows SETTLEMENT as its live stage until the money
+    // actually arrives, and this returns no action for it. That stage's
+    // confirmations — the financier's disbursement and the supplier's — are
+    // still only in the review dialog, so the cockpit names a step it cannot
+    // take there. That is the SAME defect one stage further along, it predates
+    // this change, and it is filed rather than fixed here: it is a fourth
+    // action, on a different surface, and this issue scopes to three.
+    if (!settlementStage || settlementStage.state === "COMPLETE") return undefined;
+    if (deal.status !== "APPROVED") return undefined;
+
+    if (!expectedPaymentRegistered) {
+      return {
+        stageKey: "SETTLEMENT",
+        actionKey: "RegisterExpectedPaymentAction",
+        onStart: () => {
+          setPaymentError(null);
+          setRegisteringPayment(true);
+        },
+        unavailableReasonKey: hasPermission(PERMISSIONS.REGISTER_EXPECTED_PAYMENT)
+          ? undefined
+          : "ExpectedPaymentNeedsPermission",
+      };
+    }
+
+    return {
+      stageKey: "SETTLEMENT",
+      actionKey: "FinalizeDealAction",
+      onStart: () => {
+        setFinalizeError(null);
+        setConfirmingFinalize(true);
+      },
+      /**
+       * Two different reasons the close cannot be taken, and the PREREQUISITE
+       * is named before the permission.
+       *
+       * The route is the one that would otherwise have been discovered as a
+       * refusal: on a consigned car with an external financier and no route
+       * recorded — the ordinary shape of a consigned financed deal —
+       * `finalizeDeal` is certain to reject, and the operator only reaches it
+       * after handover has already sealed the approved amount. Telling a caller
+       * who cannot close anyway that they lack the permission would be true and
+       * useless; the deal is not closeable by anyone yet.
+       *
+       * Recording the route is still done in the review dialog. Saying so is the
+       * issue's own minimum bar — a pointer is not as good as the action, but it
+       * is not a dead end — and bringing that control across is filed separately
+       * rather than folded into this change.
+       */
+      unavailableReasonKey: finalizeUnavailableReasonKey(
+        settlementRouteRequired,
+        hasPermission(PERMISSIONS.FINALIZE_FINANCED_DEAL)
+      ),
+    };
+  }
+
+  const workflowAction = buildWorkflowAction();
   // One key per correction attempt, so a retry after a lost response is the same
   // amendment rather than a second audited one.
   const correctionKeyRef = useRef<string | null>(null);
+  // The same discipline for finalization, and it matters more here: the
+  // operation this key protects creates the sale and posts its journals.
+  const finalizeKeyRef = useRef<string | null>(null);
 
   // Below every hook, deliberately. An early return placed above `useRef` changes
   // the hook order between renders — eslint's rules-of-hooks caught exactly that
@@ -426,6 +644,7 @@ export function DealCockpit({
           currency: economicsApp.economicsCurrency ?? null,
           canRecordQuotation: hasPermission(PERMISSIONS.CREATE_FINANCE_APPLICATION),
           canRecordApproval: hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION),
+          approvedAmountIsFarFromEvidence: economics?.approvedAmountIsFarFromEvidence ?? false,
           // What `recordAppraisal` itself requires for a finance-company or
           // independent appraisal. The dealer-estimate branch takes a different
           // permission and is not offered here.
@@ -491,6 +710,101 @@ export function DealCockpit({
     <DealCockpitView
       deal={deal}
       financeDecision={financeDecision}
+      workflowAction={workflowAction}
+      handover={{
+        confirming: confirmingHandover,
+        submitting: handoverSubmitting,
+        onOpenChange: setConfirmingHandover,
+        /**
+         * RETHROWS. The refusal belongs to the attempt that earned it, and the
+         * attempt lives in the dialog — holding it here is what let a stale
+         * "the figures changed" message survive into a freshly opened
+         * confirmation about a different revision.
+         */
+        onSubmit: async (values) => {
+          setHandoverSubmitting(true);
+          try {
+            await registerVehicleHandover({
+              orgId,
+              applicationId,
+              notes: values.notes,
+              // The stamp the dialog was OPENED against, passed straight
+              // through. Not re-read from `deal` here — that would undo the
+              // snapshot the dialog took and restore the race it closes.
+              economicsStamp: values.economicsStamp,
+            });
+            toast.success(t("HandoverRegistered"));
+            setConfirmingHandover(false);
+          } catch (error) {
+            // The server's refusals name the thing to change — not APPROVED
+            // yet, already handed over. Replacing them with a generic message
+            // would turn the one recovery path this state has into a dead end.
+            const message = getErrorMessage(error);
+            toast.error(message);
+            throw new Error(message);
+          } finally {
+            setHandoverSubmitting(false);
+          }
+        },
+      }}
+      expectedPayment={{
+        registering: registeringPayment,
+        submitting: paymentSubmitting,
+        error: paymentError,
+        onOpenChange: setRegisteringPayment,
+        onSubmit: async (values) => {
+          setPaymentSubmitting(true);
+          setPaymentError(null);
+          try {
+            await registerExpectedPayment({ orgId, applicationId, ...values });
+            toast.success(t("ExpectedPaymentRegisteredSuccess"));
+            setRegisteringPayment(false);
+          } catch (error) {
+            const message = getErrorMessage(error);
+            setPaymentError(message);
+            toast.error(message);
+          } finally {
+            setPaymentSubmitting(false);
+          }
+        },
+      }}
+      finalize={{
+        confirming: confirmingFinalize,
+        submitting: finalizeSubmitting,
+        error: finalizeError,
+        onOpenChange: setConfirmingFinalize,
+        onSubmit: async () => {
+          setFinalizeSubmitting(true);
+          setFinalizeError(null);
+          try {
+            // ONE key per finalize attempt, minted on the first try and reused
+            // by every retry after it. A finalize that runs twice is not a UI
+            // glitch — it is a second sale, a second set of journals and a
+            // second inventory movement for one car. Cleared only once the
+            // server has confirmed, so a lost response retries the SAME
+            // operation rather than starting a new one.
+            finalizeKeyRef.current ??= `finalize-deal:${crypto.randomUUID()}`;
+            await finalizeDeal({
+              orgId,
+              applicationId,
+              idempotencyKey: finalizeKeyRef.current,
+            });
+            finalizeKeyRef.current = null;
+            toast.success(t("DealFinalizedSuccess"));
+            setConfirmingFinalize(false);
+          } catch (error) {
+            // Deliberately keeps the key: every refusal here is actionable and
+            // names what to change — an unrecorded settlement route, missing
+            // economics, an unresolved عربون — so the next attempt is the same
+            // finalize with the same key, not a second one.
+            const message = getErrorMessage(error);
+            setFinalizeError(message);
+            toast.error(message);
+          } finally {
+            setFinalizeSubmitting(false);
+          }
+        },
+      }}
       canCorrectAdvice={canCorrectAdvice}
       onCorrectSettlementAdvice={async (correction) => {
         correctionKeyRef.current ??= `amend-supplier-advice:${crypto.randomUUID()}`;
@@ -685,7 +999,12 @@ function MoneyPanel({
       {profit.available && (
         <>
           <Separator />
-          <dl className="space-y-1.5 text-sm">
+          {/* Capped for the same reason as the decision card's rows: this is a
+              working of one figure, and a term separated from its label by the
+              full width of the panel has to be re-associated by eye on every
+              line. Left as a single column — these lines are a SUM, and the
+              order they are read in is part of the meaning. */}
+          <dl className="max-w-xl space-y-1.5 text-sm">
             {profit.lines
               // A zero on an OPTIONAL line is noise, not information:
               // the customer-direct amount has no writer yet, so it
@@ -741,6 +1060,12 @@ export type FinanceDecisionWiring = {
   canRecordApproval: boolean;
   canRecordAppraisal: boolean;
   isOwnDeal: boolean;
+  /**
+   * The server's judgement that the recorded amount is unlike every figure on
+   * file — the same rule `approveDealerPurchaseAmount` refuses on. Consumed by
+   * the handover confirmation; never recomputed on this side.
+   */
+  approvedAmountIsFarFromEvidence?: boolean;
   /** What the calculator has to say, including "not yet arrived". */
   calculation: QuotationCalculation;
   appraisal: { id: string; amountMinor: number } | null;
@@ -777,6 +1102,10 @@ export type FinanceDecisionWiring = {
 export function DealCockpitView({
   deal,
   financeDecision,
+  workflowAction,
+  handover,
+  expectedPayment,
+  finalize,
   canCorrectAdvice = false,
   onCorrectSettlementAdvice,
   onRecordSupplierReceipt,
@@ -788,6 +1117,59 @@ export function DealCockpitView({
    * was skipped for want of `view:finance_applications`.
    */
   financeDecision?: FinanceDecisionWiring;
+  /**
+   * The action belonging to the stage the rail currently names.
+   *
+   * One at a time, keyed to a stage, because the workflow tail is strictly
+   * ordered on the server: handover requires an APPROVED application, expected
+   * payment requires the handover, and each refuses a second attempt. Offering
+   * the whole tail at once would put three buttons on screen of which two are
+   * guaranteed refusals.
+   *
+   * `unavailableReasonKey` is the other half and is not optional in spirit:
+   * when this caller cannot take the step the rail is naming, the screen says
+   * so. A named step with neither a button nor a reason is the dead end this
+   * issue exists to remove.
+   */
+  workflowAction?: {
+    stageKey: string;
+    /** i18n key for the button label — never a raw string. */
+    actionKey: string;
+    onStart: () => void;
+    /** Set when the step cannot be taken; the button is withheld and this is shown. */
+    unavailableReasonKey?: string;
+  };
+  /** The handover confirmation's own state — absent on a deal that cannot reach it. */
+  handover?: {
+    confirming: boolean;
+    submitting: boolean;
+    onOpenChange: (open: boolean) => void;
+    /** Rejects on refusal; the error belongs to the dialog's attempt. */
+    onSubmit: (values: {
+      notes?: string;
+      economicsStamp: string | undefined;
+    }) => Promise<void>;
+  };
+  /** The expected-payment form's own state. */
+  expectedPayment?: {
+    registering: boolean;
+    submitting: boolean;
+    error: string | null;
+    onOpenChange: (open: boolean) => void;
+    onSubmit: (values: {
+      method: ExpectedPaymentMethod;
+      expectedDate: number;
+      chequeDetails?: { bank: string; chequeNumber: string };
+    }) => void | Promise<void>;
+  };
+  /** The finalization confirmation's own state. */
+  finalize?: {
+    confirming: boolean;
+    submitting: boolean;
+    error: string | null;
+    onOpenChange: (open: boolean) => void;
+    onSubmit: () => void | Promise<void>;
+  };
   /**
    * Whether this caller may amend a recorded settlement advice (MANAGE_FINANCE).
    *
@@ -858,8 +1240,64 @@ export function DealCockpitView({
   // switches to USD would otherwise be rescaled at the wrong power of ten —
   // 5,000,000 minor units rendering as 50,000 USD instead of 5,000 JOD, and the
   // same wrong factor feeding the receipt dialog.
-  const dealCurrency = deal?.money?.currency ?? currency.code;
-  const factor = useMemo(() => Math.pow(10, scaleForCurrency(dealCurrency)), [dealCurrency]);
+  /**
+   * The denomination the SERVER vouches for, or null.
+   *
+   * This screen is a money-READING surface. Everything below used to fall from
+   * the deal's currency to the org's to a hardcoded default, and then through a
+   * scaler that answers 2 for anything it does not recognise — so a legacy row
+   * carrying "JD" showed 11,500,000 fils as 115,000. Refusing the handover
+   * protects the irreversible step and does nothing for the figure a dealer
+   * reads off the page.
+   *
+   * When it is null there is no honest way to spell these amounts, so they are
+   * withheld and the reason is stated. Absent, unsupported and non-canonical
+   * all land here, matching exactly what the writers refuse.
+   */
+  // Only a payload that CARRIES the projection can be judged by it. The cash
+  // variant comes from `sales.dealCockpit`, which projects no denomination at
+  // all — reading its absence as "unusable" would have hidden the figures on
+  // every live cash sale, which is a far worse fault than the one this guards.
+  const hasDenominationProjection = deal != null && "denomination" in deal;
+  const denomination = hasDenominationProjection ? deal.denomination : null;
+  /**
+   * Whether economics are actually ON the record.
+   *
+   * NOT `Boolean(deal.money)`. That object is permission-shaped: `dealCockpit`
+   * builds it for any caller holding `view:finance` and returns zeroed party
+   * rows for a deal where nothing has ever been recorded. Using it here put the
+   * red restatement panel on every freshly created financed deal for the OWNER,
+   * telling them to record again something that was never recorded once.
+   *
+   * The stage rail is the real signal, and the server derives it from the
+   * unredacted row — so it is equally true for a caller whose money is withheld.
+   */
+  const economicsRecorded = !hasDenominationProjection
+    ? false
+    : "economicsRecorded" in deal
+      ? deal.economicsRecorded === true
+      : // UNKNOWN, and unknown must not read as "nothing recorded".
+        //
+        // A response from the previous backend carries `denomination` but not
+        // `economicsRecorded`, and on this repository that pairing is the
+        // DEFAULT after a merge rather than an exotic rollback: pushing to
+        // `main` auto-deploys the frontend, while the Convex functions stay on
+        // the old version until someone deploys them by hand. So a new client
+        // talks to an old server on every merge, for as long as that gap lasts.
+        //
+        // Reading the absent field as `false` switched the guard off in exactly
+        // that window — a legacy row denominated in something unspellable would
+        // have gone back to the guessing scale and rendered 11,500,000 minor
+        // units as 115,000. Assuming instead that money MAY be recorded costs a
+        // restatement panel on a deal that has none, and only until the backend
+        // catches up. One of those errors is a wrong number on a real deal.
+        true;
+  const denominationUnusable = hasDenominationProjection && denomination === null && economicsRecorded;
+  const dealCurrency = denomination?.code ?? deal?.money?.currency ?? currency.code;
+  const factor = useMemo(
+    () => Math.pow(10, denomination?.scale ?? scaleForCurrency(dealCurrency)),
+    [denomination, dealCurrency]
+  );
   // A SHORT currency marker, and a locale-appropriate one.
   //
   // `currency.format` renders "دينار اردني" in Arabic, which on a screen
@@ -884,6 +1322,24 @@ export function DealCockpitView({
   // about the scale. A missing figure renders as unknown rather than as zero —
   // "the advice says nothing" and "the advice says nought" are different
   // claims, and only one of them is ever true here.
+  // DELIBERATELY still the guessing scaler. See SCRUM-88 before changing it.
+  //
+  // This strip does render a legacy "JD" row at the wrong scale, and an earlier
+  // revision of this PR tried to fix that here by switching to the strict
+  // `denominationOf`. That made things worse, not better: this same factor
+  // prefills the EDITABLE amount in `SettlementAdviceCorrectionDialog` below,
+  // while the submit path converts back with `scaleForCurrency`. Making only
+  // the display side strict left the two disagreeing, so an operator opening
+  // the dialog to correct a reference and submitting without touching the
+  // amount persisted 100x the recorded figure over the advice and its audit
+  // row. A display fault became a write corruption.
+  //
+  // The two sides have to move together — display, prefill, submit and a
+  // server-side denomination guard on the amend mutation, which currently takes
+  // no currency argument and so cannot check one. That is a change to a shipped
+  // financial correction flow, not a hunk in a release-verification pass, and
+  // it is tracked separately. Keeping main's behavior here is the smaller risk:
+  // wrong on screen, but internally consistent, and it round-trips exactly.
   const discrepancy = deal?.settlementAdviceDiscrepancy ?? null;
   const discrepancyCurrency = discrepancy?.currency ?? dealCurrency;
   const discrepancyFactor = useMemo(
@@ -907,8 +1363,25 @@ export function DealCockpitView({
   );
   const decisionMarker =
     locale === "ar" && decisionCurrency === currency.code ? currency.symbol : decisionCurrency;
+  /**
+   * What the handover confirmation shows — from the COCKPIT's own payload, not
+   * from `getEconomics`.
+   *
+   * The cockpit only mounts `getEconomics` for `view:finance_applications`. A
+   * role holding `confirm:finance_disbursement` without it is entitled to the
+   * approved amount, and the legacy Review screen shows it — but here the
+   * confirmation rendered blank while the handover still sealed. Both screens
+   * now read the same server-side redaction, so the same caller sees the same
+   * deal whichever door they open.
+   */
+  const handoverEvidence =
+    deal && "handoverEvidence" in deal ? deal.handoverEvidence : undefined;
+  // Withheld outright rather than approximated: a figure the operator cannot
+  // tell is wrong is worse than a visible blank beside the restatement notice.
   const decisionMoney = (minor: number) =>
-    `${(minor / decisionFactor).toLocaleString()} ${decisionMarker}`;
+    denominationUnusable
+      ? "—"
+      : `${(minor / decisionFactor).toLocaleString()} ${decisionMarker}`;
   const adviceRecordedLabel =
     discrepancy?.recordedMinor != null ? discrepancyMoney(discrepancy.recordedMinor) : t("Unknown");
   const adviceApprovedLabel =
@@ -1263,16 +1736,41 @@ export function DealCockpitView({
         </CardContent>
       </Card>
 
-      {/* --- next step ---------------------------------------------------- */}
+      {/* --- next step ----------------------------------------------------
+          The test id anchors the E2E to the BLOCK rather than to a button
+          name. Every stage name appears twice on this screen — once on the
+          rail, once here — so a spec selecting globally can pass against the
+          rail while the block that is supposed to carry the action says
+          nothing, which is the exact defect this issue is about. */}
       {live && (
-        <Card className="border-primary/40 bg-primary/[0.03]">
+        <Card className="border-primary/40 bg-primary/[0.03]" data-testid="deal-next-step">
           <CardHeader className="pb-3">
             <CardTitle className="text-base">{t("NextStepHeading")}</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-2">
-            <p className="font-medium">{t(STAGE_LABEL[live.key] ?? live.key)}</p>
+          <CardContent className="max-w-2xl space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+              <p className="font-medium">{t(STAGE_LABEL[live.key] ?? live.key)}</p>
+              {/* The action for the step this block NAMES.
+                  Until now the rail announced "vehicle handover" and offered
+                  nothing that performs it, so the operator went looking for a
+                  screen — Finance Applications -> Review — that the rail never
+                  mentions. A step worth naming is a step worth doing here. */}
+              {workflowAction?.stageKey === live.key &&
+                workflowAction.unavailableReasonKey === undefined && (
+                  <Button size="sm" onClick={workflowAction.onStart}>
+                    {t(workflowAction.actionKey)}
+                  </Button>
+                )}
+            </div>
             {live.blocker && (
               <p className="text-sm text-muted-foreground">{t(`Blocker${live.blocker}`)}</p>
+            )}
+            {/* Why the named step is not actionable BY THIS CALLER. Silence
+                here is the defect this issue exists to remove. */}
+            {workflowAction?.stageKey === live.key && workflowAction.unavailableReasonKey && (
+              <p className="text-sm text-muted-foreground">
+                {t(workflowAction.unavailableReasonKey)}
+              </p>
             )}
             {live.blocker === "DocumentsIncomplete" && (
               <ul className="space-y-1 pt-1">
@@ -1325,7 +1823,19 @@ export function DealCockpitView({
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           {/* --- money ---------------------------------------------------- */}
-          {deal.money === null ? (
+          {/* Withheld before anything is spelled, because a figure in an
+              unverifiable denomination is worse than no figure: the operator
+              cannot tell it is wrong. Placed ahead of the permission case so a
+              caller who CAN see the money is told why it is absent, rather than
+              being shown amounts scaled by a guess. */}
+          {denominationUnusable ? (
+            <Card className="border-destructive/40">
+              <CardContent className="space-y-2 py-8 text-sm">
+                <p className="font-medium text-destructive">{t("EconomicsCurrencyUnusable")}</p>
+                <p className="text-muted-foreground">{t("EconomicsCurrencyUnusableHint")}</p>
+              </CardContent>
+            </Card>
+          ) : deal.money === null ? (
             <Card>
               <CardContent className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
                 <Lock className="h-4 w-4" />
@@ -1636,6 +2146,65 @@ export function DealCockpitView({
             onSubmit={handleReopenApproved}
           />
         </>
+      )}
+
+      {handover && (
+        <ConfirmHandoverDialog
+          open={handover.confirming}
+          submitting={handover.submitting}
+          // Read from the SAME facts the decision card renders, so the figures
+          // the dialog asks the operator to verify are the ones they have been
+          // looking at — not a second derivation that could disagree.
+          // The server's one answer, handed over whole. This screen forms no
+          // opinion about the figures, the anomaly verdict, or how any of it is
+          // denominated — the legacy Review screen consumes the same object.
+          evidence={
+            handoverEvidence ?? {
+              approvedPurchaseAmountMinor: null,
+              financeCompanyFundedPortionMinor: null,
+              dealerContributionMinor: null,
+              approvedAmountIsFarFromEvidence: false,
+              currency: null,
+            }
+          }
+          // `deal` is a union — the cash variant comes from `sales.dealCockpit`
+          // and carries no stamp, because nothing on that path seals financing
+          // economics. Narrowed by presence rather than by `dealKind` so a
+          // future payload that stops issuing one fails here, at the point that
+          // needs it, instead of silently sending `undefined` to the mutation.
+          economicsStamp={deal && "economicsStamp" in deal ? deal.economicsStamp : undefined}
+          t={t}
+          onOpenChange={handover.onOpenChange}
+          onSubmit={handover.onSubmit}
+        />
+      )}
+
+      {/* The form itself is the review dialog's, reused rather than rebuilt:
+          one shape for the cheque fields, one schema, one set of rules about
+          what a cheque needs. Only its opener differs — here the next-step
+          block owns that, so the dialog renders without its own trigger. */}
+      {expectedPayment && (
+        <RegisterExpectedPaymentDialog
+          open={expectedPayment.registering}
+          withTrigger={false}
+          disabled={expectedPayment.submitting}
+          submitting={expectedPayment.submitting}
+          error={expectedPayment.error}
+          t={t}
+          onOpenChange={expectedPayment.onOpenChange}
+          onConfirm={expectedPayment.onSubmit}
+        />
+      )}
+
+      {finalize && (
+        <ConfirmFinalizeDialog
+          open={finalize.confirming}
+          submitting={finalize.submitting}
+          error={finalize.error}
+          t={t}
+          onOpenChange={finalize.onOpenChange}
+          onSubmit={finalize.onSubmit}
+        />
       )}
 
       {discrepancy && canCorrectAdvice && (

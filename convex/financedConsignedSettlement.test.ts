@@ -18,7 +18,7 @@
  */
 import * as applicationsModule from "./applications";
 import * as financingEconomicsModule from "./financingEconomics";
-import { convexTestWithComponents } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -184,6 +184,8 @@ async function runDeal(
       treatment: "APPLY_TO_DEALER_AMOUNT" | "APPLY_TO_TRANSACTION_SETTLEMENT" | "REFUND_TO_CUSTOMER" | "FORFEITED" | "OTHER";
       reason?: string;
     };
+    /** Runs after the route is chosen and before the vehicle goes out. */
+    beforeHandover?: (applicationId: Id<"financeApplications">) => Promise<void>;
   } = {}
 ) {
   const downPayment = opts.downPayment ?? 0;
@@ -236,7 +238,20 @@ async function runDeal(
     });
   }
 
-  await s.asUser.mutation(api.applications.registerVehicleHandover, { orgId: s.orgId, applicationId });
+  // Anything that must be on the record BEFORE the vehicle goes out.
+  //
+  // Handover seals the approved amount: `approveDealerPurchaseAmount` now
+  // refuses to change a recorded one afterwards, as `reopenApproval` and
+  // `recordAppraisal` already did. A case that needs a CORRECTION on the record
+  // — an override history, say — has to make it while the door is still open,
+  // which is also the only order an operator could achieve.
+  await opts.beforeHandover?.(applicationId);
+
+  // The stamp of the economics as they stand at this moment, taken from the
+  // deal payload the way a real screen gets it. Read rather than assumed:
+  // `beforeHandover` may have recorded an approval, and most callers here have
+  // not, so the stamp differs between cases.
+  await registerHandover(s.asUser, api, s.orgId, applicationId);
   await s.asUser.mutation(api.applications.registerExpectedPayment, {
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
   });
@@ -4660,22 +4675,32 @@ describe("a settlement advice that contradicts the approval", () => {
     await s.t.run(async (ctx) => {
       await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
     });
-    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: false });
-    await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
-      orgId: s.orgId,
-      applicationId,
-      submittedQuotationMinor: VEHICLE_PRICE * SCALE,
-      source: "MANUAL_ENTRY",
+    // Recorded BEFORE the handover, which is the only order the product allows
+    // now that the vehicle going out seals the approved amount — and the order
+    // an operator would have had to follow anyway. The two approvals are here
+    // to populate an override history, not to assert that a post-handover
+    // correction is legal; that one is refused, and proved refused elsewhere.
+    const { applicationId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      finalize: false,
+      beforeHandover: async (id) => {
+        await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+          orgId: s.orgId,
+          applicationId: id,
+          submittedQuotationMinor: VEHICLE_PRICE * SCALE,
+          source: "MANUAL_ENTRY",
+        });
+        for (const amount of [FIRST_APPROVED, SECOND_APPROVED]) {
+          await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+            orgId: s.orgId,
+            applicationId: id,
+            approvedAmountMinor: amount * SCALE,
+            basis: "MANUAL",
+            notes: `Approved at ${amount}.`,
+          });
+        }
+      },
     });
-    for (const amount of [FIRST_APPROVED, SECOND_APPROVED]) {
-      await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-        orgId: s.orgId,
-        applicationId,
-        approvedAmountMinor: amount * SCALE,
-        basis: "MANUAL",
-        notes: `Approved at ${amount}.`,
-      });
-    }
     await s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId });
     await s.asUser.mutation(api.applications.confirmSupplierDisbursement, {
       orgId: s.orgId,
@@ -4693,7 +4718,12 @@ describe("a settlement advice that contradicts the approval", () => {
       } as never);
       const role = (await ctx.db.query("roles").collect()).find((r) => r.orgId === s.orgId)!;
       await ctx.db.patch(role._id, {
-        permissions: ["view:sales", "view:finance_applications"],
+        // `register:vehicle_handover` is in here because the DEFAULT SALES
+        // template holds it — this fixture is meant to be a salesperson, and a
+        // salesperson hands vehicles over. It also keeps `handoverStamp`
+        // reachable, so the scan below covers the token rather than skipping
+        // the one door whose first version leaked the approved amount outright.
+        permissions: ["view:sales", "view:finance_applications", "register:vehicle_handover"],
         isSystemOwnerRole: false,
       });
     });
@@ -4706,6 +4736,10 @@ describe("a settlement advice that contradicts the approval", () => {
     const detail = await s.asUser.query(api.applications.get, { orgId: s.orgId, applicationId });
     const cockpitView = await cockpit(s, applicationId);
     const log = await s.asUser.query(api.applications.getLog, { orgId: s.orgId, applicationId });
+    const handoverToken = await s.asUser.query(api.applications.handoverStamp, {
+      orgId: s.orgId,
+      applicationId,
+    });
     const economics = (await s.asUser.query(api.financingEconomics.getEconomics, {
       orgId: s.orgId,
       applicationId,
@@ -4754,6 +4788,12 @@ describe("a settlement advice that contradicts the approval", () => {
       ["applications.get", detail],
       ["applications.dealCockpit", cockpitView],
       ["applications.getLog", log],
+      // The handover stamp. It is issued from the UNREDACTED row and served to
+      // any caller who may hand over, so it is exactly the kind of door this
+      // scan exists for — and the first version of it did leak: the token
+      // spelled out the approved amount and its split. It is a revision
+      // counter now, and this asserts that rather than trusting the comment.
+      ["applications.handoverStamp", handoverToken],
       ["financingEconomics.getEconomics", economics],
       ["financingEconomics.listNeedingReconciliation", queue],
       ["financingEconomics.suggestQuotationForApplication", quotation],
@@ -6005,5 +6045,186 @@ describe("SCRUM-42 — a lost vehicle must not turn an unpaid supplier into a se
     // No supplier, nothing owed, and the deal is free to finish.
     expect(supplier.amountMinor).toBe(0);
     expect(stageOf(view, "SETTLEMENT")).toBe("COMPLETE");
+  });
+});
+
+/**
+ * A deal walked to APPROVED with the vehicle handed over and NOTHING else.
+ *
+ * `runDeal` registers the expected payment on its way past, which is right for
+ * every settlement case in this file and wrong for the two below: they are about
+ * the moment before that registration, and about what happens when it is
+ * refused.
+ */
+async function approvedHandedOverDeal(s: Seeded): Promise<Id<"financeApplications">> {
+  const quoteId = await s.asUser.mutation(api.quotes.saveQuote, {
+    orgId: s.orgId,
+    customerId: s.customerId,
+    vehicleId: s.vehicleId,
+    vehiclePrice: VEHICLE_PRICE,
+    downPayment: 0,
+    termMonths: 48,
+    mode: "CONFIGURED_FINANCE_COMPANY",
+    companyId: s.companyId,
+    totalFinancedAmount: VEHICLE_PRICE,
+  });
+  const applicationId = await s.asUser.mutation(api.applications.createFromQuote, {
+    orgId: s.orgId,
+    quoteId,
+  });
+  await s.asUser.mutation(api.applications.updateStatus, {
+    orgId: s.orgId,
+    applicationId,
+    status: "UNDER_REVIEW",
+  });
+  await s.asApprover.mutation(api.applications.updateStatus, {
+    orgId: s.orgId,
+    applicationId,
+    status: "APPROVED",
+  });
+  await registerHandover(s.asUser, api, s.orgId, applicationId);
+  return applicationId;
+}
+
+/**
+ * The workflow facts the DEAL COCKPIT projects, and the boundary that keeps one
+ * of them from becoming unreachable state.
+ *
+ * SCRUM-78 moved handover, expected payment and close onto the cockpit, so the
+ * screen now has to answer "can this step be taken" for itself. Two adversarial
+ * findings landed exactly there, and both are the query and the mutation
+ * disagreeing about the same deal.
+ */
+describe("the cockpit's workflow projections", () => {
+  test("names the settlement route as outstanding before it offers a close", async () => {
+    const s = await seedDealership("cockpitroute");
+    const { applicationId } = await runDeal(s, { finalize: false });
+
+    const before = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+
+    // A consigned car, an external financier, no route chosen — the ordinary
+    // shape of a consigned financed deal, and the one `finalizeDeal` refuses.
+    // Without this projection the cockpit offered a close that was certain to
+    // be rejected, one step AFTER handover had sealed the approved amount.
+    expect(before!.supplierSettlementRouteRequired).toBe(true);
+    // And it really would have been refused — asserted against the mutation
+    // rather than assumed from reading it, because "the screen and the server
+    // agree about this deal" is the only thing this projection is for.
+    await expect(
+      s.asUser.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId })
+    ).rejects.toThrow(/settlement route/i);
+
+    await s.asUser.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId: s.orgId,
+      applicationId,
+      route: "THROUGH_DEALERSHIP",
+    });
+
+    const after = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    expect(after!.supplierSettlementRouteRequired).toBe(false);
+  });
+
+  test("reports the expected payment only once one is really on file", async () => {
+    const s = await seedDealership("cockpitpay");
+    const applicationId = await approvedHandedOverDeal(s);
+
+    const before = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    expect(before!.expectedPaymentRegistered).toBe(false);
+
+    await s.asUser.mutation(api.applications.registerExpectedPayment, {
+      orgId: s.orgId,
+      applicationId,
+      method: "BANK_TRANSFER",
+      expectedDate: Date.now(),
+    });
+
+    const after = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    // Asserted across the REAL writer rather than by setting the flag in a
+    // fixture. The component tests hand this boolean to the screen, so nothing
+    // there proves the query computes it at all.
+    expect(after!.expectedPaymentRegistered).toBe(true);
+  });
+
+  test("refuses an expected-payment date that would strand the deal", async () => {
+    const s = await seedDealership("cockpitzero");
+    const applicationId = await approvedHandedOverDeal(s);
+
+    // 1970-01-01, which the date field will happily produce. `v.number()`
+    // admits it and `finalizeDeal` tests the value for truth — so it used to be
+    // accepted here, stamped as registered, and then block the close forever
+    // while this mutation refused a second attempt and the sealed approval could
+    // no longer be reopened. There was no way out but cancelling the deal.
+    await expect(
+      s.asUser.mutation(api.applications.registerExpectedPayment, {
+        orgId: s.orgId,
+        applicationId,
+        method: "BANK_TRANSFER",
+        expectedDate: 0,
+      })
+    ).rejects.toThrow(/valid date/i);
+
+    // The refusal has to leave the deal exactly where it was, or it has only
+    // moved the dead end: a stamped `expectedPaymentRegisteredAt` would refuse
+    // every later attempt too.
+    const view = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    expect(view!.expectedPaymentRegistered).toBe(false);
+
+    await s.asUser.mutation(api.applications.registerExpectedPayment, {
+      orgId: s.orgId,
+      applicationId,
+      method: "BANK_TRANSFER",
+      expectedDate: Date.now(),
+    });
+    const recovered = await s.asUser.query(api.applications.dealCockpit, {
+      orgId: s.orgId,
+      applicationId,
+    });
+    expect(recovered!.expectedPaymentRegistered).toBe(true);
+  });
+
+  test("tells a caller who cannot see the money which step the deal is on", async () => {
+    const s = await seedDealership("cockpitgate");
+    const { applicationId } = await runDeal(s, { finalize: false });
+
+    // `view:sales` and nothing financial — the salesperson tracking their own
+    // deal's progress. The money block is withheld from them by design, and the
+    // workflow conditions have to survive that: a step nobody is shown is the
+    // same dead end in a different place.
+    const watcherId = await s.t.run((ctx) =>
+      ctx.db.insert("users", {
+        clerkId: "cockpitgate_watch",
+        email: "watch.cockpitgate@example.com",
+        name: "Watcher",
+      })
+    );
+    const watcherRoleId = await s.t.run((ctx) =>
+      ctx.db.insert("roles", { orgId: s.orgId, name: "Watcher", permissions: ["view:sales"] })
+    );
+    await s.t.run((ctx) =>
+      ctx.db.insert("memberships", { orgId: s.orgId, userId: watcherId, roleId: watcherRoleId })
+    );
+
+    const view = await s.t
+      .withIdentity({ subject: "cockpitgate_watch", clerkId: "cockpitgate_watch" })
+      .query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+
+    expect(view!.money).toBeNull();
+    expect(view!.expectedPaymentRegistered).toBe(true);
+    expect(view!.supplierSettlementRouteRequired).toBe(true);
   });
 });

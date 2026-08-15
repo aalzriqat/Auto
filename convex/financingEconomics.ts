@@ -18,7 +18,7 @@ import {
   isConsignedAgentSale,
 } from "./utils/vehicleOwnership";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
-import { toMinorUnits } from "./utils/money";
+import { toMinorUnits, assertSupportedDenomination, denominationOf } from "./utils/money";
 import {
   assertMinorAmount,
   buildRuleSnapshot,
@@ -90,6 +90,11 @@ async function recomputeAndPatchEconomics(
   ctx: MutationCtx,
   app: Doc<"financeApplications">
 ): Promise<void> {
+  // Defense in depth. Every caller is guarded at its own handler top, but this
+  // is the shared writer of the derived split — if a future mutation reaches it
+  // without its own check, the bad denomination stops here rather than being
+  // persisted and scaled by a guess further downstream.
+  assertSupportedDenomination(app.economicsCurrency, "recomputing these economics");
   const snapshot = await resolveRuleSnapshot(ctx, app);
   const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, app.orgId));
 
@@ -155,6 +160,9 @@ async function recomputeAndPatchEconomics(
   if (!derived) {
     await ctx.db.patch(app._id, {
       economicsCurrency: currency,
+      // Clearing the split moves it just as much as recomputing it: a
+      // confirmation rendered against the old figures must stop matching.
+      economicsRevision: (app.economicsRevision ?? 0) + 1,
       financeCompanyFundedPortionMinor: undefined,
       unfinancedPortionMinor: undefined,
       dealerContributionMinor: undefined,
@@ -182,6 +190,11 @@ async function recomputeAndPatchEconomics(
 
   await ctx.db.patch(app._id, {
     economicsCurrency: currency,
+    // The shared recompute — the writer the first pass at this missed, and the
+    // reason the guard test exists rather than three careful edits. It moves
+    // the funding split without touching the approved amount, so a handover
+    // confirmation showing the old split would otherwise still have sealed.
+    economicsRevision: (app.economicsRevision ?? 0) + 1,
     financeCompanyFundedPortionMinor: derived.composition.financeCompanyFundedPortionMinor,
     unfinancedPortionMinor: derived.composition.unfinancedPortionMinor,
     dealerContributionMinor: derived.composition.dealerContributionMinor,
@@ -218,6 +231,55 @@ function appendReconciliationReason(existing: string | undefined, addition: stri
   if (!existing) return addition;
   if (existing.includes(addition)) return existing;
   return `${existing} ${addition}`;
+}
+
+/**
+ * The appraisal an approved amount is JUDGED against — newest real one on file.
+ *
+ * Not the approval's basis appraisal, which under MANUAL is deliberately not
+ * adopted unless the company's LTV rule needs it. Shared by the mutation that
+ * refuses an unacknowledged outlier and by the query that tells the screen an
+ * amount is unusual, so the two cannot reach different conclusions about the
+ * same deal. That drift is not hypothetical: the first cut of this check reused
+ * the basis appraisal and ended up comparing against the quotation alone.
+ */
+/**
+ * Whether the recorded approved amount is unlike every figure on file.
+ *
+ * ONE derivation, consumed by `getEconomics` and by `applications.get`. The
+ * cockpit reads the first and the legacy Review screen reads the second, and
+ * for a while the legacy screen simply passed `false` — so the same deal could
+ * be flagged as anomalous on one entry point to the one-way door and presented
+ * as ordinary on the other. Re-deriving it there would have been worse: two
+ * opinions about what counts as unusual, free to disagree with each other and
+ * with the mutation that refuses an unacknowledged outlier.
+ *
+ * `visible` gates it, because this is a judgement ABOUT a figure the caller may
+ * not be shown, and emphasis is meaningless where there is nothing to emphasise.
+ */
+export function approvedAmountIsFarFromEvidenceFor(
+  app: Doc<"financeApplications">,
+  appraisals: Array<Doc<"financeAppraisals">>,
+  visible: boolean
+): boolean {
+  if (!visible || app.approvedDealerPurchaseAmountMinor === undefined) return false;
+  return isApprovalFarFromEvidence({
+    approvedAmountMinor: app.approvedDealerPurchaseAmountMinor,
+    submittedQuotationMinor: app.submittedQuotationMinor,
+    appraisalAmountMinor: resolveComparisonAppraisal(appraisals)?.appraisalAmountMinor,
+  });
+}
+
+function resolveComparisonAppraisal(
+  appraisals: Array<Doc<"financeAppraisals">>
+): Doc<"financeAppraisals"> | undefined {
+  return appraisals
+    .filter(
+      (row) =>
+        (row.status === "RECORDED" || row.status === "APPROVED") &&
+        row.providerType !== "DEALER_ESTIMATE"
+    )
+    .sort((a, b) => b.appraisedAt - a.appraisedAt)[0];
 }
 
 async function recordOverride(
@@ -551,6 +613,30 @@ export const suggestQuotationForApplication = query({
     const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
 
     /**
+     * A denomination nobody can vouch for is an ANSWER here, never a refusal.
+     *
+     * Guards belong on the writers; this is a read. A ConvexError from a query
+     * reaches `useQuery` during render and takes the whole deal screen down —
+     * see the note immediately below, written after exactly that failure.
+     * Throwing here hid the legacy rows this rule protects behind a blank page,
+     * leaving no screen to restate the currency from: the guard defeated its
+     * own purpose. It arrived by pattern-matching a line instead of reading
+     * what enclosed it.
+     *
+     * Reported rather than silently suggested, because a figure scaled by a
+     * guessed fallback is worse than no suggestion at all.
+     */
+    if (app.economicsCurrency !== undefined && denominationOf(app.economicsCurrency) === null) {
+      return {
+        appliedLtvPercent: undefined,
+        currency,
+        ruleVersion: undefined,
+        available: false as const,
+        reason: "UNSUPPORTED_CURRENCY",
+      };
+    }
+
+    /**
      * The rules may not resolve at all — and that is an ANSWER, not an error.
      *
      * This query's whole contract is "here is a figure, or here is why there
@@ -658,6 +744,13 @@ export const getEconomics = query({
       isSystemOwnerRole(auth.role) ||
       auth.role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
 
+    // The redaction's OWN decision about the approved amount, reused rather
+    // than restated. Whether this caller may see the figure is a rule that
+    // lives in one place; asking the redacted row is how the anomaly verdict
+    // below inherits it instead of maintaining a second copy that could drift.
+    const visibleApp = redactSettlementEvidence(app, auth.role);
+    const approvedAmountVisible = visibleApp.approvedDealerPurchaseAmountMinor !== undefined;
+
     return {
       application: {
         // Through the SAME helper `applications.get` uses. This query authorizes
@@ -665,11 +758,30 @@ export const getEconomics = query({
         // and spread the whole document while redacting exactly one field — so
         // gating the other two doors left the settlement evidence readable here
         // by a weaker role than the one that had just been closed.
-        ...redactSettlementEvidence(app, auth.role),
+        ...visibleApp,
         vehiclePurchaseCostMinor: canSeeCost ? app.vehiclePurchaseCostMinor : undefined,
       },
       appraisals: appraisals.sort((a, b) => b.appraisedAt - a.appraisedAt),
       overrides: overrides.sort((a, b) => b.changedAt - a.changedAt),
+      /**
+       * Whether the recorded approved amount is unlike every figure on file.
+       *
+       * Derived HERE, by the same rule and against the same appraisal the
+       * mutation uses to refuse an unacknowledged outlier, so a screen can flag
+       * an anomalous figure without owning a second opinion about what counts
+       * as anomalous. Any screen that needs this asks the server; none of them
+       * re-derives it.
+       *
+       * Withheld with the amount itself: it is a judgement ABOUT a figure this
+       * caller may not see, and on its own it would tell them something about a
+       * number the row deliberately withholds. Emphasis is meaningless where
+       * there is nothing to emphasise.
+       */
+      approvedAmountIsFarFromEvidence: approvedAmountIsFarFromEvidenceFor(
+        app,
+        appraisals,
+        approvedAmountVisible
+      ),
     };
   },
 });
@@ -1051,6 +1163,10 @@ export const recordSubmittedQuotation = mutation({
       }
     }
 
+    // Same reason as the other writers: `??` preserves an unrecognised code
+    // rather than replacing it, so recording a quotation would carry it into
+    // every figure derived from this deal afterwards.
+    assertSupportedDenomination(app.economicsCurrency, "recording this quotation");
     await ctx.db.patch(args.applicationId, {
       economicsCurrency: app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId)),
       submittedQuotationMinor: args.submittedQuotationMinor,
@@ -1243,6 +1359,7 @@ export const recordAppraisal = mutation({
     }
 
     const now = Date.now();
+    assertSupportedDenomination(app.economicsCurrency, "recording these economics");
     const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
     const appraisalId = await ctx.db.insert("financeAppraisals", {
       orgId: args.orgId,
@@ -1289,6 +1406,9 @@ export const recordAppraisal = mutation({
       updatedAt: now,
       ...(supersedesApproval
         ? {
+            // The approval is being withdrawn, so a confirmation taken against
+            // it must stop matching. See `economicsRevision` in the schema.
+            economicsRevision: (app.economicsRevision ?? 0) + 1,
             approvedDealerPurchaseAmountMinor: undefined,
             approvedPurchaseBasis: undefined,
             approvedPurchaseAppraisalId: undefined,
@@ -1389,6 +1509,52 @@ export const approveDealerPurchaseAmount = mutation({
     );
     if (app.status === "CLOSED" || app.status === "CANCELLED") {
       throw new ConvexError("This application is closed. Its approval can no longer be changed.");
+    }
+    /**
+     * At the TOP of the handler, so every approval route runs it.
+     *
+     * It previously sat three conditions deep inside consigned
+     * direct-settlement handling, so dealer-owned stock, through-dealership
+     * routes and zero-cost rows all skipped it. That is not a theoretical gap:
+     * a legacy deal with a quotation already on file could record an approval
+     * that `finalizeDeal` then refuses forever, while the handover lock blocks
+     * correcting it — a deal stranded short of a sale with no in-app way back.
+     */
+    assertSupportedDenomination(app.economicsCurrency, "recording this approval");
+    /**
+     * The THIRD writer of this number, and the one that had no door on it.
+     *
+     * `reopenApproval` refuses after handover, and `recordAppraisal`'s
+     * superseding branch refuses too — so the product's rule is already that
+     * the vehicle going out seals the approved amount. This mutation is the
+     * other way to change it, and re-approving is a supported path rather than
+     * an exotic one: the override recorded below exists precisely because a
+     * second call with a different figure is expected.
+     *
+     * Without this guard the handover confirmation SCRUM-78 put in front of the
+     * operator — "after the vehicle is handed over the recorded approved amount
+     * can no longer be corrected through the normal correction flow" — was
+     * simply untrue, and a screen that tells someone a figure is now permanent
+     * while a sibling writer rewrites it is worse than one that says nothing.
+     *
+     * Scoped to a CORRECTION, not to every write — and the test suite is what
+     * insisted on the distinction. A first guard on `vehicleHandoverAt` alone
+     * failed 63 existing cases, all of them recording economics on a deal that
+     * was handed over with none: `assertDealerEconomicsRecorded` lets a deal
+     * with no quotation through, so that order is genuinely reachable, and
+     * SCRUM-61 exists precisely to let such a deal record the approval it never
+     * had. Blocking that would have created the dead end one step earlier than
+     * the one that issue is about.
+     *
+     * The claim the dialog makes is about a figure the operator READ, and it
+     * only shows one when there is one. Where no amount was ever recorded there
+     * is nothing to correct and nothing was verified, so the door does not
+     * apply.
+     */
+    if (app.vehicleHandoverAt && app.approvedDealerPurchaseAmountMinor !== undefined) {
+      throw new ConvexError(
+        "The vehicle has already been handed over on this deal, so the approved purchase amount can no longer be changed. Cancel the application to reverse it instead."
+      );
     }
     if (app.submittedQuotationMinor === undefined) {
       throw new ConvexError(
@@ -1533,13 +1699,7 @@ export const approveDealerPurchaseAmount = mutation({
     // left the server comparing against the quotation alone on exactly the
     // deals the dialog compares against both. The screen would then ask a
     // question the server did not, or stay silent where the server refused.
-    const comparisonAppraisal = appraisals
-      .filter(
-        (row) =>
-          (row.status === "RECORDED" || row.status === "APPROVED") &&
-          row.providerType !== "DEALER_ESTIMATE"
-      )
-      .sort((a, b) => b.appraisedAt - a.appraisedAt)[0];
+    const comparisonAppraisal = resolveComparisonAppraisal(appraisals);
     if (
       !args.outlierAcknowledged &&
       isApprovalFarFromEvidence({
@@ -1630,6 +1790,9 @@ export const approveDealerPurchaseAmount = mutation({
     // after an exception kept `approvedPurchaseExceptionRuleVersion` pointing
     // at a rule version that no longer had anything to do with the approval.
     await ctx.db.patch(args.applicationId, {
+      // Any confirmation an operator was holding is now against figures that
+      // have moved. See `economicsRevision` in the schema.
+      economicsRevision: (app.economicsRevision ?? 0) + 1,
       approvedDealerPurchaseAmountMinor: args.approvedAmountMinor,
       approvedPurchaseBasis: args.basis,
       approvedPurchaseAppraisalId: appraisal?._id,
@@ -1819,6 +1982,8 @@ export const reopenApproval = mutation({
     });
 
     await ctx.db.patch(args.applicationId, {
+      // See `economicsRevision` in the schema.
+      economicsRevision: (app.economicsRevision ?? 0) + 1,
       approvedDealerPurchaseAmountMinor: undefined,
       approvedPurchaseBasis: undefined,
       approvedPurchaseAppraisalId: undefined,

@@ -440,6 +440,36 @@ export async function requireOwnedRow<T extends OrgScopedTable>(
  * every caller — Convex drops undefined values from the wire, so nothing leaks,
  * while consumers keep one type instead of a union they must narrow.
  */
+/**
+ * Whether this role is shown the approved purchase amount at all.
+ *
+ * Exported because a second caller now needs the SAME answer, and asking it a
+ * second way is how the two drift. `registerVehicleHandover` requires an
+ * `VIEW_FINANCE` or `CONFIRM_FINANCE_DISBURSEMENT`, matching the tier-2 gate
+ * below exactly.
+ *
+ * ⚠️ NOT EXPORTED, DELIBERATELY. This is one display gate among several — it
+ * answers what `redactSettlementEvidence` withholds, and nothing more. It is
+ * NOT an authority on who can see the approved amount: `listNeedingReconciliation`
+ * serves that same figure raw under `VIEW_FINANCE_APPLICATIONS`, which this
+ * predicate does not mention.
+ *
+ * `registerVehicleHandover` was briefly built on it, to decide who had to
+ * confirm the figure they were shown. That was wrong in both directions —
+ * default SALES holds neither permission and so was never asked, while a
+ * `confirm:finance_disbursement` role without `view:finance_applications` was
+ * asked for a figure its screen could not display. Handover now compares a
+ * stamp issued to every caller, and asks nothing about who is looking. Do not
+ * reach for this to gate a WRITE.
+ */
+function canSeeApprovedPurchaseAmount(role: Doc<"roles">): boolean {
+  return (
+    isSystemOwnerRole(role) ||
+    role.permissions.includes(PERMISSIONS.VIEW_FINANCE) ||
+    role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT)
+  );
+}
+
 export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
   app: T,
   role: Doc<"roles">
@@ -447,7 +477,7 @@ export function redactSettlementEvidence<T extends Doc<"financeApplications">>(
   const has = (permission: Permission) =>
     isSystemOwnerRole(role) || role.permissions.includes(permission);
   const canSeeFinance = has(PERMISSIONS.VIEW_FINANCE);
-  const canWorkDisbursement = canSeeFinance || has(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+  const canWorkDisbursement = canSeeApprovedPurchaseAmount(role);
 
   return {
     ...app,

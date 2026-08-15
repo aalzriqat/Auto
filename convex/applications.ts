@@ -3,7 +3,10 @@ import { MutationCtx, QueryCtx, query } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
-import { requireTenantAuth, redactSettlementEvidence } from "./utils/tenancy";
+import {
+  requireTenantAuth,
+  redactSettlementEvidence,
+} from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
@@ -25,6 +28,8 @@ import {
   assertValidMinorAmount,
   toMinorSameCurrencyOrUndefined,
   outstandingMinorFromMajor,
+  denominationOf,
+  assertSupportedDenomination,
 } from "./utils/money";
 import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
 import {
@@ -41,6 +46,9 @@ import {
   type ObligationState,
   type SettlementObligations,
 } from "./utils/financingEconomics";
+// The anomaly verdict, from the module that owns it. Both handover
+// confirmations must warn about the same deals; see the helper's own note.
+import { approvedAmountIsFarFromEvidenceFor } from "./financingEconomics";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
@@ -1456,6 +1464,26 @@ export const get = query({
 
     return {
       ...visibleApp,
+      // Issued from the UNREDACTED row, deliberately. The stamp is a comparison
+      // token, not evidence: a caller whose amounts were withheld above still
+      // has to prove the deal did not move under them.
+      economicsStamp: economicsStamp(app),
+      /**
+       * The server's anomaly verdict, so this screen's handover confirmation
+       * warns about the same deals the cockpit's does.
+       *
+       * Both entry points open the SAME one-way door. Passing `false` here — as
+       * this screen briefly did — meant the cockpit could say an amount is
+       * unlike the quotation and every appraisal on file while the other
+       * confirmation presented it as ordinary. Read from the shared derivation
+       * rather than recomputed, so the two cannot form separate opinions.
+       */
+      /**
+       * The SAME projection the cockpit consumes, so the two doors into the
+       * handover cannot describe the same deal differently — including how its
+       * figures are denominated.
+       */
+      handoverEvidence: await handoverEvidenceFor(ctx, app, role),
       customer,
       vehicle,
       company,
@@ -1491,6 +1519,112 @@ export const get = query({
  * Returns `null` for an application that does not exist or belongs to another
  * org — the same shape `get` uses, so the screen has one not-found path.
  */
+/**
+ * A stamp of the economics a handover confirmation is about, issued to every
+ * caller who can load the deal and demanded back by `registerVehicleHandover`.
+ *
+ * Deliberately NOT permission-shaped: a caller whose amounts are redacted still
+ * needs one, because the deal must not be sealed against figures that moved
+ * regardless of who is looking. Keying this to visibility is what left default
+ * SALES unguarded and dead-ended `confirm:finance_disbursement` roles at once.
+ *
+ * And deliberately CARRYING NO MONEY. The first version of this encoded the
+ * approved amount and its split directly — `v1|<approved>|<funded>|<contribution>`
+ * — and then projected it to every caller, handing the exact figures
+ * `redactSettlementEvidence` withholds to the callers it withholds them from,
+ * legible at a glance. A digest would not have saved it: the format is known
+ * and at 100% LTV the search collapses to a single figure. So the token is a
+ * revision counter and says nothing about the deal but that it changed.
+ */
+function economicsStamp(app: Doc<"financeApplications">): string {
+  return `v2|${app.economicsRevision ?? 0}`;
+}
+
+/**
+ * Everything the handover confirmation is allowed to show, resolved ONCE on the
+ * server and consumed identically by `dealCockpit` and `applications.get`.
+ *
+ * Five defects of one class reached this screen before it looked like this:
+ * some of what the operator saw came from one query and some from another, or
+ * some from a snapshot and some from live props, and the two disagreed. The
+ * cure is not another careful patch — it is that there is now exactly one
+ * answer, computed in one place, for both doors into the same one-way action.
+ *
+ * THE FIGURES MOVE TOGETHER. The split is not separately gated: with the
+ * approved amount withheld but its two addends shown, an operator recovers the
+ * withheld figure by adding them — `funded + contribution` IS the approved
+ * amount. Showing a decomposition of a number that is being withheld is not a
+ * partial disclosure, it is the whole one with an extra step.
+ *
+ * CURRENCY FAILS CLOSED. `economicsCurrency` is the deal's own denomination and
+ * the only trustworthy one. The organization's current currency is NOT a
+ * fallback: `orgSettings` does not count `financeApplications` among the rows
+ * that lock it, so an org can record economics in JOD and later switch to USD —
+ * this schema says so in as many words. Guessing would render 1,150,000 minor
+ * units of USD as 1,150 JOD on the screen that seals the deal permanently. When
+ * the denomination cannot be established, this returns null and the client
+ * refuses the confirmation rather than spelling a number in a currency nobody
+ * verified.
+ */
+async function handoverEvidenceFor(
+  ctx: QueryCtx,
+  app: Doc<"financeApplications">,
+  role: Doc<"roles">
+): Promise<{
+  approvedPurchaseAmountMinor: number | null;
+  financeCompanyFundedPortionMinor: number | null;
+  dealerContributionMinor: number | null;
+  approvedAmountIsFarFromEvidence: boolean;
+  currency: { code: string; scale: number } | null;
+}> {
+  const visibleAmount = redactSettlementEvidence(app, role).approvedDealerPurchaseAmountMinor;
+  const maySeeFigures = visibleAmount !== undefined;
+  const appraisals = await ctx.db
+    .query("financeAppraisals")
+    .withIndex("by_application", (q) => q.eq("applicationId", app._id))
+    .collect();
+  return {
+    approvedPurchaseAmountMinor: visibleAmount ?? null,
+    financeCompanyFundedPortionMinor: maySeeFigures
+      ? app.financeCompanyFundedPortionMinor ?? null
+      : null,
+    dealerContributionMinor: maySeeFigures ? app.dealerContributionMinor ?? null : null,
+    approvedAmountIsFarFromEvidence: approvedAmountIsFarFromEvidenceFor(
+      app,
+      appraisals,
+      maySeeFigures
+    ),
+    currency: denominationOf(app.economicsCurrency),
+  };
+}
+
+/**
+ * The handover stamp on its own, for a caller who may perform the handover.
+ *
+ * `dealCockpit` and `applications.get` both authorize on `view:sales`, and a
+ * role can hold `register:vehicle_handover` without it. Requiring a stamp those
+ * callers had no query to obtain would have dead-ended them exactly as keying
+ * the old obligation to `view:finance` dead-ended `confirm:finance_disbursement`
+ * — the same defect, one layer down, which is why this exists rather than a
+ * note telling operators to open a different screen.
+ *
+ * Authorized on the permission to ACT, so the ability to obtain the token
+ * follows from the ability to use it. It returns the token and nothing else:
+ * no figures, no identity, no status.
+ */
+export const handoverStamp = query({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REGISTER_VEHICLE_HANDOVER]);
+    const app = await ctx.db.get(args.applicationId);
+    if (!app || app.orgId !== args.orgId) return null;
+    return economicsStamp(app);
+  },
+});
+
 export const dealCockpit = query({
   args: {
     orgId: v.id("organizations"),
@@ -1643,6 +1777,23 @@ export const dealCockpit = query({
           }
         : null;
 
+    /**
+     * `finalizeDeal`'s settlement-route prerequisite, evaluated with its own
+     * inputs rather than approximated.
+     *
+     * Scoped exactly as the mutation scopes it: a consigned car (the supplier's,
+     * so somebody owes somebody), and an EXTERNAL financier — which is the quote
+     * MODE, not `companyId`, because a MANUAL_FINANCE_COMPANY deal structurally
+     * cannot carry one. Nothing already closed is asked, since its sale has
+     * already posted one of the two answers.
+     */
+    const settlementRouteRequired =
+      app.status !== "CLOSED" &&
+      app.supplierSettlementRoute === undefined &&
+      vehicle !== null &&
+      isConsignedAgentSale(vehicle) &&
+      (await settlementPayerForApplication(ctx, app)).external;
+
     const base = {
       /**
        * What KIND of deal this is. SCRUM-29 put a cash deal on the same screen,
@@ -1695,6 +1846,103 @@ export const dealCockpit = query({
        * gate exists to withhold. The condition is public; the evidence is not.
        */
       settlementAdviceRequiresReconciliation: adviceRequiresReconciliation,
+      /**
+       * Whether the fact `finalizeDeal` demands about the payment is on file.
+       *
+       * Deliberately `expectedPaymentMethod && expectedPaymentDate` — the exact
+       * pair `finalizeDeal` refuses without — and NOT the
+       * `expectedPaymentRegisteredAt` timestamp that `registerExpectedPayment`
+       * checks for a repeat. The two answer different questions, and the
+       * difference is only visible on a row written before that timestamp
+       * existed: reading the timestamp would tell such a deal to register a
+       * payment it already has, and the mutation would agree and overwrite it.
+       * The review dialog gates on the method for the same reason.
+       *
+       * A WORKFLOW condition, so it sits outside the money gate with
+       * `settlementAdviceRequiresReconciliation`: it carries no amount, no date
+       * and no method — only that the step is done. Whoever may see the deal may
+       * see which step it is waiting on.
+       */
+      expectedPaymentRegistered: Boolean(app.expectedPaymentMethod && app.expectedPaymentDate),
+      /**
+       * That `finalizeDeal` will refuse until the settlement route is recorded.
+       *
+       * The SAME predicate the mutation refuses on, evaluated here rather than
+       * reconstructed: a consigned car, an external financier, and no route
+       * chosen. It cannot be derived from anything the screen already had —
+       * `money.routeKnown` answers whether the SALE is readable, and an absent
+       * route reads as the legacy THROUGH_DEALERSHIP default everywhere else, so
+       * both would report this deal as perfectly fine.
+       *
+       * Without it the cockpit offered a close that the server was certain to
+       * reject, on the ordinary shape of a consigned financed deal, and it did
+       * so one step AFTER handover had sealed the approved amount.
+       *
+       * A workflow condition with no amounts in it, so it sits outside the money
+       * gate like the other two.
+       */
+      supplierSettlementRouteRequired: settlementRouteRequired,
+      /**
+       * The stamp the handover confirmation must send back, on `base` so it
+       * survives the money gate below.
+       *
+       * A caller who cannot see the figures still needs it: the deal must not
+       * be sealed against economics that moved, whoever is looking. Putting it
+       * inside `money` would have recreated the defect this replaces — an
+       * obligation only the permitted could discharge.
+       */
+      economicsStamp: economicsStamp(app),
+      /**
+       * The denomination this deal's money may be SPELLED in, or null.
+       *
+       * The cockpit is a money-READING surface, not only a place to act. It
+       * formatted every figure through the fallback scaler, so a legacy row
+       * carrying "JD" displayed 11,500,000 fils as 115,000 — a dealer reading a
+       * real deal off by a factor of ten. Handover already refused such a row,
+       * which protects the irreversible step and does nothing whatever for the
+       * number on the screen.
+       *
+       * The same authority the writers assert against, so the page cannot show
+       * money in a denomination the mutations would reject.
+       */
+      denomination: denominationOf(app.economicsCurrency),
+      /**
+       * Whether any economics are actually ON this deal.
+       *
+       * The client had to guess at this and guessed with `Boolean(deal.money)`,
+       * which is PERMISSION-shaped: `buildCockpitMoney` returns zeroed rows for
+       * any caller holding `view:finance`, recorded or not. That put a red
+       * "record it again" panel on every freshly created financed deal for the
+       * owner, about figures that had never been recorded once.
+       *
+       * Any of the three, not just the approved amount: a deal carrying only a
+       * quotation still shows money, so a denomination nobody can vouch for
+       * matters there too.
+       */
+      economicsRecorded:
+        app.submittedQuotationMinor !== undefined ||
+        app.approvedDealerPurchaseAmountMinor !== undefined ||
+        app.financeCompanyFundedPortionMinor !== undefined,
+      /**
+       * What the handover confirmation shows, on `base` so it survives the
+       * money gate — and derived through `redactSettlementEvidence`, the same
+       * policy `applications.get` uses.
+       *
+       * The cockpit used to read these from `getEconomics`, which it only
+       * mounts for `view:finance_applications`. A role holding
+       * `confirm:finance_disbursement` without it is ENTITLED to the approved
+       * amount — `applications.get` shows it — yet the cockpit rendered the
+       * confirmation with no figures and no anomaly warning, while the stamp
+       * still arrived and the handover still sealed. The two entry points to
+       * the same one-way door disagreed about the same deal for the same
+       * caller, and the cockpit was the one that showed less.
+       *
+       * Redaction is a DISPLAY question and belongs here. What must never come
+       * back is keying the OBLIGATION to it: the stamp above is demanded of
+       * everyone, and a caller shown nothing is still held to the deal not
+       * having moved.
+       */
+      handoverEvidence: await handoverEvidenceFor(ctx, app, role),
       /**
        * The FIGURES behind that flag, and they are gated.
        *
@@ -2334,6 +2582,47 @@ export const registerVehicleHandover = mutation({
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),
     notes: v.optional(v.string()),
+    /**
+     * The economics the operator's screen was built from, as the server stamped
+     * them — `economicsStamp` from the same `dealCockpit` / `get` payload the
+     * confirmation was rendered against.
+     *
+     * WHY A STAMP AND NOT THE AMOUNT. Handover is the moment those figures
+     * become permanent. Between a dialog rendering them and the operator
+     * pressing confirm, another approver can legitimately record different ones
+     * — the vehicle has not gone out yet, so nothing refuses them — and sealing
+     * against a figure that has since moved is the exact confidence this
+     * confirmation was built to create, pointed at the wrong number.
+     *
+     * The first attempt asked for the approved amount back and demanded it only
+     * from callers who could SEE it. That was wrong in both directions, and the
+     * regression tests for both directions live in `financingEconomics.test.ts`:
+     *
+     *   • TOO NARROW — default SALES holds neither `view:finance` nor
+     *     `confirm:finance_disbursement`, so the obligation was never raised for
+     *     the role most likely to hand a vehicle over. It sealed silently.
+     *   • TOO BROAD — a role holding `confirm:finance_disbursement` without
+     *     `view:finance_applications` was required to confirm a figure the
+     *     cockpit could not display to it, dead-ending handover entirely.
+     *
+     * Visibility was never the right basis. Whether a caller may READ the
+     * amount and whether the deal may be SEALED against figures that moved are
+     * different questions, and `approvedDealerPurchaseAmountMinor` is in any
+     * case a display gate rather than a confidentiality boundary — see the note
+     * in `redactSettlementEvidence`. So the stamp is issued to every caller who
+     * can load the deal, redacted or not, and demanded from all of them. There
+     * is no predicate left to keep exhaustive across four queries.
+     *
+     * Compared inside the mutation's own transaction, so there is no window
+     * between the check and the write.
+     *
+     * Optional in the VALIDATOR only so a client running a bundle from before
+     * this change gets the readable refusal below instead of a raw validator
+     * dump. The handler demands it unconditionally: absent is refused, exactly
+     * like stale. Fail closed — a brief loud refusal during a deploy, never a
+     * silent seal.
+     */
+    economicsStamp: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REGISTER_VEHICLE_HANDOVER]);
@@ -2341,7 +2630,56 @@ export const registerVehicleHandover = mutation({
     if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
     if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before registering handover.");
     if (app.vehicleHandoverAt) throw new ConvexError("Vehicle handover has already been registered.");
+    // Deal fitness first. A deal that cannot be handed over at all is not
+    // improved by being asked to confirm a figure — and the refusal that names
+    // the missing funding split is the more useful one to reach the operator.
     assertDealerEconomicsRecorded(app, "handing over the vehicle");
+    /**
+     * The denomination, enforced HERE and not only in what the screens render.
+     *
+     * `handoverEvidenceFor` already refuses to show figures whose currency
+     * AutoFlow cannot vouch for, and that is a display rule — a direct caller,
+     * an internal caller, or a client built against this API tomorrow renders
+     * nothing at all. A refusal that lives only in a projection is not
+     * enforcement; the irreversible boundary is this mutation.
+     *
+     * Scoped to a deal that actually HAS recorded economics to seal. Where no
+     * approved amount was ever recorded there is no money-bearing figure being
+     * made permanent and so no denomination to verify — and refusing there
+     * would build a new dead end for exactly the historical deals that need the
+     * recovery path (SCRUM-61) most.
+     */
+    // An unrecognised code blocks regardless of whether economics exist yet:
+    // once the vehicle is gone the deal cannot be restated, and every later
+    // writer would preserve the bad value rather than replace it.
+    assertSupportedDenomination(app.economicsCurrency, "handing the vehicle over");
+    // And an ABSENT denomination blocks only when there is money to seal — with
+    // no approved amount there is nothing to denominate, and refusing would
+    // close the SCRUM-61 recovery path for exactly the historical deals it
+    // exists for.
+    if (
+      app.approvedDealerPurchaseAmountMinor !== undefined &&
+      denominationOf(app.economicsCurrency) === null
+    ) {
+      throw new ConvexError(
+        "AutoFlow cannot confirm which currency this deal's approved amount is recorded in, so the vehicle cannot be handed over yet. Record the deal's economics again to restate them in a supported currency."
+      );
+    }
+
+    /**
+     * The concurrency check — asked of everyone, keyed to nothing about the
+     * caller. See the argument's note for why visibility was the wrong basis.
+     */
+    if (args.economicsStamp === undefined) {
+      throw new ConvexError(
+        "Confirm the handover from the deal screen so the figures you acted on can be checked. If you were already on it, reload the page and try again."
+      );
+    }
+    if (args.economicsStamp !== economicsStamp(app)) {
+      throw new ConvexError(
+        "The deal's approved figures changed while you were confirming the handover. Re-check them on the deal before handing the vehicle over."
+      );
+    }
 
     const now = Date.now();
     await ctx.db.patch(args.applicationId, {
@@ -2380,6 +2718,21 @@ export const registerExpectedPayment = mutation({
     if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before registering expected payment.");
     if (!app.vehicleHandoverAt) throw new ConvexError("Register the vehicle handover before the expected payment.");
     if (app.expectedPaymentRegisteredAt) throw new ConvexError("Expected payment has already been registered.");
+    // A date this mutation ACCEPTS but `finalizeDeal` will not.
+    //
+    // `v.number()` admits 0 and NaN, and 0 is what the date field produces for
+    // 1970-01-01. `finalizeDeal` tests `!app.expectedPaymentDate`, so a zero
+    // sails in here and then blocks the close — while THIS mutation refuses a
+    // second attempt because it has already stamped
+    // `expectedPaymentRegisteredAt`. With the handover recorded the approval can
+    // no longer be reopened either, so the deal has no supported way forward at
+    // all: the only remedy left is cancelling the application.
+    //
+    // Refused at the boundary rather than repaired downstream, because the
+    // state is unrecoverable once written.
+    if (!Number.isFinite(args.expectedDate) || args.expectedDate <= 0) {
+      throw new ConvexError("Record a valid date for the expected payment.");
+    }
 
     if (args.method === "CHEQUE") {
       if (!args.chequeDetails?.bank?.trim() || !args.chequeDetails?.chequeNumber?.trim()) {
@@ -2613,6 +2966,11 @@ export const finalizeDeal = mutation({
         // reappraisal leaves status APPROVED, so this is the only thing
         // stopping a sale being completed on economics nothing supports.
         assertDealerEconomicsRecorded(app, "finalizing");
+        // The last step in the ordering Codex traced, and the one that creates
+        // a SALE. A deal whose denomination cannot be established must not be
+        // turned into money here either — otherwise every guard upstream is
+        // just a longer road to the same wrong figure.
+        assertSupportedDenomination(app.economicsCurrency, "finalizing this deal");
 
         // On a consigned car financed by an external company, the route decides
         // opposite balance sheets from the same sale — a payable to the supplier

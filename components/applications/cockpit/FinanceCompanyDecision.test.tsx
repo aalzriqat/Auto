@@ -59,9 +59,27 @@ import { RecordSubmittedQuotationDialog } from "./RecordSubmittedQuotationDialog
 const JOD = 1_000;
 
 /** A financed deal whose approved-purchase stage is the live blocker. */
+/**
+ * The server's stamp of the deal's economics, as `dealCockpit` issues it — a
+ * revision counter, carrying no figure. The dialog sends this back rather than
+ * an amount, so the mutation can refuse a deal whose economics moved while the
+ * operator was reading them, without the token itself disclosing them.
+ */
+const STAMP = "v2|7";
+
 function dealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
   return {
     dealKind: "FINANCED",
+    economicsStamp: STAMP,
+    denomination: { code: "JOD", scale: 3 },
+    economicsRecorded: true,
+    handoverEvidence: {
+      approvedPurchaseAmountMinor: null,
+      financeCompanyFundedPortionMinor: null,
+      dealerContributionMinor: null,
+      approvedAmountIsFarFromEvidence: false,
+      currency: { code: "JOD", scale: 3 },
+    },
     dealRef: "app_2048",
     applicationId: "app_2048",
     saleId: null,
@@ -160,6 +178,144 @@ function cardButton(name: string): HTMLElement | undefined {
 afterEach(() => {
   cleanup();
   language.locale = "ar";
+});
+
+describe("a denomination nobody can vouch for", () => {
+  test("withholds the money panel and says why, instead of guessing", () => {
+    // A legacy row carrying "JD": JOD is scale 3, the fallback scaler answers
+    // 2, and 11,500,000 fils renders as 115,000. Handover refuses such a deal,
+    // which protects the irreversible step and leaves the dealer reading a
+    // figure wrong by a factor of ten.
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          denomination: null,
+          // Money withheld from this caller AND economics on the record. The
+          // server states both, so the warning reaches a caller who cannot see
+          // the figures either way.
+          money: null,
+          economicsRecorded: true,
+        })}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    expect(screen.getByText("EconomicsCurrencyUnusable")).toBeTruthy();
+    expect(screen.getByText("EconomicsCurrencyUnusableHint")).toBeTruthy();
+  });
+
+  test("does not fire for a PRIVILEGED caller on a deal with no economics yet", () => {
+    // The shape both reviewers said the suite never exercised, and the one the
+    // dealership owner sees most: `dealCockpit` builds a money object for any
+    // caller holding `view:finance` — zeroed rows, no economics recorded — so a
+    // predicate keyed on `Boolean(deal.money)` put a red "record it again"
+    // panel on every newly created financed deal. Nothing had been recorded
+    // once.
+    //
+    // The money block is supplied EXPLICITLY. `dealFixture` defaults it to null
+    // — the MANAGER case — and Codex caught that inheriting the default made
+    // this test vacuous: with no money object the discarded `Boolean(deal.money)`
+    // predicate is false too, so the case passed against the very code it was
+    // written to condemn. A test that cannot fail on the old implementation is
+    // not a regression test for it.
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          denomination: null,
+          economicsRecorded: false,
+          // What `buildCockpitMoney` actually returns for a deal on which
+          // nothing has been recorded: a real object, present rows, no figures.
+          // That presence is the whole trap — it is built from the caller's
+          // PERMISSION, not from the deal having any money on it.
+          money: {
+            currency: "JOD",
+            settlesDirectToSupplier: false,
+            routeKnown: false,
+            profit: { available: false, reason: "NoApprovedPurchaseAmount" },
+            expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
+            parties: [],
+          },
+        })}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    expect(screen.queryByText("EconomicsCurrencyUnusable")).toBeNull();
+  });
+
+  test("does not fire for a CASH deal, whose payload carries no denomination", () => {
+    // `sales.dealCockpit` projects no denomination at all. Reading that absence
+    // as "unusable" would have hidden the figures on every live cash sale — a
+    // regression far worse than the display fault this guards against.
+    //
+    // The keys are DELETED, not set to `undefined`. Both reviewers caught this
+    // independently: spreading an explicit `undefined` leaves the key in place,
+    // so `"denomination" in deal` stayed true and the case never touched the
+    // absent-key path it names. It passed on a coincidence — `undefined !== null`
+    // downstream — which is not the invariant being guarded.
+    const cash = dealFixture({
+      dealKind: "CASH",
+      applicationId: null,
+      // A cash sale HAS money — that is the entire point of the regression. The
+      // fixture's default is null (the MANAGER case), and inheriting it made
+      // this test pass against the broken predicate too, since `Boolean(null)`
+      // is false either way. With the figures present, reading the missing
+      // denomination as "unusable" replaces them, which is what must not happen.
+      money: {
+        currency: "JOD",
+        settlesDirectToSupplier: false,
+        routeKnown: true,
+        profit: { available: false, reason: "NoApprovedPurchaseAmount" },
+        expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
+        parties: [],
+      },
+    }) as Record<string, unknown>;
+    delete cash.denomination;
+    delete cash.economicsRecorded;
+    expect("denomination" in cash).toBe(false);
+    expect("economicsRecorded" in cash).toBe(false);
+
+    render(
+      <DealCockpitView
+        deal={cash as never}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    expect(screen.queryByText("EconomicsCurrencyUnusable")).toBeNull();
+  });
+
+  test("withholds the figures when the backend is too old to say whether economics exist", () => {
+    // Version skew, which on this repository is the DEFAULT after a merge:
+    // pushing to `main` auto-deploys the frontend while the Convex functions
+    // stay on the previous version until deployed by hand. That response
+    // carries `denomination` but not `economicsRecorded`.
+    //
+    // Codex found that reading the absent key as "nothing recorded" switched the
+    // guard off in exactly that window, putting a legacy unspellable row back
+    // through the guessing scale. Unknown has to fail closed.
+    const oldBackend = dealFixture({ denomination: null }) as Record<string, unknown>;
+    delete oldBackend.economicsRecorded;
+    expect("denomination" in oldBackend).toBe(true);
+    expect("economicsRecorded" in oldBackend).toBe(false);
+
+    render(
+      <DealCockpitView
+        deal={oldBackend as never}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    expect(screen.getByText("EconomicsCurrencyUnusable")).toBeTruthy();
+  });
+
+  test("does not fire for a deal with no economics recorded", () => {
+    // Absent currency on a deal with nothing to denominate is ordinary, not an
+    // error — warning there would put a red panel on every new deal.
+    render(
+      <DealCockpitView
+        deal={dealFixture({ denomination: null, money: null, economicsRecorded: false })}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    expect(screen.queryByText("EconomicsCurrencyUnusable")).toBeNull();
+  });
 });
 
 describe("the card is not behind the money gate", () => {
@@ -1211,5 +1367,279 @@ describe("the departure question is carried to the server, and retired when it s
       within(dialog).queryByRole("button", { name: "ApprovedAmountConfirmAction" })
     ).toBeNull();
     expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeTruthy();
+  });
+});
+
+/**
+ * The step the rail names is a step the screen can take — SCRUM-78.
+ *
+ * The owner walked a real deal and found the cockpit announcing
+ * "الخطوة التالية: تسليم المركبة" with nothing on the page that performs it.
+ * Handover lived in `Finance Applications -> Review`, a screen the rail never
+ * mentions, which is why the E2E stayed green while the workspace could not
+ * finish a deal.
+ */
+describe("the stage the rail names carries its own action", () => {
+  const awaitingHandover = dealFixture({
+    stages: [
+      { key: "APPLICATION", state: "COMPLETE" },
+      { key: "APPROVED_PURCHASE", state: "COMPLETE" },
+      { key: "HANDOVER", state: "CURRENT" },
+      { key: "SETTLEMENT", state: "PENDING" },
+    ],
+  });
+
+  const handoverWiring = (overrides: Record<string, unknown> = {}) => ({
+    confirming: false,
+    submitting: false,
+    error: null,
+    onOpenChange: vi.fn(),
+    onSubmit: vi.fn(noopAsync),
+    ...overrides,
+  });
+
+  function renderAwaitingHandover(props: Record<string, unknown> = {}) {
+    const handover = handoverWiring(
+      (props.handover as Record<string, unknown> | undefined) ?? {}
+    );
+    render(
+      <DealCockpitView
+        deal={awaitingHandover}
+        financeDecision={wiring({
+          facts: {
+            approvedPurchaseRecorded: true,
+            approvedPurchaseAmountMinor: 150_000 * JOD,
+            financeCompanyFundedPortionMinor: 127_500 * JOD,
+            dealerContributionMinor: 22_500 * JOD,
+          },
+        })}
+        workflowAction={{
+          stageKey: "HANDOVER",
+          actionKey: "RegisterHandoverAction",
+          onStart: (props.onStart as () => void) ?? vi.fn(),
+          unavailableReasonKey: props.unavailableReasonKey as string | undefined,
+        }}
+        handover={handover}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    return handover;
+  }
+
+  test("offers the handover action beside the step it names", () => {
+    const onStart = vi.fn();
+    renderAwaitingHandover({ onStart });
+
+    const action = cardButton("RegisterHandoverAction");
+    expect(action).toBeTruthy();
+    fireEvent.click(action!);
+    expect(onStart).toHaveBeenCalled();
+  });
+
+  test("a caller who cannot register it is told so, never left with silence", () => {
+    renderAwaitingHandover({ unavailableReasonKey: "HandoverNeedsPermission" });
+
+    // The defect this issue exists to remove: a named step with no button and
+    // no reason. The button is correctly withheld; the reason must be there.
+    expect(cardButton("RegisterHandoverAction")).toBeUndefined();
+    expect(screen.getByText("HandoverNeedsPermission")).toBeTruthy();
+  });
+
+  test("the action is absent once handover is already complete", () => {
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          stages: [
+            { key: "APPLICATION", state: "COMPLETE" },
+            { key: "HANDOVER", state: "COMPLETE" },
+            { key: "SETTLEMENT", state: "CURRENT" },
+          ],
+        })}
+        financeDecision={wiring()}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    expect(cardButton("RegisterHandoverAction")).toBeUndefined();
+  });
+});
+
+describe("handover states the door it closes, with the figures to check", () => {
+  const openDialog = (factOverrides: Record<string, unknown> = {}) => {
+    const onSubmit = vi.fn(noopAsync);
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          stages: [
+            { key: "APPLICATION", state: "COMPLETE" },
+            { key: "HANDOVER", state: "CURRENT" },
+          ],
+          // The confirmation's figures come from the COCKPIT payload now, not
+          // from `getEconomics` — a caller without `view:finance_applications`
+          // never mounts that query, and used to get a blank confirmation over
+          // a handover that sealed anyway.
+          handoverEvidence: {
+            approvedPurchaseAmountMinor: 150_000 * JOD,
+            financeCompanyFundedPortionMinor: 127_500 * JOD,
+            dealerContributionMinor: 22_500 * JOD,
+            approvedAmountIsFarFromEvidence: false,
+            currency: { code: "JOD", scale: 3 },
+            ...factOverrides,
+          },
+        })}
+        financeDecision={wiring({
+          facts: {
+            approvedPurchaseRecorded: true,
+            approvedPurchaseAmountMinor: 150_000 * JOD,
+            financeCompanyFundedPortionMinor: 127_500 * JOD,
+            dealerContributionMinor: 22_500 * JOD,
+          },
+        })}
+        workflowAction={{
+          stageKey: "HANDOVER",
+          actionKey: "RegisterHandoverAction",
+          onStart: vi.fn(),
+        }}
+        handover={{
+          confirming: true,
+          submitting: false,
+          onOpenChange: vi.fn(),
+          onSubmit,
+        }}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    return { dialog: screen.getByRole("dialog"), onSubmit };
+  };
+
+  test("warns that the approved amount can no longer be corrected", () => {
+    const { dialog } = openDialog();
+    expect(within(dialog).getByText("HandoverSealsApprovedAmount")).toBeTruthy();
+    expect(within(dialog).getByText("HandoverVerifyBeforeContinuing")).toBeTruthy();
+  });
+
+  test("shows the amount and the split it asks the operator to verify", () => {
+    // A confirmation that says "check the approved amount" without showing it
+    // is asking someone to remember a number. The deal that prompted this
+    // carried 150,000 against a 17,000 quotation, and this is the last screen
+    // that would have shown it before the figure became permanent.
+    const { dialog } = openDialog();
+    expect(within(dialog).getByText(/150,000|150000/)).toBeTruthy();
+    expect(within(dialog).getByText(/127,500|127500/)).toBeTruthy();
+    expect(within(dialog).getByText(/22,500|22500/)).toBeTruthy();
+  });
+
+  test("still warns when the amount is withheld from this caller", () => {
+    // `redactSettlementEvidence` hides the figure from weaker roles. The door
+    // still closes for them, so removing the warning with the number would
+    // take the safeguard away from exactly the callers least able to check.
+    const { dialog } = openDialog({
+      approvedPurchaseAmountMinor: null,
+      financeCompanyFundedPortionMinor: null,
+      dealerContributionMinor: null,
+    });
+    expect(within(dialog).getByText("HandoverSealsApprovedAmount")).toBeTruthy();
+    expect(within(dialog).queryByText(/150,000|150000/)).toBeNull();
+  });
+
+  test("confirming sends the notes through to the caller", async () => {
+    const { dialog, onSubmit } = openDialog();
+    fireEvent.change(within(dialog).getByLabelText("HandoverNotesLabel"), {
+      target: { value: "collected by the customer" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "ConfirmHandoverAction" }));
+
+    // The payload carries the stamp the dialog was OPENED against, alongside
+    // the notes. Not decoration: the server refuses a stamp that no longer
+    // matches the deal, so a dialog that dropped this would be back to sealing
+    // whatever happens to be on the deal at write time rather than what the
+    // operator actually read.
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith({
+        notes: "collected by the customer",
+        economicsStamp: STAMP,
+      })
+    );
+  });
+});
+
+/**
+ * The handover door consumes SCRUM-77's anomaly verdict; it never forms one.
+ *
+ * Required in review: the confirmation must not present a materially unusual
+ * amount with ordinary visual weight, and must not introduce a second formula
+ * for "unusual". `getEconomics` derives it with the same rule and the same
+ * comparison appraisal that `approveDealerPurchaseAmount` refuses on, and the
+ * dialog only renders that verdict.
+ */
+describe("a flagged amount does not look ordinary at the one-way door", () => {
+  function openHandover(flagged: boolean, amountMinor: number | null = 150_000 * JOD) {
+    render(
+      <DealCockpitView
+        deal={dealFixture({
+          stages: [
+            { key: "APPLICATION", state: "COMPLETE" },
+            { key: "HANDOVER", state: "CURRENT" },
+          ],
+          handoverEvidence: {
+            approvedPurchaseAmountMinor: amountMinor,
+            financeCompanyFundedPortionMinor: 127_500 * JOD,
+            dealerContributionMinor: 22_500 * JOD,
+            approvedAmountIsFarFromEvidence: flagged,
+            currency: { code: "JOD", scale: 3 },
+          },
+        })}
+        financeDecision={wiring({
+          approvedAmountIsFarFromEvidence: flagged,
+          facts: {
+            approvedPurchaseRecorded: true,
+            approvedPurchaseAmountMinor: amountMinor,
+            financeCompanyFundedPortionMinor: 127_500 * JOD,
+            dealerContributionMinor: 22_500 * JOD,
+          },
+        })}
+        workflowAction={{
+          stageKey: "HANDOVER",
+          actionKey: "RegisterHandoverAction",
+          onStart: vi.fn(),
+        }}
+        handover={{
+          confirming: true,
+          submitting: false,
+          onOpenChange: vi.fn(),
+          onSubmit: vi.fn(noopAsync),
+        }}
+        onRecordSupplierReceipt={async () => {}}
+      />
+    );
+    return screen.getByRole("dialog");
+  }
+
+  test("says in words that the amount was flagged, not by colour alone", () => {
+    const dialog = openHandover(true);
+    // Colour is not a message on its own, and is not available to every reader.
+    expect(within(dialog).getByText("HandoverAmountLooksUnusual")).toBeTruthy();
+  });
+
+  test("an ordinary amount is not dressed up as a problem", () => {
+    const dialog = openHandover(false);
+    expect(within(dialog).queryByText("HandoverAmountLooksUnusual")).toBeNull();
+    // ...and the door is still stated, because it still closes.
+    expect(within(dialog).getByText("HandoverSealsApprovedAmount")).toBeTruthy();
+  });
+
+  test("a flagged amount never blocks the handover", () => {
+    // The verdict changes emphasis only. An unusual amount can be exactly what
+    // the finance company approved, and AutoFlow does not get to refuse it.
+    const dialog = openHandover(true);
+    const confirm = within(dialog).getByRole("button", { name: "ConfirmHandoverAction" });
+    expect(confirm).toHaveProperty("disabled", false);
+  });
+
+  test("no verdict is shown where the amount itself is withheld", () => {
+    // The server withholds the judgement with the figure: on its own it would
+    // tell a caller something about a number the row deliberately hides.
+    const dialog = openHandover(false, null);
+    expect(within(dialog).queryByText("HandoverAmountLooksUnusual")).toBeNull();
+    expect(within(dialog).getByText("HandoverSealsApprovedAmount")).toBeTruthy();
   });
 });

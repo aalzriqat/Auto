@@ -1,4 +1,5 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -366,7 +367,7 @@ describe("Finance lifecycle Phase 4", () => {
       asLimitedUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })
     ).rejects.toThrow(/finalize:financed_deal/);
 
-    await asFinalizer.mutation(api.applications.registerVehicleHandover, { orgId, applicationId });
+    await registerHandover(asFinalizer, api, orgId, applicationId);
     await asFinalizer.mutation(api.applications.registerExpectedPayment, {
       orgId,
       applicationId,

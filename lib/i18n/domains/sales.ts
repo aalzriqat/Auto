@@ -813,6 +813,108 @@ export const salesEn = {
   ReopenApprovalWhatHappensNext:
     "The amount comes off the record along with the funding split worked out from it, and handover is blocked again until the correct amount is recorded.",
   ReopenApprovedPurchaseAction: "Reopen for correction",
+
+  RegisterHandoverAction: "Register vehicle handover",
+  HandoverNeedsPermission:
+    "You do not have permission to register the vehicle handover. Someone who does completes this step.",
+  ConfirmHandoverTitle: "Register the vehicle handover",
+  ConfirmHandoverDesc: "The vehicle goes out to the customer. This is recorded as a fact, and it closes the deal's figures.",
+  /**
+   * The one-way door, stated BEFORE it closes.
+   *
+   * `reopenApproval` refuses once the vehicle has gone out, so from this point
+   * a wrong approved amount can only be undone by cancelling the application.
+   * The dialog shows the amount and the split so the verification it asks for
+   * can actually be done here, rather than from memory.
+   */
+  HandoverSealsApprovedAmount:
+    "After the vehicle is handed over, the recorded approved amount can no longer be corrected through the normal correction flow.",
+  /**
+   * The anomaly the SERVER already judged, restated at the one-way door.
+   *
+   * Named rather than only coloured: colour is not a message on its own, and
+   * an operator about to seal a figure permanently should be told in words.
+   */
+  /**
+   * Names no particular document, because the rule does not require one.
+   *
+   * `isApprovalFarFromEvidence` compares the approved amount against whichever
+   * of the quotation and the appraisal are actually on file, and returns true
+   * from the quotation alone. The earlier wording said "the quotation and
+   * appraisal on this deal", which asserts an appraisal exists — to an operator
+   * standing at the one-way door, on a deal that may only have a quotation.
+   */
+  HandoverAmountLooksUnusual:
+    "This approved amount is unlike the other figures recorded on this deal. AutoFlow flagged it when it was recorded.",
+  HandoverVerifyBeforeContinuing:
+    "Check the approved amount and the funding split above before continuing.",
+  EconomicsCurrencyUnusable: "This deal's figures cannot be shown safely.",
+  EconomicsCurrencyUnusableHint:
+    "AutoFlow cannot confirm which currency this deal's economics are recorded in, so showing the amounts could be wrong by a factor of ten. Record the deal's economics again in a supported currency to restore them.",
+  HandoverCurrencyUnverified:
+    "AutoFlow cannot confirm which currency this deal's figures are recorded in, so it will not show them here. Record the deal's economics again before handing the vehicle over.",
+  HandoverNotesLabel: "Notes (optional)",
+  HandoverNotesPlaceholder: "e.g. collected by the customer's brother, ID checked",
+  ConfirmHandoverAction: "Confirm handover",
+  HandoverRegistered: "Vehicle handover registered",
+
+  RegisterExpectedPaymentAction: "Register the expected payment",
+  ExpectedPaymentNeedsPermission:
+    "You do not have permission to register the expected payment. Someone who does completes this step.",
+  FinalizeDealAction: "Close the deal",
+  FinalizeNeedsPermission:
+    "You do not have permission to close the deal. Someone who does completes this step.",
+  /**
+   * The prerequisite, named before it becomes a refusal.
+   *
+   * On a consigned car with an external financier the route decides opposite
+   * balance sheets — a payable to the supplier for his whole entitlement, or a
+   * claim on him for the margin — so `finalizeDeal` refuses until it is on the
+   * record. It says where, because the control is still in the review dialog.
+   */
+  FinalizeNeedsSettlementRoute:
+    "This car belongs to the supplier and the deal is financed, so who the finance company pays has to be recorded before the deal can be closed. It is chosen in Finance Applications → Review.",
+  /**
+   * Both blockers at once, and the pointer withheld on purpose.
+   *
+   * `setSupplierSettlementRoute` takes the SAME permission as the close, so a
+   * caller who cannot close cannot record the route either — and the review
+   * dialog hides the selector from them. Sending them there would be sending
+   * them to an empty screen.
+   */
+  FinalizeNeedsRouteAndPermission:
+    "This deal is waiting on who the finance company pays, and that is recorded by the same person who closes the deal. Someone with permission to close it completes both.",
+  /**
+   * The stage with no exit, said out loud.
+   *
+   * Nothing in AutoFlow writes a gap resolution yet, so this stage can never
+   * complete — and the rail is sequential, so it hides every step after it. The
+   * server does not consult the gap at all, so the deal really can be finished;
+   * this points at the screen where those steps still work rather than leaving
+   * the operator on a page that names a step nobody can take. SCRUM-83.
+   */
+  GapResolutionUnavailable:
+    "The finance company approved less than the quotation, and recording who covers the difference is not available in AutoFlow yet — so this step cannot be completed here. The rest of the deal can still be handled from Finance Applications → Review.",
+  ConfirmFinalizeTitle: "Close the deal",
+  ConfirmFinalizeDesc:
+    "The handover and the expected payment are on file, so the deal can be closed.",
+  /**
+   * What closing actually does, said before it is done.
+   *
+   * `finalizeDeal` is not a status change: it creates the sale, posts its
+   * journals and moves the vehicle. There is no unwind — reversing it means
+   * cancelling the sale — so the word "close" is not left to carry that alone.
+   */
+  FinalizeCreatesTheSale:
+    "Closing records the sale and posts it to the books. It cannot be undone; correcting it afterwards means cancelling the sale.",
+  /**
+   * Deliberately NOT the same words as `FinalizeDealAction`.
+   *
+   * The opener and the confirmation would otherwise carry the same accessible
+   * name, which makes "close the deal" ambiguous to anything selecting by role
+   * and name — a screen reader announcing the dialog, and the E2E driving it.
+   */
+  ConfirmFinalizeAction: "Confirm closing",
   DerivedEconomicsHeading: "What that leaves",
   DerivedEconomicsNote: "Worked out by AutoFlow from the two figures above. Not editable.",
   DerivedFundedPortion: "Funded by the finance company",
@@ -1664,6 +1766,42 @@ export const salesAr = {
   ReopenApprovalWhatHappensNext:
     "يُرفع المبلغ عن السجل مع تقسيم التمويل المحسوب منه، ويُمنع التسليم من جديد إلى أن يُسجَّل المبلغ الصحيح.",
   ReopenApprovedPurchaseAction: "إعادة الفتح للتصحيح",
+
+  RegisterHandoverAction: "تسجيل تسليم المركبة",
+  HandoverNeedsPermission: "لا تملك صلاحية تسجيل تسليم المركبة. يُكمل هذه الخطوة من يملكها.",
+  ConfirmHandoverTitle: "تسجيل تسليم المركبة",
+  ConfirmHandoverDesc: "تخرج المركبة إلى العميل. يُسجَّل ذلك كواقعة، ويُغلق أرقام الصفقة.",
+  HandoverSealsApprovedAmount:
+    "بعد تسليم المركبة لا يعود بالإمكان تصحيح المبلغ المعتمد المسجَّل عبر مسار التصحيح المعتاد.",
+  HandoverAmountLooksUnusual:
+    "هذا المبلغ المعتمد يختلف عن باقي الأرقام المسجَّلة على هذه الصفقة، وقد نبّه أوتوفلو إليه عند تسجيله.",
+  HandoverVerifyBeforeContinuing: "تحقّق من المبلغ المعتمد وتقسيم التمويل أعلاه قبل المتابعة.",
+  EconomicsCurrencyUnusable: "لا يمكن عرض أرقام هذه الصفقة بشكل موثوق.",
+  EconomicsCurrencyUnusableHint:
+    "لا يستطيع أوتوفلو تأكيد العملة المسجَّلة بها اقتصاديات هذه الصفقة، وعرض المبالغ قد يكون خاطئًا بعشرة أضعاف. أعد تسجيل اقتصاديات الصفقة بعملة مدعومة لاستعادتها.",
+  HandoverCurrencyUnverified:
+    "لا يستطيع أوتوفلو تأكيد العملة المسجَّلة بها أرقام هذه الصفقة، ولذلك لن يعرضها هنا. أعد تسجيل اقتصاديات الصفقة قبل تسليم المركبة.",
+  HandoverNotesLabel: "ملاحظات (اختياري)",
+  HandoverNotesPlaceholder: "مثال: استلمها شقيق العميل، وتم التحقق من الهوية",
+  ConfirmHandoverAction: "تأكيد التسليم",
+  HandoverRegistered: "تم تسجيل تسليم المركبة",
+
+  RegisterExpectedPaymentAction: "تسجيل الدفعة المتوقعة",
+  ExpectedPaymentNeedsPermission:
+    "لا تملك صلاحية تسجيل الدفعة المتوقعة. يُكمل هذه الخطوة من يملكها.",
+  FinalizeDealAction: "إغلاق الصفقة",
+  FinalizeNeedsPermission: "لا تملك صلاحية إغلاق الصفقة. يُكمل هذه الخطوة من يملكها.",
+  FinalizeNeedsSettlementRoute:
+    "هذه المركبة تعود للمورد والصفقة ممولة، لذا يجب تسجيل الجهة التي تدفع لها شركة التمويل قبل إغلاق الصفقة. يُختار ذلك من طلبات التمويل ← مراجعة.",
+  FinalizeNeedsRouteAndPermission:
+    "هذه الصفقة بانتظار تحديد الجهة التي تدفع لها شركة التمويل، ويُسجّل ذلك من يملك صلاحية إغلاق الصفقة نفسها. يُكمل الخطوتين من يملك تلك الصلاحية.",
+  GapResolutionUnavailable:
+    "اعتمدت شركة التمويل مبلغاً أقل من عرض السعر، وتسجيل الجهة التي تتحمّل الفرق غير متاح في أوتوفلو بعد، لذا لا يمكن إتمام هذه الخطوة هنا. يمكن متابعة بقية الصفقة من طلبات التمويل ← مراجعة.",
+  ConfirmFinalizeTitle: "إغلاق الصفقة",
+  ConfirmFinalizeDesc: "التسليم والدفعة المتوقعة مسجَّلان، ويمكن إغلاق الصفقة.",
+  FinalizeCreatesTheSale:
+    "الإغلاق يسجّل البيع ويقيّده في الدفاتر، ولا يمكن التراجع عنه؛ وتصحيحه بعد ذلك يعني إلغاء البيع.",
+  ConfirmFinalizeAction: "تأكيد الإغلاق",
   DerivedEconomicsHeading: "ما ينتج عن ذلك",
   DerivedEconomicsNote: "يحتسبه أوتوفلو من الرقمين أعلاه، وغير قابل للتعديل.",
   DerivedFundedPortion: "الجزء المموَّل من شركة التمويل",
