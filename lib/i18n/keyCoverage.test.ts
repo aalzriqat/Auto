@@ -2,6 +2,13 @@ import { describe, expect, test } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { dictionaries } from "./dictionaries";
+// Imported statically, not with `await import()` inside the test body. Loading
+// the panel drags in React, Convex and the shadcn tree; under a parallel run
+// that transform cost lands inside the 5s per-test budget and the test times
+// out, while passing in isolation. Paying it at file-import time — which vitest
+// does not time-box per test — makes the guard's result depend on the code
+// rather than on how loaded the machine is.
+import { computeApprovalGate } from "@/components/accounting/setup/OpeningBalanceApprovalPanel";
 
 /**
  * `useLanguage().t` is typed as `keyof typeof dictionaries.en | (string & {})`.
@@ -204,12 +211,9 @@ describe("dynamically-referenced i18n keys", () => {
     }
   });
 
-  test("the list above matches what the gate can actually return", async () => {
+  test("the list above matches what the gate can actually return", () => {
     // Guards the guard: if a future branch returns a new key and nobody adds it
     // above, this fails rather than silently narrowing the coverage.
-    const { computeApprovalGate } = await import(
-      "@/components/accounting/setup/OpeningBalanceApprovalPanel"
-    );
     const produced = new Set<string>();
     for (const isOwnDraft of [true, false]) {
       for (const busy of [true, false]) {

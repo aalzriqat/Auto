@@ -202,7 +202,7 @@ export function OpeningBalanceApprovalView({
                 and an un-isolated bidi run reorders visually — the reviewer
                 would read a mangled name on exactly the screen where knowing
                 who prepared it is the whole control. */}
-            <p className="text-sm text-amber-900">
+            <p data-testid="opening-balance-meta" className="text-sm text-amber-900">
               {t("OpeningBalancePreparedBy")}{" "}
               <bdi className="font-medium">
                 {draft.preparedByName ?? t("OpeningBalancePreparerUnknown")}
@@ -211,6 +211,20 @@ export function OpeningBalanceApprovalView({
                 <>
                   {" · "}
                   {t("OpeningBalanceAsOf")} <bdi>{asOf}</bdi>
+                </>
+              ) : null}
+              {/* The DRAFT's own currency, deliberately not `useCurrency()`.
+                  Every sibling accounting tab reads the org's current currency,
+                  and doing that here would state the one thing SCRUM-62 exists
+                  to stop assuming: a draft prepared in JOD is still a JOD draft
+                  after the org switches to USD. Omitted entirely when the
+                  denomination is unknown — the query falls back to the org
+                  currency there, and naming that fallback would assert exactly
+                  the fact the red line below says is missing. */}
+              {draft.denominationKnown ? (
+                <>
+                  {" · "}
+                  {t("Currency")} <bdi className="font-medium">{draft.currency}</bdi>
                 </>
               ) : null}
             </p>
@@ -224,25 +238,49 @@ export function OpeningBalanceApprovalView({
         </span>
       </div>
 
+      {/* Headers are not decoration on this table. Without them the reviewer is
+          shown two unlabelled number columns and asked to approve the whole
+          organization's starting GL position — and which side is which flips
+          visually between LTR and RTL, so there is no stable convention to fall
+          back on. Same reasoning as the account-name fallback below: approving
+          what you cannot read is the rubber-stamp this panel exists to prevent. */}
       <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-amber-300 text-xs uppercase tracking-wide text-amber-900">
+            <th scope="col" className="py-1 text-start font-medium">
+              {t("Account")}
+            </th>
+            <th scope="col" className="py-1 ps-3 text-end font-medium">
+              {t("Debit")}
+            </th>
+            <th scope="col" className="py-1 ps-3 text-end font-medium">
+              {t("Credit")}
+            </th>
+          </tr>
+        </thead>
         <tbody>
           {draft.lines.map((line, index) => (
             <tr key={`${index}-${line.accountId}`} className="border-t border-amber-200/70">
               <td className="py-1.5 text-slate-800">{line.accountName}</td>
-              <td className="py-1.5 text-end tabular-nums text-slate-800">
+              <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-slate-800">
                 {line.debitMinor > 0 ? formatMinor(line.debitMinor, draft.currency, draft.denominationKnown) : ""}
               </td>
-              <td className="py-1.5 text-end tabular-nums text-slate-800">
+              <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-slate-800">
                 {line.creditMinor > 0 ? formatMinor(line.creditMinor, draft.currency, draft.denominationKnown) : ""}
               </td>
             </tr>
           ))}
           <tr className="border-t-2 border-amber-300 font-semibold">
             <td className="py-1.5 text-slate-900">{t("Total")}</td>
-            <td className="py-1.5 text-end tabular-nums text-slate-900">
+            {/* ps-3 + nowrap: the debit and credit totals rendered with a
+                MEASURED 0px gap at 390px, so the one pair of figures a reviewer
+                uses to check that the draft balances read as a single
+                22-character run. The columns are sized by content and sit flush
+                otherwise, so the padding is what guarantees the separation. */}
+            <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-slate-900">
               {formatMinor(totalDebitMinor, draft.currency, draft.denominationKnown)}
             </td>
-            <td className="py-1.5 text-end tabular-nums text-slate-900">
+            <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-slate-900">
               {formatMinor(totalCreditMinor, draft.currency, draft.denominationKnown)}
             </td>
           </tr>

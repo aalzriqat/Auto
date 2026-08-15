@@ -336,3 +336,96 @@ describe("computeApprovalGate", () => {
     expect(gate.recoveryKey).toBeNull();
   });
 });
+
+/**
+ * Both defects below were invisible to every previous round — five adversarial
+ * reviews, 57 passing tests and a green CI — and took about four seconds to see
+ * once the panel was rendered in a browser. They are the same class the panel's
+ * own account-name fallback already guards against: the reviewer is asked to
+ * approve something they cannot fully read.
+ */
+describe("the reviewer can actually read what they are approving", () => {
+  function headerCells() {
+    const panel = screen.getByTestId("opening-balance-approval");
+    const head = panel.querySelector("thead");
+    if (!head) throw new Error("no <thead> — the amount columns are unlabelled");
+    // Scoped to the header row rather than a global getByText: "Debit" and
+    // "Credit" are short words and a global query would keep passing off any
+    // other occurrence on the screen.
+    return [...head.querySelectorAll("th")].map((th) => th.textContent?.trim());
+  }
+
+  test("the two amount columns are labelled debit and credit", () => {
+    render(
+      <OpeningBalanceApprovalView
+        draft={draftFixture()}
+        isOwnDraft={false}
+        busy={false}
+        onApprove={() => {}}
+        onReject={() => {}}
+      />
+    );
+    // Order matters: this is the only thing telling the reviewer which side is
+    // which, and the columns swap visually between LTR and RTL.
+    expect(headerCells()).toEqual(["Account", "Debit", "Credit"]);
+  });
+
+  test("the amounts state the currency they are denominated in", () => {
+    render(
+      <OpeningBalanceApprovalView
+        draft={draftFixture()}
+        isOwnDraft={false}
+        busy={false}
+        onApprove={() => {}}
+        onReject={() => {}}
+      />
+    );
+    // The label is a bare text node sharing the meta paragraph with the
+    // preparer and the date, so it is asserted on that paragraph's text rather
+    // than with getByText, which only matches an element's whole content.
+    const meta = screen.getByTestId("opening-balance-meta");
+    expect(meta.textContent).toContain("Currency");
+    // The code itself is in its own <bdi> — a Latin currency code inside an
+    // Arabic sentence is the same bidi hazard as the preparer's name.
+    expect(within(meta).getByText("JOD").tagName).toBe("BDI");
+  });
+
+  test("the currency shown is the DRAFT's, not a fixed one", () => {
+    // The whole of SCRUM-62 is that a draft's denomination and the org's
+    // current currency can differ. A test that only ever saw JOD would pass
+    // against a hardcoded label.
+    render(
+      <OpeningBalanceApprovalView
+        draft={draftFixture({ currency: "USD" })}
+        isOwnDraft={false}
+        busy={false}
+        onApprove={() => {}}
+        onReject={() => {}}
+      />
+    );
+    const panel = screen.getByTestId("opening-balance-approval");
+    expect(within(panel).getByText("USD")).toBeTruthy();
+    expect(within(panel).queryByText("JOD")).toBeNull();
+  });
+
+  test("no currency is asserted when the draft never recorded one", () => {
+    // `listPendingOpeningBalanceDrafts` falls back to the org's current
+    // currency for these. Printing that fallback would state as fact the exact
+    // thing the red line underneath says is unknown.
+    render(
+      <OpeningBalanceApprovalView
+        draft={draftFixture({ denominationKnown: false })}
+        isOwnDraft={false}
+        busy={false}
+        onApprove={() => {}}
+        onReject={() => {}}
+      />
+    );
+    const panel = screen.getByTestId("opening-balance-approval");
+    expect(within(panel).queryByText("JOD")).toBeNull();
+    expect(within(panel).queryByText("Currency")).toBeNull();
+    // ...but the columns are still labelled — the reviewer has to read the
+    // raw units to decide whether to reject.
+    expect(headerCells()).toEqual(["Account", "Debit", "Credit"]);
+  });
+});
