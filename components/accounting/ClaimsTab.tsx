@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -47,6 +48,10 @@ export function ClaimsTab() {
   const { t, isRtl } = useLanguage();
   const formatIn = useCurrencyFormatterInCurrency();
 
+  // Captured once per mount: "overdue" must not flicker between renders, and
+  // reading the clock during render is not idempotent.
+  const [now] = useState(() => Date.now());
+
   const { results: rows, status } = usePaginatedQuery(
     api.claims.listFinanceCompanyReceivables,
     activeOrgId ? { orgId: activeOrgId } : "skip",
@@ -71,7 +76,6 @@ export function ClaimsTab() {
     {}
   );
   const outstandingEntries = Object.entries(outstandingByCurrency);
-  const now = Date.now();
   const Arrow = isRtl ? ArrowLeft : ArrowRight;
 
   return (
